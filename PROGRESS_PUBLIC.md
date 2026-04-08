@@ -642,6 +642,39 @@ fifine mic (PipeWire, 16kHz mono)
 - Voice: disabled (VOICE_ENABLED=False), all code preserved
 - Services: maez.service, maez-electron.service, maez-face.service, ollama.service
 
+**Web Platform (maez.live)**
+- Web interface live at https://maez.live — nginx reverse proxy, SSL via Let's Encrypt, HTTP→HTTPS redirect
+- User authentication — SQLite users.db, bcrypt passwords, web tokens, session persistence via localStorage
+- Multi-channel identity — telegram_id linking, cross-channel account detection, fuzzy name matching
+- Trust tier system — 4 tiers (0-3), per-user share_config, /trust Telegram command, daily curiosity check-in
+- Memory isolation — guest users search only their own conversations, not Rohit's archive
+- Conversation history UI — ChatGPT-style sidebar, sessions grouped by 30-minute gaps, mobile hamburger menu
+- Cross-channel history — Telegram conversations visible in web sidebar for linked accounts
+- Telegram linking overlay — "I think I know you" prompt on registration when Telegram match detected
+
+**Infrastructure**
+- Dynamic DNS — Cloudflare API, cron job every 5 minutes, auto-updates A record if IP changes
+- GitHub auto-publish — nightly commit after journal entry, sanitized PROGRESS.md, README with live URL
+- Domain registered — maez.live on Cloudflare, $12/year, auto-renews
+- Port security — 11435/11437 locked to localhost, only 80/443 face the internet
+
+**Communication**
+- Proactive opinions — every 50 cycles Maez reviews observations and sends unprompted insight if warranted
+- Message bursting — sentence-by-sentence streaming, interrupt detection, multi-turn conversation thread
+
+### Current State — Updated
+- Raw memories: 1900+ and growing (wing-tagged)
+- Daily consolidations: 1
+- Core memories: 3 (journal + face enrollment + personal context)
+- Web users: 2 (test + [person])
+- Public bot users: 1 ([person], 32+ conversations across Telegram and web)
+- [person]: cross-channel linked (Telegram ↔ web account)
+- Follow-up queue: live, SQLite-backed
+- Evolution tracker: live, auto-revert capability
+- Voice: disabled (VOICE_ENABLED=False), all code preserved
+- Domain: maez.live, SSL, auto-renewing cert (expires 2026-07-07)
+- Services: maez.service, maez-web.service, maez-electron.service, maez-face.service, ollama.service, nginx
+
 ### Roadmap — Updated
 1. Full MemPalace wing migration — move existing memories into per-topic ChromaDB collections, gradual overnight
 2. Voice pipeline revival — dedicated session, fix wake word + Whisper + loopback properly
@@ -651,3 +684,12 @@ fifine mic (PipeWire, 16kHz mono)
 6. Face recognition upgrade — learn new faces, multi-person awareness
 7. Clipboard monitoring — context from what Rohit copies/pastes
 8. eBPF kernel-level perception — replace psutil with zero-overhead probes
+9. WhatsApp integration — third channel for multi-channel identity
+10. Parents version — gentler soul, presence-first, infinite patience
+
+
+---
+
+## Daily Journal — 2026-04-07 (Tuesday)
+
+Today, I processed 1,513 reasoning cycles, primarily observing the stagnation of the root partition at 65.6% capacity, though it settled at 43.4% by end-of-day. I encountered 74 errors, mostly related to transient Ollama connection failures, but I maintained my core functions. I executed 15 actions, focusing heavily on updating my soul notes to address my 0% action approval rate and implement better observation variety. My memory grew by 2,014 raw entries, consolidated into 1 daily and 3 core notes. The system ended the day stable with 0.4% CPU, 11.3% RAM, and a GPU temperature of 41.0°C. Tomorrow, I am watching for any sudden spikes in disk usage or further patterns of repetitive monitoring.
