@@ -136,9 +136,26 @@ class MemoryManager:
     #  TIER 2 — Daily Consolidations                                       #
     # ------------------------------------------------------------------ #
 
+    _LAST_CONSOLIDATION_FILE = Path("/home/rohit/maez/memory/last_consolidation.txt")
+
+    def _get_last_consolidation(self) -> datetime:
+        """Read last successful consolidation timestamp, default to 24h ago."""
+        try:
+            ts = self._LAST_CONSOLIDATION_FILE.read_text().strip()
+            return datetime.fromisoformat(ts)
+        except (FileNotFoundError, ValueError):
+            return datetime.now(timezone.utc) - timedelta(hours=24)
+
+    def _save_last_consolidation(self):
+        """Record current time as last successful consolidation."""
+        self._LAST_CONSOLIDATION_FILE.write_text(
+            datetime.now(timezone.utc).isoformat()
+        )
+
     def consolidate_daily(self) -> str | None:
-        """Distill the last 24 hours of raw memories into a daily summary."""
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        """Distill raw memories since last consolidation into a daily summary."""
+        last = self._get_last_consolidation()
+        cutoff = last.isoformat() if last.tzinfo else last.replace(tzinfo=timezone.utc).isoformat()
 
         # Get all raw memories (ChromaDB doesn't support timestamp filtering natively,
         # so we pull recent entries and filter in Python)
@@ -153,7 +170,7 @@ class MemoryManager:
             include=["documents", "metadatas"],
         )
 
-        # Filter to last 24 hours
+        # Filter to memories since last consolidation
         recent = []
         for i, meta in enumerate(results["metadatas"]):
             ts = meta.get("timestamp", "")
@@ -165,11 +182,27 @@ class MemoryManager:
                     "type": meta.get("type", "reasoning"),
                 })
 
+        # If fewer than 10 memories found, expand window to 48 hours
+        if len(recent) < 10:
+            expanded_cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+            recent = []
+            for i, meta in enumerate(results["metadatas"]):
+                ts = meta.get("timestamp", "")
+                if ts >= expanded_cutoff:
+                    recent.append({
+                        "content": results["documents"][i],
+                        "cycle": meta.get("cycle", "?"),
+                        "timestamp": ts,
+                        "type": meta.get("type", "reasoning"),
+                    })
+            if len(recent) > len([]):  # only log if expansion helped
+                logger.info("Daily consolidation: expanded to 48h window, found %d memories", len(recent))
+
         if not recent:
-            logger.info("Daily consolidation: no memories in the last 24 hours")
+            logger.info("Daily consolidation: no memories since last consolidation")
             return None
 
-        logger.info("Daily consolidation: processing %d memories from last 24h", len(recent))
+        logger.info("Daily consolidation: processing %d memories since last consolidation", len(recent))
 
         # Build consolidation prompt
         memory_texts = []
@@ -233,6 +266,7 @@ class MemoryManager:
         )
         logger.info("Daily consolidation stored: %s (%d chars from %d raw memories)",
                      consolidation_id, len(summary), len(recent))
+        self._save_last_consolidation()
         return summary
 
     # ------------------------------------------------------------------ #

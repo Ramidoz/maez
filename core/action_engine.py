@@ -11,6 +11,7 @@ import os
 import re
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import time
 import uuid
@@ -50,6 +51,7 @@ FORBIDDEN_PATTERNS = [
     re.compile(r"\bsystemctl\s+(stop|disable|mask)\s+ollama", re.IGNORECASE),
     re.compile(r"\bmaez\.service\b", re.IGNORECASE),
     re.compile(r"\bmaez_daemon\b", re.IGNORECASE),
+    re.compile(r"HARD\s+CONSTRAINTS", re.IGNORECASE),  # Never touch constraints section
 ]
 
 FORBIDDEN_PATHS = [
@@ -57,18 +59,148 @@ FORBIDDEN_PATHS = [
     Path("/home/rohit/maez/daemon/maez_daemon.py"),
 ]
 
+# Forbidden action types — always raise ForbiddenActionError
+FORBIDDEN_ACTION_TYPES = {
+    'stop_ollama', 'delete_memory_db', 'modify_soul_constraints',
+}
+
 READONLY_COMMANDS = {
     "ls", "cat", "head", "tail", "df", "du", "ps", "top", "free",
     "uptime", "uname", "whoami", "hostname", "date", "wc", "file",
     "stat", "lsblk", "ip", "ss", "nvidia-smi", "sensors", "journalctl",
     "systemctl status", "dpkg", "apt list", "pip list", "git log",
     "git status", "git diff", "find", "which", "env", "printenv",
+    "netstat", "lsof", "id", "groups", "mount", "blkid", "dmidecode",
 }
+
+SAFE_COMMANDS = {
+    "git status", "git log", "git diff", "git add", "git commit",
+    "pip list", "pip show", "pip check",
+    "systemctl is-active", "systemctl list-units",
+    "docker ps", "docker images",
+}
+
+# --- Action tier map ---
+ACTION_TIERS = {
+    # Tier 0 — Immediate
+    'read_file': 0, 'search_files': 0, 'run_readonly_command': 0,
+    'query_system': 0, 'promote_to_core_memory': 0,
+    'write_soul_note': 0, 'update_baseline': 0,
+    # Tier 1 — Auto after 30s
+    'write_file': 1, 'append_file': 1, 'run_safe_command': 1,
+    'delete_temp_file': 1, 'git_commit': 1,
+    'clean_temp_files': 1, 'append_to_file': 1,
+    # Tier 2 — Telegram notify, 5min cancel
+    'restart_service': 2, 'install_package': 2, 'modify_config': 2,
+    'write_outside_maez': 2, 'run_script': 2, 'git_push': 2,
+    'kill_process': 2, 'free_disk_space': 2,
+    # Tier 3 — Explicit approval
+    'restart_critical_service': 3, 'modify_firewall': 3,
+    'system_reboot': 3, 'delete_file': 3, 'sudo_command': 3,
+    'execute_script': 3, 'register_new_skill': 3,
+}
+
+CRITICAL_SERVICES = {'nginx', 'maez-web', 'maez-web.service', 'nginx.service'}
+
+# --- Trust score DB ---
+TRUST_DB_PATH = BASE_DIR / "memory" / "action_trust.db"
 
 
 class ForbiddenActionError(Exception):
     """Raised when an action violates hardcoded safety constraints."""
     pass
+
+
+class ActionTrustTracker:
+    """SQLite tracker for per-action-type trust scores."""
+
+    def __init__(self, db_path: str = str(TRUST_DB_PATH)):
+        self.db_path = db_path
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        with self._conn() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS action_trust (
+                    action_type     TEXT PRIMARY KEY,
+                    proposed_count  INTEGER DEFAULT 0,
+                    approved_count  INTEGER DEFAULT 0,
+                    cancelled_count INTEGER DEFAULT 0,
+                    auto_executed   INTEGER DEFAULT 0,
+                    last_updated    REAL
+                )
+            """)
+            conn.commit()
+
+    def _conn(self):
+        return sqlite3.connect(self.db_path)
+
+    def record_outcome(self, action_type: str, outcome: str):
+        """Update trust counters for an action type."""
+        with self._conn() as conn:
+            conn.execute("""
+                INSERT INTO action_trust (action_type, proposed_count, approved_count,
+                    cancelled_count, auto_executed, last_updated)
+                VALUES (?, 1, 0, 0, 0, ?)
+                ON CONFLICT(action_type) DO UPDATE SET
+                    proposed_count = proposed_count + 1,
+                    last_updated = ?
+            """, (action_type, time.time(), time.time()))
+            if outcome in ('approved', 'executed'):
+                col = 'approved_count' if outcome == 'approved' else 'auto_executed'
+                conn.execute(f"UPDATE action_trust SET {col} = {col} + 1 WHERE action_type = ?",
+                             (action_type,))
+            elif outcome == 'cancelled':
+                conn.execute("UPDATE action_trust SET cancelled_count = cancelled_count + 1 WHERE action_type = ?",
+                             (action_type,))
+            conn.commit()
+
+    def get_trust_score(self, action_type: str) -> float:
+        """Return 0.0-1.0 trust score for an action type."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT proposed_count, approved_count, cancelled_count, auto_executed FROM action_trust WHERE action_type = ?",
+                (action_type,),
+            ).fetchone()
+        if not row or row[0] == 0:
+            return 0.0
+        proposed, approved, cancelled, auto = row
+        successful = approved + auto
+        return successful / proposed if proposed > 0 else 0.0
+
+    def should_promote(self, action_type: str) -> bool:
+        """True if trust score > 0.85 over 20+ actions — earned tier reduction."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT proposed_count, approved_count, auto_executed FROM action_trust WHERE action_type = ?",
+                (action_type,),
+            ).fetchone()
+        if not row:
+            return False
+        proposed, approved, auto = row
+        if proposed < 20:
+            return False
+        score = (approved + auto) / proposed
+        return score > 0.85
+
+    def get_promotion_candidates(self) -> list[dict]:
+        """Return all action types that have earned a tier promotion."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT action_type, proposed_count, approved_count, auto_executed FROM action_trust WHERE proposed_count >= 20"
+            ).fetchall()
+        candidates = []
+        for action_type, proposed, approved, auto in rows:
+            score = (approved + auto) / proposed
+            if score > 0.85:
+                candidates.append({
+                    'action_type': action_type,
+                    'score': score,
+                    'proposed': proposed,
+                    'current_tier': ACTION_TIERS.get(action_type, -1),
+                })
+        return candidates
+
+
+_trust_tracker = ActionTrustTracker()
 
 
 class ActionResult:
@@ -100,6 +232,9 @@ class ActionEngine:
 
     def _check_forbidden(self, action: str, params: dict):
         """Raise ForbiddenActionError if the action violates safety constraints."""
+        if action in FORBIDDEN_ACTION_TYPES:
+            raise ForbiddenActionError(f"Action '{action}' is permanently forbidden")
+
         params_str = json.dumps(params, default=str).lower()
         full_str = f"{action} {params_str}"
 
@@ -241,6 +376,7 @@ class ActionEngine:
                                  entry["reasoning"], entry["params"],
                                  f"CANCELLED ({action_id})")
                 _quality_tracker.record_outcome(action_id, 'cancelled')
+                _trust_tracker.record_outcome(entry["action"], 'cancelled')
                 return True
         return False
 
@@ -272,6 +408,7 @@ class ActionEngine:
             duration = time.time() - start
             self._log_action(tier, action, reasoning, params, f"OK: {str(output)[:200]}", duration)
             _quality_tracker.record_outcome(action_id, 'executed')
+            _trust_tracker.record_outcome(action, 'executed')
             return ActionResult(action, tier, True, output=str(output), duration=duration)
         except Exception as e:
             duration = time.time() - start
@@ -332,6 +469,47 @@ class ActionEngine:
             f"[Baseline observation] {observation}", source="baseline_update"
         )
         return f"Baseline stored as core memory: {core_id}"
+
+    def read_file(self, path: str, reasoning: str) -> ActionResult:
+        """Tier 0: Read any file under /home/rohit."""
+        return self._execute_action("read_file", {"path": path}, reasoning, tier=0)
+
+    def _do_read_file(self, path: str) -> str:
+        p = self._check_path_allowed(path)
+        if not p.exists():
+            return f"File not found: {p}"
+        content = p.read_text()
+        return content[:5000] + (f"\n... ({len(content)} chars total)" if len(content) > 5000 else "")
+
+    def search_files(self, pattern: str, directory: str, reasoning: str) -> ActionResult:
+        """Tier 0: Find files matching pattern under /home/rohit."""
+        return self._execute_action("search_files", {"pattern": pattern, "directory": directory}, reasoning, tier=0)
+
+    def _do_search_files(self, pattern: str, directory: str = "/home/rohit/maez") -> str:
+        p = Path(directory).resolve()
+        if not str(p).startswith("/home/rohit/"):
+            raise ForbiddenActionError(f"Search outside /home/rohit/: {directory}")
+        results = subprocess.run(
+            ["find", str(p), "-maxdepth", "5", "-name", pattern, "-type", "f"],
+            capture_output=True, text=True, timeout=15,
+        )
+        return results.stdout.strip()[:3000] or "No files found"
+
+    def query_system(self, cmd: str, reasoning: str) -> ActionResult:
+        """Tier 0: Run readonly system queries (ps, df, free, top, netstat)."""
+        return self._execute_action("query_system", {"cmd": cmd}, reasoning, tier=0)
+
+    def _do_query_system(self, cmd: str) -> str:
+        parts = shlex.split(cmd)
+        if not parts:
+            return "Empty command"
+        base = parts[0]
+        if base not in READONLY_COMMANDS:
+            two_word = f"{parts[0]} {parts[1]}" if len(parts) > 1 else ""
+            if two_word not in READONLY_COMMANDS:
+                raise ForbiddenActionError(f"'{base}' not in readonly allowlist")
+        result = subprocess.run(parts, capture_output=True, text=True, timeout=15)
+        return result.stdout.strip()[:3000]
 
     # ------------------------------------------------------------------ #
     #  TIER 1 — Autonomous (deferred 30s)                                  #
@@ -406,9 +584,142 @@ class ActionEngine:
             output += f"\nSTDERR: {result.stderr.strip()[:500]}"
         return output
 
+    def run_safe_command(self, cmd: str, reasoning: str) -> str:
+        """Queue: run pre-approved safe commands (git status, pip list, etc)."""
+        return self.queue_action("run_safe_command", {"cmd": cmd}, reasoning, tier=1)
+
+    def _do_run_safe_command(self, cmd: str) -> str:
+        parts = shlex.split(cmd)
+        if not parts:
+            return "Empty command"
+        two_word = f"{parts[0]} {parts[1]}" if len(parts) > 1 else parts[0]
+        if two_word not in SAFE_COMMANDS and parts[0] not in SAFE_COMMANDS:
+            raise ForbiddenActionError(f"'{cmd}' not in safe command allowlist")
+        result = subprocess.run(parts, capture_output=True, text=True, timeout=30,
+                                cwd="/home/rohit/maez")
+        output = result.stdout.strip()[:2000]
+        if result.returncode != 0:
+            output += f"\nSTDERR: {result.stderr.strip()[:500]}"
+        return output
+
+    def delete_temp_file(self, path: str, reasoning: str) -> str:
+        """Queue: delete files in /tmp or explicitly temp directories."""
+        return self.queue_action("delete_temp_file", {"path": path}, reasoning, tier=1)
+
+    def _do_delete_temp_file(self, path: str) -> str:
+        p = Path(path).resolve()
+        if not (str(p).startswith("/tmp") or "/temp/" in str(p) or "/tmp/" in str(p)):
+            raise ForbiddenActionError(f"Not a temp path: {path}")
+        if not p.exists():
+            return f"File not found: {p}"
+        p.unlink()
+        return f"Deleted: {p}"
+
+    def git_commit(self, message: str, files: str, reasoning: str) -> str:
+        """Queue: git add + commit in /home/rohit/maez."""
+        return self.queue_action("git_commit", {"message": message, "files": files}, reasoning, tier=1)
+
+    def _do_git_commit(self, message: str, files: str = ".") -> str:
+        cwd = "/home/rohit/maez"
+        add_result = subprocess.run(
+            ["git", "add"] + files.split(), capture_output=True, text=True,
+            timeout=15, cwd=cwd,
+        )
+        if add_result.returncode != 0:
+            return f"git add failed: {add_result.stderr.strip()}"
+        commit_result = subprocess.run(
+            ["git", "commit", "-m", message], capture_output=True, text=True,
+            timeout=15, cwd=cwd,
+        )
+        if commit_result.returncode != 0:
+            return f"git commit failed: {commit_result.stderr.strip()}"
+        return commit_result.stdout.strip()[:500]
+
     # ------------------------------------------------------------------ #
     #  TIER 2 — Notify then execute (Telegram, 5 min cancel window)        #
     # ------------------------------------------------------------------ #
+
+    def install_package_t2(self, package: str, reason: str) -> str:
+        """Tier 2: pip/apt install with Telegram notification."""
+        action_id = self.queue_action(
+            "install_package", {"package": package, "reason": reason}, reason, tier=2,
+        )
+        if self.telegram:
+            self.telegram.send_message(
+                f"[Action Queued — T2]\nInstall: {package}\n"
+                f"Reason: {reason}\nExecutes in 5 minutes.\n"
+                f"Reply /cancel {action_id} to stop."
+            )
+        return action_id
+
+    def write_outside_maez(self, path: str, content: str, reasoning: str) -> str:
+        """Tier 2: Write files outside /home/rohit/maez (but within /home/rohit)."""
+        action_id = self.queue_action(
+            "write_outside_maez", {"path": path, "content": content}, reasoning, tier=2,
+        )
+        if self.telegram:
+            self.telegram.send_message(
+                f"[Action Queued — T2]\nWrite file: {path}\n"
+                f"Reason: {reasoning[:100]}\nExecutes in 5 minutes.\n"
+                f"Reply /cancel {action_id} to stop."
+            )
+        return action_id
+
+    def _do_write_outside_maez(self, path: str, content: str) -> str:
+        p = self._check_path_allowed(path)
+        if p.exists():
+            self._backup_file(p)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+        return f"Written: {p} ({len(content)} chars)"
+
+    def run_script(self, path: str, reasoning: str) -> str:
+        """Tier 2: Execute a Python or bash script."""
+        action_id = self.queue_action("run_script", {"path": path}, reasoning, tier=2)
+        if self.telegram:
+            self.telegram.send_message(
+                f"[Action Queued — T2]\nRun script: {path}\n"
+                f"Reason: {reasoning[:100]}\nExecutes in 5 minutes.\n"
+                f"Reply /cancel {action_id} to stop."
+            )
+        return action_id
+
+    def _do_run_script(self, path: str) -> str:
+        p = self._check_path_allowed(path)
+        if not p.exists():
+            return f"Script not found: {p}"
+        if str(p).endswith('.py'):
+            cmd = ["/home/rohit/maez/.venv/bin/python3", str(p)]
+        elif str(p).endswith('.sh'):
+            cmd = ["bash", str(p)]
+        else:
+            return f"Unsupported script type: {p.suffix}"
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
+                                cwd="/home/rohit/maez")
+        output = result.stdout.strip()[:2000]
+        if result.returncode != 0:
+            output += f"\nERROR: {result.stderr.strip()[:500]}"
+        return output
+
+    def git_push(self, remote: str, reasoning: str) -> str:
+        """Tier 2: Push to remote with Telegram notification."""
+        action_id = self.queue_action("git_push", {"remote": remote}, reasoning, tier=2)
+        if self.telegram:
+            self.telegram.send_message(
+                f"[Action Queued — T2]\nGit push to: {remote}\n"
+                f"Reason: {reasoning[:100]}\nExecutes in 5 minutes.\n"
+                f"Reply /cancel {action_id} to stop."
+            )
+        return action_id
+
+    def _do_git_push(self, remote: str = "origin") -> str:
+        result = subprocess.run(
+            ["git", "push", remote], capture_output=True, text=True,
+            timeout=60, cwd="/home/rohit/maez",
+        )
+        if result.returncode != 0:
+            return f"Push failed: {result.stderr.strip()[:500]}"
+        return f"Pushed to {remote}"
 
     def kill_process(self, pid: int, name: str, reason: str) -> str:
         """Notify via Telegram, execute after 5 minutes unless cancelled."""
@@ -622,6 +933,115 @@ class ActionEngine:
         path.write_text(skill_code)
         return f"Skill registered: {path} ({len(skill_code)} chars)"
 
+    def restart_critical_service(self, service_name: str, reason: str) -> str:
+        """Tier 3: Restart public-facing services (nginx, maez-web)."""
+        action_id = self.queue_action(
+            "restart_critical_service", {"service_name": service_name, "reason": reason},
+            reason, tier=3,
+        )
+        if self.telegram:
+            self.telegram.send_message(
+                f"[Action Request — T3]\nRestart critical: {service_name}\n"
+                f"Reason: {reason}\nReply /approve {action_id} to confirm.\n"
+                f"Expires in 10 minutes."
+            )
+        return action_id
+
+    def _do_restart_critical_service(self, service_name: str, reason: str = "") -> str:
+        self._check_forbidden("restart_critical_service", {"service_name": service_name})
+        result = subprocess.run(
+            ["sudo", "systemctl", "restart", service_name],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return f"Failed: {result.stderr.strip()}"
+        return f"Restarted critical service: {service_name}"
+
+    def modify_firewall(self, rule: str, reason: str) -> str:
+        """Tier 3: Modify ufw rules."""
+        action_id = self.queue_action(
+            "modify_firewall", {"rule": rule, "reason": reason}, reason, tier=3,
+        )
+        if self.telegram:
+            self.telegram.send_message(
+                f"[Action Request — T3]\nFirewall rule: {rule}\n"
+                f"Reason: {reason}\nReply /approve {action_id} to confirm.\n"
+                f"Expires in 10 minutes."
+            )
+        return action_id
+
+    def _do_modify_firewall(self, rule: str, reason: str = "") -> str:
+        parts = shlex.split(rule)
+        result = subprocess.run(
+            ["sudo", "ufw"] + parts, capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return f"ufw failed: {result.stderr.strip()}"
+        return f"Firewall updated: {result.stdout.strip()}"
+
+    def system_reboot(self, reason: str) -> str:
+        """Tier 3: Full system reboot."""
+        action_id = self.queue_action(
+            "system_reboot", {"reason": reason}, reason, tier=3,
+        )
+        if self.telegram:
+            self.telegram.send_message(
+                f"[Action Request — T3]\nSystem REBOOT\n"
+                f"Reason: {reason}\nReply /approve {action_id} to confirm.\n"
+                f"Expires in 10 minutes."
+            )
+        return action_id
+
+    def _do_system_reboot(self, reason: str = "") -> str:
+        result = subprocess.run(
+            ["sudo", "reboot"], capture_output=True, text=True, timeout=10,
+        )
+        return "Reboot initiated"
+
+    def delete_file(self, path: str, reason: str) -> str:
+        """Tier 3: Delete non-temp files."""
+        action_id = self.queue_action(
+            "delete_file", {"path": path, "reason": reason}, reason, tier=3,
+        )
+        if self.telegram:
+            self.telegram.send_message(
+                f"[Action Request — T3]\nDelete file: {path}\n"
+                f"Reason: {reason}\nReply /approve {action_id} to confirm.\n"
+                f"Expires in 10 minutes."
+            )
+        return action_id
+
+    def _do_delete_file(self, path: str, reason: str = "") -> str:
+        p = self._check_path_allowed(path)
+        if not p.exists():
+            return f"File not found: {p}"
+        self._backup_file(p)
+        p.unlink()
+        return f"Deleted (backup created): {p}"
+
+    def sudo_command(self, cmd: str, reason: str) -> str:
+        """Tier 3: Run any sudo command."""
+        action_id = self.queue_action(
+            "sudo_command", {"cmd": cmd, "reason": reason}, reason, tier=3,
+        )
+        if self.telegram:
+            self.telegram.send_message(
+                f"[Action Request — T3]\nSudo: {cmd}\n"
+                f"Reason: {reason}\nReply /approve {action_id} to confirm.\n"
+                f"Expires in 10 minutes."
+            )
+        return action_id
+
+    def _do_sudo_command(self, cmd: str, reason: str = "") -> str:
+        parts = shlex.split(cmd)
+        result = subprocess.run(
+            ["sudo"] + parts, capture_output=True, text=True, timeout=60,
+        )
+        output = result.stdout.strip()[:2000]
+        if result.returncode != 0:
+            output += f"\nERROR: {result.stderr.strip()[:500]}"
+        return output
+
     # ------------------------------------------------------------------ #
     #  Tier 2/3 approval and cancellation                                  #
     # ------------------------------------------------------------------ #
@@ -638,6 +1058,7 @@ class ActionEngine:
                     action_id=entry["id"],
                 )
                 _quality_tracker.record_outcome(action_id, 'approved')
+                _trust_tracker.record_outcome(entry["action"], 'approved')
                 # Remove from pending
                 self._pending = [a for a in self._pending if a["id"] != action_id]
                 self._save_pending()
@@ -689,13 +1110,26 @@ class ActionEngine:
     #  Available actions summary (for injection into reasoning prompt)      #
     # ------------------------------------------------------------------ #
 
+    def check_promotions(self) -> list[dict]:
+        """Check for action types that have earned tier promotion. Called at 3am."""
+        return _trust_tracker.get_promotion_candidates()
+
+    def get_trust_score(self, action_type: str) -> float:
+        """Get current trust score for an action type."""
+        return _trust_tracker.get_trust_score(action_type)
+
     def available_actions_prompt(self) -> str:
         """Return a brief description of available actions for the LLM."""
         return (
             "Available actions (use only when genuinely needed):\n"
-            "- Tier 0 (immediate): promote_to_core_memory, write_soul_note, update_baseline\n"
-            "- Tier 1 (next cycle): clean_temp_files, write_file, append_to_file, run_readonly_command\n"
-            "- Tier 2 (notify+5min): kill_process, restart_service, free_disk_space\n"
-            "- Tier 3 (ask+wait): install_package, execute_script, modify_config, register_new_skill\n"
+            "- Tier 0 (immediate): promote_to_core_memory, write_soul_note, update_baseline, "
+            "read_file, search_files, query_system\n"
+            "- Tier 1 (next cycle): clean_temp_files, write_file, append_to_file, "
+            "run_readonly_command, run_safe_command, delete_temp_file, git_commit\n"
+            "- Tier 2 (notify+5min): kill_process, restart_service, free_disk_space, "
+            "install_package, write_outside_maez, run_script, git_push\n"
+            "- Tier 3 (ask+wait): execute_script, modify_config, register_new_skill, "
+            "restart_critical_service, modify_firewall, system_reboot, delete_file, sudo_command\n"
+            "- FORBIDDEN: stop_ollama, delete_memory_db, modify_soul_constraints\n"
             "Do NOT take actions unless the situation clearly warrants it."
         )
