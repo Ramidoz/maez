@@ -329,16 +329,32 @@ class MemoryManager:
         return memories
 
     def _topic_rerank(self, query: str, results: list[dict], n: int) -> list[dict]:
-        """Re-rank results by boosting those matching the query's topic wing."""
+        """Re-rank results by boosting topic matches and penalizing fixated topics."""
         wing = _topic_router.detect_wing(query)
         logger.debug("[MEMORY] Wing: %s, query: %s", wing, query[:50])
         wing_keywords = WINGS.get(wing, [])
 
+        # Import anti-fixation penalty (safe fallback if unavailable)
+        try:
+            from core.cognition_quality import get_fixation_penalty, primary_topic
+        except ImportError:
+            get_fixation_penalty = lambda t: 1.0
+            primary_topic = lambda t: 'unknown'
+
         for mem in results:
-            # Boost: multiply distance by 0.7 if content matches wing keywords
             content_lower = mem.get("content", "").lower()
+            dist = mem.get("distance") or 1.0
+
+            # Boost: multiply distance by 0.7 if content matches wing keywords
             if any(kw in content_lower for kw in wing_keywords):
-                mem["distance"] = (mem.get("distance") or 1.0) * 0.7
+                dist *= 0.7
+
+            # Anti-fixation: penalize memories about recently over-represented topics
+            mem_topic = mem.get("metadata", {}).get("cog_topic") or primary_topic(content_lower)
+            penalty = get_fixation_penalty(mem_topic)
+            dist *= penalty
+
+            mem["distance"] = dist
 
         results.sort(key=lambda m: m.get("distance") or 1.0)
         return results[:n]

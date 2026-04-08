@@ -43,6 +43,12 @@ from skills.reddit_skill import RedditSkill
 from skills.followup_queue import FollowUpQueue
 from skills.git_awareness import format_for_context as git_context
 from skills.dev_notifier import send_dev
+from core.cognition_quality import (
+    score_and_classify as cog_score_and_classify,
+    self_critique as cog_self_critique,
+    format_for_prompt as cog_format_for_prompt,
+    check_consolidation_quality as cog_check_consolidation,
+)
 from skills.disk_cleanup import scan as disk_scan, format_telegram_message as disk_msg, execute_cleanup
 from skills.self_analysis import analyze as self_analyze, format_for_telegram as analysis_telegram
 from skills.wake_word import start as wake_word_start, stop as wake_word_stop
@@ -103,6 +109,8 @@ class MaezDaemon:
         self._quality_tracker = QualityTracker()
         self._reflection_cycle_counter = 0
         self.REFLECTION_EVERY_N_CYCLES = 20  # every ~10 minutes
+        self._cognition_critique_counter = 0
+        self._last_cognition_critique: dict | None = None
         self._last_presence_snap: PresenceSnapshot | None = None
         self._presence_cycle_counter = 0
         self.PRESENCE_EVERY_N_CYCLES = 2  # every ~60 seconds
@@ -362,6 +370,11 @@ class MaezDaemon:
         reflection_context = self._quality_tracker.format_for_context()
         if reflection_context:
             prompt += f"\n{reflection_context}\n"
+
+        # Add cognition quality context
+        cog_context = cog_format_for_prompt(self._last_cognition_critique)
+        if cog_context:
+            prompt += f"\n{cog_context}\n"
 
         prompt += "\n"
 
@@ -874,9 +887,15 @@ class MaezDaemon:
                 summary = self.memory.consolidate_daily()
                 if summary:
                     logger.info("Daily consolidation complete: %d chars", len(summary))
+                    # Check consolidation quality
+                    cq = cog_check_consolidation(summary)
+                    quality_note = f"Quality: {'PASS' if cq['passed'] else 'FAIL'}"
+                    if not cq['passed']:
+                        quality_note += f" ({', '.join(cq['reasons'])})"
                     send_dev(
                         f"Daily memory consolidation complete.\n"
-                        f"Stats: {self.memory.memory_stats()}"
+                        f"Stats: {self.memory.memory_stats()}\n"
+                        f"{quality_note}"
                     )
             except Exception as e:
                 logger.error("Daily consolidation error: %s", e)
@@ -1349,6 +1368,20 @@ class MaezDaemon:
                 except Exception as e:
                     logger.error("Disk scan failed: %s", e)
 
+            # Cognition self-critique — every 20 cycles
+            self._cognition_critique_counter += 1
+            if self._cognition_critique_counter >= 20:
+                self._cognition_critique_counter = 0
+                try:
+                    critique = cog_self_critique()
+                    if critique:
+                        self._last_cognition_critique = critique
+                        if critique.get('should_write_soul_note') and critique.get('soul_note_reason'):
+                            logger.info("Cognition soul note: %s", critique['soul_note_reason'][:100])
+                            self.actions.write_soul_note(critique['soul_note_reason'])
+                except Exception as e:
+                    logger.debug("Cognition critique failed: %s", e)
+
             # Self-reflection — periodic insight check
             self._reflection_cycle_counter += 1
             if self._reflection_cycle_counter >= self.REFLECTION_EVERY_N_CYCLES:
@@ -1382,6 +1415,10 @@ class MaezDaemon:
                     if self._last_calendar_snap.next_event:
                         next_event = self._last_calendar_snap.next_event.title
 
+                # Score and classify BEFORE storage — enriched metadata in one write
+                full_thought = result + screen_note + calendar_note
+                cog_metadata = cog_score_and_classify(full_thought)
+
                 mem_metadata = {
                     "cpu_pct": snap["cpu"]["percent"],
                     "ram_pct": snap["ram"]["percent"],
@@ -1394,7 +1431,8 @@ class MaezDaemon:
                     "next_event": next_event,
                     "rohit_present": str(self._last_presence_snap.rohit_present) if self._last_presence_snap else "unknown",
                 }
-                self.memory.store(result + screen_note + calendar_note,
+                mem_metadata.update(cog_metadata)
+                self.memory.store(full_thought,
                                   cycle=self.cycle_count,
                                   snapshot=snap, metadata=mem_metadata)
 
