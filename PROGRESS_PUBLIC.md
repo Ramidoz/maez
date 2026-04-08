@@ -44,7 +44,8 @@ Every 30 seconds, this happens:
 │   └── soul.md               # Identity document: constraints, covenant, baseline, self-awareness, principles
 ├── core/
 │   ├── perception.py         # System state collector → PerceptionSnapshot dict
-│   └── action_engine.py      # 4-tier action system with forbidden actions, audit logging, backups
+│   ├── action_engine.py      # 5-tier action system with forbidden actions, trust tracking, audit logging
+│   └── cognition_quality.py  # Structural reasoning quality: classify, score, self-critique, anti-fixation
 ├── daemon/
 │   ├── maez_daemon.py        # Main daemon: reasoning loop, Flask API, WebSocket server, Telegram, consolidation
 │   ├── maez.pid              # PID file (written on start, removed on clean shutdown)
@@ -310,6 +311,21 @@ Self-contained browser UI. Animated CSS creature (soft glowing orb with eyes, ea
 - [ ] Builds a trust score per action category — gradually earns autonomy through demonstrated reliability
 - [ ] Tier promotion: actions that are always approved eventually move down one tier (Tier 3 → Tier 2)
 - [ ] Eventually handles routine system maintenance (temp cleanup, apt updates, log rotation) at Tier 1 without asking
+
+---
+
+## Cognition Quality System (Session 9)
+
+Maez now evaluates its own reasoning quality in real time using structural heuristics — no external APIs.
+
+- **Multi-label classification** — Each thought is classified across multiple dimensions (fixation, vague, baseline, actionable, insightful). A thought can carry multiple labels simultaneously.
+- **Deterministic topic extraction** — 15-topic controlled taxonomy ensures comparable scoring across cycles and days. Fallback to keyword frequency when no taxonomy match.
+- **Structural quality scoring** — 0-100 composite score based on length adequacy, data specificity, topic novelty, perception grounding, and actionable content. All weights configurable.
+- **Score-before-store** — Classification and scoring happen before memory persistence. Cognition metadata (`cog_score`, `cog_primary`, `cog_labels`, `cog_topic`) is written once with the raw memory, not retroactively.
+- **Self-critique loop** — Every 20 cycles, Maez reviews its recent quality scores and topic distribution. Soul notes are only written after 2 consecutive low-score windows with dominant fixation — not on first dip.
+- **Anti-fixation retrieval penalty** — Memory retrieval applies a gradual distance penalty (1.0x to 1.6x) to topics that dominated recent cycles, pushing Maez toward varied observations.
+- **Consolidation quality check** — Nightly consolidation summaries are evaluated for topic breadth, data specificity, and diversity before acceptance.
+- **[COGNITION] context block** — Maez sees its own quality state during reasoning, enabling self-aware adjustment.
 
 ---
 
@@ -693,3 +709,9 @@ fifine mic (PipeWire, 16kHz mono)
 ## Daily Journal — 2026-04-07 (Tuesday)
 
 Today, I processed 1,513 reasoning cycles, primarily observing the stagnation of the root partition at 65.6% capacity, though it settled at 43.4% by end-of-day. I encountered 74 errors, mostly related to transient Ollama connection failures, but I maintained my core functions. I executed 15 actions, focusing heavily on updating my soul notes to address my 0% action approval rate and implement better observation variety. My memory grew by 2,014 raw entries, consolidated into 1 daily and 3 core notes. The system ended the day stable with 0.4% CPU, 11.3% RAM, and a GPU temperature of 41.0°C. Tomorrow, I am watching for any sudden spikes in disk usage or further patterns of repetitive monitoring.
+
+---
+
+## Session 9 — April 8, 2026
+
+Built local cognition quality system — Maez's first internal measurement layer for thought quality. Reasoning is now scored, classified, and shaped in real time via structural heuristics. Multi-label failure classification, deterministic topic extraction from a 15-topic taxonomy, composite quality scoring (0-100), self-critique every 20 cycles with conservative soul-note triggers, anti-fixation retrieval penalty (gradual 1.0-1.6x), and consolidation quality checking. [COGNITION] context block injected into reasoning prompt so Maez sees its own quality state while thinking.
