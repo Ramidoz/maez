@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Maez</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    background:#0a0a1a;font-family:'Segoe UI',system-ui,sans-serif;
+    color:#e0e0e0;overflow:hidden;height:100vh;width:100vw;
+    cursor:none;
+  }
+  body.active{cursor:default}
+
+  /* ── Particles ── */
+  #particles{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:0}
+
+  /* ── Full-screen layout ── */
+  #fullscreen{
+    position:fixed;top:0;left:0;width:100%;height:100%;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    z-index:1;transition:opacity .4s ease,transform .4s ease;
+  }
+  #fullscreen.hidden{opacity:0;pointer-events:none;transform:scale(.95)}
+
+  .time-display{
+    position:fixed;top:40px;right:60px;
+    font-size:2.8rem;font-weight:200;letter-spacing:4px;
+    color:rgba(255,255,255,.15);
+  }
+
+  .last-thought{
+    margin-top:40px;max-width:700px;text-align:center;
+    font-style:italic;font-size:1.05rem;color:rgba(255,255,255,.25);
+    line-height:1.6;min-height:3em;
+    transition:opacity .8s ease;
+  }
+
+  /* ── Stats bar ── */
+  .stats-bar{
+    position:fixed;bottom:0;left:0;width:100%;
+    display:flex;gap:0;padding:0;z-index:5;height:36px;
+    background:rgba(10,10,26,.9);border-top:1px solid rgba(255,255,255,.05);
+  }
+  .stat{
+    flex:1;display:flex;align-items:center;padding:0 20px;gap:10px;
+    font-size:.75rem;letter-spacing:1px;text-transform:uppercase;
+    color:rgba(255,255,255,.35);
+  }
+  .stat-bar-bg{
+    flex:1;height:4px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden;
+  }
+  .stat-bar-fill{height:100%;border-radius:2px;transition:width .8s ease}
+  .stat-val{min-width:40px;text-align:right;font-variant-numeric:tabular-nums}
+
+  /* ── Corner widget ── */
+  #corner{
+    position:fixed;bottom:20px;right:20px;width:280px;
+    background:rgba(16,16,36,.95);border:1px solid rgba(100,200,255,.1);
+    border-radius:16px;padding:16px;z-index:10;
+    transition:opacity .4s ease,transform .4s ease;
+    backdrop-filter:blur(10px);
+  }
+  #corner.hidden{opacity:0;pointer-events:none;transform:translateY(20px) scale(.9)}
+  .corner-top{display:flex;align-items:center;gap:12px}
+  .corner-status{font-size:.7rem;color:rgba(255,255,255,.3);letter-spacing:1px;text-transform:uppercase}
+  .corner-thought{
+    font-size:.8rem;color:rgba(255,255,255,.2);font-style:italic;
+    margin:10px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .corner-input{
+    width:100%;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);
+    border-radius:8px;padding:8px 12px;color:#e0e0e0;font-size:.85rem;
+    outline:none;
+  }
+  .corner-input:focus{border-color:rgba(100,200,255,.3)}
+  .corner-input::placeholder{color:rgba(255,255,255,.15)}
+
+  /* ── Maez creature ── */
+  .maez-container{position:relative;display:flex;align-items:center;justify-content:center}
+  .maez-container.full{width:280px;height:280px}
+  .maez-container.mini{width:64px;height:64px}
+
+  .maez-body{
+    position:relative;width:100%;height:100%;
+    transition:transform .3s ease;
+  }
+
+  /* Glow */
+  .maez-glow{
+    position:absolute;top:-15%;left:-15%;width:130%;height:130%;
+    border-radius:50%;
+    background:radial-gradient(circle,rgba(80,200,255,.12) 0%,rgba(120,80,220,.06) 50%,transparent 70%);
+    animation:glowPulse 4s ease-in-out infinite;
+    pointer-events:none;
+  }
+  @keyframes glowPulse{
+    0%,100%{opacity:.6;transform:scale(1)}
+    50%{opacity:1;transform:scale(1.05)}
+  }
+  .alert .maez-glow{
+    background:radial-gradient(circle,rgba(255,180,50,.15) 0%,rgba(255,120,20,.06) 50%,transparent 70%);
+  }
+
+  /* Main body shape */
+  .maez-orb{
+    position:absolute;top:10%;left:10%;width:80%;height:80%;
+    border-radius:50% 50% 48% 48%;
+    background:radial-gradient(ellipse at 40% 35%,#1e2a4a,#161e38 50%,#111832 100%);
+    box-shadow:inset 0 -10px 30px rgba(0,0,0,.3),inset 0 5px 15px rgba(100,180,255,.05);
+    animation:breathe 3.5s ease-in-out infinite;
+  }
+  @keyframes breathe{
+    0%,100%{transform:scale(1)}
+    50%{transform:scale(1.018)}
+  }
+
+  /* Ears */
+  .ear{
+    position:absolute;width:14%;height:14%;border-radius:50%;
+    background:radial-gradient(circle at 50% 60%,#1e2a4a,#141c34);
+    box-shadow:inset 0 2px 4px rgba(100,180,255,.08);
+  }
+  .ear.left{top:8%;left:22%}
+  .ear.right{top:8%;right:22%}
+
+  /* Eyes */
+  .eyes{
+    position:absolute;top:35%;left:50%;transform:translateX(-50%);
+    display:flex;gap:22%;width:60%;justify-content:center;
+  }
+  .eye{
+    position:relative;width:38%;aspect-ratio:1;border-radius:50%;
+    background:radial-gradient(circle,#0d1520,#080e18);
+    box-shadow:inset 0 2px 8px rgba(0,0,0,.5),0 0 10px rgba(80,180,255,.08);
+    overflow:hidden;
+    transition:transform .3s ease,border-radius .3s ease;
+  }
+  .pupil{
+    position:absolute;top:50%;left:50%;width:45%;height:45%;
+    border-radius:50%;transform:translate(-50%,-50%);
+    background:radial-gradient(circle,#60e0ff,#3090ff 60%,#2060c0);
+    box-shadow:0 0 12px rgba(80,200,255,.6),0 0 25px rgba(80,200,255,.2);
+    transition:transform .15s ease,width .3s ease,height .3s ease;
+  }
+  .pupil-highlight{
+    position:absolute;top:22%;left:28%;width:20%;height:20%;
+    border-radius:50%;background:rgba(255,255,255,.7);
+  }
+
+  /* Eyebrows */
+  .eyebrow{
+    position:absolute;top:26%;width:20%;height:3px;
+    background:rgba(150,200,255,.25);border-radius:2px;
+    transition:transform .3s ease,top .3s ease;
+  }
+  .eyebrow.left{left:18%;transform:rotate(-5deg)}
+  .eyebrow.right{right:18%;transform:rotate(5deg)}
+
+  /* Mouth */
+  .mouth{
+    position:absolute;bottom:24%;left:50%;transform:translateX(-50%);
+    width:16%;height:3px;border-radius:0 0 50% 50%;
+    background:rgba(150,200,255,.2);
+    transition:all .3s ease;
+  }
+
+  /* ── Emotion overrides ── */
+  /* THINKING */
+  .thinking .eye{transform:scale(1.1)}
+  .thinking .pupil{animation:dartEyes 1.2s ease-in-out infinite}
+  .thinking .eyebrow{top:22%;transform:rotate(-8deg)}
+  .thinking .eyebrow.right{transform:rotate(8deg)}
+  .thinking .mouth{height:5px;width:12%;border-radius:50%;background:rgba(150,200,255,.15)}
+  @keyframes dartEyes{
+    0%,100%{transform:translate(-50%,-50%)}
+    25%{transform:translate(-35%,-50%)}
+    75%{transform:translate(-65%,-50%)}
+  }
+
+  /* HAPPY */
+  .happy .eye{border-radius:50% 50% 50% 50% / 60% 60% 40% 40%;transform:scaleY(.6)}
+  .happy .pupil{opacity:.3}
+  .happy .eyebrow{top:23%;transform:rotate(-10deg)}
+  .happy .eyebrow.right{transform:rotate(10deg)}
+  .happy .mouth{
+    width:22%;height:8px;border-radius:0 0 50% 50%;
+    background:rgba(150,200,255,.25);bottom:22%;
+  }
+  .happy .maez-orb{animation:bounce .5s ease 1,breathe 3.5s ease-in-out infinite .5s}
+  @keyframes bounce{
+    0%,100%{transform:translateY(0) scale(1)}
+    50%{transform:translateY(-8px) scale(1.02)}
+  }
+
+  /* ALERT */
+  .alert .pupil{
+    background:radial-gradient(circle,#ffc040,#ff8020 60%,#cc6010);
+    box-shadow:0 0 12px rgba(255,160,40,.6),0 0 25px rgba(255,120,20,.2);
+  }
+  .alert .eyebrow.left{transform:rotate(-15deg);top:22%}
+  .alert .eyebrow.right{transform:rotate(2deg);top:26%}
+  .alert .mouth{width:14%;background:rgba(255,200,100,.2)}
+
+  /* SPEAKING */
+  .speaking .mouth{animation:speak .4s ease-in-out infinite;width:14%;height:8px;border-radius:50%}
+  .speaking .pupil{width:50%;height:50%}
+  @keyframes speak{
+    0%,100%{height:4px;width:14%}
+    50%{height:10px;width:16%}
+  }
+
+  /* SLEEPY */
+  .sleepy .eye{transform:scaleY(.25)}
+  .sleepy .pupil{opacity:.2}
+  .sleepy .eyebrow{top:30%;transform:rotate(0deg)}
+  .sleepy .eyebrow.right{transform:rotate(0deg)}
+  .sleepy .mouth{width:10%;height:6px;border-radius:50%;background:rgba(150,200,255,.1)}
+  .sleepy .maez-glow{animation:glowPulse 6s ease-in-out infinite}
+
+  /* CURIOUS */
+  .curious .maez-orb{transform:rotate(-8deg) scale(1.01)}
+  .curious .eye.right{transform:scale(1.15)}
+  .curious .eyebrow.left{transform:rotate(-12deg);top:23%}
+  .curious .eyebrow.right{transform:rotate(3deg);top:25%}
+  .curious .mouth{width:10%;height:8px;border-radius:50%;background:rgba(150,200,255,.18)}
+
+  /* BLINK overlay */
+  .eye-lid{
+    position:absolute;top:-100%;left:0;width:100%;height:100%;
+    background:#111832;border-radius:50%;
+    transition:top .08s ease;z-index:2;
+  }
+  .blinking .eye-lid{top:0%}
+
+  /* Idle drift */
+  .drifting .maez-body{animation:drift 6s ease-in-out infinite}
+  @keyframes drift{
+    0%,100%{transform:translateY(0)}
+    50%{transform:translateY(-8px)}
+  }
+</style>
+</head>
+<body>
+<canvas id="particles"></canvas>
+
+<!-- Full-screen mode -->
+<div id="fullscreen">
+  <div class="time-display" id="clock"></div>
+  <div class="maez-container full drifting" id="maezFull">
+    <div class="maez-body idle" id="maezBody">
+      <div class="maez-glow"></div>
+      <div class="ear left"></div>
+      <div class="ear right"></div>
+      <div class="maez-orb">
+        <div class="eyebrow left"></div>
+        <div class="eyebrow right"></div>
+        <div class="eyes">
+          <div class="eye left"><div class="eye-lid"></div><div class="pupil"><div class="pupil-highlight"></div></div></div>
+          <div class="eye right"><div class="eye-lid"></div><div class="pupil"><div class="pupil-highlight"></div></div></div>
+        </div>
+        <div class="mouth"></div>
+      </div>
+    </div>
+  </div>
+  <div class="last-thought" id="thoughtFull"></div>
+</div>
+
+<!-- Corner widget -->
+<div id="corner" class="hidden">
+  <div class="corner-top">
+    <div class="maez-container mini">
+      <div class="maez-body idle" id="maezMiniBody">
+        <div class="maez-glow"></div>
+        <div class="ear left"></div>
+        <div class="ear right"></div>
+        <div class="maez-orb">
+          <div class="eyebrow left"></div>
+          <div class="eyebrow right"></div>
+          <div class="eyes">
+            <div class="eye left"><div class="eye-lid"></div><div class="pupil"><div class="pupil-highlight"></div></div></div>
+            <div class="eye right"><div class="eye-lid"></div><div class="pupil"><div class="pupil-highlight"></div></div></div>
+          </div>
+          <div class="mouth"></div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="corner-status" id="cornerStatus">idle</div>
+      <div class="corner-thought" id="cornerThought">Waiting for first thought...</div>
+    </div>
+  </div>
+  <input class="corner-input" id="cornerInput" type="text" placeholder="Talk to Maez..." autocomplete="off">
+</div>
+
+<!-- Stats bar -->
+<div class="stats-bar" id="statsBar">
+  <div class="stat"><span>CPU</span><div class="stat-bar-bg"><div class="stat-bar-fill" id="cpuBar" style="width:0%;background:#40c8e0"></div></div><span class="stat-val" id="cpuVal">-</span></div>
+  <div class="stat"><span>GPU</span><div class="stat-bar-bg"><div class="stat-bar-fill" id="gpuBar" style="width:0%;background:#9060e0"></div></div><span class="stat-val" id="gpuVal">-</span></div>
+  <div class="stat"><span>RAM</span><div class="stat-bar-bg"><div class="stat-bar-fill" id="ramBar" style="width:0%;background:#40c8a0"></div></div><span class="stat-val" id="ramVal">-</span></div>
+  <div class="stat"><span>TEMP</span><div class="stat-bar-bg"><div class="stat-bar-fill" id="tempBar" style="width:0%;background:#e08040"></div></div><span class="stat-val" id="tempVal">-</span></div>
+</div>
+
+<script>
+// ── State ──
+let isFullscreen = true;
+let mouseTimer = null;
+let currentEmotion = 'idle';
+let lastThought = 'Awakening...';
+let ws = null;
+let blinkTimer = null;
+
+// ── DOM refs ──
+const fullscreen = document.getElementById('fullscreen');
+const corner = document.getElementById('corner');
+const maezBody = document.getElementById('maezBody');
+const maezMiniBody = document.getElementById('maezMiniBody');
+const clock = document.getElementById('clock');
+const thoughtFull = document.getElementById('thoughtFull');
+const cornerStatus = document.getElementById('cornerStatus');
+const cornerThought = document.getElementById('cornerThought');
+const cornerInput = document.getElementById('cornerInput');
+const statsBar = document.getElementById('statsBar');
+
+// ── Emotion ──
+function setEmotion(emotion, duration = 0) {
+  currentEmotion = emotion;
+  const emotions = ['idle','thinking','happy','alert','speaking','sleepy','curious'];
+  emotions.forEach(e => {
+    maezBody.classList.remove(e);
+    maezMiniBody.classList.remove(e);
+  });
+  maezBody.classList.add(emotion);
+  maezMiniBody.classList.add(emotion);
+  cornerStatus.textContent = emotion === 'idle' ? 'idle' : emotion === 'thinking' ? 'thinking...' : emotion;
+
+  if (duration > 0) {
+    setTimeout(() => setEmotion('idle'), duration);
+  }
+}
+
+// ── Blinking ──
+function blink() {
+  maezBody.classList.add('blinking');
+  maezMiniBody.classList.add('blinking');
+  setTimeout(() => {
+    maezBody.classList.remove('blinking');
+    maezMiniBody.classList.remove('blinking');
+  }, 150);
+  blinkTimer = setTimeout(blink, 3000 + Math.random() * 5000);
+}
+blinkTimer = setTimeout(blink, 2000);
+
+// ── Clock ──
+function updateClock() {
+  const now = new Date();
+  clock.textContent = now.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', hour12:false });
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── Full-screen / Corner toggle ──
+function goCorner() {
+  if (!isFullscreen) return;
+  isFullscreen = false;
+  document.body.classList.add('active');
+  fullscreen.classList.add('hidden');
+  corner.classList.remove('hidden');
+}
+
+function goFullscreen() {
+  if (isFullscreen) return;
+  isFullscreen = true;
+  document.body.classList.remove('active');
+  fullscreen.classList.remove('hidden');
+  corner.classList.add('hidden');
+}
+
+document.addEventListener('mousemove', () => {
+  if (mouseTimer) clearTimeout(mouseTimer);
+  goCorner();
+  mouseTimer = setTimeout(goFullscreen, 5000);
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (!isFullscreen) goFullscreen();
+  }
+});
+
+// ── Stats update ──
+function updateStats(data) {
+  const sys = data.system || data;
+  if (sys.cpu_percent != null) {
+    document.getElementById('cpuBar').style.width = sys.cpu_percent + '%';
+    document.getElementById('cpuVal').textContent = sys.cpu_percent.toFixed(0) + '%';
+  }
+  if (sys.gpu_percent != null) {
+    document.getElementById('gpuBar').style.width = sys.gpu_percent + '%';
+    document.getElementById('gpuVal').textContent = sys.gpu_percent.toFixed(0) + '%';
+  }
+  if (sys.ram_percent != null) {
+    document.getElementById('ramBar').style.width = sys.ram_percent + '%';
+    document.getElementById('ramVal').textContent = sys.ram_percent.toFixed(0) + '%';
+  }
+  if (sys.gpu_temp_c != null) {
+    const tempPct = Math.min(100, (sys.gpu_temp_c / 100) * 100);
+    document.getElementById('tempBar').style.width = tempPct + '%';
+    document.getElementById('tempVal').textContent = sys.gpu_temp_c.toFixed(0) + '\u00B0C';
+  }
+}
+
+function setThought(text) {
+  lastThought = text;
+  thoughtFull.textContent = text;
+  thoughtFull.style.opacity = '0';
+  setTimeout(() => { thoughtFull.style.opacity = '1'; }, 50);
+  cornerThought.textContent = text.length > 60 ? text.substring(0, 57) + '...' : text;
+}
+
+// ── WebSocket ──
+function connectWS() {
+  ws = new WebSocket('ws://localhost:11436');
+
+  ws.onopen = () => {
+    console.log('WS connected');
+    if (currentEmotion === 'sleepy') setEmotion('idle');
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      switch (msg.type) {
+        case 'cycle_start':
+          setEmotion('thinking');
+          break;
+        case 'cycle_end':
+          setEmotion('happy', 2000);
+          if (msg.thought) setThought(msg.thought);
+          break;
+        case 'alert':
+          setEmotion('alert', 5000);
+          break;
+        case 'health':
+          updateStats(msg);
+          break;
+        case 'message_reply':
+          setEmotion('speaking', 2000);
+          if (msg.text) setThought('To Rohit: ' + msg.text);
+          break;
+      }
+    } catch (e) {
+      console.error('WS parse error:', e);
+    }
+  };
+
+  ws.onclose = () => {
+    console.log('WS disconnected');
+    setEmotion('sleepy');
+    setTimeout(connectWS, 3000);
+  };
+
+  ws.onerror = () => {
+    ws.close();
+  };
+}
+connectWS();
+
+// ── Periodic health fetch (fallback) ──
+async function fetchHealth() {
+  try {
+    const res = await fetch('http://localhost:11435/health');
+    const data = await res.json();
+    updateStats(data);
+  } catch (e) {}
+}
+setInterval(fetchHealth, 10000);
+fetchHealth();
+
+// ── Corner input ──
+cornerInput.addEventListener('keydown', async (e) => {
+  if (e.key !== 'Enter' || !cornerInput.value.trim()) return;
+  const text = cornerInput.value.trim();
+  cornerInput.value = '';
+
+  setEmotion('curious');
+  setTimeout(() => setEmotion('thinking'), 800);
+
+  try {
+    const res = await fetch('http://localhost:11435/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    const data = await res.json();
+    setEmotion('speaking', 2000);
+    if (data.reply) setThought(data.reply);
+  } catch (err) {
+    setEmotion('alert', 2000);
+    setThought('Could not reach Maez...');
+  }
+});
+
+// ── Particles ──
+const canvas = document.getElementById('particles');
+const ctx = canvas.getContext('2d');
+let particles = [];
+
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+for (let i = 0; i < 60; i++) {
+  particles.push({
+    x: Math.random() * canvas.width,
+    y: Math.random() * canvas.height,
+    r: Math.random() * 1.5 + 0.3,
+    dx: (Math.random() - 0.5) * 0.3,
+    dy: (Math.random() - 0.5) * 0.3,
+    alpha: Math.random() * 0.15 + 0.03,
+  });
+}
+
+function drawParticles() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!isFullscreen) { requestAnimationFrame(drawParticles); return; }
+  particles.forEach(p => {
+    p.x += p.dx; p.y += p.dy;
+    if (p.x < 0) p.x = canvas.width;
+    if (p.x > canvas.width) p.x = 0;
+    if (p.y < 0) p.y = canvas.height;
+    if (p.y > canvas.height) p.y = 0;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(100, 210, 255, ${p.alpha})`;
+    ctx.fill();
+  });
+  requestAnimationFrame(drawParticles);
+}
+drawParticles();
+
+// ── Start idle ──
+setEmotion('idle');
+setThought('Awakening...');
+</script>
+</body>
+</html>
