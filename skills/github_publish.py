@@ -102,19 +102,16 @@ class GitHubPublisher:
         git('config', 'user.name', 'Maez')
 
     def sanitize_progress(self, content: str) -> str:
-        """Strip personal content from PROGRESS.md."""
+        """Strip personal content from any text before publishing."""
+        content = re.sub(r'\b100\.125\.42\.76\b', '[private-ip]', content)
+        content = re.sub(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', '[ip-redacted]', content)
         lines = content.split('\n')
         sanitized = []
         for line in lines:
-            # Skip lines with personal names, Telegram IDs, phone numbers
-            if re.search(r'\b([person]|[person])\b', line):
-                sanitized.append(re.sub(r'\b([person]|[person])\b', '[person]', line))
-                continue
             if re.search(r'\b\d{7,}\b', line) and not re.search(r'\b\d{4}-\d{2}-\d{2}\b', line):
-                # Skip lines with 7+ digit numbers that aren't dates
                 sanitized.append('[private]')
-                continue
-            sanitized.append(line)
+            else:
+                sanitized.append(line)
         return '\n'.join(sanitized)
 
     def _generate_commit_message(self) -> str:
@@ -196,13 +193,18 @@ Rohit Ananthan — [@Ramidoz](https://github.com/Ramidoz)
         # Write README
         self._write_readme()
 
-        # Sanitize and write PROGRESS_PUBLIC.md
+        # PROGRESS_PUBLIC.md is maintained directly — just run sanitizer as safety net
+        progress_public = os.path.join(MAEZ_ROOT, 'PROGRESS_PUBLIC.md')
         try:
-            with open(os.path.join(MAEZ_ROOT, 'PROGRESS.md')) as f:
-                progress = f.read()
-            sanitized = self.sanitize_progress(progress)
-            with open(os.path.join(MAEZ_ROOT, 'PROGRESS_PUBLIC.md'), 'w') as f:
-                f.write(sanitized)
+            if os.path.exists(progress_public):
+                with open(progress_public) as f:
+                    content = f.read()
+                sanitized = self.sanitize_progress(content)
+                with open(progress_public, 'w') as f:
+                    f.write(sanitized)
+            else:
+                logger.warning("[GITHUB] PROGRESS_PUBLIC.md not found — skipping")
+                return False
         except Exception as e:
             logger.error("[GITHUB] Progress sanitize failed: %s", e)
             return False

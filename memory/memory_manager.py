@@ -26,7 +26,7 @@ WINGS = {
     'system': ['cpu', 'ram', 'gpu', 'disk', 'memory', 'partition', 'temperature', 'process'],
     'rohit': ['rohit', 'desk', 'presence', 'arrived', 'away', 'focus', 'deep work', 'break'],
     'development': ['code', 'python', 'git', 'claude', 'claude code', 'error', 'debug', 'deploy'],
-    'people': ['[person]', 'telegram', 'message', 'conversation', 'public bot', 'user'],
+    'people': ['telegram', 'message', 'conversation', 'public bot', 'user'],
     'maez': ['soul', 'reasoning', 'cycle', 'evolution', 'self', 'improvement'],
     'external': ['news', 'reddit', 'github', 'search', 'web', 'trending'],
 }

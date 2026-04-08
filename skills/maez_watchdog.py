@@ -22,7 +22,7 @@ LOG_PATH = Path("/home/rohit/maez/logs/maez_watchdog.log")
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 POLL_INTERVAL = 60  # seconds
-SSH_HOST = "rohit@[private-ip]"
+SSH_HOST = "rohit@maez.live"
 
 # --- Logging ---
 logger = logging.getLogger("maez_watchdog")

@@ -21,3 +21,4 @@ ui/electron/dist/
 *.bak
 *.bak2
 /tmp/
+PROGRESS.md
