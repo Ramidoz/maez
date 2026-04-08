@@ -6,9 +6,9 @@ Not a chatbot. Not an assistant you summon. A presence that lives in the OS,
 perceives the full state of the machine every 30 seconds, remembers everything
 forever, and thinks even when no one is talking to it.
 
-## Talk to Maez
+## Live at
 
-**[http://maez.live:11437](http://maez.live:11437)** — Register and start a conversation.
+**[http://maez.live](http://maez.live)** — Register and start a conversation.
 
 ## What Makes Maez Different
 
