@@ -46,8 +46,11 @@ from skills.dev_notifier import send_dev
 from core.cognition_quality import (
     score_and_classify as cog_score_and_classify,
     self_critique as cog_self_critique,
-    format_for_prompt as cog_format_for_prompt,
+    format_active_prompt as cog_format_active_prompt,
     check_consolidation_quality as cog_check_consolidation,
+    get_behavior_policy as cog_get_behavior_policy,
+    should_retry as cog_should_retry,
+    build_retry_prompt as cog_build_retry_prompt,
 )
 from skills.disk_cleanup import scan as disk_scan, format_telegram_message as disk_msg, execute_cleanup
 from skills.self_analysis import analyze as self_analyze, format_for_telegram as analysis_telegram
@@ -111,6 +114,7 @@ class MaezDaemon:
         self.REFLECTION_EVERY_N_CYCLES = 20  # every ~10 minutes
         self._cognition_critique_counter = 0
         self._last_cognition_critique: dict | None = None
+        self._last_reasoning_prompt: str = ""
         self._last_presence_snap: PresenceSnapshot | None = None
         self._presence_cycle_counter = 0
         self.PRESENCE_EVERY_N_CYCLES = 2  # every ~60 seconds
@@ -371,8 +375,8 @@ class MaezDaemon:
         if reflection_context:
             prompt += f"\n{reflection_context}\n"
 
-        # Add cognition quality context
-        cog_context = cog_format_for_prompt(self._last_cognition_critique)
+        # Add active cognition block — always populated once data exists
+        cog_context = cog_format_active_prompt()
         if cog_context:
             prompt += f"\n{cog_context}\n"
 
@@ -398,6 +402,9 @@ class MaezDaemon:
             f"Remember: NEVER suggest touching ollama, its models, or any "
             f"process that powers your reasoning."
         )
+
+        # Store prompt for potential retry use
+        self._last_reasoning_prompt = prompt
 
         # Skip reasoning if voice command has the GPU
         acquired = self._ollama_lock.acquire(timeout=0)
@@ -1418,6 +1425,64 @@ class MaezDaemon:
                 # Score and classify BEFORE storage — enriched metadata in one write
                 full_thought = result + screen_note + calendar_note
                 cog_metadata = cog_score_and_classify(full_thought)
+                retried = False
+
+                # Retry path: if thought is below floor or matches reject combos
+                try:
+                    if cog_should_retry(cog_metadata):
+                        policy = cog_get_behavior_policy()
+                        retry_instruction = cog_build_retry_prompt(cog_metadata, policy)
+                        initial_score = cog_metadata.get('cog_score', 0)
+                        initial_labels = cog_metadata.get('cog_labels', '')
+                        logger.info("Cycle %d: retry triggered (score=%d, labels=%s)",
+                                    self.cycle_count, initial_score, initial_labels)
+
+                        # One corrective retry — append instruction to existing prompt
+                        last_prompt = getattr(self, '_last_reasoning_prompt', '')
+                        acquired = self._ollama_lock.acquire(timeout=0)
+                        if acquired:
+                            try:
+                                retry_response = ollama.chat(
+                                    model=MODEL,
+                                    messages=[
+                                        {"role": "system", "content": self.system_prompt},
+                                        {"role": "user", "content": last_prompt},
+                                        {"role": "assistant", "content": result},
+                                        {"role": "user", "content": retry_instruction},
+                                    ],
+                                    options={"temperature": 0.8, "num_predict": 300},
+                                )
+                                retry_content = retry_response.message.content.strip()
+                                if retry_content and retry_content != "(empty response)":
+                                    # Re-score the retry
+                                    retry_thought = retry_content + screen_note + calendar_note
+                                    retry_cog = cog_score_and_classify(retry_thought)
+
+                                    if retry_cog.get('cog_score', 0) > initial_score:
+                                        # Retry is better — use it
+                                        full_thought = retry_thought
+                                        result = retry_content
+                                        cog_metadata = retry_cog
+                                        cog_metadata['cog_retried'] = 'improved'
+                                        cog_metadata['cog_initial_score'] = initial_score
+                                        cog_metadata['cog_initial_labels'] = initial_labels
+                                        retried = True
+                                        logger.info("Cycle %d: retry improved %d → %d",
+                                                    self.cycle_count, initial_score,
+                                                    retry_cog.get('cog_score', 0))
+                                    else:
+                                        # Retry didn't help — keep original
+                                        cog_metadata['cog_retried'] = 'kept_original'
+                                        cog_metadata['cog_retry_score'] = retry_cog.get('cog_score', 0)
+                                        logger.info("Cycle %d: retry not better (%d vs %d), keeping original",
+                                                    self.cycle_count, retry_cog.get('cog_score', 0), initial_score)
+                            except Exception as e:
+                                logger.debug("Retry generation failed: %s", e)
+                                cog_metadata['cog_retried'] = 'failed'
+                            finally:
+                                self._ollama_lock.release()
+                except Exception as e:
+                    logger.debug("Retry check failed: %s", e)
 
                 mem_metadata = {
                     "cpu_pct": snap["cpu"]["percent"],
