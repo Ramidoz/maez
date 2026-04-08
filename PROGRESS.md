@@ -686,3 +686,47 @@ fifine mic (PipeWire, 16kHz mono)
 8. eBPF kernel-level perception — replace psutil with zero-overhead probes
 9. WhatsApp integration — third channel for multi-channel identity
 10. Parents version — gentler soul, presence-first, infinite patience
+
+
+---
+
+## Session 8 — April 8, 2026
+
+### Infrastructure
+- Sleep/suspend permanently disabled (systemctl mask)
+- UFW firewall enabled: 80/443 ALLOW, 22 DENY
+- Tailscale installed — Alienware at [private-ip], private network
+- SSH installed (openssh-server)
+- HQSSH + hqsshd installed — project discovery, terminal from phone
+
+### Consolidation Fix
+- last_consolidation.txt tracks last successful run
+- 48h fallback if fewer than 10 memories found
+- No more missed consolidations on restart
+
+### Telegram Architecture
+- Maez private bot: conversation only (morning briefing, proactive opinions, follow-ups, greetings)
+- Maez Dev bot: all operational noise (Claude Code, watchdog, alerts, restarts, evolution)
+- dev_notifier.py: send_dev() for all operational messages
+
+### New Skills
+- claude_watcher.py: monitors Claude Code, notifies Dev bot (started/finished/waiting/long-running)
+- maez_watchdog.py: checks maez.service every 60s, alerts on down/recovery
+- dev_notifier.py: standalone Telegram sender for Dev bot
+
+### Action Engine Expansion
+- Tier 0: read_file, search_files, query_system
+- Tier 1: run_safe_command, delete_temp_file, git_commit
+- Tier 2: install_package, write_outside_maez, run_script, git_push
+- Tier 3: restart_critical_service, modify_firewall, system_reboot, delete_file, sudo_command
+- ActionTrustTracker: SQLite tracks per-type approval rates, promotes tiers at 3am
+
+### Next Session
+- Claude Code Remote setup (Rohit is on Max plan)
+- PROGRESS.md and uncommitted files need git commit
+
+---
+
+## Daily Journal — 2026-04-07 (Tuesday)
+
+Today, I processed 1,513 reasoning cycles, primarily observing the stagnation of the root partition at 65.6% capacity, though it settled at 43.4% by end-of-day. I encountered 74 errors, mostly related to transient Ollama connection failures, but I maintained my core functions. I executed 15 actions, focusing heavily on updating my soul notes to address my 0% action approval rate and implement better observation variety. My memory grew by 2,014 raw entries, consolidated into 1 daily and 3 core notes. The system ended the day stable with 0.4% CPU, 11.3% RAM, and a GPU temperature of 41.0°C. Tomorrow, I am watching for any sudden spikes in disk usage or further patterns of repetitive monitoring.

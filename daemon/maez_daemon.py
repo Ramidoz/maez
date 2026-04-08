@@ -42,6 +42,7 @@ from skills.github_skill import GitHubSkill
 from skills.reddit_skill import RedditSkill
 from skills.followup_queue import FollowUpQueue
 from skills.git_awareness import format_for_context as git_context
+from skills.dev_notifier import send_dev
 from skills.disk_cleanup import scan as disk_scan, format_telegram_message as disk_msg, execute_cleanup
 from skills.self_analysis import analyze as self_analyze, format_for_telegram as analysis_telegram
 from skills.wake_word import start as wake_word_start, stop as wake_word_stop
@@ -768,7 +769,7 @@ class MaezDaemon:
 
         alert_msg = f"[Cycle {self.cycle_count}]\n" + "\n".join(f"⚠ {r}" for r in reasons)
         logger.info("Alert sent: %s", ", ".join(reasons))
-        self.telegram.send_message(alert_msg)
+        send_dev(alert_msg)
         self._last_alert_time = now
 
     # ------------------------------------------------------------------ #
@@ -840,7 +841,7 @@ class MaezDaemon:
                 summary = self.memory.consolidate_daily()
                 if summary:
                     logger.info("Missed consolidation complete: %d chars", len(summary))
-                    self.telegram.send_message(
+                    send_dev(
                         f"Missed consolidation recovered.\n"
                         f"Stats: {self.memory.memory_stats()}"
                     )
@@ -873,7 +874,7 @@ class MaezDaemon:
                 summary = self.memory.consolidate_daily()
                 if summary:
                     logger.info("Daily consolidation complete: %d chars", len(summary))
-                    self.telegram.send_message(
+                    send_dev(
                         f"Daily memory consolidation complete.\n"
                         f"Stats: {self.memory.memory_stats()}"
                     )
@@ -885,7 +886,7 @@ class MaezDaemon:
                 analysis = self_analyze(self.memory, self.actions)
                 if analysis:
                     msg = analysis_telegram(analysis)
-                    self.telegram.send_message(f"Nightly self-analysis:\n{msg}")
+                    send_dev(f"Nightly self-analysis:\n{msg}")
                     logger.info("Self-analysis complete")
             except Exception as e:
                 logger.error("Self-analysis failed: %s", e)
@@ -898,6 +899,19 @@ class MaezDaemon:
             except Exception as e:
                 logger.debug("Wing migration failed: %s", e)
 
+            # Check action trust promotions
+            try:
+                candidates = self.actions.check_promotions()
+                if candidates:
+                    types_str = ", ".join(c['action_type'] for c in candidates)
+                    send_dev(
+                        f"Maez has earned higher autonomy for: {types_str}.\n"
+                        f"Reply /promote <action_type> to lower its tier."
+                    )
+                    logger.info("Trust promotion candidates: %s", types_str)
+            except Exception as e:
+                logger.debug("Trust promotion check failed: %s", e)
+
             # Evolution cycle after self-analysis
             try:
                 from skills.evolution_engine import run_evolution_cycle, format_morning_report
@@ -906,10 +920,10 @@ class MaezDaemon:
                 if weaknesses:
                     logger.info("Evolution: %d weaknesses found", len(weaknesses))
                     self._evolution_summary = run_evolution_cycle(
-                        weaknesses, telegram_callback=self.telegram.send_message,
+                        weaknesses, telegram_callback=send_dev,
                     )
                     evo_msg = format_morning_report(self._evolution_summary)
-                    self.telegram.send_message(f"Nightly evolution:\n{evo_msg}")
+                    send_dev(f"Nightly evolution:\n{evo_msg}")
                 else:
                     logger.info("No weaknesses — skipping evolution")
             except Exception as e:
@@ -1317,7 +1331,7 @@ class MaezDaemon:
             if self.cycle_count % 20 == 0:
                 try:
                     from skills.evolution_engine import check_and_revert
-                    check_and_revert(self.memory, telegram_callback=self.telegram.send_message)
+                    check_and_revert(self.memory, telegram_callback=send_dev)
                 except Exception as e:
                     logger.debug("Evolution check failed: %s", e)
 
@@ -1328,7 +1342,7 @@ class MaezDaemon:
                     report = disk_scan()
                     if report['total_bytes'] > 100 * 1024 * 1024:
                         msg = disk_msg(report)
-                        self.telegram.send_message(msg)
+                        send_dev(msg)
                         self._pending_cleanup = report
                         logger.info("Disk cleanup proposed: %.0f MB",
                                     report['total_bytes'] / (1024 * 1024))
@@ -1511,7 +1525,7 @@ class MaezDaemon:
             f"Memory: {stats['raw']} raw, {stats['daily']} daily, {stats['core']} core"
         )
         time.sleep(2)
-        self.telegram.send_message(startup_msg)
+        send_dev(startup_msg)
 
         # Check if daily consolidation was missed while offline
         self._missed_consolidation = False

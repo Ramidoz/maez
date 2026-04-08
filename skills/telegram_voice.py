@@ -103,6 +103,27 @@ def _get_public_context_for_telegram() -> str:
 SOUL_PATH = Path("/home/rohit/maez/config/soul.md")
 MODEL = "gemma4:26b"
 
+# --- Natural language intent detection ---
+MACHINE_INTENTS = {
+    'status':       ['how is everything', 'system status', "what's running", 'all good', 'services ok'],
+    'logs':         ['show logs', 'recent logs', 'any errors', 'what happened', 'check logs'],
+    'restart_maez': ['restart yourself', 'restart maez', 'reboot yourself'],
+    'claude_status':['claude code', "what's claude doing", 'is claude running', 'build status'],
+    'reboot':       ['reboot the machine', 'restart the computer', 'reboot system'],
+    'disk':         ['disk space', 'storage', 'partition', 'how much space'],
+    'memory':       ['how many memories', 'memory count', 'what do you remember'],
+}
+
+
+def _match_intent(text: str) -> str | None:
+    """Match user text to a machine intent. Returns intent name or None."""
+    text_lower = text.lower().strip()
+    for intent, phrases in MACHINE_INTENTS.items():
+        for phrase in phrases:
+            if phrase in text_lower:
+                return intent
+    return None
+
 
 class TelegramVoice:
     def __init__(self, memory: MemoryManager):
@@ -192,10 +213,96 @@ class TelegramVoice:
             finally:
                 self._generating = False
 
+    async def _execute_intent(self, intent: str, update, context) -> str | None:
+        """Execute a matched machine intent and return formatted response."""
+        import subprocess as _sp
+        import time as _time
+
+        try:
+            if intent == 'status':
+                snap = perception_snapshot()
+                gpu = snap.get("gpu") or {}
+                services = _sp.run(
+                    ["systemctl", "is-active", "maez", "maez-web", "nginx", "ollama"],
+                    capture_output=True, text=True, timeout=5,
+                ).stdout.strip().split('\n')
+                svc_names = ['maez', 'maez-web', 'nginx', 'ollama']
+                svc_str = " | ".join(f"{n}: {s}" for n, s in zip(svc_names, services))
+                msg = (
+                    f"All systems nominal.\n"
+                    f"CPU {snap['cpu']['percent']}% | RAM {snap['ram']['percent']}% | "
+                    f"GPU {gpu.get('temperature_c', '?')}°C\n"
+                    f"VRAM {gpu.get('memory_used_mb', 0):.0f}MB | "
+                    f"Disk {snap['disk']['percent']}%\n"
+                    f"Services: {svc_str}\n"
+                    f"Memories: {self.memory.count()}"
+                )
+                return msg
+
+            elif intent == 'logs':
+                result = _sp.run(
+                    ["tail", "-20", "/home/rohit/maez/logs/maez.log"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                errors = [l for l in result.stdout.split('\n') if 'ERROR' in l or 'WARNING' in l]
+                if errors:
+                    return f"Recent issues ({len(errors)}):\n" + "\n".join(errors[-5:])
+                return "Logs are clean. No errors or warnings in the last 20 lines."
+
+            elif intent == 'restart_maez':
+                return ("I can't restart myself — that would interrupt this conversation. "
+                        "Run `sudo systemctl restart maez` from terminal if needed.")
+
+            elif intent == 'claude_status':
+                result = _sp.run(
+                    ["pgrep", "-a", "claude"], capture_output=True, text=True, timeout=5,
+                )
+                if result.stdout.strip():
+                    lines = result.stdout.strip().split('\n')
+                    return f"Claude Code is running ({len(lines)} process{'es' if len(lines) > 1 else ''})."
+                return "Claude Code is not currently running."
+
+            elif intent == 'reboot':
+                return ("System reboot requires explicit approval. "
+                        "Say 'approve reboot' or run `sudo reboot` from terminal.")
+
+            elif intent == 'disk':
+                result = _sp.run(
+                    ["df", "-h", "/", "/home"], capture_output=True, text=True, timeout=5,
+                )
+                return f"Disk usage:\n{result.stdout.strip()}"
+
+            elif intent == 'memory':
+                stats = self.memory.memory_stats()
+                return (
+                    f"Memory banks:\n"
+                    f"  Raw archive: {stats['raw']} memories\n"
+                    f"  Daily consolidations: {stats['daily']}\n"
+                    f"  Core memories: {stats['core']}\n"
+                    f"  Total: {stats['total']}"
+                )
+
+        except Exception as e:
+            logger.error("Intent execution failed (%s): %s", intent, e)
+            return None
+
+        return None
+
     async def _process_message(self, update, context, user_text: str) -> str:
         """Build context, stream response, handle post-processing."""
         import re as _re
         import time as _time
+
+        # Check for machine intent first
+        intent = _match_intent(user_text)
+        if intent:
+            logger.info("Matched intent: %s for '%s'", intent, user_text[:60])
+            response = await self._execute_intent(intent, update, context)
+            if response:
+                await update.message.reply_text(response)
+                self.memory.store_telegram(f"Rohit asked: {user_text}\nMaez replied: {response}")
+                self._thread_last_active = _time.time()
+                return response
 
         # Multi-turn thread management
         if _time.time() - self._thread_last_active > 1800:
@@ -544,6 +651,27 @@ class TelegramVoice:
         display = result.get('display_name') or args[0]
         await update.message.reply_text(f"Linked. I know you as {display} now, across all channels.")
 
+    async def _handle_promote(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /promote <action_type> — lower tier for trusted action type."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /promote <action_type>")
+            return
+        action_type = context.args[0]
+        from core.action_engine import ACTION_TIERS
+        if action_type not in ACTION_TIERS:
+            await update.message.reply_text(f"Unknown action type: {action_type}")
+            return
+        current = ACTION_TIERS[action_type]
+        if current <= 0:
+            await update.message.reply_text(f"{action_type} is already Tier 0.")
+            return
+        ACTION_TIERS[action_type] = current - 1
+        await update.message.reply_text(
+            f"Promoted {action_type}: Tier {current} → Tier {current - 1}."
+        )
+
     async def _handle_approve_evolution(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
@@ -595,6 +723,7 @@ class TelegramVoice:
         self._app.add_handler(CommandHandler("disk", self._handle_disk))
         self._app.add_handler(CommandHandler("analyze", self._handle_analyze))
         self._app.add_handler(CommandHandler("approve_cleanup", self._handle_approve_cleanup))
+        self._app.add_handler(CommandHandler("promote", self._handle_promote))
         self._app.add_handler(CommandHandler("approve_evolution", self._handle_approve_evolution))
         self._app.add_handler(CommandHandler("login", self._handle_login))
         self._app.add_handler(CommandHandler("trust", self._handle_trust))
