@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:transparent;user-select:none;-webkit-app-region:no-drag}
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+.creature-wrap{
+  width:100%;height:100%;display:flex;align-items:center;justify-content:center;
+  flex-direction:column;position:relative;cursor:pointer;
+}
+/* Outer glow */
+.glow{
+  position:absolute;width:75%;height:75%;border-radius:50%;
+  background:radial-gradient(circle,rgba(0,212,170,.12) 0%,rgba(0,180,220,.05) 40%,transparent 70%);
+  animation:glowPulse 4s ease-in-out infinite;pointer-events:none;
+  transition:all .6s ease;
+}
+.chat-open .glow{background:radial-gradient(circle,rgba(0,212,170,.2) 0%,rgba(0,180,220,.1) 40%,transparent 70%)}
+@keyframes glowPulse{0%,100%{opacity:.6;transform:scale(1)}50%{opacity:1;transform:scale(1.08)}}
+
+/* Body */
+.body{
+  width:60%;height:60%;border-radius:50% 50% 48% 48%;position:relative;
+  background:radial-gradient(ellipse at 40% 35%,#1a2640,#111d33 50%,#0c1525);
+  box-shadow:inset 0 -8px 20px rgba(0,0,0,.4),inset 0 4px 12px rgba(0,212,170,.06),
+             0 0 30px rgba(0,212,170,.08);
+  animation:breathe 3.5s ease-in-out infinite;
+  transition:box-shadow .6s ease;
+}
+@keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.025)}}
+
+/* Ears */
+.ear{position:absolute;width:16%;height:16%;border-radius:50%;
+  background:radial-gradient(circle at 50% 60%,#1a2640,#0f1a2d);top:-4%;
+  box-shadow:inset 0 2px 4px rgba(0,212,170,.06)}
+.ear.l{left:15%}.ear.r{right:15%}
+
+/* Eyes */
+.eyes{position:absolute;top:32%;left:50%;transform:translateX(-50%);display:flex;gap:24%;width:64%;justify-content:center}
+.eye{
+  position:relative;width:36%;aspect-ratio:1;border-radius:50%;
+  background:radial-gradient(circle,#080e18,#050a12);
+  box-shadow:inset 0 2px 6px rgba(0,0,0,.6),0 0 8px rgba(0,212,170,.06);
+  overflow:hidden;transition:transform .3s ease,border-radius .3s ease;
+}
+.pupil{
+  position:absolute;top:50%;left:50%;width:48%;height:48%;border-radius:50%;
+  transform:translate(-50%,-50%);
+  background:radial-gradient(circle,#00e8c0,#00a090 60%,#007868);
+  box-shadow:0 0 10px rgba(0,212,170,.7),0 0 20px rgba(0,212,170,.2);
+  transition:transform .15s ease,background .4s ease,box-shadow .4s ease;
+}
+.pupil-dot{position:absolute;top:22%;left:30%;width:18%;height:18%;border-radius:50%;background:rgba(255,255,255,.6)}
+.lid{position:absolute;top:-100%;left:0;width:100%;height:100%;background:#0c1525;border-radius:50%;z-index:2;transition:top .08s ease}
+.blinking .lid{top:0}
+
+/* Mouth */
+.mouth{
+  position:absolute;bottom:22%;left:50%;transform:translateX(-50%);
+  width:18%;height:3px;border-radius:0 0 50% 50%;
+  background:rgba(0,212,170,.18);transition:all .3s ease;
+}
+
+/* Emotion overrides */
+.thinking .pupil{animation:dart 1.2s ease-in-out infinite;
+  background:radial-gradient(circle,#f5c040,#d4a020 60%,#b08018);
+  box-shadow:0 0 10px rgba(245,166,35,.7),0 0 20px rgba(245,166,35,.2)}
+.thinking .mouth{width:14%;height:4px;border-radius:50%;background:rgba(245,166,35,.15)}
+@keyframes dart{0%,100%{transform:translate(-50%,-50%)}30%{transform:translate(-35%,-50%)}70%{transform:translate(-65%,-50%)}}
+
+.happy .eye{border-radius:50% 50% 50% 50% / 60% 60% 35% 35%;transform:scaleY(.55)}
+.happy .pupil{opacity:.2}
+.happy .mouth{width:24%;height:6px;border-radius:0 0 50% 50%;background:rgba(0,255,136,.25)}
+.happy .body{box-shadow:inset 0 -8px 20px rgba(0,0,0,.4),0 0 40px rgba(0,255,136,.15)}
+
+.alert .pupil{background:radial-gradient(circle,#ff6050,#cc3020 60%,#992010);
+  box-shadow:0 0 10px rgba(255,71,87,.7),0 0 20px rgba(255,71,87,.2)}
+.alert .mouth{width:16%;background:rgba(255,71,87,.2)}
+.alert .body{box-shadow:inset 0 -8px 20px rgba(0,0,0,.4),0 0 30px rgba(255,71,87,.1)}
+
+.sleepy .eye{transform:scaleY(.2)}.sleepy .pupil{opacity:.15}
+.sleepy .mouth{width:8%;height:4px;border-radius:50%;background:rgba(0,212,170,.08)}
+
+.curious .body{transform:rotate(-6deg) scale(1.01)}
+.curious .eye.r{transform:scale(1.15)}
+.curious .mouth{width:10%;height:6px;border-radius:50%}
+
+.speaking .mouth{animation:speak .35s ease-in-out infinite}
+.speaking .pupil{width:52%;height:52%;box-shadow:0 0 14px rgba(0,212,170,.8)}
+@keyframes speak{0%,100%{height:3px;width:16%}50%{height:8px;width:20%}}
+
+/* Status dots */
+.status-dots{
+  display:flex;gap:8px;margin-top:8px;
+}
+.dot{
+  width:6px;height:6px;border-radius:50%;
+  background:rgba(0,212,170,.3);transition:background .5s ease;
+}
+.dot.ok{background:#00d4aa}.dot.warn{background:#f5a623}.dot.bad{background:#ff4757}
+.dot.pulse{animation:dotPulse 1s ease-in-out infinite}
+@keyframes dotPulse{0%,100%{opacity:.4}50%{opacity:1}}
+</style></head><body>
+<div class="creature-wrap" id="wrap">
+  <div class="glow"></div>
+  <div class="body" id="body">
+    <div class="ear l"></div><div class="ear r"></div>
+    <div class="eyes">
+      <div class="eye l"><div class="lid"></div><div class="pupil"><div class="pupil-dot"></div></div></div>
+      <div class="eye r"><div class="lid"></div><div class="pupil"><div class="pupil-dot"></div></div></div>
+    </div>
+    <div class="mouth"></div>
+  </div>
+  <div class="status-dots">
+    <div class="dot" id="dotHealth"></div>
+    <div class="dot" id="dotThinking"></div>
+    <div class="dot" id="dotConn"></div>
+  </div>
+</div>
+<script>
+const { ipcRenderer } = require('electron');
+const wrap = document.getElementById('wrap');
+const body = document.getElementById('body');
+const dotHealth = document.getElementById('dotHealth');
+const dotThinking = document.getElementById('dotThinking');
+const dotConn = document.getElementById('dotConn');
+
+let emotion = 'idle';
+let ws = null;
+let blinkTimer = null;
+
+// Click toggles chat
+wrap.addEventListener('click', () => ipcRenderer.send('toggle-chat'));
+
+// Emotion
+function setEmotion(emo, duration = 0) {
+  const all = ['idle','thinking','happy','alert','sleepy','curious','speaking'];
+  all.forEach(e => body.classList.remove(e));
+  body.classList.add(emo);
+  emotion = emo;
+  dotThinking.classList.toggle('pulse', emo === 'thinking');
+  if (duration > 0) setTimeout(() => setEmotion('idle'), duration);
+}
+
+// Blink
+function blink() {
+  if (emotion === 'sleepy') return;
+  body.classList.add('blinking');
+  setTimeout(() => body.classList.remove('blinking'), 150);
+  blinkTimer = setTimeout(blink, 3000 + Math.random() * 5000);
+}
+blinkTimer = setTimeout(blink, 2000);
+
+// Chat state
+ipcRenderer.on('chat-state', (_, open) => {
+  wrap.classList.toggle('chat-open', open);
+});
+ipcRenderer.on('emotion-change', (_, emo) => setEmotion(emo));
+
+// WebSocket
+function connectWS() {
+  ws = new WebSocket('ws://localhost:11436');
+  ws.onopen = () => {
+    dotConn.className = 'dot ok';
+    if (emotion === 'sleepy') setEmotion('happy', 2000);
+  };
+  ws.onmessage = (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      ipcRenderer.send('daemon-event', d);
+      if (d.type === 'cycle_start') setEmotion('thinking');
+      else if (d.type === 'cycle_end') setEmotion('happy', 2500);
+      else if (d.type === 'alert') setEmotion('alert', 5000);
+      else if (d.type === 'health') {
+        const s = d.system || d;
+        const cpu = s.cpu_percent || 0;
+        const temp = s.gpu_temp_c || 0;
+        dotHealth.className = 'dot ' + (cpu > 90 || temp > 80 ? 'bad' : cpu > 60 ? 'warn' : 'ok');
+      }
+      else if (d.type === 'message_reply') setEmotion('speaking', 3000);
+    } catch(err) {}
+  };
+  ws.onclose = () => {
+    dotConn.className = 'dot bad';
+    setEmotion('sleepy');
+    setTimeout(connectWS, 3000);
+  };
+  ws.onerror = () => ws.close();
+}
+connectWS();
+
+setEmotion('idle');
+dotConn.className = 'dot warn';
+dotHealth.className = 'dot ok';
+</script></body></html>

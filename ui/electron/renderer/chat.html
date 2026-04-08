@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:transparent;font-family:'Share Tech Mono',monospace}
+
+.panel{
+  width:calc(100% - 16px);height:calc(100% - 16px);margin:8px;
+  background:rgba(8,12,22,.92);border:1px solid rgba(0,212,170,.12);
+  border-radius:12px;display:flex;flex-direction:column;
+  backdrop-filter:blur(20px);overflow:hidden;
+  animation:slideIn .3s ease-out;
+}
+@keyframes slideIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+
+/* Header */
+.header{
+  padding:14px 16px;display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid rgba(0,212,170,.08);flex-shrink:0;
+}
+.header-left{display:flex;align-items:center;gap:10px}
+.header-dot{width:8px;height:8px;border-radius:50%;background:#00d4aa}
+.header-dot.off{background:#444}
+.header-name{color:#00d4aa;font-size:.9rem;letter-spacing:2px}
+.header-esc{color:rgba(255,255,255,.15);font-size:.7rem}
+
+/* Last thought */
+.last-thought{
+  padding:8px 16px;font-size:.7rem;color:rgba(0,212,170,.25);font-style:italic;
+  border-bottom:1px solid rgba(0,212,170,.05);flex-shrink:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:28px;
+}
+
+/* Messages */
+.messages{
+  flex:1;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:10px;
+  scrollbar-width:thin;scrollbar-color:rgba(0,212,170,.15) transparent;
+}
+.msg{max-width:85%;padding:8px 12px;border-radius:10px;font-size:.82rem;line-height:1.5;word-wrap:break-word}
+.msg.user{
+  align-self:flex-end;background:rgba(255,255,255,.06);color:rgba(255,255,255,.6);
+  border-bottom-right-radius:3px;
+}
+.msg.maez{
+  align-self:flex-start;background:rgba(0,212,170,.06);color:rgba(0,212,170,.7);
+  border-bottom-left-radius:3px;
+}
+.msg.maez .avatar{display:inline-block;width:6px;height:6px;border-radius:50%;background:#00d4aa;margin-right:6px;vertical-align:middle}
+.msg.typing{color:rgba(0,212,170,.3)}
+
+/* Input */
+.input-area{
+  padding:10px 16px;border-top:1px solid rgba(0,212,170,.08);flex-shrink:0;
+}
+.input-field{
+  width:100%;background:rgba(255,255,255,.03);border:1px solid rgba(0,212,170,.1);
+  border-radius:8px;padding:10px 14px;color:#e0e0e0;font-family:'Share Tech Mono',monospace;
+  font-size:.85rem;outline:none;
+}
+.input-field:focus{border-color:rgba(0,212,170,.3)}
+.input-field::placeholder{color:rgba(255,255,255,.12)}
+.input-field:disabled{opacity:.4}
+
+/* Vitals */
+.vitals{
+  display:flex;gap:0;padding:0;border-top:1px solid rgba(0,212,170,.05);flex-shrink:0;height:28px;
+}
+.vital{
+  flex:1;display:flex;align-items:center;padding:0 12px;gap:6px;
+  font-size:.6rem;color:rgba(255,255,255,.2);letter-spacing:1px;
+}
+.vital-bar{flex:1;height:3px;background:rgba(255,255,255,.04);border-radius:2px;overflow:hidden}
+.vital-fill{height:100%;border-radius:2px;transition:width .8s ease}
+.vital-val{min-width:28px;text-align:right;font-variant-numeric:tabular-nums}
+</style></head><body>
+<div class="panel">
+  <div class="header">
+    <div class="header-left"><div class="header-dot" id="hDot"></div><span class="header-name">MAEZ</span></div>
+    <span class="header-esc">ESC to close</span>
+  </div>
+  <div class="last-thought" id="lastThought">Listening...</div>
+  <div class="messages" id="msgs"></div>
+  <div class="input-area">
+    <input class="input-field" id="input" type="text" placeholder="Speak to Maez..." autocomplete="off">
+  </div>
+  <div class="vitals">
+    <div class="vital">CPU<div class="vital-bar"><div class="vital-fill" id="cpuBar" style="width:0%;background:#00d4aa"></div></div><span class="vital-val" id="cpuVal">-</span></div>
+    <div class="vital">GPU<div class="vital-bar"><div class="vital-fill" id="gpuBar" style="width:0%;background:#9060e0"></div></div><span class="vital-val" id="gpuVal">-</span></div>
+    <div class="vital">RAM<div class="vital-bar"><div class="vital-fill" id="ramBar" style="width:0%;background:#40c8a0"></div></div><span class="vital-val" id="ramVal">-</span></div>
+  </div>
+</div>
+<script>
+const { ipcRenderer } = require('electron');
+const msgs = document.getElementById('msgs');
+const input = document.getElementById('input');
+const lastThought = document.getElementById('lastThought');
+const hDot = document.getElementById('hDot');
+
+// Load history from localStorage
+let history = JSON.parse(localStorage.getItem('maez_chat') || '[]');
+history.slice(-30).forEach(m => addMsgDOM(m.role, m.text, false));
+scrollBottom();
+
+function addMsgDOM(role, text, animate = true) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  if (role === 'maez') {
+    const av = document.createElement('span');
+    av.className = 'avatar';
+    div.appendChild(av);
+  }
+  const span = document.createElement('span');
+  div.appendChild(span);
+  msgs.appendChild(div);
+  if (animate && role === 'maez') {
+    typeText(span, text);
+  } else {
+    span.textContent = text;
+  }
+  scrollBottom();
+  return div;
+}
+
+function typeText(el, text) {
+  let i = 0;
+  const iv = setInterval(() => {
+    if (i >= text.length) { clearInterval(iv); return; }
+    el.textContent += text[i++];
+    scrollBottom();
+  }, 15);
+}
+
+function scrollBottom() {
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function saveHistory(role, text) {
+  history.push({ role, text, ts: Date.now() });
+  if (history.length > 100) history = history.slice(-80);
+  localStorage.setItem('maez_chat', JSON.stringify(history));
+}
+
+// Send message
+async function send() {
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  input.disabled = true;
+  input.placeholder = '...';
+
+  addMsgDOM('user', text, false);
+  saveHistory('user', text);
+
+  const thinkDiv = addMsgDOM('maez', '...', false);
+  thinkDiv.classList.add('typing');
+
+  try {
+    const res = await fetch('http://localhost:11435/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    const data = await res.json();
+    const reply = data.reply || '(no response)';
+
+    msgs.removeChild(thinkDiv);
+    addMsgDOM('maez', reply, true);
+    saveHistory('maez', reply);
+  } catch (e) {
+    msgs.removeChild(thinkDiv);
+    addMsgDOM('maez', 'Connection error.', false);
+  }
+
+  input.disabled = false;
+  input.placeholder = 'Speak to Maez...';
+  input.focus();
+}
+
+input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') send();
+  if (e.key === 'Escape') ipcRenderer.send('close-chat');
+});
+
+// ESC anywhere
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') ipcRenderer.send('close-chat');
+});
+
+// Focus input when chat opens
+ipcRenderer.on('focus-input', () => { input.focus(); });
+
+// Daemon events from creature
+ipcRenderer.on('daemon-event', (_, d) => {
+  if (d.type === 'cycle_end' && d.thought) {
+    lastThought.textContent = 'Maez: ' + d.thought.substring(0, 120) + (d.thought.length > 120 ? '...' : '');
+  }
+  if (d.type === 'health') {
+    const s = d.system || d;
+    if (s.cpu_percent != null) {
+      document.getElementById('cpuBar').style.width = s.cpu_percent + '%';
+      document.getElementById('cpuVal').textContent = s.cpu_percent.toFixed(0) + '%';
+    }
+    if (s.gpu_percent != null) {
+      document.getElementById('gpuBar').style.width = (s.gpu_percent || 0) + '%';
+      document.getElementById('gpuVal').textContent = (s.gpu_percent || 0).toFixed(0) + '%';
+    }
+    if (s.ram_percent != null) {
+      document.getElementById('ramBar').style.width = s.ram_percent + '%';
+      document.getElementById('ramVal').textContent = s.ram_percent.toFixed(0) + '%';
+    }
+  }
+});
+
+// Connection dot
+let wsOk = false;
+ipcRenderer.on('daemon-event', (_, d) => {
+  if (!wsOk) { wsOk = true; hDot.className = 'header-dot'; }
+});
+</script></body></html>
