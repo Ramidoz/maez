@@ -62,6 +62,16 @@ ANTIFIXATION_RECENCY_WINDOW = 10        # how many recent topics to penalize
 CONSOLIDATION_MIN_TOPICS = 3            # consolidation must mention at least N distinct topics
 CONSOLIDATION_MIN_LENGTH = 200          # chars — consolidation must be at least this long
 
+# Behavior policy thresholds
+POLICY_FIXATION_STREAK = 3              # consecutive fixation labels before avoid_topics kicks in
+POLICY_VAGUE_STREAK = 3                 # consecutive vague labels before requiring specificity
+POLICY_LOW_SCORE_FLOOR = 30             # below this, trigger a retry
+POLICY_RETRY_REJECT_LABELS = {          # label combos that trigger retry
+    frozenset({'fixation', 'vague'}),
+    frozenset({'fixation', 'baseline'}),
+}
+POLICY_EXPLORATORY_THRESHOLD = 0.7      # fixation ratio above this → exploratory mode
+
 
 # ══════════════════════════════════════════════════════════════════════
 #  TOPIC TAXONOMY — deterministic extraction
@@ -301,6 +311,9 @@ def score_and_classify(text: str) -> dict:
         _recent_scores.append(quality)
         if len(_recent_scores) > 50:
             _recent_scores[:] = _recent_scores[-50:]
+        _recent_labels.append(classification['labels'])
+        if len(_recent_labels) > 50:
+            _recent_labels[:] = _recent_labels[-50:]
 
         result = {
             'cog_score': quality,
@@ -451,6 +464,223 @@ def get_recent_topics() -> list[str]:
     return list(_recent_topics)
 
 
+# In-memory ring buffer for recent labels (parallel to _recent_topics/_recent_scores)
+_recent_labels: list[list[str]] = []
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  BEHAVIOR POLICY — converts cognition state into reasoning guidance
+# ══════════════════════════════════════════════════════════════════════
+
+def get_behavior_policy() -> dict:
+    """Generate a behavior policy from recent cognition state.
+
+    Returns structured dict that the daemon converts into prompt directives.
+    Safe fallback: returns neutral policy on any error.
+    """
+    try:
+        recent_t = _recent_topics[-10:] if _recent_topics else []
+        recent_s = _recent_scores[-10:] if _recent_scores else []
+        recent_l = _recent_labels[-10:] if _recent_labels else []
+
+        policy = {
+            'avoid_topics': [],
+            'prefer_topics': [],
+            'require_perception_grounding': False,
+            'require_metric_specificity': False,
+            'force_new_angle': False,
+            'reflection_mode': 'normal',  # normal / corrective / exploratory
+            'retry_eligible': False,
+            'directive': '',  # single-sentence instruction for the LLM
+        }
+
+        if not recent_t:
+            return policy
+
+        avg_score = sum(recent_s) / len(recent_s) if recent_s else 50
+        topic_counts = collections.Counter(recent_t)
+        dominant_topic, dominant_count = topic_counts.most_common(1)[0]
+        fixation_ratio = dominant_count / len(recent_t)
+
+        # Flatten recent labels
+        flat_labels = [l for ll in recent_l for l in ll]
+        label_counts = collections.Counter(flat_labels)
+
+        # --- Fixation response ---
+        fixation_streak = 0
+        for t in reversed(recent_t):
+            if t == dominant_topic:
+                fixation_streak += 1
+            else:
+                break
+
+        if fixation_streak >= POLICY_FIXATION_STREAK:
+            policy['avoid_topics'].append(dominant_topic)
+            policy['force_new_angle'] = True
+
+        if fixation_ratio >= POLICY_EXPLORATORY_THRESHOLD:
+            policy['reflection_mode'] = 'exploratory'
+            # Suggest topics NOT recently seen
+            all_topics = set(TOPIC_TAXONOMY.keys())
+            seen = set(recent_t)
+            unseen = list(all_topics - seen)
+            if unseen:
+                policy['prefer_topics'] = unseen[:3]
+
+        elif fixation_ratio >= FIXATION_THRESHOLD:
+            policy['reflection_mode'] = 'corrective'
+            policy['avoid_topics'].append(dominant_topic)
+
+        # --- Vague response ---
+        vague_streak = 0
+        for ll in reversed(recent_l):
+            if 'vague' in ll:
+                vague_streak += 1
+            else:
+                break
+
+        if vague_streak >= POLICY_VAGUE_STREAK:
+            policy['require_metric_specificity'] = True
+            policy['require_perception_grounding'] = True
+
+        # --- Build directive sentence ---
+        parts = []
+        if policy['avoid_topics']:
+            readable = ', '.join(t.replace('_', ' ') for t in policy['avoid_topics'])
+            parts.append(f"Do NOT repeat observations about {readable} unless the data genuinely changed")
+        if policy['force_new_angle']:
+            parts.append("approach from a completely different angle or perception source")
+        if policy['require_metric_specificity']:
+            parts.append("include at least one concrete metric (%, GB, °C, PID)")
+        if policy['require_perception_grounding']:
+            parts.append("reference a specific perception block ([SCREEN], [CALENDAR], [PRESENCE], etc.)")
+        if policy['prefer_topics']:
+            readable = ', '.join(t.replace('_', ' ') for t in policy['prefer_topics'][:2])
+            parts.append(f"consider looking at {readable}")
+
+        if parts:
+            policy['directive'] = 'Next thought: ' + '; '.join(parts) + '.'
+        elif avg_score < CRITIQUE_LOW_SCORE_THRESHOLD:
+            policy['directive'] = (
+                'Recent thoughts have been low quality. '
+                'Focus on what is different right now, not what is the same.'
+            )
+
+        _cog_logger.info(
+            "policy | mode=%s avoid=%s force_new=%s specificity=%s grounding=%s",
+            policy['reflection_mode'], policy['avoid_topics'],
+            policy['force_new_angle'], policy['require_metric_specificity'],
+            policy['require_perception_grounding'],
+        )
+
+        return policy
+
+    except Exception as e:
+        logger.error("Behavior policy generation failed (safe fallback): %s", e)
+        return {
+            'avoid_topics': [], 'prefer_topics': [],
+            'require_perception_grounding': False,
+            'require_metric_specificity': False,
+            'force_new_angle': False,
+            'reflection_mode': 'normal',
+            'retry_eligible': False,
+            'directive': '',
+        }
+
+
+def should_retry(cog_result: dict) -> bool:
+    """Determine if a thought should be retried based on cognition results.
+
+    Returns True if score is below floor OR labels match a reject combo.
+    """
+    try:
+        if cog_result.get('cog_score', 50) < POLICY_LOW_SCORE_FLOOR:
+            return True
+        labels = set(cog_result.get('cog_labels', '').split(','))
+        for reject_combo in POLICY_RETRY_REJECT_LABELS:
+            if reject_combo.issubset(labels):
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def build_retry_prompt(cog_result: dict, policy: dict) -> str:
+    """Build a corrective instruction for a retry attempt.
+
+    Tells the LLM exactly what was wrong and what must change.
+    """
+    parts = []
+    labels = cog_result.get('cog_labels', '')
+    topic = cog_result.get('cog_topic', 'unknown')
+    score_val = cog_result.get('cog_score', 0)
+
+    parts.append(f"Your previous thought scored {score_val}/100.")
+
+    if 'fixation' in labels:
+        parts.append(f"It fixated on '{topic.replace('_', ' ')}' which you have already covered repeatedly.")
+        parts.append("Choose a DIFFERENT topic entirely.")
+    if 'vague' in labels:
+        parts.append("It lacked concrete data. Include specific metrics (%, GB, °C, PID).")
+    if 'baseline' in labels:
+        parts.append("It reported normal system state as if noteworthy. Only flag deviations.")
+
+    if policy.get('prefer_topics'):
+        readable = ', '.join(t.replace('_', ' ') for t in policy['prefer_topics'][:2])
+        parts.append(f"Consider looking at: {readable}.")
+
+    parts.append("Generate a completely new observation. Do not rephrase the previous one.")
+
+    return '\n'.join(parts)
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  ACTIVE [COGNITION] PROMPT BLOCK — directive, not just informational
+# ══════════════════════════════════════════════════════════════════════
+
+def format_active_prompt() -> str:
+    """Build the [COGNITION] block for injection into reasoning prompt.
+
+    Always populated once cognition data exists (>= 3 cycles).
+    Short, directive, operational — not a score dump.
+    """
+    if len(_recent_scores) < 3:
+        return ""
+
+    window = min(len(_recent_scores), 10)
+    recent_s = _recent_scores[-window:]
+    recent_t = _recent_topics[-window:]
+    avg = sum(recent_s) / len(recent_s)
+    last = recent_s[-1] if recent_s else 0
+
+    topic_counts = collections.Counter(recent_t)
+    dominant, dom_count = topic_counts.most_common(1)[0]
+    fixation_ratio = dom_count / len(recent_t)
+
+    lines = ["[COGNITION]"]
+    lines.append(f"  Last score: {last}/100")
+    lines.append(f"  {window}-cycle average: {avg:.0f}/100")
+
+    # Dominant failure mode
+    flat = [l for ll in _recent_labels[-window:] for l in ll]
+    label_freq = collections.Counter(flat)
+    neg_labels = {k: v for k, v in label_freq.items() if k in ('fixation', 'vague', 'baseline', 'repetition')}
+    if neg_labels:
+        worst = max(neg_labels, key=neg_labels.get)
+        lines.append(f"  Recent failure mode: {worst} ({neg_labels[worst]}/{window} cycles)")
+
+    # Directive from policy
+    policy = get_behavior_policy()
+    if policy.get('directive'):
+        lines.append(f"  {policy['directive']}")
+    elif fixation_ratio >= 0.4:
+        readable = dominant.replace('_', ' ')
+        lines.append(f"  Avoid repeating '{readable}' unless something genuinely changed.")
+        lines.append(f"  Look at what is DIFFERENT right now.")
+
+    return '\n'.join(lines)
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  CONSOLIDATION QUALITY CHECKER
 # ══════════════════════════════════════════════════════════════════════
@@ -525,6 +755,12 @@ def check_consolidation_quality(summary: str) -> dict:
 
 def _test():
     """Run basic sanity checks."""
+    # Reset buffers for clean test
+    global _recent_topics, _recent_scores, _recent_labels
+    _recent_topics = []
+    _recent_scores = []
+    _recent_labels = []
+
     print("=== Topic Extraction ===")
     assert 'disk_usage' in extract_topics("Root partition at 65.6%")
     assert 'cpu_load' in extract_topics("CPU spiked to 95% across all cores")
@@ -558,7 +794,45 @@ def _test():
     assert 'cog_topic' in result
     print(f"  integrated: score={result['cog_score']} topic={result['cog_topic']}: OK")
 
+    print("=== Behavior Policy ===")
+    # Simulate fixation streak
+    _recent_topics.clear()
+    _recent_scores.clear()
+    _recent_labels.clear()
+    for _ in range(8):
+        _recent_topics.append('rohit_activity')
+        _recent_scores.append(35)
+        _recent_labels.append(['fixation', 'vague'])
+    policy = get_behavior_policy()
+    assert 'rohit_activity' in policy['avoid_topics'], f"Expected avoid rohit_activity, got {policy}"
+    assert policy['force_new_angle'], f"Expected force_new_angle, got {policy}"
+    assert policy['require_metric_specificity'], f"Expected require specificity"
+    assert policy['directive'], f"Expected non-empty directive"
+    print(f"  fixation policy: avoid={policy['avoid_topics']} mode={policy['reflection_mode']}: OK")
+    print(f"  directive: {policy['directive'][:80]}...")
+
+    print("=== Retry Logic ===")
+    bad_result = {'cog_score': 25, 'cog_labels': 'fixation,vague', 'cog_topic': 'rohit_activity'}
+    assert should_retry(bad_result), "Low score should trigger retry"
+    good_result = {'cog_score': 70, 'cog_labels': 'actionable,insightful', 'cog_topic': 'cpu_load'}
+    assert not should_retry(good_result), "Good score should not trigger retry"
+    retry_prompt = build_retry_prompt(bad_result, policy)
+    assert 'scored 25' in retry_prompt
+    assert 'DIFFERENT topic' in retry_prompt
+    print(f"  retry trigger: OK")
+    print(f"  retry prompt: {retry_prompt[:80]}...")
+
+    print("=== Active Prompt ===")
+    prompt = format_active_prompt()
+    assert '[COGNITION]' in prompt
+    assert 'Last score' in prompt
+    print(f"  active prompt block generated: OK")
+
     print("=== Consolidation Quality ===")
+    # Reset for clean consolidation test
+    _recent_topics.clear()
+    _recent_scores.clear()
+    _recent_labels.clear()
     good = check_consolidation_quality(
         "Today Rohit focused on coding in VS Code. CPU averaged 15%, RAM at 42%. "
         "GPU stayed at 41°C. Disk usage stable at 43.4%. Telegram conversations with "
