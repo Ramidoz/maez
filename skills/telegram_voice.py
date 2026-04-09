@@ -10,7 +10,7 @@ import threading
 from pathlib import Path
 
 import ollama
-from telegram import Bot, Update
+from telegram import Bot, Update, BotCommand, BotCommandScopeChat, MenuButtonCommands
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -102,6 +102,48 @@ def _get_public_context_for_telegram() -> str:
 
 SOUL_PATH = Path("/home/rohit/maez/config/soul.md")
 MODEL = "gemma4:26b"
+
+# Telegram message length limit (Telegram API max is 4096; we leave headroom)
+MAX_MESSAGE_LENGTH = 4000
+
+
+def split_long_message(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> list[str]:
+    """Split a long message safely on sentence boundaries.
+    Returns a list of parts (≥1). Never splits mid-word if avoidable.
+    Preserves order. Used as a defense layer against Telegram API truncation."""
+    if not text:
+        return [""]
+    if len(text) <= max_length:
+        return [text]
+
+    parts = []
+    remaining = text
+    while len(remaining) > max_length:
+        # Try sentence boundaries first
+        chunk = remaining[:max_length]
+        split_at = -1
+        for sep in ['. ', '? ', '! ']:
+            idx = chunk.rfind(sep)
+            if idx > max_length // 2:
+                split_at = max(split_at, idx + len(sep))
+        if split_at < 0:
+            # Fall back to newline boundary
+            idx = chunk.rfind('\n')
+            if idx > max_length // 2:
+                split_at = idx + 1
+        if split_at < 0:
+            # Fall back to space boundary
+            idx = chunk.rfind(' ')
+            if idx > max_length // 2:
+                split_at = idx + 1
+        if split_at < 0:
+            # Hard split (no good boundary)
+            split_at = max_length
+        parts.append(remaining[:split_at].rstrip())
+        remaining = remaining[split_at:].lstrip()
+    if remaining:
+        parts.append(remaining)
+    return parts
 
 # --- Natural language intent detection ---
 MACHINE_INTENTS = {
@@ -409,18 +451,16 @@ class TelegramVoice:
                         )
                     current_sentence = ""
 
-            # Send remaining text
+            # Send remaining text (split if too long)
             remainder = current_sentence.strip()
             if remainder:
-                if current_msg is None:
-                    await context.bot.send_message(
-                        chat_id=update.effective_chat.id, text=remainder,
-                    )
-                else:
+                if current_msg is not None:
                     await asyncio.sleep(1.0)
+                for part in split_long_message(remainder):
                     await context.bot.send_message(
-                        chat_id=update.effective_chat.id, text=remainder,
+                        chat_id=update.effective_chat.id, text=part,
                     )
+                    await asyncio.sleep(0.5)
 
             reply = full_reply.strip() or "(Maez had no response)"
 
@@ -709,6 +749,222 @@ class TelegramVoice:
         except Exception:
             await update.message.reply_text("No evolution log yet.")
 
+    async def _handle_proposals(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show last 5 proposal candidates."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        try:
+            from skills.evolution_engine import _rail_conn
+            import json as _json
+            with _rail_conn() as conn:
+                rows = conn.execute(
+                    "SELECT id, state, weakness_description, cognition_evidence "
+                    "FROM candidates ORDER BY id DESC LIMIT 5"
+                ).fetchall()
+            if not rows:
+                await update.message.reply_text("No proposals yet.")
+                return
+            lines = ["Recent proposals:"]
+            for r in rows:
+                ev = {}
+                try:
+                    ev = _json.loads(r[3] or '{}')
+                except Exception:
+                    pass
+                u = ev.get('usefulness', {}).get('overall', '?')
+                emoji = {'strong': '\u2705', 'acceptable': '\u26a0\ufe0f',
+                         'weak': '\u274c', 'unknown': '\u26aa'}.get(u, '')
+                w = (r[2] or '')[:60]
+                lines.append(f"  [{r[0]}] {r[1]:11s} {emoji} {u:10s} {w}")
+            await update.message.reply_text('\n'.join(lines))
+        except Exception as e:
+            await update.message.reply_text(f"Error: {e}")
+
+    async def _handle_show(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show candidate by id."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /show <candidate_id>")
+            return
+        try:
+            cid = int(context.args[0])
+            from skills.evolution_engine import load_candidate_for_display
+            disp = load_candidate_for_display(cid)
+            if not disp:
+                await update.message.reply_text(f"Candidate {cid} not found")
+                return
+            u = disp['usefulness']
+            intent = disp.get('intent') or {}
+            ev = disp.get('evidence') or {}
+            lines = [
+                f"Candidate {cid} \u2014 {disp['state']} \u2014 {u.get('overall')}",
+                f"Weakness: {disp['weakness'][:200]}",
+                f"Target:   {intent.get('target_name', '?')}",
+                f"Before:   {intent.get('current_value')!r}",
+                f"After:    {intent.get('proposed_value')!r}",
+                f"Why:      {intent.get('rationale', '?')[:150]}",
+                f"",
+                f"Failure mode:    {ev.get('dominant_failure_mode', '?')}",
+                f"Addresses:       {u.get('addresses_failure_mode')}",
+                f"Direction sane:  {u.get('direction_sane')}",
+                f"Change minimal:  {u.get('change_minimal')}",
+            ]
+            await update.message.reply_text('\n'.join(lines))
+        except Exception as e:
+            await update.message.reply_text(f"Error: {e}")
+
+    async def _handle_apply(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Apply candidate by id."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /apply <candidate_id>")
+            return
+        try:
+            cid = int(context.args[0])
+            from skills.evolution_engine import apply_candidate
+            await update.message.reply_text(f"Applying candidate {cid}...")
+            result = apply_candidate(cid)
+            if 'error' in result:
+                await update.message.reply_text(
+                    f"Apply failed: {result['error']}\n"
+                    f"Rolled back: {result.get('rolled_back', False)} "
+                    f"(layer={result.get('layer')})"
+                )
+            else:
+                await update.message.reply_text(
+                    f"\u2705 Applied candidate {cid}\n"
+                    f"State: {result.get('state')}\n"
+                    f"Pre-score: {result.get('pre_score_avg')}"
+                )
+        except Exception as e:
+            await update.message.reply_text(f"Error: {e}")
+
+    async def _handle_reject(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Reject candidate by id."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /reject <candidate_id>")
+            return
+        try:
+            cid = int(context.args[0])
+            from skills.evolution_engine import _rail_conn, _set_candidate_state, _log_evolution, V1_ALLOWED_TARGET
+            with _rail_conn() as conn:
+                row = conn.execute("SELECT state FROM candidates WHERE id=?", (cid,)).fetchone()
+            if not row:
+                await update.message.reply_text(f"Candidate {cid} not found")
+                return
+            _set_candidate_state(cid, 'rejected', rejection_reason='manual rejection via Telegram')
+            _log_evolution({'action': 'MANUAL_REJECTION', 'target': V1_ALLOWED_TARGET,
+                            'result': f'candidate {cid}'})
+            await update.message.reply_text(f"Candidate {cid} rejected (was: {row[0]})")
+        except Exception as e:
+            await update.message.reply_text(f"Error: {e}")
+
+    async def _handle_cog_analyze(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Compact cognition snapshot — overrides old self-analysis /analyze."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        try:
+            from core.cognition_quality import (
+                _recent_scores, _recent_topics, _recent_labels, get_behavior_policy,
+            )
+            import collections as _cc
+            window = min(len(_recent_scores), 10)
+            if window == 0:
+                await update.message.reply_text("No cognition data yet.")
+                return
+            scores = _recent_scores[-window:]
+            topics = _recent_topics[-window:]
+            labels_window = _recent_labels[-window:]
+            avg = sum(scores) / len(scores)
+            tc = _cc.Counter(topics)
+            dominant_topic, dom_count = tc.most_common(1)[0]
+            flat = [l for ll in labels_window for l in ll]
+            neg = {k: v for k, v in _cc.Counter(flat).items()
+                   if k in ('fixation', 'vague', 'baseline', 'repetition')}
+            failure = max(neg, key=neg.get) if neg else 'none'
+            streak = 0
+            for t in reversed(topics):
+                if t == dominant_topic:
+                    streak += 1
+                else:
+                    break
+            policy = get_behavior_policy()
+            mode = policy.get('reflection_mode', 'normal')
+            lines = [
+                "Cognition snapshot:",
+                f"  Last 10 scores: {scores}",
+                f"  Average:        {avg:.1f}/100",
+                f"  Dominant topic: {dominant_topic} ({dom_count}/{window})",
+                f"  Failure mode:   {failure}",
+                f"  Fixation streak: {streak}",
+                f"  Policy mode:    {mode}",
+            ]
+            await update.message.reply_text('\n'.join(lines))
+        except Exception as e:
+            await update.message.reply_text(f"Error: {e}")
+
+    async def _handle_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Grouped command list."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        text = (
+            "Maez commands:\n"
+            "\n"
+            "System:\n"
+            "  /status    System and cognition summary\n"
+            "  /git       Git repo state\n"
+            "  /disk      Disk usage summary\n"
+            "\n"
+            "Cognition:\n"
+            "  /analyze   Cognition snapshot (last 10 cycles)\n"
+            "\n"
+            "Evolution:\n"
+            "  /proposals  Last 5 proposal candidates\n"
+            "  /show <id>  Show candidate details\n"
+            "  /apply <id> Apply candidate\n"
+            "  /reject <id> Reject candidate\n"
+            "\n"
+            "Control:\n"
+            "  /pending   Pending actions\n"
+            "  /trust     Trust user\n"
+            "  /promote   Promote action type\n"
+            "  /help      This list"
+        )
+        await update.message.reply_text(text)
+
+    async def _configure_bot_commands(self):
+        """Register bot commands and menu button for the private chat."""
+        try:
+            commands = [
+                BotCommand("status",    "System and cognition summary"),
+                BotCommand("git",       "Git repo state"),
+                BotCommand("disk",      "Disk usage summary"),
+                BotCommand("analyze",   "Cognition snapshot"),
+                BotCommand("proposals", "Last 5 proposal candidates"),
+                BotCommand("show",      "Show candidate by id"),
+                BotCommand("apply",     "Apply candidate by id"),
+                BotCommand("reject",    "Reject candidate by id"),
+                BotCommand("pending",   "Pending actions"),
+                BotCommand("trust",     "Trust user"),
+                BotCommand("promote",   "Promote action type"),
+                BotCommand("help",      "Grouped command list"),
+            ]
+            await self._app.bot.set_my_commands(
+                commands,
+                scope=BotCommandScopeChat(chat_id=self.authorized_user),
+            )
+            await self._app.bot.set_chat_menu_button(
+                chat_id=self.authorized_user,
+                menu_button=MenuButtonCommands(),
+            )
+            logger.info("Telegram private bot commands registered (%d)", len(commands))
+        except Exception as e:
+            logger.error("Failed to register bot commands: %s", e)
+
     def _run_bot(self):
         """Run the Telegram bot in its own event loop (called from thread)."""
         self._loop = asyncio.new_event_loop()
@@ -721,7 +977,7 @@ class TelegramVoice:
         self._app.add_handler(CommandHandler("pending", self._handle_pending))
         self._app.add_handler(CommandHandler("git", self._handle_git))
         self._app.add_handler(CommandHandler("disk", self._handle_disk))
-        self._app.add_handler(CommandHandler("analyze", self._handle_analyze))
+        self._app.add_handler(CommandHandler("analyze", self._handle_cog_analyze))
         self._app.add_handler(CommandHandler("approve_cleanup", self._handle_approve_cleanup))
         self._app.add_handler(CommandHandler("promote", self._handle_promote))
         self._app.add_handler(CommandHandler("approve_evolution", self._handle_approve_evolution))
@@ -729,11 +985,19 @@ class TelegramVoice:
         self._app.add_handler(CommandHandler("trust", self._handle_trust))
         self._app.add_handler(CommandHandler("reject_evolution", self._handle_reject_evolution))
         self._app.add_handler(CommandHandler("evolution_log", self._handle_evolution_log))
+        # New evolution-rail handlers
+        self._app.add_handler(CommandHandler("proposals", self._handle_proposals))
+        self._app.add_handler(CommandHandler("show", self._handle_show))
+        self._app.add_handler(CommandHandler("apply", self._handle_apply))
+        self._app.add_handler(CommandHandler("reject", self._handle_reject))
+        self._app.add_handler(CommandHandler("help", self._handle_help))
         self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
 
         logger.info("Telegram bot starting polling...")
         self._loop.run_until_complete(self._app.initialize())
         self._loop.run_until_complete(self._app.start())
+        # Register bot command menu before polling starts
+        self._loop.run_until_complete(self._configure_bot_commands())
         self._loop.run_until_complete(self._app.updater.start_polling(drop_pending_updates=True))
         self._loop.run_forever()
 
@@ -748,17 +1012,26 @@ class TelegramVoice:
         logger.info("Telegram bot thread started (authorized user: %d)", self.authorized_user)
 
     def send_message(self, text: str):
-        """Send a message to Rohit via Telegram. Safe to call from any thread."""
+        """Send a message to Rohit via Telegram. Safe to call from any thread.
+        Auto-splits messages > 4000 chars on sentence boundaries."""
         if not self.enabled or not self._loop:
             return
 
-        async def _send():
-            bot = Bot(token=self.token)
-            await bot.send_message(chat_id=self.authorized_user, text=text)
+        parts = split_long_message(text)
+        if len(parts) > 1:
+            logger.info("Telegram message split into %d parts", len(parts))
 
-        future = asyncio.run_coroutine_threadsafe(_send(), self._loop)
+        async def _send_all():
+            import asyncio as _a
+            bot = Bot(token=self.token)
+            for i, part in enumerate(parts):
+                await bot.send_message(chat_id=self.authorized_user, text=part)
+                if i < len(parts) - 1:
+                    await _a.sleep(0.5)
+
+        future = asyncio.run_coroutine_threadsafe(_send_all(), self._loop)
         try:
-            future.result(timeout=10)
-            logger.info("Telegram sent: %s", text[:80])
+            future.result(timeout=30)
+            logger.info("Telegram sent: %s (full %d chars)", text[:80], len(text))
         except Exception as e:
             logger.error("Telegram send failed: %s", e)

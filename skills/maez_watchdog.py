@@ -15,7 +15,7 @@ import requests
 import sys
 
 sys.path.insert(0, str(Path("/home/rohit/maez")))
-from skills.dev_notifier import send_dev
+from skills.dev_notifier import send_dev, send_service_card
 
 # --- Config ---
 LOG_PATH = Path("/home/rohit/maez/logs/maez_watchdog.log")
@@ -78,23 +78,26 @@ def run():
             if was_active and not active:
                 # Maez just went down
                 went_down_at = datetime.now()
-                msg = (
-                    f"\u26a0\ufe0f Maez went offline at {went_down_at.strftime('%H:%M:%S')}.\n"
-                    f"SSH: ssh {SSH_HOST}"
+                logger.warning("Maez went offline at %s", went_down_at.strftime('%H:%M:%S'))
+                send_service_card(
+                    'maez.service',
+                    f"went offline at {went_down_at.strftime('%H:%M:%S')}",
+                    f"SSH: ssh {SSH_HOST}",
                 )
-                logger.warning(msg)
-                send_dev(msg)
 
             elif not was_active and active:
                 # Maez just came back
                 cycles = get_cycle_count()
-                downtime = ""
+                downtime_str = "unknown"
                 if went_down_at:
                     mins = (datetime.now() - went_down_at).total_seconds() / 60
-                    downtime = f" Downtime: {mins:.1f} minutes."
-                msg = f"\u2705 Maez is back online. {cycles} cycles running.{downtime}"
-                logger.info(msg)
-                send_dev(msg)
+                    downtime_str = f"{mins:.1f} min"
+                logger.info("Maez back online (%s cycles running)", cycles)
+                send_service_card(
+                    'maez.service',
+                    f"back online ({cycles} cycles)",
+                    f"Downtime: {downtime_str}",
+                )
                 went_down_at = None
 
             was_active = active

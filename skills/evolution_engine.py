@@ -2277,12 +2277,21 @@ def process_proposal_job(job_id: int) -> dict:
     except Exception:
         pass
 
-    # Notify Rohit via canonical display
+    # Notify Rohit via canonical display + compact card
     try:
-        from skills.dev_notifier import send_dev
+        from skills.dev_notifier import send_proposal_card
         disp = load_candidate_for_display(cand_id)
         if disp:
-            send_dev(format_telegram_notification(disp))
+            i = disp.get('intent') or {}
+            send_proposal_card(
+                candidate_id=cand_id,
+                weakness=disp.get('weakness', ''),
+                target=i.get('target_name', '?'),
+                before=i.get('current_value'),
+                after=i.get('proposed_value'),
+                usefulness=disp['usefulness'].get('overall', 'unknown'),
+                rationale=i.get('rationale', ''),
+            )
     except Exception:
         pass
 
