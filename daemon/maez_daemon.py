@@ -43,6 +43,15 @@ from skills.reddit_skill import RedditSkill
 from skills.followup_queue import FollowUpQueue
 from skills.git_awareness import format_for_context as git_context
 from skills.dev_notifier import send_dev
+from core.continuity import (
+    load_capsule as continuity_load,
+    format_for_prompt as continuity_format,
+    checkpoint as continuity_checkpoint,
+    graceful_shutdown_write as continuity_shutdown,
+    archive_capsule as continuity_archive,
+    CONTINUITY_CHECKPOINT_INTERVAL,
+    POST_RESTART_INJECTION_CYCLES,
+)
 from core.cognition_quality import (
     score_and_classify as cog_score_and_classify,
     self_critique as cog_self_critique,
@@ -115,6 +124,10 @@ class MaezDaemon:
         self._cognition_critique_counter = 0
         self._last_cognition_critique: dict | None = None
         self._last_reasoning_prompt: str = ""
+        self._continuity_capsule: dict | None = None
+        self._continuity_active = False
+        self._continuity_cycles_remaining = 0
+        self._continuity_checkpoint_counter = 0
         self._last_presence_snap: PresenceSnapshot | None = None
         self._presence_cycle_counter = 0
         self.PRESENCE_EVERY_N_CYCLES = 2  # every ~60 seconds
@@ -379,6 +392,12 @@ class MaezDaemon:
         cog_context = cog_format_active_prompt()
         if cog_context:
             prompt += f"\n{cog_context}\n"
+
+        # Add continuity block during orientation window
+        if self._continuity_active and self._continuity_capsule:
+            cont_block = continuity_format(self._continuity_capsule)
+            if cont_block:
+                prompt += f"\n{cont_block}\n"
 
         prompt += "\n"
 
@@ -1425,6 +1444,7 @@ class MaezDaemon:
                 # Score and classify BEFORE storage — enriched metadata in one write
                 full_thought = result + screen_note + calendar_note
                 cog_metadata = cog_score_and_classify(full_thought)
+                self._last_cog_metadata = cog_metadata
                 retried = False
 
                 # Retry path: if thought is below floor or matches reject combos
@@ -1507,6 +1527,35 @@ class MaezDaemon:
                     "cycle": self.cycle_count,
                     "thought": result,
                 })
+
+            # Continuity checkpoint + orientation expiry
+            if result:
+                self._continuity_checkpoint_counter += 1
+                if self._continuity_checkpoint_counter >= CONTINUITY_CHECKPOINT_INTERVAL:
+                    self._continuity_checkpoint_counter = 0
+                    try:
+                        _last_cog = getattr(self, '_last_cog_metadata', {})
+                        continuity_checkpoint(last_thought={
+                            'text': result[:200],
+                            'cycle': self.cycle_count,
+                            'score': _last_cog.get('cog_score', 0),
+                            'topic': _last_cog.get('cog_topic', ''),
+                            'labels': _last_cog.get('cog_labels', '').split(','),
+                        })
+                    except Exception as e:
+                        logger.debug("Continuity checkpoint failed: %s", e)
+
+                # Expire continuity orientation
+                if self._continuity_active:
+                    self._continuity_cycles_remaining -= 1
+                    if self._continuity_cycles_remaining <= 0:
+                        self._continuity_active = False
+                        self._continuity_capsule = None
+                        try:
+                            continuity_archive()
+                        except Exception:
+                            pass
+                        logger.info("Continuity orientation complete. Resuming normal operation.")
 
             # Proactive search if thought shows knowledge gap
             if result:
@@ -1594,6 +1643,15 @@ class MaezDaemon:
         self.telegram.start()
         self.public_bot.start()
 
+        # Load continuity capsule BEFORE greeting/session-resume logic
+        self._continuity_capsule = continuity_load()
+        if self._continuity_capsule:
+            self._continuity_active = True
+            self._continuity_cycles_remaining = POST_RESTART_INJECTION_CYCLES
+            logger.info("Continuity active: %d orientation cycles, mode=%s",
+                        self._continuity_cycles_remaining,
+                        self._continuity_capsule.get('current_mode', '?'))
+
         # Detect offline duration from last shutdown timestamp
         stats = self.memory.memory_stats()
         is_restart = stats["total"] > 0 and self.cycle_count == 0
@@ -1628,7 +1686,10 @@ class MaezDaemon:
             f"Memory: {stats['raw']} raw, {stats['daily']} daily, {stats['core']} core"
         )
         time.sleep(2)
-        send_dev(startup_msg)
+        if not self._continuity_active:
+            send_dev(startup_msg)
+        else:
+            logger.info("Startup message suppressed — continuity orientation active")
 
         # Check if daily consolidation was missed while offline
         self._missed_consolidation = False
@@ -1669,6 +1730,13 @@ class MaezDaemon:
         journal_thread = threading.Thread(target=self._nightly_journal_loop, daemon=True,
                                            name="journal")
         journal_thread.start()
+
+        # Start proposal worker thread
+        try:
+            from skills.evolution_engine import start_proposal_worker
+            start_proposal_worker()
+        except Exception as e:
+            logger.debug("Proposal worker start failed: %s", e)
 
         # Start soul.md hot-reload watcher
         threading.Thread(target=self._watch_soul, daemon=True, name="soul-watcher").start()
@@ -1741,6 +1809,11 @@ class MaezDaemon:
         """Graceful shutdown."""
         logger.info("=== Maez Daemon shutting down (signal: %s) ===", signum)
         self.running = False
+        # Write continuity capsule before anything else
+        try:
+            continuity_shutdown()
+        except Exception as e:
+            logger.debug("Continuity shutdown write failed: %s", e)
         try:
             wake_word_stop()
             voice_output_shutdown()

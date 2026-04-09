@@ -1,0 +1,1230 @@
+{
+  "schema_version": "1.0",
+  "built_at": "2026-04-08T19:31:39.834161+00:00",
+  "maez_root": "/home/rohit/maez",
+  "total_files": 60,
+  "indexed_files": 44,
+  "parsed_files": 32,
+  "skipped_by_design": 14,
+  "parse_errors": 0,
+  "files": {
+    "README.md": {
+      "path": "README.md",
+      "file_type": "markdown",
+      "purpose": "A persistent, always-on AI agent inspired by Jarvis from Iron Man.",
+      "category": "config",
+      "risk_level": "high",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [],
+      "dependents": [],
+      "exported_symbols": [],
+      "last_hash": "28d0486492053746cba30fffe37fa9095d435c2f69a7742883a39968d87e6e07",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "A persistent, always-on AI agent inspired by Jarvis from Iron Man.",
+      "tags": [],
+      "parse_error": null
+    },
+    "PROGRESS.md": {
+      "path": "PROGRESS.md",
+      "file_type": "markdown",
+      "purpose": "Maez \u2014 Build Progress",
+      "category": "config",
+      "risk_level": "high",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [],
+      "dependents": [],
+      "exported_symbols": [],
+      "last_hash": "7b724841fdfcc577d6ecbd0f4d5019b20439c6b79f01eee3b3eee59d99b665da",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "Maez \u2014 Build Progress",
+      "tags": [],
+      "parse_error": null
+    },
+    "PROGRESS_PUBLIC.md": {
+      "path": "PROGRESS_PUBLIC.md",
+      "file_type": "markdown",
+      "purpose": "Maez \u2014 Build Progress",
+      "category": "config",
+      "risk_level": "high",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [],
+      "dependents": [],
+      "exported_symbols": [],
+      "last_hash": "2190eb22708d8554685e5cbdb61bfea8fcf086359abe9dfd8796dfd91ff21a78",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "Maez \u2014 Build Progress",
+      "tags": [],
+      "parse_error": null
+    },
+    "core/action_engine.py": {
+      "path": "core/action_engine.py",
+      "file_type": "python",
+      "purpose": "Maez Action Engine \u2014 Tiered action execution with safety guarantees.",
+      "category": "core",
+      "risk_level": "critical",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [
+        "memory.quality_tracker"
+      ],
+      "dependents": [
+        "daemon/maez_daemon.py",
+        "skills/telegram_voice.py"
+      ],
+      "exported_symbols": [
+        "ForbiddenActionError",
+        "ActionTrustTracker",
+        "ActionResult",
+        "ActionEngine"
+      ],
+      "last_hash": "d819345e76841c2d70734a1c64d3ce3cbeab359051f831feee001c3591aef064",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "Maez Action Engine \u2014 Tiered action execution with safety guarantees.",
+      "tags": [
+        "maez_self",
+        "security"
+      ],
+      "parse_error": null
+    },
+    "core/perception.py": {
+      "path": "core/perception.py",
+      "file_type": "python",
+      "purpose": "Maez Perception Module \u2014 Collects system state into a single context snapshot.",
+      "category": "core",
+      "risk_level": "high",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [],
+      "dependents": [
+        "daemon/maez_daemon.py",
+        "skills/web_interface.py",
+        "skills/telegram_voice.py"
+      ],
+      "exported_symbols": [
+        "GpuStats",
+        "PerceptionSnapshot",
+        "snapshot",
+        "format_snapshot"
+      ],
+      "last_hash": "ab2042047fbaed341ac1ba40893a5dc6c421668721b9bfc6ffb8a2268d8c3681",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "Maez Perception Module \u2014 Collects system state into a single context snapshot.",
+      "tags": [
+        "cpu_load",
+        "memory_usage",
+        "gpu_state",
+        "disk_usage",
+        "network",
+        "processes"
+      ],
+      "parse_error": null
+    },
+    "core/cognition_quality.py": {
+      "path": "core/cognition_quality.py",
+      "file_type": "python",
+      "purpose": "cognition_quality.py \u2014 Structural cognition quality subsystem for Maez.",
+      "category": "core",
+      "risk_level": "medium",
+      "self_edit_scope": "allowed",
+      "allowed_operations": [
+        "read",
+        "modify"
+      ],
+      "imports": [],
+      "dependents": [
+        "memory/memory_manager.py",
+        "daemon/maez_daemon.py"
+      ],
+      "exported_symbols": [
+        "extract_topics",
+        "primary_topic",
+        "get_parent_topic",
+        "classify",
+        "score",
+        "score_and_classify",
+        "self_critique",
+        "format_for_prompt",
+        "get_fixation_penalty",
+        "get_recent_topics",
+        "get_behavior_policy",
+        "should_retry",
+        "build_retry_prompt",
+        "format_active_prompt",
+        "check_consolidation_quality"
+      ],
+      "last_hash": "7a2325f05b3c7bd480d6fe3ea7b067149b9ace07d3d4b0812a4afeb625ac7be0",
+      "last_indexed": "2026-04-08T19:32:23.783135+00:00",
+      "summary": "cognition_quality.py \u2014 Structural cognition quality subsystem for Maez.",
+      "tags": [
+        "maez_self",
+        "development_tools"
+      ],
+      "parse_error": null
+    },
+    "core/source_awareness.py": {
+      "path": "core/source_awareness.py",
+      "file_type": "python",
+      "purpose": "source_awareness.py \u2014 Maez's read-only self-model of its own codebase.",
+      "category": "core",
+      "risk_level": "high",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [],
+      "dependents": [],
+      "exported_symbols": [
+        "build_map",
+        "refresh_map",
+        "resolve",
+        "get_file",
+        "get_by_scope",
+        "get_by_category",
+        "summary_stats"
+      ],
+      "last_hash": "644c8b5ed2295e16a26bc62fa1d521ddf1a211626aeed2ee83053d51c5982efb",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "source_awareness.py \u2014 Maez's read-only self-model of its own codebase.",
+      "tags": [],
+      "parse_error": null
+    },
+    "memory/source_awareness.json": {
+      "path": "memory/source_awareness.json",
+      "file_type": "json",
+      "purpose": "\"schema_version\": \"1.0\",",
+      "category": "memory",
+      "risk_level": "high",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [],
+      "dependents": [],
+      "exported_symbols": [],
+      "last_hash": "a345dad93b711e026a7d42bd1fa8b85f4c78e7f0008be54593071d50d49170cf",
+      "last_indexed": "2026-04-08T19:32:23.783135+00:00",
+      "summary": "\"schema_version\": \"1.0\",",
+      "tags": [],
+      "parse_error": null
+    },
+    "memory/quality_tracker.py": {
+      "path": "memory/quality_tracker.py",
+      "file_type": "python",
+      "purpose": "quality_tracker.py \u2014 Reasoning quality feedback loop for Maez",
+      "category": "memory",
+      "risk_level": "high",
+      "self_edit_scope": "forbidden",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [],
+      "dependents": [
+        "core/action_engine.py",
+        "daemon/maez_daemon.py"
+      ],
+      "exported_symbols": [
+        "QualityTracker",
+        "test"
+      ],
+      "last_hash": "c7b417c68de4f607d9d96e2f37e82c68464757569c3edadce5a9506302462a48",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "quality_tracker.py \u2014 Reasoning quality feedback loop for Maez",
+      "tags": [
+        "maez_self"
+      ],
+      "parse_error": null
+    },
+    "memory/memory_manager.py": {
+      "path": "memory/memory_manager.py",
+      "file_type": "python",
+      "purpose": "Maez Memory Manager \u2014 Three-tier persistent vector memory.",
+      "category": "memory",
+      "risk_level": "critical",
+      "self_edit_scope": "forbidden",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [
+        "core.cognition_quality"
+      ],
+      "dependents": [
+        "daemon/maez_daemon.py",
+        "skills/self_analysis.py",
+        "skills/web_interface.py",
+        "skills/telegram_voice.py",
+        "skills/face_enrollment.py"
+      ],
+      "exported_symbols": [
+        "TopicRouter",
+        "MemoryManager"
+      ],
+      "last_hash": "6d792e1d9a12ed1ecd8b42f63faeec830edc4e85732938dfc05ea2fdefeb4a05",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "Maez Memory Manager \u2014 Three-tier persistent vector memory.",
+      "tags": [
+        "maez_self"
+      ],
+      "parse_error": null
+    },
+    "config/soul.md": {
+      "path": "config/soul.md",
+      "file_type": "markdown",
+      "purpose": "HARD CONSTRAINTS \u2014 These override all other reasoning, always:",
+      "category": "config",
+      "risk_level": "high",
+      "self_edit_scope": "append_only",
+      "allowed_operations": [
+        "read",
+        "append_only"
+      ],
+      "imports": [],
+      "dependents": [],
+      "exported_symbols": [],
+      "last_hash": "0b5d65f8c0c0b8dec6927a7b75fe7a1376caf7e9268b243de916e46c2e3f0910",
+      "last_indexed": "2026-04-08T19:32:23.728827+00:00",
+      "summary": "HARD CONSTRAINTS \u2014 These override all other reasoning, always:",
+      "tags": [
+        "maez_self"
+      ],
+      "parse_error": null
+    },
+    "config/.env": {
+      "path": "config/.env",
+      "file_type": "env",
+      "purpose": "MAEZ_TELEGRAM_USER_ID=6727062247",
+      "category": "config",
+      "risk_level": "critical",
+      "self_edit_scope": "forbidden",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [],
+      "dependents": [],
+      "exported_symbols": [],
+      "last_hash": "36388882285711cac945f9675de2a3ffc8047af0276501850a5cd451e3d2113f",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "MAEZ_TELEGRAM_USER_ID=6727062247",
+      "tags": [],
+      "parse_error": null
+    },
+    "ui/maez_terminal_ui.py": {
+      "path": "ui/maez_terminal_ui.py",
+      "file_type": "python",
+      "purpose": "Maez Terminal UI \u2014 Persistent cyberpunk terminal face. Shadow-buffered rendering.",
+      "category": "ui",
+      "risk_level": "low",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [],
+      "dependents": [],
+      "exported_symbols": [
+        "ShadowBuffer",
+        "MaezTerminalUI",
+        "main"
+      ],
+      "last_hash": "acc38e72d935310be7cc1c42a1ca4b214f64859385603a65961f815e86306bb1",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "Maez Terminal UI \u2014 Persistent cyberpunk terminal face. Shadow-buffered rendering.",
+      "tags": [],
+      "parse_error": null
+    },
+    "ui/face.json": {
+      "path": "ui/face.json",
+      "file_type": "json",
+      "purpose": "\"version\": 1,",
+      "category": "ui",
+      "risk_level": "low",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [],
+      "dependents": [],
+      "exported_symbols": [],
+      "last_hash": "7151f383705a28628797fbe3f2ff2efc5735c2516ba32b5d1ee1401e9c019ece",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "\"version\": 1,",
+      "tags": [],
+      "parse_error": null
+    },
+    "ui/index.html": {
+      "path": "ui/index.html",
+      "file_type": "html",
+      "purpose": "<!DOCTYPE html>",
+      "category": "ui",
+      "risk_level": "low",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [],
+      "dependents": [],
+      "exported_symbols": [],
+      "last_hash": "ffbf446ee66939829f5d8562b2c2a6b2b8adf1ae67cc1ea83f5432afc59adbd8",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "<!DOCTYPE html>",
+      "tags": [],
+      "parse_error": null
+    },
+    "ui/electron/package.json": {
+      "path": "ui/electron/package.json",
+      "file_type": "json",
+      "purpose": "\"name\": \"maez-desktop\",",
+      "category": "ui",
+      "risk_level": "low",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [],
+      "dependents": [],
+      "exported_symbols": [],
+      "last_hash": "f362cbdc9232552d25b765eff641923e4f61f06fb2a8469ba5100c5fa7ed54cb",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "\"name\": \"maez-desktop\",",
+      "tags": [],
+      "parse_error": null
+    },
+    "ui/electron/main.js": {
+      "path": "ui/electron/main.js",
+      "file_type": "javascript",
+      "purpose": "const {",
+      "category": "ui",
+      "risk_level": "low",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [],
+      "dependents": [],
+      "exported_symbols": [],
+      "last_hash": "6a3c68ecfb63a6ad60ca83ff91acd35cdd99776e1ec9d850eacd1fee7195fceb",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "const {",
+      "tags": [],
+      "parse_error": null
+    },
+    "ui/electron/renderer/chat.html": {
+      "path": "ui/electron/renderer/chat.html",
+      "file_type": "html",
+      "purpose": "<!DOCTYPE html>",
+      "category": "ui",
+      "risk_level": "low",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [],
+      "dependents": [],
+      "exported_symbols": [],
+      "last_hash": "32288748b47eb4d770972df6e274949eb89af0267e1284eddb30419b51473123",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "<!DOCTYPE html>",
+      "tags": [],
+      "parse_error": null
+    },
+    "ui/electron/renderer/creature.html": {
+      "path": "ui/electron/renderer/creature.html",
+      "file_type": "html",
+      "purpose": "<!DOCTYPE html>",
+      "category": "ui",
+      "risk_level": "low",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [],
+      "dependents": [],
+      "exported_symbols": [],
+      "last_hash": "a530e01332e9ededff24a544e75cebe1b35b3999ba58c7da745acd80174ee8b7",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "<!DOCTYPE html>",
+      "tags": [],
+      "parse_error": null
+    },
+    "daemon/maez_daemon.py": {
+      "path": "daemon/maez_daemon.py",
+      "file_type": "python",
+      "purpose": "Maez Daemon \u2014 Always-on system-level AI agent.",
+      "category": "daemon",
+      "risk_level": "critical",
+      "self_edit_scope": "forbidden",
+      "allowed_operations": [
+        "read"
+      ],
+      "imports": [
+        "core.action_engine",
+        "core.cognition_quality",
+        "core.perception",
+        "memory.memory_manager",
+        "memory.quality_tracker",
+        "skills.calendar_perception",
+        "skills.dev_notifier",
+        "skills.disk_cleanup",
+        "skills.evolution_engine",
+        "skills.followup_queue",
+        "skills.git_awareness",
+        "skills.github_publish",
+        "skills.github_skill",
+        "skills.presence_perception",
+        "skills.reddit_skill",
+        "skills.screen_perception",
+        "skills.self_analysis",
+        "skills.telegram_public",
+        "skills.telegram_voice",
+        "skills.user_accounts",
+        "skills.voice_output",
+        "skills.wake_word",
+        "skills.web_search"
+      ],
+      "dependents": [],
+      "exported_symbols": [
+        "MaezDaemon",
+        "daemonize",
+        "main"
+      ],
+      "last_hash": "0ac66164d0c7851deb32c29b137ca5d629667273be1210ef6acf57a389d2eaa1",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "Maez Daemon \u2014 Always-on system-level AI agent.",
+      "tags": [
+        "maez_self",
+        "system_monitoring"
+      ],
+      "parse_error": null
+    },
+    "skills/web_search.py": {
+      "path": "skills/web_search.py",
+      "file_type": "python",
+      "purpose": "web_search.py \u2014 Real web search for Maez",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [],
+      "dependents": [
+        "daemon/maez_daemon.py",
+        "skills/telegram_voice.py"
+      ],
+      "exported_symbols": [
+        "search",
+        "format_for_context",
+        "search_rss",
+        "is_news_query",
+        "needs_web_search"
+      ],
+      "last_hash": "bf66343970762776f58cc1a49f81884a770c23e1646f7979f1d2ad6be0dd42f4",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "web_search.py \u2014 Real web search for Maez",
+      "tags": [
+        "web_content"
+      ],
+      "parse_error": null
+    },
+    "skills/dynamic_dns.py": {
+      "path": "skills/dynamic_dns.py",
+      "file_type": "python",
+      "purpose": "dynamic_dns.py \u2014 Keep maez.live pointed at this machine's public IP.",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [],
+      "dependents": [],
+      "exported_symbols": [
+        "get_public_ip",
+        "cf_request",
+        "get_dns_record",
+        "update_dns_record",
+        "create_dns_record",
+        "main"
+      ],
+      "last_hash": "732682053103c2990facde06207291d5642e5d9144aad4f24446e88645e0ac3e",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "dynamic_dns.py \u2014 Keep maez.live pointed at this machine's public IP.",
+      "tags": [
+        "network"
+      ],
+      "parse_error": null
+    },
+    "skills/wake_word.py": {
+      "path": "skills/wake_word.py",
+      "file_type": "python",
+      "purpose": "wake_word.py \u2014 Wake word detection + transcription for Maez",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [],
+      "dependents": [
+        "daemon/maez_daemon.py",
+        "skills/voice_output.py"
+      ],
+      "exported_symbols": [
+        "extract_verifier_features",
+        "start",
+        "stop",
+        "set_speaking",
+        "test"
+      ],
+      "last_hash": "49452b76a5577a505cbf8703eb1ad0ad3ff7006780f6357ac623b0d1638355ad",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "wake_word.py \u2014 Wake word detection + transcription for Maez",
+      "tags": [
+        "general_presence"
+      ],
+      "parse_error": null
+    },
+    "skills/claude_watcher.py": {
+      "path": "skills/claude_watcher.py",
+      "file_type": "python",
+      "purpose": "claude_watcher.py \u2014 Monitors Claude Code and notifies via Maez Dev bot.",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [
+        "skills.dev_notifier"
+      ],
+      "dependents": [],
+      "exported_symbols": [
+        "acquire_lock",
+        "find_claude_process",
+        "run"
+      ],
+      "last_hash": "f5fed0cd4efba90f69262660c9622b5ad1caed02384098be14c434f0af7ee1da",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "claude_watcher.py \u2014 Monitors Claude Code and notifies via Maez Dev bot.",
+      "tags": [
+        "system_monitoring",
+        "development_tools"
+      ],
+      "parse_error": null
+    },
+    "skills/maez_watchdog.py": {
+      "path": "skills/maez_watchdog.py",
+      "file_type": "python",
+      "purpose": "maez_watchdog.py \u2014 Independent watchdog for maez.service.",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [
+        "skills.dev_notifier"
+      ],
+      "dependents": [],
+      "exported_symbols": [
+        "is_maez_active",
+        "get_cycle_count",
+        "run"
+      ],
+      "last_hash": "92a2898c5baf258704a7c4feba4b01c0192443395615aec96438dc635e2bceb0",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "maez_watchdog.py \u2014 Independent watchdog for maez.service.",
+      "tags": [
+        "system_monitoring"
+      ],
+      "parse_error": null
+    },
+    "skills/followup_queue.py": {
+      "path": "skills/followup_queue.py",
+      "file_type": "python",
+      "purpose": "followup_queue.py \u2014 Maez's promise tracker.",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [],
+      "dependents": [
+        "daemon/maez_daemon.py",
+        "skills/telegram_voice.py"
+      ],
+      "exported_symbols": [
+        "FollowUpQueue"
+      ],
+      "last_hash": "007862af5ebe9fc78858fb1bf65df41f35bb60fc7e37da11c27dba86bc190f31",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "followup_queue.py \u2014 Maez's promise tracker.",
+      "tags": [
+        "telegram"
+      ],
+      "parse_error": null
+    },
+    "skills/github_skill.py": {
+      "path": "skills/github_skill.py",
+      "file_type": "python",
+      "purpose": "GitHub awareness skill for Maez.",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [],
+      "dependents": [
+        "daemon/maez_daemon.py"
+      ],
+      "exported_symbols": [
+        "GitHubSkill"
+      ],
+      "last_hash": "103f6f67b4276d2c5ffce692cc36b7dab43403474e88174fa2c7ef27ee12136f",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "GitHub awareness skill for Maez.",
+      "tags": [
+        "web_content",
+        "git_workflow"
+      ],
+      "parse_error": null
+    },
+    "skills/self_analysis.py": {
+      "path": "skills/self_analysis.py",
+      "file_type": "python",
+      "purpose": "self_analysis.py \u2014 Maez analyzes its own reasoning quality",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [
+        "memory.memory_manager"
+      ],
+      "dependents": [
+        "daemon/maez_daemon.py",
+        "skills/telegram_voice.py",
+        "skills/evolution_engine.py"
+      ],
+      "exported_symbols": [
+        "analyze",
+        "format_for_telegram",
+        "get_weaknesses"
+      ],
+      "last_hash": "bbceda2baa176b2290fb3642fa3fc2d734fc92ab4a237dee30f0677fa12c3319",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "self_analysis.py \u2014 Maez analyzes its own reasoning quality",
+      "tags": [
+        "maez_self"
+      ],
+      "parse_error": null
+    },
+    "skills/telegram_public.py": {
+      "path": "skills/telegram_public.py",
+      "file_type": "python",
+      "purpose": "Public-facing Telegram interface for Maez.",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [],
+      "dependents": [
+        "daemon/maez_daemon.py",
+        "skills/web_interface.py"
+      ],
+      "exported_symbols": [
+        "UserProfileStore",
+        "ManipulationDetector",
+        "MaezPublicBot"
+      ],
+      "last_hash": "02ac5cd65dd225820f372623b776676280b57722ae17753eb37df21934c8af3f",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "Public-facing Telegram interface for Maez.",
+      "tags": [
+        "telegram",
+        "maez_self"
+      ],
+      "parse_error": null
+    },
+    "skills/disk_cleanup.py": {
+      "path": "skills/disk_cleanup.py",
+      "file_type": "python",
+      "purpose": "disk_cleanup.py \u2014 Scan disk and propose cleanup to Rohit",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [],
+      "dependents": [
+        "daemon/maez_daemon.py",
+        "skills/telegram_voice.py"
+      ],
+      "exported_symbols": [
+        "scan",
+        "format_telegram_message",
+        "execute_cleanup"
+      ],
+      "last_hash": "a0830e084a75e29fb6a36fc83d4388ac71f2c0fe4f7a6558723538c2d7e3e65a",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "disk_cleanup.py \u2014 Scan disk and propose cleanup to Rohit",
+      "tags": [
+        "disk_usage"
+      ],
+      "parse_error": null
+    },
+    "skills/calendar_perception.py": {
+      "path": "skills/calendar_perception.py",
+      "file_type": "python",
+      "purpose": "calendar_perception.py \u2014 Google Calendar awareness for Maez",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [],
+      "dependents": [
+        "daemon/maez_daemon.py"
+      ],
+      "exported_symbols": [
+        "CalendarEvent",
+        "CalendarSnapshot",
+        "observe",
+        "test"
+      ],
+      "last_hash": "dd35750f7a490f2aff4febe36f4c4a60ed9fd7993682da7140ce1f3d21546634",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "calendar_perception.py \u2014 Google Calendar awareness for Maez",
+      "tags": [
+        "calendar"
+      ],
+      "parse_error": null
+    },
+    "skills/web_interface.py": {
+      "path": "skills/web_interface.py",
+      "file_type": "python",
+      "purpose": "web_interface.py \u2014 Maez web chat interface.",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [
+        "core.perception",
+        "memory.memory_manager",
+        "skills.telegram_public",
+        "skills.user_accounts"
+      ],
+      "dependents": [],
+      "exported_symbols": [
+        "cors",
+        "index",
+        "register",
+        "login",
+        "link_telegram",
+        "chat",
+        "history",
+        "status"
+      ],
+      "last_hash": "7e6b25521713527ddf45e70ff21a3d731717963d34048a7aaf7d898ef6b6c4ca",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "web_interface.py \u2014 Maez web chat interface.",
+      "tags": [
+        "telegram",
+        "network"
+      ],
+      "parse_error": null
+    },
+    "skills/git_awareness.py": {
+      "path": "skills/git_awareness.py",
+      "file_type": "python",
+      "purpose": "git_awareness.py \u2014 Monitor git repos for Maez",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [],
+      "dependents": [
+        "daemon/maez_daemon.py",
+        "skills/telegram_voice.py"
+      ],
+      "exported_symbols": [
+        "find_repos",
+        "get_repo_status",
+        "scan_all",
+        "format_for_context",
+        "get_summary_for_telegram"
+      ],
+      "last_hash": "b1a3bec6fbba02ff68b9e57551137671ca8cd486728a84e55cb89fe2d92f0805",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "git_awareness.py \u2014 Monitor git repos for Maez",
+      "tags": [
+        "git_workflow"
+      ],
+      "parse_error": null
+    },
+    "skills/telegram_voice.py": {
+      "path": "skills/telegram_voice.py",
+      "file_type": "python",
+      "purpose": "Maez Telegram Voice \u2014 Bidirectional Telegram integration.",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [
+        "core.action_engine",
+        "core.perception",
+        "memory.memory_manager",
+        "skills.disk_cleanup",
+        "skills.evolution_engine",
+        "skills.followup_queue",
+        "skills.git_awareness",
+        "skills.self_analysis",
+        "skills.user_accounts",
+        "skills.web_search"
+      ],
+      "dependents": [
+        "daemon/maez_daemon.py"
+      ],
+      "exported_symbols": [
+        "TelegramVoice"
+      ],
+      "last_hash": "3e4f96e06698a98a71685de05f5ff5c399e603bce2525a6fd084b5788e33bb74",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "Maez Telegram Voice \u2014 Bidirectional Telegram integration.",
+      "tags": [
+        "telegram"
+      ],
+      "parse_error": null
+    },
+    "skills/dev_notifier.py": {
+      "path": "skills/dev_notifier.py",
+      "file_type": "python",
+      "purpose": "dev_notifier.py \u2014 Sends operational notifications to Maez Dev bot.",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [],
+      "dependents": [
+        "daemon/maez_daemon.py",
+        "skills/claude_watcher.py",
+        "skills/maez_watchdog.py"
+      ],
+      "exported_symbols": [
+        "send_dev"
+      ],
+      "last_hash": "e166dab5684fbe41ced02bfac3d0a3136b6b47f2f0b9df7717e8b710b422f634",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "dev_notifier.py \u2014 Sends operational notifications to Maez Dev bot.",
+      "tags": [
+        "telegram",
+        "system_monitoring"
+      ],
+      "parse_error": null
+    },
+    "skills/voice_input.py": {
+      "path": "skills/voice_input.py",
+      "file_type": "python",
+      "purpose": "voice_input.py \u2014 Command transcription for Maez via faster-whisper",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [],
+      "dependents": [],
+      "exported_symbols": [
+        "VoiceTranscriber",
+        "initialize",
+        "listen_and_transcribe",
+        "test"
+      ],
+      "last_hash": "efeadb04e6fe3a619f078c1d117e2ec616a90b81b5d36e785ee178f461eca9ae",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "voice_input.py \u2014 Command transcription for Maez via faster-whisper",
+      "tags": [
+        "general_presence"
+      ],
+      "parse_error": null
+    },
+    "skills/face_enrollment.py": {
+      "path": "skills/face_enrollment.py",
+      "file_type": "python",
+      "purpose": "face_enrollment.py \u2014 Teach Maez who Rohit is",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [
+        "memory.memory_manager"
+      ],
+      "dependents": [],
+      "exported_symbols": [
+        "enroll",
+        "load_enrollment"
+      ],
+      "last_hash": "b24586a50d54de6d21781ff42537d571e422d637313e3a2859e9fc59471f056b",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "face_enrollment.py \u2014 Teach Maez who Rohit is",
+      "tags": [
+        "rohit_presence"
+      ],
+      "parse_error": null
+    },
+    "skills/screen_perception.py": {
+      "path": "skills/screen_perception.py",
+      "file_type": "python",
+      "purpose": "screen_perception.py \u2014 Screen awareness for Maez",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [],
+      "dependents": [
+        "daemon/maez_daemon.py"
+      ],
+      "exported_symbols": [
+        "ScreenObservation",
+        "observe",
+        "test"
+      ],
+      "last_hash": "819d4c467b0f8b1fb5b991bde7be0d883743fe54f8f00ab8844b95200826ee49",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "screen_perception.py \u2014 Screen awareness for Maez",
+      "tags": [
+        "browser_usage",
+        "development_tools"
+      ],
+      "parse_error": null
+    },
+    "skills/reddit_skill.py": {
+      "path": "skills/reddit_skill.py",
+      "file_type": "python",
+      "purpose": "Reddit awareness for Maez. Rohit's actual subreddits.",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [],
+      "dependents": [
+        "daemon/maez_daemon.py"
+      ],
+      "exported_symbols": [
+        "RedditSkill"
+      ],
+      "last_hash": "4f113ab86958d24dff53f97a28b02bcfa0af92e85287ed303028bf9737ce43e8",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "Reddit awareness for Maez. Rohit's actual subreddits.",
+      "tags": [
+        "web_content"
+      ],
+      "parse_error": null
+    },
+    "skills/voice_output.py": {
+      "path": "skills/voice_output.py",
+      "file_type": "python",
+      "purpose": "voice_output.py \u2014 Streaming voice output for Maez via RealtimeTTS + Kokoro.",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [
+        "skills.wake_word"
+      ],
+      "dependents": [
+        "daemon/maez_daemon.py"
+      ],
+      "exported_symbols": [
+        "initialize",
+        "speak",
+        "feed_sentence",
+        "speak_blocking",
+        "stop",
+        "is_speaking",
+        "shutdown",
+        "test"
+      ],
+      "last_hash": "0bedc39649a0f01b6ece53354dfcb1d14f75eaec7fbd9932b8665df603f54149",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "voice_output.py \u2014 Streaming voice output for Maez via RealtimeTTS + Kokoro.",
+      "tags": [
+        "general_presence"
+      ],
+      "parse_error": null
+    },
+    "skills/evolution_engine.py": {
+      "path": "skills/evolution_engine.py",
+      "file_type": "python",
+      "purpose": "evolution_engine.py \u2014 Maez's self-evolution system",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [
+        "skills.self_analysis"
+      ],
+      "dependents": [
+        "daemon/maez_daemon.py",
+        "skills/telegram_voice.py"
+      ],
+      "exported_symbols": [
+        "validate_syntax",
+        "validate_security",
+        "validate_behavior",
+        "deploy_improvement",
+        "run_evolution_cycle",
+        "format_morning_report",
+        "EvolutionTracker",
+        "check_and_revert"
+      ],
+      "last_hash": "cd89a4ab7e6f4974235051221acdd19f46ba6173746464088ab2235087d6a917",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "evolution_engine.py \u2014 Maez's self-evolution system",
+      "tags": [
+        "maez_self"
+      ],
+      "parse_error": null
+    },
+    "skills/user_accounts.py": {
+      "path": "skills/user_accounts.py",
+      "file_type": "python",
+      "purpose": "user_accounts.py \u2014 Universal identity system for Maez.",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [],
+      "dependents": [
+        "daemon/maez_daemon.py",
+        "skills/web_interface.py",
+        "skills/telegram_voice.py"
+      ],
+      "exported_symbols": [
+        "UserAccounts"
+      ],
+      "last_hash": "2404b610579649fb9bbbf67a0bef2b5a55dd17b7d7ba670de72c2828485e564b",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "user_accounts.py \u2014 Universal identity system for Maez.",
+      "tags": [
+        "telegram"
+      ],
+      "parse_error": null
+    },
+    "skills/github_publish.py": {
+      "path": "skills/github_publish.py",
+      "file_type": "python",
+      "purpose": "github_publish.py \u2014 Maez publishes its own life to GitHub.",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [],
+      "dependents": [
+        "daemon/maez_daemon.py"
+      ],
+      "exported_symbols": [
+        "GitHubPublisher"
+      ],
+      "last_hash": "4c5e53cedcacd4d2633d75f4cfbd0c1fc846245e9db833e88896fc820bacddee",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "github_publish.py \u2014 Maez publishes its own life to GitHub.",
+      "tags": [
+        "git_workflow"
+      ],
+      "parse_error": null
+    },
+    "skills/presence_perception.py": {
+      "path": "skills/presence_perception.py",
+      "file_type": "python",
+      "purpose": "presence_perception.py \u2014 Camera-based presence + face recognition for Maez",
+      "category": "skills",
+      "risk_level": "medium",
+      "self_edit_scope": "read_only",
+      "allowed_operations": [
+        "read",
+        "new_file"
+      ],
+      "imports": [],
+      "dependents": [
+        "daemon/maez_daemon.py"
+      ],
+      "exported_symbols": [
+        "PresenceSnapshot",
+        "observe",
+        "is_present",
+        "test"
+      ],
+      "last_hash": "eba2727b73776ec8a4f28c8bd1c930247f8993a35e004b1e1afea01d59900cb9",
+      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "summary": "presence_perception.py \u2014 Camera-based presence + face recognition for Maez",
+      "tags": [
+        "rohit_presence"
+      ],
+      "parse_error": null
+    }
+  }
+}

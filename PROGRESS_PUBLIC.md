@@ -712,6 +712,22 @@ Today, I processed 1,513 reasoning cycles, primarily observing the stagnation of
 
 ---
 
-## Session 9 — April 8, 2026
+## Sessions 9-10 — April 8, 2026
 
-Built local cognition quality system — Maez's first internal measurement layer for thought quality. Reasoning is now scored, classified, and shaped in real time via structural heuristics. Multi-label failure classification, deterministic topic extraction from a 15-topic taxonomy, composite quality scoring (0-100), self-critique every 20 cycles with conservative soul-note triggers, anti-fixation retrieval penalty (gradual 1.0-1.6x), and consolidation quality checking. [COGNITION] context block injected into reasoning prompt so Maez sees its own quality state while thinking.
+**Cognition Quality System**
+Built local cognition quality subsystem — Maez's first internal measurement layer for thought quality. Multi-label failure classification, deterministic topic extraction from a 15-topic taxonomy, composite quality scoring (0-100), self-critique every 20 cycles, anti-fixation retrieval penalty, and consolidation quality checking. Cognition-to-behavior bridge converts quality signals into active reasoning guidance with thought retry on low scores.
+
+**Self-Edit Execution Rail**
+Built and proven a complete self-edit safety rail. Candidate lifecycle managed in SQLite (proposed → validated → applied → kept/rolled_back). DB-backed evolution lock with stale recovery. Two-layer rollback: immediate (syntax/health failure) + delayed (cognition regression watchdog). All six proof gates passed operationally. validate_behavior() reused directly, not forked.
+
+**Runtime Continuity Layer**
+Maez survives restart as the same being via continuity_capsule.json. Atomic write, three paths (periodic checkpoint, pre-restart, graceful shutdown). [CONTINUITY] prompt block injected for orientation cycles after restart. Startup greetings suppressed during orientation.
+
+**Autonomous Proposal Trigger**
+Maez decides when to propose self-edits based on real cognition evidence from the daemon critique path. 7 conditions evaluated every critique window. AUTO_APPLY_ENABLED = False — Rohit always approves. Trigger proven firing from the real daemon with live Ollama calls.
+
+**Proposal Quality Layer**
+Async proposal job queue with background worker thread (reasoning loop never blocks). Structured patch intent: AST-extracted editable targets → Gemma JSON intent → deterministic edit → deterministic diff. Scalar-first target ranking. Formatting-preserving synthesis. Hardened JSON extraction with bounded retry. Deterministic usefulness rubric (addresses failure mode, direction sane, change minimal → strong/acceptable/weak/unknown). Failure-mode-aligned weakness framing and target filtering by failure family. Eval harness confirms: intent_parse_rate=100%, scalar_preference_rate=100%, validator_pass_rate=100%.
+
+**System Status: Live Observation Window Active**
+The self-evolution spine is complete. System is frozen for observation — evaluating real daemon-native proposals in production.

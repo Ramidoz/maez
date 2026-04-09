@@ -38,7 +38,7 @@ _cog_logger.setLevel(logging.INFO)
 # Classification
 MIN_ACTIONABLE_LENGTH = 30  # chars — below this, thought is too vague to be actionable
 FIXATION_WINDOW = 10        # how many recent topics to track for fixation detection
-FIXATION_THRESHOLD = 0.6    # fraction of recent topics that must match to flag fixation
+FIXATION_THRESHOLD = 0.55   # fraction of recent topics that must match to flag fixation (tightened from 0.6)
 
 # Scoring weights (0-100 scale)
 SCORE_WEIGHT_LENGTH = 10        # bonus for adequate length
@@ -78,27 +78,57 @@ POLICY_EXPLORATORY_THRESHOLD = 0.7      # fixation ratio above this → explorat
 # ══════════════════════════════════════════════════════════════════════
 
 TOPIC_TAXONOMY = {
+    # System hardware
     'disk_usage':     ['disk', 'partition', 'storage', 'df ', '/dev/', 'mount', 'inode'],
     'cpu_load':       ['cpu', 'load average', 'cores', 'utilization'],
-    'memory_usage':   ['ram', 'memory', 'swap', 'oom'],
+    'memory_usage':   ['ram', 'swap', 'oom'],
     'gpu_state':      ['gpu', 'vram', 'cuda', 'nvidia', 'temperature'],
-    'network':        ['network', 'bandwidth', 'latency', 'packet', 'connection', 'ssh'],
+    'network':        ['network', 'bandwidth', 'latency', 'packet', 'connection', 'download', 'upload', 'mbps'],
     'processes':      ['process', 'pid', 'zombie', 'defunct', 'top ', 'htop'],
-    'rohit_presence': ['rohit', 'desk', 'arrived', 'away', 'presence', 'absent'],
-    'rohit_activity': ['working', 'coding', 'browsing', 'idle', 'focus', 'deep work', 'vs code', 'terminal'],
+    # Rohit — presence (physical state)
+    'rohit_presence': ['arrived', 'away', 'absent', 'left desk', 'back at desk'],
+    # Rohit — fine-grained activity subtopics (checked BEFORE parent)
+    'git_workflow':       ['commit', 'push', 'pull', 'branch', 'diff', 'merge', 'staged', 'unstaged',
+                           'rebase', 'stash', 'uncommitted', 'git add', 'git log', 'git status'],
+    'browser_usage':      ['firefox', 'chrome', 'tab', 'youtube', 'browsing', 'webpage', 'browser',
+                           'web content', 'isolated web'],
+    'development_tools':  ['vscode', 'vs code', 'cursor', 'claude', 'opus', 'sonnet', 'ide', 'editor',
+                           'coding', 'debugg', 'python', 'script'],
+    'system_monitoring':  ['logs', 'daemon', 'service', 'maez', 'health', 'restart', 'watcher',
+                           'monitoring', 'journalctl', 'systemctl'],
+    'general_presence':   ['at desk', 'focus', 'session duration', 'active', 'present',
+                           'idle', 'deep work', 'working', 'break'],
+    # External context
     'calendar':       ['meeting', 'event', 'calendar', 'schedule', 'appointment'],
     'telegram':       ['telegram', 'message', 'conversation', 'bot'],
     'web_content':    ['news', 'reddit', 'github', 'trending', 'article'],
-    'maez_self':      ['soul', 'reasoning', 'cycle', 'evolution', 'memory', 'consolidation'],
+    'maez_self':      ['soul', 'reasoning', 'cycle', 'evolution', 'consolidation'],
     'error':          ['error', 'fail', 'crash', 'exception', 'timeout', 'refused'],
     'security':       ['firewall', 'ufw', 'ssh attempt', 'unauthorized', 'port'],
     'time_awareness': ['morning', 'evening', 'night', 'circadian', 'time of day'],
 }
 
+# Topics that are children of rohit_activity — checked first, parent is fallback
+_ROHIT_ACTIVITY_SUBTOPICS = {
+    'git_workflow', 'browser_usage', 'development_tools',
+    'system_monitoring', 'general_presence',
+}
+
+# Map from subtopic → parent for logging and backward compat
+TOPIC_PARENT = {t: 'rohit_activity' for t in _ROHIT_ACTIVITY_SUBTOPICS}
+
+# Precedence: fine-grained subtopics beat the parent. Among subtopics,
+# highest keyword match count wins. Among equal counts, this order breaks ties.
+_SUBTOPIC_PRECEDENCE = [
+    'git_workflow', 'browser_usage', 'development_tools',
+    'system_monitoring', 'general_presence',
+]
+
 
 def extract_topics(text: str) -> list[str]:
     """Extract topics from text using the controlled taxonomy.
     Returns list of matched topic keys, sorted by match count (descending).
+    Fine-grained subtopics take precedence over parent categories.
     Falls back to simple keyword extraction if no taxonomy match."""
     text_lower = text.lower()
     matches: dict[str, int] = {}
@@ -107,26 +137,45 @@ def extract_topics(text: str) -> list[str]:
         if count > 0:
             matches[topic] = count
 
-    if matches:
-        return sorted(matches, key=matches.get, reverse=True)
+    if not matches:
+        # Fallback: extract nouns/keywords by frequency
+        words = re.findall(r'\b[a-z]{4,}\b', text_lower)
+        stop = {'this', 'that', 'with', 'from', 'have', 'been', 'will', 'your',
+                'than', 'they', 'what', 'when', 'were', 'there', 'their', 'which',
+                'about', 'would', 'could', 'should', 'these', 'those', 'being',
+                'some', 'very', 'just', 'also', 'into', 'more', 'other', 'like'}
+        words = [w for w in words if w not in stop]
+        if words:
+            freq = collections.Counter(words)
+            return [w for w, _ in freq.most_common(3)]
+        return ['unknown']
 
-    # Fallback: extract nouns/keywords by frequency (simple heuristic)
-    words = re.findall(r'\b[a-z]{4,}\b', text_lower)
-    stop = {'this', 'that', 'with', 'from', 'have', 'been', 'will', 'your',
-            'than', 'they', 'what', 'when', 'were', 'there', 'their', 'which',
-            'about', 'would', 'could', 'should', 'these', 'those', 'being',
-            'some', 'very', 'just', 'also', 'into', 'more', 'other', 'like'}
-    words = [w for w in words if w not in stop]
-    if words:
-        freq = collections.Counter(words)
-        return [w for w, _ in freq.most_common(3)]
-    return ['unknown']
+    # Precedence: if any subtopic matched, prefer it over non-subtopics of equal weight
+    # Sort by: (1) match count desc, (2) subtopic precedence for ties
+    def sort_key(topic_name):
+        count = matches[topic_name]
+        # Lower precedence index = higher priority for ties
+        if topic_name in _ROHIT_ACTIVITY_SUBTOPICS:
+            try:
+                tie_break = _SUBTOPIC_PRECEDENCE.index(topic_name)
+            except ValueError:
+                tie_break = 99
+        else:
+            tie_break = 50  # non-subtopics sort middle
+        return (-count, tie_break)
+
+    return sorted(matches, key=sort_key)
 
 
 def primary_topic(text: str) -> str:
     """Return the single primary topic of a text."""
     topics = extract_topics(text)
     return topics[0] if topics else 'unknown'
+
+
+def get_parent_topic(topic: str) -> str | None:
+    """Return parent topic if topic is a subtopic, else None."""
+    return TOPIC_PARENT.get(topic)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -223,10 +272,12 @@ def classify(text: str, recent_topics: list[str] = None) -> dict:
             primary_label = p
             break
 
+    parent = get_parent_topic(topic)
     return {
         'labels': labels,
         'primary': primary_label,
         'topic': topic,
+        'parent_topic': parent,  # None if not a subtopic
         'topics': topics,
     }
 
@@ -315,6 +366,7 @@ def score_and_classify(text: str) -> dict:
         if len(_recent_labels) > 50:
             _recent_labels[:] = _recent_labels[-50:]
 
+        parent = classification.get('parent_topic')
         result = {
             'cog_score': quality,
             'cog_primary': classification['primary'],
@@ -322,11 +374,14 @@ def score_and_classify(text: str) -> dict:
             'cog_topic': classification['topic'],
             'cog_topics': ','.join(classification['topics'][:3]),
         }
+        if parent:
+            result['cog_parent_topic'] = parent
 
+        parent_str = f" parent={parent}" if parent else ""
         _cog_logger.info(
-            "cycle | score=%d primary=%s topic=%s labels=%s",
+            "cycle | score=%d primary=%s topic=%s%s labels=%s",
             quality, classification['primary'],
-            classification['topic'], classification['labels'],
+            classification['topic'], parent_str, classification['labels'],
         )
 
         return result
@@ -414,6 +469,15 @@ def self_critique() -> dict | None:
         fixation_ratio, topic_diversity, _low_critique_streak,
         critique['should_write_soul_note'],
     )
+
+    # Check proposal trigger after critique
+    try:
+        from skills.evolution_engine import check_proposal_trigger
+        check_proposal_trigger(critique)
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.debug("Proposal trigger check failed: %s", e)
 
     return critique
 
@@ -765,7 +829,30 @@ def _test():
     assert 'disk_usage' in extract_topics("Root partition at 65.6%")
     assert 'cpu_load' in extract_topics("CPU spiked to 95% across all cores")
     assert 'rohit_presence' in extract_topics("Rohit arrived at desk")
-    print("  topic extraction: OK")
+    print("  basic topics: OK")
+
+    # Fine-grained subtopics must resolve correctly
+    assert extract_topics("You have uncommitted changes, run git commit")[0] == 'git_workflow'
+    assert extract_topics("Firefox tab consuming 178% CPU, YouTube video buffering")[0] == 'browser_usage'
+    assert extract_topics("You're coding in VS Code with Claude open")[0] == 'development_tools'
+    assert extract_topics("Checking daemon logs, maez.service health")[0] == 'system_monitoring'
+    assert extract_topics("Rohit is at desk, deep work session")[0] == 'general_presence'
+    print("  subtopic resolution: OK")
+
+    # Subtopics have parent
+    assert get_parent_topic('git_workflow') == 'rohit_activity'
+    assert get_parent_topic('browser_usage') == 'rohit_activity'
+    assert get_parent_topic('disk_usage') is None
+    print("  parent mapping: OK")
+
+    # Critical: git thought and browser thought must NOT be the same topic
+    git_topic = extract_topics("Push your uncommitted changes with git commit")[0]
+    browser_topic = extract_topics("Firefox pulling 23% CPU from YouTube tabs")[0]
+    monitoring_topic = extract_topics("Check the daemon logs and maez.service status")[0]
+    assert git_topic != browser_topic, f"git and browser should differ: {git_topic} vs {browser_topic}"
+    assert git_topic != monitoring_topic, f"git and monitoring should differ: {git_topic} vs {monitoring_topic}"
+    assert browser_topic != monitoring_topic, f"browser and monitoring should differ"
+    print(f"  differentiation: git={git_topic} browser={browser_topic} monitoring={monitoring_topic}: OK")
 
     print("=== Classification ===")
     c = classify("Root disk at 65.6%, nothing unusual", ['disk_usage'] * 8)
@@ -794,17 +881,34 @@ def _test():
     assert 'cog_topic' in result
     print(f"  integrated: score={result['cog_score']} topic={result['cog_topic']}: OK")
 
+    print("=== Fixation on fine-grained topic ===")
+    _recent_topics.clear()
+    _recent_scores.clear()
+    _recent_labels.clear()
+    # Simulate: git_workflow repeated 8 times — should fixate on git_workflow, not rohit_activity
+    for _ in range(8):
+        score_and_classify("You should git commit your uncommitted staged changes now")
+    c_fix = classify("Run git commit to push your staged changes", _recent_topics)
+    assert 'fixation' in c_fix['labels'], f"Expected fixation on git_workflow streak"
+    assert c_fix['topic'] == 'git_workflow', f"Expected git_workflow, got {c_fix['topic']}"
+    print(f"  git_workflow fixation: OK (topic={c_fix['topic']})")
+
+    # Now a browser thought should NOT be fixation
+    c_browser = classify("Firefox pulling 23% CPU from YouTube tabs", _recent_topics)
+    assert 'fixation' not in c_browser['labels'], f"Browser should not be fixation after git streak: {c_browser['labels']}"
+    assert c_browser['topic'] == 'browser_usage', f"Expected browser_usage, got {c_browser['topic']}"
+    print(f"  browser after git streak: NOT fixation (topic={c_browser['topic']}): OK")
+
     print("=== Behavior Policy ===")
-    # Simulate fixation streak
     _recent_topics.clear()
     _recent_scores.clear()
     _recent_labels.clear()
     for _ in range(8):
-        _recent_topics.append('rohit_activity')
+        _recent_topics.append('git_workflow')
         _recent_scores.append(35)
         _recent_labels.append(['fixation', 'vague'])
     policy = get_behavior_policy()
-    assert 'rohit_activity' in policy['avoid_topics'], f"Expected avoid rohit_activity, got {policy}"
+    assert 'git_workflow' in policy['avoid_topics'], f"Expected avoid git_workflow, got {policy}"
     assert policy['force_new_angle'], f"Expected force_new_angle, got {policy}"
     assert policy['require_metric_specificity'], f"Expected require specificity"
     assert policy['directive'], f"Expected non-empty directive"
