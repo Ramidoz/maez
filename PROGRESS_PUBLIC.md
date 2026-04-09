@@ -731,3 +731,27 @@ Async proposal job queue with background worker thread (reasoning loop never blo
 
 **System Status: Live Observation Window Active**
 The self-evolution spine is complete. System is frozen for observation — evaluating real daemon-native proposals in production.
+
+---
+
+## Session 10 — April 9, 2026
+
+**First real proposals reviewed**
+Two daemon-native proposals were reviewed in the live observation window. Both targeted FIXATION_THRESHOLD for a vague failure mode and were rejected as weak. The same misalignment occurring twice confirmed a live routing bug that the structured eval did not catch.
+
+**First architectural self-diagnosis**
+Maez self-diagnosed the routing failure via natural conversation. It traced the misclassification to a label collapse in the failure mode classifier and proposed a structural fix: introducing VAGUENESS_DETECTION as a distinct label from REPETITION_DETECTION. This was the first time the system identified a bug in its own architecture and articulated a concrete fix in plain language.
+
+**Telegram UX hardening**
+- Message truncation root cause traced to a low num_predict budget in the followup delivery path. Fixed at source. Defense layer added: split_long_message helper for any future >4000 char messages.
+- Private bot command menu registered with 12 commands and a menu button.
+- New handlers: /proposals, /show, /apply, /reject, /help, plus a compact /analyze cognition snapshot.
+- Dev bot card formatting: send_proposal_card, send_service_card, send_nightly_card. Compact, high-signal, max 8 lines per card.
+
+**Observation window status**
+System is healthy. Critique trigger fires on schedule and correctly suppresses proposals when scores stay above the threshold. The observation window is doing what it was designed to do — surface live behavior gaps that synthetic eval cannot reproduce.
+
+**Next**
+- Implement the classifier redesign that Maez proposed
+- Continue observation window
+- Re-evaluate failure-mode-to-target routing once the new label is in place

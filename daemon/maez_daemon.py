@@ -958,6 +958,7 @@ class MaezDaemon:
                 logger.debug("Trust promotion check failed: %s", e)
 
             # Evolution cycle after self-analysis
+            evo_summary = {'experiments': 0, 'failed': 0, 'deployed': 0, 'flagged': 0}
             try:
                 from skills.evolution_engine import run_evolution_cycle, format_morning_report
                 from skills.self_analysis import get_weaknesses
@@ -967,12 +968,35 @@ class MaezDaemon:
                     self._evolution_summary = run_evolution_cycle(
                         weaknesses, telegram_callback=send_dev,
                     )
-                    evo_msg = format_morning_report(self._evolution_summary)
-                    send_dev(f"Nightly evolution:\n{evo_msg}")
+                    evo_summary = self._evolution_summary
                 else:
                     logger.info("No weaknesses — skipping evolution")
             except Exception as e:
                 logger.error("Evolution cycle failed: %s", e)
+
+            # Unified nightly summary card
+            try:
+                from skills.dev_notifier import send_nightly_card
+                from skills.self_analysis import analyze as _self_analyze
+                analysis = _self_analyze(self.memory, self.actions) or {}
+                top_topics = []
+                try:
+                    # Best-effort top topics from cognition recent buffer
+                    from core.cognition_quality import _recent_topics
+                    import collections as _cc
+                    if _recent_topics:
+                        top_topics = _cc.Counter(_recent_topics[-50:]).most_common(3)
+                except Exception:
+                    pass
+                send_nightly_card(
+                    memories_analyzed=analysis.get('total_analyzed', self.memory.memory_stats().get('raw', 0)),
+                    unique_insight_rate=analysis.get('unique_insight_rate', 0),
+                    top_topics=top_topics,
+                    proposals_attempted=evo_summary.get('experiments', 0),
+                    proposals_failed=evo_summary.get('failed', 0),
+                )
+            except Exception as e:
+                logger.debug("Nightly card failed: %s", e)
 
         logger.info("Consolidation thread stopped.")
 
@@ -1599,7 +1623,7 @@ class MaezDaemon:
                                     {"role": "system", "content": self.system_prompt},
                                     {"role": "user", "content": fu_prompt},
                                 ],
-                                options={"temperature": 0.5, "num_predict": 200},
+                                options={"temperature": 0.5, "num_predict": 4096},
                             )
                             fu_reply = fu_resp.message.content.strip()
                             if fu_reply:
