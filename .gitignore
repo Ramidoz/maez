@@ -22,3 +22,7 @@ ui/electron/dist/
 *.bak2
 /tmp/
 PROGRESS.md
+training/.venv/
+training/runs/
+*.safetensors
+*.gguf
