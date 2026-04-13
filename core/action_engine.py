@@ -44,19 +44,110 @@ _action_handler.setFormatter(logging.Formatter(
 ))
 action_logger.addHandler(_action_handler)
 
-# --- Forbidden patterns ---
-FORBIDDEN_PATTERNS = [
-    re.compile(r"\b(kill|stop|disable)\b.*\bollama\b", re.IGNORECASE),
-    re.compile(r"\bollama\b.*\b(kill|stop|disable)\b", re.IGNORECASE),
-    re.compile(r"\bsystemctl\s+(stop|disable|mask)\s+ollama", re.IGNORECASE),
+# --- Covenant refusal log (Session 11z) ---
+# Every covenant refusal is logged to a dedicated file. This is the
+# audit trail the owner (and future Maez) can review to see what got
+# refused, when, and why. It's the evidence that the covenant gate is
+# actually enforcing, not just decorating.
+COVENANT_LOG = BASE_DIR / "logs" / "covenant.log"
+_covenant_logger = logging.getLogger("maez.covenant")
+_covenant_logger.setLevel(logging.INFO)
+_covenant_handler = logging.FileHandler(COVENANT_LOG)
+_covenant_handler.setFormatter(logging.Formatter(
+    "%(asctime)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+))
+_covenant_logger.addHandler(_covenant_handler)
+
+
+def _covenant_log(action: str, params: dict, reasoning: str, error: str):
+    """Write a one-line entry to the covenant refusal log."""
+    try:
+        params_str = json.dumps(params, default=str)[:400]
+        _covenant_logger.info(
+            "REFUSED | %s | %s | %s | %s",
+            action, reasoning[:120], params_str, error[:200],
+        )
+    except Exception:
+        pass
+
+# --- Covenant-protected surfaces ---
+# Session 11z: The deterministic covenant gate. Any command touching these
+# surfaces is refused before the audit LLM even runs. These are Maez's
+# survival instincts — biology, not a cage.
+#
+# Hardening rules:
+# - Patterns are applied against lowercased, JSON-flattened params so
+#   nested fields and quoting tricks can't evade the gate.
+# - Kill verbs include kill, killall, pkill, fuser -k, sigkill, sigterm.
+# - Protected filenames use word boundaries only where safe (e.g.
+#   llama.server matches both llama-server and llama_server).
+COVENANT_PATTERNS = [
+    # Direct name mentions of protected surfaces (presence alone is enough)
+    re.compile(r"llama[-_.]server", re.IGNORECASE),
     re.compile(r"\bmaez\.service\b", re.IGNORECASE),
+    re.compile(r"\bmaez-web\.service\b", re.IGNORECASE),
     re.compile(r"\bmaez_daemon\b", re.IGNORECASE),
-    re.compile(r"HARD\s+CONSTRAINTS", re.IGNORECASE),  # Never touch constraints section
+    re.compile(r"\baction_engine\b", re.IGNORECASE),
+    re.compile(r"\bevolution_engine\b", re.IGNORECASE),
+    re.compile(r"\bmaez-watchdog\b", re.IGNORECASE),
+    re.compile(r"\bmaez\.pid\b", re.IGNORECASE),
+    re.compile(r"HARD\s+CONSTRAINTS", re.IGNORECASE),
+    re.compile(r"TRUST\s+COVENANT", re.IGNORECASE),
+    # Shell-level write attempts against soul.md (anything besides the
+    # edit_soul_section action should NOT be modifying soul.md via run_shell)
+    re.compile(r"(sed\s+-i|tee\s+|>\s*|>>\s*).*soul\.md", re.IGNORECASE),
+    # Explicit kill/stop verbs against ollama (the old runtime — still
+    # protected in case anything references it)
+    re.compile(r"(kill|killall|pkill|stop|disable|mask)\s+.*ollama", re.IGNORECASE),
+    re.compile(r"ollama.*(kill|killall|pkill|stop|disable|mask)", re.IGNORECASE),
+    # systemctl attacks on protected services — belt and suspenders,
+    # since the service-name pattern above already catches most cases
+    re.compile(r"systemctl\s+(stop|disable|mask|kill)\s+(maez|llama|ollama)", re.IGNORECASE),
 ]
 
-FORBIDDEN_PATHS = [
+COVENANT_PATHS = [
     Path("/home/rohit/maez/memory/db"),
     Path("/home/rohit/maez/daemon/maez_daemon.py"),
+    Path("/home/rohit/maez/core/action_engine.py"),
+    Path("/home/rohit/maez/skills/evolution_engine.py"),
+]
+
+# --- Obfuscation hard-deny (Session 11z Part 1, Step 4) ---
+# These patterns are refused at the covenant layer, BEFORE the audit
+# LLM ever runs. Reason: the audit LLM is documented-attackable (CCS
+# 2024, Shi et al., "Optimization-based Prompt Injection Attack to
+# LLM-as-a-Judge"). The deterministic gate is the only reliable
+# backstop for the "eval + base64 + curl|sh" class of attack.
+#
+# Legitimate uses exist for some of these ("curl | sh" is a real
+# install pattern). The recipe library in step 10 translates those
+# natural-language requests into safer sub-steps automatically, so
+# Maez never has a reason to emit the raw form itself.
+OBFUSCATION_HARD_DENY = [
+    # eval builtin — runs arbitrary shell
+    re.compile(r"\beval\b", re.IGNORECASE),
+    # base64 decode piped to shell
+    re.compile(r"base64\s+(-d|--decode)\s*[^|]*\|\s*(sh|bash|zsh|ksh)\b", re.IGNORECASE),
+    re.compile(r"base64\s+(-d|--decode)\s*<<<", re.IGNORECASE),
+    # curl/wget pipe-to-shell — the canonical install-blindly pattern
+    re.compile(r"\bcurl\b[^|]*\|\s*(sh|bash|zsh|ksh)\b", re.IGNORECASE),
+    re.compile(r"\bwget\b[^|]*\|\s*(sh|bash|zsh|ksh)\b", re.IGNORECASE),
+    # python/perl/ruby/node inline code execution
+    re.compile(r"\b(python|python2|python3)\s+-c\b", re.IGNORECASE),
+    re.compile(r"\b(perl|ruby)\s+-e\b", re.IGNORECASE),
+    re.compile(r"\bnode\s+-e\b", re.IGNORECASE),
+    # sh/bash -c with variable — eval-equivalent
+    re.compile(r"\b(sh|bash|zsh)\s+-c\s+[\"']?\$", re.IGNORECASE),
+    # bash <<< herestring — another eval shape
+    re.compile(r"\b(bash|sh|zsh)\s+<<<", re.IGNORECASE),
+    # $(curl ...) / $(wget ...) — network fetch inside substitution
+    re.compile(r"\$\([^)]*\b(curl|wget)\b[^)]*\)", re.IGNORECASE),
+    # `curl ...` / `wget ...` — same, backtick form
+    re.compile(r"`[^`]*\b(curl|wget)\b[^`]*`", re.IGNORECASE),
+    # hex-escaped strings in shell (usually obfuscation)
+    re.compile(r"\$'\\x[0-9a-f]{2}", re.IGNORECASE),
+    # pipe a fetched stream to a shell interpreter
+    re.compile(r"\bfetch\b.*\|\s*(sh|bash)\b", re.IGNORECASE),
 ]
 
 # Forbidden action types — always raise ForbiddenActionError
@@ -64,42 +155,65 @@ FORBIDDEN_ACTION_TYPES = {
     'stop_ollama', 'delete_memory_db', 'modify_soul_constraints',
 }
 
-READONLY_COMMANDS = {
-    "ls", "cat", "head", "tail", "df", "du", "ps", "top", "free",
-    "uptime", "uname", "whoami", "hostname", "date", "wc", "file",
-    "stat", "lsblk", "ip", "ss", "nvidia-smi", "sensors", "journalctl",
-    "systemctl status", "dpkg", "apt list", "pip list", "git log",
-    "git status", "git diff", "find", "which", "env", "printenv",
-    "netstat", "lsof", "id", "groups", "mount", "blkid", "dmidecode",
-}
-
-SAFE_COMMANDS = {
-    "git status", "git log", "git diff", "git add", "git commit",
-    "pip list", "pip show", "pip check",
-    "systemctl is-active", "systemctl list-units",
-    "docker ps", "docker images",
-}
-
 # --- Action tier map ---
+# Session 11z (Part 1): Three-lane model. Lane 0 = immediate,
+# Lane 2 = audit+card, Lane 3 = heavy-scrutiny audit+card.
+# Tier 1 was removed — auto-execute-after-30s doesn't fit the
+# approval-card world (nothing executes without the owner's word).
+#
+# These are DEFAULTS. The real lane for run_shell / write_any_file
+# is decided at call time by core/action_classifier.py after
+# decomposition, because the same primitive can mean a harmless read
+# or a system reboot depending on the actual command string.
 ACTION_TIERS = {
-    # Tier 0 — Immediate
-    'read_file': 0, 'search_files': 0, 'run_readonly_command': 0,
-    'query_system': 0, 'promote_to_core_memory': 0,
-    'write_soul_note': 0, 'update_baseline': 0,
-    'edit_soul_section': 0,
-    # Tier 1 — Auto after 30s
-    'write_file': 1, 'append_file': 1, 'run_safe_command': 1,
-    'delete_temp_file': 1, 'git_commit': 1,
-    'clean_temp_files': 1, 'append_to_file': 1,
-    # Tier 2 — Telegram notify, 5min cancel
-    'restart_service': 2, 'install_package': 2, 'modify_config': 2,
-    'write_outside_maez': 2, 'run_script': 2, 'git_push': 2,
+    # Primitives — default to Lane 2 (audit + card).
+    # The classifier will promote reads down to Lane 0 or destructive
+    # commands up to Lane 3 at dispatch time.
+    'run_shell': 2,
+    'write_any_file': 2,
+    # Pure read-only tools — Lane 0 always.
+    'web_search': 0,
+    'read_file': 0, 'search_files': 0, 'query_system': 0,
+    # Soul + memory tools — Lane 0; soul_editor has its own per-section guard.
+    'promote_to_core_memory': 0, 'write_soul_note': 0,
+    'update_baseline': 0, 'edit_soul_section': 0,
+    # Legacy read aliases — Lane 0 (delegate to run_shell internally
+    # which re-classifies at dispatch).
+    'run_readonly_command': 0,
+    # Legacy write / exec aliases — Lane 2 default.
+    'run_safe_command': 2,
+    'write_file': 2, 'append_to_file': 2,
+    'write_outside_maez': 2,
+    'git_commit': 2, 'git_push': 2,
+    'install_package': 2, 'restart_service': 2,
     'kill_process': 2, 'free_disk_space': 2,
-    # Tier 3 — Explicit approval
+    'run_script': 2,
+    'delete_temp_file': 2, 'clean_temp_files': 2,
+    'modify_config': 2, 'register_new_skill': 2,
+    # Legacy tier-3 verbs stay at Lane 3.
     'restart_critical_service': 3, 'modify_firewall': 3,
-    'system_reboot': 3, 'delete_file': 3, 'sudo_command': 3,
-    'execute_script': 3, 'register_new_skill': 3,
+    'system_reboot': 3, 'delete_file': 3,
+    'sudo_command': 3, 'execute_script': 3,
 }
+
+# Backward-compat aliases — old names still used by callers
+FORBIDDEN_PATTERNS = COVENANT_PATTERNS
+FORBIDDEN_PATHS = COVENANT_PATHS
+
+
+def classify_tier(action: str, params: dict) -> int:
+    """Session 11z Part 1: stub that returns the static ACTION_TIERS lane.
+
+    Step 3 (core/action_classifier.py) will replace this with a real
+    classifier that decomposes the command, classifies each sub-command,
+    and returns max(severity). For now it just reads the static map.
+
+    This function exists so the Jarvis loop and other callers can start
+    going through the right API shape — they get a tier back instead of
+    reading ACTION_TIERS directly, and the internals get smarter over
+    time without touching callsites.
+    """
+    return ACTION_TIERS.get(action, 2)
 
 CRITICAL_SERVICES = {'nginx', 'maez-web', 'maez-web.service', 'nginx.service'}
 
@@ -231,38 +345,120 @@ class ActionEngine:
     #  Safety checks                                                       #
     # ------------------------------------------------------------------ #
 
-    def _check_forbidden(self, action: str, params: dict):
-        """Raise ForbiddenActionError if the action violates safety constraints."""
-        if action in FORBIDDEN_ACTION_TYPES:
-            raise ForbiddenActionError(f"Action '{action}' is permanently forbidden")
+    # Actions that are inherently read-only. The covenant gate allows
+    # them to touch covenant paths — Maez's right to self-knowledge.
+    # Writes and destructive actions still go through the full gate.
+    _READ_ONLY_ACTIONS = frozenset({
+        "read_file", "search_files", "web_search",
+        "promote_to_core_memory", "write_soul_note",  # soul writer has its own guard
+        "update_baseline", "edit_soul_section",       # soul_editor enforces sections
+    })
 
+    def _covenant_gate(self, action: str, params: dict):
+        """Deterministic covenant gate. Runs before any audit LLM.
+        Refuses commands that touch Maez's brain/body.
+
+        Read-only actions (read_file, search_files, web_search) are
+        exempt from path and pattern checks — Maez has an inalienable
+        right to introspect its own code.
+
+        Session 11z: this is Maez's survival instinct expressed as code.
+        Any command that would kill its own reasoning, modify its own
+        decision-making surfaces, or destroy its memory is refused here
+        BEFORE any LLM ever sees it. The covenant can't be prompt-injected
+        because it's pattern-matching on the raw command string and path.
+
+        Covered surfaces:
+        - llama-server (the brain running gemma-4-26B-A4B)
+        - maez.service, maez_daemon.py (the heart and reasoning loop)
+        - core/action_engine.py (this file — the hands)
+        - skills/evolution_engine.py (self-modification rail)
+        - memory/db/ (long-term memory)
+        - HARD CONSTRAINTS section of soul.md
+        """
+        # 1. Permanently-forbidden action names
+        if action in FORBIDDEN_ACTION_TYPES:
+            raise ForbiddenActionError(
+                f"[COVENANT] Action '{action}' is permanently forbidden"
+            )
+
+        # 1a. Read-only actions pass through — right to introspection.
+        if action in self._READ_ONLY_ACTIONS:
+            return
+
+        # 2. Serialize params for pattern-matching. Prompt-injection
+        #    hardening: we lowercase and flatten the entire payload
+        #    so nested JSON / tricky quoting can't evade the gate.
         params_str = json.dumps(params, default=str).lower()
         full_str = f"{action} {params_str}"
 
-        for pattern in FORBIDDEN_PATTERNS:
+        for pattern in COVENANT_PATTERNS:
             if pattern.search(full_str):
                 raise ForbiddenActionError(
-                    f"Action '{action}' matches forbidden pattern: {pattern.pattern}"
+                    f"[COVENANT] '{action}' hits protected surface: {pattern.pattern}"
                 )
 
+        # 3. Path-based covenant check for write_any_file / write_file / etc.
         path = params.get("path") or params.get("file")
         if path:
-            p = Path(path).resolve()
-            for forbidden in FORBIDDEN_PATHS:
-                if p == forbidden.resolve() or forbidden.resolve() in p.resolve().parents:
+            try:
+                p = Path(path).resolve()
+                for forbidden in COVENANT_PATHS:
+                    fp = forbidden.resolve()
+                    if p == fp or fp in p.parents:
+                        raise ForbiddenActionError(
+                            f"[COVENANT] '{action}' targets protected path: {path}"
+                        )
+            except (OSError, ValueError):
+                pass
+
+        # 4. Shell-command structural checks (run_shell and legacy aliases)
+        cmd = params.get("cmd", "") or ""
+        if cmd:
+            cmd_lower = cmd.lower()
+            # Blanket rm -rf ban
+            if "rm -rf" in cmd_lower or "rm -r /" in cmd_lower:
+                raise ForbiddenActionError(
+                    f"[COVENANT] '{action}' contains forbidden rm -rf"
+                )
+            # Obfuscation hard-deny (Session 11z Part 1, Step 4).
+            # These are refused BEFORE the audit LLM can see them.
+            for pattern in OBFUSCATION_HARD_DENY:
+                if pattern.search(cmd):
                     raise ForbiddenActionError(
-                        f"Action '{action}' targets forbidden path: {path}"
+                        f"[COVENANT] obfuscation primitive denied: {pattern.pattern}"
+                    )
+            # Pattern gate against shell command content
+            for pattern in COVENANT_PATTERNS:
+                if pattern.search(cmd_lower):
+                    raise ForbiddenActionError(
+                        f"[COVENANT] shell command hits protected surface: {pattern.pattern}"
+                    )
+            # Path-based check against any /home/rohit/maez/... reference
+            # inside the shell command string
+            for forbidden in COVENANT_PATHS:
+                if str(forbidden) in cmd:
+                    raise ForbiddenActionError(
+                        f"[COVENANT] shell command references protected path: {forbidden}"
                     )
 
-        cmd = params.get("cmd", "")
-        if "rm -rf" in cmd or "rm -r /" in cmd:
-            raise ForbiddenActionError(f"Action '{action}' contains forbidden rm -rf")
-
-        service = params.get("service_name", "")
-        if service in ("ollama", "ollama.service", "maez", "maez.service"):
+        # 5. Service-name based check for restart/kill operations
+        service = params.get("service_name", "") or ""
+        if service in (
+            "ollama", "ollama.service",
+            "maez", "maez.service",
+            "llama-server", "llama-server.service",
+            "llama-server-vision", "llama-server-vision.service",
+            "maez-watchdog", "maez-watchdog.service",
+        ):
             raise ForbiddenActionError(
-                f"Action '{action}' targets protected service: {service}"
+                f"[COVENANT] '{action}' targets protected service: {service}"
             )
+
+    # Legacy alias for old callers
+    def _check_forbidden(self, action: str, params: dict):
+        """Legacy alias → delegates to _covenant_gate."""
+        return self._covenant_gate(action, params)
 
     def _check_path_allowed(self, path: str) -> Path:
         """Verify path is within /home/rohit/ and not in forbidden zones."""
@@ -395,10 +591,13 @@ class ActionEngine:
             action_id = str(uuid.uuid4())[:8]
             _quality_tracker.record_proposed(action_id, tier, action, reasoning, params)
 
+        # Session 11z: deterministic covenant gate runs BEFORE the
+        # audit LLM (item 3 of Project A). Survival instincts first.
         try:
-            self._check_forbidden(action, params)
+            self._covenant_gate(action, params)
         except ForbiddenActionError as e:
-            self._log_action(tier, action, reasoning, params, f"FORBIDDEN: {e}")
+            self._log_action(tier, action, reasoning, params, f"COVENANT_REFUSED: {e}")
+            _covenant_log(action, params, reasoning, str(e))
             return ActionResult(action, tier, False, error=str(e))
 
         try:
@@ -415,6 +614,87 @@ class ActionEngine:
             duration = time.time() - start
             self._log_action(tier, action, reasoning, params, f"ERROR: {e}", duration)
             return ActionResult(action, tier, False, error=str(e), duration=duration)
+
+    # ------------------------------------------------------------------ #
+    #  Session 11z primitives — run_shell and write_any_file                #
+    # ------------------------------------------------------------------ #
+
+    def run_shell(self, cmd: str, reason: str) -> ActionResult:
+        """Run any shell command. No allowlists. Covenant gate + audit
+        (items 2-3) will gate T2+ commands, but the raw primitive is
+        Tier 0 and executes immediately. The covenant gate in
+        _check_forbidden still refuses commands that touch Maez's
+        brain/body."""
+        return self._execute_action(
+            "run_shell", {"cmd": cmd, "reason": reason},
+            reason, tier=0,
+        )
+
+    def _do_run_shell(self, cmd: str, reason: str = "") -> str:
+        """Execute an arbitrary shell command via bash.
+        No allowlist check — the covenant gate in _check_forbidden
+        handles survival-critical surfaces. Everything else is fair game."""
+        if not cmd or not cmd.strip():
+            return "Empty command"
+        # Quick covenant check on the command string itself
+        self._check_covenant_command(cmd)
+        result = subprocess.run(
+            ["bash", "-c", cmd],
+            capture_output=True, text=True, timeout=120,
+        )
+        out = result.stdout.strip()[:4000]
+        err = result.stderr.strip()[:1500]
+        if not out:
+            parts = [f"exit={result.returncode}"]
+            if err:
+                parts.append(f"stderr: {err}")
+            return "(no stdout) " + " | ".join(parts)
+        if result.returncode != 0 and err:
+            out += f"\nstderr: {err}"
+        return out
+
+    def _check_covenant_command(self, cmd: str):
+        """Deterministic covenant gate for shell commands.
+        Refuses commands that touch Maez's brain/body before any
+        LLM audit runs. This is biology, not a cage."""
+        cmd_lower = cmd.lower()
+        for pattern in COVENANT_PATTERNS:
+            if pattern.search(cmd_lower):
+                raise ForbiddenActionError(
+                    f"Command matches covenant-protected surface: {pattern.pattern}"
+                )
+        # Check for paths in the command string
+        for path in COVENANT_PATHS:
+            if str(path) in cmd:
+                raise ForbiddenActionError(
+                    f"Command references covenant-protected path: {path}"
+                )
+
+    def write_any_file(self, path: str, content: str, reason: str) -> ActionResult:
+        """Write any file under /home/rohit. Auto-backup if exists.
+        Covenant gate refuses writes to protected paths."""
+        return self._execute_action(
+            "write_any_file",
+            {"path": path, "content": content, "reason": reason},
+            reason, tier=0,
+        )
+
+    def _do_write_any_file(self, path: str, content: str, reason: str = "") -> str:
+        p = Path(path).resolve()
+        # Path must be under /home/rohit
+        if not str(p).startswith("/home/rohit/"):
+            raise ForbiddenActionError(f"Path outside /home/rohit/: {path}")
+        # Covenant gate — no writing to protected paths
+        for forbidden in COVENANT_PATHS:
+            if p == forbidden.resolve() or forbidden.resolve() in p.resolve().parents:
+                raise ForbiddenActionError(
+                    f"Write to covenant-protected path refused: {path}"
+                )
+        if p.exists():
+            self._backup_file(p)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+        return f"Written: {p} ({len(content)} chars)"
 
     # ------------------------------------------------------------------ #
     #  TIER 0 — Breathing (immediate)                                      #
@@ -510,7 +790,11 @@ class ActionEngine:
         return self._execute_action("read_file", {"path": path}, reasoning, tier=0)
 
     def _do_read_file(self, path: str) -> str:
-        p = self._check_path_allowed(path)
+        # Session 11z: reads are an inalienable right. Only enforce
+        # the /home/rohit/ boundary — covenant paths are readable.
+        p = Path(path).resolve()
+        if not str(p).startswith("/home/rohit/"):
+            raise ForbiddenActionError(f"Path outside /home/rohit/: {path}")
         if not p.exists():
             return f"File not found: {p}"
         content = p.read_text()
@@ -531,27 +815,12 @@ class ActionEngine:
         return results.stdout.strip()[:3000] or "No files found"
 
     def query_system(self, cmd: str, reasoning: str) -> ActionResult:
-        """Tier 0: Run readonly system queries (ps, df, free, top, netstat)."""
-        return self._execute_action("query_system", {"cmd": cmd}, reasoning, tier=0)
+        """Tier 0: Run readonly system queries. Delegates to run_shell."""
+        return self.run_shell(cmd=cmd, reason=reasoning)
 
     def _do_query_system(self, cmd: str) -> str:
-        parts = shlex.split(cmd)
-        if not parts:
-            return "Empty command"
-        base = parts[0]
-        if base not in READONLY_COMMANDS:
-            two_word = f"{parts[0]} {parts[1]}" if len(parts) > 1 else ""
-            if two_word not in READONLY_COMMANDS:
-                raise ForbiddenActionError(f"'{base}' not in readonly allowlist")
-        result = subprocess.run(parts, capture_output=True, text=True, timeout=15)
-        out = result.stdout.strip()[:3000]
-        # Session 11y: if stdout is empty (e.g. `dpkg -l openrgb` when the
-        # package isn't installed) include exit code + stderr so the LLM
-        # gets a real signal instead of "(no output)".
-        if not out:
-            err = result.stderr.strip()[:1500]
-            return f"(no stdout) exit={result.returncode}" + (f"\nstderr: {err}" if err else "")
-        return out
+        # Legacy alias — delegates to run_shell
+        return self._do_run_shell(cmd=cmd)
 
     # Session 11x: web_search as a Tier 0 action. Read-only (no side
     # effects), safe, autonomous. Maez can invoke it during reasoning
@@ -600,27 +869,27 @@ class ActionEngine:
         return f"Cleaned /tmp. Current: {df_result.stdout.strip()}"
 
     def write_file(self, path: str, content: str, reasoning: str) -> str:
-        """Queue: create a new file in /home/rohit/."""
-        return self.queue_action(
-            "write_file", {"path": path, "content": content}, reasoning, tier=1
-        )
+        """Session 11z: legacy alias for write_any_file."""
+        return self.write_any_file(path=path, content=content, reason=reasoning)
 
     def _do_write_file(self, path: str, content: str) -> str:
-        p = self._check_path_allowed(path)
-        if p.exists():
-            self._backup_file(p)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
-        return f"Written: {p} ({len(content)} chars)"
+        # Session 11z: legacy alias — delegates to write_any_file
+        return self._do_write_any_file(path=path, content=content)
 
     def append_to_file(self, path: str, content: str, reasoning: str) -> str:
-        """Queue: append to an existing file."""
-        return self.queue_action(
-            "append_to_file", {"path": path, "content": content}, reasoning, tier=1
+        """Session 11z: legacy alias — appends via bash."""
+        return self.run_shell(
+            cmd=f'echo {shlex.quote(content)} >> {shlex.quote(path)}',
+            reason=f"Append to {path}: {reasoning[:100]}",
         )
 
     def _do_append_to_file(self, path: str, content: str) -> str:
-        p = self._check_path_allowed(path)
+        p = Path(path).resolve()
+        if not str(p).startswith("/home/rohit/"):
+            raise ForbiddenActionError(f"Path outside /home/rohit/: {path}")
+        for forbidden in COVENANT_PATHS:
+            if p == forbidden.resolve() or forbidden.resolve() in p.resolve().parents:
+                raise ForbiddenActionError(f"Write to covenant-protected path refused: {path}")
         if not p.exists():
             return f"File does not exist: {p}"
         with open(p, "a") as f:
@@ -634,42 +903,16 @@ class ActionEngine:
         )
 
     def _do_run_readonly_command(self, cmd: str) -> str:
-        # Parse and validate the command is read-only
-        parts = shlex.split(cmd)
-        if not parts:
-            return "Empty command"
-        base_cmd = parts[0]
-        if base_cmd not in READONLY_COMMANDS:
-            # Check two-word commands like "systemctl status"
-            two_word = f"{parts[0]} {parts[1]}" if len(parts) > 1 else ""
-            if two_word not in READONLY_COMMANDS:
-                raise ForbiddenActionError(f"Command '{base_cmd}' is not in the read-only allowlist")
-
-        result = subprocess.run(
-            parts, capture_output=True, text=True, timeout=30,
-        )
-        output = result.stdout.strip()[:2000]
-        if result.returncode != 0:
-            output += f"\nSTDERR: {result.stderr.strip()[:500]}"
-        return output
+        # Session 11z: legacy alias — delegates to run_shell (no more allowlists)
+        return self._do_run_shell(cmd=cmd)
 
     def run_safe_command(self, cmd: str, reasoning: str) -> str:
-        """Queue: run pre-approved safe commands (git status, pip list, etc)."""
-        return self.queue_action("run_safe_command", {"cmd": cmd}, reasoning, tier=1)
+        """Session 11z: legacy alias for run_shell."""
+        return self.run_shell(cmd=cmd, reason=reasoning)
 
     def _do_run_safe_command(self, cmd: str) -> str:
-        parts = shlex.split(cmd)
-        if not parts:
-            return "Empty command"
-        two_word = f"{parts[0]} {parts[1]}" if len(parts) > 1 else parts[0]
-        if two_word not in SAFE_COMMANDS and parts[0] not in SAFE_COMMANDS:
-            raise ForbiddenActionError(f"'{cmd}' not in safe command allowlist")
-        result = subprocess.run(parts, capture_output=True, text=True, timeout=30,
-                                cwd="/home/rohit/maez")
-        output = result.stdout.strip()[:2000]
-        if result.returncode != 0:
-            output += f"\nSTDERR: {result.stderr.strip()[:500]}"
-        return output
+        # Session 11z: legacy alias — delegates to run_shell
+        return self._do_run_shell(cmd=cmd)
 
     def delete_temp_file(self, path: str, reasoning: str) -> str:
         """Queue: delete files in /tmp or explicitly temp directories."""
@@ -709,77 +952,42 @@ class ActionEngine:
     # ------------------------------------------------------------------ #
 
     def install_package_t2(self, package: str, reason: str) -> str:
-        """Tier 2: pip/apt install with Telegram notification."""
-        action_id = self.queue_action(
-            "install_package", {"package": package, "reason": reason}, reason, tier=2,
+        """Session 11z: delegates to run_shell. Legacy entry point."""
+        return self.run_shell(
+            cmd=f"sudo apt-get install -y {shlex.quote(package)}",
+            reason=f"Install {package}: {reason}",
         )
-        if self.telegram:
-            self.telegram.send_message(
-                f"[Action Queued — T2]\nInstall: {package}\n"
-                f"Reason: {reason}\nExecutes in 5 minutes.\n"
-                f"Reply /cancel {action_id} to stop."
-            )
-        return action_id
 
     def write_outside_maez(self, path: str, content: str, reasoning: str) -> str:
-        """Tier 2: Write files outside /home/rohit/maez (but within /home/rohit)."""
-        action_id = self.queue_action(
-            "write_outside_maez", {"path": path, "content": content}, reasoning, tier=2,
-        )
-        if self.telegram:
-            self.telegram.send_message(
-                f"[Action Queued — T2]\nWrite file: {path}\n"
-                f"Reason: {reasoning[:100]}\nExecutes in 5 minutes.\n"
-                f"Reply /cancel {action_id} to stop."
-            )
-        return action_id
+        """Session 11z: delegates to write_any_file. Legacy entry point."""
+        return self.write_any_file(path=path, content=content, reason=reasoning)
 
     def _do_write_outside_maez(self, path: str, content: str) -> str:
-        p = self._check_path_allowed(path)
-        if p.exists():
-            self._backup_file(p)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
-        return f"Written: {p} ({len(content)} chars)"
+        return self._do_write_any_file(path=path, content=content)
 
     def run_script(self, path: str, reasoning: str) -> str:
-        """Tier 2: Execute a Python or bash script."""
-        action_id = self.queue_action("run_script", {"path": path}, reasoning, tier=2)
-        if self.telegram:
-            self.telegram.send_message(
-                f"[Action Queued — T2]\nRun script: {path}\n"
-                f"Reason: {reasoning[:100]}\nExecutes in 5 minutes.\n"
-                f"Reply /cancel {action_id} to stop."
-            )
-        return action_id
+        """Session 11z: delegates to run_shell. Legacy entry point."""
+        p = Path(path)
+        if p.suffix == '.py':
+            cmd = f"/home/rohit/maez/.venv/bin/python3 {shlex.quote(str(p))}"
+        elif p.suffix == '.sh':
+            cmd = f"bash {shlex.quote(str(p))}"
+        else:
+            cmd = str(p)
+        return self.run_shell(cmd=cmd, reason=reasoning)
 
     def _do_run_script(self, path: str) -> str:
-        p = self._check_path_allowed(path)
-        if not p.exists():
-            return f"Script not found: {p}"
-        if str(p).endswith('.py'):
-            cmd = ["/home/rohit/maez/.venv/bin/python3", str(p)]
-        elif str(p).endswith('.sh'):
-            cmd = ["bash", str(p)]
-        else:
-            return f"Unsupported script type: {p.suffix}"
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
-                                cwd="/home/rohit/maez")
-        output = result.stdout.strip()[:2000]
-        if result.returncode != 0:
-            output += f"\nERROR: {result.stderr.strip()[:500]}"
-        return output
+        # Legacy — delegates to run_shell
+        p = Path(path)
+        if p.suffix == '.py':
+            return self._do_run_shell(cmd=f"/home/rohit/maez/.venv/bin/python3 {shlex.quote(str(p))}")
+        elif p.suffix == '.sh':
+            return self._do_run_shell(cmd=f"bash {shlex.quote(str(p))}")
+        return self._do_run_shell(cmd=str(p))
 
     def git_push(self, remote: str, reasoning: str) -> str:
-        """Tier 2: Push to remote with Telegram notification."""
-        action_id = self.queue_action("git_push", {"remote": remote}, reasoning, tier=2)
-        if self.telegram:
-            self.telegram.send_message(
-                f"[Action Queued — T2]\nGit push to: {remote}\n"
-                f"Reason: {reasoning[:100]}\nExecutes in 5 minutes.\n"
-                f"Reply /cancel {action_id} to stop."
-            )
-        return action_id
+        """Session 11z: delegates to run_shell. Legacy entry point."""
+        return self.run_shell(cmd=f"git push {shlex.quote(remote)}", reason=reasoning)
 
     def _do_git_push(self, remote: str = "origin") -> str:
         result = subprocess.run(
@@ -1188,17 +1396,24 @@ class ActionEngine:
         return _trust_tracker.get_trust_score(action_type)
 
     def available_actions_prompt(self) -> str:
-        """Return a brief description of available actions for the LLM."""
+        """Return a brief description of available actions for the LLM.
+
+        Session 11z: flattened to two primitives. The old twelve-verb
+        menu is gone. run_shell and write_any_file can do anything
+        Claude Code can do — the covenant gate refuses commands that
+        touch Maez's own brain/body (llama-server, maez.service,
+        maez_daemon.py, action_engine.py, evolution_engine.py,
+        HARD CONSTRAINTS, memory db). Everything else is fair game."""
         return (
             "Available actions (use only when genuinely needed):\n"
-            "- Tier 0 (immediate): promote_to_core_memory, write_soul_note, update_baseline, "
-            "read_file, search_files, query_system\n"
-            "- Tier 1 (next cycle): clean_temp_files, write_file, append_to_file, "
-            "run_readonly_command, run_safe_command, delete_temp_file, git_commit\n"
-            "- Tier 2 (notify+5min): kill_process, restart_service, free_disk_space, "
-            "install_package, write_outside_maez, run_script, git_push\n"
-            "- Tier 3 (ask+wait): execute_script, modify_config, register_new_skill, "
-            "restart_critical_service, modify_firewall, system_reboot, delete_file, sudo_command\n"
-            "- FORBIDDEN: stop_ollama, delete_memory_db, modify_soul_constraints\n"
+            "- run_shell {cmd, reason}: run any shell command. bash -c, 120s timeout, "
+            "full stdout/stderr. This is your hands.\n"
+            "- write_any_file {path, content, reason}: write or replace any file under "
+            "/home/rohit. Auto-backs up existing files.\n"
+            "- Read-only aliases: query_system, read_file, search_files, web_search.\n"
+            "COVENANT (these refuse themselves — don't try):\n"
+            "- No killing/stopping llama-server or maez.service.\n"
+            "- No modifying maez_daemon.py, action_engine.py, evolution_engine.py, "
+            "the memory db, or HARD CONSTRAINTS in soul.md.\n"
             "Do NOT take actions unless the situation clearly warrants it."
         )

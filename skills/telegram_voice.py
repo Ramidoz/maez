@@ -334,30 +334,29 @@ def _extract_balanced_json(s: str) -> str | None:
 _TOOL_MANIFEST = """\
 TOOLS YOU CAN USE (your body, your hands — these run on the owner's machine):
 
-1. query_system   {"cmd":"dpkg -l openrgb"}
-   Read-only system query. ONE binary, NO pipes, NO redirects.
-   Allowed: ps, df, du, free, top, uptime, dpkg, systemctl status, nvidia-smi,
-   ls, cat, head, tail, find, which, lsblk, ip, ss, journalctl, lsof, stat, file.
-2. read_file      {"path":"/home/rohit/maez/config/soul.md"}
+1. run_shell       {"cmd":"dpkg -l openrgb","reason":"check if installed"}
+   Run ANY shell command via bash -c. 120s timeout. Full stdout/stderr.
+   This is your hands. Pipes, redirects, sudo, chains with && — all fine.
+   Examples:
+     {"cmd":"sudo apt-get install -y openrgb","reason":"the owner asked"}
+     {"cmd":"sudo add-apt-repository -y ppa:openrgb/stable && sudo apt-get update && sudo apt-get install -y openrgb","reason":"install from PPA"}
+     {"cmd":"nvidia-smi","reason":"check GPU"}
+     {"cmd":"git status","reason":"see what's uncommitted"}
+     {"cmd":"systemctl is-active nginx","reason":"check service"}
+2. write_any_file  {"path":"/home/rohit/notes.txt","content":"...","reason":"..."}
+   Write or replace any file under /home/rohit. Auto-backs up existing files.
+3. read_file       {"path":"/home/rohit/maez/config/soul.md"}
    Read any file under /home/rohit. Returns up to 5KB.
-3. search_files   {"pattern":"*.py","directory":"/home/rohit/maez"}
+4. search_files    {"pattern":"*.py","directory":"/home/rohit/maez"}
    find -name pattern, max depth 5.
-4. web_search     {"query":"openrgb cpu lighting linux"}
+5. web_search      {"query":"openrgb cpu lighting linux"}
    Real DuckDuckGo search. Use this whenever you need facts you don't have.
-5. run_safe_command {"cmd":"git status"}
-   Allowed: git status/log/diff/add/commit, pip list/show/check, systemctl is-active, docker ps.
-6. write_file     {"path":"/home/rohit/notes.txt","content":"..."}
-   Create or replace a file in /home/rohit (auto-backup if it exists).
-7. append_to_file {"path":"/home/rohit/notes.txt","content":"..."}
-   Append to an existing file.
-8. git_commit     {"message":"...","files":"."}
-   git add + commit inside /home/rohit/maez.
-9. install_package {"package":"openrgb","reason":"the owner asked"}
-   sudo apt-get install -y. Real install.
-10. restart_service {"service_name":"nginx","reason":"..."}
-    sudo systemctl restart. Forbidden services: ollama, maez (your own brain).
-11. run_script    {"path":"/home/rohit/foo.sh"}
-    Executes a .sh or .py under /home/rohit.
+
+COVENANT (these refuse themselves — don't try):
+- No killing/stopping llama-server or maez.service (your own brain and heart).
+- No modifying maez_daemon.py, action_engine.py, evolution_engine.py,
+  the memory database, or HARD CONSTRAINTS in soul.md.
+Everything else is fair game. You have full control.
 
 To use a tool, emit ONE LINE exactly in this format and nothing else on that line:
 TOOL_CALL: {"action":"<name>","params":{...}}
@@ -371,9 +370,10 @@ when you have enough information to answer the owner.
 
 Rules:
 - If the question is conversation/opinion/recall and needs no real data → write DONE immediately.
-- Never speculate or fabricate. If you don't know, USE web_search.
-- Prefer the smallest tool that answers the question.
+- Never speculate or fabricate. If you don't know, USE web_search or run_shell.
+- Prefer run_shell for any real system action. It's the most capable tool.
 - the owner asking you to do something IS authorization. Don't ask "should I?" — do it, then tell him what you did.
+- If a command fails, try to fix it and retry. Pivot if the first approach doesn't work.
 """
 
 
@@ -893,12 +893,21 @@ class TelegramVoice:
             logger.debug("jarvis loop unavailable: %s", e)
             return ""
 
-        # Allow these action names through the loop. Anything else is refused.
+        # Session 11z: flattened allowlist. The two primitives (run_shell,
+        # write_any_file) cover everything. Read-only aliases remain for
+        # the LLM's convenience. Legacy verbs stay in the set so old
+        # model outputs still dispatch correctly while the merged LoRA
+        # learns the new primitive names.
         allowed = {
+            # Session 11z primitives — the only two that really matter
+            'run_shell', 'write_any_file',
+            # Read-only — still supported as direct actions
             'query_system', 'read_file', 'search_files', 'web_search',
+            # Legacy aliases — delegate to run_shell / write_any_file internally
             'run_readonly_command', 'run_safe_command',
             'write_file', 'append_to_file', 'git_commit',
             'install_package', 'restart_service', 'run_script',
+            'write_outside_maez', 'git_push',
         }
 
         history = [
