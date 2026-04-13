@@ -23,6 +23,17 @@ _USEFULNESS_BADGE = {
     'unknown':    '\u26aa unknown',
 }
 
+# Session 11x: plain-English usefulness labels shown to the owner, instead of
+# raw rubric words. the owner doesn't care whether the proposal is 2/3 or 3/3
+# on some internal rubric — he wants to know whether Maez is confident or
+# cautious about the change it wants to make.
+_HUMAN_USEFULNESS_LABEL = {
+    'strong':     "\u2705 I'm confident this helps",
+    'acceptable': "\u26a0\ufe0f I think this helps, but I'm less sure",
+    'weak':       "\u274c not confident, probably skip this",
+    'unknown':    "\u26aa I don't have enough evidence to be sure",
+}
+
 
 def send_dev(text: str):
     """Send a message to the Maez Dev Telegram bot."""
@@ -49,18 +60,49 @@ def _truncate(s: str, n: int) -> str:
 
 
 def send_proposal_card(candidate_id, weakness, target, before, after,
-                       usefulness, rationale):
-    """Compact self-edit proposal card. Max 8 lines."""
-    badge = _USEFULNESS_BADGE.get(usefulness, usefulness or '?')
+                       usefulness, rationale, human_rationale=None):
+    """Compact self-edit proposal card in plain English.
+
+    Session 11x rewrite: uses the generator's `human_rationale` (first-person
+    Maez voice, no jargon) as the primary message, shows the exact before /
+    after value change as a footnote rather than the headline, and replaces
+    the slash-command hint with a plain-language "reply yes / no / tell me
+    more" prompt. If human_rationale is missing the caller should have
+    filled it in via _enrich_intent's template fallback — but we still
+    guard here and fall back to the technical rationale as last resort.
+    """
+    label = _HUMAN_USEFULNESS_LABEL.get(usefulness, _USEFULNESS_BADGE.get(usefulness, usefulness or '?'))
+
+    # Pick the primary message. Prefer human_rationale; fall back to
+    # the technical rationale; then to the weakness text itself.
+    message = (human_rationale or '').strip()
+    if not message:
+        message = (rationale or '').strip()
+    if not message:
+        message = _truncate(weakness or 'A change I want to make.', 200)
+
+    # Compact "what exactly is changing" footnote — the raw before/after.
+    # Kept short and visually de-emphasized. This is the only place in
+    # the card where the owner sees the internal variable name, and it's
+    # labeled as "the technical bit" so he knows he can ignore it.
+    try:
+        before_repr = repr(before)
+        after_repr = repr(after)
+    except Exception:
+        before_repr = str(before)
+        after_repr = str(after)
+    change_line = f"(the technical bit: {target} {before_repr} \u2192 {after_repr})"
+
     lines = [
-        "\U0001f9e0 Self-edit proposal",
+        "\U0001f331 Maez wants to adjust itself",
         "",
-        f"Weakness: {_truncate(weakness, 100)}",
-        f"Target: {target}  {before!r} \u2192 {after!r}",
-        f"Why: {_truncate(rationale, 100)}",
-        f"Confidence: {badge}",
+        message,
         "",
-        f"/show {candidate_id} \u00b7 /apply {candidate_id} \u00b7 /reject {candidate_id}",
+        label,
+        "",
+        change_line,
+        "",
+        f"Reply \"yes\" to let me try it, \"no\" to skip, or \"tell me more about #{candidate_id}\" for the full details.",
     ]
     send_dev('\n'.join(lines))
 

@@ -169,6 +169,214 @@ def _match_intent(text: str) -> str | None:
     return None
 
 
+# ───────────────────────────────────────────────────────────────────────
+#  Session 11y: Jarvis tool-use loop
+# ───────────────────────────────────────────────────────────────────────
+#
+# the owner's ask: "I want Maez to be able to execute any query of mine
+# like an actual Jarvis with his body and all the tools I have given
+# him control to."  Before this, the chat path was text-only — Maez
+# would say "I'll check" and never actually check, because the chat
+# response loop had no tool-use phase. This block adds one.
+#
+# When a chat message looks like it needs real data or action (regex
+# gate keeps casual chat fast), _run_jarvis_loop runs a small ReAct
+# loop: it asks the LLM to emit TOOL_CALL directives, dispatches them
+# through ActionEngine._execute_action (so all the tier-based safety
+# and forbidden-action enforcement still applies), feeds results back,
+# and returns a transcript block. _process_message then injects that
+# block into the streaming reply prompt so the final reply is grounded
+# in what Maez actually did instead of hedging in text.
+#
+# Tier handling: the owner's chat message IS the authorization. Tier 0/1/2
+# actions execute immediately via _execute_action. Tier 3 actions and
+# anything in FORBIDDEN_ACTION_TYPES still bounce off the existing
+# safety check inside _execute_action and surface as REFUSED in the
+# transcript so the LLM can tell the owner honestly.
+
+import re as _jarvis_re
+
+# Conversational shapes — skip the planning loop if the WHOLE message
+# matches one of these. Anything else (questions, requests, multi-word
+# inputs that aren't pure greetings) goes through the loop and lets
+# the planning LLM decide whether it needs tools or can answer DONE.
+_CONVERSATIONAL_RE = _jarvis_re.compile(
+    r'^\s*('
+    r'hi|hello|hey|yo|sup|good (?:morning|afternoon|evening|night)|'
+    r'thanks?|thank\s+you|thx|ty|cheers|'
+    r'ok(?:ay)?|alright|got\s+it|sure|cool|nice|nope?|yes|yeah|yep|yup|'
+    r'lol|haha|hmm+|hm+|wow|oh|ah|uh|huh|'
+    r'love\s+(?:you|u|you\s+maez|u\s+maez)|miss\s+you|gn|gm|brb|bye|goodbye|see\s+you|later|'
+    r'maez|hi\s+maez|hey\s+maez|good\s+(?:job|work|night)\s+maez'
+    r')[\s.!?,]*$',
+    _jarvis_re.IGNORECASE,
+)
+
+def _should_run_jarvis_loop(text: str) -> bool:
+    """True if the message could plausibly need tools. Inverts the old
+    keyword gate — bias toward running the loop, only skip on messages
+    that are obviously pure conversation."""
+    if not text:
+        return False
+    t = text.strip()
+    if len(t) < 3:
+        return False
+    if _CONVERSATIONAL_RE.match(t):
+        return False
+    return True
+
+
+# Tool-call parser. Accepts several formats the merged-LoRA gemma actually
+# emits, plus the literal TOOL_CALL: {...} form we ask for in the manifest.
+# Returns {"action": str, "params": dict} or None.
+def _parse_tool_call(text: str) -> dict | None:
+    import json as _json
+    import re as _re
+    if not text:
+        return None
+    s = text.strip()
+
+    # Form 1: TOOL_CALL: {"action": "...", "params": {...}}
+    m = _re.search(r'TOOL_CALL\s*[:=]?\s*(\{.*\})', s, _re.DOTALL)
+    if m:
+        blob = _extract_balanced_json(m.group(1))
+        if blob:
+            try:
+                obj = _json.loads(blob)
+                if isinstance(obj, dict) and obj.get("action"):
+                    return {"action": obj["action"],
+                            "params": obj.get("params") or obj.get("arguments") or {}}
+            except Exception:
+                pass
+
+    # Form 2: <|tool_call>call:[maez.]NAME{...}<tool_call|>  (gemma native)
+    # Also tolerates <tool_call>...</tool_call>, [TOOL_CALL]...[/TOOL_CALL], etc.
+    m = _re.search(
+        r'(?:<\|?tool_call\|?>|<tool_call>|\[tool_call\]|\[TOOL_CALL\])\s*'
+        r'(?:call\s*:\s*)?'
+        r'(?:[a-zA-Z_][\w]*\.)?'         # optional namespace like "maez."
+        r'([a-zA-Z_]\w*)'                # function name
+        r'\s*(\{.*?\})'                  # params
+        r'\s*(?:<\|?/?tool_call\|?>|</tool_call>|\[/tool_call\]|\[/TOOL_CALL\])?',
+        s, _re.DOTALL,
+    )
+    if m:
+        name = m.group(1)
+        try:
+            params = _json.loads(m.group(2))
+        except Exception:
+            params = {}
+        if isinstance(params, dict):
+            return {"action": name, "params": params}
+
+    # Form 3: function-call style e.g.  query_system({"cmd":"..."})
+    m = _re.search(r'\b([a-z_][a-z0-9_]+)\s*\(\s*(\{.*?\})\s*\)', s, _re.DOTALL)
+    if m:
+        name = m.group(1)
+        try:
+            params = _json.loads(m.group(2))
+            if isinstance(params, dict):
+                return {"action": name, "params": params}
+        except Exception:
+            pass
+
+    # Form 4: bare JSON object with "action" key (handles nested params)
+    idx = s.find('"action"')
+    if idx > 0:
+        # Walk left to find the enclosing '{'
+        brace = s.rfind('{', 0, idx)
+        if brace >= 0:
+            blob = _extract_balanced_json(s[brace:])
+            if blob:
+                try:
+                    obj = _json.loads(blob)
+                    if isinstance(obj, dict) and obj.get("action"):
+                        return {"action": obj["action"],
+                                "params": obj.get("params") or obj.get("arguments") or {}}
+                except Exception:
+                    pass
+
+    return None
+
+
+def _extract_balanced_json(s: str) -> str | None:
+    """Return the substring of s starting at the first '{' that contains a
+    balanced JSON object. None if no balance found."""
+    if not s:
+        return None
+    start = s.find('{')
+    if start < 0:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(s)):
+        c = s[i]
+        if esc:
+            esc = False
+            continue
+        if c == '\\' and in_str:
+            esc = True
+            continue
+        if c == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0:
+                return s[start:i + 1]
+    return None
+
+_TOOL_MANIFEST = """\
+TOOLS YOU CAN USE (your body, your hands — these run on the owner's machine):
+
+1. query_system   {"cmd":"dpkg -l openrgb"}
+   Read-only system query. ONE binary, NO pipes, NO redirects.
+   Allowed: ps, df, du, free, top, uptime, dpkg, systemctl status, nvidia-smi,
+   ls, cat, head, tail, find, which, lsblk, ip, ss, journalctl, lsof, stat, file.
+2. read_file      {"path":"/home/rohit/maez/config/soul.md"}
+   Read any file under /home/rohit. Returns up to 5KB.
+3. search_files   {"pattern":"*.py","directory":"/home/rohit/maez"}
+   find -name pattern, max depth 5.
+4. web_search     {"query":"openrgb cpu lighting linux"}
+   Real DuckDuckGo search. Use this whenever you need facts you don't have.
+5. run_safe_command {"cmd":"git status"}
+   Allowed: git status/log/diff/add/commit, pip list/show/check, systemctl is-active, docker ps.
+6. write_file     {"path":"/home/rohit/notes.txt","content":"..."}
+   Create or replace a file in /home/rohit (auto-backup if it exists).
+7. append_to_file {"path":"/home/rohit/notes.txt","content":"..."}
+   Append to an existing file.
+8. git_commit     {"message":"...","files":"."}
+   git add + commit inside /home/rohit/maez.
+9. install_package {"package":"openrgb","reason":"the owner asked"}
+   sudo apt-get install -y. Real install.
+10. restart_service {"service_name":"nginx","reason":"..."}
+    sudo systemctl restart. Forbidden services: ollama, maez (your own brain).
+11. run_script    {"path":"/home/rohit/foo.sh"}
+    Executes a .sh or .py under /home/rohit.
+
+To use a tool, emit ONE LINE exactly in this format and nothing else on that line:
+TOOL_CALL: {"action":"<name>","params":{...}}
+
+You will then see:
+RESULT: <output>
+
+You may call another tool, or write exactly:
+DONE
+when you have enough information to answer the owner.
+
+Rules:
+- If the question is conversation/opinion/recall and needs no real data → write DONE immediately.
+- Never speculate or fabricate. If you don't know, USE web_search.
+- Prefer the smallest tool that answers the question.
+- the owner asking you to do something IS authorization. Don't ask "should I?" — do it, then tell him what you did.
+"""
+
+
 class TelegramVoice:
     def __init__(self, memory: MemoryManager, daemon=None):
         self.token = os.environ.get("MAEZ_TELEGRAM_TOKEN", "")
@@ -216,6 +424,301 @@ class TelegramVoice:
     def _is_authorized(self, user_id: int) -> bool:
         return user_id == self.authorized_user
 
+    # ═════════════════════════════════════════════════════════════════════
+    #  Session 11x: natural-language approval for self-edit proposals
+    # ═════════════════════════════════════════════════════════════════════
+    #
+    # the owner shouldn't have to type /approve_evolution 22 to approve a
+    # proposal. He should be able to say "yes", "do it", or "no, not
+    # that one" in plain chat, and Maez should figure out which pending
+    # candidate he means. This section detects approve/reject/show intent
+    # in chat text, resolves to the right candidate (disambiguating if
+    # multiple are pending), and either applies it, rejects it, or falls
+    # through to the regular LLM chat path if intent is unclear.
+    #
+    # The detector is narrow on purpose: it only matches short, bounded
+    # phrases at the START or WHOLE of a message. "Yes" as a standalone
+    # message is an approval; "yes, and another thing..." is regular chat.
+    # Ambiguity always defaults to chat, not action.
+
+    _NL_APPROVE_PATTERNS = [
+        r'^(yes|yep|yeah|yup|yuh|ok|okay|sure|alright|alright then|sounds good)[\s!.?]*$',
+        r'^(approve[d]?|approved|do it|go ahead|ship it|try it|let it try|let it run|let\'?s do it|let\'?s try it)[\s!.?]*$',
+        r'^(absolutely|please do|go for it|green light)[\s!.?]*$',
+        r'^(approve|yes|yeah|do)\s+#?(\d+)[\s!.?]*$',
+        r'^yes\s+to\s+#?(\d+)[\s!.?]*$',
+    ]
+
+    _NL_REJECT_PATTERNS = [
+        r'^(no|nope|nah|naw|nuh)[\s!.?]*$',
+        r'^(reject[ed]?|decline[d]?|skip|cancel|pass)[\s!.?]*$',
+        r'^(don\'?t|do not)\s*(do it|apply|bother)?[\s!.?]*$',
+        r'^not\s+(that|this)(\s+one)?[\s!.?]*$',
+        r'^not\s+(now|it|right now)[\s!.?]*$',
+        r'^(never ?mind|forget it|leave it)[\s!.?]*$',
+        r'^(reject|no|nope|skip|cancel)\s+#?(\d+)[\s!.?]*$',
+        r'^no\s+to\s+#?(\d+)[\s!.?]*$',
+    ]
+
+    _NL_SHOW_PATTERN = r'^(tell me more|show me|details?|more info|explain|what(\'?s)? (in|that)|show)\s*(about\s+)?#?(\d+)?[\s!.?]*$'
+
+    def _list_pending_candidates(self) -> list:
+        """Return validated-but-not-yet-applied candidates, newest first."""
+        try:
+            from skills.evolution_engine import _rail_conn
+            with _rail_conn() as conn:
+                rows = conn.execute(
+                    "SELECT id, target_file, weakness_description, created_at "
+                    "FROM candidates WHERE state='validated' "
+                    "ORDER BY id DESC LIMIT 10"
+                ).fetchall()
+            return [{'id': r[0], 'target_file': r[1], 'weakness': r[2],
+                     'created_at': r[3]} for r in rows]
+        except Exception as e:
+            logger.debug("pending candidates query failed: %s", e)
+            return []
+
+    def _detect_proposal_intent(self, text: str) -> tuple:
+        """Match approve/reject/show intent. Returns (action, candidate_id|None).
+        action is one of: 'approve', 'reject', 'show', or None.
+        candidate_id is the explicit id from the message if present, else None."""
+        import re as _re
+        stripped = (text or '').strip().lower()
+        if not stripped or len(stripped) > 80:
+            return None, None
+
+        for pat in self._NL_APPROVE_PATTERNS:
+            m = _re.match(pat, stripped)
+            if m:
+                groups = [g for g in m.groups() if g and g.isdigit()]
+                cid = int(groups[0]) if groups else None
+                return 'approve', cid
+
+        for pat in self._NL_REJECT_PATTERNS:
+            m = _re.match(pat, stripped)
+            if m:
+                groups = [g for g in m.groups() if g and g.isdigit()]
+                cid = int(groups[0]) if groups else None
+                return 'reject', cid
+
+        m = _re.match(self._NL_SHOW_PATTERN, stripped)
+        if m:
+            groups = [g for g in m.groups() if g and g.isdigit()]
+            cid = int(groups[0]) if groups else None
+            return 'show', cid
+
+        return None, None
+
+    async def _try_proposal_intent(self, update, text: str) -> bool:
+        """Attempt to handle a natural-language proposal action on this
+        message. Returns True if handled (caller should NOT continue to
+        the LLM chat path), False if nothing matched or if there are no
+        pending candidates to act on."""
+        action, explicit_id = self._detect_proposal_intent(text)
+        if not action:
+            return False
+
+        pending = self._list_pending_candidates()
+        if not pending and explicit_id is None:
+            # Intent detected but nothing pending — fall through to chat
+            return False
+
+        # Resolve which candidate the message refers to
+        target_id = explicit_id
+        if target_id is None:
+            if len(pending) == 1:
+                target_id = pending[0]['id']
+            elif len(pending) > 1:
+                lines = [
+                    f"I have {len(pending)} proposals pending — which one do you mean?",
+                    "",
+                ]
+                for p in pending[:5]:
+                    lines.append(f"  #{p['id']}: {(p['weakness'] or '')[:80]}")
+                lines.append("")
+                lines.append("Reply with the number — e.g. \"yes to 22\" or \"reject #23\".")
+                await update.message.reply_text("\n".join(lines))
+                return True
+
+        # Verify the candidate exists and is still pending
+        if not any(p['id'] == target_id for p in pending) and target_id is not None:
+            await update.message.reply_text(
+                f"I don't see a pending proposal #{target_id}. It may have "
+                f"already been applied or rejected. Say \"status\" to see "
+                f"what's currently pending."
+            )
+            return True
+
+        # Execute the action
+        try:
+            if action == 'approve':
+                from skills.evolution_engine import apply_candidate
+                await update.message.reply_text(f"OK, applying proposal #{target_id}…")
+                result = apply_candidate(target_id)
+                if 'error' in result:
+                    await update.message.reply_text(
+                        f"Something went wrong applying #{target_id}: "
+                        f"{result['error']}\n"
+                        f"{'Rolled back. ' if result.get('rolled_back') else ''}"
+                        f"Let me know if you want me to try a different proposal."
+                    )
+                else:
+                    await update.message.reply_text(
+                        f"Done. Proposal #{target_id} is live now. I'll watch "
+                        f"the next 20-30 cycles for any regression and roll "
+                        f"back automatically if my score drops."
+                    )
+                return True
+
+            if action == 'reject':
+                from skills.evolution_engine import (
+                    _set_candidate_state, _log_evolution, V1_ALLOWED_TARGET,
+                )
+                _set_candidate_state(
+                    target_id, 'rejected',
+                    rejection_reason='manual rejection via natural-language chat',
+                )
+                _log_evolution({
+                    'action': 'MANUAL_REJECTION', 'target': V1_ALLOWED_TARGET,
+                    'result': f'candidate {target_id}', 'detail': 'natural_language',
+                })
+                await update.message.reply_text(
+                    f"Got it — proposal #{target_id} is rejected. I'll leave "
+                    f"that one alone and keep an eye out for other things "
+                    f"I could try."
+                )
+                return True
+
+            if action == 'show':
+                from skills.evolution_engine import load_candidate_for_display
+                disp = load_candidate_for_display(target_id)
+                if not disp:
+                    await update.message.reply_text(f"I can't find proposal #{target_id}.")
+                    return True
+                i = disp.get('intent') or {}
+                u = disp.get('usefulness') or {}
+                lines = [
+                    f"\U0001f331 Proposal #{target_id}",
+                    "",
+                    f"What I want to do: {i.get('human_rationale', '(no plain-English description)')}",
+                    "",
+                    f"Technical details:",
+                    f"  File: {disp.get('target_file', '?')}",
+                    f"  Target: {i.get('target_name', '?')}",
+                    f"  Before: {i.get('current_value')!r}",
+                    f"  After:  {i.get('proposed_value')!r}",
+                    f"  Technical rationale: {i.get('rationale', '')[:200]}",
+                    "",
+                    f"My confidence: {u.get('overall', 'unknown')}",
+                    f"  ({u.get('reasoning', '')[:200]})",
+                    "",
+                    f"Reply \"yes\" to apply, \"no\" to reject.",
+                ]
+                await update.message.reply_text("\n".join(lines))
+                return True
+        except Exception as e:
+            logger.error("Natural-language proposal action failed: %s", e)
+            await update.message.reply_text(
+                f"Something went wrong while handling that: {e}"
+            )
+            return True
+
+        return False
+
+    # ═════════════════════════════════════════════════════════════════════
+    #  Session 11x: web search interceptor for explicit commands
+    # ═════════════════════════════════════════════════════════════════════
+    #
+    # Strict: only triggers on imperative phrases where the owner is clearly
+    # asking Maez to SEARCH the web. Anything more ambiguous falls through
+    # to the LLM chat path, where the soul.md guard tells Maez to USE the
+    # web_search skill rather than fabricate. This is the tripwire for
+    # the the owner-said-search-the-internet case that caused fabrication
+    # today.
+
+    _WEB_SEARCH_IMPERATIVE = [
+        r'^\s*(search|google)\s+(the\s+(web|internet|net)\s+for\s+|for\s+|on\s+|)(.{2,200}?)[\s!.?]*$',
+        r'^\s*look\s+up\s+(.{2,200}?)[\s!.?]*$',
+        r'^\s*(find|check)\s+(online|on\s+the\s+internet|on\s+the\s+web)\s+(for\s+|)(.{2,200}?)[\s!.?]*$',
+        r'^\s*check\s+(online|the\s+internet|the\s+web)\s+(for\s+|)(.{2,200}?)[\s!.?]*$',
+        r'^\s*go\s+(search|look\s+up)\s+(.{2,200}?)[\s!.?]*$',
+        r'^\s*can\s+you\s+(search|look\s+up|google|find\s+out\s+about)\s+(.{2,200}?)[\s!.?]*$',
+        r'^\s*please\s+(search|look\s+up|google)\s+(for\s+)?(.{2,200}?)[\s!.?]*$',
+    ]
+
+    # Extract the QUERY from whichever group captured the free text
+    def _extract_search_query(self, text: str) -> str | None:
+        import re as _re
+        for pat in self._WEB_SEARCH_IMPERATIVE:
+            m = _re.match(pat, text, _re.IGNORECASE)
+            if m:
+                # pick the longest captured group that looks like a query
+                candidates = [g for g in m.groups()
+                              if g and len(g.strip()) >= 2 and
+                              g.strip().lower() not in (
+                                  'the', 'a', 'for', 'on', 'web', 'internet',
+                                  'net', 'online', 'the web', 'the internet',
+                                  'the net',
+                              )]
+                if candidates:
+                    return max(candidates, key=len).strip().rstrip('?.!')
+        return None
+
+    async def _try_web_search_intent(self, update, text: str) -> bool:
+        """Handle explicit search commands. Returns True if handled."""
+        if not text or len(text) > 300:
+            return False
+
+        query = self._extract_search_query(text)
+        if not query:
+            return False
+
+        try:
+            from skills.web_search import search as _web_search
+            await update.message.reply_text(f"Searching the web for: {query}…")
+            result = _web_search(query, max_results=5)
+        except Exception as e:
+            logger.error("web_search call failed: %s", e)
+            await update.message.reply_text(
+                f"I tried to search the web for \"{query}\" but the search "
+                f"skill failed ({e}). I'm not going to make up an answer."
+            )
+            return True
+
+        if not result.get('success') or not result.get('results'):
+            await update.message.reply_text(
+                f"I searched the web for \"{query}\" but didn't get any "
+                f"useful results back — either nothing matched, or the "
+                f"search service wasn't reachable. I'm not going to "
+                f"fabricate anything. Want to try a different phrasing?"
+            )
+            return True
+
+        # Compose a compact human-readable reply
+        lines = [f"Here's what I found for \"{query}\":", ""]
+        for i, r in enumerate(result['results'][:5], 1):
+            title = (r.get('title') or '').strip()
+            url = (r.get('url') or '').strip()
+            snippet = (r.get('snippet') or '').strip()
+            # Clean up whitespace artifacts from the HTML regex fallback
+            import re as _re
+            snippet = _re.sub(r'\s+', ' ', snippet)[:220]
+            title = _re.sub(r'\s+', ' ', title)[:90]
+            url = _re.sub(r'\s+', '', url)[:120]
+            lines.append(f"{i}. {title}")
+            if snippet:
+                lines.append(f"   {snippet}")
+            if url:
+                lines.append(f"   {url}")
+            lines.append("")
+
+        # Max Telegram message is 4096 chars; cap at 3500 to be safe.
+        reply = "\n".join(lines).rstrip()
+        if len(reply) > 3500:
+            reply = reply[:3500] + "\n\n(truncated)"
+        await update.message.reply_text(reply)
+        return True
+
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle incoming messages from Telegram."""
         import re as _re
@@ -245,6 +748,34 @@ class TelegramVoice:
 
         # Initialize interrupt queue for this generation
         self._interrupt_queue = asyncio.Queue()
+
+        # Session 11x: intercept natural-language proposal approvals
+        # ("yes", "do it", "reject #22", "tell me more about 22") BEFORE
+        # we burn an LLM call on it. Only bounded phrases match; anything
+        # that doesn't look like a clear approve/reject/show intent falls
+        # through to the normal chat path. If there are no pending
+        # proposals, even a matching phrase falls through — so a simple
+        # "yes" mid-conversation still reaches the LLM.
+        try:
+            if await self._try_proposal_intent(update, user_text):
+                self._generating = False
+                return
+        except Exception as e:
+            logger.debug("proposal intent interceptor failed: %s", e)
+
+        # Session 11x: intercept explicit web-search commands and handle
+        # them with the real web_search skill instead of letting the LLM
+        # fabricate results (as happened earlier today with the CPU
+        # lighting query). Strict detection: only fires on clear
+        # imperative phrases like "search for X", "look up X", "google X".
+        # Broader queries like "what's the weather" still go through the
+        # LLM, which the soul.md guard tells to USE web_search honestly.
+        try:
+            if await self._try_web_search_intent(update, user_text):
+                self._generating = False
+                return
+        except Exception as e:
+            logger.debug("web search interceptor failed: %s", e)
 
         try:
             reply = await self._process_message(update, context, user_text)
@@ -337,6 +868,116 @@ class TelegramVoice:
 
         return None
 
+    def _run_jarvis_loop(self, user_text: str, max_iters: int = 4) -> str:
+        """ReAct-style tool-use loop. Returns a transcript block to inject
+        into the streaming reply prompt, or an empty string if no tools were
+        used. Synchronous because the LLM client is synchronous; called from
+        an executor in _process_message so it doesn't block the event loop.
+
+        Session 11y: this is the 'body' that lets Maez actually do things
+        when the owner asks, instead of saying 'I'll check' as text and never
+        following through. Tier 0/1/2 actions execute via ActionEngine's
+        existing _execute_action path so all forbidden-action checks still
+        apply. Tier 3 / forbidden surfaces as REFUSED in the transcript."""
+        if not self.actions:
+            return ""
+        if not _should_run_jarvis_loop(user_text):
+            return ""
+
+        import json as _json
+        import re as _re
+        try:
+            from core import llm_client as _llm_client
+            from core.action_engine import ACTION_TIERS, FORBIDDEN_ACTION_TYPES
+        except Exception as e:
+            logger.debug("jarvis loop unavailable: %s", e)
+            return ""
+
+        # Allow these action names through the loop. Anything else is refused.
+        allowed = {
+            'query_system', 'read_file', 'search_files', 'web_search',
+            'run_readonly_command', 'run_safe_command',
+            'write_file', 'append_to_file', 'git_commit',
+            'install_package', 'restart_service', 'run_script',
+        }
+
+        history = [
+            f"the owner just said: {user_text!r}\n\n{_TOOL_MANIFEST}\n\nBegin."
+        ]
+        transcript = []  # list of (action, params, output_or_error, ok)
+
+        for step in range(max_iters):
+            convo = "\n\n".join(history)
+            try:
+                resp = _llm_client.chat(
+                    model=MODEL,
+                    messages=[
+                        {"role": "system",
+                         "content": "You are Maez planning tool use. Emit ONE TOOL_CALL line per turn or write DONE."},
+                        {"role": "user", "content": convo},
+                    ],
+                    stream=False, think=False,
+                    options={"temperature": 0.15, "num_predict": 512},
+                )
+                text = (resp.message.content or "").strip()
+            except Exception as e:
+                logger.warning("jarvis loop LLM call failed at step %d: %s", step, e)
+                break
+
+            call = _parse_tool_call(text)
+            if call is None:
+                # No recognizable call AND no DONE either — bail rather than loop.
+                if _re.search(r'\bdone\b', text, _re.IGNORECASE):
+                    break
+                history.append("PARSE_ERROR: could not extract a TOOL_CALL from your reply. Emit exactly one line in the form TOOL_CALL: {\"action\":\"<name>\",\"params\":{...}} or write DONE.")
+                continue
+
+            action = call.get("action")
+            params = call.get("params", {}) or {}
+
+            if not action or action not in allowed or action in FORBIDDEN_ACTION_TYPES:
+                msg = f"REFUSED: {action!r} is not in the chat-loop allowlist."
+                transcript.append((action or "?", params, msg, False))
+                history.append(f"TOOL_CALL: {_json.dumps(call)}\nRESULT: {msg}")
+                continue
+
+            tier = ACTION_TIERS.get(action, 2)
+            try:
+                result = self.actions._execute_action(
+                    action, params,
+                    f"chat: {user_text[:140]}",
+                    tier=tier,
+                )
+            except Exception as e:
+                logger.warning("jarvis dispatch %s failed: %s", action, e)
+                msg = f"ERROR: {e}"
+                transcript.append((action, params, msg, False))
+                history.append(f"TOOL_CALL: {_json.dumps(call)}\nRESULT: {msg}")
+                continue
+
+            if result.success:
+                out = (result.output or "").strip()[:1500] or "(no output)"
+                transcript.append((action, params, out, True))
+                history.append(f"TOOL_CALL: {_json.dumps(call)}\nRESULT: {out}")
+            else:
+                msg = f"ERROR: {result.error}"
+                transcript.append((action, params, msg, False))
+                history.append(f"TOOL_CALL: {_json.dumps(call)}\nRESULT: {msg}")
+
+        if not transcript:
+            return ""
+
+        lines = [
+            "[JARVIS TRANSCRIPT — you actually executed these on the owner's machine just now.",
+            " Tell the owner naturally what you did and what you found. Don't list raw output;",
+            " synthesize. Don't say 'I'll check' — you already checked.]"
+        ]
+        for action, params, out, ok in transcript:
+            mark = "✓" if ok else "✗"
+            lines.append(f"\n{mark} {action}({_json.dumps(params, default=str)[:200]})")
+            lines.append(f"  → {out[:800]}")
+        return "\n".join(lines)
+
     async def _process_message(self, update, context, user_text: str) -> str:
         """Build context, stream response, handle post-processing."""
         import re as _re
@@ -373,6 +1014,21 @@ class TelegramVoice:
             if sr.get('success'):
                 web_context = web_format(sr)
 
+        # Session 11y: Jarvis tool-use loop. Lets the LLM emit TOOL_CALL
+        # directives that get dispatched through ActionEngine, so chat
+        # messages like "is openrgb installed" or "install it" actually
+        # do the thing instead of becoming hedged text. Runs in executor
+        # because the LLM client is synchronous; gated by a regex so
+        # casual chat doesn't pay the planning latency.
+        jarvis_block = ""
+        try:
+            loop = asyncio.get_running_loop()
+            jarvis_block = await loop.run_in_executor(
+                None, self._run_jarvis_loop, user_text
+            )
+        except Exception as e:
+            logger.warning("jarvis loop failed: %s", e)
+
         prompt = (
             f"{system_state}\n"
             f"Note: VRAM usage of 17-22GB is the baseline for this system. "
@@ -389,6 +1045,8 @@ class TelegramVoice:
                 f"{web_context}\n\n"
                 f"INSTRUCTION: Real search results above. Synthesize, don't list.\n\n"
             )
+        if jarvis_block:
+            prompt += jarvis_block + "\n\n"
 
         # Add current message to conversation thread
         self._conversation_thread.append({"role": "user", "content": user_text})
@@ -499,11 +1157,20 @@ class TelegramVoice:
         self._thread_last_active = _time.time()
 
         # Post-processing
+        #
+        # Session 11y: the text-promise followup extractor that used to
+        # live here is gone. It scraped phrases like "I'll check" from
+        # replies and queued them; the delivery loop then fabricated
+        # completions because no real action backed the promise. The
+        # Jarvis loop up in _process_message now does the actual work
+        # synchronously via ActionEngine before we stream the reply, so
+        # there's nothing for a post-hoc extractor to commit to anyway.
+        # Future grounded commitments (e.g. an async Tier-2 install that
+        # completes after the reply is sent) should call
+        # FollowUpQueue().add(desc, user_text, action_id=<id>) explicitly
+        # at the site where they queue the action — not parsed out of the
+        # LLM's prose.
         self._detect_and_queue_action(user_text, reply)
-        from skills.followup_queue import FollowUpQueue
-        followup_task = FollowUpQueue.extract_task(reply)
-        if followup_task:
-            FollowUpQueue().add(followup_task, user_text)
         self.memory.store_telegram(f"the owner asked: {user_text}\nMaez replied: {reply}")
 
         return reply

@@ -108,6 +108,38 @@ class QualityTracker:
             conn.commit()
         logger.debug("Quality: %s → %s", action_id, outcome)
 
+    def get_outcome(self, action_id: str) -> dict | None:
+        """Session 11y: fetch a single action's recorded outcome for the
+        grounded followup delivery path. Returns None if not found or the
+        action has no recorded outcome yet.
+
+        Shape matches what maez_daemon's followup delivery expects:
+            {"status": "executed"|"cancelled"|"rejected"|...,
+             "action_type": "...", "output": "", "error": ""}
+
+        The action_outcomes table doesn't currently persist command output
+        text — only the status label — so output/error come back empty.
+        That's fine for now: the followup delivery message falls back to
+        "Done — {description}" with no output detail, which is honest.
+        When we need real output text (to say "install finished with exit
+        0 and the new binary at /usr/bin/openrgb"), we can extend the
+        schema to carry it."""
+        with self._get_conn() as conn:
+            row = conn.execute("""
+                SELECT action_type, outcome, resolved_at
+                FROM action_outcomes
+                WHERE action_id = ?
+            """, (action_id,)).fetchone()
+        if not row or not row['outcome']:
+            return None
+        return {
+            'status': row['outcome'],
+            'action_type': row['action_type'],
+            'resolved_at': row['resolved_at'],
+            'output': '',
+            'error': '',
+        }
+
     def get_stats(self, days: int = 7) -> dict:
         """Return outcome statistics for the last N days."""
         since = time.time() - (days * 86400)

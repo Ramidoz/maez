@@ -625,8 +625,52 @@ def _get_lock_state() -> dict:
 # ══════════════════════════════════════════════════════════════════════
 
 def _normalize_cooldown_key(weakness: str, target: str) -> str:
-    words = sorted(set(_re.findall(r'[a-z]+', weakness.lower())))
-    return '|'.join(words) + '|' + target
+    """Compact failure-family + topic + target cooldown key.
+
+    Session 11x: the previous implementation extracted every alpha token
+    from the weakness description and sorted them. That produced 200-400
+    character fingerprints that were effectively unique per wording, so
+    the cooldown never coalesced slightly-different weaknesses about the
+    same underlying failure. A fixation on browser_usage in cycle 50 and
+    another one in cycle 80 would hash to different keys and both get
+    experiments, bypassing the 24h cooldown entirely.
+
+    The new key is a 3-part tuple: (failure_mode, dominant_topic, target).
+    Any two weaknesses about the same failure + topic + target collide
+    and respect the cooldown. We extract failure_mode and topic from the
+    weakness description by keyword match rather than parsing, because
+    weakness text is templated in _derive_weakness() and the keywords
+    are stable."""
+    lower = (weakness or '').lower()
+    # Detect failure mode by keyword presence in the templated weakness text.
+    # _derive_weakness() always mentions the failure mode name in the text
+    # (e.g., 'fixating on', 'too vague', 'not grounding', 'repetitive').
+    if 'fixating' in lower or 'fixation' in lower:
+        family = 'fixation'
+    elif 'too vague' in lower or 'vague' in lower:
+        family = 'vague'
+    elif 'not grounding' in lower or 'weak_retrieval' in lower or 'weak retrieval' in lower:
+        family = 'weak_retrieval'
+    elif 'repetitive' in lower or 'repetition' in lower:
+        family = 'repetition'
+    elif 'baseline' in lower:
+        family = 'baseline'
+    else:
+        family = 'unknown'
+
+    # Extract dominant topic from the "Context:" suffix _derive_weakness
+    # always appends. Fall back to 'topic' if absent.
+    topic = 'topic'
+    m = _re.search(r'context:\s*([a-z_ ]+?)\s+was', lower)
+    if m:
+        topic = m.group(1).strip().replace(' ', '_')
+    else:
+        # Legacy templates sometimes say "fixating on X" or similar
+        m2 = _re.search(r'on (?:the )?([a-z_ ]+?) detected', lower)
+        if m2:
+            topic = m2.group(1).strip().replace(' ', '_')
+
+    return f'{family}|{topic}|{target}'
 
 
 def _check_policy(weakness: str, target_file: str, diff_text: str = "") -> str | None:
@@ -1255,7 +1299,14 @@ def check_and_revert(memory_manager, telegram_callback=None):
 # ══════════════════════════════════════════════════════════════════════
 
 AUTO_APPLY_ENABLED = False   # Hardcoded. Never auto-apply.
-PROPOSAL_SCORE_THRESHOLD = 45
+# Session 11x: raised 45 -> 65. The original threshold was chosen when
+# Maez's cognition scores averaged 40s-50s. Post-merged-LoRA (April 12)
+# the baseline stabilized in the 56-69 band, which meant the original
+# threshold was never met and the engine became functionally stalled
+# (15 consecutive PROPOSAL_SUPPRESSED log entries over 3 hours on the
+# last day we checked). 65 matches the new baseline: proposals fire on
+# dips into the mediocre range, stay suppressed on strong cycles.
+PROPOSAL_SCORE_THRESHOLD = 65
 MIN_EVIDENCE_CYCLES = 10
 MAX_PROPOSAL_HUNKS = 1
 MAX_PROPOSAL_CHANGED_LINES = 8
@@ -1570,13 +1621,36 @@ _MAX_INITIAL_TARGETS = 5
 _MAX_RETRY_TARGETS = 3
 
 
-# Failure-mode-to-target-family keyword mapping for filtering
-_TARGET_FAMILIES = {
-    'fixation': {'FIXATION', 'STREAK', 'PENALTY', 'SUPPRESS', 'AVOID', 'RECENT', 'TOPIC', 'WINDOW', 'COOLDOWN'},
-    'weak_retrieval': {'RETRIEVAL', 'RERANK', 'BOOST', 'PENALTY', 'GROUNDING', 'WING', 'ANTIFIXATION', 'FETCH'},
-    'vague': {'VAGUE', 'VAGUENESS', 'SPECIFIC', 'SPECIFICITY', 'ACTIONABLE', 'GROUNDING', 'LENGTH', 'MINIMUM', 'METRIC', 'CONCRETE', 'SCORE', 'FLOOR'},
-    'repetition': {'OVERLAP', 'NOVELTY', 'DIVERSITY', 'SEMANTIC', 'REPETITION', 'SIMILARITY', 'WINDOW'},
-}
+# Session 11x: _TARGET_FAMILIES and _FAILURE_TARGET_FAMILIES used to be
+# two separate dicts with inconsistent keywords — the filter hid targets
+# the scorer rewarded, and showed targets the scorer did not. That made
+# addresses_failure_rate structurally zero. Now _TARGET_FAMILIES is a
+# forward-reference into _FAILURE_TARGET_FAMILIES (defined later in the
+# file around line 2022) so there is one source of truth. The scorer and
+# the filter agree by construction.
+def _target_families() -> dict:
+    """Single source of truth for failure_mode -> target family keyword set.
+    Proxied to _FAILURE_TARGET_FAMILIES which is defined after the scorer
+    section. Use this helper instead of accessing _TARGET_FAMILIES directly."""
+    return _FAILURE_TARGET_FAMILIES
+
+
+# Legacy alias — some callers use `_TARGET_FAMILIES` directly. Kept as a
+# read-through proxy so any lookup hits the unified scorer dict.
+class _TargetFamiliesProxy:
+    def __contains__(self, key):
+        return key in _FAILURE_TARGET_FAMILIES
+    def __getitem__(self, key):
+        return _FAILURE_TARGET_FAMILIES[key]
+    def get(self, key, default=None):
+        return _FAILURE_TARGET_FAMILIES.get(key, default)
+    def keys(self):
+        return _FAILURE_TARGET_FAMILIES.keys()
+    def items(self):
+        return _FAILURE_TARGET_FAMILIES.items()
+
+
+_TARGET_FAMILIES = _TargetFamiliesProxy()
 
 
 def _filter_targets_by_failure(targets: list, failure_mode: str | None) -> tuple[list, bool, int]:
@@ -1606,53 +1680,255 @@ def _filter_targets_by_failure(targets: list, failure_mode: str | None) -> tuple
         return targets[:_MAX_INITIAL_TARGETS], False, 0
 
 
-def _generate_patch_intent(weakness: str, evidence: dict, editable_targets: list) -> dict | None:
+def _generate_patch_intent(weakness: str, evidence: dict, editable_targets: list,
+                           retry_feedback: dict | None = None) -> dict | None:
     """Ask Gemma for structured patch intent JSON. Targets sorted by rank (scalars first).
-    Filtered by failure-mode family when possible. Retries once with top 3 on failure."""
+    Filtered by failure-mode family. Retries once with top 3 on parse failure.
+
+    Session 11x rewrite: the prompt now (1) injects real cycle evidence
+    (recent label distribution + scores), (2) inlines the failure-family
+    keywords the scorer actually rewards, (3) inlines the direction rules
+    for scalar targets, and (4) forces failure-led reasoning BEFORE the
+    JSON output. If retry_feedback is given (from the pre-queue scoring
+    gate), the rubric's reasoning is surfaced as feedback so the LLM can
+    correct the specific failure on its next attempt."""
     failure_mode = evidence.get('dominant_failure_mode')
     injected, filtered_by_fm, family_match_count = _filter_targets_by_failure(editable_targets, failure_mode)
+
+    # Session 11x: pre-annotate each injected target with its direction
+    # rule (if any) so the LLM sees "(direction: RAISE)" or "(direction:
+    # LOWER)" right next to the target name. This removes the model's
+    # need to derive the correct direction from the rule prose below —
+    # it's already printed inline. Pushes direction_sane_rate higher on
+    # the long-tail cases where the LLM was reasoning semantically and
+    # picking the wrong direction. Only scalar targets get a direction
+    # tag; list_str targets get (direction: list-replace).
+    def _target_direction_hint(target: dict) -> str:
+        if not failure_mode:
+            return ''
+        name_upper = target['name'].upper()
+        if target['type'] in ('int', 'float'):
+            for (fm, name_part), direction in _DIRECTION_RULES.items():
+                if fm == failure_mode and name_part in name_upper:
+                    return ' (direction rule: ' + direction.upper() + ')'
+        return ''
+
     targets_text = '\n'.join(
         f"  [rank {t.get('target_rank', '?')}] {t['name']} = {t['current_value']!r}  "
-        f"(type: {t['type']}, line {t['lineno']})"
+        f"(type: {t['type']}, line {t['lineno']}){_target_direction_hint(t)}"
         for t in injected
     )
-    evidence_summary = json.dumps({
-        'avg_score': evidence.get('avg_score'),
-        'dominant_topic': evidence.get('dominant_topic'),
-        'fixation_ratio': evidence.get('fixation_ratio'),
-        'policy_directive': str(evidence.get('policy_directive', ''))[:100],
-    }, default=str)
 
+    # ── Build evidence block from REAL cycle data, not just aggregates ──
+    evidence_lines = []
+    if failure_mode:
+        evidence_lines.append(f"  Dominant failure mode:  {failure_mode}")
+    if evidence.get('dominant_topic'):
+        evidence_lines.append(f"  Dominant topic:         {evidence.get('dominant_topic')}")
+    avg = evidence.get('avg_score')
+    if avg is not None:
+        try:
+            evidence_lines.append(f"  Average cognition score: {float(avg):.1f}/100")
+        except (TypeError, ValueError):
+            evidence_lines.append(f"  Average cognition score: {avg}")
+    fratio = evidence.get('fixation_ratio')
+    if fratio is not None:
+        try:
+            evidence_lines.append(f"  Fixation ratio:          {float(fratio):.2f}")
+        except (TypeError, ValueError):
+            pass
+
+    # Recent labels — a REAL distribution the LLM can reason about
+    primary_labels = evidence.get('primary_labels') or []
+    if primary_labels:
+        import collections as _cc
+        label_counts = _cc.Counter(primary_labels)
+        label_summary = ', '.join(f"{k}={v}" for k, v in label_counts.most_common(6))
+        evidence_lines.append(
+            f"  Recent label distribution ({len(primary_labels)} cycles): {label_summary}"
+        )
+
+    # Recent scores — the trend, not just the mean
+    scores = evidence.get('scores') or []
+    if scores:
+        recent = scores[-10:]
+        try:
+            recent_fmt = ', '.join(f"{float(s):.0f}" for s in recent)
+        except (TypeError, ValueError):
+            recent_fmt = ', '.join(str(s) for s in recent)
+        evidence_lines.append(f"  Recent score trend (last {len(recent)}): [{recent_fmt}]")
+
+    policy = str(evidence.get('policy_directive', '') or '')
+    if policy:
+        evidence_lines.append(f"  Policy directive:       {policy[:120]}")
+
+    evidence_block = '\n'.join(evidence_lines) if evidence_lines else '  (no evidence available)'
+
+    # ── Failure-family hint: which target name parts would address this ──
+    family_hint = ""
+    family_match_set: set = set()
+    if failure_mode and failure_mode in _FAILURE_TARGET_FAMILIES:
+        family_match_set = _FAILURE_TARGET_FAMILIES[failure_mode]
+        family_kws = sorted(family_match_set)
+        family_hint = (
+            f"\nTARGET FAMILY for '{failure_mode}':\n"
+            f"  A target that actually addresses this failure mode should have\n"
+            f"  a name containing one of these keywords (underscore-separated):\n"
+            f"  {', '.join(family_kws)}\n"
+            f"  Targets outside this family will be scored as NOT addressing the failure."
+        )
+
+    # ── Direction rules: which way to move scalars for this failure mode ──
+    #
+    # Session 11x: the rules are phrased in terms of the SCORING effect,
+    # not in terms of semantic intuition. The LLM tends to reason about
+    # thresholds semantically ("to fix vagueness, require MORE detail =
+    # raise the length threshold") which is the opposite of the mechanical
+    # scoring effect ("lower the threshold so MORE cycles pass the check
+    # and the vague penalty fires less often"). The prompt now explains
+    # each rule in terms of what it does to the failure metric, so the
+    # model has an anchor that overrides its semantic intuition.
+    direction_lines = []
+    _RULE_PURPOSE = {
+        ('fixation', 'THRESHOLD'): (
+            "LOWER the value — a lower fixation-detection threshold means\n"
+            "    more borderline cycles get flagged and penalized, which\n"
+            "    reduces the average fixation rate over time."
+        ),
+        ('fixation', 'PENALTY'): (
+            "RAISE the value — a higher fixation penalty makes each fixation\n"
+            "    cycle hurt the score more, creating a stronger incentive to\n"
+            "    shift topics."
+        ),
+        ('fixation', 'STREAK'): (
+            "LOWER the value — a shorter streak trigger catches fixation\n"
+            "    earlier before it compounds into a run of bad cycles."
+        ),
+        ('weak_retrieval', 'WEIGHT'): (
+            "RAISE the value — a higher retrieval weight pulls more relevant\n"
+            "    memories into the reasoning prompt, grounding the next thought\n"
+            "    in real context and reducing ungrounded/weak outputs."
+        ),
+        ('weak_retrieval', 'PENALTY'): (
+            "LOWER the value — a softer suppression penalty lets the retriever\n"
+            "    surface memories it was previously overcorrecting against."
+        ),
+        ('weak_retrieval', 'BOOST'): (
+            "RAISE the value — a higher boost gives a larger bonus to cycles\n"
+            "    that actually cite concrete sensor/perception data."
+        ),
+        ('vague', 'ACTIONABLE'): (
+            "LOWER the value — counterintuitive but correct: lowering the\n"
+            "    ACTIONABLE threshold means MORE cycles count as actionable,\n"
+            "    so the 'vague' penalty fires LESS often. Raising this value\n"
+            "    makes the threshold stricter, which causes more vague\n"
+            "    classifications, which makes the failure WORSE."
+        ),
+        ('vague', 'SPECIFICITY'): (
+            "RAISE the value — a higher specificity weight means cycles that\n"
+            "    do cite concrete nouns/metrics get more credit, rewarding\n"
+            "    the behavior we want to reinforce."
+        ),
+        ('vague', 'GROUNDING'): (
+            "RAISE the value — a higher grounding weight rewards cycles that\n"
+            "    reference real perception data, pushing Maez away from\n"
+            "    abstract or generic observations."
+        ),
+    }
+    if failure_mode:
+        for (fm, name_part), direction in _DIRECTION_RULES.items():
+            if fm == failure_mode:
+                purpose = _RULE_PURPOSE.get((fm, name_part))
+                if purpose:
+                    direction_lines.append(
+                        f"  - target whose name contains '{name_part}':\n    {purpose}"
+                    )
+                else:
+                    verb = 'LOWER' if direction == 'lower' else 'RAISE'
+                    direction_lines.append(
+                        f"  - target whose name contains '{name_part}' -> {verb} the value"
+                    )
+    direction_block = ""
+    if direction_lines:
+        direction_block = (
+            f"\nDIRECTION RULES for '{failure_mode}' (each rule says which way\n"
+            f"the value must move to REDUCE the failure rate, not the intuitive\n"
+            f"semantic direction):\n"
+            + '\n'.join(direction_lines)
+            + "\n\n  CRITICAL: Read these rules carefully. The proposed_value must\n"
+            + "  move in the direction the rules specify. Reasoning intuitively\n"
+            + "  about what 'fixing' the failure means will often give the wrong\n"
+            + "  answer — the rules are based on how the scoring math actually\n"
+            + "  works, not on semantic meaning."
+        )
+
+    # ── Retry feedback from the scoring gate ──
+    retry_block = ""
+    if retry_feedback:
+        reasoning = str(retry_feedback.get('reasoning', '') or '')[:280]
+        retry_block = (
+            f"\nPREVIOUS ATTEMPT REJECTED by the deterministic usefulness rubric.\n"
+            f"  Rubric reasoning: {reasoning}\n"
+            f"  Fix the specific problem above in this attempt. Read the\n"
+            f"  TARGET FAMILY and DIRECTION RULES carefully and pick a target\n"
+            f"  whose name contains a family keyword AND move its value in\n"
+            f"  the direction the rules specify.\n"
+        )
+
+    # ── Final assembled prompt: reason first, JSON second ──
     prompt = (
         f"You are proposing one minimal change to improve Maez's reasoning quality.\n\n"
-        f"Weakness detected:\n{weakness}\n\n"
-        f"Evidence:\n{evidence_summary}\n\n"
-        f"Editable targets from core/cognition_quality.py:\n{targets_text}\n\n"
-        f'Output JSON only. No prose. No diff.\n'
-        f'Exactly this structure:\n'
+        f"WEAKNESS DETECTED:\n{weakness}\n\n"
+        f"EVIDENCE FROM RECENT CYCLES:\n{evidence_block}\n"
+        f"{family_hint}"
+        f"{direction_block}\n\n"
+        f"EDITABLE TARGETS from core/cognition_quality.py:\n{targets_text}\n"
+        f"{retry_block}\n"
+        f"Before producing JSON, reason through these four questions in one\n"
+        f"or two short sentences each. Keep the reasoning compact — the JSON\n"
+        f"is what will be applied.\n\n"
+        f"  1. Failure pattern: what specific failure does the evidence above show?\n"
+        f"  2. Countermeasure: what kind of change to core/cognition_quality.py\n"
+        f"     would reduce the frequency of that failure?\n"
+        f"  3. Target: which listed target most directly implements that\n"
+        f"     countermeasure? It MUST be a target whose name contains one of\n"
+        f"     the target-family keywords above.\n"
+        f"  4. Direction: which way does the value need to move to reduce the\n"
+        f"     failure, and does that match the direction rules above?\n\n"
+        f"THEN output the JSON on new lines, starting with {{ on its own line:\n"
         f'{{\n'
         f'  "target_name": "<existing constant name>",\n'
         f'  "target_type": "constant" or "keyword_list",\n'
         f'  "current_value": <current value>,\n'
         f'  "proposed_value": <new value>,\n'
-        f'  "rationale": "<one sentence>"\n'
+        f'  "rationale": "<one sentence, technical: connects target + direction to the failure>",\n'
+        f'  "human_rationale": "<one or two sentences in PLAIN ENGLISH, first-person in Maez\'s own voice (\\"I will try to...\\"), explaining what Maez is going to try to do differently and WHY, without using variable names, scoring-weight terms, or technical jargon. Write it for a non-technical reader who wants to understand the behavior change, not the parameter change. Do NOT mention SCORE_WEIGHT, THRESHOLD, PENALTY, or any internal symbol names. Do NOT mention the rubric. Do NOT use the words \\"lower\\" or \\"raise\\" — describe the behavior instead.>"\n'
         f'}}\n\n'
-        f"Rules:\n"
-        f"- target_name must be one of the listed editable targets\n"
-        f"- proposed_value must be the same type as current_value\n"
-        f"- proposed_value must differ from current_value\n"
-        f"- one target only\n"
+        f"Hard rules:\n"
+        f"- target_name must be one of the listed editable targets.\n"
+        f"- proposed_value must be the same type as current_value.\n"
+        f"- proposed_value must differ from current_value.\n"
+        f"- One target only.\n"
         f"- Prefer targets ranked earlier in this list.\n"
-        f"  Only propose a keyword list change if no scalar or\n"
-        f"  threshold change would reasonably address the weakness.\n"
+        f"- Only propose a keyword list change if no scalar or threshold\n"
+        f"  change would reasonably address the weakness.\n"
+        f"- human_rationale is the message the owner (the user) will see. Write it so\n"
+        f"  he instantly understands what Maez will try to do differently, without\n"
+        f"  needing to know any internal code. Good examples of the voice:\n"
+        f"    - \"I'm going to try harder to notice concrete details when I watch\n"
+        f"      what's happening, because my recent observations have been too\n"
+        f"      generic.\"\n"
+        f"    - \"I'll catch myself getting stuck on the same topic a little\n"
+        f"      earlier, so I can break out of a rut before it turns into a long\n"
+        f"      streak of the same kind of thought.\"\n"
+        f"    - \"I'll pull more of what I already remember into my thinking,\n"
+        f"      because I've been making observations that drift away from the\n"
+        f"      actual state of your system.\"\n"
+        f"  Bad examples (do NOT write like this):\n"
+        f"    - \"Raising SCORE_WEIGHT_SPECIFICITY from 25 to 35.\" (jargon)\n"
+        f"    - \"Increasing the specificity weight to penalize vague thoughts.\" (jargon)\n"
+        f"    - \"Lowering the threshold will reduce the vague penalty rate.\" (rubric-speak)\n"
     )
-    if failure_mode:
-        prompt += (
-            f"\nThe dominant failure mode is {failure_mode}.\n"
-            f"Targets are filtered toward this failure type.\n"
-            f"Choose the target that most directly addresses {failure_mode},\n"
-            f"not merely the topic.\n"
-        )
 
     retry_info = {'retry_attempted': False, 'retry_reason': None, 'retry_succeeded': False}
     filter_info = {
@@ -1674,6 +1950,63 @@ def _generate_patch_intent(weakness: str, evidence: dict, editable_targets: list
             intent['failure_family_alignment'] = bool(name_parts & _TARGET_FAMILIES[failure_mode])
         else:
             intent['failure_family_alignment'] = False
+
+        # ── Session 11x: SELF-GATING RETRY on weak intents ──
+        # Before returning, score the intent with the deterministic rubric.
+        # If it's weak AND this isn't already a retry (retry_feedback is None),
+        # call ourselves once with the rubric's reasoning as feedback. The
+        # retry prompt surfaces the feedback as "PREVIOUS ATTEMPT REJECTED"
+        # and asks the model to correct the specific failure. This used to
+        # live in process_proposal_job, but moving it here means the eval
+        # harness (which calls _generate_patch_intent directly) also
+        # benefits, and every future caller gets the same safeguard.
+        if retry_feedback is None:
+            try:
+                # Quick validation first — if the intent is malformed we
+                # can't score it, so skip the gate and let the caller handle
+                # validation failure normally.
+                vv, _ = _validate_patch_intent(intent, editable_targets)
+                if vv:
+                    normalized = normalize_evidence(dict(evidence))
+                    rubric = score_proposal_usefulness(intent, normalized, diff_lines_changed=2)
+                    gate_overall = rubric.get('overall', 'unknown')
+                    if gate_overall == 'weak':
+                        logger.info(
+                            "Self-gating retry: first attempt weak, reason=%s",
+                            str(rubric.get('reasoning', ''))[:140],
+                        )
+                        retried = _generate_patch_intent(
+                            weakness, evidence, editable_targets,
+                            retry_feedback=rubric,
+                        )
+                        if retried:
+                            rv, _ = _validate_patch_intent(retried, editable_targets)
+                            if rv:
+                                retry_rubric = score_proposal_usefulness(
+                                    retried, normalized, diff_lines_changed=2,
+                                )
+                                retry_overall = retry_rubric.get('overall', 'unknown')
+                                if retry_overall != 'weak':
+                                    logger.info(
+                                        "Self-gating retry: succeeded with overall=%s",
+                                        retry_overall,
+                                    )
+                                    return retried
+                                else:
+                                    logger.info(
+                                        "Self-gating retry: still weak, falling through to first intent"
+                                    )
+                            else:
+                                logger.info(
+                                    "Self-gating retry: retry intent invalid, falling through"
+                                )
+                        else:
+                            logger.info(
+                                "Self-gating retry: retry returned nothing, falling through"
+                            )
+            except Exception as e:
+                logger.debug("Self-gating retry skipped: %s", e)
+
         return _enrich_intent(intent, editable_targets)
 
     # Fix 3: One retry with stricter, narrower prompt
@@ -1698,7 +2031,8 @@ def _generate_patch_intent(weakness: str, evidence: dict, editable_targets: list
         f'  "target_type": "...",\n'
         f'  "current_value": ...,\n'
         f'  "proposed_value": ...,\n'
-        f'  "rationale": "one sentence"\n'
+        f'  "rationale": "one sentence, technical",\n'
+        f'  "human_rationale": "one sentence in plain English, first person, no variable names, for a non-technical reader"\n'
         f'}}\n\n'
         f"Nothing else."
     )
@@ -1743,7 +2077,8 @@ def _call_ollama_for_intent(prompt: str) -> tuple[str | None, dict | None]:
 
 
 def _enrich_intent(intent: dict, editable_targets: list) -> dict:
-    """Add target_rank and ranked_targets_considered to parsed intent."""
+    """Add target_rank, ranked_targets_considered, and a template-fallback
+    human_rationale when the LLM omitted it. Session 11x."""
     target_map = {t['name']: t for t in editable_targets}
     if intent.get('target_name') in target_map:
         intent['target_rank'] = target_map[intent['target_name']].get('target_rank')
@@ -1751,7 +2086,82 @@ def _enrich_intent(intent: dict, editable_targets: list) -> dict:
         {'name': t['name'], 'rank': t.get('target_rank'), 'type': t['type']}
         for t in editable_targets[:8]
     ]
+    # If the LLM forgot human_rationale, or produced one that still leaks
+    # variable names / rubric jargon, synthesize a template fallback so
+    # the proposal card always has plain-English text for the owner.
+    hr = (intent.get('human_rationale') or '').strip()
+    looks_jargon = False
+    if hr:
+        jargon_markers = ('SCORE_WEIGHT', 'THRESHOLD', 'PENALTY_', 'BOOST_',
+                          'MIN_', 'MAX_', 'FLOOR', 'CEILING', 'WEIGHT_')
+        if any(m in hr.upper() for m in jargon_markers):
+            looks_jargon = True
+    if not hr or looks_jargon:
+        intent['human_rationale'] = _template_human_rationale(intent)
+        intent['human_rationale_source'] = 'template_fallback' if not hr else 'template_replaced_jargon'
+    else:
+        intent['human_rationale_source'] = 'llm'
     return intent
+
+
+def _template_human_rationale(intent: dict) -> str:
+    """Generate a plain-English, first-person behavior description from a
+    proposal intent, so the Telegram card always has human-readable text
+    even when the LLM omits or jargonizes the human_rationale field.
+
+    Returns a single sentence in Maez's voice describing what Maez will
+    try to do differently. Does NOT mention variable names, scoring
+    weights, or direction words like 'raise/lower'."""
+    target_name = (intent.get('target_name') or '').upper()
+    name_parts = set(target_name.split('_'))
+    current = intent.get('current_value')
+    proposed = intent.get('proposed_value')
+
+    # Direction inferred from the values (not from the rule, because the
+    # template might be called for any failure mode or unknown evidence)
+    direction = None
+    try:
+        if isinstance(current, (int, float)) and isinstance(proposed, (int, float)):
+            direction = 'more' if proposed > current else 'less'
+    except Exception:
+        pass
+
+    # Pattern-match on target name parts to pick a behavior phrase
+    if 'FIXATION' in name_parts or 'ANTIFIXATION' in name_parts or 'STREAK' in name_parts:
+        if direction == 'less':
+            return "I'll catch myself getting stuck on the same topic a little earlier, so I can break out of a rut before it turns into a long streak of the same kind of thought."
+        return "I'll push myself harder to move off a topic once I notice I've been circling on it, so my thinking stays fresher."
+    if 'SPECIFICITY' in name_parts or 'SPECIFIC' in name_parts:
+        if direction == 'more':
+            return "I'll try harder to notice concrete details — specific numbers, specific names, specific things that are actually happening — because my recent observations have been too generic."
+        return "I'll relax a little about how specific every observation has to be, because I've been over-demanding concreteness to the point of missing the bigger picture."
+    if 'ACTIONABLE' in name_parts:
+        if direction == 'less':
+            return "I'll be more generous about counting an observation as useful, because I've been rejecting too many of my own thoughts as not good enough."
+        return "I'll hold myself to a higher bar for what counts as a useful observation, because I've been letting weak ones through."
+    if 'GROUNDING' in name_parts:
+        if direction == 'more':
+            return "I'll lean harder on what I can actually see happening on the system, because my recent thoughts have been drifting away from real evidence."
+        return "I'll be less reliant on raw sensor data when I'm reasoning, because I've been pattern-matching the numbers without thinking about what they mean."
+    if 'RETRIEVAL' in name_parts or 'BOOST' in name_parts:
+        if direction == 'more':
+            return "I'll pull more of what I already remember into my thinking, because my recent observations have been losing track of context I should know."
+        return "I'll lean less hard on old memories and more on what's happening right now, because I've been over-indexing on history."
+    if 'NOVELTY' in name_parts or 'DIVERSITY' in name_parts:
+        return "I'll be more deliberate about varying the subjects I notice, instead of returning to the same handful of topics over and over."
+    if 'LENGTH' in name_parts:
+        if direction == 'less':
+            return "I'll stop requiring every observation to be long before I count it as worthwhile, because I've been dismissing short, useful thoughts."
+        return "I'll hold short observations to a higher bar and only count the ones that actually say something substantial."
+    if 'THRESHOLD' in name_parts or 'FLOOR' in name_parts or 'CEILING' in name_parts:
+        if direction == 'less':
+            return "I'll set a lower bar for when I flag my own thinking as needing improvement, so I catch problems earlier."
+        return "I'll be a little more forgiving of my own thinking before I flag it as a problem, because I've been too hard on myself."
+
+    # Unknown target family — generic fallback
+    if direction:
+        return f"I'll adjust one of my internal settings so I respond {direction} strongly to this pattern, based on what I've been noticing in recent cycles."
+    return "I want to adjust one of my internal settings to address a pattern I've been noticing in my recent thinking."
 
 
 def _validate_patch_intent(intent: dict, editable_targets: list) -> tuple[bool, str]:
@@ -2170,6 +2580,10 @@ def process_proposal_job(job_id: int) -> dict:
         return {'error': 'No editable targets found'}
 
     # Step 2: Generate patch intent
+    # (Session 11x: _generate_patch_intent now self-gates against the
+    # usefulness rubric and retries once internally on 'weak'. Any weak
+    # intent that reaches here has already failed a retry — treat as final
+    # rejection rather than re-retrying a third time.)
     intent = _generate_patch_intent(weakness, evidence, editable)
     if not intent:
         return {'error': 'Gemma returned no valid patch intent'}
@@ -2178,6 +2592,26 @@ def process_proposal_job(job_id: int) -> dict:
     valid, reason = _validate_patch_intent(intent, editable)
     if not valid:
         return {'error': f'Intent validation failed: {reason}', 'intent': intent}
+
+    # Step 3b: Belt-and-suspenders final gate — reject 'weak' intents that
+    # somehow slipped past the generator's self-gating. No retry here; the
+    # generator already had its shot.
+    try:
+        _norm_ev = normalize_evidence(dict(evidence))
+        _final_gate = score_proposal_usefulness(intent, _norm_ev, diff_lines_changed=2)
+        if _final_gate.get('overall') == 'weak':
+            logger.info(
+                "Proposal final gate: rejecting weak intent for job=%d target=%s: %s",
+                job_id, intent.get('target_name', '?'),
+                str(_final_gate.get('reasoning', ''))[:140],
+            )
+            return {
+                'error': f"Final gate: {_final_gate.get('reasoning', 'weak proposal')}",
+                'intent': intent,
+                'gate': _final_gate,
+            }
+    except Exception as e:
+        logger.debug("Final gate skipped: %s", e)
 
     # Step 4: Synthesize edit on original content (not live file)
     original, edited = _synthesize_edit(full_path, intent['target_name'],
@@ -2273,7 +2707,9 @@ def process_proposal_job(job_id: int) -> dict:
     except Exception:
         pass
 
-    # Notify the owner via canonical display + compact card
+    # Notify the owner via canonical display + compact card (Session 11x:
+    # now passes human_rationale through so the card shows Maez's plain-
+    # English behavioral description instead of a raw variable delta)
     try:
         from skills.dev_notifier import send_proposal_card
         disp = load_candidate_for_display(cand_id)
@@ -2287,6 +2723,7 @@ def process_proposal_job(job_id: int) -> dict:
                 after=i.get('proposed_value'),
                 usefulness=disp['usefulness'].get('overall', 'unknown'),
                 rationale=i.get('rationale', ''),
+                human_rationale=i.get('human_rationale', ''),
             )
     except Exception:
         pass
@@ -2455,22 +2892,33 @@ def check_proposal_trigger(critique: dict) -> dict | None:
         logger.info("Proposal trigger: suppressed (score %.1f >= %d)", avg, PROPOSAL_SCORE_THRESHOLD)
         return None
 
-    # Condition 3: dominant failure is fixation (not vague-only)
+    # Condition 3: supported failure mode present in recent labels.
+    # Session 11x: broadened from fixation-only to ANY failure mode the
+    # pipeline has direction rules for (fixation, weak_retrieval, vague).
+    # Without this, the trigger was silent unless Maez was literally
+    # stuck on one topic — which is rare after the merged-LoRA baseline
+    # rose. Broader detection = proposals fire on real quality dips even
+    # when they're not topic fixations.
+    _SUPPORTED_FAILURE_MODES = {'fixation', 'weak_retrieval', 'vague'}
     try:
         from core.cognition_quality import _recent_labels
         import collections as _cc
         window = min(len(_recent_labels), 20)
         flat = [l for ll in _recent_labels[-window:] for l in ll]
         label_counts = _cc.Counter(flat)
-        has_fixation = label_counts.get('fixation', 0) > 0
+        supported_count = sum(label_counts.get(m, 0) for m in _SUPPORTED_FAILURE_MODES)
+        has_supported_failure = supported_count > 0
+        present_modes = sorted(m for m in _SUPPORTED_FAILURE_MODES if label_counts.get(m, 0) > 0)
     except Exception:
-        has_fixation = False
-    conditions['fixation_present'] = has_fixation
-    if not has_fixation:
+        has_supported_failure = False
+        present_modes = []
+    conditions['supported_failure_present'] = has_supported_failure
+    if not has_supported_failure:
         _log_evolution({'action': 'PROPOSAL_SUPPRESSED', 'target': target,
-                        'result': 'no fixation in dominant failure mode'})
-        logger.info("Proposal trigger: suppressed (vague-only, no fixation)")
+                        'result': 'no supported failure mode in recent labels'})
+        logger.info("Proposal trigger: suppressed (no supported failure mode)")
         return None
+    logger.info("Proposal trigger: supported failure modes present: %s", ', '.join(present_modes))
 
     # Condition 4: no active candidate in DB
     reconcile_lock()

@@ -1732,40 +1732,55 @@ class MaezDaemon:
             self._check_and_alert(snap)
 
             # Follow-up delivery — every 5 cycles
+            #
+            # Session 11y: this path used to ask the LLM to "deliver on
+            # your promise" given only the text of an earlier "I'll check"
+            # phrase and the current perception snapshot. The LLM had no
+            # grounded evidence and would fabricate a completion ("I've
+            # finished installing maez-cli" for an install that never ran).
+            # That was a direct trust-breaking failure.
+            #
+            # The new contract: get_pending() only returns rows with a
+            # non-null action_id. For each one, look up the real action
+            # result (outcome + output) from action_engine's action log
+            # or pending list, and send a grounded report. If the action
+            # hasn't completed yet, skip — try again next window. No LLM
+            # role-play.
             if self.cycle_count % 5 == 0:
                 try:
                     self.followup_queue.expire_old()
                     pending = self.followup_queue.get_pending()
                     for fu in pending:
-                        # Build focused delivery prompt
-                        fu_snap = perception_snapshot()
-                        fu_state = format_snapshot(fu_snap)
-                        fu_prompt = (
-                            f'You previously told the owner: "{fu["task"]}"\n'
-                            f"Original question: {fu['original_msg']}\n\n"
-                            f"Current system state:\n{fu_state}\n\n"
-                            f"Deliver on your promise — give the owner the actual answer or update now.\n"
-                            f"Be direct and specific. Start with what you found, not a preamble."
-                        )
+                        action_id = fu.get('action_id')
+                        if not action_id:
+                            continue
+                        # Look up the real action outcome from the quality
+                        # tracker (persisted across restarts) rather than
+                        # re-asking the LLM what happened.
                         try:
-                            # Session 11r: via llm_client (was missed in 11p batch)
-                            from core import llm_client as _llm_client
-                            fu_resp = _llm_client.chat(
-                                model=MODEL,
-                                messages=[
-                                    {"role": "system", "content": self.system_prompt},
-                                    {"role": "user", "content": fu_prompt},
-                                ],
-                                think=False,
-                                options={"temperature": 0.5, "num_predict": 4096},
-                            )
-                            fu_reply = (fu_resp.message.content or "").strip()
-                            if fu_reply:
-                                self.telegram.send_message(fu_reply)
-                                self.followup_queue.mark_delivered(fu['id'])
-                                logger.info("[FOLLOWUP] Delivered: %s", fu['task'][:60])
+                            from memory.quality_tracker import QualityTracker
+                            qt = QualityTracker()
+                            outcome = qt.get_outcome(action_id) if hasattr(qt, 'get_outcome') else None
+                        except Exception:
+                            outcome = None
+                        if not outcome or outcome.get('status') not in ('executed', 'cancelled', 'failed'):
+                            # Action still pending — wait for next window.
+                            continue
+                        status = outcome.get('status', 'unknown')
+                        output = (outcome.get('output') or outcome.get('error') or '').strip()[:600]
+                        desc = fu.get('task', 'the action you asked about')
+                        if status == 'executed':
+                            msg = f"Done — {desc}\n\nResult: {output}" if output else f"Done — {desc}"
+                        elif status == 'cancelled':
+                            msg = f"Cancelled — {desc}"
+                        else:
+                            msg = f"Failed — {desc}\n\n{output or 'No error detail.'}"
+                        try:
+                            self.telegram.send_message(msg)
+                            self.followup_queue.mark_delivered(fu['id'])
+                            logger.info("[FOLLOWUP] Delivered (grounded): %s → %s", action_id, status)
                         except Exception as e:
-                            logger.error("[FOLLOWUP] Delivery failed: %s", e)
+                            logger.error("[FOLLOWUP] Delivery send failed: %s", e)
                 except Exception as e:
                     logger.debug("Followup check failed: %s", e)
 
@@ -1827,12 +1842,22 @@ class MaezDaemon:
         self.boot_time = datetime.now(timezone.utc).isoformat()
         self._write_pid()
 
-        # Verify Ollama connectivity
+        # Verify LLM backend connectivity
         if not self._check_ollama():
-            logger.error("Cannot reach Ollama or model %s — aborting.", MODEL)
+            logger.error("Cannot reach LLM backend or model %s — aborting.", MODEL)
             self._remove_pid()
             sys.exit(1)
-        logger.info("Model %s confirmed available.", MODEL)
+        # Session 11x: MAEZ_LLM_BACKEND has been 'llamacpp' since 11p. The
+        # legacy "Model gemma4:26b confirmed available" log string was
+        # factually wrong for llama.cpp runs. llm_client ignores the model
+        # identifier for llamacpp (it uses the model the server was started
+        # with — gemma-4-26B-A4B Q4_K_M with merged LoRA as of 2026-04-12)
+        # so this log message is cosmetic only. Keep it honest.
+        _backend = os.environ.get('MAEZ_LLM_BACKEND', 'ollama').lower()
+        if _backend == 'llamacpp':
+            logger.info("Runtime brain confirmed: gemma-4-26B-A4B (Q4_K_M, merged LoRA) via llama.cpp")
+        else:
+            logger.info("Model %s confirmed available.", MODEL)
 
         self.running = True
 
