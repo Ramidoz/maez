@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Maez · redirecting…</title>
+<meta http-equiv="refresh" content="0; url=/dashboard">
+<link rel="canonical" href="https://maez.live/dashboard">
+<style>
+  html, body { background: #0c0a08; color: #f3ece0; margin: 0; height: 100%;
+    font-family: "JetBrains Mono", ui-monospace, monospace; display: flex;
+    align-items: center; justify-content: center; }
+  a { color: #e8a33a; text-decoration: none; }
+  a:hover { color: #f4b854; }
+  .wrap { text-align: center; padding: 1rem; }
+  .lbl { font-size: 11px; color: #9e907a; letter-spacing: 2px; margin-bottom: 0.6rem; }
+</style>
+</head>
+<body>
+<script>
+  // If served from localhost (Rohit's own box), prefer the interactive local dashboard.
+  // Otherwise fall through to the meta refresh → public dashboard.
+  (function() {
+    var h = location.hostname;
+    if (h === 'localhost' || h === '127.0.0.1') {
+      location.replace('http://127.0.0.1:11435/dashboard');
+    } else {
+      location.replace('/dashboard');
+    }
+  })();
+</script>
+<div class="wrap">
+  <div class="lbl">MAEZ</div>
+  <div>The project mindmap has moved to <a href="/dashboard">/dashboard</a>.</div>
+</div>
+</body>
+</html>

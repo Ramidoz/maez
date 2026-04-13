@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Maez · background layer (zen)</title>
+<meta name="description" content="Zen background presence layer for maez.live. Ink strokes on rice paper. Forwarded cursor, session-persistent formation.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #F5EFE0;
+    color: #6B7265;
+    font-family: 'Share Tech Mono', ui-monospace, monospace;
+    overflow: hidden;
+  }
+  canvas { display: block; }
+  .standalone-note {
+    position: fixed;
+    left: 50%; bottom: 24px;
+    transform: translateX(-50%);
+    font-size: 10px;
+    letter-spacing: 2.4px;
+    text-transform: uppercase;
+    color: rgba(107, 114, 101, 0.55);
+    pointer-events: none;
+    z-index: 99;
+  }
+</style>
+</head>
+<body>
+<canvas id="webgl-layer" style="position:absolute;top:0;left:0;z-index:0"></canvas>
+<canvas id="grid-layer"  style="position:absolute;top:0;left:0;z-index:1;pointer-events:none"></canvas>
+<canvas id="ascii-layer" style="position:absolute;top:0;left:0;z-index:3;pointer-events:none"></canvas>
+
+<script>
+(() => {
+'use strict';
+
+// ═══════════════════════════════════════════════════════════════
+//  MAEZ · BACKGROUND LAYER
+//  a persistent presence layer used behind index / app / dashboard
+//  driven by postMessage cursor forwarding from the parent page
+// ═══════════════════════════════════════════════════════════════
+
+// ── config ────────────────────────────────────────────────────
+const CW = 9;
+const CH = 14;
+const FONT_PX = 13;
+const CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@#$%&01';
+const PARTICLE_MAX = 200;
+const CHAR_MUTATE_PER_FRAME = 4;
+const SAMPLE_W = 128;
+const SAMPLE_H = 80;
+const TARGET_FPS = 30;
+const FRAME_MIN_MS = 1000 / TARGET_FPS;
+
+// ── DOM ──────────────────────────────────────────────────────
+const asciiCanvas = document.getElementById('ascii-layer');
+const webglCanvas = document.getElementById('webgl-layer');
+const gridCanvas  = document.getElementById('grid-layer');
+const actx    = asciiCanvas.getContext('2d', { alpha: true });
+const gridCtx = gridCanvas.getContext('2d',   { alpha: true });
+
+const IS_EMBEDDED = window.self !== window.top;
+
+// ── runtime state ─────────────────────────────────────────────
+let W = 0, H = 0;
+let COLS = 0, ROWS = 0;
+
+let renderer, scene, camera, mesh, material;
+let sampleTarget;
+let samplePixels = new Uint8Array(SAMPLE_W * SAMPLE_H * 4);
+
+const mouse = { x: 0, y: 0, nx: 0.82, ny: 0.78 };
+let presenceVal = 0;
+let rotY = 0, rotX = 0;
+let eyePulseL = 1;
+let eyePulseR = 1;
+let pageCount = 1;
+let emergenceBias = 0; // accrues with pageCount — figure wakes faster across nav
+
+let streams = [];
+const particles = [];
+
+let tStart = performance.now() / 1000;
+let t = 0;
+let tPrev = 0;
+let frameCount = 0;
+let lastRenderMs = 0;
+
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+const lerp = (a, b, n) => a + (b - a) * n;
+const smooth01 = (v) => { const x = clamp01(v); return x * x * (3 - 2 * x); };
+
+// ═══════════════════════════════════════════════════════════════
+//  SESSION PERSISTENCE — maez remembers you across the tab
+// ═══════════════════════════════════════════════════════════════
+const STORAGE_KEY = 'maez_presence';
+const STATE_MAX_AGE_MS = 5 * 60 * 1000;
+
+function restoreState() {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (!saved || typeof saved !== 'object') return;
+    const age = Date.now() - (saved.lastSeenMs || 0);
+    if (age > STATE_MAX_AGE_MS) {
+      sessionStorage.removeItem(STORAGE_KEY);
+      return;
+    }
+    // slight transition penalty — figure "re-gathers" in new space
+    presenceVal = (saved.presenceVal || 0) * 0.85;
+    rotY = saved.rotY || 0;
+    rotX = saved.rotX || 0;
+    if (typeof saved.lastNx === 'number' && typeof saved.lastNy === 'number') {
+      mouse.nx = saved.lastNx;
+      mouse.ny = saved.lastNy;
+    }
+    pageCount = (saved.pageCount || 0) + 1;
+    // familiarity accrual — each nav lowers the wake threshold slightly
+    emergenceBias = Math.min(0.22, pageCount * 0.04);
+  } catch (e) { /* ignore */ }
+}
+
+let lastSaveMs = 0;
+function persistState() {
+  const now = performance.now();
+  if (now - lastSaveMs < 500) return;
+  lastSaveMs = now;
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+      presenceVal,
+      rotY, rotX,
+      lastNx: mouse.nx,
+      lastNy: mouse.ny,
+      pageCount,
+      lastSeenMs: Date.now(),
+    }));
+  } catch (e) { /* ignore quota errors */ }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SILHOUETTE FIELD — the body. Direct port from maez_hero.html.
+// ═══════════════════════════════════════════════════════════════
+function silhouette(nx, ny, rotY, rotX) {
+  const cx = 0.50, cy = 0.28;
+  const px = nx - rotY * 0.12, py = ny + rotX * 0.07;
+  if (px < cx - 0.35 || px > cx + 0.35) return 0;
+  if (py < cy - 0.50 || py > cy + 0.82) return 0;
+
+  const epL = eyePulseL, epR = eyePulseR;
+  const G = (ox, oy, sx, sy, a) =>
+    Math.exp(-(((px - (cx + ox)) / sx) ** 2 + ((py - (cy + oy)) / sy) ** 2)) * a;
+
+  let d = 0;
+  // head
+  d += G(0,       -0.020, 0.124, 0.144, 0.68);
+  d += G(0,        0.074, 0.100, 0.084, 0.60);
+  d += G(0,       -0.124, 0.094, 0.038, 0.30);
+  d += G(-0.102,   0.032, 0.036, 0.052, 0.42);
+  d += G( 0.102,   0.032, 0.036, 0.052, 0.39);
+  d += G(-0.074,   0.132, 0.028, 0.046, 0.32);
+  d += G( 0.074,   0.132, 0.028, 0.046, 0.32);
+  d += G(0,        0.162, 0.044, 0.029, 0.46);
+  d += G(0,        0.184, 0.028, 0.018, 0.24);
+  d += G(0,       -0.053, 0.112, 0.009, 0.82);
+  d += G(-0.053,  -0.059, 0.029, 0.010, 0.54);
+  d += G( 0.053,  -0.059, 0.029, 0.010, 0.52);
+  d -= G(-0.056,  -0.025, 0.031, 0.018, 0.72);
+  d -= G( 0.056,  -0.025, 0.031, 0.018, 0.66);
+  d += G(-0.056,  -0.025, 0.011, 0.009, 1.60 * epL);
+  d += G( 0.056,  -0.025, 0.011, 0.009, 1.45 * epR);
+  d += G(-0.091,   0.022, 0.038, 0.024, 0.32);
+  d += G( 0.091,   0.022, 0.038, 0.024, 0.30);
+  d += G(0,        0.016, 0.009, 0.072, 0.70);
+  d += G(0,        0.086, 0.021, 0.016, 0.54);
+  d += G(0,        0.121, 0.043, 0.008, 0.78);
+  d += G(0,        0.134, 0.048, 0.011, 0.85);
+  d += G(-0.132,  -0.006, 0.014, 0.031, 0.38);
+  d += G( 0.132,  -0.006, 0.014, 0.031, 0.34);
+
+  // subtle under-cheek shadows — suggest jaw edge without cutting
+  d -= G(-0.105,  0.108, 0.026, 0.018, 0.16);
+  d -= G( 0.105,  0.108, 0.026, 0.018, 0.15);
+
+  // neck — narrower column + gentle gap on both sides
+  d += G(0,       0.282, 0.040, 0.048, 0.54);
+  d -= G(-0.072,  0.278, 0.018, 0.034, 0.24);  // neck gap L
+  d -= G( 0.072,  0.278, 0.018, 0.034, 0.22);  // neck gap R
+  d += G(-0.098,  0.294, 0.048, 0.038, 0.56);  // trapezius L
+  d += G( 0.098,  0.294, 0.048, 0.038, 0.52);  // trapezius R
+
+  // shoulders — wide bar with clear tips
+  d += G(0,       0.348, 0.228, 0.042, 1.08);
+  d += G(-0.194,  0.338, 0.050, 0.036, 0.72);
+  d += G( 0.194,  0.338, 0.050, 0.036, 0.66);
+  d += G(0,       0.304, 0.172, 0.009, 0.60);  // clavicle ridge
+  d += G(0,       0.372, 0.012, 0.108, 0.54);  // sternum line
+
+  // torso — pecs + subtle chest/abs hint (no hard dividers)
+  d += G(0,       0.430, 0.162, 0.056, 1.12);
+  d += G(-0.062,  0.448, 0.060, 0.036, 0.30);  // pec L
+  d += G( 0.062,  0.448, 0.060, 0.036, 0.28);  // pec R
+  d -= G(0,       0.482, 0.082, 0.004, 0.12);  // chest / abs hint
+  d += G(0,       0.506, 0.126, 0.044, 0.98);
+  d += G(0,       0.564, 0.094, 0.042, 0.80);
+  d -= G(0,       0.596, 0.066, 0.004, 0.09);  // abs / waist hint
+  d += G(0,       0.626, 0.082, 0.042, 0.62);
+  d += G(0,       0.704, 0.070, 0.032, 0.56);
+  d += G(0,       0.752, 0.096, 0.031, 0.48);
+  return Math.max(0, d);
+}
+
+function pupilHighlight(nx, ny) {
+  const cx = 0.50, cy = 0.28;
+  const px = nx - rotY * 0.12;
+  const py = ny + rotX * 0.07;
+  if (Math.abs(py - (cy - 0.025)) > 0.022) return 0;
+  if (Math.abs(px - cx) > 0.085) return 0;
+  const g = (dx, dy, sx, sy, a) => {
+    const xx = (px - (cx + dx)) / sx;
+    const yy = (py - (cy + dy)) / sy;
+    return Math.exp(-(xx * xx + yy * yy)) * a;
+  };
+  return g(-0.056, -0.025, 0.011, 0.009, 1.55 * eyePulseL) +
+         g( 0.056, -0.025, 0.011, 0.009, 1.40 * eyePulseR);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ENTITY COLOR — zen sumi-e palette · ink strokes on rice paper
+// ═══════════════════════════════════════════════════════════════
+// On warm cream bg (#F5EFE0), characters DARKEN toward clay/sienna
+// as the figure materializes. Opposite of the dark ramp — this is
+// ink condensing onto paper, not glowing from void.
+function entityColor(total, press) {
+  let r, g, b, a;
+  const warmth = press * 0.6;
+  if (total < 0.07) {
+    // faint stream — soft stone ink, just visible on paper
+    r = 192; g = 184; b = 160;
+    a = 0.22 + warmth * 0.16;
+  } else if (total < 0.18) {
+    // light stream — warm stone darkening
+    const f = (total - 0.07) / 0.11;
+    r = Math.round(192 - f * 36 - warmth * 20);
+    g = Math.round(184 - f * 42 - warmth * 24);
+    b = Math.round(160 - f * 38 - warmth * 20);
+    a = 0.36 + f * 0.24 + warmth * 0.18;
+  } else if (total < 0.38) {
+    // transition — warm clay with deeper pigment
+    const f = (total - 0.18) / 0.20;
+    r = Math.round(156 - f * 36 - warmth * 18);
+    g = Math.round(142 - f * 42 - warmth * 26);
+    b = Math.round(122 - f * 42 - warmth * 26);
+    a = 0.60 + f * 0.22 + warmth * 0.14;
+  } else if (total < 0.62) {
+    // body — burnt sienna, dark clay
+    const f = (total - 0.38) / 0.24;
+    r = Math.round(120 - f * 40);
+    g = Math.round(100 - f * 44);
+    b = Math.round(80  - f * 40);
+    a = 0.82 + f * 0.14;
+  } else {
+    // peak — forest ink, almost black
+    const f = Math.min(1, (total - 0.62) / 0.30);
+    r = Math.round(80 - f * 38);
+    g = Math.round(56 - f * 24);
+    b = Math.round(40 - f * 12);
+    a = 0.96;
+  }
+  return {
+    r: r > 255 ? 255 : r < 0 ? 0 : r,
+    g: g > 255 ? 255 : g < 0 ? 0 : g,
+    b: b > 255 ? 255 : b < 0 ? 0 : b,
+    a: a > 1 ? 1 : a < 0 ? 0 : a,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  THREE.JS MEMBRANE
+// ═══════════════════════════════════════════════════════════════
+function initThree() {
+  renderer = new THREE.WebGLRenderer({
+    canvas: webglCanvas,
+    antialias: false,
+    preserveDrawingBuffer: false,
+    alpha: false,
+  });
+  renderer.setPixelRatio(1);
+  renderer.setClearColor(0xF5EFE0, 1);
+
+  scene = new THREE.Scene();
+  camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 2);
+  camera.position.z = 1;
+
+  const geometry = new THREE.PlaneGeometry(2, 2, 64, 64);
+
+  material = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime:     { value: 0 },
+      uMouse:    { value: new THREE.Vector2(0, 0) },
+      uPresence: { value: 0 },
+    },
+    vertexShader: `
+      uniform float uTime;
+      uniform vec2 uMouse;
+      uniform float uPresence;
+      varying vec2 vUv;
+      varying float vWarmth;
+
+      void main() {
+        vUv = uv;
+        vec3 pos = position;
+
+        vec2 uvMouse = uMouse * 0.5 + 0.5;
+        float dist = distance(uv, uvMouse);
+        float falloff = smoothstep(0.22, 0.0, dist);
+        pos.z += falloff * falloff * 0.14 * uPresence;
+        float breath = sin(uTime * 0.42) * 0.003;
+        pos.z += breath;
+
+        vWarmth = falloff * uPresence;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform float uTime;
+      uniform vec2 uMouse;
+      varying vec2 vUv;
+      varying float vWarmth;
+
+      void main() {
+        // Rice paper base — warm cream #F5EFE0
+        vec3 base = vec3(0.961, 0.937, 0.878);
+
+        // Body region darkens toward muted clay (toward sienna)
+        float bodyDist = distance(vUv, vec2(0.50, 0.44));
+        float bodyShade = exp(-bodyDist * bodyDist * 8.0) * 0.085;
+        vec3 clay = vec3(0.659, 0.486, 0.322);
+        vec3 color = mix(base, clay, bodyShade);
+
+        // Press region gets a warmer clay tint — the gaze of attention
+        vec2 uvMouse = uMouse * 0.5 + 0.5;
+        float pressDist = distance(vUv, uvMouse);
+        float pressGlow = exp(-pressDist * pressDist * 22.0) * vWarmth * 0.14;
+        vec3 pressClay = vec3(0.678, 0.482, 0.268);
+        color = mix(color, pressClay, pressGlow);
+
+        // Soft radial lightening from center — like a lit room
+        float lift = exp(-distance(vUv, vec2(0.5, 0.44)) * 1.2) * 0.015;
+        color += vec3(lift);
+
+        // Soft vignette darkens edges slightly (keeps focus on the figure)
+        float vign = 1.0 - smoothstep(0.35, 1.0, distance(vUv, vec2(0.5)));
+        color *= (0.94 + vign * 0.06);
+
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `,
+  });
+
+  mesh = new THREE.Mesh(geometry, material);
+  scene.add(mesh);
+
+  sampleTarget = new THREE.WebGLRenderTarget(SAMPLE_W, SAMPLE_H, {
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    format: THREE.RGBAFormat,
+    type: THREE.UnsignedByteType,
+    depthBuffer: false,
+    stencilBuffer: false,
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  RESIZE
+// ═══════════════════════════════════════════════════════════════
+function resize() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+
+  asciiCanvas.width = W; asciiCanvas.height = H;
+  asciiCanvas.style.width = W + 'px'; asciiCanvas.style.height = H + 'px';
+
+  gridCanvas.width = W; gridCanvas.height = H;
+  gridCanvas.style.width = W + 'px'; gridCanvas.style.height = H + 'px';
+
+  webglCanvas.style.width = W + 'px'; webglCanvas.style.height = H + 'px';
+  renderer.setSize(W, H, false);
+
+  drawGrid();
+
+  COLS = Math.ceil(W / CW) + 1;
+  ROWS = Math.ceil(H / CH) + 1;
+
+  streams = new Array(COLS);
+  for (let c = 0; c < COLS; c++) {
+    const length = ROWS + 24;
+    const chars = new Array(length);
+    for (let i = 0; i < length; i++) {
+      chars[i] = CHARSET[(Math.random() * CHARSET.length) | 0];
+    }
+    streams[c] = {
+      speed: 18 + Math.random() * 22,
+      totalShift: Math.random() * length * CH,
+      chars,
+    };
+  }
+
+  // Use forwarded cursor position or restored value
+  mouse.x = mouse.nx * W;
+  mouse.y = mouse.ny * H;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  GRID — suppressed in zen mode (too technical for rice paper)
+// ═══════════════════════════════════════════════════════════════
+function drawGrid() {
+  // Zen: leave the canvas clear. The bg stays pure cream.
+  gridCtx.clearRect(0, 0, W, H);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  UPDATE
+// ═══════════════════════════════════════════════════════════════
+function updateEyes() {
+  eyePulseL = 0.72 + 0.28 * Math.sin(t * 1.55 + 2.1);
+  eyePulseR = 0.72 + 0.28 * Math.sin(t * 1.30 + 0.4);
+}
+
+function updatePresence() {
+  const faceCx = 0.50, faceCy = 0.28;
+  const d = Math.hypot(mouse.nx - faceCx, mouse.ny - faceCy);
+  const raw = smooth01((0.54 - d) / 0.54);
+  // familiarity bias — figure responds faster on subsequent nav
+  const target = clamp01(raw + emergenceBias * (1 - raw));
+  presenceVal += (target - presenceVal) * 0.08;
+  rotY = (mouse.nx - 0.5)  * 0.70;
+  rotX = (mouse.ny - 0.28) * 0.40;
+}
+
+function updateStreams(dt) {
+  const emergence = smooth01((presenceVal - 0.04) / 0.86);
+  const mutateCount = CHAR_MUTATE_PER_FRAME + ((emergence * 12) | 0);
+  for (let i = 0; i < mutateCount; i++) {
+    const c = (Math.random() * COLS) | 0;
+    const col = streams[c];
+    const r = (Math.random() * col.chars.length) | 0;
+    col.chars[r] = CHARSET[(Math.random() * CHARSET.length) | 0];
+  }
+  for (let c = 0; c < COLS; c++) {
+    const col = streams[c];
+    col.totalShift += col.speed * dt * (0.96 + emergence * 0.22);
+    const period = col.chars.length * CH;
+    if (col.totalShift >= period) col.totalShift -= period;
+  }
+}
+
+function updateParticles(dt) {
+  const emergence = smooth01((presenceVal - 0.04) / 0.86);
+  const spawnTries = 1 + ((emergence * 5) | 0);
+  for (let i = 0; i < spawnTries && particles.length < PARTICLE_MAX; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const radius = 0.065 + Math.random() * 0.20;
+    const nx = 0.50 + Math.cos(angle) * radius;
+    const ny = 0.28 + Math.sin(angle) * radius * 1.25;
+    if (nx < 0 || nx > 1 || ny < 0 || ny > 1) continue;
+    const d = silhouette(nx, ny, rotY, rotX);
+    if (d < 0.07 || d > 0.50) continue;
+    if (Math.random() > 0.08 + emergence * 0.70) continue;
+    const x = nx * W, y = ny * H;
+    const fcx = 0.50 * W, fcy = 0.28 * H;
+    const dx = x - fcx, dy = y - fcy;
+    const dmag = Math.hypot(dx, dy) || 1;
+    particles.push({
+      x, y,
+      vx: (dx / dmag) * (5 + Math.random() * 10) * (0.55 + emergence * 0.80),
+      vy: (dy / dmag) * (5 + Math.random() * 10) * (0.55 + emergence * 0.80),
+      life: 0,
+      maxLife: 80 + ((Math.random() * 120) | 0),
+      char: CHARSET[(Math.random() * CHARSET.length) | 0],
+    });
+  }
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life++;
+    if (p.life >= p.maxLife) { particles.splice(i, 1); continue; }
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  RENDER — single pass, no readback (bg doesn't need sampling)
+// ═══════════════════════════════════════════════════════════════
+function renderWebGL() {
+  material.uniforms.uTime.value = t;
+  material.uniforms.uMouse.value.set(mouse.nx * 2 - 1, -(mouse.ny * 2 - 1));
+  material.uniforms.uPresence.value = presenceVal;
+  renderer.setRenderTarget(null);
+  renderer.render(scene, camera);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  DRAW — ASCII membrane (no HUD, no scanlines, no frame chrome)
+// ═══════════════════════════════════════════════════════════════
+function drawAscii() {
+  actx.clearRect(0, 0, W, H);
+  actx.font = FONT_PX + 'px "Share Tech Mono", ui-monospace, monospace';
+  actx.textBaseline = 'top';
+
+  const emergence = smooth01((presenceVal - 0.04) / 0.86);
+  const formStage = emergence;
+  const streamShiftScale = 0.060 + formStage * 0.055;
+
+  for (let c = 0; c < COLS; c++) {
+    const col = streams[c];
+    const S = col.totalShift;
+    const baseX = c * CW;
+    const length = col.chars.length;
+    const iMin = Math.floor(-S / CH) - 1;
+    const iMax = Math.ceil((H - S) / CH) + 1;
+
+    for (let i = iMin; i <= iMax; i++) {
+      const y = i * CH + S;
+      if (y < -CH || y > H) continue;
+
+      const cellCx = baseX + CW * 0.5;
+      const cellCy = y + CH * 0.5;
+      const nx = cellCx / W;
+      const ny = cellCy / H;
+
+      // bottom fade
+      let bottomFade = 1;
+      if (ny > 0.82) {
+        if (ny >= 0.90) continue;
+        bottomFade = 1 - (ny - 0.82) / 0.08;
+      }
+
+      const silBase = silhouette(nx, ny, rotY, rotX);
+      const pup = pupilHighlight(nx, ny);
+
+      const headHalo = Math.exp(-(((nx - 0.50) / 0.22) ** 2 + ((ny - 0.28) / 0.24) ** 2));
+      const torsoHalo = Math.exp(-(((nx - 0.50) / 0.31) ** 2 + ((ny - 0.57) / 0.38) ** 2));
+      const streamHalo = clamp01(headHalo * 0.92 + torsoHalo * 0.76);
+      const sil = silBase * (0.08 + formStage * 1.04);
+
+      // cursor displacement
+      const dxp = cellCx - mouse.x;
+      const dyp = cellCy - mouse.y;
+      const dpx2 = dxp * dxp + dyp * dyp;
+      let pressVal = 0;
+      let dispX = 0, dispY = 0;
+      const PRESS_RADIUS_PX = 180;
+      const pressR2 = PRESS_RADIUS_PX * PRESS_RADIUS_PX;
+      if (dpx2 < pressR2) {
+        const dpx = Math.sqrt(dpx2);
+        const f = 1 - dpx / PRESS_RADIUS_PX;
+        pressVal = f * f;
+        if (dpx > 0.01) {
+          const pullMag = f * 14;
+          dispX = -(dxp / dpx) * pullMag;
+          dispY = -(dyp / dpx) * pullMag;
+        }
+      }
+
+      // formation pull — chars drift toward head/torso centers
+      const pullXNorm =
+        (0.50 - nx) * headHalo * (0.30 + formStage * 0.50) +
+        (0.50 - nx) * torsoHalo * (0.15 + formStage * 0.32);
+      const pullYNorm =
+        (0.28 - ny) * headHalo * (0.26 + formStage * 0.44) +
+        (0.57 - ny) * torsoHalo * (0.15 + formStage * 0.30);
+      const formationLock = clamp01(silBase / 0.52) * (0.20 + formStage * 0.80);
+      dispX += pullXNorm * W * streamShiftScale * (1 - formationLock);
+      dispY += pullYNorm * H * streamShiftScale * (1 - formationLock);
+
+      const total = sil;
+      let R, G, B, alpha;
+
+      // Ambient stream — warm stone ink on rice paper
+      const streamMaterial = clamp01(streamHalo * (0.55 + formStage * 0.65));
+      const streamRBase = Math.round(200 - streamMaterial * 20);
+      const streamGBase = Math.round(192 - streamMaterial * 22);
+      const streamBBase = Math.round(172 - streamMaterial * 20);
+      const streamAlphaBase = 0.020 + streamMaterial * 0.050;
+
+      const densityNoise = ((c * 17 + ((i % length) + length) % length * 23 + (frameCount >> 2) * 7) % 100) / 100;
+      const streamDensity = 0.22 + streamHalo * (0.34 + formStage * 0.18);
+      if (total < 0.03 && pressVal < 0.02 && densityNoise > streamDensity) continue;
+
+      // Pupils — dark forest ink dots (not glowing white). Gated by formStage.
+      const pupGated = pup * smooth01((formStage - 0.25) / 0.35);
+      if (pupGated > 0.5 || total > 1.1) {
+        R = 45; G = 58; B = 48; // deep forest #2D3A30
+        alpha = 0.92 * clamp01((formStage - 0.25) / 0.35);
+      } else {
+        const ec = entityColor(total, pressVal);
+        const materialize = smooth01(total / 0.34) * (0.12 + formStage * 0.88);
+        R = Math.round(lerp(streamRBase, ec.r, materialize));
+        G = Math.round(lerp(streamGBase, ec.g, materialize));
+        B = Math.round(lerp(streamBBase, ec.b, materialize));
+        const edgeSoftness = total < 0.30 ? Math.pow(total / 0.30, 1.2) : 1.0;
+        const baseAlpha = Math.max(streamAlphaBase, ec.a * (0.18 + formStage * 0.42));
+        alpha = baseAlpha + (ec.a - baseAlpha) * edgeSoftness * materialize + pressVal * 0.12;
+      }
+      alpha *= bottomFade;
+      if (alpha > 1) alpha = 1;
+      if (alpha < 0.014) continue;
+
+      const charIdx = ((i % length) + length) % length;
+      const ch = col.chars[charIdx];
+      actx.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',' + alpha.toFixed(3) + ')';
+      actx.fillText(ch, baseX + dispX, y + dispY);
+    }
+  }
+
+  // particles — clay dust drifting out from the figure
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i];
+    const lifeT = p.life / p.maxLife;
+    const a = Math.sin(lifeT * Math.PI) * 0.70;
+    if (a < 0.05) continue;
+    const k = 1 - lifeT;
+    const R = (165 - k * 25) | 0;
+    const G = (120 - k * 20) | 0;
+    const B = ( 80 - k * 15) | 0;
+    actx.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',' + a.toFixed(3) + ')';
+    actx.fillText(p.char, p.x, p.y);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  MAIN LOOP — 30fps cap via timestamp gate
+// ═══════════════════════════════════════════════════════════════
+function loop() {
+  requestAnimationFrame(loop);
+
+  const nowMs = performance.now();
+  if (nowMs - lastRenderMs < FRAME_MIN_MS) return;
+  lastRenderMs = nowMs;
+
+  const now = nowMs / 1000;
+  t = now - tStart;
+  let dt = t - tPrev;
+  if (dt > 0.08) dt = 0.08;
+  if (dt < 0) dt = 0;
+  tPrev = t;
+  frameCount++;
+
+  updateEyes();
+  updatePresence();
+  updateStreams(dt);
+  updateParticles(dt);
+
+  renderWebGL();
+  drawAscii();
+
+  persistState();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  POSTMESSAGE LISTENER — cursor forwarded from the parent page
+// ═══════════════════════════════════════════════════════════════
+function setNeutralMouse() {
+  mouse.nx = 0.82;
+  mouse.ny = 0.78;
+  mouse.x = mouse.nx * W;
+  mouse.y = mouse.ny * H;
+}
+
+window.addEventListener('message', (event) => {
+  if (event.origin !== location.origin) return;
+  const d = event.data;
+  if (!d || typeof d !== 'object') return;
+  if (d.type === 'mouse' && typeof d.nx === 'number' && typeof d.ny === 'number') {
+    mouse.nx = d.nx;
+    mouse.ny = d.ny;
+    mouse.x = d.nx * W;
+    mouse.y = d.ny * H;
+  } else if (d.type === 'leave') {
+    setNeutralMouse();
+  }
+});
+
+window.addEventListener('resize', () => resize(), { passive: true });
+
+// Standalone-mode marker — if someone opens /maez_bg_zen.html directly,
+// show a small label so it's clear what they're looking at.
+if (!IS_EMBEDDED) {
+  const note = document.createElement('div');
+  note.className = 'standalone-note';
+  note.textContent = '· ink layer · maez.live ·';
+  document.body.appendChild(note);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  TEST HOOKS — URL params for deterministic screenshots.
+//  Work in standalone mode and when embedded (useful for host-page
+//  screenshot verification where the iframe src can carry params).
+// ═══════════════════════════════════════════════════════════════
+(function() {
+  const qp = new URLSearchParams(window.location.search);
+  const mx = parseFloat(qp.get('mx'));
+  const my = parseFloat(qp.get('my'));
+  if (!isNaN(mx) && !isNaN(my)) {
+    mouse.nx = mx; mouse.ny = my;
+  }
+  const jt = parseFloat(qp.get('jumpt'));
+  if (!isNaN(jt)) { tStart -= jt; }
+  // force higher initial presence for verification screenshots
+  const prep = parseFloat(qp.get('presence'));
+  if (!isNaN(prep)) { presenceVal = clamp01(prep); }
+})();
+
+// ═══════════════════════════════════════════════════════════════
+//  BOOT
+// ═══════════════════════════════════════════════════════════════
+restoreState();
+mouse.x = window.innerWidth  * mouse.nx;
+mouse.y = window.innerHeight * mouse.ny;
+
+initThree();
+resize();
+
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(() => { /* font active */ });
+}
+loop();
+
+})();
+</script>
+</body>
+</html>

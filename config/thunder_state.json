@@ -1,0 +1,8 @@
+{
+  "credits_remaining_usd": 30.53,
+  "last_run_cost_usd": 9.10,
+  "last_run_date": "2026-04-12",
+  "last_run_label": "11u+11v",
+  "_updated": "2026-04-12",
+  "_note": "Hand-maintained at session end. Could be sourced from Thunder MCP get_subscription + get_upcoming_invoice."
+}

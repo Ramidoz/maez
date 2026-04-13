@@ -1,15 +1,28 @@
 """
 screen_perception.py — Screen awareness for Maez
 
-Captures a screenshot of Rohit's display and uses gemma4:26b's native vision
-to understand what he is working on. Returns a structured description that
-gets injected into every reasoning cycle.
+Captures a screenshot of Rohit's display and uses a dedicated vision model
+(Qwen2.5-VL-3B via llama-server-vision.service on port 8081) to understand
+what he is working on. Returns a structured description that gets injected
+into every reasoning cycle.
 
 Called by the daemon every N cycles. Runs asynchronously so it never blocks
 the reasoning loop.
+
+Session 11r: migrated from ollama gemma4 mmproj to dedicated Qwen2.5-VL-3B
+server. The old gemma4 path used `/api/chat` with `images=[base64]` (ollama
+native format). The new path uses OpenAI-compat `/v1/chat/completions` on
+127.0.0.1:8081 with the multimodal message shape
+`content: [{type: text, ...}, {type: image_url, image_url: {url: ...}}]`.
+
+Also downsamples screenshots to max-dim 1024 before sending — Qwen2.5-VL's
+vision tower needs ~1.88 GB to process a 2560×1440 image but only ~500 MiB
+for 1024×576. 1024 is plenty of resolution for "what app is open and what
+is the user doing" — that's a 480p task at worst.
 """
 
 import base64
+import io
 import logging
 import os
 import subprocess
@@ -22,10 +35,11 @@ import requests
 
 logger = logging.getLogger("maez")
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
-MODEL = "gemma4:26b"
+VISION_URL = "http://127.0.0.1:8081/v1/chat/completions"
+VISION_MODEL = "qwen2.5-vl-3b"
+VISION_MAX_DIM = 1024     # downscale screenshots to max side = 1024 px
 SCREENSHOT_TIMEOUT = 10   # seconds for screenshot capture
-VISION_TIMEOUT = 45       # seconds for gemma4 vision call
+VISION_TIMEOUT = 45       # seconds for vision call
 
 # Display environment — needed because maez.service has no DISPLAY by default
 DISPLAY_ENV = {
@@ -85,9 +99,14 @@ class ScreenObservation:
 
 def _capture_screenshot() -> Optional[str]:
     """
-    Capture a screenshot and return as base64 string.
-    Tries scrot first, then gnome-screenshot, then ImageMagick import.
-    Returns None if all methods fail.
+    Capture a screenshot, downscale to max dim VISION_MAX_DIM, return as
+    base64 PNG string. Tries scrot first, then gnome-screenshot, then
+    ImageMagick import. Returns None if all methods fail.
+
+    Session 11r: added PIL downscaling to prevent the vision server from
+    OOMing on the vision-encoder's image tensor allocation. Full 2560×1440
+    frames need ~1.9 GB of VRAM to encode; 1024-max-dim needs ~500 MB.
+    Activity/application detection doesn't need full resolution.
     """
     tmp = tempfile.mktemp(suffix='.png')
 
@@ -106,11 +125,25 @@ def _capture_screenshot() -> Optional[str]:
                 timeout=SCREENSHOT_TIMEOUT
             )
             if result.returncode == 0 and os.path.exists(tmp):
-                with open(tmp, 'rb') as f:
-                    data = base64.b64encode(f.read()).decode()
-                os.unlink(tmp)
-                logger.debug("Screenshot captured via %s", cmd[0])
-                return data
+                # Downscale via PIL before base64-encoding
+                try:
+                    from PIL import Image
+                    img = Image.open(tmp)
+                    img.thumbnail((VISION_MAX_DIM, VISION_MAX_DIM), Image.LANCZOS)
+                    buf = io.BytesIO()
+                    img.save(buf, format='PNG', optimize=True)
+                    data = base64.b64encode(buf.getvalue()).decode()
+                    logger.debug(
+                        "Screenshot captured via %s (downscaled to %dx%d)",
+                        cmd[0], img.size[0], img.size[1],
+                    )
+                    return data
+                except Exception as e:
+                    # PIL unavailable or resize failed — fall back to raw bytes
+                    logger.debug("PIL downscale failed (%s) — sending full-res", e)
+                    with open(tmp, 'rb') as f:
+                        data = base64.b64encode(f.read()).decode()
+                    return data
         except FileNotFoundError:
             continue
         except subprocess.TimeoutExpired:
@@ -167,34 +200,36 @@ def observe() -> ScreenObservation:
             error="Screenshot capture failed — no display method succeeded"
         )
 
-    # Call gemma4 vision
+    # Call the dedicated Qwen2.5-VL-3B vision server (Session 11r).
+    # OpenAI-compat endpoint on port 8081, multimodal message shape.
     try:
         resp = requests.post(
-            OLLAMA_URL,
+            VISION_URL,
             json={
-                "model": MODEL,
+                "model": VISION_MODEL,
                 "messages": [{
                     "role": "user",
-                    "content": VISION_PROMPT,
-                    "images": [img_b64]
+                    "content": [
+                        {"type": "text", "text": VISION_PROMPT},
+                        {"type": "image_url", "image_url": {
+                            "url": f"data:image/png;base64,{img_b64}",
+                        }},
+                    ],
                 }],
-                "stream": False,
-                "options": {
-                    "temperature": 0.1,
-                    "num_predict": 4096,
-                }
+                "temperature": 0.1,
+                "max_tokens": 500,
             },
-            timeout=VISION_TIMEOUT
+            timeout=VISION_TIMEOUT,
         )
 
         if resp.status_code != 200:
             return ScreenObservation(
                 activity="", application="", detail="", focus_level="",
                 raw_response="", timestamp=timestamp, success=False,
-                error=f"Ollama returned {resp.status_code}: {resp.text[:200]}"
+                error=f"Vision server returned {resp.status_code}: {resp.text[:200]}",
             )
 
-        raw = resp.json()['message']['content']
+        raw = resp.json()['choices'][0]['message']['content']
         parsed = _parse_vision_response(raw)
 
         return ScreenObservation(

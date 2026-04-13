@@ -1,0 +1,176 @@
+{
+  "updated_at": "2026-04-13T01:08:42+00:00",
+  "items": [
+    {
+      "id": "core-heartbeat",
+      "title": "Persistent reasoning loop and memory spine",
+      "status": "done",
+      "visibility": "public",
+      "summary": "The always-on daemon, three-tier memory, and local Gemma runtime are live and continuously growing.",
+      "details": "Maez runs as a service, thinks every 30 seconds, stores observations, and never resets to zero.",
+      "private_notes": "",
+      "tags": [
+        "core",
+        "memory"
+      ],
+      "updated_at": "2026-04-10T20:53:39+00:00"
+    },
+    {
+      "id": "public-web",
+      "title": "Public web surface redesign",
+      "status": "done",
+      "visibility": "public",
+      "summary": "Landing, login, app, progress, and dashboard now share a clearer, more human public experience built around continuity instead of generic AI-tool language.",
+      "details": "The public site now leads with presence, continuity, and user understanding first, while keeping the existing auth flows, analytics hooks, and live status behavior intact.",
+      "private_notes": "",
+      "tags": [
+        "web",
+        "design",
+        "ux"
+      ],
+      "updated_at": "2026-04-13T01:03:07+00:00"
+    },
+    {
+      "id": "architecture-page",
+      "title": "Dashboard and progress proof layers",
+      "status": "done",
+      "visibility": "public",
+      "summary": "The dashboard now reads as the technical proof layer, while progress explains how much of the idea has already become real.",
+      "details": "This keeps the architecture map separate from the build-status story so first-time visitors can understand the concept before they go technical.",
+      "private_notes": "",
+      "tags": [
+        "dashboard",
+        "ux",
+        "progress"
+      ],
+      "updated_at": "2026-04-13T01:03:07+00:00"
+    },
+    {
+      "id": "funnel-clarity",
+      "title": "Whole-funnel UX clarification",
+      "status": "done",
+      "visibility": "public",
+      "summary": "The public funnel now explains Maez in one consistent order: what it is, how it begins, how it keeps living, and why that matters.",
+      "details": "Landing, login, app, progress, and dashboard now reuse the same thesis and proof ideas instead of reframing Maez differently on each page.",
+      "private_notes": "",
+      "tags": [
+        "website",
+        "messaging",
+        "ux"
+      ],
+      "updated_at": "2026-04-13T01:03:07+00:00"
+    },
+    {
+      "id": "observation-window",
+      "title": "Live observation window",
+      "status": "in_progress",
+      "visibility": "public",
+      "summary": "Self-improvement is being observed carefully so Maez learns from live behavior before more autonomy is granted.",
+      "details": "One proposal at a time. Slow observation over synthetic confidence.",
+      "private_notes": "",
+      "tags": [
+        "safety",
+        "evaluation"
+      ],
+      "updated_at": "2026-04-10T20:53:39+00:00"
+    },
+    {
+      "id": "fastlane-validation",
+      "title": "Fast-lane traffic validation",
+      "status": "in_progress",
+      "visibility": "public",
+      "summary": "The fast reply lane exists in staging and still needs real-world validation before broader rollout.",
+      "details": "The routing, redaction, audit, and policy layers are built; traffic confidence is what remains.",
+      "private_notes": "",
+      "tags": [
+        "fast-lane",
+        "staging"
+      ],
+      "updated_at": "2026-04-10T20:53:39+00:00"
+    },
+    {
+      "id": "planner-split",
+      "title": "Public progress board and private planner",
+      "status": "done",
+      "visibility": "public",
+      "summary": "Public progress and private planning now run as separate surfaces over one shared board model, with hidden notes staying private by default.",
+      "details": "Public visitors read `/progress`; authenticated editing stays in `/planner`; the same data model feeds both views without exposing private scratch work.",
+      "private_notes": "Keep private scratch ideas out of the public board by default.",
+      "tags": [
+        "planner",
+        "website"
+      ],
+      "updated_at": "2026-04-13T01:03:07+00:00"
+    },
+    {
+      "id": "vagueness-fix",
+      "title": "Ship VAGUENESS_DETECTION routing fix",
+      "status": "next",
+      "visibility": "public",
+      "summary": "Separate vague failures from repetition/fixation so self-diagnosis can route to the right corrective action.",
+      "details": "This is the next high-leverage system fix from the observation window.",
+      "private_notes": "",
+      "tags": [
+        "cognition",
+        "next"
+      ],
+      "updated_at": "2026-04-10T20:53:39+00:00"
+    },
+    {
+      "id": "desktop-wrapper",
+      "title": "Rohit desktop wrapper",
+      "status": "next",
+      "visibility": "public",
+      "summary": "A closer daily wrapper around Maez is next once the current web and fast-lane surfaces settle.",
+      "details": "This will likely become the most natural high-trust surface.",
+      "private_notes": "",
+      "tags": [
+        "desktop",
+        "product"
+      ],
+      "updated_at": "2026-04-10T20:53:39+00:00"
+    },
+    {
+      "id": "publishing-agent",
+      "title": "Publishing agent",
+      "status": "planned",
+      "visibility": "public",
+      "summary": "A supervised publishing flow for public updates is planned after the current communication surfaces stabilize.",
+      "details": "This comes after the planner, desktop, and fast-lane validation work is mature.",
+      "private_notes": "",
+      "tags": [
+        "publishing",
+        "planned"
+      ],
+      "updated_at": "2026-04-10T20:53:39+00:00"
+    },
+    {
+      "id": "voice-return",
+      "title": "Voice pipeline revival",
+      "status": "planned",
+      "visibility": "public",
+      "summary": "Voice returns later, once the infrastructure path is stable enough to justify reviving it properly.",
+      "details": "Useful, but not ahead of the current system and UX priorities.",
+      "private_notes": "",
+      "tags": [
+        "voice",
+        "planned"
+      ],
+      "updated_at": "2026-04-10T20:53:39+00:00"
+    },
+    {
+      "id": "private-elderly",
+      "title": "Elder deployment notes",
+      "status": "planned",
+      "visibility": "private",
+      "summary": "Private scratch area for mission-aligned deployment ideas.",
+      "details": "",
+      "private_notes": "Think through onboarding, trust, pacing, screen simplicity, and non-technical caregiver roles.",
+      "tags": [
+        "private",
+        "mission"
+      ],
+      "updated_at": "2026-04-10T20:53:39+00:00"
+    }
+  ]
+}

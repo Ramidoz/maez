@@ -115,10 +115,11 @@ class GitHubPublisher:
         return '\n'.join(sanitized)
 
     def _generate_commit_message(self) -> str:
-        """Ask gemma4 for a commit message."""
+        """Ask gemma4 for a commit message. Session 11r: via llm_client
+        (was missed in 11p batch migration)."""
         try:
-            import ollama
-            r = ollama.chat(
+            from core import llm_client as _llm_client
+            r = _llm_client.chat(
                 model='gemma4:26b',
                 messages=[{
                     'role': 'user',
@@ -128,9 +129,10 @@ class GitHubPublisher:
                         'Be specific about architecture changes. No personal content. Max 72 chars.'
                     ),
                 }],
+                think=False,
                 options={'temperature': 0.3, 'num_predict': 30},
             )
-            msg = r.message.content.strip().strip('"').strip("'")[:72]
+            msg = (r.message.content or '').strip().strip('"').strip("'")[:72]
             return msg if msg else "Update Maez technical documentation"
         except Exception:
             return "Update Maez technical documentation"

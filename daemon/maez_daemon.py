@@ -26,7 +26,7 @@ import asyncio
 
 import ollama
 import websockets
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
 
 sys.path.insert(0, str(Path("/home/rohit/maez")))
 from memory.memory_manager import MemoryManager
@@ -107,9 +107,22 @@ class MaezDaemon:
         self.last_cycle_time = None
         self.system_prompt = self._load_soul()
         self.memory = MemoryManager()
-        self.telegram = TelegramVoice(self.memory)
+        # Session 11m: pass daemon ref so the Telegram bot can signal
+        # "Rohit is talking" and defer our next reasoning cycle.
+        self._rohit_active_until = 0.0
+        self.telegram = TelegramVoice(self.memory, daemon=self)
         self.public_bot = MaezPublicBot()
         self.actions = ActionEngine(memory=self.memory, telegram=self.telegram)
+        # Session 11o: dream-state orchestration. Fires during idle time
+        # (Rohit AFK >30 min), runs pattern detection over recent raw
+        # memories, stores novel insights as soul-note proposals for
+        # manual approval via private Telegram bot.
+        from core.dream_state import DreamState
+        self.dream = DreamState(
+            memory=self.memory,
+            telegram=self.telegram,
+            action_engine=self.actions,
+        )
         self._last_alert_time = 0.0
         self._last_screen_obs: ScreenObservation | None = None
         self._screen_cycle_counter = 0
@@ -257,13 +270,19 @@ class MaezDaemon:
                 f"If yes — write exactly what you would send. 1-2 sentences. Direct. No preamble.\n"
                 f"If no — respond with exactly: NOTHING"
             )
-            response = ollama.chat(
+            # Session 11r: via llm_client (was missed in 11p batch)
+            from core import llm_client as _llm_client
+            response = _llm_client.chat(
                 model=MODEL,
                 messages=[{"role": "user", "content": prompt}],
+                think=False,
                 options={"temperature": 0.8, "num_predict": 100},
             )
-            result = response.message.content.strip()
+            result = (response.message.content or "").strip()
             if result and result != "NOTHING" and len(result) > 10 and "NOTHING" not in result.upper():
+                # Temporal grounding: strip stale weekday phrases from
+                # model output before sending to Rohit.
+                result = self._strip_temporal_phrases(result)
                 self.telegram.send_message(result)
                 logger.info("[OPINION] Unprompted: %s", result[:80])
         except Exception as e:
@@ -289,6 +308,50 @@ class MaezDaemon:
                 f"  Time: {phase} ({hour:02d}:00)\n"
                 f"  Expected energy: {energy}\n"
                 f"  Suggested tone: {tone}")
+
+    @staticmethod
+    def _strip_temporal_phrases(text: str) -> str:
+        """Remove or replace stale weekday/daypart phrases from model-generated text.
+
+        The reasoning model often starts thoughts with "it is Monday evening..."
+        because the prompt includes the current weekday. When that thought is later
+        recalled (e.g. in the >2h welcome-back greeting), the stale weekday leaks
+        into the greeting. This helper strips such phrases so recalled text never
+        injects a weekday that doesn't match the actual current day.
+
+        Strategy: replace "it is <weekday> <daypart>" and similar patterns with
+        relative phrasing or strip them entirely. Does NOT touch weekday names that
+        appear as data (e.g. "the meeting is on Monday") — only the leading
+        "it is/was <day>" assertion pattern that the model uses for temporal
+        grounding.
+
+        Returns the sanitized text (may be shorter).
+        """
+        import re
+        days = r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)'
+        parts = r'(?:morning|afternoon|evening|night|late evening|early morning|midday)'
+
+        # "it is Monday evening" / "it's Tuesday morning" / "it was Wednesday night"
+        text = re.sub(
+            rf"\b[Ii]t(?:'s|\s+is|\s+was)\s+{days}\b(?:\s+{parts})?\s*[.,;—–-]?\s*",
+            '', text,
+        )
+        # "on Monday evening," at the start of a temporal phrase — NOT "on Fridays"
+        text = re.sub(
+            rf"\b[Oo]n\s+{days}\b(?:\s+{parts})\s*[.,;—–-]?\s*",
+            '', text,
+        )
+        # "this Monday" / "today is Wednesday" — NOT "last Monday's"
+        text = re.sub(
+            rf"\b(?:[Tt]his|[Tt]oday\s+is)\s+{days}\b\s*[.,;—–-]?\s*",
+            '', text,
+        )
+        # Clean up leading whitespace / double spaces left behind
+        text = re.sub(r'\s{2,}', ' ', text).strip()
+        # If the stripping left us with a lowercase first char, capitalize
+        if text and text[0].islower():
+            text = text[0].upper() + text[1:]
+        return text
 
     def _write_pid(self):
         """Write PID file for process management."""
@@ -425,13 +488,33 @@ class MaezDaemon:
         # Store prompt for potential retry use
         self._last_reasoning_prompt = prompt
 
+        # Session 11m: defer this cycle if Rohit is mid-conversation on Telegram.
+        # Gives the GPU a clean window for his reply. The 15s backoff is set by
+        # telegram_voice._process_message right before its ollama.chat call.
+        if time.time() < self._rohit_active_until:
+            logger.info("Reasoning cycle deferred — Rohit is talking")
+            return None
+
         # Skip reasoning if voice command has the GPU
         acquired = self._ollama_lock.acquire(timeout=0)
         if not acquired:
             logger.info("Reasoning cycle skipped — voice command active")
             return None
         try:
-            response = ollama.chat(
+            # Session 11p: route daemon reasoning through llm_client so
+            # the backend (Ollama or llama.cpp) is env-selectable at call
+            # time. When MAEZ_LLM_BACKEND=llamacpp, this hits the CUDA
+            # llama-server on 127.0.0.1:8080 running gemma-4-26B-A4B.
+            # Default is still ollama — flipping is a service env var
+            # change, rolls back cleanly.
+            #
+            # Note: daemon reasoning historically used gemma4's thinking
+            # mode for structural system-state analysis. We're keeping
+            # that here (think=None, let the backend use its default).
+            # 11q will evaluate cognition scores and decide whether to
+            # disable thinking on the daemon path for further speedup.
+            from core import llm_client as _llm_client
+            response = _llm_client.chat(
                 model=MODEL,
                 messages=[
                     {"role": "system", "content": self.system_prompt},
@@ -439,7 +522,7 @@ class MaezDaemon:
                 ],
                 options={"temperature": 0.7, "num_predict": 300},
             )
-            content = response.message.content.strip()
+            content = (response.message.content or "").strip()
             thinking = getattr(response.message, "thinking", None)
             if thinking:
                 logger.debug("Cycle %d thinking: %s", self.cycle_count, thinking.strip()[:500])
@@ -517,15 +600,18 @@ class MaezDaemon:
             )
 
         try:
-            response = ollama.chat(
+            # Session 11r: via llm_client (was missed in 11p batch)
+            from core import llm_client as _llm_client
+            response = _llm_client.chat(
                 model=MODEL,
                 messages=[
                     {"role": "system", "content": sys_prompt},
                     {"role": "user", "content": prompt},
                 ],
+                think=False,
                 options={"temperature": 0.7, "num_predict": 4096},
             )
-            reply = response.message.content.strip() or "(no response)"
+            reply = (response.message.content or "").strip() or "(no response)"
         except Exception as e:
             reply = f"Error: {e}"
 
@@ -547,7 +633,7 @@ class MaezDaemon:
             if col.count() == 0:
                 return ""
             # Fetch all and filter in Python (timestamps are ISO strings)
-            cutoff_iso = _dt.utcfromtimestamp(time.time() - 86400).strftime('%Y-%m-%dT%H:%M:%S')
+            cutoff_iso = _dt.fromtimestamp(time.time() - 86400, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
             results = col.get(include=["documents", "metadatas"])
             filtered = [
                 (doc, meta) for doc, meta in zip(results["documents"], results["metadatas"])
@@ -753,15 +839,18 @@ class MaezDaemon:
                 f"Be direct. Be useful. Sign off as Maez."
             )
 
-            response = ollama.chat(
+            # Session 11r: via llm_client (was missed in 11p batch)
+            from core import llm_client as _llm_client
+            response = _llm_client.chat(
                 model=MODEL,
                 messages=[
                     {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": briefing_prompt},
                 ],
+                think=False,
                 options={"temperature": 0.5, "num_predict": 4096},
             )
-            briefing = response.message.content.strip()
+            briefing = (response.message.content or "").strip()
             if briefing:
                 self.telegram.send_message(f"Morning briefing:\n\n{briefing}")
                 logger.info("Morning briefing sent")
@@ -1157,15 +1246,18 @@ class MaezDaemon:
         )
 
         try:
-            response = ollama.chat(
+            # Session 11r: via llm_client (was missed in 11p batch)
+            from core import llm_client as _llm_client
+            response = _llm_client.chat(
                 model=MODEL,
                 messages=[
                     {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": summary_prompt},
                 ],
+                think=False,
                 options={"temperature": 0.3, "num_predict": 4096},
             )
-            summary = response.message.content.strip()
+            summary = (response.message.content or "").strip()
             if not summary:
                 summary = (
                     f"Ran {cycle_count} reasoning cycles. "
@@ -1341,6 +1433,14 @@ class MaezDaemon:
                                             last_thought = recent["documents"][0][:120]
                                     except Exception:
                                         pass
+                                    # Temporal grounding fix: strip stale weekday
+                                    # phrases from recalled thoughts so the greeting
+                                    # never says "Monday" when it's actually Thursday.
+                                    if last_thought:
+                                        last_thought = self._strip_temporal_phrases(last_thought)
+                                    now_local = datetime.now().astimezone()
+                                    greeting_weekday = now_local.strftime('%A')
+                                    greeting_daypart = self._get_circadian_context().split('\n')[1].strip() if self._get_circadian_context() else ''
                                     msg = (f"Welcome back Rohit — you've been away for "
                                            f"{hrs}h {mins}m.")
                                     if last_thought:
@@ -1348,7 +1448,13 @@ class MaezDaemon:
                                     self.telegram.send_message(msg)
                                     self._greeted_this_session = True
                                     self._last_greeted_at = time.time()
-                                    logger.info("Greeted Rohit (away %dh %dm)", hrs, mins)
+                                    logger.info(
+                                        "Greeted Rohit (away %dh %dm) | "
+                                        "greeting_weekday=%s greeting_daypart=%s "
+                                        "thought_stripped=%s",
+                                        hrs, mins, greeting_weekday, greeting_daypart,
+                                        bool(last_thought),
+                                    )
 
                         # Morning briefing check
                         if (self._last_presence_snap.just_arrived
@@ -1427,20 +1533,43 @@ class MaezDaemon:
                     if critique:
                         self._last_cognition_critique = critique
                         if critique.get('should_write_soul_note') and critique.get('soul_note_reason'):
-                            logger.info("Cognition soul note: %s", critique['soul_note_reason'][:100])
-                            self.actions.write_soul_note(critique['soul_note_reason'])
+                            reason = critique['soul_note_reason']
+                            soul_text = self.system_prompt or ""
+                            if reason[:60] not in soul_text:
+                                logger.info("Cognition soul note: %s", reason[:100])
+                                self.actions.write_soul_note(reason)
+                            else:
+                                logger.debug("Cognition soul note deduped — already in soul.md")
                 except Exception as e:
                     logger.debug("Cognition critique failed: %s", e)
 
             # Self-reflection — periodic insight check
+            # 11u fix: dedup against soul.md AND track last-written insight
+            # to prevent the same insight being appended hundreds of times.
+            # The substring check alone failed when a consolidated lessons
+            # section paraphrased the insight (past vs present tense).
             self._reflection_cycle_counter += 1
             if self._reflection_cycle_counter >= self.REFLECTION_EVERY_N_CYCLES:
                 self._reflection_cycle_counter = 0
                 try:
                     insight = self._quality_tracker.format_insight_for_soul()
                     if insight:
-                        logger.info("Self-reflection insight: %s", insight[:100])
-                        self.actions.write_soul_note(insight)
+                        # Dedup by key concepts, not exact text
+                        soul_lower = (self.system_prompt or "").lower()
+                        insight_lower = insight.lower()
+                        # If soul.md mentions "approval rate" AND this insight
+                        # is about approval rate, it's a duplicate lesson
+                        key_concepts = ["approval rate", "fixation", "repetition"]
+                        covered = sum(1 for k in key_concepts
+                                      if k in soul_lower and k in insight_lower)
+                        # Also dedup against last-written insight
+                        last = getattr(self, "_last_reflection_insight", None)
+                        if covered > 0 or insight == last:
+                            logger.debug("Self-reflection deduped — concepts already in soul.md")
+                        else:
+                            logger.info("Self-reflection insight: %s", insight[:100])
+                            self.actions.write_soul_note(insight)
+                            self._last_reflection_insight = insight
                 except Exception as e:
                     logger.warning("Self-reflection error: %s", e)
 
@@ -1486,7 +1615,9 @@ class MaezDaemon:
                         acquired = self._ollama_lock.acquire(timeout=0)
                         if acquired:
                             try:
-                                retry_response = ollama.chat(
+                                # Session 11r: via llm_client (was missed in 11p batch)
+                                from core import llm_client as _llm_client
+                                retry_response = _llm_client.chat(
                                     model=MODEL,
                                     messages=[
                                         {"role": "system", "content": self.system_prompt},
@@ -1496,7 +1627,7 @@ class MaezDaemon:
                                     ],
                                     options={"temperature": 0.8, "num_predict": 300},
                                 )
-                                retry_content = retry_response.message.content.strip()
+                                retry_content = (retry_response.message.content or "").strip()
                                 if retry_content and retry_content != "(empty response)":
                                     # Re-score the retry
                                     retry_thought = retry_content + screen_note + calendar_note
@@ -1617,15 +1748,18 @@ class MaezDaemon:
                             f"Be direct and specific. Start with what you found, not a preamble."
                         )
                         try:
-                            fu_resp = ollama.chat(
+                            # Session 11r: via llm_client (was missed in 11p batch)
+                            from core import llm_client as _llm_client
+                            fu_resp = _llm_client.chat(
                                 model=MODEL,
                                 messages=[
                                     {"role": "system", "content": self.system_prompt},
                                     {"role": "user", "content": fu_prompt},
                                 ],
+                                think=False,
                                 options={"temperature": 0.5, "num_predict": 4096},
                             )
-                            fu_reply = fu_resp.message.content.strip()
+                            fu_reply = (fu_resp.message.content or "").strip()
                             if fu_reply:
                                 self.telegram.send_message(fu_reply)
                                 self.followup_queue.mark_delivered(fu['id'])
@@ -1638,6 +1772,46 @@ class MaezDaemon:
             # Proactive opinion — every 50 cycles
             if self.cycle_count % 50 == 0:
                 self._check_proactive_opinion()
+
+            # Session 11o: dream cycle trigger. Fires when Rohit has been
+            # AFK for >30 min, rate-limited to >=10 min between dreams.
+            # Runs in a BACKGROUND thread so the main 30s reasoning loop
+            # never blocks on it — even under daemon/dream GPU contention
+            # where a cycle can take 30-60s. The dream sets its own cooldown
+            # timestamp at the top of run_dream_cycle (pre-work), so the
+            # next loop tick sees should_run_now() == False and won't
+            # re-spawn while an earlier dream is still in flight.
+            try:
+                _now = time.time()
+                _absence = (
+                    (_now - self._last_departure_time)
+                    if self._last_departure_time
+                    else 0.0
+                )
+                if (
+                    self.dream.is_idle(self._last_presence_snap, _absence)
+                    and self.dream.should_run_now(_now)
+                ):
+                    logger.info("Dream cycle triggered — Rohit AFK %.0fs", _absence)
+                    def _run_dream_bg():
+                        try:
+                            _insight = self.dream.run_dream_cycle()
+                            if _insight:
+                                logger.info("Dream insight: %s", _insight[:120])
+                            # Session 11u: training self-evaluation
+                            # (rate-limited to 1 per 24h inside the method)
+                            _train_id = self.dream.maybe_propose_training()
+                            if _train_id:
+                                logger.info("Training proposal #%d submitted", _train_id)
+                        except Exception as _e:
+                            logger.error("Dream cycle worker failed: %s", _e)
+                    threading.Thread(
+                        target=_run_dream_bg,
+                        name="dream-cycle",
+                        daemon=True,
+                    ).start()
+            except Exception as e:
+                logger.debug("Dream cycle check failed: %s", e)
 
             # Sleep in small increments so shutdown is responsive
             for _ in range(LOOP_INTERVAL):
@@ -1892,6 +2066,11 @@ class MaezDaemon:
                 return jsonify({"error": "empty message"}), 400
             reply = self.handle_message(text, source="UI")
             return jsonify({"reply": reply})
+
+        @app.route("/dashboard")
+        def dashboard():
+            """Local-only interactive dashboard. Bound to 127.0.0.1, never nginx-proxied."""
+            return send_file(str(BASE_DIR / "ui" / "dashboard_local.html"))
 
         @app.route("/")
         def root():

@@ -1,0 +1,217 @@
+/* ─────────────────────────────────────────────────────────────────
+ * maez.css — shared design system for all Maez public pages.
+ *
+ * Loaded by every visitor-facing page (index, login, app, dashboard,
+ * progress, privacy, planner, analytics) so they feel like one site.
+ * Warm near-black ground, parchment ink, single ember-amber accent.
+ * Fraunces (display) + Newsreader (body) + JetBrains Mono (data).
+ *
+ * Pages keep their own structure and layout. This file only provides:
+ *   1. Google Fonts for the three-face stack
+ *   2. :root design tokens, under BOTH new semantic names (--ember,
+ *      --ink, --bg, --serif, --body, --mono) and the legacy cyber
+ *      names (--void, --deep, --teal, --amber, --text, --panel, ...)
+ *      re-mapped to warm values so older per-page CSS retunes
+ *      automatically without needing every rule rewritten.
+ *   3. A base heading font-family so h1-h6 go to Fraunces by default.
+ *
+ * No class overrides, no !important, no layout opinions. Page-level
+ * CSS stays local.
+ * ───────────────────────────────────────────────────────────────── */
+
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..600;1,9..144,400..500&family=Newsreader:ital,opsz,wght@0,6..72,400..500;1,6..72,400..500&family=JetBrains+Mono:wght@400&display=swap");
+
+:root {
+  /* ── New semantic tokens ────────────────────────────────── */
+
+  --bg:          #0c0a08;
+  --bg-raised:   #130f0b;
+  --bg-sink:     #080604;
+
+  --ink:         #f3ece0;
+  --ink-soft:    #d7cab4;
+  --ink-mute:    #9e907a;
+  --ink-dim:     #6a5f4f;
+  --ink-faint:   #3e362b;
+
+  --ember:        #e8a33a;
+  --ember-bright: #f4b854;
+  --ember-deep:   #b97d1c;
+  --ember-soft:   rgba(232, 163, 58, 0.14);
+  --ember-line:   rgba(232, 163, 58, 0.28);
+
+  --warm-red:    #e86a6a;
+  --warm-sage:   #8dbf6a;
+  --warm-lilac:  #c4a3d8;
+
+  --serif: "Fraunces", Georgia, "Times New Roman", serif;
+  --body:  "Newsreader", Georgia, serif;
+  --mono:  "JetBrains Mono", ui-monospace, Menlo, monospace;
+
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --shadow-warm: 0 30px 90px rgba(0, 0, 0, 0.46);
+
+  /* ── Legacy cyber-token aliases, remapped to warm values ──
+   * Older pages reference these names throughout; redefining them
+   * here means every `color: var(--teal)` in a legacy page becomes
+   * ember, every `background: var(--void)` becomes warm near-black,
+   * and so on — without touching a single class rule.
+   * ─────────────────────────────────────────────────────── */
+
+  --void:        #0c0a08;
+  --deep:        #130f0b;
+  --panel:       rgba(18, 14, 11, 0.82);
+  --panel-hi:    rgba(22, 17, 13, 0.92);
+
+  --line:        rgba(243, 236, 224, 0.10);
+  --line-strong: rgba(243, 236, 224, 0.20);
+
+  --text:        #f3ece0;
+  --text-soft:   #d7cab4;
+  --text-dim:    #9e907a;
+
+  --teal:        #e8a33a;
+  --teal-hi:     #f4b854;
+  --amber:       #e8a33a;
+  --amber-hi:    #f4b854;
+
+  --red:         #e86a6a;
+  --green:       #8dbf6a;
+  --purple:      #c4a3d8;
+  --rose:        #e86a6a;
+
+  --radius:      12px;
+  --radius-lg:   20px;
+  --radius-pill: 999px;
+  --shadow: 0 30px 90px rgba(0, 0, 0, 0.46);
+}
+
+/* ── Base resets + typography ─────────────────────────────── */
+
+html {
+  background: var(--bg);
+  font-feature-settings: "kern", "liga", "calt";
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 18px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--serif);
+  font-weight: 400;
+  letter-spacing: -0.018em;
+  font-variation-settings: "opsz" 48;
+  color: var(--ink);
+}
+
+.maez-thesis-block {
+  display: grid;
+  gap: 14px;
+  padding: 18px 20px 20px;
+  border: 1px solid rgba(232, 163, 58, 0.14);
+  background:
+    linear-gradient(180deg, rgba(18, 14, 11, 0.82), rgba(12, 10, 8, 0.90));
+  box-shadow: var(--shadow-warm);
+}
+
+.maez-thesis-kicker {
+  color: var(--ember);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.maez-thesis-line {
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: clamp(24px, 2.3vw, 36px);
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+}
+
+.maez-thesis-line em {
+  color: var(--ember);
+}
+
+.maez-thesis-copy {
+  color: var(--ink-soft);
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+.maez-proof-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.maez-proof-card {
+  padding: 12px 13px 14px;
+  border: 1px solid rgba(243, 236, 224, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.maez-proof-label {
+  display: block;
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.maez-proof-body {
+  display: block;
+  margin-top: 8px;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.maez-proof-note {
+  display: block;
+  margin-top: 8px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.maez-crosslinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+
+.maez-crosslinks a {
+  color: var(--ember);
+  text-decoration: none;
+  border-bottom: 1px solid var(--ember-line);
+}
+
+.maez-crosslinks a:hover {
+  border-bottom-color: var(--ember);
+}
+
+em { font-style: italic; }
+
+::selection {
+  background: rgba(232, 163, 58, 0.34);
+  color: var(--ink);
+}
+
+@media (max-width: 720px) {
+  .maez-proof-grid {
+    grid-template-columns: 1fr;
+  }
+}

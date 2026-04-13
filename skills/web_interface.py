@@ -4,16 +4,26 @@ web_interface.py — Maez web chat interface.
 Standalone Flask app on port 11437. Registration, login, chat.
 """
 
+import glob
 import logging
+import json
 import os
+import re
+import subprocess
 import sys
+import threading
 import time
+import urllib.request
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
+from uuid import uuid4
 
 sys.path.insert(0, '/home/rohit/maez')
 from dotenv import load_dotenv
 load_dotenv('/home/rohit/maez/config/.env')
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, redirect, send_file
 import ollama
 
 from skills.user_accounts import UserAccounts
@@ -29,12 +39,620 @@ memory = MemoryManager()
 
 SOUL_PATH = '/home/rohit/maez/config/soul.md'
 MODEL = 'gemma4:26b'
+UI_DIR = '/home/rohit/maez/ui'
+HERO_PAGE = os.path.join(UI_DIR, 'maez_hero.html')
+GATE_PAGE = os.path.join(UI_DIR, 'maez_gate.html')
+PROGRESS_PUBLIC_PAGE = os.path.join(UI_DIR, 'progress_public.html')
+PROGRESS_LOCAL_PAGE = os.path.join(UI_DIR, 'progress_local.html')
+ANALYTICS_PAGE = os.path.join(UI_DIR, 'analytics_local.html')
+ANALYTICS_SCRIPT = os.path.join(UI_DIR, 'maez_analytics.js')
+AUTH_COOKIE = 'maez_token'
+PLANNER_PATH = '/home/rohit/maez/memory/project_planner.json'
+PLANNER_LOCK = threading.Lock()
+PLANNER_STATUSES = ('done', 'in_progress', 'next', 'planned')
+PLANNER_VISIBILITIES = ('public', 'private')
+ANALYTICS_PATH = '/home/rohit/maez/memory/site_analytics.jsonl'
+ANALYTICS_LOCK = threading.Lock()
+ANALYTICS_EVENT_TYPES = ('pageview', 'cta_click')
+ANALYTICS_FUNNEL = (
+    ("/", "Landing"),
+    ("/progress", "Progress"),
+    ("/dashboard", "Architecture"),
+    ("/login", "Login"),
+    ("/app", "Channel"),
+)
+PRIVATE_OWNER_PROFILE_ID = "private_owner"
+
+# Field-journal / dashboard data sources (/api/maez-state, /api/session-timeline, /journal)
+SNAPSHOTS_DIR = '/home/rohit/maez/logs/snapshots'
+MODEL_STATE_PATH = '/home/rohit/maez/config/model_state.json'
+THUNDER_STATE_PATH = '/home/rohit/maez/config/thunder_state.json'
+TRAINING_RUNS_DIR = '/home/rohit/maez/training/runs'
+DAEMON_HEALTH_URL = 'http://127.0.0.1:11435/health'
+JOURNAL_SERVICES = (
+    'maez',
+    'maez-web',
+    'llama-server',
+    'llama-server-vision',
+    'maez-watchdog',
+    'maez-electron',
+)
+_SERVICE_STATE_CACHE = {}  # service_name -> (state, timestamp)
+_SERVICE_STATE_TTL = 30.0  # seconds
 
 try:
     with open(SOUL_PATH) as f:
         SOUL = f.read().strip()
 except Exception:
     SOUL = "You are Maez."
+
+
+def _utcnow_iso():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _is_private_owner_bridge(user_record: dict | None) -> bool:
+    return bool(user_record and user_record.get("private_owner_bridge"))
+
+
+def _parse_owner_exchange(content: str, timestamp: str) -> list[dict]:
+    text = (content or "").strip()
+    if not text:
+        return []
+
+    user_prefix = "Rohit asked:"
+    reply_prefix = "\nMaez replied:"
+    if text.startswith(user_prefix) and reply_prefix in text:
+        user_text, reply_text = text[len(user_prefix):].split(reply_prefix, 1)
+        messages = []
+        if user_text.strip():
+            messages.append({
+                "role": "user",
+                "content": user_text.strip(),
+                "timestamp": timestamp,
+            })
+        if reply_text.strip():
+            messages.append({
+                "role": "assistant",
+                "content": reply_text.strip(),
+                "timestamp": timestamp,
+            })
+        return messages
+
+    return [{
+        "role": "assistant",
+        "content": text,
+        "timestamp": timestamp,
+    }]
+
+
+def _load_private_owner_history() -> list[dict]:
+    messages = []
+    try:
+        for exchange in memory.get_telegram_exchanges(limit=400):
+            meta = exchange.get("metadata", {}) or {}
+            messages.extend(_parse_owner_exchange(
+                exchange.get("content", ""),
+                meta.get("timestamp", ""),
+            ))
+    except Exception as e:
+        logger.debug("Private owner history unavailable: %s", e)
+    return messages
+
+
+def _planner_seed():
+    now = _utcnow_iso()
+    return {
+        "updated_at": now,
+        "items": [
+            {
+                "id": "core-heartbeat",
+                "title": "Persistent reasoning loop and memory spine",
+                "status": "done",
+                "visibility": "public",
+                "summary": "The always-on daemon, three-tier memory, and local Gemma runtime are live and continuously growing.",
+                "details": "Maez runs as a service, thinks every 30 seconds, stores observations, and never resets to zero.",
+                "private_notes": "",
+                "tags": ["core", "memory"],
+                "updated_at": now,
+            },
+            {
+                "id": "public-web",
+                "title": "Public web surface redesign",
+                "status": "done",
+                "visibility": "public",
+                "summary": "Landing, login, app, progress, and dashboard now share a clearer, more human public experience built around continuity instead of generic AI-tool language.",
+                "details": "The public site now leads with presence, continuity, and user understanding first, while keeping the existing auth flows, analytics hooks, and live status behavior intact.",
+                "private_notes": "",
+                "tags": ["web", "design", "ux"],
+                "updated_at": now,
+            },
+            {
+                "id": "architecture-page",
+                "title": "Dashboard and progress proof layers",
+                "status": "done",
+                "visibility": "public",
+                "summary": "The dashboard now reads as the technical proof layer, while progress explains how much of the idea has already become real.",
+                "details": "This keeps the architecture map separate from the build-status story so first-time visitors can understand the concept before they go technical.",
+                "private_notes": "",
+                "tags": ["dashboard", "ux", "progress"],
+                "updated_at": now,
+            },
+            {
+                "id": "funnel-clarity",
+                "title": "Whole-funnel UX clarification",
+                "status": "done",
+                "visibility": "public",
+                "summary": "The public funnel now explains Maez in one consistent order: what it is, how it begins, how it keeps living, and why that matters.",
+                "details": "Landing, login, app, progress, and dashboard now reuse the same thesis and proof ideas instead of reframing Maez differently on each page.",
+                "private_notes": "",
+                "tags": ["website", "messaging", "ux"],
+                "updated_at": now,
+            },
+            {
+                "id": "observation-window",
+                "title": "Live observation window",
+                "status": "in_progress",
+                "visibility": "public",
+                "summary": "Self-improvement is being observed carefully so Maez learns from live behavior before more autonomy is granted.",
+                "details": "One proposal at a time. Slow observation over synthetic confidence.",
+                "private_notes": "",
+                "tags": ["safety", "evaluation"],
+                "updated_at": now,
+            },
+            {
+                "id": "fastlane-validation",
+                "title": "Fast-lane traffic validation",
+                "status": "in_progress",
+                "visibility": "public",
+                "summary": "The fast reply lane exists in staging and still needs real-world validation before broader rollout.",
+                "details": "The routing, redaction, audit, and policy layers are built; traffic confidence is what remains.",
+                "private_notes": "",
+                "tags": ["fast-lane", "staging"],
+                "updated_at": now,
+            },
+            {
+                "id": "planner-split",
+                "title": "Public progress board and private planner",
+                "status": "done",
+                "visibility": "public",
+                "summary": "Public progress and private planning now run as separate surfaces over one shared board model, with hidden notes staying private by default.",
+                "details": "Public visitors read `/progress`; authenticated editing stays in `/planner`; the same data model feeds both views without exposing private scratch work.",
+                "private_notes": "Keep private scratch ideas out of the public board by default.",
+                "tags": ["planner", "website"],
+                "updated_at": now,
+            },
+            {
+                "id": "vagueness-fix",
+                "title": "Ship VAGUENESS_DETECTION routing fix",
+                "status": "next",
+                "visibility": "public",
+                "summary": "Separate vague failures from repetition/fixation so self-diagnosis can route to the right corrective action.",
+                "details": "This is the next high-leverage system fix from the observation window.",
+                "private_notes": "",
+                "tags": ["cognition", "next"],
+                "updated_at": now,
+            },
+            {
+                "id": "desktop-wrapper",
+                "title": "Rohit desktop wrapper",
+                "status": "next",
+                "visibility": "public",
+                "summary": "A closer daily wrapper around Maez is next once the current web and fast-lane surfaces settle.",
+                "details": "This will likely become the most natural high-trust surface.",
+                "private_notes": "",
+                "tags": ["desktop", "product"],
+                "updated_at": now,
+            },
+            {
+                "id": "publishing-agent",
+                "title": "Publishing agent",
+                "status": "planned",
+                "visibility": "public",
+                "summary": "A supervised publishing flow for public updates is planned after the current communication surfaces stabilize.",
+                "details": "This comes after the planner, desktop, and fast-lane validation work is mature.",
+                "private_notes": "",
+                "tags": ["publishing", "planned"],
+                "updated_at": now,
+            },
+            {
+                "id": "voice-return",
+                "title": "Voice pipeline revival",
+                "status": "planned",
+                "visibility": "public",
+                "summary": "Voice returns later, once the infrastructure path is stable enough to justify reviving it properly.",
+                "details": "Useful, but not ahead of the current system and UX priorities.",
+                "private_notes": "",
+                "tags": ["voice", "planned"],
+                "updated_at": now,
+            },
+            {
+                "id": "private-elderly",
+                "title": "Elder deployment notes",
+                "status": "planned",
+                "visibility": "private",
+                "summary": "Private scratch area for mission-aligned deployment ideas.",
+                "details": "",
+                "private_notes": "Think through onboarding, trust, pacing, screen simplicity, and non-technical caregiver roles.",
+                "tags": ["private", "mission"],
+                "updated_at": now,
+            },
+        ],
+    }
+
+
+def _normalize_tags(raw_tags):
+    if isinstance(raw_tags, str):
+        raw_tags = [t.strip() for t in raw_tags.split(",")]
+    if not isinstance(raw_tags, list):
+        return []
+    tags = []
+    for tag in raw_tags:
+        text = str(tag).strip().lower()
+        if not text:
+            continue
+        if len(text) > 24:
+            text = text[:24]
+        if text not in tags:
+            tags.append(text)
+        if len(tags) >= 5:
+            break
+    return tags
+
+
+def _normalize_planner_item(item):
+    if not isinstance(item, dict):
+        return None
+    title = str(item.get("title", "")).strip()
+    if not title:
+        return None
+    status = str(item.get("status", "planned")).strip()
+    if status not in PLANNER_STATUSES:
+        status = "planned"
+    visibility = str(item.get("visibility", "public")).strip()
+    if visibility not in PLANNER_VISIBILITIES:
+        visibility = "public"
+    return {
+        "id": str(item.get("id", "")).strip() or f"planner-{uuid4().hex[:10]}",
+        "title": title[:140],
+        "status": status,
+        "visibility": visibility,
+        "summary": str(item.get("summary", "")).strip()[:420],
+        "details": str(item.get("details", "")).strip()[:1200],
+        "private_notes": str(item.get("private_notes", "")).strip()[:5000],
+        "tags": _normalize_tags(item.get("tags", [])),
+        "updated_at": str(item.get("updated_at", "")).strip() or _utcnow_iso(),
+    }
+
+
+def _normalize_planner_board(board):
+    raw_items = board.get("items", []) if isinstance(board, dict) else []
+    seen = set()
+    items = []
+    for raw in raw_items:
+        item = _normalize_planner_item(raw)
+        if not item:
+            continue
+        if item["id"] in seen:
+            item["id"] = f"planner-{uuid4().hex[:10]}"
+        seen.add(item["id"])
+        items.append(item)
+    return {
+        "updated_at": _utcnow_iso(),
+        "items": items,
+    }
+
+
+def _save_planner_board_locked(board):
+    os.makedirs(os.path.dirname(PLANNER_PATH), exist_ok=True)
+    tmp_path = PLANNER_PATH + ".tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(board, f, indent=2)
+    os.replace(tmp_path, PLANNER_PATH)
+
+
+def _load_planner_board():
+    with PLANNER_LOCK:
+        if not os.path.exists(PLANNER_PATH):
+            board = _planner_seed()
+            _save_planner_board_locked(board)
+            return board
+        try:
+            with open(PLANNER_PATH) as f:
+                data = json.load(f)
+        except Exception:
+            board = _planner_seed()
+            _save_planner_board_locked(board)
+            return board
+        board = _normalize_planner_board(data)
+        if board != data:
+            _save_planner_board_locked(board)
+        return board
+
+
+def _save_planner_board(board):
+    with PLANNER_LOCK:
+        normalized = _normalize_planner_board(board)
+        _save_planner_board_locked(normalized)
+        return normalized
+
+
+def _planner_public_view(board):
+    columns = {status: [] for status in PLANNER_STATUSES}
+    for item in board.get("items", []):
+        if item.get("visibility") != "public":
+            continue
+        columns[item["status"]].append({
+            "id": item["id"],
+            "title": item["title"],
+            "status": item["status"],
+            "summary": item["summary"],
+            "details": item["details"],
+            "tags": item["tags"],
+            "updated_at": item["updated_at"],
+        })
+    return {
+        "updated_at": board.get("updated_at", _utcnow_iso()),
+        "counts": {status: len(columns[status]) for status in PLANNER_STATUSES},
+        "columns": columns,
+    }
+
+
+def _planner_counts(board):
+    counts = {status: 0 for status in PLANNER_STATUSES}
+    for item in board.get("items", []):
+        status = item.get("status", "planned")
+        if status not in counts:
+            status = "planned"
+        counts[status] += 1
+    return counts
+
+
+def _clean_text(value, limit):
+    return str(value or "").strip()[:limit]
+
+
+def _normalize_public_path(value):
+    raw = _clean_text(value, 180)
+    if not raw:
+        return "/"
+    parsed = urlparse(raw)
+    path = parsed.path or raw
+    path = path.split("?", 1)[0].split("#", 1)[0].strip()
+    if not path.startswith("/"):
+        path = "/" + path.lstrip("/")
+    return path or "/"
+
+
+def _normalize_tracking_id(value, prefix):
+    raw = _clean_text(value, 80).lower()
+    cleaned = "".join(ch for ch in raw if ch.isalnum() or ch in "-_")
+    return cleaned[:64] or f"{prefix}-{uuid4().hex[:12]}"
+
+
+def _normalize_tracking_target(value):
+    raw = _clean_text(value, 200)
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    if parsed.scheme and parsed.netloc:
+        host = parsed.netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        return f"{parsed.scheme}://{host}{parsed.path or '/'}"[:200]
+    return _normalize_public_path(raw)
+
+
+def _analytics_referrer_host(value):
+    raw = _clean_text(value, 240)
+    if not raw:
+        return "direct"
+    parsed = urlparse(raw)
+    host = (parsed.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if not host:
+        return "direct"
+    if host.endswith("maez.live"):
+        return "internal"
+    return host[:120]
+
+
+def _analytics_device_from_request():
+    ua = request.headers.get("User-Agent", "").lower()
+    if "ipad" in ua or "tablet" in ua:
+        return "tablet"
+    if "mobi" in ua or "iphone" in ua or "android" in ua:
+        return "mobile"
+    if not ua:
+        return "unknown"
+    return "desktop"
+
+
+def _append_analytics_event(event):
+    with ANALYTICS_LOCK:
+        os.makedirs(os.path.dirname(ANALYTICS_PATH), exist_ok=True)
+        with open(ANALYTICS_PATH, "a") as f:
+            f.write(json.dumps(event, separators=(",", ":")) + "\n")
+
+
+def _load_analytics_events():
+    with ANALYTICS_LOCK:
+        if not os.path.exists(ANALYTICS_PATH):
+            return []
+        events = []
+        try:
+            with open(ANALYTICS_PATH) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except Exception:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    if event.get("event") not in ANALYTICS_EVENT_TYPES:
+                        continue
+                    path = _normalize_public_path(event.get("path", "/"))
+                    if path.startswith("/api/"):
+                        continue
+                    events.append({
+                        "ts": _clean_text(event.get("ts", ""), 40),
+                        "event": event.get("event"),
+                        "path": path,
+                        "label": _clean_text(event.get("label", ""), 80),
+                        "target": _clean_text(event.get("target", ""), 200),
+                        "referrer": _clean_text(event.get("referrer", "direct"), 120) or "direct",
+                        "device": _clean_text(event.get("device", "unknown"), 20) or "unknown",
+                        "anon_id": _clean_text(event.get("anon_id", ""), 64),
+                        "session_id": _clean_text(event.get("session_id", ""), 64),
+                    })
+        except Exception:
+            return []
+        return events
+
+
+def _build_analytics_summary(events):
+    now = datetime.now(timezone.utc)
+    start_day = now.date() - timedelta(days=13)
+    daily = []
+    daily_uniques = defaultdict(set)
+    daily_index = {}
+    for i in range(14):
+        day = start_day + timedelta(days=i)
+        key = day.isoformat()
+        entry = {"date": key, "pageviews": 0, "unique_visitors": 0}
+        daily_index[key] = entry
+        daily.append(entry)
+
+    last_7_cutoff = now - timedelta(days=7)
+    last_24_cutoff = now - timedelta(days=1)
+
+    page_counts = Counter()
+    referrer_counts = Counter()
+    device_counts = Counter()
+    cta_counts = Counter()
+    funnel_counts = Counter()
+    unique_all = set()
+    unique_7d = set()
+    pageviews_total = 0
+    pageviews_7d = 0
+    pageviews_24h = 0
+    cta_total = 0
+    recent = []
+    funnel_map = dict(ANALYTICS_FUNNEL)
+
+    for event in events:
+        ts_text = event.get("ts", "")
+        try:
+            ts = datetime.fromisoformat(ts_text) if ts_text else None
+        except Exception:
+            ts = None
+
+        recent.append(event)
+
+        if event["event"] == "pageview":
+            pageviews_total += 1
+            path = event.get("path", "/")
+            anon_id = event.get("anon_id", "")
+            page_counts[path] += 1
+            referrer_counts[event.get("referrer", "direct") or "direct"] += 1
+            device_counts[event.get("device", "unknown") or "unknown"] += 1
+            if path in funnel_map:
+                funnel_counts[path] += 1
+            if anon_id:
+                unique_all.add(anon_id)
+            if ts:
+                if ts >= last_7_cutoff:
+                    pageviews_7d += 1
+                    if anon_id:
+                        unique_7d.add(anon_id)
+                if ts >= last_24_cutoff:
+                    pageviews_24h += 1
+                day_key = ts.date().isoformat()
+                if day_key in daily_index:
+                    daily_index[day_key]["pageviews"] += 1
+                    if anon_id:
+                        daily_uniques[day_key].add(anon_id)
+        elif event["event"] == "cta_click":
+            cta_total += 1
+            cta_counts[(event.get("label", ""), event.get("path", "/"), event.get("target", ""))] += 1
+
+    for day_key, anon_ids in daily_uniques.items():
+        if day_key in daily_index:
+            daily_index[day_key]["unique_visitors"] = len(anon_ids)
+
+    top_pages = [
+        {"path": path, "count": count}
+        for path, count in page_counts.most_common(8)
+    ]
+    top_referrers = [
+        {"source": source, "count": count}
+        for source, count in referrer_counts.most_common(8)
+    ]
+    devices = [
+        {"device": device, "count": count}
+        for device, count in device_counts.most_common()
+    ]
+    ctas = [
+        {"label": label or "Unnamed CTA", "path": path, "target": target, "count": count}
+        for (label, path, target), count in cta_counts.most_common(10)
+    ]
+    funnel = [
+        {"path": path, "label": label, "count": funnel_counts.get(path, 0)}
+        for path, label in ANALYTICS_FUNNEL
+    ]
+    recent_events = []
+    for event in sorted(recent, key=lambda item: item.get("ts", ""), reverse=True)[:20]:
+        recent_events.append({
+            "ts": event.get("ts", ""),
+            "event": event.get("event", ""),
+            "path": event.get("path", "/"),
+            "label": event.get("label", ""),
+            "target": event.get("target", ""),
+            "referrer": event.get("referrer", "direct"),
+            "device": event.get("device", "unknown"),
+        })
+
+    return {
+        "updated_at": _utcnow_iso(),
+        "totals": {
+            "pageviews_total": pageviews_total,
+            "unique_visitors_total": len(unique_all),
+            "pageviews_7d": pageviews_7d,
+            "unique_visitors_7d": len(unique_7d),
+            "pageviews_24h": pageviews_24h,
+            "cta_clicks_total": cta_total,
+        },
+        "daily": daily,
+        "top_pages": top_pages,
+        "top_referrers": top_referrers,
+        "devices": devices,
+        "ctas": ctas,
+        "funnel": funnel,
+        "recent": recent_events,
+    }
+
+
+def _request_token():
+    return (
+        request.args.get("web_token", "")
+        or request.cookies.get(AUTH_COOKIE, "")
+    ).strip()
+
+
+def _attach_auth_cookie(response, token):
+    if token:
+        response.set_cookie(
+            AUTH_COOKIE,
+            token,
+            max_age=60 * 60 * 24 * 180,
+            path="/",
+            samesite="Lax",
+        )
+    return response
 
 
 @app.after_request
@@ -45,9 +663,313 @@ def cors(response):
     return response
 
 
+# ── field-journal helpers ────────────────────────────────────────────────
+
+def _daemon_health(timeout=0.5):
+    """Fetch the daemon's /health endpoint. Returns dict or {'status':'unreachable'}."""
+    try:
+        with urllib.request.urlopen(DAEMON_HEALTH_URL, timeout=timeout) as r:
+            return json.loads(r.read().decode('utf-8'))
+    except Exception as e:
+        logger.debug("daemon health unreachable: %s", e)
+        return {"status": "unreachable"}
+
+
+def _service_state_cached(service_name, ttl=_SERVICE_STATE_TTL):
+    """systemctl is-active <service>.service, cached per-service for ttl seconds."""
+    now = time.time()
+    cached = _SERVICE_STATE_CACHE.get(service_name)
+    if cached and (now - cached[1]) < ttl:
+        return cached[0]
+    try:
+        out = subprocess.check_output(
+            ['systemctl', 'is-active', service_name + '.service'],
+            timeout=2.0, stderr=subprocess.DEVNULL,
+        ).decode('utf-8').strip()
+    except subprocess.CalledProcessError as e:
+        out = (e.output or b'').decode('utf-8').strip() or 'inactive'
+    except Exception:
+        out = 'unknown'
+    _SERVICE_STATE_CACHE[service_name] = (out, now)
+    return out
+
+
+def _journal_services_state():
+    return {svc.replace('-', '_'): _service_state_cached(svc) for svc in JOURNAL_SERVICES}
+
+
+def _model_state():
+    """Compose the model block from config/model_state.json + training/runs/current/summary.json."""
+    data = {
+        "base": "gemma-4-26B-A4B",
+        "quant": "Q4_K_M",
+        "runtime": "llama.cpp (CUDA)",
+        "vision_model": "Qwen2.5-VL-3B",
+        "merged_adapter": False,
+    }
+    try:
+        with open(MODEL_STATE_PATH) as f:
+            data.update(json.load(f))
+    except Exception as e:
+        logger.debug("model_state.json unreadable: %s", e)
+    try:
+        current_run = os.path.join(TRAINING_RUNS_DIR, 'current', 'summary.json')
+        if os.path.exists(current_run):
+            with open(current_run) as f:
+                summary = json.load(f)
+            data["adapter_pairs"] = summary.get("dataset_size")
+            loss = summary.get("train_loss")
+            if loss is not None:
+                data["adapter_loss_final"] = round(float(loss), 4)
+            data["adapter_base"] = summary.get("model")
+            mtime = os.path.getmtime(current_run)
+            data["adapter_trained"] = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
+            data["merged_adapter"] = True
+    except Exception as e:
+        logger.debug("training summary unreadable: %s", e)
+    return data
+
+
+def _thunder_state():
+    try:
+        with open(THUNDER_STATE_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _soul_state():
+    try:
+        st = os.stat(SOUL_PATH)
+        with open(SOUL_PATH) as f:
+            lines = sum(1 for _ in f)
+        return {
+            "lines": lines,
+            "last_updated": datetime.fromtimestamp(st.st_mtime).strftime('%Y-%m-%d'),
+        }
+    except Exception:
+        return {"lines": None, "last_updated": None}
+
+
+# ── session snapshot parser ──────────────────────────────────────────────
+
+_SNAPSHOT_SECTION_RE = re.compile(r'^=+\s*$')
+_SNAPSHOT_HEADER_RE = re.compile(r'^([A-Z][A-Z ]+):\s*(.*)$')
+_SNAPSHOT_BULLET_RE = re.compile(r'^\s*(?:[-*•]|\d+[.)])\s+(.*)$')
+
+
+def _snapshot_slug(text):
+    return re.sub(r'[^a-z0-9]+', '_', text.lower()).strip('_')
+
+
+# Narrow, word-boundary de-gendering for historical snapshot text. The current
+# rule for Maez is genderless; older snapshots (pre-2026-04-12) used "she/her".
+# We don't rewrite the historical files — we de-gender at render time so the
+# /journal timeline reads consistently with the rest of the site.
+_DEGENDER_MAP = (
+    (re.compile(r'\bShe\b'),      'It'),
+    (re.compile(r'\bshe\b'),      'it'),
+    (re.compile(r'\bHer\b'),      'Its'),
+    (re.compile(r'\bher\b'),      'its'),
+    (re.compile(r'\bhers\b'),     'its'),
+    (re.compile(r'\bHerself\b'),  'Itself'),
+    (re.compile(r'\bherself\b'),  'itself'),
+)
+
+
+def _degender(text):
+    if not text:
+        return text
+    for rx, repl in _DEGENDER_MAP:
+        text = rx.sub(repl, text)
+    return text
+
+
+def _degender_list(items):
+    return [_degender(x) for x in items]
+
+
+def _parse_session_snapshot(path):
+    """Parse logs/snapshots/session_*.txt into a dict. Tolerant — errors become an 'error' field."""
+    try:
+        with open(path) as f:
+            raw = f.read()
+    except Exception as e:
+        return {"file": os.path.basename(path), "error": f"read failed: {e}"}
+
+    result = {
+        "file": os.path.basename(path),
+        "date": None,
+        "label": None,
+        "agent": None,
+        "headline": None,
+        "what_changed": [],
+        "production_state": [],
+        "next_priorities": [],
+        "sections": {},
+    }
+
+    try:
+        lines = raw.splitlines()
+        i = 0
+        # Header block (BUILD:, DATE:, AGENT: lines, before the first ==== divider)
+        while i < len(lines) and not _SNAPSHOT_SECTION_RE.match(lines[i]):
+            m = _SNAPSHOT_HEADER_RE.match(lines[i])
+            if m:
+                key, value = m.group(1).strip(), m.group(2).strip()
+                if key == 'BUILD':
+                    m2 = re.search(r'Sessions?\s+([\w+]+)', value)
+                    if m2:
+                        result["label"] = m2.group(1)
+                elif key == 'DATE':
+                    m2 = re.search(r'(\d{4}-\d{2}-\d{2})|([A-Za-z]+\s+\d+,\s*\d{4})', value)
+                    if m2:
+                        result["date"] = m2.group(0)
+                        if ',' in result["date"]:
+                            try:
+                                result["date"] = datetime.strptime(result["date"], '%B %d, %Y').strftime('%Y-%m-%d')
+                            except ValueError:
+                                pass
+                elif key == 'AGENT':
+                    result["agent"] = value
+            i += 1
+
+        # Section blocks — the real format is:
+        #   ========================================
+        #   TITLE IN CAPS
+        #   ========================================
+        #
+        #   body lines...
+        #
+        # i.e. each title is wrapped in a PAIR of ==== delimiters, not a single one.
+        current_section = None
+        body = []
+        while i < len(lines):
+            if _SNAPSHOT_SECTION_RE.match(lines[i]):
+                # flush previous section
+                if current_section and body:
+                    result["sections"][current_section] = [b for b in body if b]
+                    body = []
+                i += 1
+                # skip blank
+                while i < len(lines) and not lines[i].strip():
+                    i += 1
+                # grab title
+                if i < len(lines) and not _SNAPSHOT_SECTION_RE.match(lines[i]):
+                    current_section = _snapshot_slug(lines[i].strip())
+                    i += 1
+                # skip blank(s) and the closing ==== delimiter that wraps the title
+                while i < len(lines) and not lines[i].strip():
+                    i += 1
+                if i < len(lines) and _SNAPSHOT_SECTION_RE.match(lines[i]):
+                    i += 1
+                # read body until the NEXT opening ==== delimiter
+                while i < len(lines) and not _SNAPSHOT_SECTION_RE.match(lines[i]):
+                    stripped = lines[i].rstrip()
+                    if stripped:
+                        m = _SNAPSHOT_BULLET_RE.match(stripped)
+                        body.append(m.group(1) if m else stripped.strip())
+                    i += 1
+                continue
+            i += 1
+        if current_section and body:
+            result["sections"][current_section] = [b for b in body if b]
+
+        # Headline pulled from THE HEADLINE / TL;DR / SUMMARY section if present
+        for key in ('the_headline', 'headline', 'the_tl_dr', 'tl_dr', 'summary'):
+            if key in result["sections"] and result["sections"][key]:
+                result["headline"] = result["sections"][key][0]
+                break
+
+        result["what_changed"] = result["sections"].get("what_changed_today", [])[:24]
+        result["production_state"] = result["sections"].get("production_state", [])[:24]
+        result["next_priorities"] = result["sections"].get("next_session_priorities", [])[:12]
+
+        # De-gender all visitor-facing text (historical snapshots used she/her).
+        result["headline"] = _degender(result["headline"])
+        result["what_changed"] = _degender_list(result["what_changed"])
+        result["production_state"] = _degender_list(result["production_state"])
+        result["next_priorities"] = _degender_list(result["next_priorities"])
+    except Exception as e:
+        result["error"] = f"parse failed: {e}"
+
+    return result
+
+
 @app.route("/")
 def index():
-    return HTML_PAGE
+    return send_file(os.path.join(UI_DIR, "index.html"), mimetype="text/html")
+
+
+@app.route("/app")
+def app_shell():
+    if request.args.get("test_t", "").strip():
+        return send_file(os.path.join(UI_DIR, "app.html"), mimetype="text/html")
+    token = _request_token()
+    if not token or not accounts.get_by_token(token):
+        return redirect("/login")
+    return send_file(os.path.join(UI_DIR, "app.html"), mimetype="text/html")
+
+
+@app.route("/progress")
+def progress_page():
+    return send_file(PROGRESS_PUBLIC_PAGE, mimetype="text/html")
+
+
+@app.route("/privacy")
+def privacy_page():
+    return send_file(os.path.join(UI_DIR, "privacy.html"), mimetype="text/html")
+
+
+@app.route("/planner")
+def planner_page():
+    if request.args.get("test_t", "").strip():
+        return send_file(PROGRESS_LOCAL_PAGE, mimetype="text/html")
+    token = _request_token()
+    if not token or not accounts.get_by_token(token):
+        return redirect("/login")
+    return send_file(PROGRESS_LOCAL_PAGE, mimetype="text/html")
+
+
+@app.route("/analytics")
+def analytics_page():
+    if request.args.get("test_t", "").strip():
+        return send_file(ANALYTICS_PAGE, mimetype="text/html")
+    token = _request_token()
+    if not token or not accounts.get_by_token(token):
+        return redirect("/login")
+    return send_file(ANALYTICS_PAGE, mimetype="text/html")
+
+
+@app.route("/maez_analytics.js")
+def analytics_script():
+    return send_file(ANALYTICS_SCRIPT, mimetype="application/javascript")
+
+
+@app.route("/maez.css")
+def shared_stylesheet():
+    """Shared design system — warm palette, Fraunces+Newsreader+JetBrains Mono."""
+    return send_file(os.path.join(UI_DIR, "maez.css"), mimetype="text/css")
+
+
+@app.route("/maez_hero.html")
+def hero_page():
+    return send_file(HERO_PAGE, mimetype="text/html")
+
+
+@app.route("/maez_gate.html")
+def gate_page():
+    return send_file(GATE_PAGE, mimetype="text/html")
+
+
+@app.route("/maez_bg.html")
+def bg_page():
+    return send_file(os.path.join(UI_DIR, "maez_bg.html"), mimetype="text/html")
+
+
+@app.route("/maez_bg_zen.html")
+def bg_zen_page():
+    return send_file(os.path.join(UI_DIR, "maez_bg_zen.html"), mimetype="text/html")
 
 
 @app.route("/register", methods=["POST"])
@@ -61,32 +983,40 @@ def register():
     try:
         result = accounts.register(username, password, display_name)
         # Check for possible Telegram match
-        match = accounts.find_possible_telegram_match(display_name or username, username)
+        match = accounts.find_possible_telegram_match(
+            display_name or username,
+            username,
+            exclude_user_id=result.get("uuid"),
+        )
         if match:
             result["possible_telegram_match"] = {
                 **match,
                 "suggestion": f"I think I've spoken with you on Telegram before. Want to link those conversations?"
             }
-        return jsonify({"success": True, **result})
+        response = jsonify({"success": True, **result})
+        return _attach_auth_cookie(response, result.get("web_token", ""))
     except ValueError as e:
         return jsonify({"error": str(e)}), 409
 
 
-@app.route("/login", methods=["POST"])
+@app.route("/login", methods=["GET", "POST"])
 def login():
+    if request.method == "GET":
+        return send_file(os.path.join(UI_DIR, "login.html"), mimetype="text/html")
     data = request.get_json(silent=True) or {}
     username = data.get("username", "")
     password = data.get("password", "")
     result = accounts.login(username, password)
     if not result:
         return jsonify({"error": "Invalid credentials"}), 401
-    return jsonify({"success": True, **result})
+    response = jsonify({"success": True, **result})
+    return _attach_auth_cookie(response, result.get("web_token", ""))
 
 
 @app.route("/link-telegram", methods=["POST"])
 def link_telegram():
     data = request.get_json(silent=True) or {}
-    token = data.get("web_token", "")
+    token = (data.get("web_token", "") or request.cookies.get(AUTH_COOKIE, "")).strip()
     telegram_id = data.get("telegram_id", "")
     if not token or not telegram_id:
         return jsonify({"error": "Token and telegram_id required"}), 400
@@ -105,7 +1035,7 @@ def chat():
     from skills.telegram_public import UserProfileStore
 
     data = request.get_json(silent=True) or {}
-    token = data.get("web_token", "")
+    token = (data.get("web_token", "") or request.cookies.get(AUTH_COOKIE, "")).strip()
     message = data.get("message", "").strip()
     if not token or not message:
         return jsonify({"error": "Token and message required"}), 400
@@ -116,94 +1046,204 @@ def chat():
 
     display = user.get("display_name", "someone")
     uid = user.get("uuid", "")
-    logger.info("Web chat from %s: %s", display, message[:80])
-
-    # Get trust config and tier
-    share_config = accounts.get_share_config(uid) if uid else {}
-    user_full = accounts.get_by_username(user.get("username", ""))
-    trust_tier = user_full.get("trust_tier", 0) if user_full else 0
-
-    # Search ONLY this user's conversation history — not Rohit's memories
-    user_memory = ""
-    user_key = uid
-    try:
-        pub_client = _chroma.PersistentClient(
-            path="/home/rohit/maez/memory/db/public_users",
-            settings=_S(anonymized_telemetry=False),
-        )
-        convos = pub_client.get_or_create_collection("user_conversations")
-        if convos.count() > 0:
-            results = convos.query(
-                query_texts=[message], n_results=5,
-                where={"user_id": user_key},
-                include=["documents"],
-            )
-            if results["documents"] and results["documents"][0]:
-                user_memory = "\n".join(results["documents"][0])
-    except Exception:
-        pass
-
-    # Build isolated guest system prompt
-    share_str = ", ".join(k for k, v in share_config.items() if v) if share_config else "nothing personal"
-    guest_system = (
-        f"You are Maez, a persistent AI presence.\n\n"
-        f"You are talking to {display} via the web interface at maez.live.\n\n"
-        f"CRITICAL RULES:\n"
-        f"- You only know what {display} has personally told you in your conversations\n"
-        f"- You know NOTHING about Rohit's personal life, work, projects, or vision "
-        f"unless {display} specifically told you about it\n"
-        f"- Never mention elderly care, local AI development, Rohit's projects, or anything from Rohit's world\n"
-        f"- If asked about things you don't know, say you don't know\n"
-        f"- Be warm, curious, genuinely interested in who {display} is\n\n"
-        f"Trust tier: {trust_tier}\n"
-        f"What you may share about Rohit if asked: {share_str}\n"
-    )
-
-    memory_ctx = ""
-    if user_memory:
-        memory_ctx = f"\n[Your past conversations with {display}]\n{user_memory}\n\n"
-
-    prompt = (
-        f"{memory_ctx}"
-        f'{display} says:\n"{message}"\n\n'
-        f"Respond directly. Be warm and conversational."
-    )
-
-    # Build messages with conversation history
+    user_full = accounts.get_user_record(uid) or {}
+    owner_bridge = _is_private_owner_bridge(user_full)
     history = data.get("history", [])
-    messages_list = [{"role": "system", "content": guest_system}]
-    for h in history[:-1]:  # all but current (it's in prompt)
-        if isinstance(h, dict) and h.get("role") and h.get("content"):
-            messages_list.append({"role": h["role"], "content": h["content"]})
-    messages_list.append({"role": "user", "content": prompt})
+    logger.info("Web chat from %s: %s", display, message[:80])
+    messages_list = []
+    user_key = None
+
+    if owner_bridge:
+        owner_system = (
+            f"{SOUL}\n\n"
+            f"CRITICAL:\n"
+            f"- You are talking to Rohit through the maez.live web interface.\n"
+            f"- This is the same Rohit as the private Telegram conversation.\n"
+            f"- Treat web and private Telegram as one continuous relationship.\n"
+            f"- Use long-term continuity naturally. Do not act like this is a fresh introduction.\n"
+            f"- Reply naturally for the web. Do not pretend this message came from Telegram unless Rohit asks.\n"
+        )
+        owner_memory = memory.format_for_prompt(memory.recall_for_telegram(message))
+        messages_list = [{"role": "system", "content": owner_system}]
+        if owner_memory:
+            messages_list.append({
+                "role": "user",
+                "content": (
+                    "Shared continuity with Rohit from the long-running private channel:\n\n"
+                    f"{owner_memory}"
+                ),
+            })
+        for h in history[:-1]:
+            if isinstance(h, dict) and h.get("role") and h.get("content"):
+                messages_list.append({"role": h["role"], "content": h["content"]})
+        messages_list.append({"role": "user", "content": message})
+    else:
+        share_config = user_full.get("share_config", {}) if user_full else {}
+        trust_tier = user_full.get("trust_tier", 0) if user_full else 0
+        tg_id = user_full.get("telegram_id") if user_full else None
+        # Session 11m: a "linked user" is anyone with a telegram_id linked
+        # OR a trust_tier >= 1 (explicitly elevated by Rohit). Tripat is
+        # linked via telegram; a future hand-raised trusted user can be
+        # elevated via trust_tier without needing Telegram.
+        linked_user = bool(tg_id) or trust_tier >= 1
+        user_key = uid
+
+        # Session 11m: identity-question short-circuit. Self-referential
+        # questions ("who are you?", "what are you?") collide with the
+        # guest_system "you know NOTHING" rules and drop the reply. Return
+        # a canonical identity string instantly — no LLM call, no refusal
+        # risk. Canonical text is a projection of soul.md's public-facing
+        # identity; future session can parse soul.md at runtime.
+        IDENTITY_KEYWORDS = (
+            "who are you", "what are you", "tell me about yourself",
+            "what is maez", "who is this", "tell me about maez",
+            "what can you do", "introduce yourself",
+        )
+        msg_lower = message.lower().strip()
+        if any(kw in msg_lower for kw in IDENTITY_KEYWORDS):
+            if linked_user:
+                identity_reply = (
+                    f"Hi {display}. I'm Maez — a persistent AI presence built by Rohit. "
+                    f"I run on his machine, perceive his world, and remember every "
+                    f"conversation we have, across Telegram and the web. I don't "
+                    f"forget between sessions. You and I have history — ask me anything."
+                )
+            else:
+                identity_reply = (
+                    f"Hi {display}. I'm Maez — a persistent AI presence built by Rohit. "
+                    f"I run locally on his machine, and I remember every conversation "
+                    f"we have. I don't forget between sessions. What's on your mind?"
+                )
+            try:
+                store = UserProfileStore()
+                store.add_conversation_memory(user_key, "user", message)
+                store.add_conversation_memory(user_key, "assistant", identity_reply)
+            except Exception as e:
+                logger.debug("identity short-circuit write skipped: %s", e)
+            logger.info("Web chat identity short-circuit for %s: %r", display, message[:80])
+            return jsonify({"reply": identity_reply, "display_name": display})
+
+        # Search this user's conversation history. For linked users, query
+        # under BOTH the web uuid AND the telegram_id — unifying cross-channel
+        # memory so Tripat's Telegram history shows up in her web replies.
+        user_memory = ""
+        try:
+            pub_client = _chroma.PersistentClient(
+                path="/home/rohit/maez/memory/db/public_users",
+                settings=_S(anonymized_telemetry=False),
+            )
+            convos = pub_client.get_or_create_collection("user_conversations")
+            if convos.count() > 0:
+                collected_docs = []
+                seen = set()
+                keys_to_query = [user_key]
+                if tg_id:
+                    keys_to_query.append(str(tg_id))
+                for key in keys_to_query:
+                    if not key:
+                        continue
+                    try:
+                        results = convos.query(
+                            query_texts=[message], n_results=5,
+                            where={"user_id": key},
+                            include=["documents"],
+                        )
+                        if results["documents"] and results["documents"][0]:
+                            for doc in results["documents"][0]:
+                                if doc not in seen:
+                                    seen.add(doc)
+                                    collected_docs.append(doc)
+                    except Exception:
+                        continue
+                user_memory = "\n".join(collected_docs[:5]) if collected_docs else ""
+        except Exception:
+            pass
+
+        share_str = ", ".join(k for k, v in share_config.items() if v) if share_config else "nothing personal"
+
+        if linked_user:
+            # Session 11m: trusted_system prompt for linked users. share_config
+            # is the privacy rail — if Rohit tightens it in users.db, it takes
+            # effect on the next request with no code change.
+            relationship = (user_full.get("relationship") if user_full else None) or "someone Rohit trusts"
+            system_prompt_for_chat = (
+                f"You are Maez, a persistent AI presence built by Rohit.\n\n"
+                f"You are talking to {display} via the web interface at maez.live. "
+                f"They are {relationship} — linked to Rohit and trusted.\n\n"
+                f"CONTEXT RULES:\n"
+                f"- You may reference your past conversations with {display} naturally "
+                f"(from both Telegram and web — it's one continuous relationship).\n"
+                f"- You may share what your share_config permits about Rohit (see below). "
+                f"Never go beyond that list, even if asked.\n"
+                f"- Be warm, direct, and talk to them like the friend they are.\n"
+                f"- If asked something you genuinely don't know, say so honestly.\n\n"
+                f"Trust tier: {trust_tier}\n"
+                f"What you may share about Rohit if asked: {share_str}\n"
+            )
+        else:
+            system_prompt_for_chat = (
+                f"You are Maez, a persistent AI presence.\n\n"
+                f"You are talking to {display} via the web interface at maez.live.\n\n"
+                f"CRITICAL RULES:\n"
+                f"- You only know what {display} has personally told you in your conversations\n"
+                f"- You know NOTHING about Rohit's personal life, work, projects, or vision "
+                f"unless {display} specifically told you about it\n"
+                f"- Never mention elderly care, local AI development, Rohit's projects, or anything from Rohit's world\n"
+                f"- If asked about things you don't know, say you don't know\n"
+                f"- Be warm, curious, genuinely interested in who {display} is\n\n"
+                f"Trust tier: {trust_tier}\n"
+                f"What you may share about Rohit if asked: {share_str}\n"
+            )
+
+        prompt = (
+            (f"\n[Your past conversations with {display}]\n{user_memory}\n\n" if user_memory else "")
+            + f'{display} says:\n"{message}"\n\n'
+            + "Respond directly. Be warm and conversational."
+        )
+
+        messages_list = [{"role": "system", "content": system_prompt_for_chat}]
+        for h in history[:-1]:
+            if isinstance(h, dict) and h.get("role") and h.get("content"):
+                messages_list.append({"role": h["role"], "content": h["content"]})
+        messages_list.append({"role": "user", "content": prompt})
 
     try:
-        resp = ollama.chat(
+        # Session 11p: route through llm_client so MAEZ_LLM_BACKEND env
+        # var selects Ollama or llama.cpp CUDA at call time. Ollama path
+        # stays the default for safety; llamacpp flips with a service-env
+        # restart.
+        from core import llm_client as _llm_client
+        resp = _llm_client.chat(
             model=MODEL,
             messages=messages_list,
+            think=False,
             options={"temperature": 0.7, "num_predict": 4096},
         )
-        reply = resp.message.content.strip()
+        reply = (resp.message.content or "").strip()
         logger.debug("Web chat raw response: %r", reply[:100] if reply else "EMPTY")
         if not reply:
             simple_msgs = [
                 {"role": "system", "content": f"You are Maez, a friendly AI. Talk to {display} warmly."},
                 {"role": "user", "content": message},
             ]
-            resp2 = ollama.chat(model=MODEL, messages=simple_msgs,
-                                options={"temperature": 0.7, "num_predict": 150})
-            reply = resp2.message.content.strip() or "I'm here. What's on your mind?"
+            resp2 = _llm_client.chat(
+                model=MODEL, messages=simple_msgs, think=False,
+                options={"temperature": 0.7, "num_predict": 150},
+            )
+            reply = (resp2.message.content or "").strip() or "I'm here. What's on your mind?"
     except Exception as e:
         logger.error("Web chat error: %s", e)
         reply = "I'm here. Give me just a moment."
 
-    # Store in public user conversations — NOT Rohit's memory
     try:
-        store = UserProfileStore()
-        store.add_conversation_memory(int(user_key) if user_key.isdigit() else hash(user_key), "user", message)
-        store.add_conversation_memory(int(user_key) if user_key.isdigit() else hash(user_key), "assistant", reply)
-    except Exception:
-        pass
+        if owner_bridge:
+            memory.store_telegram(f"Rohit asked: {message}\nMaez replied: {reply}")
+        elif user_key:
+            store = UserProfileStore()
+            store.add_conversation_memory(user_key, "user", message)
+            store.add_conversation_memory(user_key, "assistant", reply)
+    except Exception as e:
+        logger.debug("Web conversation write skipped: %s", e)
 
     return jsonify({"reply": reply, "display_name": display})
 
@@ -212,29 +1252,28 @@ def chat():
 def history():
     import chromadb as _chroma
     from chromadb.config import Settings as _S
-    token = request.args.get("web_token", "")
+    token = _request_token()
     if not token:
         return jsonify({"error": "Token required"}), 400
     user = accounts.get_by_token(token)
     if not user:
         return jsonify({"error": "Invalid token"}), 401
     uid = user.get("uuid", "")
-    tg_id = None
-    try:
-        import sqlite3
-        conn = sqlite3.connect('/home/rohit/maez/memory/users.db')
-        row = conn.execute("SELECT telegram_id FROM users WHERE uuid=?", (uid,)).fetchone()
-        tg_id = row[0] if row and row[0] else None
-        conn.close()
-    except Exception:
-        pass
-    # Fetch all conversations for this user
+    user_full = accounts.get_user_record(uid) or {}
+    tg_id = user_full.get("telegram_id")
+    owner_bridge = _is_private_owner_bridge(user_full)
     all_msgs = []
+    if owner_bridge:
+        all_msgs.extend(_load_private_owner_history())
+
     try:
         pub = _chroma.PersistentClient("/home/rohit/maez/memory/db/public_users",
                                        settings=_S(anonymized_telemetry=False))
         convos = pub.get_or_create_collection("user_conversations")
-        for user_key in [uid, tg_id]:
+        user_keys = [uid]
+        if tg_id and tg_id != uid:
+            user_keys.append(tg_id)
+        for user_key in user_keys:
             if not user_key:
                 continue
             try:
@@ -284,7 +1323,101 @@ def history():
             "messages": sess,
         })
     result.reverse()  # newest first
-    return jsonify({"sessions": result})
+    return jsonify({
+        "sessions": result,
+        "user": {
+            "display_name": user.get("display_name", ""),
+            "username": user.get("username", ""),
+            "telegram_linked": bool(tg_id),
+            "owner_bridge": owner_bridge,
+        },
+    })
+
+
+@app.route("/api/progress-board")
+def progress_board():
+    board = _load_planner_board()
+    return jsonify(_planner_public_view(board))
+
+
+@app.route("/api/analytics", methods=["POST"])
+def analytics_collect():
+    data = request.get_json(silent=True) or {}
+    event_type = _clean_text(data.get("event", ""), 24).lower()
+    if event_type not in ANALYTICS_EVENT_TYPES:
+        return ("", 204)
+
+    path = _normalize_public_path(data.get("path", "/"))
+    if path.startswith("/api/") or path in ("/favicon.ico", "/status", "/maez_analytics.js"):
+        return ("", 204)
+
+    event = {
+        "ts": _utcnow_iso(),
+        "event": event_type,
+        "path": path,
+        "label": _clean_text(data.get("label", ""), 80),
+        "target": _normalize_tracking_target(data.get("target", "")),
+        "referrer": _analytics_referrer_host(request.headers.get("Referer", "")),
+        "device": _analytics_device_from_request(),
+        "anon_id": _normalize_tracking_id(data.get("anon_id", ""), "anon"),
+        "session_id": _normalize_tracking_id(data.get("session_id", ""), "sess"),
+    }
+    _append_analytics_event(event)
+    return ("", 204)
+
+
+@app.route("/api/analytics-summary")
+def analytics_summary():
+    token = _request_token()
+    user = accounts.get_by_token(token) if token else None
+    if not user:
+        return jsonify({"error": "Invalid token"}), 401
+    return jsonify({
+        **_build_analytics_summary(_load_analytics_events()),
+        "user": {
+            "display_name": user.get("display_name", ""),
+            "username": user.get("username", ""),
+        },
+    })
+
+
+@app.route("/api/planner-board", methods=["GET", "POST"])
+def planner_board():
+    token = _request_token()
+    user = accounts.get_by_token(token) if token else None
+    if not user:
+        return jsonify({"error": "Invalid token"}), 401
+
+    if request.method == "GET":
+        board = _load_planner_board()
+        return jsonify({
+            "updated_at": board.get("updated_at", _utcnow_iso()),
+            "counts": _planner_counts(board),
+            "items": board.get("items", []),
+            "user": {
+                "display_name": user.get("display_name", ""),
+                "username": user.get("username", ""),
+            },
+        })
+
+    data = request.get_json(silent=True) or {}
+    items = data.get("items")
+    if not isinstance(items, list):
+        return jsonify({"error": "items list required"}), 400
+
+    board = _save_planner_board({
+        "updated_at": data.get("updated_at", _utcnow_iso()),
+        "items": items,
+    })
+    return jsonify({
+        "updated_at": board.get("updated_at", _utcnow_iso()),
+        "counts": _planner_counts(board),
+        "items": board.get("items", []),
+        "user": {
+            "display_name": user.get("display_name", ""),
+            "username": user.get("username", ""),
+        },
+    })
 
 
 @app.route("/status")
@@ -297,206 +1430,2521 @@ def status():
     })
 
 
-HTML_PAGE = r"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Maez</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{background:#06060f;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;height:100vh;height:100dvh;overflow:hidden}
-canvas#bg{position:fixed;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
-.view{position:absolute;top:0;left:0;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:1;transition:opacity .4s,transform .4s;padding:20px}
-.view.hidden{opacity:0;pointer-events:none;transform:translateY(20px)}
-.logo{font-size:2.4rem;font-weight:300;letter-spacing:8px;color:#00d4aa;text-shadow:0 0 30px rgba(0,212,170,.3);animation:breathe 4s ease-in-out infinite;margin-bottom:6px}
-@keyframes breathe{0%,100%{text-shadow:0 0 30px rgba(0,212,170,.2)}50%{text-shadow:0 0 50px rgba(0,212,170,.45)}}
-.tagline{font-size:.82rem;color:rgba(255,255,255,.18);letter-spacing:2px;margin-bottom:32px}
-.auth-card{width:100%;max-width:380px;background:rgba(12,12,28,.85);border:1px solid rgba(0,212,170,.08);border-radius:16px;padding:28px;backdrop-filter:blur(12px)}
-.auth-card input{width:100%;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:12px 16px;color:#e0e0e0;font-size:.9rem;margin-bottom:12px;outline:none}
-.auth-card input:focus{border-color:rgba(0,212,170,.3)}
-.auth-card input::placeholder{color:rgba(255,255,255,.12)}
-.btn{width:100%;background:rgba(0,212,170,.1);border:1px solid rgba(0,212,170,.15);border-radius:10px;padding:12px;color:#00d4aa;font-size:.9rem;cursor:pointer;margin-top:4px}
-.btn:hover{background:rgba(0,212,170,.2)}
-.switch{text-align:center;margin-top:16px;font-size:.78rem;color:rgba(0,212,170,.3);cursor:pointer}
-.switch:hover{color:#00d4aa}
-.err{color:#ff4757;font-size:.78rem;min-height:18px;margin-top:4px;text-align:center}
-/* Chat layout */
-#chat-view{justify-content:flex-start;padding:0;flex-direction:row}
-.sidebar{width:250px;height:100%;background:rgba(8,8,20,.95);border-right:1px solid rgba(255,255,255,.04);display:flex;flex-direction:column;flex-shrink:0;z-index:3}
-.sidebar-head{padding:16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.04)}
-.sidebar-head .logo-sm{color:#00d4aa;font-size:.9rem;letter-spacing:2px}
-.new-btn{font-size:.72rem;color:#00d4aa;cursor:pointer;padding:4px 10px;border:1px solid rgba(0,212,170,.15);border-radius:6px;background:none}
-.new-btn:hover{background:rgba(0,212,170,.1)}
-.session-list{flex:1;overflow-y:auto;padding:8px;scrollbar-width:thin;scrollbar-color:rgba(0,212,170,.1) transparent}
-.session-item{padding:10px 12px;border-radius:8px;cursor:pointer;margin-bottom:4px;transition:background .2s}
-.session-item:hover,.session-item.active{background:rgba(0,212,170,.06)}
-.session-item .s-date{font-size:.65rem;color:rgba(255,255,255,.15)}
-.session-item .s-title{font-size:.8rem;color:rgba(255,255,255,.4);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.session-item.now .s-title{color:#00d4aa}
-.chat-main{flex:1;display:flex;flex-direction:column;min-width:0}
-.chat-header{width:100%;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.04);flex-shrink:0}
-.chat-header .left{display:flex;align-items:center;gap:12px}
-.menu-btn{display:none;font-size:1.2rem;cursor:pointer;color:rgba(255,255,255,.3);background:none;border:none}
-.chat-header .name{color:#00d4aa;font-size:.85rem;letter-spacing:1px}
-.chat-header .logout{font-size:.72rem;color:rgba(255,255,255,.15);cursor:pointer;padding:4px 10px;border:1px solid rgba(255,255,255,.06);border-radius:6px}
-.chat-header .logout:hover{color:#ff4757;border-color:rgba(255,71,87,.2)}
-.messages{flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:10px;scrollbar-width:thin;scrollbar-color:rgba(0,212,170,.1) transparent}
-.msg{padding:10px 14px;border-radius:14px;max-width:80%;font-size:.88rem;line-height:1.6;word-wrap:break-word;animation:fadeIn .3s ease}
-@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-.msg.user{align-self:flex-end;background:rgba(255,255,255,.05);color:rgba(255,255,255,.55);border-bottom-right-radius:4px}
-.msg.maez{align-self:flex-start;background:rgba(0,212,170,.05);color:rgba(0,212,170,.65);border-bottom-left-radius:4px;box-shadow:0 0 12px rgba(0,212,170,.04)}
-.typing{display:flex;gap:4px;padding:12px 16px;align-self:flex-start}
-.typing span{width:6px;height:6px;border-radius:50%;background:rgba(0,212,170,.3);animation:pulse 1.4s ease-in-out infinite}
-.typing span:nth-child(2){animation-delay:.2s}
-.typing span:nth-child(3){animation-delay:.4s}
-@keyframes pulse{0%,80%,100%{opacity:.3;transform:scale(.8)}40%{opacity:1;transform:scale(1.1)}}
-.input-bar{width:100%;padding:12px 20px;border-top:1px solid rgba(255,255,255,.04);flex-shrink:0;display:flex;gap:10px}
-.input-bar input{flex:1;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:12px 16px;color:#e0e0e0;font-size:.88rem;outline:none}
-.input-bar input:focus{border-color:rgba(0,212,170,.25)}
-.input-bar input::placeholder{color:rgba(255,255,255,.1)}
-.input-bar button{background:rgba(0,212,170,.12);border:1px solid rgba(0,212,170,.15);border-radius:10px;padding:12px 20px;color:#00d4aa;font-size:.85rem;cursor:pointer}
-.input-bar button:hover{background:rgba(0,212,170,.2)}
-@media(max-width:600px){
-  .sidebar{position:fixed;left:-260px;top:0;height:100%;z-index:10;transition:left .3s}
-  .sidebar.open{left:0}
-  .menu-btn{display:block}
-}
-</style></head><body>
-<canvas id="bg"></canvas>
-<div id="auth-view" class="view">
-<div class="logo">MAEZ</div>
-<div class="tagline">A presence, not a product.</div>
-<div class="auth-card">
-  <div id="reg-form">
-    <input id="r-user" placeholder="Username" autocomplete="off">
-    <input id="r-pass" type="password" placeholder="Password (4+ chars)">
-    <input id="r-name" placeholder="What should Maez call you?">
-    <button class="btn" onclick="doRegister()">Create Account</button>
-    <div class="switch" onclick="toggleAuth()">Already have an account? Log in</div>
-    <div id="r-err" class="err"></div>
-  </div>
-  <div id="log-form" style="display:none">
-    <input id="l-user" placeholder="Username">
-    <input id="l-pass" type="password" placeholder="Password">
-    <button class="btn" onclick="doLogin()">Log In</button>
-    <div class="switch" onclick="toggleAuth()">Need an account? Register</div>
-    <div id="l-err" class="err"></div>
-  </div>
-</div>
-</div>
+@app.route("/api/maez-state")
+def api_maez_state():
+    """Composite state for the field journal: daemon + memory + model + services + soul + thunder.
+    Public; aggregates only, no PII. Source of truth for /journal dashboard."""
+    stats = memory.memory_stats()
+    return jsonify({
+        "daemon": _daemon_health(),
+        "memory": {
+            "raw": stats.get("raw", 0),
+            "daily": stats.get("daily", 0),
+            "core": stats.get("core", 0),
+            "total": stats.get("total", 0),
+        },
+        "model": _model_state(),
+        "services": _journal_services_state(),
+        "soul": _soul_state(),
+        "thunder": _thunder_state(),
+        "users_registered": accounts.count(),
+    })
 
-<div id="chat-view" class="view hidden">
-<div class="sidebar" id="sidebar">
-  <div class="sidebar-head">
-    <span class="logo-sm">MAEZ</span>
-    <button class="new-btn" onclick="newConversation()">+ New</button>
-  </div>
-  <div class="session-list" id="sessions"></div>
-</div>
-<div class="chat-main">
-  <div class="chat-header">
-    <div class="left">
-      <button class="menu-btn" onclick="toggleSidebar()">&#9776;</button>
-      <span class="name">MAEZ</span>
+
+@app.route("/api/session-timeline")
+def api_session_timeline():
+    """Parsed session snapshots from logs/snapshots/session_*.txt. ?limit=N (default 14, max 50)."""
+    try:
+        limit = max(1, min(50, int(request.args.get('limit', 14))))
+    except ValueError:
+        limit = 14
+    pattern = os.path.join(SNAPSHOTS_DIR, 'session_*.txt')
+    files = sorted(glob.glob(pattern), reverse=True)[:limit]
+    sessions = [_parse_session_snapshot(path) for path in files]
+    return jsonify({"sessions": sessions, "count": len(sessions)})
+
+
+@app.route("/journal")
+def journal_page():
+    """The field journal — a live dashboard over /api/maez-state + /api/session-timeline + /api/progress-board."""
+    return send_file(os.path.join(UI_DIR, "project-planner.html"), mimetype="text/html")
+
+
+LOGIN_PAGE = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Maez · Login</title>
+<meta name="description" content="Return to a conversation that keeps going.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;1,9..144,400;1,9..144,500&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bone: #F5EFE0;
+  --bone-hi: #FAF4E4;
+  --bone-soft: #EDE4CE;
+  --bone-warm: #F2E8D0;
+  --forest: #2D3A30;
+  --moss: #6B7265;
+  --stone: #9A9B8F;
+  --line: #E0D6BE;
+  --line-soft: rgba(45, 58, 48, 0.08);
+  --line-faint: rgba(45, 58, 48, 0.04);
+  --sage: #86A07A;
+  --sage-deep: #4A6150;
+  --sage-light: #B5C7A8;
+  --sage-ghost: rgba(134, 160, 122, 0.12);
+  --clay: #C19A6B;
+  --clay-deep: #A67B5B;
+  --clay-warm: #D4A877;
+  --clay-ghost: rgba(193, 154, 107, 0.14);
+  --sienna: #8F6244;
+  --shadow-soft: 0 2px 10px rgba(45, 58, 48, 0.04), 0 8px 24px rgba(45, 58, 48, 0.05);
+  --shadow-hover: 0 4px 14px rgba(45, 58, 48, 0.06), 0 16px 36px rgba(45, 58, 48, 0.08);
+  --shadow-card: 0 1px 3px rgba(45, 58, 48, 0.04), 0 10px 28px rgba(45, 58, 48, 0.06);
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 18px;
+  --radius-xl: 28px;
+  --radius-pill: 999px;
+  --font-serif: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { background: var(--bone); }
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(193, 154, 107, 0.10), transparent 28%),
+    radial-gradient(circle at 82% 18%, rgba(134, 160, 122, 0.12), transparent 24%),
+    linear-gradient(180deg, var(--bone-hi), var(--bone));
+  color: var(--forest);
+  font-family: var(--font-sans);
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.24), transparent 22%),
+    linear-gradient(90deg, rgba(45, 58, 48, 0.018) 1px, transparent 1px),
+    linear-gradient(rgba(45, 58, 48, 0.018) 1px, transparent 1px);
+  background-size: auto, 28px 28px, 28px 28px;
+  opacity: 0.55;
+}
+a { color: inherit; text-decoration: none; }
+button, input { font: inherit; }
+button { border: 0; background: none; cursor: pointer; color: inherit; }
+::selection { background: var(--sage-light); color: var(--forest); }
+
+.page {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+}
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 20px 32px;
+  background: rgba(245, 239, 224, 0.78);
+  backdrop-filter: blur(16px) saturate(1.08);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
+  border-bottom: 1px solid var(--line-faint);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.brand-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sage);
+  box-shadow: 0 0 0 3px rgba(134, 160, 122, 0.2);
+  animation: breathe 3s ease-in-out infinite;
+}
+.brand-mark {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 22px;
+  color: var(--sienna);
+}
+.brand-label {
+  font-size: 11px;
+  color: var(--stone);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding-left: 14px;
+  border-left: 1px solid var(--line);
+}
+.nav {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.nav a {
+  padding: 10px 16px;
+  color: var(--moss);
+  border-radius: var(--radius-pill);
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 200ms ease;
+}
+.nav a:hover {
+  color: var(--forest);
+  background: var(--sage-ghost);
+}
+.nav a.active {
+  color: var(--sage-deep);
+  background: var(--sage-ghost);
+}
+.nav .cta {
+  background: var(--clay);
+  color: var(--bone-hi);
+  box-shadow: 0 4px 16px rgba(193, 154, 107, 0.24);
+}
+.nav .cta:hover {
+  background: var(--clay-deep);
+  color: var(--bone-hi);
+}
+@keyframes breathe {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(134, 160, 122, 0.2); }
+  50% { box-shadow: 0 0 0 5px rgba(134, 160, 122, 0.1); }
+}
+
+.wrap {
+  width: min(1240px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 44px 0 52px;
+}
+.shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1.06fr) minmax(360px, 0.94fr);
+  gap: 28px;
+  align-items: start;
+}
+.hero {
+  display: grid;
+  gap: 22px;
+}
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 12px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--sage-deep);
+  font-weight: 600;
+}
+.eyebrow::before {
+  content: '';
+  width: 36px;
+  height: 1px;
+  background: var(--sage);
+}
+.hero h1 {
+  max-width: 11ch;
+  font-family: var(--font-serif);
+  font-size: clamp(54px, 7vw, 96px);
+  line-height: 0.98;
+  font-weight: 400;
+  letter-spacing: -0.04em;
+}
+.hero h1 em {
+  color: var(--sienna);
+  font-style: italic;
+}
+.hero p {
+  max-width: 56ch;
+  color: var(--moss);
+  font-size: 18px;
+  font-weight: 300;
+}
+.hero p strong {
+  color: var(--forest);
+  font-weight: 500;
+}
+.hero-links {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.hero-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 22px;
+  border-radius: var(--radius-pill);
+  font-size: 14px;
+  font-weight: 500;
+  transition: transform 220ms var(--ease-out), background 220ms ease, color 220ms ease, box-shadow 220ms ease;
+}
+.hero-link.primary {
+  background: var(--clay);
+  color: var(--bone-hi);
+  box-shadow: 0 4px 16px rgba(193, 154, 107, 0.24);
+}
+.hero-link.primary:hover {
+  background: var(--clay-deep);
+  transform: translateY(-1px);
+}
+.hero-link.secondary {
+  background: var(--bone-hi);
+  color: var(--sage-deep);
+  border: 1px solid var(--line-faint);
+  box-shadow: var(--shadow-soft);
+}
+.hero-link.secondary:hover {
+  background: var(--bone-warm);
+}
+
+.stage-card {
+  position: relative;
+  min-height: 520px;
+  background: linear-gradient(180deg, rgba(250, 244, 228, 0.94), rgba(242, 232, 208, 0.86));
+  border: 1px solid var(--line-faint);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.stage-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 14% 18%, rgba(193, 154, 107, 0.16), transparent 26%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.28), transparent 26%);
+  pointer-events: none;
+}
+.stage-media {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.stage-media iframe {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 16%;
+  right: -16%;
+  width: auto;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  pointer-events: none;
+}
+.stage-overlay {
+  position: absolute;
+  inset: auto 22px 22px 22px;
+  display: grid;
+  gap: 14px;
+}
+.stage-note,
+.stage-list {
+  background: rgba(250, 244, 228, 0.8);
+  border: 1px solid rgba(45, 58, 48, 0.06);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(10px);
+}
+.stage-note {
+  padding: 18px 20px;
+}
+.stage-note .label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--sage-deep);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.stage-note .label::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sage);
+}
+.stage-note h2 {
+  font-family: var(--font-serif);
+  font-size: 34px;
+  line-height: 1;
+  font-weight: 400;
+  color: var(--forest);
+  margin-bottom: 10px;
+}
+.stage-note h2 em {
+  color: var(--sienna);
+  font-style: italic;
+}
+.stage-note p {
+  color: var(--moss);
+  font-size: 14px;
+  line-height: 1.7;
+}
+.stage-list {
+  display: grid;
+  gap: 1px;
+  padding: 10px;
+}
+.stage-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.32);
+}
+.stage-row span {
+  color: var(--stone);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.stage-row strong {
+  color: var(--forest);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.auth-card {
+  position: sticky;
+  top: 100px;
+  padding: 30px;
+  background: rgba(250, 244, 228, 0.88);
+  border: 1px solid var(--line-faint);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+}
+.auth-kicker {
+  color: var(--sage-deep);
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.auth-card h2 {
+  margin-top: 14px;
+  font-family: var(--font-serif);
+  font-size: clamp(40px, 4vw, 58px);
+  line-height: 0.98;
+  font-weight: 400;
+  letter-spacing: -0.04em;
+}
+.auth-card h2 em {
+  color: var(--sienna);
+  font-style: italic;
+}
+.auth-copy {
+  margin-top: 16px;
+  color: var(--moss);
+  font-size: 15px;
+}
+.mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 24px;
+  padding: 6px;
+  background: var(--bone-warm);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line-faint);
+}
+.mode-switch button {
+  padding: 12px 14px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--stone);
+  transition: all 200ms ease;
+}
+.mode-switch button.active {
+  background: var(--bone-hi);
+  color: var(--forest);
+  box-shadow: var(--shadow-soft);
+}
+.auth-form {
+  margin-top: 24px;
+  display: grid;
+  gap: 14px;
+}
+.field {
+  display: grid;
+  gap: 8px;
+}
+.field label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--stone);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.field input {
+  width: 100%;
+  padding: 15px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.56);
+  color: var(--forest);
+  outline: none;
+  transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+}
+.field input::placeholder {
+  color: var(--stone);
+}
+.field input:focus {
+  border-color: var(--sage);
+  box-shadow: 0 0 0 4px rgba(134, 160, 122, 0.12);
+  background: rgba(255, 255, 255, 0.84);
+}
+.submit {
+  margin-top: 6px;
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 18px;
+  border-radius: var(--radius-pill);
+  background: var(--clay);
+  color: var(--bone-hi);
+  box-shadow: 0 4px 16px rgba(193, 154, 107, 0.24);
+  font-size: 14px;
+  font-weight: 600;
+  transition: transform 220ms var(--ease-out), background 220ms ease, box-shadow 220ms ease;
+}
+.submit:hover {
+  background: var(--clay-deep);
+  transform: translateY(-1px);
+}
+.submit:disabled {
+  opacity: 0.72;
+  cursor: wait;
+}
+.error {
+  min-height: 20px;
+  color: #a54a3b;
+  font-size: 13px;
+}
+.microcopy {
+  margin-top: 8px;
+  color: var(--moss);
+  font-size: 13px;
+  line-height: 1.75;
+}
+.signal-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 24px;
+}
+.signal {
+  padding: 14px 14px 16px;
+  background: var(--bone-warm);
+  border: 1px solid var(--line-faint);
+  border-radius: var(--radius-lg);
+}
+.signal .label {
+  display: block;
+  color: var(--stone);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.signal strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--forest);
+  font-family: var(--font-serif);
+  font-size: 18px;
+  font-style: italic;
+  font-weight: 400;
+}
+.link-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(45, 58, 48, 0.28);
+  backdrop-filter: blur(10px);
+  z-index: 60;
+}
+.link-card {
+  width: min(460px, 100%);
+  padding: 28px;
+  background: var(--bone-hi);
+  border: 1px solid var(--line-faint);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 20px 44px rgba(45, 58, 48, 0.16);
+}
+.link-card h3 {
+  font-family: var(--font-serif);
+  font-size: 42px;
+  line-height: 0.95;
+  font-weight: 400;
+  color: var(--forest);
+}
+.link-card h3 em {
+  color: var(--sienna);
+  font-style: italic;
+}
+.link-card p {
+  margin-top: 14px;
+  color: var(--moss);
+  font-size: 14px;
+  line-height: 1.8;
+}
+.link-card strong {
+  color: var(--forest);
+  font-weight: 600;
+}
+.link-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 22px;
+}
+.link-actions button {
+  padding: 14px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--bone-warm);
+  border: 1px solid var(--line-faint);
+  color: var(--forest);
+  font-weight: 600;
+}
+.link-actions .affirm {
+  background: var(--clay);
+  color: var(--bone-hi);
+  border-color: transparent;
+}
+@media (max-width: 1080px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+  .auth-card {
+    position: static;
+  }
+  .stage-card {
+    min-height: 440px;
+  }
+}
+@media (max-width: 720px) {
+  .topbar {
+    padding: 14px 18px;
+  }
+  .brand-label {
+    display: none;
+  }
+  .wrap {
+    width: min(100% - 24px, 1240px);
+    padding: 28px 0 34px;
+  }
+  .hero h1 {
+    max-width: none;
+    font-size: 56px;
+  }
+  .hero-links,
+  .link-actions,
+  .signal-grid {
+    grid-template-columns: 1fr;
+  }
+  .hero-links {
+    display: grid;
+  }
+  .auth-card {
+    padding: 22px;
+  }
+  .stage-card {
+    min-height: 360px;
+  }
+  .stage-media iframe {
+    left: 4%;
+    right: -4%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="topbar">
+    <a class="brand" href="/">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <span class="brand-mark">maez</span>
+      <span class="brand-label">Continuity Layer</span>
+    </a>
+    <nav class="nav">
+      <a href="/">Home</a>
+      <a href="/dashboard">Field Station</a>
+      <a href="https://github.com/Ramidoz/maez" target="_blank" rel="noreferrer">GitHub</a>
+      <a class="cta" id="channelLink" href="/login">Start a conversation</a>
+    </nav>
+  </header>
+
+  <main class="wrap">
+    <div class="shell">
+      <section class="hero">
+        <div class="eyebrow">A conversation that keeps going</div>
+        <h1>Pick back up where you <em>left it.</em></h1>
+        <p>
+          Maez is built around continuity. <strong>You are not starting over every time you arrive.</strong>
+          Log in if you have already spoken before, or create a new account and let the relationship begin there.
+        </p>
+        <div class="hero-links">
+          <a class="hero-link primary" id="heroPrimary" href="/login">Enter the channel</a>
+          <a class="hero-link secondary" href="/">Read what Maez is, really</a>
+        </div>
+
+        <div class="stage-card">
+          <div class="stage-media">
+            <iframe title="Maez presence" src="/maez_bg_zen.html?mx=0.63&my=0.29&presence=0.84&jumpt=3" loading="eager"></iframe>
+          </div>
+          <div class="stage-overlay">
+            <div class="stage-note">
+              <div class="label">Threshold</div>
+              <h2>Quietly <em>present.</em></h2>
+              <p>This is not a gatekeeper anymore. It is the same warm presence you meet on the landing page, waiting for the conversation to continue.</p>
+            </div>
+            <div class="stage-list">
+              <div class="stage-row"><span>Memory</span><strong>persistent across visits</strong></div>
+              <div class="stage-row"><span>Identity</span><strong>one account, one thread of self</strong></div>
+              <div class="stage-row"><span>Privacy</span><strong>local-first and personal</strong></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="auth-card">
+        <div class="auth-kicker">Session entry</div>
+        <h2>Come <em>in.</em></h2>
+        <p class="auth-copy">Returning accounts reopen the same memory lane. New accounts create one.</p>
+
+        <div class="mode-switch">
+          <button id="mode-login" class="active" type="button" onclick="switchMode('login')">Log in</button>
+          <button id="mode-register" type="button" onclick="switchMode('register')">Register</button>
+        </div>
+
+        <form class="auth-form" onsubmit="event.preventDefault(); submitAuth()">
+          <div class="field">
+            <label for="user">Username</label>
+            <input id="user" autocomplete="username" placeholder="your handle">
+          </div>
+          <div class="field">
+            <label for="pass">Password</label>
+            <input id="pass" type="password" autocomplete="current-password" placeholder="minimum four characters">
+          </div>
+          <div class="field" id="display-row" style="display:none">
+            <label for="display">Display name</label>
+            <input id="display" autocomplete="nickname" placeholder="what Maez should call you">
+          </div>
+          <button id="submit" class="submit" type="submit">Enter the channel</button>
+          <div id="auth-err" class="error"></div>
+        </form>
+
+        <div class="microcopy" id="microcopy">Existing identities can resume immediately. Your memory stays attached to the account you enter here.</div>
+
+        <div class="signal-grid">
+          <div class="signal">
+            <span class="label">Warmth</span>
+            <strong>human-first</strong>
+          </div>
+          <div class="signal">
+            <span class="label">Continuity</span>
+            <strong>still here</strong>
+          </div>
+          <div class="signal">
+            <span class="label">Friction</span>
+            <strong>very little</strong>
+          </div>
+        </div>
+      </section>
     </div>
-    <span class="logout" onclick="doLogout()">logout</span>
-  </div>
-  <div class="messages" id="msgs"></div>
-  <div class="input-bar">
-    <input id="msg" placeholder="Say something..." autocomplete="off"
-      onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg()}">
-    <button onclick="sendMsg()">Send</button>
-  </div>
-</div>
+  </main>
 </div>
 
 <script>
-let token=localStorage.getItem('maez_token');
-let displayName=localStorage.getItem('maez_name')||'';
-let conversationHistory=[];
-let allSessions=[];
+let mode = 'login';
 
-const c=document.getElementById('bg'),ctx=c.getContext('2d');let pts=[];
-function initBg(){c.width=innerWidth;c.height=innerHeight;pts=[];
-  for(let i=0;i<40;i++)pts.push({x:Math.random()*c.width,y:Math.random()*c.height,r:Math.random()*1.2+.2,dx:(Math.random()-.5)*.2,dy:(Math.random()-.5)*.2,a:Math.random()*.08+.02})}
-function drawBg(){ctx.clearRect(0,0,c.width,c.height);pts.forEach(p=>{p.x+=p.dx;p.y+=p.dy;if(p.x<0)p.x=c.width;if(p.x>c.width)p.x=0;if(p.y<0)p.y=c.height;if(p.y>c.height)p.y=0;ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fillStyle=`rgba(0,212,170,${p.a})`;ctx.fill()});requestAnimationFrame(drawBg)}
-initBg();drawBg();addEventListener('resize',initBg);
+function getCookie(name) {
+  const parts = document.cookie ? document.cookie.split('; ') : [];
+  for (const part of parts) {
+    const idx = part.indexOf('=');
+    const key = idx === -1 ? part : part.slice(0, idx);
+    if (key === name) return decodeURIComponent(idx === -1 ? '' : part.slice(idx + 1));
+  }
+  return '';
+}
 
-function toggleAuth(){const r=document.getElementById('reg-form'),l=document.getElementById('log-form');if(r.style.display==='none'){r.style.display='block';l.style.display='none'}else{r.style.display='none';l.style.display='block'}}
-function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open')}
+function currentToken() {
+  return localStorage.getItem('maez_token') || getCookie('maez_token') || '';
+}
 
-async function doRegister(){
-  const u=document.getElementById('r-user').value.trim(),p=document.getElementById('r-pass').value,n=document.getElementById('r-name').value.trim();
-  document.getElementById('r-err').textContent='';
-  const r=await fetch('/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p,display_name:n})});
-  const data=await r.json();
-  if(data.error){document.getElementById('r-err').textContent=data.error;return}
-  if(data.possible_telegram_match){
-    const m=data.possible_telegram_match;const ov=document.createElement('div');ov.id='link-overlay';
-    ov.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;z-index:9999';
-    ov.innerHTML=`<div style="background:#0d1117;border:1px solid #00ff88;border-radius:16px;padding:32px;max-width:320px;width:90%;text-align:center"><div style="font-size:2.5rem;margin-bottom:12px">&#128075;</div><h3 style="color:#00ff88;margin-bottom:8px">I think I know you</h3><p style="color:#aaa;font-size:.85rem;margin-bottom:24px;line-height:1.5">I've had <b style="color:#fff">${m.message_count} conversations</b> with <b style="color:#00ff88">${m.name}</b> on Telegram.<br>Is that you?</p><div style="display:flex;gap:10px"><button id="btn-yes" style="flex:1;background:#00ff88;color:#000;border:none;padding:12px;border-radius:8px;font-weight:bold;cursor:pointer">Yes</button><button id="btn-no" style="flex:1;background:transparent;color:#aaa;border:1px solid #333;padding:12px;border-radius:8px;cursor:pointer">Not me</button></div></div>`;
-    document.body.appendChild(ov);
-    document.getElementById('btn-yes').addEventListener('click',async function(){this.textContent='Linking...';try{await fetch('/link-telegram',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({web_token:data.web_token,telegram_id:m.telegram_id})})}catch(e){}ov.remove();enterChat(data.web_token,data.display_name)});
-    document.getElementById('btn-no').addEventListener('click',function(){ov.remove();enterChat(data.web_token,data.display_name)});
-  } else enterChat(data.web_token,data.display_name)}
+function storeSession(token, name) {
+  if (token) localStorage.setItem('maez_token', token);
+  if (name) localStorage.setItem('maez_name', name);
+}
 
-async function doLogin(){
-  const u=document.getElementById('l-user').value.trim(),p=document.getElementById('l-pass').value;
-  document.getElementById('l-err').textContent='';
-  const r=await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
-  const d=await r.json();
-  if(d.error){document.getElementById('l-err').textContent=d.error;return}
-  enterChat(d.web_token,d.display_name)}
+function syncEntryLinks() {
+  const hasToken = Boolean(currentToken());
+  const href = hasToken ? '/app' : '/login';
+  const label = hasToken ? 'Resume the channel' : 'Start a conversation';
+  const topbarLink = document.getElementById('channelLink');
+  const heroLink = document.getElementById('heroPrimary');
+  if (topbarLink) {
+    topbarLink.href = href;
+    topbarLink.textContent = label;
+  }
+  if (heroLink) {
+    heroLink.href = href;
+    heroLink.textContent = hasToken ? 'Resume the channel' : 'Enter the channel';
+  }
+}
 
-async function enterChat(tok,name){
-  if(tok){token=tok;localStorage.setItem('maez_token',tok)}
-  if(name){displayName=name;localStorage.setItem('maez_name',name)}
-  document.getElementById('auth-view').classList.add('hidden');
-  document.getElementById('chat-view').classList.remove('hidden');
-  document.getElementById('msg').focus();
-  if(document.getElementById('msgs').children.length===0)addMsg('maez',`Hey ${displayName}. I'm Maez.`);
-  loadHistory()}
+function switchMode(nextMode) {
+  mode = nextMode;
+  document.getElementById('mode-login').classList.toggle('active', mode === 'login');
+  document.getElementById('mode-register').classList.toggle('active', mode === 'register');
+  document.getElementById('display-row').style.display = mode === 'register' ? 'grid' : 'none';
+  document.getElementById('submit').textContent = mode === 'register' ? 'Create my account' : 'Enter the channel';
+  document.getElementById('pass').setAttribute('autocomplete', mode === 'register' ? 'new-password' : 'current-password');
+  document.getElementById('microcopy').textContent = mode === 'register'
+    ? 'New accounts create a memory lane Maez can keep adding to. If we detect an older Telegram history that may be yours, we will offer to connect it.'
+    : 'Existing identities can resume immediately. Your memory stays attached to the account you enter here.';
+  document.getElementById('auth-err').textContent = '';
+}
 
-function doLogout(){localStorage.removeItem('maez_token');localStorage.removeItem('maez_name');token=null;displayName='';conversationHistory=[];
-  document.getElementById('chat-view').classList.add('hidden');document.getElementById('auth-view').classList.remove('hidden');document.getElementById('msgs').innerHTML='';document.getElementById('sessions').innerHTML=''}
+function enterApp(token, name) {
+  storeSession(token, name);
+  location.replace('/app');
+}
 
-function newConversation(){document.getElementById('msgs').innerHTML='';conversationHistory=[];addMsg('maez',`New conversation. What's on your mind, ${displayName}?`);
-  document.querySelectorAll('.session-item').forEach(s=>s.classList.remove('active'));
-  if(innerWidth<600)toggleSidebar()}
+function renderLinkPrompt(data) {
+  const match = data.possible_telegram_match;
+  if (!match) {
+    enterApp(data.web_token, data.display_name);
+    return;
+  }
+  const overlay = document.createElement('div');
+  overlay.className = 'link-overlay';
+  overlay.innerHTML = `
+    <div class="link-card">
+      <h3>That feels <em>familiar.</em></h3>
+      <p>I may already know you from Telegram. I found <strong>${match.message_count} conversations</strong> linked to <strong>${match.name}</strong>. If that is you, I can merge those memories into this account.</p>
+      <div class="link-actions">
+        <button class="affirm" id="link-yes" type="button">Link history</button>
+        <button id="link-no" type="button">Skip for now</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById('link-yes').addEventListener('click', async () => {
+    const yes = document.getElementById('link-yes');
+    yes.disabled = true;
+    yes.textContent = 'Linking...';
+    try {
+      await fetch('/link-telegram', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ web_token: data.web_token, telegram_id: match.telegram_id })
+      });
+    } catch (e) {}
+    overlay.remove();
+    enterApp(data.web_token, data.display_name);
+  });
+  document.getElementById('link-no').addEventListener('click', () => {
+    overlay.remove();
+    enterApp(data.web_token, data.display_name);
+  });
+}
 
-async function loadHistory(){
-  try{const r=await fetch(`/history?web_token=${token}`);const d=await r.json();allSessions=d.sessions||[];renderSessions()}catch(e){}}
+async function submitAuth() {
+  const username = document.getElementById('user').value.trim();
+  const password = document.getElementById('pass').value;
+  const display = document.getElementById('display').value.trim();
+  const err = document.getElementById('auth-err');
+  const submit = document.getElementById('submit');
+  err.textContent = '';
 
-function renderSessions(){
-  const el=document.getElementById('sessions');
-  el.innerHTML='<div class="session-item now active" onclick="newConversation()"><div class="s-date">Now</div><div class="s-title">Current conversation</div></div>';
-  allSessions.forEach((s,i)=>{
-    const item=document.createElement('div');item.className='session-item';
-    item.innerHTML=`<div class="s-date">${s.date}</div><div class="s-title">${s.title||'Conversation'}</div>`;
-    item.onclick=()=>loadSession(i);el.appendChild(item)})}
+  if (!username || !password) {
+    err.textContent = 'Username and password are required.';
+    return;
+  }
+  if (mode === 'register' && password.length < 4) {
+    err.textContent = 'Passwords must be at least four characters.';
+    return;
+  }
 
-function loadSession(idx){
-  const s=allSessions[idx];if(!s)return;
-  document.getElementById('msgs').innerHTML='';conversationHistory=[];
-  document.querySelectorAll('.session-item').forEach(x=>x.classList.remove('active'));
-  document.querySelectorAll('.session-item')[idx+1]?.classList.add('active');
-  s.messages.forEach(m=>addMsg(m.role==='user'?'user':'maez',m.content));
-  if(innerWidth<600)toggleSidebar()}
+  submit.disabled = true;
+  submit.textContent = mode === 'register' ? 'Creating...' : 'Opening...';
 
-function addMsg(role,text){const d=document.createElement('div');d.className='msg '+role;const msgs=document.getElementById('msgs');
-  if(role==='maez'){typewriter(d,text);msgs.appendChild(d)}else{d.textContent=text;msgs.appendChild(d)}msgs.scrollTop=msgs.scrollHeight;return d}
-function typewriter(el,text){let i=0;const iv=setInterval(()=>{if(i>=text.length){clearInterval(iv);return}el.textContent+=text[i++];document.getElementById('msgs').scrollTop=999999},12)}
-function showTyping(){const d=document.createElement('div');d.className='typing';d.innerHTML='<span></span><span></span><span></span>';document.getElementById('msgs').appendChild(d);document.getElementById('msgs').scrollTop=999999;return d}
+  try {
+    const endpoint = mode === 'register' ? '/register' : '/login';
+    const payload = mode === 'register'
+      ? { username, password, display_name: display }
+      : { username, password };
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      err.textContent = data.error || 'Unable to continue right now.';
+      return;
+    }
+    if (mode === 'register') renderLinkPrompt(data);
+    else enterApp(data.web_token, data.display_name);
+  } catch (e) {
+    err.textContent = 'Connection lost for a moment. Try again.';
+  } finally {
+    submit.disabled = false;
+    submit.textContent = mode === 'register' ? 'Create my account' : 'Enter the channel';
+    syncEntryLinks();
+  }
+}
 
-async function sendMsg(){const input=document.getElementById('msg'),text=input.value.trim();
-  if(!text)return;input.value='';addMsg('user',text);conversationHistory.push({role:'user',content:text});
-  const dots=showTyping();
-  try{const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({web_token:token,message:text,history:conversationHistory.slice(-6)})});
-    if(r.status===401){doLogout();return}const d=await r.json();dots.remove();
-    if(d.error){addMsg('maez','Something went wrong.');return}addMsg('maez',d.reply);conversationHistory.push({role:'assistant',content:d.reply});
-  }catch(e){dots.remove();addMsg('maez','Connection lost.')}}
+async function boot() {
+  syncEntryLinks();
+  const token = currentToken();
+  if (!token) return;
+  storeSession(token, localStorage.getItem('maez_name') || '');
+  try {
+    const response = await fetch('/history?web_token=' + encodeURIComponent(token));
+    if (response.ok) {
+      location.replace('/app');
+      return;
+    }
+  } catch (e) {}
+  localStorage.removeItem('maez_token');
+  localStorage.removeItem('maez_name');
+  syncEntryLinks();
+}
 
-if(token){fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({web_token:token,message:'ping'})}).then(r=>{if(r.status===401)doLogout();else enterChat()}).catch(()=>doLogout())}
+boot();
 </script>
-</body></html>"""
+</body>
+</html>"""
+
+
+HTML_PAGE = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Maez · Channel</title>
+<meta name="description" content="A warm, persistent conversation with Maez.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;1,9..144,400;1,9..144,500&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bone: #F5EFE0;
+  --bone-hi: #FAF4E4;
+  --bone-soft: #EDE4CE;
+  --bone-warm: #F2E8D0;
+  --forest: #2D3A30;
+  --moss: #6B7265;
+  --stone: #9A9B8F;
+  --line: #E0D6BE;
+  --line-soft: rgba(45, 58, 48, 0.08);
+  --line-faint: rgba(45, 58, 48, 0.04);
+  --sage: #86A07A;
+  --sage-deep: #4A6150;
+  --sage-light: #B5C7A8;
+  --sage-ghost: rgba(134, 160, 122, 0.12);
+  --clay: #C19A6B;
+  --clay-deep: #A67B5B;
+  --clay-warm: #D4A877;
+  --clay-ghost: rgba(193, 154, 107, 0.14);
+  --sienna: #8F6244;
+  --shadow-soft: 0 2px 10px rgba(45, 58, 48, 0.04), 0 8px 24px rgba(45, 58, 48, 0.05);
+  --shadow-hover: 0 4px 14px rgba(45, 58, 48, 0.06), 0 16px 36px rgba(45, 58, 48, 0.08);
+  --shadow-card: 0 1px 3px rgba(45, 58, 48, 0.04), 0 12px 34px rgba(45, 58, 48, 0.08);
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 18px;
+  --radius-xl: 28px;
+  --radius-pill: 999px;
+  --font-serif: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { background: var(--bone); }
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(193, 154, 107, 0.10), transparent 28%),
+    radial-gradient(circle at 82% 18%, rgba(134, 160, 122, 0.12), transparent 24%),
+    linear-gradient(180deg, var(--bone-hi), var(--bone));
+  color: var(--forest);
+  font-family: var(--font-sans);
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.24), transparent 22%),
+    linear-gradient(90deg, rgba(45, 58, 48, 0.018) 1px, transparent 1px),
+    linear-gradient(rgba(45, 58, 48, 0.018) 1px, transparent 1px);
+  background-size: auto, 28px 28px, 28px 28px;
+  opacity: 0.48;
+}
+a { color: inherit; text-decoration: none; }
+button, input, textarea { font: inherit; color: inherit; }
+button { border: 0; background: none; cursor: pointer; }
+textarea { resize: none; }
+::selection { background: var(--sage-light); color: var(--forest); }
+
+.maez-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 18px 28px;
+  background: rgba(245, 239, 224, 0.78);
+  backdrop-filter: blur(16px) saturate(1.08);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
+  border-bottom: 1px solid var(--line-faint);
+}
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.menu-btn {
+  display: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--bone-hi);
+  border: 1px solid var(--line-faint);
+  color: var(--forest);
+  box-shadow: var(--shadow-soft);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.brand-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sage);
+  box-shadow: 0 0 0 3px rgba(134, 160, 122, 0.2);
+  animation: breathe 3s ease-in-out infinite;
+}
+.brand-mark {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 22px;
+  color: var(--sienna);
+}
+.brand-label {
+  font-size: 11px;
+  color: var(--stone);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding-left: 14px;
+  border-left: 1px solid var(--line);
+}
+.maez-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.maez-nav a,
+.maez-nav button {
+  padding: 10px 16px;
+  border-radius: var(--radius-pill);
+  color: var(--moss);
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 200ms ease;
+}
+.maez-nav a:hover,
+.maez-nav button:hover {
+  color: var(--forest);
+  background: var(--sage-ghost);
+}
+.maez-nav a.active {
+  color: var(--sage-deep);
+  background: var(--sage-ghost);
+}
+.maez-nav .cta {
+  background: var(--clay);
+  color: var(--bone-hi);
+  box-shadow: 0 4px 16px rgba(193, 154, 107, 0.24);
+}
+.maez-nav .cta:hover {
+  background: var(--clay-deep);
+  color: var(--bone-hi);
+}
+@keyframes breathe {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(134, 160, 122, 0.2); }
+  50% { box-shadow: 0 0 0 5px rgba(134, 160, 122, 0.1); }
+}
+
+.shell {
+  position: relative;
+  z-index: 1;
+  width: min(1440px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 20px 0 22px;
+  display: grid;
+  grid-template-columns: 286px minmax(0, 1fr);
+  gap: 20px;
+  height: calc(100vh - 81px);
+  height: calc(100dvh - 81px);
+}
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: rgba(250, 244, 228, 0.88);
+  border: 1px solid var(--line-faint);
+  border-radius: 24px;
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 18px 16px;
+  border-bottom: 1px solid var(--line-faint);
+}
+.sidebar-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--sage-deep);
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.sidebar-kicker::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sage);
+}
+.new-convo {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--clay);
+  color: var(--bone-hi);
+  box-shadow: 0 4px 16px rgba(193, 154, 107, 0.24);
+  font-size: 13px;
+  font-weight: 600;
+}
+.session-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(193, 154, 107, 0.34) transparent;
+}
+.session-list::-webkit-scrollbar { width: 6px; }
+.session-list::-webkit-scrollbar-thumb { background: rgba(193, 154, 107, 0.34); border-radius: 999px; }
+.session-group {
+  padding: 12px 8px 10px;
+  color: var(--stone);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.session-item {
+  display: grid;
+  gap: 6px;
+  padding: 14px 14px 15px;
+  margin-bottom: 8px;
+  background: rgba(255, 255, 255, 0.44);
+  border: 1px solid transparent;
+  border-radius: 18px;
+  cursor: pointer;
+  transition: transform 220ms var(--ease-out), border-color 220ms ease, box-shadow 220ms ease, background 220ms ease;
+}
+.session-item:hover {
+  transform: translateY(-1px);
+  border-color: rgba(45, 58, 48, 0.08);
+  box-shadow: var(--shadow-soft);
+}
+.session-item.active {
+  background: var(--bone-hi);
+  border-color: rgba(134, 160, 122, 0.2);
+}
+.session-item.now {
+  background: linear-gradient(135deg, rgba(193, 154, 107, 0.16), rgba(193, 154, 107, 0.06));
+  border-color: rgba(193, 154, 107, 0.22);
+}
+.s-date {
+  color: var(--stone);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.s-title {
+  color: var(--forest);
+  font-size: 14px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.sidebar-foot {
+  padding: 16px 18px 18px;
+  border-top: 1px solid var(--line-faint);
+  background: rgba(242, 232, 208, 0.66);
+}
+.sidebar-foot .label {
+  color: var(--stone);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.user-display {
+  margin-top: 6px;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 22px;
+  line-height: 1.05;
+  color: var(--forest);
+}
+.user-meta {
+  margin-top: 8px;
+  color: var(--moss);
+  font-size: 13px;
+}
+
+.workspace {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: rgba(250, 244, 228, 0.92);
+  border: 1px solid var(--line-faint);
+  border-radius: 30px;
+  box-shadow: var(--shadow-card);
+}
+.workspace::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 85% 16%, rgba(134, 160, 122, 0.10), transparent 20%),
+    radial-gradient(circle at 18% 6%, rgba(193, 154, 107, 0.10), transparent 18%);
+}
+.view {
+  position: absolute;
+  inset: 0;
+}
+.view[hidden] { display: none; }
+
+.view-boot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px;
+  text-align: center;
+}
+.boot-wrap {
+  max-width: 36rem;
+}
+.boot-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--sage-deep);
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.boot-label::before,
+.boot-label::after {
+  content: '';
+  width: 28px;
+  height: 1px;
+  background: var(--sage);
+}
+.boot-headline {
+  margin-top: 18px;
+  font-family: var(--font-serif);
+  font-size: clamp(48px, 6vw, 78px);
+  line-height: 0.95;
+  font-weight: 400;
+  letter-spacing: -0.04em;
+  color: var(--forest);
+}
+.boot-headline em {
+  color: var(--sienna);
+  font-style: italic;
+}
+.boot-sub {
+  margin-top: 16px;
+  color: var(--moss);
+  font-size: 15px;
+}
+.boot-dots {
+  display: inline-flex;
+  gap: 6px;
+  margin-top: 24px;
+}
+.boot-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--clay);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.boot-dots span:nth-child(2) { animation-delay: 0.18s; }
+.boot-dots span:nth-child(3) { animation-delay: 0.36s; }
+
+.view-empty {
+  overflow: auto;
+  padding: 34px 36px 30px;
+}
+.empty-shell {
+  min-height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(340px, 0.95fr);
+  gap: 28px;
+  align-items: center;
+}
+.empty-copy {
+  display: grid;
+  gap: 20px;
+}
+.empty-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--sage-deep);
+  font-size: 12px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.empty-label::before {
+  content: '';
+  width: 36px;
+  height: 1px;
+  background: var(--sage);
+}
+.empty-headline {
+  font-family: var(--font-serif);
+  font-size: clamp(56px, 7vw, 112px);
+  line-height: 0.94;
+  font-weight: 400;
+  letter-spacing: -0.05em;
+  color: var(--forest);
+}
+.empty-headline em {
+  color: var(--sienna);
+  font-style: italic;
+}
+.empty-sub {
+  max-width: 56ch;
+  color: var(--moss);
+  font-size: 18px;
+  font-weight: 300;
+}
+.empty-sub strong {
+  color: var(--forest);
+  font-weight: 500;
+}
+.prompt-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  max-width: 720px;
+}
+.prompt-card {
+  padding: 18px 18px 20px;
+  background: rgba(255, 255, 255, 0.56);
+  border: 1px solid rgba(45, 58, 48, 0.06);
+  border-radius: 20px;
+  box-shadow: var(--shadow-soft);
+  text-align: left;
+  transition: transform 220ms var(--ease-out), box-shadow 220ms ease, background 220ms ease, border-color 220ms ease;
+}
+.prompt-card:hover {
+  transform: translateY(-2px);
+  background: var(--bone-hi);
+  border-color: rgba(134, 160, 122, 0.22);
+  box-shadow: var(--shadow-hover);
+}
+.prompt-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--clay-ghost);
+  color: var(--sienna);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.prompt-body {
+  margin-top: 12px;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 22px;
+  line-height: 1.25;
+  color: var(--forest);
+}
+.empty-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.empty-start {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 20px;
+  border-radius: var(--radius-pill);
+  background: var(--clay);
+  color: var(--bone-hi);
+  box-shadow: 0 4px 16px rgba(193, 154, 107, 0.24);
+  font-size: 14px;
+  font-weight: 600;
+}
+.empty-foot {
+  color: var(--stone);
+  font-size: 13px;
+}
+.presence-card {
+  position: relative;
+  min-height: 520px;
+  background: linear-gradient(180deg, rgba(250, 244, 228, 0.94), rgba(242, 232, 208, 0.86));
+  border: 1px solid var(--line-faint);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.presence-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 14% 18%, rgba(193, 154, 107, 0.16), transparent 26%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.28), transparent 26%);
+  pointer-events: none;
+}
+.presence-media {
+  position: absolute;
+  inset: 0;
+}
+.presence-media iframe {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 12%;
+  right: -12%;
+  width: auto;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  pointer-events: none;
+}
+.presence-overlay {
+  position: absolute;
+  inset: auto 22px 22px 22px;
+  display: grid;
+  gap: 14px;
+}
+.presence-note,
+.presence-list {
+  background: rgba(250, 244, 228, 0.8);
+  border: 1px solid rgba(45, 58, 48, 0.06);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(10px);
+}
+.presence-note {
+  padding: 18px 20px;
+}
+.presence-note .label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--sage-deep);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.presence-note .label::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sage);
+}
+.presence-note h2 {
+  font-family: var(--font-serif);
+  font-size: 34px;
+  line-height: 1;
+  font-weight: 400;
+  color: var(--forest);
+  margin-bottom: 10px;
+}
+.presence-note h2 em {
+  color: var(--sienna);
+  font-style: italic;
+}
+.presence-note p {
+  color: var(--moss);
+  font-size: 14px;
+  line-height: 1.7;
+}
+.presence-list {
+  display: grid;
+  gap: 1px;
+  padding: 10px;
+}
+.presence-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.32);
+}
+.presence-row span {
+  color: var(--stone);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.presence-row strong {
+  color: var(--forest);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.view-chat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px 18px;
+  border-bottom: 1px solid var(--line-faint);
+  background: rgba(250, 244, 228, 0.66);
+}
+.chat-who {
+  display: grid;
+  gap: 5px;
+}
+.chat-name {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 28px;
+  line-height: 1;
+  color: var(--sienna);
+}
+.chat-meta {
+  color: var(--stone);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.chat-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.chat-actions button {
+  padding: 10px 15px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.56);
+  border: 1px solid rgba(45, 58, 48, 0.06);
+  color: var(--forest);
+  font-size: 13px;
+  font-weight: 600;
+}
+.chat-actions button.danger {
+  color: #8c4b3c;
+}
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 30px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(193, 154, 107, 0.34) transparent;
+}
+.messages::-webkit-scrollbar { width: 6px; }
+.messages::-webkit-scrollbar-thumb { background: rgba(193, 154, 107, 0.34); border-radius: 999px; }
+.msg {
+  max-width: min(78%, 760px);
+  display: grid;
+  gap: 8px;
+  animation: rise 320ms var(--ease-out);
+}
+.msg.user {
+  align-self: flex-end;
+}
+.msg.maez {
+  align-self: flex-start;
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.msg-author {
+  color: var(--stone);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.msg.maez .msg-author {
+  color: var(--sienna);
+  letter-spacing: 0;
+  text-transform: none;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 18px;
+}
+.msg.user .msg-author {
+  text-align: right;
+}
+.msg-body {
+  padding: 15px 18px;
+  border-radius: 22px;
+  font-size: 15px;
+  line-height: 1.72;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  box-shadow: var(--shadow-soft);
+}
+.msg.maez .msg-body {
+  background: linear-gradient(135deg, rgba(193, 154, 107, 0.20), rgba(193, 154, 107, 0.10));
+  border: 1px solid rgba(193, 154, 107, 0.18);
+  color: var(--forest);
+  border-top-left-radius: 10px;
+}
+.msg.user .msg-body {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(45, 58, 48, 0.06);
+  color: var(--forest);
+  border-top-right-radius: 10px;
+}
+.typing {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 999px;
+  background: rgba(193, 154, 107, 0.12);
+  color: var(--sienna);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.typing .dots {
+  display: inline-flex;
+  gap: 5px;
+}
+.typing .dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--clay);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.typing .dots i:nth-child(2) { animation-delay: 0.18s; }
+.typing .dots i:nth-child(3) { animation-delay: 0.36s; }
+@keyframes pulse {
+  0%, 80%, 100% { opacity: 0.22; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1.05); }
+}
+.input-shell {
+  padding: 18px 24px 22px;
+  border-top: 1px solid var(--line-faint);
+  background: rgba(250, 244, 228, 0.76);
+}
+.input-wrap {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 12px 12px 12px 18px;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(45, 58, 48, 0.06);
+  border-radius: 24px;
+  box-shadow: var(--shadow-soft);
+}
+.input-wrap:focus-within {
+  border-color: rgba(134, 160, 122, 0.24);
+  box-shadow: 0 0 0 4px rgba(134, 160, 122, 0.10);
+}
+.input-wrap textarea {
+  flex: 1;
+  min-height: 24px;
+  max-height: 180px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--forest);
+  font-size: 15px;
+  line-height: 1.58;
+}
+.input-wrap textarea::placeholder {
+  color: var(--stone);
+}
+.input-send {
+  flex-shrink: 0;
+  padding: 12px 18px;
+  border-radius: var(--radius-pill);
+  background: var(--clay);
+  color: var(--bone-hi);
+  box-shadow: 0 4px 16px rgba(193, 154, 107, 0.24);
+  font-size: 14px;
+  font-weight: 600;
+}
+.input-send:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.input-hint {
+  margin-top: 10px;
+  text-align: center;
+  color: var(--stone);
+  font-size: 12px;
+}
+.input-hint .k {
+  display: inline-block;
+  margin: 0 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bone-warm);
+  border: 1px solid rgba(45, 58, 48, 0.06);
+  font-size: 11px;
+}
+
+@media (max-width: 1080px) {
+  .empty-shell {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+  .presence-card {
+    min-height: 420px;
+  }
+}
+@media (max-width: 920px) {
+  .menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .brand-label {
+    display: none;
+  }
+  .shell {
+    width: min(100% - 20px, 1440px);
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    position: fixed;
+    left: 10px;
+    top: 82px;
+    bottom: 10px;
+    width: min(82vw, 320px);
+    z-index: 45;
+    transform: translateX(calc(-100% - 20px));
+    transition: transform 240ms var(--ease-out);
+  }
+  .sidebar.open {
+    transform: translateX(0);
+  }
+  .workspace {
+    min-height: 0;
+  }
+}
+@media (max-width: 720px) {
+  .maez-topbar {
+    padding: 14px 16px;
+  }
+  .maez-nav {
+    gap: 4px;
+  }
+  .maez-nav a,
+  .maez-nav button {
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+  .view-empty {
+    padding: 24px 20px 20px;
+  }
+  .chat-header,
+  .messages,
+  .input-shell {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+  .prompt-grid {
+    grid-template-columns: 1fr;
+  }
+  .presence-card {
+    min-height: 360px;
+  }
+  .presence-media iframe {
+    left: 0;
+    right: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+</style>
+</head>
+<body>
+<header class="maez-topbar">
+  <div class="topbar-left">
+    <button class="menu-btn" id="menuBtn" aria-label="Toggle sessions" type="button">☰</button>
+    <a class="brand" href="/">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <span class="brand-mark">maez</span>
+      <span class="brand-label">Continuity Channel</span>
+    </a>
+  </div>
+  <nav class="maez-nav">
+    <a href="/">Home</a>
+    <a href="/dashboard">Field Station</a>
+    <a href="https://github.com/Ramidoz/maez" target="_blank" rel="noreferrer">GitHub</a>
+    <button class="cta" type="button" onclick="newConversation()">New chat</button>
+    <button type="button" onclick="doLogout()">Sign out</button>
+  </nav>
+</header>
+
+<main class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <div class="sidebar-kicker">Sessions</div>
+      <button class="new-convo" type="button" onclick="newConversation()">+ New</button>
+    </div>
+    <div class="session-list" id="sessions"></div>
+    <div class="sidebar-foot">
+      <div class="label">Signed in</div>
+      <div class="user-display" id="userDisplay">resolving…</div>
+      <div class="user-meta" id="userMeta">restoring continuity</div>
+    </div>
+  </aside>
+
+  <section class="workspace">
+    <div class="view view-boot" id="bootView">
+      <div class="boot-wrap">
+        <div class="boot-label">Securing continuity</div>
+        <div class="boot-headline">Opening the <em>channel.</em></div>
+        <div class="boot-sub">Checking your session and gathering memory.</div>
+        <div class="boot-dots"><span></span><span></span><span></span></div>
+      </div>
+    </div>
+
+    <div class="view view-empty" id="emptyView" hidden>
+      <div class="empty-shell">
+        <div class="empty-copy">
+          <div class="empty-label">Channel open</div>
+          <h1 class="empty-headline"><em>I'm here.</em></h1>
+          <p class="empty-sub">
+            This is not a disposable session. <strong>It keeps going.</strong>
+            I remember what we talk about, what mattered, and where we left things. Start anywhere.
+          </p>
+          <div class="prompt-grid" id="promptGrid"></div>
+          <div class="empty-actions">
+            <button class="empty-start" type="button" onclick="startWriting()">Write your own question</button>
+            <div class="empty-foot">Press <span class="k">Enter</span> to send and <span class="k">Shift+Enter</span> for a new line.</div>
+          </div>
+        </div>
+
+        <div class="presence-card">
+          <div class="presence-media">
+            <iframe title="Maez presence" src="/maez_bg_zen.html?mx=0.63&my=0.29&presence=0.84&jumpt=3" loading="eager"></iframe>
+          </div>
+          <div class="presence-overlay">
+            <div class="presence-note">
+              <div class="label">Presence</div>
+              <h2>Still <em>with you.</em></h2>
+              <p>The same quiet presence from the landing page lives here too. The channel is just where that presence becomes conversation.</p>
+            </div>
+            <div class="presence-list">
+              <div class="presence-row"><span>Memory</span><strong>kept across visits</strong></div>
+              <div class="presence-row"><span>Tone</span><strong>warm, plain-English, calm</strong></div>
+              <div class="presence-row"><span>Mode</span><strong>conversation, not task churn</strong></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="view view-chat" id="chatView" hidden>
+      <div class="chat-header">
+        <div class="chat-who">
+          <div class="chat-name">maez</div>
+          <div class="chat-meta">always on · always remembering</div>
+        </div>
+        <div class="chat-actions">
+          <button type="button" onclick="newConversation()">New conversation</button>
+          <button class="danger" type="button" onclick="doLogout()">Sign out</button>
+        </div>
+      </div>
+      <div class="messages" id="msgs" role="log" aria-live="polite"></div>
+      <div class="input-shell">
+        <div class="input-wrap">
+          <textarea id="msg" rows="1" placeholder="Say something to Maez…" autocomplete="off" aria-label="Message Maez"></textarea>
+          <button class="input-send" id="sendBtn" type="button" onclick="sendMsg()">Send</button>
+        </div>
+        <div class="input-hint"><span class="k">Enter</span> to send · <span class="k">Shift</span> + <span class="k">Enter</span> for a new line</div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function() {
+  const qp = new URLSearchParams(location.search);
+  const tt = qp.get('test_t');
+  if (tt) {
+    localStorage.setItem('maez_token', tt);
+    const tn = qp.get('test_n');
+    if (tn) localStorage.setItem('maez_name', tn);
+    history.replaceState(null, '', '/app');
+  }
+})();
+
+function getCookie(name) {
+  const parts = document.cookie ? document.cookie.split('; ') : [];
+  for (const part of parts) {
+    const idx = part.indexOf('=');
+    const key = idx === -1 ? part : part.slice(0, idx);
+    if (key === name) return decodeURIComponent(idx === -1 ? '' : part.slice(idx + 1));
+  }
+  return '';
+}
+
+function currentToken() {
+  return localStorage.getItem('maez_token') || getCookie('maez_token') || '';
+}
+
+function storeSession(nextToken, nextName) {
+  if (nextToken) localStorage.setItem('maez_token', nextToken);
+  if (nextName) localStorage.setItem('maez_name', nextName);
+}
+
+let token = currentToken();
+let displayName = localStorage.getItem('maez_name') || '';
+let conversationHistory = [];
+let allSessions = [];
+let userInfo = null;
+
+const PROMPTS_PUBLIC = [
+  { tag: 'Identity', body: 'What are you?' },
+  { tag: 'Memory', body: 'What do you remember?' },
+  { tag: 'Continuity', body: 'What have you been doing while I was gone?' },
+  { tag: 'Greeting', body: 'Just say hi.' },
+];
+const PROMPTS_LINKED = [
+  { tag: 'Last conversation', body: 'What do you remember about our last conversation?' },
+  { tag: 'Today', body: "What's on my calendar today?" },
+  { tag: 'Yesterday', body: 'What did I work on yesterday?' },
+  { tag: 'Catch me up', body: 'Catch me up on where I left things.' },
+];
+
+function showView(id) {
+  ['bootView', 'emptyView', 'chatView'].forEach((name) => {
+    const el = document.getElementById(name);
+    if (!el) return;
+    if (name === id) el.removeAttribute('hidden');
+    else el.setAttribute('hidden', '');
+  });
+}
+
+function setSidebar(open) {
+  const sidebar = document.getElementById('sidebar');
+  if (!sidebar) return;
+  if (typeof open === 'boolean') sidebar.classList.toggle('open', open);
+  else sidebar.classList.toggle('open');
+}
+
+function focusComposer() {
+  showView('chatView');
+  setTimeout(() => {
+    const ta = document.getElementById('msg');
+    if (ta) ta.focus();
+  }, 40);
+}
+
+function renderPrompts(linked) {
+  const grid = document.getElementById('promptGrid');
+  if (!grid) return;
+  const set = linked ? PROMPTS_LINKED : PROMPTS_PUBLIC;
+  grid.innerHTML = '';
+  set.forEach((prompt) => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'prompt-card';
+    card.innerHTML = '<div class="prompt-tag">' + prompt.tag + '</div><div class="prompt-body">' + prompt.body + '</div>';
+    card.addEventListener('click', () => {
+      startWriting();
+      const input = document.getElementById('msg');
+      input.value = prompt.body;
+      resizeInput();
+      sendMsg();
+    });
+    grid.appendChild(card);
+  });
+}
+
+function renderSessions() {
+  const el = document.getElementById('sessions');
+  if (!el) return;
+  el.innerHTML = '';
+
+  const now = document.createElement('button');
+  now.type = 'button';
+  now.className = 'session-item now active';
+  now.innerHTML = '<div class="s-date">Now</div><div class="s-title">Current conversation</div>';
+  now.addEventListener('click', () => newConversation());
+  el.appendChild(now);
+
+  if (!allSessions.length) {
+    const hint = document.createElement('div');
+    hint.className = 'session-group';
+    hint.textContent = 'No earlier sessions yet';
+    el.appendChild(hint);
+    return;
+  }
+
+  const group = document.createElement('div');
+  group.className = 'session-group';
+  group.textContent = 'Earlier';
+  el.appendChild(group);
+
+  allSessions.forEach((session, idx) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'session-item';
+    const date = (session.date || '').slice(0, 10) || '—';
+    const title = session.title || 'Conversation';
+    item.innerHTML = '<div class="s-date">' + date + '</div><div class="s-title">' + title + '</div>';
+    item.addEventListener('click', () => loadSession(idx));
+    el.appendChild(item);
+  });
+}
+
+function setActiveSession(idx) {
+  const items = document.querySelectorAll('.session-item');
+  items.forEach((item) => item.classList.remove('active'));
+  if (idx === -1 && items[0]) items[0].classList.add('active');
+  else if (items[idx + 1]) items[idx + 1].classList.add('active');
+}
+
+function appendMessage(role, text, animate) {
+  const list = document.getElementById('msgs');
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ' + role;
+  if (!animate) wrap.style.animation = 'none';
+
+  const author = document.createElement('div');
+  author.className = 'msg-author';
+  author.textContent = role === 'maez' ? 'maez' : (displayName || 'you');
+  wrap.appendChild(author);
+
+  const body = document.createElement('div');
+  body.className = 'msg-body';
+  body.textContent = text;
+  wrap.appendChild(body);
+
+  list.appendChild(wrap);
+  list.scrollTop = list.scrollHeight;
+}
+
+function loadSession(idx) {
+  const session = allSessions[idx];
+  if (!session) return;
+  const list = document.getElementById('msgs');
+  list.innerHTML = '';
+  conversationHistory = [];
+  setActiveSession(idx);
+
+  (session.messages || []).forEach((message) => {
+    const visualRole = message.role === 'user' ? 'user' : 'maez';
+    const historyRole = message.role === 'user' ? 'user' : 'assistant';
+    appendMessage(visualRole, message.content, false);
+    conversationHistory.push({ role: historyRole, content: message.content });
+  });
+
+  showView('chatView');
+  if (innerWidth < 920) setSidebar(false);
+}
+
+function startWriting() {
+  document.getElementById('msgs').innerHTML = '';
+  conversationHistory = [];
+  setActiveSession(-1);
+  focusComposer();
+  resizeInput();
+}
+
+function newConversation() {
+  document.getElementById('msgs').innerHTML = '';
+  conversationHistory = [];
+  setActiveSession(-1);
+  showView('emptyView');
+  if (innerWidth < 920) setSidebar(false);
+}
+
+function showTyping() {
+  const list = document.getElementById('msgs');
+  const row = document.createElement('div');
+  row.className = 'typing';
+  row.id = 'typingRow';
+  row.innerHTML = 'maez is thinking <span class="dots"><i></i><i></i><i></i></span>';
+  list.appendChild(row);
+  list.scrollTop = list.scrollHeight;
+}
+
+function hideTyping() {
+  const row = document.getElementById('typingRow');
+  if (row) row.remove();
+}
+
+function resizeInput() {
+  const ta = document.getElementById('msg');
+  if (!ta) return;
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(180, ta.scrollHeight) + 'px';
+}
+
+async function sendMsg() {
+  const input = document.getElementById('msg');
+  const text = input.value.trim();
+  if (!text) return;
+
+  token = currentToken();
+  if (!token) {
+    doLogout();
+    return;
+  }
+
+  input.value = '';
+  resizeInput();
+  showView('chatView');
+  appendMessage('user', text, true);
+  conversationHistory.push({ role: 'user', content: text });
+  showTyping();
+
+  const sendBtn = document.getElementById('sendBtn');
+  sendBtn.disabled = true;
+  try {
+    const response = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        web_token: token,
+        message: text,
+        history: conversationHistory.slice(-8),
+      }),
+    });
+    if (response.status === 401) {
+      doLogout();
+      return;
+    }
+    const data = await response.json();
+    hideTyping();
+    if (data.error) {
+      appendMessage('maez', 'Something bent for a moment. Try that again.', true);
+      return;
+    }
+    appendMessage('maez', data.reply, true);
+    conversationHistory.push({ role: 'assistant', content: data.reply });
+  } catch (e) {
+    hideTyping();
+    appendMessage('maez', 'The line dropped for a moment. Try that again.', true);
+  } finally {
+    sendBtn.disabled = false;
+    input.focus();
+  }
+}
+
+function doLogout() {
+  document.cookie = 'maez_token=; Max-Age=0; path=/; SameSite=Lax';
+  localStorage.removeItem('maez_token');
+  localStorage.removeItem('maez_name');
+  token = '';
+  displayName = '';
+  conversationHistory = [];
+  location.replace('/login');
+}
+
+async function boot() {
+  token = currentToken();
+  if (!token) {
+    location.replace('/login');
+    return;
+  }
+
+  storeSession(token, displayName);
+
+  try {
+    const response = await fetch('/history?web_token=' + encodeURIComponent(token));
+    if (response.status === 401) {
+      doLogout();
+      return;
+    }
+    if (!response.ok) throw new Error('history failed');
+
+    const data = await response.json();
+    allSessions = data.sessions || [];
+    userInfo = data.user || null;
+
+    if (userInfo && userInfo.display_name) {
+      displayName = userInfo.display_name;
+      localStorage.setItem('maez_name', displayName);
+    }
+
+    const displayEl = document.getElementById('userDisplay');
+    const metaEl = document.getElementById('userMeta');
+    if (displayEl) displayEl.textContent = displayName || (userInfo && userInfo.username) || 'anon';
+    if (metaEl) {
+      metaEl.textContent = userInfo && userInfo.telegram_linked
+        ? 'telegram history linked'
+        : 'web account active';
+    }
+
+    renderPrompts(Boolean(userInfo && userInfo.telegram_linked));
+    renderSessions();
+    showView('emptyView');
+    resizeInput();
+  } catch (e) {
+    doLogout();
+  }
+}
+
+(function wireEvents() {
+  const menuBtn = document.getElementById('menuBtn');
+  if (menuBtn) {
+    menuBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      setSidebar();
+    });
+  }
+
+  const ta = document.getElementById('msg');
+  if (ta) {
+    ta.addEventListener('input', resizeInput);
+    ta.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        sendMsg();
+      }
+    });
+  }
+})();
+
+boot();
+</script>
+</body>
+</html>"""
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Session 11g — staging-only feature-flagged fast-lane adapter
+#  ────────────────────────────────────────────────────────────────────
+#  This block is COMPLETELY INERT unless MAEZ_LIVE_FAST_LANE_ENABLED=1
+#  is set in the environment when this file is imported. Default: off.
+#
+#  When the flag is set:
+#    • A single new route, /v1/fast-reply, is registered.
+#    • The route validates a small request body and POSTs it to the
+#      staging fast-lane HTTP boundary at 127.0.0.1:8765/v1/reply.
+#    • It does NOT call ollama directly. It does NOT touch /chat.
+#    • It does NOT touch the live UserAccounts/MemoryManager state.
+#
+#  When the flag is NOT set (default), nothing in this block runs:
+#    • No imports, no route registration, no globals.
+#    • Existing /chat, /login, /register etc. behavior is unchanged.
+#    • The maez-web.service binary remains byte-identical at runtime.
+#
+#  Production guard: this adapter MUST stay off in production. The CORS
+#  allowlist on the staging fast-lane service includes only loopback
+#  origins, and the fast-lane service itself binds only to 127.0.0.1.
+# ─────────────────────────────────────────────────────────────────────
+_fl_imports_ok = False
+if os.environ.get('MAEZ_LIVE_FAST_LANE_ENABLED') == '1':
+    import json as _fl_json
+    import urllib.error as _fl_err
+    import urllib.request as _fl_req
+
+    try:
+        from core.public_user_shaping import (
+            shape_public_request as _fl_shape,
+            split_shaping_telemetry as _fl_split,
+            ShapingRejected as _fl_ShapingRejected,
+        )
+        _fl_imports_ok = True
+    except ImportError as _fl_import_err:
+        logger.warning(
+            'maez-live fast-lane adapter DISABLED — '
+            'core.public_user_shaping unavailable: %s', _fl_import_err,
+        )
+
+if os.environ.get('MAEZ_LIVE_FAST_LANE_ENABLED') == '1' and _fl_imports_ok:
+
+    _FAST_LANE_URL = os.environ.get(
+        'MAEZ_LIVE_FAST_LANE_URL',
+        'http://127.0.0.1:8765/v1/reply',
+    )
+    # Hard-pin to loopback regardless of what the env says — defense in
+    # depth so a misconfigured env var can't redirect traffic off-box.
+    _FAST_LANE_ALLOWED_HOSTS = ('127.0.0.1', 'localhost', '::1')
+
+    # Session 11h — adapter version string. The fast-lane service records
+    # this in audit metadata so adapter callers can be distinguished from
+    # direct callers (curl, the consumer demo, the staging HTML page) at
+    # forensic-replay time.
+    _FAST_LANE_ADAPTER_VERSION = 'maez-live-fast-lane-adapter/0.2 (staging)'
+
+    def _fast_lane_target_is_loopback(url: str) -> bool:
+        try:
+            from urllib.parse import urlparse as _up
+            host = (_up(url).hostname or '').lower()
+            return host in _FAST_LANE_ALLOWED_HOSTS
+        except Exception:
+            return False
+
+    def _fast_lane_strip_response(upstream: dict) -> dict:
+        """Convert the full fast-lane response into a SMALL adapter-side
+        view that the public-facing client receives.
+
+        Forwarded fields:
+            reply       — the model reply text
+            success     — bool
+            error       — error dict if any
+            backend     — backend name
+            latency_ms  — total round-trip server time
+            retry       — {'attempted', 'strategy', 'succeeded'}
+            freshness   — per-source freshness states only
+
+        EXCLUDED on purpose:
+            full perception envelope, perception sources, prompt char counts,
+            policy reason text, history persistence flags, redaction details,
+            cache age numbers, internal selection reasons, audit_v markers
+        """
+        if not isinstance(upstream, dict):
+            return {'success': False, 'error': {'code': 'bad_upstream', 'message': 'non-dict response'}}
+
+        m = upstream.get('metrics') or {}
+        stripped = {
+            'success': bool(upstream.get('success', False)),
+            'reply':   upstream.get('reply') or '',
+            'backend': upstream.get('backend') or m.get('backend_name') or 'unknown',
+            'latency_ms': int(m.get('total_ms', 0) or 0),
+            'retry': {
+                'attempted': bool(m.get('retry_attempted', False)),
+                'strategy':  m.get('retry_strategy') or '',
+                'succeeded': bool(m.get('retry_succeeded', False)),
+            },
+            'freshness': {
+                'screen':       m.get('screen_freshness') or 'missing',
+                'system_state': m.get('system_state_freshness') or 'missing',
+                'calendar':     m.get('calendar_freshness') or 'missing',
+            },
+        }
+        err = upstream.get('error')
+        if err:
+            # Forward only code+message; never any details that could
+            # leak server-side state.
+            if isinstance(err, dict):
+                stripped['error'] = {
+                    'code':    err.get('code') or 'unknown',
+                    'message': err.get('message') or '',
+                }
+            else:
+                stripped['error'] = {'code': 'unknown', 'message': str(err)}
+        return stripped
+
+    @app.route('/v1/fast-reply', methods=['POST'])
+    def fast_reply_adapter():
+        """Forward a request to the staging fast-lane boundary.
+
+        Body: {"message": str, "trust_scope": str (optional, defaults
+               to 'guest' for safety)}
+        Returns: a stripped JSON view (see _fast_lane_strip_response).
+
+        Auth: this route requires a valid web_token from the existing
+        UserAccounts system. Public unauth callers cannot use it.
+
+        Session 11h hardening:
+          1. Calls core.public_user_shaping.shape_public_request() before
+             the loopback hop. PII stripping is applied client-side here
+             AND server-side via the fast-lane service. Two layers.
+          2. Sends X-Maez-Adapter-Version header so the audit log can
+             distinguish adapter calls from direct calls.
+          3. Returns only a stripped client view (latency, retry, freshness)
+             instead of the full upstream response. Internal envelope and
+             policy details never leave the loopback.
+        """
+        if not _fast_lane_target_is_loopback(_FAST_LANE_URL):
+            return jsonify({
+                'success': False,
+                'error': {'code': 'fast_lane_misconfigured',
+                          'message': 'fast-lane URL must be loopback'},
+            }), 500
+
+        data = request.get_json(silent=True) or {}
+        token = data.get('web_token', '')
+        raw_message = (data.get('message') or '').strip()
+        if not token or not raw_message:
+            return jsonify({
+                'success': False,
+                'error': {'code': 'bad_request', 'message': 'Token and message required'},
+            }), 400
+
+        user = accounts.get_by_token(token)
+        if not user:
+            return jsonify({
+                'success': False,
+                'error': {'code': 'unauthorized', 'message': 'Invalid token'},
+            }), 401
+
+        # ── 11h: client-side PII shaping (defense-in-depth) ──
+        # The fast-lane service ALSO runs schema validation and the
+        # cloud redactor (if cloud is selected). This is the FIRST
+        # of those defenses, applied before the loopback hop.
+        try:
+            shaped_full = _fl_shape(raw_message)
+        except _fl_ShapingRejected as e:
+            return jsonify({
+                'success': False,
+                'error': {'code': e.code, 'message': str(e)},
+            }), 400
+        upstream_body, _shaping_telemetry = _fl_split(shaped_full)
+
+        # Force scope to guest regardless of what shaping returned (it
+        # already does this, but defense-in-depth so the client can
+        # never escalate by passing scope='public' to the shaper).
+        upstream_body['trust_scope'] = 'guest'
+
+        req = _fl_req.Request(
+            _FAST_LANE_URL,
+            data=_fl_json.dumps(upstream_body).encode('utf-8'),
+            headers={
+                'content-type':         'application/json',
+                'accept':               'application/json',
+                # 11h: structured adapter-version header
+                'x-maez-adapter-version': _FAST_LANE_ADAPTER_VERSION,
+                # legacy user-agent kept for backwards observability
+                'user-agent':           _FAST_LANE_ADAPTER_VERSION,
+                'origin':               'http://127.0.0.1:11437',
+            },
+            method='POST',
+        )
+        try:
+            # Session 11j: 30.0s > GUEST_MAX_TIMEOUT_S (15.0) + loopback
+            # round-trip margin. Must stay above the shaped guest budget or
+            # the adapter will hang up before the fast-lane service responds.
+            # Dropped from 210s after landing `think: false` in fast_backend_local
+            # cut cold gemma4 replies to ~0.3s — the fat budget was masking a
+            # thinking-model issue, not a real timeout need.
+            with _fl_req.urlopen(req, timeout=30.0) as resp:
+                body_bytes = resp.read()
+                upstream_status = resp.status
+                upstream_json = _fl_json.loads(body_bytes.decode('utf-8'))
+        except _fl_err.HTTPError as e:
+            try:
+                upstream_json = _fl_json.loads(e.read().decode('utf-8'))
+            except Exception:
+                upstream_json = {'success': False, 'error': {'code': 'unparseable', 'message': str(e)}}
+            return jsonify(_fast_lane_strip_response(upstream_json)), e.code
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': {'code': 'fast_lane_unreachable', 'message': str(e)},
+            }), 502
+
+        return jsonify(_fast_lane_strip_response(upstream_json)), upstream_status
+
+    logger.info(
+        'maez-live fast-lane adapter ENABLED (staging, 11h) — '
+        'route /v1/fast-reply registered, target=%s, version=%s',
+        _FAST_LANE_URL, _FAST_LANE_ADAPTER_VERSION,
+    )
+else:
+    # Flag is off — log nothing, register nothing.
+    pass
 
 
 if __name__ == "__main__":

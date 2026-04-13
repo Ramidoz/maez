@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Maez Gate</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#02050b;
+  --bg-hi:#07111a;
+  --teal:#3ce0d4;
+  --teal-hi:#9ffaf2;
+  --line:rgba(60,224,212,.12);
+  --line-hi:rgba(60,224,212,.32);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{
+  width:100%;
+  height:100%;
+  overflow:hidden;
+  background:
+    radial-gradient(circle at 50% 28%, rgba(60,224,212,.08), transparent 30%),
+    radial-gradient(circle at 50% 62%, rgba(60,224,212,.04), transparent 38%),
+    linear-gradient(180deg, #02050b 0%, #050a12 100%);
+  font-family:"JetBrains Mono", ui-monospace, monospace;
+}
+body::before,
+body::after{
+  content:"";
+  position:fixed;
+  inset:0;
+  pointer-events:none;
+}
+body::before{
+  background-image:
+    linear-gradient(rgba(60,224,212,.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(60,224,212,.03) 1px, transparent 1px),
+    linear-gradient(rgba(60,224,212,.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(60,224,212,.045) 1px, transparent 1px);
+  background-size:24px 24px,24px 24px,96px 96px,96px 96px;
+  mask-image:radial-gradient(circle at 50% 50%, black 38%, transparent 92%);
+  opacity:.8;
+}
+body::after{
+  background:
+    repeating-linear-gradient(to bottom, transparent 0, transparent 2px, rgba(255,255,255,.02) 2px, rgba(255,255,255,.02) 3px),
+    radial-gradient(circle at 50% 50%, transparent 40%, rgba(0,0,0,.6) 100%);
+  opacity:.46;
+}
+canvas{
+  position:fixed;
+  inset:0;
+  width:100%;
+  height:100%;
+}
+.hud{
+  position:fixed;
+  inset:0;
+  pointer-events:none;
+  color:rgba(60,224,212,.7);
+  font-size:10px;
+  letter-spacing:.16em;
+  text-transform:uppercase;
+}
+.panel{
+  position:absolute;
+  padding:10px 12px;
+  border:1px solid rgba(60,224,212,.14);
+  background:rgba(3,8,14,.45);
+  backdrop-filter:blur(10px);
+}
+.panel strong{
+  color:rgba(159,250,242,.86);
+  display:block;
+  margin-bottom:6px;
+  font-weight:500;
+}
+.panel.top-left{top:18px;left:18px}
+.panel.top-right{top:18px;right:18px;text-align:right}
+.panel.bottom-left{left:18px;bottom:18px;max-width:260px}
+</style>
+</head>
+<body>
+<canvas id="field"></canvas>
+<div class="hud">
+  <div class="panel top-left">
+    <strong>Access Sentinel</strong>
+    <div>Mode: observer</div>
+    <div>Intent scan: active</div>
+    <div>Entity stability: partial</div>
+  </div>
+  <div class="panel top-right">
+    <strong>ctOS-like lattice</strong>
+    <div>Graph: burst-only</div>
+    <div>Latency profile: subsecond</div>
+    <div>Signal route: account gate</div>
+  </div>
+  <div class="panel bottom-left">
+    This figure should feel procedural, watchful, and almost unwilling to resolve. It is not Maez. It is the system deciding whether a stable channel exists.
+  </div>
+</div>
+<script>
+const canvas = document.getElementById('field');
+const ctx = canvas.getContext('2d');
+const glyphs = '01[]{}<>/\\\\|-_=+';
+const nodes = [];
+const bursts = [];
+let grid = [];
+let width = 0;
+let height = 0;
+let dpr = 1;
+let cell = 14;
+let nextBurstAt = 0;
+let lastFrame = 0;
+
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  width = window.innerWidth;
+  height = window.innerHeight;
+  canvas.width = Math.floor(width * dpr);
+  canvas.height = Math.floor(height * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cell = width < 560 ? 12 : 14;
+  buildGrid();
+}
+
+function buildGrid() {
+  grid = [];
+  const cols = Math.ceil(width / cell) + 1;
+  const rows = Math.ceil(height / cell) + 1;
+  for (let y = 0; y < rows; y += 1) {
+    for (let x = 0; x < cols; x += 1) {
+      grid.push({
+        x: x * cell,
+        y: y * cell,
+        seed: Math.random() * 1000,
+        phase: Math.random() * Math.PI * 2,
+        char: glyphs[(Math.random() * glyphs.length) | 0],
+      });
+    }
+  }
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function ellipse(nx, ny, cx, cy, rx, ry) {
+  const dx = (nx - cx) / rx;
+  const dy = (ny - cy) / ry;
+  return Math.exp(-(dx * dx + dy * dy) * 2.2);
+}
+
+function spawnBurst(time) {
+  const count = 5 + (Math.random() * 6 | 0);
+  const burst = {
+    start: time,
+    duration: 90 + Math.random() * 180,
+    nodes: [],
+    edges: [],
+  };
+  for (let i = 0; i < count; i += 1) {
+    const around = Math.random();
+    const x = width * (0.18 + Math.random() * 0.64);
+    const y = height * (around < 0.45 ? (0.16 + Math.random() * 0.32) : (0.38 + Math.random() * 0.42));
+    burst.nodes.push({ x, y, pulse: Math.random() * Math.PI * 2 });
+  }
+  const edgeCount = count + 2 + (Math.random() * 5 | 0);
+  for (let i = 0; i < edgeCount; i += 1) {
+    let a = (Math.random() * burst.nodes.length) | 0;
+    let b = (Math.random() * burst.nodes.length) | 0;
+    if (a === b) {
+      b = (b + 1) % burst.nodes.length;
+    }
+    burst.edges.push({
+      a,
+      b,
+      phase: Math.random(),
+      tracer: Math.random(),
+      width: Math.random() > 0.5 ? 1 : 1.4,
+    });
+  }
+  bursts.push(burst);
+  nextBurstAt = time + 160 + Math.random() * 520;
+}
+
+function drawBursts(time) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  for (let i = bursts.length - 1; i >= 0; i -= 1) {
+    const burst = bursts[i];
+    const progress = (time - burst.start) / burst.duration;
+    if (progress >= 1) {
+      bursts.splice(i, 1);
+      continue;
+    }
+    const life = 1 - progress;
+    for (const edge of burst.edges) {
+      const a = burst.nodes[edge.a];
+      const b = burst.nodes[edge.b];
+      const segments = 12;
+      ctx.lineWidth = edge.width;
+      for (let s = 0; s < segments; s += 1) {
+        const from = s / segments;
+        const to = (s + 0.58) / segments;
+        if (((s + Math.floor(progress * 20) + Math.floor(edge.phase * 7)) % 3) === 1) {
+          continue;
+        }
+        const x1 = a.x + (b.x - a.x) * from;
+        const y1 = a.y + (b.y - a.y) * from;
+        const x2 = a.x + (b.x - a.x) * to;
+        const y2 = a.y + (b.y - a.y) * to;
+        ctx.strokeStyle = `rgba(60,224,212,${0.12 + life * 0.34})`;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      }
+      const tracerPos = (progress * 1.35 + edge.tracer) % 1;
+      const tx = a.x + (b.x - a.x) * tracerPos;
+      const ty = a.y + (b.y - a.y) * tracerPos;
+      ctx.fillStyle = `rgba(159,250,242,${0.25 + life * 0.5})`;
+      ctx.beginPath();
+      ctx.arc(tx, ty, 1.8 + life * 1.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (const node of burst.nodes) {
+      const pulse = 0.5 + 0.5 * Math.sin(time * 0.014 + node.pulse);
+      ctx.fillStyle = `rgba(159,250,242,${0.14 + life * 0.45 * pulse})`;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, 1.6 + pulse * 1.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+function render(time) {
+  if (time - lastFrame < 41) {
+    requestAnimationFrame(render);
+    return;
+  }
+  lastFrame = time;
+  const t = time * 0.001;
+  ctx.clearRect(0, 0, width, height);
+
+  ctx.fillStyle = 'rgba(2,5,11,0.22)';
+  ctx.fillRect(0, 0, width, height);
+
+  const scanY = height * (0.18 + ((Math.sin(t * 0.72) + 1) * 0.5) * 0.28);
+  const breathe = 0.5 + 0.5 * Math.sin(t * 1.1);
+  const neckShift = Math.sin(t * 0.9) * 0.012;
+
+  ctx.font = `${cell - 1}px "JetBrains Mono", monospace`;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+
+  for (const point of grid) {
+    const nx = point.x / width;
+    const ny = point.y / height;
+    const head = ellipse(nx, ny, 0.5, 0.24, 0.15, 0.22);
+    const jaw = ellipse(nx, ny, 0.5, 0.31, 0.11, 0.08);
+    const crown = ellipse(nx, ny, 0.5, 0.17, 0.12, 0.12);
+    const shoulders = ellipse(nx, ny, 0.5, 0.46, 0.26, 0.10);
+    const torso = ellipse(nx, ny, 0.5, 0.62 + neckShift, 0.16 + breathe * 0.01, 0.28);
+    const core = clamp(head * 0.9 + jaw * 0.6 + crown * 0.4 + shoulders * 0.65 + torso * 0.9, 0, 1);
+    const chest = ellipse(nx, ny, 0.5, 0.55, 0.11, 0.10);
+    const throat = ellipse(nx, ny, 0.5, 0.41, 0.06, 0.08);
+    const facePocket = ellipse(nx, ny, 0.5, 0.25, 0.09, 0.13);
+    const scan = Math.exp(-Math.pow((point.y - scanY) / (height * 0.05), 2));
+    const field = clamp(core * 0.78 + chest * 0.36 + throat * 0.22 + facePocket * 0.26, 0, 1);
+    const ambient = 0.022 + (Math.sin(t * 0.7 + point.phase) + 1) * 0.012;
+    const alpha = ambient + field * (0.08 + 0.5 * (0.45 + 0.55 * Math.sin(t * 1.6 + point.seed))) + scan * field * 0.16;
+    const inside = field > 0.12;
+
+    if (time > point.seed * 14 && Math.sin(t * 0.9 + point.seed) > 0.92) {
+      point.char = glyphs[(Math.random() * glyphs.length) | 0];
+    }
+
+    let color = `rgba(60,224,212,${alpha})`;
+    if (inside) {
+      const hi = clamp(field * 0.72 + scan * 0.44, 0, 1);
+      color = `rgba(${Math.round(70 + hi * 90)},${Math.round(198 + hi * 44)},${Math.round(192 + hi * 54)},${clamp(alpha, 0, 0.86)})`;
+    }
+    if (!inside && alpha < 0.035) {
+      continue;
+    }
+    ctx.fillStyle = color;
+    ctx.fillText(point.char, point.x, point.y);
+  }
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  ctx.strokeStyle = 'rgba(159,250,242,0.65)';
+  ctx.lineWidth = 1.15;
+  ctx.beginPath();
+  ctx.moveTo(width * 0.43, scanY);
+  ctx.lineTo(width * 0.57, scanY);
+  ctx.stroke();
+  ctx.restore();
+
+  const eyeGlow = 0.4 + 0.6 * Math.sin(t * 3.4) * Math.sin(t * 1.7 + 0.3);
+  const eyeY = height * 0.27;
+  const eyeGap = width * 0.05;
+  for (const dir of [-1, 1]) {
+    const x = width * 0.5 + eyeGap * dir;
+    ctx.fillStyle = `rgba(159,250,242,${0.18 + Math.abs(eyeGlow) * 0.38})`;
+    ctx.fillRect(x - width * 0.022, eyeY - 1.5, width * 0.044, 3);
+  }
+
+  ctx.save();
+  ctx.strokeStyle = 'rgba(60,224,212,0.22)';
+  ctx.lineWidth = 1;
+  const retX = width * 0.5;
+  const retY = height * 0.58;
+  ctx.beginPath();
+  ctx.arc(retX, retY, Math.min(width, height) * 0.08, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(retX - 18, retY);
+  ctx.lineTo(retX + 18, retY);
+  ctx.moveTo(retX, retY - 18);
+  ctx.lineTo(retX, retY + 18);
+  ctx.stroke();
+  ctx.restore();
+
+  if (time >= nextBurstAt) {
+    spawnBurst(time);
+  }
+  drawBursts(time);
+  requestAnimationFrame(render);
+}
+
+window.addEventListener('resize', resize);
+resize();
+requestAnimationFrame(render);
+</script>
+</body>
+</html>

@@ -305,11 +305,15 @@ Respond naturally. Be present. Be real."""
                 messages.append({'role': turn['role'], 'content': turn['content']})
             messages.append({'role': 'user', 'content': message})
 
-            response = ollama.chat(
+            # Session 11p: route through llm_client so the backend (Ollama
+            # or llama.cpp CUDA) is env-selectable at MAEZ_LLM_BACKEND.
+            from core import llm_client as _llm_client
+            response = _llm_client.chat(
                 model='gemma4:26b', messages=messages,
+                think=False,  # 11m parity — no thinking on conversational paths
                 options={'temperature': 0.85, 'num_predict': 4096},
             )
-            reply = response.message.content.strip()
+            reply = (response.message.content or '').strip()
             if not reply:
                 reply = "Give me a moment."
         except Exception as e:

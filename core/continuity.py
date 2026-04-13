@@ -300,9 +300,10 @@ def _generate_resume_instructions(mode: str, concerns: list, last_thought: dict,
         _resume_cache['candidate'] == watchdog.get('candidate_id')):
         return _resume_cache['text']
 
-    # Try LLM generation
+    # Try LLM generation (Session 11r: via llm_client for backend
+    # routing; was missed in 11p batch migration)
     try:
-        import ollama
+        from core import llm_client as _llm_client
         concern_text = '; '.join(concerns[:3]) if concerns else 'none'
         thought_text = last_thought.get('text', '')[:100] if last_thought else ''
         watchdog_text = (f"watchdog active for candidate {watchdog.get('candidate_id')}"
@@ -318,12 +319,12 @@ def _generate_resume_instructions(mode: str, concerns: list, last_thought: dict,
             f"what to avoid repeating, and what matters right now. "
             f"Address yourself directly. Be specific, not generic."
         )
-        resp = ollama.chat(
+        resp = _llm_client.chat(
             model='gemma4:26b',
             messages=[{'role': 'user', 'content': prompt}],
             options={'temperature': 0.3, 'num_predict': 4096},
         )
-        text = resp.message.content.strip()
+        text = (resp.message.content or '').strip()
         if text and len(text) > 10:
             _resume_cache = {'text': text, 'generated_at': now,
                              'mode': mode, 'candidate': watchdog.get('candidate_id'),

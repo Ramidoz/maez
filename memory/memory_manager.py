@@ -157,16 +157,20 @@ class MemoryManager:
         last = self._get_last_consolidation()
         cutoff = last.isoformat() if last.tzinfo else last.replace(tzinfo=timezone.utc).isoformat()
 
-        # Get all raw memories (ChromaDB doesn't support timestamp filtering natively,
-        # so we pull recent entries and filter in Python)
+        # Get recent raw memories. ChromaDB's get(limit=N) returns the
+        # OLDEST N records, so we use offset to skip to the end.
+        # 11u fix: was fetching the oldest 200 memories (from April 6-7)
+        # instead of the most recent — consolidation never found new data.
         total = self.raw.count()
         if total == 0:
             logger.info("Daily consolidation: no raw memories to consolidate")
             return None
 
-        batch_size = min(total, 200)
+        batch_size = min(total, 500)
+        offset = max(0, total - batch_size)
         results = self.raw.get(
             limit=batch_size,
+            offset=offset,
             include=["documents", "metadatas"],
         )
 
@@ -234,7 +238,10 @@ class MemoryManager:
         )
 
         try:
-            response = ollama.chat(
+            # Session 11r: route through llm_client so this 3am consolidation
+            # path honors MAEZ_LLM_BACKEND. Missed in 11p batch migration.
+            from core import llm_client as _llm_client
+            response = _llm_client.chat(
                 model=MODEL,
                 messages=[
                     {"role": "system", "content": soul},
@@ -242,7 +249,7 @@ class MemoryManager:
                 ],
                 options={"temperature": 0.3, "num_predict": 4096},
             )
-            summary = response.message.content.strip()
+            summary = (response.message.content or "").strip()
             if not summary:
                 logger.warning("Daily consolidation: model returned empty summary")
                 return None
@@ -377,6 +384,36 @@ class MemoryManager:
 
         return {"core": core, "daily": daily, "raw": raw}
 
+    def recent_raw(self, n: int = 80) -> dict:
+        """Fetch the last N raw memories in chronological order.
+
+        Session 11o: added for dream-state pattern detection. Unlike
+        recall_for_cycle()/recall_for_telegram() which do semantic search
+        and topic-aware reranking, this just grabs the most recent N raw
+        entries in chronological order. The dream-mode reasoning is looking
+        for trajectories across a recent window, not semantic matches to a
+        query, so this is the right lens.
+
+        Returns a dict shaped like a Chroma get() response:
+          {'documents': [...], 'metadatas': [...], 'ids': [...]}
+        Chroma's .get() returns newest-first by default; we reverse into
+        chronological order for readability in prompts.
+        """
+        try:
+            if self.raw.count() == 0:
+                return {"documents": [], "metadatas": [], "ids": []}
+            results = self.raw.get(limit=n, include=["documents", "metadatas"])
+            if results.get("documents"):
+                results["documents"] = list(reversed(results["documents"]))
+                if results.get("metadatas"):
+                    results["metadatas"] = list(reversed(results["metadatas"]))
+                if results.get("ids"):
+                    results["ids"] = list(reversed(results["ids"]))
+            return results
+        except Exception as e:
+            logger.error("memory.recent_raw failed: %s", e)
+            return {"documents": [], "metadatas": [], "ids": []}
+
     def format_for_prompt(self, recalled: dict) -> str:
         """Format multi-tier recalled memories into a prompt block."""
         lines = []
@@ -433,6 +470,29 @@ class MemoryManager:
     def count(self) -> int:
         """Total memories across all tiers."""
         return self.memory_stats()["total"]
+
+    def get_telegram_exchanges(self, limit: int | None = 400) -> list[dict]:
+        """Return stored Rohit↔Maez Telegram exchanges from the raw archive."""
+        if self.raw.count() == 0:
+            return []
+
+        results = self.raw.get(
+            where={"type": "telegram_exchange"},
+            include=["documents", "metadatas"],
+        )
+
+        memories = []
+        for mem_id, doc, meta in zip(results["ids"], results["documents"], results["metadatas"]):
+            memories.append({
+                "id": mem_id,
+                "content": doc,
+                "metadata": meta,
+            })
+
+        memories.sort(key=lambda m: m.get("metadata", {}).get("timestamp", ""))
+        if limit is not None and limit > 0:
+            return memories[-limit:]
+        return memories
 
     def migrate_wings(self, batch_size: int = 50) -> int:
         """Tag untagged raw memories with topic wings. Run nightly, non-blocking."""

@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Maez · Local Dashboard (private)</title>
+<link rel="stylesheet" href="/maez.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+:root {
+  --bg:       #0c0a08;
+  --bg2:      #130f0b;
+  --panel:    #180f0c;
+  --border:   #2a241a;
+  --ink:      #f3ece0;
+  --ink-dim:  #9e907a;
+  --ink-fade: #554a3c;
+  --amber:    #e8a33a;
+  --amber-h:  #f4b854;
+  --blue:     #6a8c5a;
+  --blue-h:   #8dbf6a;
+  --green:    #8dbf6a;
+  --red:      #e86a6a;
+  --purple:   #c4a3d8;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, system-ui, "Segoe UI", sans-serif;
+  font-size: 13px;
+  line-height: 1.55;
+  min-height: 100vh;
+}
+code, .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+
+/* ── layout: full page with sidebar ───────────────────── */
+.shell { display: grid; grid-template-columns: 1fr 320px; gap: 0; min-height: 100vh; }
+.main { padding: 1.2rem 1.5rem 4rem; max-width: 1100px; overflow-x: hidden; }
+.sidebar { background: var(--panel); border-left: 1px solid var(--border); padding: 1.2rem 1rem; position: sticky; top: 0; max-height: 100vh; overflow-y: auto; }
+@media (max-width: 900px) { .shell { grid-template-columns: 1fr; } .sidebar { position: static; max-height: none; border-left: none; border-top: 1px solid var(--border); } }
+
+/* ── live status bar (top of main) ────────────────────── */
+.live-bar { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem 1rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 6px 14px; margin-bottom: 1.5rem; }
+.live-item { border-right: 1px solid var(--border); padding-right: 14px; }
+.live-item:last-child { border-right: none; }
+.live-lbl { color: var(--ink-dim); font-size: 9px; text-transform: uppercase; letter-spacing: 1.2px; }
+.live-val { color: var(--ink); font-size: 14px; font-weight: 600; font-family: "JetBrains Mono", monospace; margin-top: 2px; }
+.live-val.alive { color: var(--green); }
+.live-val.warn  { color: var(--amber); }
+.live-val.err   { color: var(--red); }
+.live-blink { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); margin-right: 5px; animation: blink 1.5s ease-in-out infinite; }
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+.header { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.3rem; }
+.brand { font-family: "JetBrains Mono", monospace; font-weight: 700; font-size: 15px; color: var(--amber); letter-spacing: 4px; }
+.tagline { color: var(--ink-dim); font-size: 11px; letter-spacing: 1.8px; text-transform: uppercase; }
+.warn-banner { background: rgba(232,163,58,0.08); border: 1px solid rgba(232,163,58,0.3); border-radius: 6px; color: var(--amber); padding: 6px 12px; font-size: 11px; margin-bottom: 14px; text-align: center; font-family: "JetBrains Mono", monospace; }
+
+/* ── sections ─────────────────────────────────────────── */
+.section { margin-bottom: 2rem; }
+.section-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 0.7rem; }
+.section-num { color: var(--amber); font-family: "JetBrains Mono", monospace; font-size: 10px; font-weight: 500; letter-spacing: 2px; }
+.section-title { color: var(--ink); font-size: 15px; font-weight: 600; }
+.section-sub { color: var(--ink-dim); font-size: 11px; margin-top: 2px; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.2rem; }
+svg { display: block; width: 100%; overflow: visible; }
+.node-box { fill: var(--bg2); stroke: var(--blue); stroke-width: 1.5; }
+.node-box.active { fill: rgba(232,163,58,0.09); stroke: var(--amber); }
+.node-label { fill: var(--ink); font-size: 11px; font-weight: 500; text-anchor: middle; }
+.node-sub { fill: var(--ink-dim); font-size: 9px; text-anchor: middle; }
+.edge { fill: none; stroke: var(--ink-fade); stroke-width: 1.1; }
+
+/* ── mindmap (interactive) ───────────────────────────── */
+.mindmap-wrap { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; position: relative; height: 540px; overflow: hidden; }
+.mm-svg { width: 100%; height: 100%; }
+.mm-node-bg { cursor: pointer; stroke: var(--border); stroke-width: 1.5; }
+.mm-node-bg.built   { fill: rgba(106,140,90,0.12); stroke: var(--blue); }
+.mm-node-bg.proven  { fill: rgba(74,222,128,0.12); stroke: var(--green); }
+.mm-node-bg.staging { fill: rgba(167,136,232,0.12); stroke: var(--purple); }
+.mm-node-bg.next    { fill: rgba(232,163,58,0.12); stroke: var(--amber); }
+.mm-node-bg.watch   { fill: rgba(240,96,96,0.10); stroke: var(--red); }
+.mm-node-bg.fixed   { fill: rgba(74,222,128,0.08); stroke: #2aaa7a; }
+.mm-node-bg.vision  { fill: rgba(167,136,232,0.08); stroke: #6d5aa0; }
+.mm-node-bg.root    { fill: rgba(232,163,58,0.2); stroke: var(--amber); stroke-width: 2; }
+.mm-node-bg:hover   { filter: brightness(1.3); }
+.mm-node-label { fill: var(--ink); font-size: 11px; font-weight: 500; pointer-events: none; text-anchor: middle; }
+.mm-link { fill: none; stroke: var(--ink-fade); stroke-width: 1.2; }
+
+.mm-detail { position: absolute; right: 10px; top: 10px; width: 260px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: none; }
+.mm-detail.open { display: block; }
+.mm-d-title { color: var(--amber); font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+.mm-d-status { display: inline-block; font-size: 10px; padding: 1px 7px; border-radius: 4px; margin-bottom: 6px; font-family: "JetBrains Mono", monospace; }
+.mm-d-body { color: var(--ink-dim); font-size: 11px; line-height: 1.5; }
+.mm-d-close { position: absolute; top: 6px; right: 8px; color: var(--ink-dim); cursor: pointer; font-size: 14px; }
+.mm-legend { position: absolute; left: 10px; bottom: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+.mm-leg { display: flex; align-items: center; gap: 4px; color: var(--ink-dim); font-size: 10px; }
+.mm-leg-dot { width: 7px; height: 7px; border-radius: 50%; }
+
+/* ── sidebar: checklist ───────────────────────────────── */
+.sb-brand { color: var(--amber); font-family: "JetBrains Mono", monospace; font-size: 11px; font-weight: 700; letter-spacing: 2px; margin-bottom: 0.4rem; }
+.sb-sub { color: var(--ink-dim); font-size: 10px; margin-bottom: 1.3rem; }
+
+.sb-col { margin-bottom: 1.5rem; }
+.sb-col-title { color: var(--ink); font-size: 10px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--border); padding-bottom: 5px; margin-bottom: 8px; display: flex; justify-content: space-between; }
+.sb-col-title .cnt { color: var(--ink-dim); font-family: "JetBrains Mono", monospace; }
+.sb-item { display: flex; gap: 6px; padding: 5px 4px; border-radius: 4px; cursor: pointer; border-bottom: 1px solid rgba(30,31,46,0.5); }
+.sb-item:hover { background: rgba(106,140,90,0.06); }
+.sb-item-body { flex: 1; }
+.sb-item-label { color: var(--ink); font-size: 11px; line-height: 1.35; }
+.sb-item-meta { color: var(--ink-dim); font-size: 9px; font-family: "JetBrains Mono", monospace; margin-top: 1px; }
+.sb-badge { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 3px; margin-right: 4px; font-family: "JetBrains Mono", monospace; }
+.b-done    { background: rgba(74,222,128,0.15); color: var(--green); }
+.b-staging { background: rgba(167,136,232,0.15); color: var(--purple); }
+.b-next    { background: rgba(232,163,58,0.15); color: var(--amber); }
+.b-watch   { background: rgba(240,96,96,0.15); color: var(--red); }
+
+.sb-notes { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin-top: 6px; display: none; }
+.sb-notes.open { display: block; }
+.sb-notes textarea { width: 100%; min-height: 60px; background: transparent; border: 1px solid var(--border); color: var(--ink); font-family: inherit; font-size: 11px; padding: 5px 7px; border-radius: 4px; resize: vertical; }
+.sb-notes .note-saved { color: var(--green); font-size: 9px; margin-top: 4px; display: none; }
+.sb-notes .note-saved.show { display: block; }
+
+/* ── architect log ─────────────────────────────────────── */
+.arch-log { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 1.5rem; }
+.arch-title { color: var(--ink); font-size: 10px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 6px; }
+.arch-row { display: flex; justify-content: space-between; font-size: 10px; font-family: "JetBrains Mono", monospace; padding: 3px 0; border-bottom: 1px solid rgba(30,31,46,0.4); }
+.arch-row:last-child { border-bottom: none; }
+.arch-row .archs { color: var(--ink-dim); }
+.arch-row .model { color: var(--blue); }
+.arch-row.current .model { color: var(--amber); font-weight: 700; }
+
+/* ── footer ───────────────────────────────────────────── */
+.footer-note { color: var(--ink-fade); font-size: 10px; text-align: center; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border); font-family: "JetBrains Mono", monospace; }
+
+/* memory mini-tiers */
+.mem-tiers { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+.mem-tier { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem; position: relative; }
+.mem-tier::after { content: "→"; position: absolute; right: -10px; top: 50%; transform: translateY(-50%); color: var(--amber); font-size: 16px; }
+.mem-tier:last-child::after { content: none; }
+.mem-count { font-family: "JetBrains Mono", monospace; color: var(--amber); font-size: 20px; font-weight: 700; }
+.mem-name { color: var(--ink); font-size: 11px; font-weight: 600; margin-top: 2px; }
+.mem-desc { color: var(--ink-dim); font-size: 10px; margin-top: 3px; line-height: 1.45; }
+
+/* tier rows */
+.tiers { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
+.tier { background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--blue); border-radius: 6px; padding: 0.6rem 0.8rem; }
+.tier.t0 { border-left-color: #2aaa7a; }
+.tier.t1 { border-left-color: var(--blue); }
+.tier.t2 { border-left-color: var(--amber); }
+.tier.t3 { border-left-color: #e57a35; }
+.tier.fb { border-left-color: var(--red); }
+.tier-name { font-weight: 600; font-size: 11px; color: var(--ink); }
+.tier-delay { color: var(--ink-dim); font-size: 9px; font-family: "JetBrains Mono", monospace; margin-bottom: 5px; }
+.tier-ex { color: var(--ink-dim); font-size: 10px; line-height: 1.4; }
+
+.callout { background: rgba(232,163,58,0.06); border-left: 3px solid var(--amber); padding: 0.7rem 0.9rem; border-radius: 5px; margin: 10px 0; color: var(--ink); font-size: 11px; }
+.callout.blue { background: rgba(106,140,90,0.06); border-left-color: var(--blue); }
+.callout.red { background: rgba(240,96,96,0.06); border-left-color: var(--red); }
+.flag { display: inline-block; background: rgba(240,96,96,0.12); color: var(--red); border: 1px solid rgba(240,96,96,0.3); border-radius: 3px; padding: 1px 6px; font-family: "JetBrains Mono", monospace; font-size: 10px; margin-left: 4px; }
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+<!-- ══════════════ MAIN ══════════════ -->
+<div class="main">
+  <div class="warn-banner">⚠ LOCAL DASHBOARD · 127.0.0.1:11435 · private to Rohit · NOT exposed through nginx</div>
+
+  <!-- live health bar -->
+  <div class="live-bar">
+    <div class="live-item">
+      <div class="live-lbl">daemon</div>
+      <div class="live-val alive" id="h-status"><span class="live-blink"></span>loading…</div>
+    </div>
+    <div class="live-item">
+      <div class="live-lbl">cycle</div>
+      <div class="live-val" id="h-cycle">—</div>
+    </div>
+    <div class="live-item">
+      <div class="live-lbl">memory</div>
+      <div class="live-val" id="h-mem">—</div>
+    </div>
+    <div class="live-item">
+      <div class="live-lbl">uptime</div>
+      <div class="live-val" id="h-uptime">—</div>
+    </div>
+    <div class="live-item">
+      <div class="live-lbl">GPU temp</div>
+      <div class="live-val" id="h-gpu">—</div>
+    </div>
+    <div class="live-item">
+      <div class="live-lbl">CPU / RAM</div>
+      <div class="live-val" id="h-cpu">—</div>
+    </div>
+  </div>
+
+  <div class="header">
+    <div class="brand">MAEZ · LOCAL</div>
+    <div class="tagline">interactive mission control · architect view</div>
+  </div>
+
+  <!-- ── INTERACTIVE MINDMAP ── -->
+  <div class="section">
+    <div class="section-head">
+      <div class="section-num">M /</div>
+      <div>
+        <div class="section-title">Interactive architecture mindmap</div>
+        <div class="section-sub">Click any node to see details. Color-coded by status.</div>
+      </div>
+    </div>
+    <div class="mindmap-wrap">
+      <svg id="mindmap" class="mm-svg"></svg>
+      <div class="mm-detail" id="mmDetail">
+        <div class="mm-d-close" onclick="document.getElementById('mmDetail').classList.remove('open')">×</div>
+        <div class="mm-d-title" id="mmdTitle"></div>
+        <div class="mm-d-status mono" id="mmdStatus"></div>
+        <div class="mm-d-body" id="mmdBody"></div>
+      </div>
+      <div class="mm-legend">
+        <div class="mm-leg"><div class="mm-leg-dot" style="background:var(--blue)"></div>built</div>
+        <div class="mm-leg"><div class="mm-leg-dot" style="background:var(--green)"></div>proven</div>
+        <div class="mm-leg"><div class="mm-leg-dot" style="background:var(--purple)"></div>staging</div>
+        <div class="mm-leg"><div class="mm-leg-dot" style="background:var(--amber)"></div>next</div>
+        <div class="mm-leg"><div class="mm-leg-dot" style="background:var(--red)"></div>watch</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── LIVE REASONING LOOP ── -->
+  <div class="section">
+    <div class="section-head">
+      <div class="section-num">01 /</div>
+      <div>
+        <div class="section-title">Live reasoning loop</div>
+        <div class="section-sub">One cycle every 30s. Perceive → Remember → Reason → Score → Store → Act.</div>
+      </div>
+    </div>
+    <div class="panel">
+      <svg id="loop" viewBox="0 0 1100 180"></svg>
+    </div>
+  </div>
+
+  <!-- ── MEMORY ── -->
+  <div class="section">
+    <div class="section-head">
+      <div class="section-num">02 /</div>
+      <div>
+        <div class="section-title">Memory architecture</div>
+        <div class="section-sub">Raw → Daily → Core. Consolidation at 3 AM. Nothing deleted.</div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="mem-tiers">
+        <div class="mem-tier">
+          <div class="mem-count" id="mc-raw">3,645</div>
+          <div class="mem-name">Raw archive</div>
+          <div class="mem-desc">Every cycle + exchange. Full snapshot metadata. 6-wing topic tag.</div>
+        </div>
+        <div class="mem-tier">
+          <div class="mem-count" id="mc-daily">1</div>
+          <div class="mem-name">Daily</div>
+          <div class="mem-desc">Nightly gemma4 roll-up from last consolidation timestamp.</div>
+        </div>
+        <div class="mem-tier">
+          <div class="mem-count" id="mc-core">7</div>
+          <div class="mem-name">Core</div>
+          <div class="mem-desc">Permanent. Always injected into every reasoning prompt.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── ACTION ENGINE ── -->
+  <div class="section">
+    <div class="section-head">
+      <div class="section-num">04 /</div>
+      <div>
+        <div class="section-title">Action engine — tiered oversight</div>
+        <div class="section-sub">Escalating human oversight. Forbidden hardcoded.</div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="tiers">
+        <div class="tier t0"><div class="tier-name">Tier 0 · Breathing</div><div class="tier-delay">immediate</div><div class="tier-ex">promote_to_core_memory · write_soul_note · read_file · query_system</div></div>
+        <div class="tier t1"><div class="tier-name">Tier 1 · Autonomous</div><div class="tier-delay">30s delay</div><div class="tier-ex">clean_temp_files · run_safe_command · git_commit</div></div>
+        <div class="tier t2"><div class="tier-name">Tier 2 · Notify</div><div class="tier-delay">5 min cancel</div><div class="tier-ex">kill_process · restart_service · git_push</div></div>
+        <div class="tier t3"><div class="tier-name">Tier 3 · Approve</div><div class="tier-delay">10 min Telegram</div><div class="tier-ex">system_reboot · modify_firewall · sudo_command</div></div>
+        <div class="tier fb"><div class="tier-name">Forbidden</div><div class="tier-delay">never</div><div class="tier-ex">stop_ollama · delete_memory_db</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── FAST-LANE ── -->
+  <div class="section">
+    <div class="section-head">
+      <div class="section-num">05 /</div>
+      <div>
+        <div class="section-title">Fast-lane architecture</div>
+        <div class="section-sub">Sessions 11a–11h staging track.</div>
+      </div>
+    </div>
+    <div class="panel">
+      <svg id="fastlane" viewBox="0 0 1100 220"></svg>
+      <div class="callout"><b>Feature flag:</b> <code>MAEZ_LIVE_FAST_LANE_ENABLED=1</code> · guest pinned local-only · audit metadata-only at <code>memory/fast_reply_audit.jsonl</code></div>
+    </div>
+  </div>
+
+  <!-- ── SELF-EVOLUTION ── -->
+  <div class="section">
+    <div class="section-head">
+      <div class="section-num">06 /</div>
+      <div>
+        <div class="section-title">Self-evolution spine</div>
+        <div class="section-sub">Auto-apply = False by contract. Two-layer rollback.</div>
+      </div>
+    </div>
+    <div class="panel">
+      <svg id="evolution" viewBox="0 0 1100 170"></svg>
+      <div class="callout red"><b>AUTO_APPLY_ENABLED = False</b><span class="flag">hardcoded</span> — no proposal ever applied without Rohit.</div>
+    </div>
+  </div>
+
+  <div class="footer-note">Maez · local dashboard · click any checklist item to add a note (localStorage)</div>
+</div>
+
+<!-- ══════════════ SIDEBAR ══════════════ -->
+<div class="sidebar">
+  <div class="sb-brand">MAEZ CHECKLIST</div>
+  <div class="sb-sub">Done · in progress · next</div>
+
+  <div class="sb-col">
+    <div class="sb-col-title">Done <span class="cnt" id="cnt-done">0</span></div>
+    <div id="col-done"></div>
+  </div>
+
+  <div class="sb-col">
+    <div class="sb-col-title">In progress <span class="cnt" id="cnt-progress">0</span></div>
+    <div id="col-progress"></div>
+  </div>
+
+  <div class="sb-col">
+    <div class="sb-col-title">Next <span class="cnt" id="cnt-next">0</span></div>
+    <div id="col-next"></div>
+  </div>
+
+  <div class="arch-log">
+    <div class="arch-title">Architect log</div>
+    <div class="arch-row"><span class="archs">Sessions 1–10</span><span class="model">Claude Sonnet</span></div>
+    <div class="arch-row"><span class="archs">Sessions 11a–11h</span><span class="model">GPT-5.4</span></div>
+    <div class="arch-row current"><span class="archs">Session 11i+</span><span class="model">Claude Sonnet</span></div>
+  </div>
+</div>
+
+</div>
+
+<script>
+// ═════════════════════════════════════════════════════════
+//  LIVE HEALTH POLL — /health every 10s
+// ═════════════════════════════════════════════════════════
+function fmtUptime(s) {
+  if (s == null) return '—';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 24) {
+    const d = Math.floor(h / 24);
+    return d + 'd ' + (h % 24) + 'h';
+  }
+  return h + 'h ' + m + 'm';
+}
+
+async function poll() {
+  try {
+    const r = await fetch('/health', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    document.getElementById('h-status').innerHTML = '<span class="live-blink"></span>' + (d.status || '?');
+    document.getElementById('h-status').className = 'live-val alive';
+    document.getElementById('h-cycle').textContent = d.cycle_count ?? '—';
+    if (d.memory) {
+      const tot = d.memory.total ?? ((d.memory.raw||0) + (d.memory.daily||0) + (d.memory.core||0));
+      document.getElementById('h-mem').textContent = (tot || 0).toLocaleString();
+      document.getElementById('mc-raw').textContent  = (d.memory.raw   || 0).toLocaleString();
+      document.getElementById('mc-daily').textContent= (d.memory.daily || 0).toLocaleString();
+      document.getElementById('mc-core').textContent = (d.memory.core  || 0).toLocaleString();
+    }
+    document.getElementById('h-uptime').textContent = fmtUptime(d.uptime_seconds);
+    if (d.system) {
+      const gt = d.system.gpu_temp_c;
+      const gpuEl = document.getElementById('h-gpu');
+      gpuEl.textContent = (gt != null ? gt.toFixed(0) : '—') + '°C';
+      gpuEl.className = 'live-val ' + (gt > 85 ? 'err' : gt > 75 ? 'warn' : 'alive');
+      const cpu = d.system.cpu_percent, ram = d.system.ram_percent;
+      document.getElementById('h-cpu').textContent =
+        (cpu != null ? cpu.toFixed(0) : '—') + '% / ' + (ram != null ? ram.toFixed(0) : '—') + '%';
+    }
+  } catch (e) {
+    document.getElementById('h-status').innerHTML = '<span class="live-blink" style="background:var(--red)"></span>offline';
+    document.getElementById('h-status').className = 'live-val err';
+  }
+}
+poll();
+setInterval(poll, 10000);
+
+
+// ═════════════════════════════════════════════════════════
+//  CHECKLIST  (sidebar)
+// ═════════════════════════════════════════════════════════
+const checklist = [
+  // DONE
+  { id: 'daemon',       col: 'done',     label: 'maez.service + reasoning loop', sess: 's1',  note: 'Core nervous system, 30s cycle.' },
+  { id: 'chromadb',     col: 'done',     label: 'ChromaDB 3-tier memory',         sess: 's1',  note: 'Raw/daily/core. Never deleted.' },
+  { id: 'telegram',     col: 'done',     label: 'Private + Dev + Public bots',    sess: 's1-6',note: '3 bots. Truncation fixed s10.' },
+  { id: 'perception',   col: 'done',     label: 'Perception stack (8 inputs)',    sess: 's1-6',note: 'System, screen, face, calendar, git, github, reddit, presence.' },
+  { id: 'actions',      col: 'done',     label: 'Action engine tier 0–3',         sess: 's8',  note: 'Forbidden hardcoded. Trust tracker.' },
+  { id: 'webui',        col: 'done',     label: 'maez.live web interface',        sess: 's6',  note: 'Flask at :11437, auth, trust tiers.' },
+  { id: 'cognition',    col: 'done',     label: 'Cognition quality system',       sess: 's9',  note: 'Score 0–100, failure classifier, anti-fixation.' },
+  { id: 'evolution',    col: 'done',     label: 'Self-edit rail (6 gates proven)',sess: 's9',  note: 'Patch → validate → apply → watchdog → rollback.' },
+  { id: 'continuity',   col: 'done',     label: 'Runtime continuity capsule',     sess: 's9',  note: 'Identity survives restart. 5-cycle orientation.' },
+  { id: 'fastlane',     col: 'done',     label: 'Fast-lane staging boundary',     sess: 's11a-h',note: '127.0.0.1:8765, 3-source cache, audit log.' },
+  { id: 'mindmap',      col: 'done',     label: 'Living project mindmap',         sess: 's11h',note: 'Served at /mindmap via nginx.' },
+  { id: 'temporal',     col: 'done',     label: 'Temporal grounding hotfix',      sess: 's11i',note: 'Stale weekday phrases stripped from greetings.' },
+  { id: 'adapter',      col: 'done',     label: 'maez-web staging adapter wired', sess: 's11i',note: 'Feature-flagged /v1/fast-reply route.' },
+
+  // IN PROGRESS
+  { id: 'obswin',       col: 'progress', label: 'Live observation window',        sess: 's10', note: 'One proposal at a time, 20-30 cycles between.' },
+  { id: 'vague-bug',    col: 'progress', label: 'Vague→FIXATION routing bug',     sess: 's10', note: 'Maez self-diagnosed. Needs VAGUENESS_DETECTION label.' },
+  { id: 'gate',         col: 'progress', label: 'Fast-lane traffic gate',         sess: 's11i',note: 'Adapter enabled but needs real session of traffic.' },
+  { id: 'audit',        col: 'progress', label: 'Audit inspection routine',       sess: 's11h',note: 'audit_inspect.py built. Review pending.' },
+  { id: 'guest-cap',    col: 'progress', label: 'Guest timeout cap vs Gemma',     sess: 's11i',note: '60s too tight for thinking model. Known issue.' },
+
+  // NEXT
+  { id: 'vagueness',    col: 'next',     label: 'Ship VAGUENESS_DETECTION label', sess: 'next',note: 'Decouple from REPETITION_DETECTION. Maez already proposed this.' },
+  { id: 'desktop',      col: 'next',     label: 'Rohit desktop wrapper',          sess: 'next',note: 'After healthy audit patterns. First cloud-eligible caller.' },
+  { id: 'cloud-budget', col: 'next',     label: 'Cloud sub-budget enforcement',   sess: 'next',note: 'Deferred from 11h. Needs careful design.' },
+  { id: 'scrapling',    col: 'next',     label: 'Scrapling web skill',            sess: 'next',note: 'Active investigator, not always-on.' },
+  { id: 'voice',        col: 'next',     label: 'Voice pipeline revival',         sess: 'later',note: 'PipeWire virtual source fix required.' },
+  { id: 'telegram-fl',  col: 'next',     label: 'Telegram fast lane',             sess: 'last',note: 'Highest-pressure surface. Integrate last.' },
+  { id: 'publishing',   col: 'next',     label: 'Publishing agent (X + Reddit)',  sess: 'next',note: 'Claude Managed Agent, supervised.' },
+];
+
+function statusBadge(col) {
+  if (col === 'done')     return '<span class="sb-badge b-done">DONE</span>';
+  if (col === 'progress') return '<span class="sb-badge b-staging">WIP</span>';
+  if (col === 'next')     return '<span class="sb-badge b-next">NEXT</span>';
+  return '';
+}
+
+function renderChecklist() {
+  ['done', 'progress', 'next'].forEach(col => {
+    const items = checklist.filter(c => c.col === col);
+    document.getElementById('cnt-' + col).textContent = items.length;
+    const container = document.getElementById('col-' + col);
+    container.innerHTML = '';
+    items.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'sb-item';
+      row.innerHTML = `
+        <div class="sb-item-body">
+          <div class="sb-item-label">${statusBadge(item.col)}${item.label}</div>
+          <div class="sb-item-meta">${item.sess}</div>
+          <div class="sb-notes" id="notes-${item.id}">
+            <textarea placeholder="Your notes...">${localStorage.getItem('maez-note-' + item.id) || ''}</textarea>
+            <div class="note-saved" id="saved-${item.id}">✓ saved</div>
+          </div>
+        </div>`;
+      row.onclick = (ev) => {
+        if (ev.target.tagName === 'TEXTAREA') return;
+        const n = document.getElementById('notes-' + item.id);
+        n.classList.toggle('open');
+      };
+      container.appendChild(row);
+    });
+  });
+  // wire up autosave
+  document.querySelectorAll('.sb-notes textarea').forEach(ta => {
+    ta.addEventListener('input', (e) => {
+      const id = e.target.closest('.sb-notes').id.replace('notes-', '');
+      localStorage.setItem('maez-note-' + id, e.target.value);
+      const saved = document.getElementById('saved-' + id);
+      saved.classList.add('show');
+      clearTimeout(saved._t);
+      saved._t = setTimeout(() => saved.classList.remove('show'), 1400);
+    });
+  });
+}
+renderChecklist();
+
+
+// ═════════════════════════════════════════════════════════
+//  INTERACTIVE MINDMAP (force-directed)
+// ═════════════════════════════════════════════════════════
+(function() {
+  const nodes = [
+    { id: 'maez', label: 'Maez', status: 'root', note: 'The whole project. Persistent system-level AI.', x: 0, y: 0, fixed: true },
+
+    { id: 'core',      label: 'Core',        status: 'built',   note: 'Daemon, perception, memory, action engine.', parent: 'maez' },
+    { id: 'percept',   label: 'Perception',  status: 'built',   note: '8 inputs: system, screen, face, calendar, git, github, reddit, presence.', parent: 'maez' },
+    { id: 'cognition', label: 'Cognition',   status: 'built',   note: 'Quality scorer, failure classifier, anti-fixation, behavior bridge.', parent: 'maez' },
+    { id: 'evol',      label: 'Self-edit',   status: 'proven',  note: '6 gates proven. AUTO_APPLY=False. Two-layer rollback.', parent: 'maez' },
+    { id: 'comm',      label: 'Comm',        status: 'built',   note: 'Private + Dev + Public Telegram bots. maez.live web UI.', parent: 'maez' },
+    { id: 'fast',      label: 'Fast-lane',   status: 'staging', note: 'Sessions 11a-11h. Local HTTP boundary at 127.0.0.1:8765.', parent: 'maez' },
+    { id: 'fixes',     label: 'Fixes',       status: 'proven',  note: 'Telegram truncation · dev cards · temporal grounding · audit rotation.', parent: 'maez' },
+    { id: 'issues',    label: 'Known',       status: 'watch',   note: 'Vague routing, fast-lane gate, gemma empty success, 2% insight rate.', parent: 'maez' },
+    { id: 'roadmap',   label: 'Roadmap',     status: 'next',    note: '11i enablement, desktop wrapper later, Telegram last.', parent: 'maez' },
+
+    // Core children
+    { id: 'daemon',  label: 'maez.service',   status: 'built',  note: 'Reasoning loop every 30s. Boot persistent.', parent: 'core' },
+    { id: 'gemma',   label: 'gemma-4-26B-A4B',     status: 'built',  note: 'Local llama.cpp. RTX 4090. Q4_K_M. Merged LoRA 2026-04-12.', parent: 'core' },
+    { id: 'chroma',  label: 'ChromaDB 3-tier',status: 'built',  note: 'Raw/daily/core. Nothing deleted.', parent: 'core' },
+    { id: 'actions', label: 'Action engine',  status: 'built',  note: 'Tier 0-3 + forbidden. Trust tracker.', parent: 'core' },
+
+    // Perception children
+    { id: 'screen',   label: 'Screen',  status: 'built', note: 'gemma4 vision every 60s.', parent: 'percept' },
+    { id: 'face',     label: 'Face',    status: 'built', note: 'Rohit enrolled, 20 frames.', parent: 'percept' },
+    { id: 'calendar', label: 'Calendar',status: 'built', note: 'Google Calendar, 8h lookahead.', parent: 'percept' },
+
+    // Evolution
+    { id: 'proposal',label: 'Proposals', status: 'proven', note: 'Daemon-native from critique path.', parent: 'evol' },
+    { id: 'wdog',    label: 'Watchdog',  status: 'proven', note: '20-30 cycle regression window.', parent: 'evol' },
+
+    // Fast-lane children
+    { id: 'cache',    label: 'Percept cache', status: 'staging', note: 'Screen + system + calendar workers.', parent: 'fast' },
+    { id: 'router',   label: 'Backend router',status: 'staging', note: 'Local-first, policy-aware.', parent: 'fast' },
+    { id: 'redactor', label: 'Cloud redactor',status: 'staging', note: 'PII + internal identifier patterns.', parent: 'fast' },
+    { id: 'auditlog', label: 'Audit log',     status: 'staging', note: 'JSONL, metadata only, rotation.', parent: 'fast' },
+
+    // Issues
+    { id: 'vague',    label: 'Vague routing', status: 'watch', note: 'VAGUENESS_DETECTION needed.', parent: 'issues' },
+    { id: 'gate',     label: 'Traffic gate',  status: 'watch', note: 'Real session observation pending.', parent: 'issues' },
+
+    // Roadmap
+    { id: 'desktop',  label: 'Desktop wrap',  status: 'next', note: 'First cloud-eligible caller.', parent: 'roadmap' },
+    { id: 'teleg-fl', label: 'Telegram FL',   status: 'next', note: 'Highest pressure, integrate LAST.', parent: 'roadmap' },
+    { id: 'scraper',  label: 'Scrapling',     status: 'next', note: 'On-demand active investigator.', parent: 'roadmap' },
+  ];
+
+  const links = [];
+  nodes.forEach(n => {
+    if (n.parent) links.push({ source: n.parent, target: n.id });
+  });
+
+  const svg = d3.select('#mindmap');
+  const wrap = document.querySelector('.mindmap-wrap');
+  const W = wrap.clientWidth || 900;
+  const H = 540;
+
+  const g = svg.append('g');
+
+  // zoom/pan
+  svg.call(d3.zoom().scaleExtent([0.5, 2.5]).on('zoom', ev => g.attr('transform', ev.transform)));
+
+  const linkG = g.append('g').selectAll('line').data(links).join('line').attr('class', 'mm-link');
+
+  const node = g.append('g').selectAll('g').data(nodes).join('g').attr('class', 'mm-node');
+
+  node.append('rect').attr('class', d => 'mm-node-bg ' + d.status)
+    .attr('width', d => d.status === 'root' ? 70 : 92)
+    .attr('height', 24).attr('rx', 5)
+    .attr('x', d => d.status === 'root' ? -35 : -46).attr('y', -12);
+
+  node.append('text').attr('class', 'mm-node-label').attr('dy', 4).text(d => d.label);
+
+  node.on('click', (ev, d) => {
+    document.getElementById('mmdTitle').textContent = d.label;
+    const st = document.getElementById('mmdStatus');
+    st.textContent = d.status.toUpperCase();
+    st.className = 'mm-d-status mono b-' + (d.status === 'done' || d.status === 'built' || d.status === 'proven' ? 'done' : d.status);
+    document.getElementById('mmdBody').textContent = d.note;
+    document.getElementById('mmDetail').classList.add('open');
+  });
+
+  const sim = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(d => d.id).distance(90).strength(0.7))
+    .force('charge', d3.forceManyBody().strength(-300))
+    .force('center', d3.forceCenter(W/2, H/2))
+    .force('collision', d3.forceCollide().radius(58))
+    .on('tick', () => {
+      linkG
+        .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+      node.attr('transform', d => `translate(${d.x},${d.y})`);
+    });
+
+  // drag
+  node.call(d3.drag()
+    .on('start', (ev, d) => { if (!ev.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+    .on('drag',  (ev, d) => { d.fx = ev.x; d.fy = ev.y; })
+    .on('end',   (ev, d) => { if (!ev.active) sim.alphaTarget(0); if (d.id !== 'maez') { d.fx = null; d.fy = null; } })
+  );
+
+  // fix the root roughly center-top
+  const root = nodes.find(n => n.id === 'maez');
+  root.fx = W/2; root.fy = H/2 - 120;
+})();
+
+
+// ═════════════════════════════════════════════════════════
+//  Shared: loop + fastlane + evolution (same as public)
+// ═════════════════════════════════════════════════════════
+(function() {
+  const svg = d3.select('#loop');
+  const nodes = [
+    { id: 'perceive', label: 'Perceive', sub: 'snapshot',   cx: 90 },
+    { id: 'remember', label: 'Remember', sub: 'recall',     cx: 260 },
+    { id: 'reason',   label: 'Reason',   sub: 'gemma-4-26B-A4B', cx: 430 },
+    { id: 'score',    label: 'Score',    sub: 'cognition',  cx: 600 },
+    { id: 'store',    label: 'Store',    sub: 'ChromaDB',   cx: 770 },
+    { id: 'act',      label: 'Act',      sub: 'if needed',  cx: 940 },
+  ];
+  const cy = 90, bw = 122, bh = 62;
+  for (let i = 0; i < nodes.length - 1; i++) {
+    svg.append('line').attr('class', 'edge')
+      .attr('x1', nodes[i].cx + bw/2).attr('y1', cy)
+      .attr('x2', nodes[i+1].cx - bw/2).attr('y2', cy);
+  }
+  svg.append('path').attr('class', 'edge')
+    .attr('d', `M ${nodes[5].cx + bw/2} ${cy} q 30 0 30 -40 L ${nodes[0].cx - 30} 50 q -30 0 -30 40`);
+  const g = svg.selectAll('.node').data(nodes).enter().append('g');
+  g.append('rect').attr('class', 'node-box')
+    .attr('x', d => d.cx - bw/2).attr('y', cy - bh/2)
+    .attr('width', bw).attr('height', bh).attr('rx', 8);
+  g.append('text').attr('class', 'node-label').attr('x', d => d.cx).attr('y', cy - 4).text(d => d.label);
+  g.append('text').attr('class', 'node-sub').attr('x', d => d.cx).attr('y', cy + 14).text(d => d.sub);
+
+  const pulse = svg.append('circle').attr('fill', '#e8a33a').attr('r', 5).attr('cy', cy);
+  const path = nodes.map(n => n.cx);
+  let i = 0;
+  function step() {
+    pulse.attr('cx', path[i])
+      .transition().duration(700).ease(d3.easeCubicInOut).attr('cx', path[(i + 1) % path.length])
+      .on('end', () => { i = (i + 1) % path.length; setTimeout(step, 180); });
+  }
+  step();
+})();
+
+(function() {
+  const svg = d3.select('#fastlane');
+  const nodes = [
+    { label: 'Client',        sub: 'maez.live',          x: 60,  y: 110 },
+    { label: 'Flask adapter', sub: ':11437',             x: 240, y: 110 },
+    { label: 'Shaper',        sub: 'PII · guest',        x: 420, y: 60  },
+    { label: 'Fast-lane HTTP',sub: '127.0.0.1:8765',     x: 600, y: 110 },
+    { label: 'Router',        sub: 'local-first',        x: 780, y: 110 },
+    { label: 'Gemma local',   sub: 'preferred',          x: 960, y: 60  },
+    { label: 'Cloud gated',   sub: 'redactor',           x: 960, y: 160 },
+    { label: 'Audit log',     sub: 'jsonl',              x: 600, y: 190 },
+  ];
+  const bw = 140, bh = 46;
+  const edges = [
+    ['Client','Flask adapter'], ['Flask adapter','Shaper'],
+    ['Shaper','Fast-lane HTTP'], ['Flask adapter','Fast-lane HTTP'],
+    ['Fast-lane HTTP','Router'], ['Router','Gemma local'],
+    ['Router','Cloud gated'], ['Fast-lane HTTP','Audit log'],
+  ];
+  const map = Object.fromEntries(nodes.map(n => [n.label, n]));
+  edges.forEach(([a,b]) => {
+    const A = map[a], B = map[b];
+    svg.append('line').attr('class', 'edge')
+      .attr('x1', A.x + bw/2).attr('y1', A.y).attr('x2', B.x - bw/2).attr('y2', B.y);
+  });
+  const g = svg.selectAll('.f').data(nodes).enter().append('g');
+  g.append('rect').attr('class', d => 'node-box' + (d.label === 'Fast-lane HTTP' ? ' active' : ''))
+    .attr('x', d => d.x - bw/2).attr('y', d => d.y - bh/2)
+    .attr('width', bw).attr('height', bh).attr('rx', 6);
+  g.append('text').attr('class', 'node-label').attr('x', d => d.x).attr('y', d => d.y - 3).text(d => d.label);
+  g.append('text').attr('class', 'node-sub').attr('x', d => d.x).attr('y', d => d.y + 11).text(d => d.sub);
+})();
+
+(function() {
+  const svg = d3.select('#evolution');
+  const nodes = [
+    { label: 'Score drop',    sub: 'critique',           x:  70 },
+    { label: 'Trigger',       sub: '7 conditions',       x: 220 },
+    { label: 'Proposal',      sub: 'structured intent',  x: 370 },
+    { label: 'Validate',      sub: 'py_compile',         x: 520 },
+    { label: 'Human approve', sub: 'Telegram',           x: 680 },
+    { label: 'Apply',         sub: 'backup + patch',     x: 830 },
+    { label: 'Watchdog',      sub: '20–30 cycles',       x: 980 },
+  ];
+  const cy = 85, bw = 130, bh = 56;
+  for (let i = 0; i < nodes.length - 1; i++) {
+    svg.append('line').attr('class', 'edge')
+      .attr('x1', nodes[i].x + bw/2).attr('y1', cy)
+      .attr('x2', nodes[i+1].x - bw/2).attr('y2', cy);
+  }
+  const g = svg.selectAll('.e').data(nodes).enter().append('g');
+  g.append('rect').attr('class', d => d.label === 'Human approve' ? 'node-box active' : 'node-box')
+    .attr('x', d => d.x - bw/2).attr('y', cy - bh/2)
+    .attr('width', bw).attr('height', bh).attr('rx', 6);
+  g.append('text').attr('class', 'node-label').attr('x', d => d.x).attr('y', cy - 3).text(d => d.label);
+  g.append('text').attr('class', 'node-sub').attr('x', d => d.x).attr('y', cy + 13).text(d => d.sub);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Maez · the one that began with you</title>
+<meta name="description" content="Return to the Maez that began with your first interaction. The same local, continuous companion, still remembering.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="/maez.css">
+<style>
+:root {
+  --void: #0c0a08;
+  --deep: #130f0b;
+  --panel: rgba(18, 14, 11, 0.82);
+  --panel-hi: rgba(22, 17, 13, 0.92);
+  --line: rgba(232, 163, 58, 0.12);
+  --line-strong: rgba(232, 163, 58, 0.28);
+  --text: #f3ece0;
+  --text-soft: #d7cab4;
+  --text-dim: #9e907a;
+  --teal: #e8a33a;
+  --teal-hi: #f4b854;
+  --amber: #e8a33a;
+  --amber-hi: #f4b854;
+  --red: #e86a6a;
+  --radius: 18px;
+  --radius-lg: 28px;
+  --radius-pill: 999px;
+  --shadow: 0 30px 90px rgba(0, 0, 0, 0.46);
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  min-height: 100%;
+  background: var(--void);
+}
+body {
+  color: var(--text);
+  font-family: "Newsreader", Georgia, serif;
+  overflow: hidden;
+  background: var(--void);
+}
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+body::before {
+  z-index: 4;
+  background:
+    linear-gradient(90deg, rgba(12, 10, 8, 0.76) 0%, rgba(12, 10, 8, 0.48) 16%, rgba(12, 10, 8, 0.10) 42%, rgba(12, 10, 8, 0.08) 58%, rgba(12, 10, 8, 0.42) 82%, rgba(12, 10, 8, 0.72) 100%),
+    radial-gradient(circle at 52% 46%, transparent 0%, transparent 34%, rgba(12, 10, 8, 0.16) 74%, rgba(12, 10, 8, 0.40) 100%);
+}
+body::after {
+  z-index: 6;
+  background: linear-gradient(180deg, rgba(12, 10, 8, 0.14), rgba(12, 10, 8, 0.30) 100%);
+  opacity: 1;
+}
+a { color: inherit; text-decoration: none; }
+button, input, textarea { font: inherit; color: inherit; }
+button {
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+textarea { resize: none; }
+::selection {
+  background: rgba(232, 163, 58, 0.36);
+  color: var(--text);
+}
+
+.maez-bg {
+  position: fixed;
+  inset: -2vh -2vw;
+  width: 104vw;
+  height: 104vh;
+  z-index: 0;
+  border: 0;
+  pointer-events: none;
+  background: var(--void);
+  filter: saturate(1.08) brightness(1.04);
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 16px 24px 15px;
+  background: linear-gradient(to bottom, rgba(12, 10, 8, 0.68), rgba(12, 10, 8, 0.20));
+  border-bottom: 1px solid rgba(232, 163, 58, 0.10);
+  backdrop-filter: blur(14px);
+}
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.menu-btn {
+  display: none;
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-dim);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-soft);
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+}
+.brand-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--teal);
+  box-shadow: 0 0 12px rgba(232, 163, 58, 0.46);
+}
+.brand-mark {
+  color: var(--amber);
+}
+.brand-label {
+  color: var(--text-dim);
+}
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.nav a,
+.nav button {
+  padding: 10px 14px;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  transition: border-color 180ms ease, color 180ms ease, background 180ms ease;
+}
+.nav a:hover,
+.nav button:hover {
+  border-color: var(--line);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.02);
+}
+.nav .cta {
+  border-color: rgba(232, 163, 58, 0.24);
+  background: rgba(232, 163, 58, 0.12);
+  color: var(--amber-hi);
+}
+
+.shell {
+  position: relative;
+  z-index: 10;
+  width: min(1520px, calc(100% - 36px));
+  margin: 0 auto;
+  padding: 18px 0 20px;
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 16px;
+  height: calc(100vh - 72px);
+  height: calc(100dvh - 72px);
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: linear-gradient(180deg, rgba(18, 14, 11, 0.68), rgba(6, 10, 16, 0.60));
+  border: 1px solid rgba(232, 163, 58, 0.10);
+  backdrop-filter: blur(16px);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.sidebar-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--teal);
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+}
+.sidebar-label::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--teal);
+}
+.new-convo {
+  padding: 10px 12px;
+  border: 1px solid rgba(232, 163, 58, 0.28);
+  background: rgba(232, 163, 58, 0.10);
+  color: var(--amber-hi);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.session-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(232, 163, 58, 0.18) transparent;
+}
+.session-list::-webkit-scrollbar { width: 6px; }
+.session-list::-webkit-scrollbar-thumb { background: rgba(232, 163, 58, 0.18); }
+.session-group {
+  padding: 10px 8px 8px;
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.session-item {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 12px 12px 13px;
+  text-align: left;
+  border-left: 2px solid transparent;
+  background: rgba(255, 255, 255, 0.02);
+  transition: background 180ms ease, border-color 180ms ease, transform 180ms ease;
+}
+.session-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-left-color: var(--text-dim);
+}
+.session-item.active {
+  background: rgba(232, 163, 58, 0.08);
+  border-left-color: var(--amber);
+}
+.session-item.now {
+  border-left-color: var(--teal);
+}
+.s-date {
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.s-title {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.sidebar-foot {
+  padding: 14px 18px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.user-display {
+  margin-top: 6px;
+  color: var(--text);
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+.user-meta {
+  margin-top: 6px;
+  color: var(--text-soft);
+  font-size: 11px;
+  line-height: 1.6;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.workspace {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid rgba(232, 163, 58, 0.10);
+  background: linear-gradient(180deg, rgba(18, 14, 11, 0.56), rgba(5, 10, 16, 0.48));
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.workspace::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(12, 10, 8, 0.18), transparent 28%, transparent 72%, rgba(12, 10, 8, 0.16)),
+    linear-gradient(180deg, rgba(232, 163, 58, 0.03), transparent 24%),
+    radial-gradient(circle at 82% 16%, rgba(232, 163, 58, 0.06), transparent 18%);
+  pointer-events: none;
+  z-index: 0;
+}
+.view {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+.view[hidden] {
+  display: none;
+}
+
+.view-boot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px;
+  text-align: center;
+}
+.boot-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--teal);
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+}
+.boot-label::before,
+.boot-label::after {
+  content: "";
+  width: 32px;
+  height: 1px;
+  background: var(--teal);
+}
+.boot-headline {
+  margin-top: 18px;
+  font-size: clamp(48px, 6vw, 82px);
+  line-height: 0.88;
+  letter-spacing: -0.05em;
+  text-transform: uppercase;
+}
+.boot-headline .amber {
+  color: var(--amber);
+}
+.boot-sub {
+  margin-top: 16px;
+  color: var(--text-soft);
+  font-size: 13px;
+}
+.boot-dots {
+  display: inline-flex;
+  gap: 6px;
+  margin-top: 22px;
+}
+.boot-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.boot-dots span:nth-child(2) { animation-delay: 0.18s; }
+.boot-dots span:nth-child(3) { animation-delay: 0.36s; }
+
+.view-empty {
+  overflow: auto;
+  padding: 28px 32px 24px;
+}
+.empty-shell {
+  min-height: 100%;
+  display: grid;
+  grid-template-columns: minmax(280px, 32vw) minmax(120px, 1fr) minmax(280px, 26vw);
+  gap: 18px;
+  align-items: end;
+}
+.empty-copy {
+  display: grid;
+  gap: 18px;
+  max-width: 540px;
+  padding: clamp(18px, 7vh, 96px) 0 clamp(18px, 8vh, 100px) clamp(0px, 1.5vw, 18px);
+}
+.empty-void {
+  min-height: clamp(360px, 56vh, 720px);
+}
+.empty-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--teal);
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+}
+.empty-label::before {
+  content: "";
+  width: 38px;
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--teal));
+}
+.empty-headline {
+  font-size: clamp(64px, 8vw, 128px);
+  line-height: 0.84;
+  font-weight: 400;
+  letter-spacing: -0.06em;
+  text-transform: uppercase;
+}
+.empty-headline .amber {
+  color: var(--amber);
+}
+.empty-sub {
+  max-width: 58ch;
+  color: var(--text-soft);
+  font-size: 15px;
+  line-height: 1.9;
+}
+.empty-sub strong {
+  color: var(--text);
+  font-weight: 400;
+}
+.prompt-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  max-width: 720px;
+}
+.prompt-card {
+  padding: 16px 16px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.02);
+  text-align: left;
+  transition: border-color 180ms ease, background 180ms ease, transform 180ms ease;
+}
+.prompt-card:hover {
+  transform: translateY(-1px);
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.04);
+}
+.prompt-tag {
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.prompt-body {
+  margin-top: 10px;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.5;
+}
+.empty-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.empty-start {
+  padding: 14px 18px;
+  border: 1px solid rgba(232, 163, 58, 0.34);
+  background: rgba(232, 163, 58, 0.12);
+  color: var(--amber-hi);
+  font-size: 11px;
+  letter-spacing: 0.20em;
+  text-transform: uppercase;
+}
+.empty-foot {
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+}
+.signal-panel {
+  padding: 22px;
+  justify-self: end;
+  width: min(100%, 380px);
+  border: 1px solid rgba(232, 163, 58, 0.10);
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(14px);
+}
+.signal-kicker {
+  color: var(--teal);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+.signal-panel h2 {
+  margin-top: 14px;
+  font-size: 38px;
+  line-height: 0.92;
+  letter-spacing: -0.04em;
+  text-transform: uppercase;
+}
+.signal-panel h2 .amber {
+  color: var(--amber);
+}
+.signal-panel p {
+  margin-top: 14px;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.8;
+}
+.signal-panel .maez-thesis-block {
+  margin-top: 18px;
+  box-shadow: none;
+  background: linear-gradient(180deg, rgba(12, 10, 8, 0.72), rgba(12, 10, 8, 0.42));
+}
+.signal-panel .maez-proof-grid {
+  gap: 8px;
+}
+.signal-panel .maez-proof-card {
+  background: rgba(255, 255, 255, 0.02);
+}
+.signal-panel .maez-proof-body {
+  font-size: 16px;
+}
+.signal-panel .maez-proof-note {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.signal-panel .maez-crosslinks {
+  margin-top: 18px;
+}
+.signal-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+.signal-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.02);
+}
+.signal-row span {
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.signal-row strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.view-chat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 24px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: linear-gradient(180deg, rgba(18, 14, 11, 0.82), rgba(18, 14, 11, 0.18));
+}
+.chat-who {
+  display: grid;
+  gap: 4px;
+}
+.chat-name {
+  color: var(--amber-hi);
+  font-size: 24px;
+  line-height: 0.95;
+  letter-spacing: -0.03em;
+  text-transform: uppercase;
+}
+.chat-meta {
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.chat-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.chat-actions button {
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.chat-actions button:hover {
+  border-color: var(--line);
+  color: var(--text);
+}
+.chat-actions .danger:hover {
+  border-color: rgba(255, 110, 120, 0.34);
+  color: var(--red);
+}
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 22px 30px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(232, 163, 58, 0.18) transparent;
+}
+.messages::-webkit-scrollbar { width: 6px; }
+.messages::-webkit-scrollbar-thumb { background: rgba(232, 163, 58, 0.18); }
+.msg {
+  max-width: min(78%, 760px);
+  display: grid;
+  gap: 8px;
+  animation: rise 320ms var(--ease);
+}
+.msg.user { align-self: flex-end; }
+.msg.maez { align-self: flex-start; }
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.msg-author {
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.msg.user .msg-author {
+  text-align: right;
+}
+.msg.maez .msg-author {
+  color: var(--amber);
+}
+.msg-body {
+  padding: 14px 16px;
+  font-size: 14px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  backdrop-filter: blur(14px);
+}
+.msg.maez .msg-body {
+  border: 1px solid rgba(232, 163, 58, 0.18);
+  border-left: 2px solid var(--amber);
+  background: linear-gradient(135deg, rgba(232, 163, 58, 0.10), rgba(232, 163, 58, 0.04));
+  color: var(--text);
+}
+.msg.user .msg-body {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-right: 2px solid var(--teal);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+.typing {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  color: var(--amber);
+  font-size: 10px;
+  letter-spacing: 0.20em;
+  text-transform: uppercase;
+}
+.typing .dots {
+  display: inline-flex;
+  gap: 4px;
+}
+.typing .dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--amber);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.typing .dots i:nth-child(2) { animation-delay: 0.18s; }
+.typing .dots i:nth-child(3) { animation-delay: 0.36s; }
+@keyframes pulse {
+  0%, 80%, 100% { opacity: 0.22; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1.1); }
+}
+
+.input-shell {
+  padding: 16px 24px 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  background: linear-gradient(to top, rgba(12, 10, 8, 0.62), rgba(12, 10, 8, 0));
+}
+.input-wrap {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 12px 12px 12px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(12px);
+}
+.input-wrap:focus-within {
+  border-color: var(--line-strong);
+}
+.input-wrap textarea {
+  flex: 1;
+  min-height: 22px;
+  max-height: 180px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.input-wrap textarea::placeholder {
+  color: var(--text-dim);
+}
+.input-send {
+  flex-shrink: 0;
+  padding: 11px 15px;
+  border: 1px solid rgba(232, 163, 58, 0.28);
+  background: rgba(232, 163, 58, 0.12);
+  color: var(--amber-hi);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.input-send:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.input-hint {
+  margin-top: 10px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.input-hint .k {
+  display: inline-block;
+  margin: 0 3px;
+  padding: 2px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-soft);
+}
+
+@media (max-width: 1080px) {
+  .empty-shell {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+  .empty-copy {
+    max-width: none;
+    padding: 0;
+  }
+  .empty-void {
+    display: none;
+  }
+  .signal-panel {
+    justify-self: stretch;
+    width: auto;
+  }
+}
+@media (max-width: 920px) {
+  .menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .brand-label {
+    display: none;
+  }
+  .shell {
+    width: min(100% - 20px, 1520px);
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    position: fixed;
+    left: -290px;
+    top: 70px;
+    bottom: 10px;
+    width: min(82vw, 300px);
+    z-index: 30;
+    transition: left 240ms var(--ease);
+  }
+  .sidebar.open {
+    left: 10px;
+  }
+}
+@media (max-width: 720px) {
+  .topbar {
+    padding: 14px 16px;
+  }
+  .nav a,
+  .nav button {
+    padding: 8px 10px;
+  }
+  .view-empty {
+    padding: 24px 20px 20px;
+  }
+  .prompt-grid {
+    grid-template-columns: 1fr;
+  }
+  .chat-header,
+  .messages,
+  .input-shell {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+}
+</style>
+</head>
+<body>
+<iframe class="maez-bg" id="bgFrame" src="/maez_hero.html?embed=1&prefill=1&jumpt=4" title="Maez background" aria-hidden="true" tabindex="-1"></iframe>
+
+<header class="topbar">
+  <div class="topbar-left">
+    <button class="menu-btn" id="menuBtn" aria-label="Toggle sessions" type="button">☰</button>
+    <a class="brand" href="/">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <span class="brand-mark" style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-size:22px;letter-spacing:-0.01em;">maez</span>
+      <span class="brand-label" style="text-transform:none;font-style:italic;">— the one you started</span>
+    </a>
+  </div>
+  <nav class="nav">
+    <a href="/" style="text-transform:none;">home</a>
+    <a href="/progress" style="text-transform:none;">build log</a>
+    <a href="/dashboard" style="text-transform:none;">how it thinks</a>
+    <a href="/planner" style="text-transform:none;">planner</a>
+    <a href="/analytics" style="text-transform:none;">analytics</a>
+    <a href="https://github.com/Ramidoz/maez" target="_blank" rel="noreferrer" style="text-transform:none;">github</a>
+    <button class="cta" type="button" onclick="newConversation()" style="text-transform:none;">New thread</button>
+    <button type="button" onclick="doLogout()" style="text-transform:none;">Sign out</button>
+  </nav>
+</header>
+
+<main class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <div class="sidebar-label" style="text-transform:none;font-style:italic;">Threads</div>
+      <button class="new-convo" type="button" onclick="newConversation()" style="text-transform:none;">+ new</button>
+    </div>
+    <div class="session-list" id="sessions"></div>
+    <div class="sidebar-foot">
+      <div style="text-transform:none;font-style:italic;font-family:'Newsreader',Georgia,serif;">signed in as</div>
+      <div class="user-display" id="userDisplay" style="text-transform:none;font-family:'Fraunces',Georgia,serif;">resolving…</div>
+      <div class="user-meta" id="userMeta" style="text-transform:none;font-style:italic;">bringing back your shared history</div>
+    </div>
+  </aside>
+
+  <section class="workspace">
+    <div class="view view-boot" id="bootView">
+      <div>
+        <div class="boot-label" style="text-transform:none;font-style:italic;">The same presence</div>
+        <div class="boot-headline" style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.025em;">Returning to the one that <span class="amber" style="font-style:italic;">began with you.</span></div>
+        <div class="boot-sub" style="font-family:'Newsreader',Georgia,serif;">Loading your thread, your shared history, and what kept living while you were away.</div>
+        <div class="boot-dots"><span></span><span></span><span></span></div>
+      </div>
+    </div>
+
+    <div class="view view-empty" id="emptyView" hidden>
+      <div class="empty-shell">
+        <div class="empty-copy">
+          <div class="empty-label" style="text-transform:none;font-style:italic;">The same Maez</div>
+          <h1 class="empty-headline" style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.025em;">Still <span class="amber" style="font-style:italic;">here.</span></h1>
+          <p class="empty-sub" style="font-family:'Newsreader',Georgia,serif;">
+            This is the Maez that began with your first interaction. You are not opening a blank chat.
+            You are returning to a thread that keeps memory, changes over time, and keeps living between visits.
+            Ask anything, pick up an older thread, or continue with one of these.
+          </p>
+          <div class="prompt-grid" id="promptGrid"></div>
+          <div class="empty-actions">
+            <button class="empty-start" type="button" onclick="startWriting()" style="text-transform:none;">Write your own</button>
+            <div class="empty-foot" style="font-family:'Newsreader',Georgia,serif;"><span class="k">Enter</span> to send · <span class="k">Shift + Enter</span> for a new line.</div>
+          </div>
+        </div>
+        <div class="empty-void" aria-hidden="true"></div>
+
+        <div class="signal-panel">
+          <div class="signal-kicker" style="text-transform:none;font-style:italic;">What carries forward</div>
+          <h2 style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.025em;">Born once. <span class="amber" style="font-style:italic;">Continuing now.</span></h2>
+          <p style="font-family:'Newsreader',Georgia,serif;">The first interaction was the beginning. This return is the continuation. The same local presence is still running, still remembering, and can still reach out first through Telegram if you have linked it.</p>
+          <div class="maez-thesis-block">
+            <div class="maez-thesis-kicker">The same Maez</div>
+            <div class="maez-thesis-line">Your thread is already <em>in progress.</em></div>
+            <div class="maez-proof-grid">
+              <div class="maez-proof-card">
+                <span class="maez-proof-label">Born</span>
+                <span class="maez-proof-body">first interaction</span>
+                <span class="maez-proof-note">The beginning already happened.</span>
+              </div>
+              <div class="maez-proof-card">
+                <span class="maez-proof-label">Remembers</span>
+                <span class="maez-proof-body">shared history</span>
+                <span class="maez-proof-note">Memory carries across returns.</span>
+              </div>
+              <div class="maez-proof-card">
+                <span class="maez-proof-label">Grows</span>
+                <span class="maez-proof-body">through time</span>
+                <span class="maez-proof-note">It changes as more life is shared.</span>
+              </div>
+              <div class="maez-proof-card">
+                <span class="maez-proof-label">Lives with you</span>
+                <span class="maez-proof-body">web and Telegram</span>
+                <span class="maez-proof-note">It can meet you across surfaces.</span>
+              </div>
+            </div>
+          </div>
+          <div class="maez-crosslinks">
+            <a href="/">What Maez is</a>
+            <a href="/dashboard">How it works</a>
+            <a href="/progress">How much is real</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="view view-chat" id="chatView" hidden>
+      <div class="chat-header">
+        <div class="chat-who">
+          <div class="chat-name" style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.01em;">maez</div>
+          <div class="chat-meta" style="text-transform:none;font-style:italic;font-family:'Newsreader',Georgia,serif;">the same thread · still remembering</div>
+        </div>
+        <div class="chat-actions">
+          <button type="button" onclick="newConversation()" style="text-transform:none;">New thread</button>
+          <button class="danger" type="button" onclick="doLogout()" style="text-transform:none;">Sign out</button>
+        </div>
+      </div>
+      <div class="messages" id="msgs" role="log" aria-live="polite"></div>
+      <div class="input-shell">
+        <div class="input-wrap">
+          <textarea id="msg" rows="1" placeholder="Continue the thread. The Maez you began is listening…" autocomplete="off" aria-label="Message Maez" style="font-family:'Newsreader',Georgia,serif;"></textarea>
+          <button class="input-send" id="sendBtn" type="button" onclick="sendMsg()" style="text-transform:none;">Send</button>
+        </div>
+        <div class="input-hint"><span class="k">Enter</span> to send · <span class="k">Shift</span> + <span class="k">Enter</span> for new line</div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="/maez_analytics.js"></script>
+<script>
+(function testHook() {
+  const qp = new URLSearchParams(location.search);
+  const tt = qp.get('test_t');
+  if (tt) {
+    localStorage.setItem('maez_token', tt);
+    const tn = qp.get('test_n');
+    if (tn) localStorage.setItem('maez_name', tn);
+    sessionStorage.setItem('maez_test_mode', '1');
+    history.replaceState(null, '', '/app');
+  }
+})();
+
+function getCookie(name) {
+  const parts = document.cookie ? document.cookie.split('; ') : [];
+  for (const part of parts) {
+    const idx = part.indexOf('=');
+    const key = idx === -1 ? part : part.slice(0, idx);
+    if (key === name) return decodeURIComponent(idx === -1 ? '' : part.slice(idx + 1));
+  }
+  return '';
+}
+
+function currentToken() {
+  return localStorage.getItem('maez_token') || getCookie('maez_token') || '';
+}
+
+function storeSession(nextToken, nextName) {
+  if (nextToken) localStorage.setItem('maez_token', nextToken);
+  if (nextName) localStorage.setItem('maez_name', nextName);
+}
+
+function isTestMode() {
+  return sessionStorage.getItem('maez_test_mode') === '1';
+}
+
+let token = currentToken();
+let displayName = localStorage.getItem('maez_name') || '';
+let conversationHistory = [];
+let allSessions = [];
+let userInfo = null;
+
+const PROMPTS_PUBLIC = [
+  { tag: 'the beginning', body: 'Tell me what you are, in your own words.' },
+  { tag: 'what you keep', body: 'What will you remember from this conversation?' },
+  { tag: 'after a pause', body: 'What changes when I come back later?' },
+  { tag: 'start simply', body: "Hi. I'm here." },
+];
+const PROMPTS_LINKED = [
+  { tag: 'same maez', body: 'What do you remember about me so far?' },
+  { tag: 'pick it up', body: 'Catch me up on where our thread stands.' },
+  { tag: 'today', body: "What's on my calendar today?" },
+  { tag: 'while i was gone', body: 'What have you been doing while I was away?' },
+];
+
+function showView(id) {
+  ['bootView', 'emptyView', 'chatView'].forEach((name) => {
+    const el = document.getElementById(name);
+    if (!el) return;
+    if (name === id) el.removeAttribute('hidden');
+    else el.setAttribute('hidden', '');
+  });
+}
+
+function toggleSidebar(force) {
+  const sidebar = document.getElementById('sidebar');
+  if (!sidebar) return;
+  if (typeof force === 'boolean') sidebar.classList.toggle('open', force);
+  else sidebar.classList.toggle('open');
+}
+
+function renderPrompts(linked) {
+  const grid = document.getElementById('promptGrid');
+  if (!grid) return;
+  const set = linked ? PROMPTS_LINKED : PROMPTS_PUBLIC;
+  grid.innerHTML = '';
+  set.forEach((prompt) => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'prompt-card';
+    card.innerHTML = '<div class="prompt-tag">' + prompt.tag + '</div><div class="prompt-body">' + prompt.body + '</div>';
+    card.addEventListener('click', () => {
+      startWriting();
+      const input = document.getElementById('msg');
+      input.value = prompt.body;
+      resizeInput();
+      sendMsg();
+    });
+    grid.appendChild(card);
+  });
+}
+
+function renderSessions() {
+  const el = document.getElementById('sessions');
+  if (!el) return;
+  el.innerHTML = '';
+
+  const now = document.createElement('button');
+  now.type = 'button';
+  now.className = 'session-item now active';
+  now.innerHTML = '<div class="s-date">Now</div><div class="s-title">Current conversation</div>';
+  now.addEventListener('click', () => newConversation());
+  el.appendChild(now);
+
+  if (!allSessions.length) {
+    const hint = document.createElement('div');
+    hint.className = 'session-group';
+    hint.textContent = 'No earlier threads yet';
+    el.appendChild(hint);
+    return;
+  }
+
+  const group = document.createElement('div');
+  group.className = 'session-group';
+  group.textContent = 'Earlier';
+  el.appendChild(group);
+
+  allSessions.forEach((session, idx) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'session-item';
+    const date = (session.date || '').slice(0, 10) || '—';
+    const title = session.title || 'Conversation';
+    item.innerHTML = '<div class="s-date">' + date + '</div><div class="s-title">' + title + '</div>';
+    item.addEventListener('click', () => loadSession(idx));
+    el.appendChild(item);
+  });
+}
+
+function setActiveSession(idx) {
+  const items = document.querySelectorAll('.session-item');
+  items.forEach((item) => item.classList.remove('active'));
+  if (idx === -1 && items[0]) items[0].classList.add('active');
+  else if (items[idx + 1]) items[idx + 1].classList.add('active');
+}
+
+function appendMessage(role, text, animate) {
+  const list = document.getElementById('msgs');
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ' + role;
+  if (!animate) wrap.style.animation = 'none';
+
+  const author = document.createElement('div');
+  author.className = 'msg-author';
+  author.textContent = role === 'maez' ? 'MAEZ' : (displayName || 'YOU');
+  wrap.appendChild(author);
+
+  const body = document.createElement('div');
+  body.className = 'msg-body';
+  body.textContent = text;
+  wrap.appendChild(body);
+
+  list.appendChild(wrap);
+  list.scrollTop = list.scrollHeight;
+}
+
+function loadSession(idx) {
+  const session = allSessions[idx];
+  if (!session) return;
+  const list = document.getElementById('msgs');
+  list.innerHTML = '';
+  conversationHistory = [];
+  setActiveSession(idx);
+
+  (session.messages || []).forEach((message) => {
+    const visualRole = message.role === 'user' ? 'user' : 'maez';
+    const historyRole = message.role === 'user' ? 'user' : 'assistant';
+    appendMessage(visualRole, message.content, false);
+    conversationHistory.push({ role: historyRole, content: message.content });
+  });
+
+  showView('chatView');
+  if (innerWidth < 920) toggleSidebar(false);
+}
+
+function startWriting() {
+  document.getElementById('msgs').innerHTML = '';
+  conversationHistory = [];
+  setActiveSession(-1);
+  showView('chatView');
+  resizeInput();
+  setTimeout(() => {
+    const ta = document.getElementById('msg');
+    if (ta) ta.focus();
+  }, 40);
+}
+
+function newConversation() {
+  document.getElementById('msgs').innerHTML = '';
+  conversationHistory = [];
+  setActiveSession(-1);
+  showView('emptyView');
+  if (innerWidth < 920) toggleSidebar(false);
+}
+
+function showTyping() {
+  const list = document.getElementById('msgs');
+  const row = document.createElement('div');
+  row.className = 'typing';
+  row.id = 'typingRow';
+  row.innerHTML = 'MAEZ IS THINKING <span class="dots"><i></i><i></i><i></i></span>';
+  list.appendChild(row);
+  list.scrollTop = list.scrollHeight;
+}
+
+function hideTyping() {
+  const row = document.getElementById('typingRow');
+  if (row) row.remove();
+}
+
+function resizeInput() {
+  const ta = document.getElementById('msg');
+  if (!ta) return;
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(180, ta.scrollHeight) + 'px';
+}
+
+async function sendMsg() {
+  const input = document.getElementById('msg');
+  const text = input.value.trim();
+  if (!text) return;
+
+  token = currentToken();
+  if (!token) {
+    doLogout();
+    return;
+  }
+
+  input.value = '';
+  resizeInput();
+  showView('chatView');
+  appendMessage('user', text, true);
+  conversationHistory.push({ role: 'user', content: text });
+  showTyping();
+
+  const sendBtn = document.getElementById('sendBtn');
+  sendBtn.disabled = true;
+  try {
+    const response = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        web_token: token,
+        message: text,
+        history: conversationHistory.slice(-8),
+      }),
+    });
+    if (response.status === 401) {
+      doLogout();
+      return;
+    }
+    const data = await response.json();
+    hideTyping();
+    if (data.error) {
+      appendMessage('maez', 'Something bent in the channel. Try that again.', true);
+      return;
+    }
+    appendMessage('maez', data.reply, true);
+    conversationHistory.push({ role: 'assistant', content: data.reply });
+  } catch (e) {
+    hideTyping();
+    appendMessage('maez', 'The line dropped for a moment. Try that again.', true);
+  } finally {
+    sendBtn.disabled = false;
+    input.focus();
+  }
+}
+
+function doLogout() {
+  document.cookie = 'maez_token=; Max-Age=0; path=/; SameSite=Lax';
+  localStorage.removeItem('maez_token');
+  localStorage.removeItem('maez_name');
+  sessionStorage.removeItem('maez_test_mode');
+  token = '';
+  displayName = '';
+  conversationHistory = [];
+  location.replace('/login');
+}
+
+function finishBootForPreview() {
+  userInfo = {
+    display_name: displayName || 'Preview User',
+    username: 'preview',
+    telegram_linked: false,
+    owner_bridge: false,
+  };
+  allSessions = [];
+
+  const displayEl = document.getElementById('userDisplay');
+  const metaEl = document.getElementById('userMeta');
+  if (displayEl) displayEl.textContent = userInfo.display_name;
+  if (metaEl) metaEl.textContent = 'test mode preview';
+
+  renderPrompts(false);
+  renderSessions();
+  showView('emptyView');
+  resizeInput();
+}
+
+(function initBackground() {
+  const bg = document.getElementById('bgFrame');
+  if (!bg || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+  let nx = 0.50;
+  let ny = 0.28;
+  let dirty = true;
+  const syncFromClient = (clientX, clientY) => {
+    nx = clientX / innerWidth;
+    ny = clientY / innerHeight;
+    dirty = true;
+  };
+  const sendLeave = () => {
+    try { bg.contentWindow && bg.contentWindow.postMessage({ type: 'leave' }, location.origin); } catch (err) {}
+  };
+
+  if (window.PointerEvent) {
+    addEventListener('pointerdown', (event) => {
+      syncFromClient(event.clientX, event.clientY);
+    }, { passive: true });
+    addEventListener('pointermove', (event) => {
+      syncFromClient(event.clientX, event.clientY);
+    }, { passive: true });
+    addEventListener('pointerleave', sendLeave);
+    addEventListener('pointerup', (event) => {
+      if (event.pointerType === 'touch' || event.pointerType === 'pen') sendLeave();
+    }, { passive: true });
+    addEventListener('pointercancel', sendLeave, { passive: true });
+  } else {
+    addEventListener('mousemove', (event) => {
+      syncFromClient(event.clientX, event.clientY);
+    }, { passive: true });
+    addEventListener('mouseleave', sendLeave);
+    addEventListener('touchstart', (event) => {
+      const touch = (event.touches && event.touches[0]) || (event.changedTouches && event.changedTouches[0]);
+      if (touch) syncFromClient(touch.clientX, touch.clientY);
+    }, { passive: true });
+    addEventListener('touchmove', (event) => {
+      const touch = (event.touches && event.touches[0]) || (event.changedTouches && event.changedTouches[0]);
+      if (touch) syncFromClient(touch.clientX, touch.clientY);
+    }, { passive: true });
+    addEventListener('touchend', sendLeave, { passive: true });
+    addEventListener('touchcancel', sendLeave, { passive: true });
+  }
+
+  bg.addEventListener('load', () => {
+    function pump() {
+      if (dirty) {
+        try { bg.contentWindow.postMessage({ type: 'mouse', nx, ny }, location.origin); } catch (err) {}
+        dirty = false;
+      }
+      requestAnimationFrame(pump);
+    }
+    pump();
+  });
+})();
+
+async function boot() {
+  token = currentToken();
+  if (!token) {
+    location.replace('/login');
+    return;
+  }
+
+  storeSession(token, displayName);
+  const testMode = isTestMode();
+
+  try {
+    const response = await fetch('/history?web_token=' + encodeURIComponent(token));
+    if (response.status === 401) {
+      if (testMode) {
+        finishBootForPreview();
+        return;
+      }
+      doLogout();
+      return;
+    }
+    if (!response.ok) throw new Error('history failed');
+
+    const data = await response.json();
+    allSessions = data.sessions || [];
+    userInfo = data.user || null;
+
+    if (userInfo && userInfo.display_name) {
+      displayName = userInfo.display_name;
+      localStorage.setItem('maez_name', displayName);
+    }
+
+    const displayEl = document.getElementById('userDisplay');
+    const metaEl = document.getElementById('userMeta');
+    if (displayEl) displayEl.textContent = displayName || (userInfo && userInfo.username) || 'anon';
+    if (metaEl) {
+      if (userInfo && userInfo.owner_bridge) {
+        metaEl.textContent = 'private continuity linked';
+      } else {
+        metaEl.textContent = userInfo && userInfo.telegram_linked
+          ? 'telegram history linked'
+          : 'web account active';
+      }
+    }
+
+    renderPrompts(Boolean(userInfo && userInfo.telegram_linked));
+    renderSessions();
+    showView('emptyView');
+    resizeInput();
+  } catch (e) {
+    if (testMode) {
+      finishBootForPreview();
+      return;
+    }
+    doLogout();
+  }
+}
+
+(function wireEvents() {
+  const menuBtn = document.getElementById('menuBtn');
+  if (menuBtn) {
+    menuBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      toggleSidebar();
+    });
+  }
+
+  const ta = document.getElementById('msg');
+  if (ta) {
+    ta.addEventListener('input', resizeInput);
+    ta.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        sendMsg();
+      }
+    });
+  }
+})();
+
+boot();
+</script>
+</body>
+</html>
