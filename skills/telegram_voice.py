@@ -402,6 +402,146 @@ class TelegramVoice:
         if not self.authorized_user:
             logger.error("MAEZ_TELEGRAM_USER_ID not set — Telegram disabled")
 
+    # ═════════════════════════════════════════════════════════════════════
+    #  Session 11z Part 2: decision pipeline integration
+    #
+    #  Every run_shell / write_any_file Maez proposes in the chat path now
+    #  goes through core.decision_pipeline.DecisionPipeline. The pipeline:
+    #    - runs the covenant gate (via the ActionEngine primitives)
+    #    - classifies the action into a Lane
+    #    - scans for prompt-injection shapes
+    #    - runs the two-pass audit LLM
+    #    - routes to either (a) immediate execution for Lane 0 or
+    #      (b) a persistent approval card for Lane 2/3
+    #
+    #  The approval card lives in memory/pending_cards.db and survives
+    #  conversation drift — the owner can defer it, ask something else, and
+    #  come back hours later. The daemon loop fires due reminders.
+    # ═════════════════════════════════════════════════════════════════════
+
+    def _get_pipeline(self):
+        """Lazy construct the decision pipeline + renderer. Returns None
+        if the action engine isn't available yet (early daemon startup)
+        or if any decision-layer module fails to import."""
+        if not self.actions:
+            return None
+        pipe = getattr(self, "_decision_pipeline", None)
+        if pipe is not None:
+            return pipe
+        try:
+            from core.decision_pipeline import DecisionPipeline
+            from core.pending_cards import PendingCardStore
+            from core.audit_log import AuditLog
+            from skills.approval_card import TelegramTextRenderer
+        except Exception as e:
+            logger.warning("decision pipeline unavailable: %s", e)
+            return None
+
+        card_store = PendingCardStore()
+        audit_log = AuditLog()
+
+        def _send(chat_id, text, reply_to=None):
+            return self._send_card_message(chat_id, text, reply_to=reply_to)
+
+        renderer = TelegramTextRenderer(
+            chat_id=str(self.authorized_user),
+            send_message_fn=_send,
+        )
+        self._decision_pipeline = DecisionPipeline(
+            action_engine=self.actions,
+            card_store=card_store,
+            audit_log=audit_log,
+            renderer=renderer,
+        )
+        self._card_store = card_store
+        self._audit_log = audit_log
+        return self._decision_pipeline
+
+    def _send_card_message(self, chat_id, text: str, reply_to=None) -> str | None:
+        """Send a Telegram message and return the posted message_id.
+
+        Unlike send_message(), this returns the message_id so the
+        pending-cards store can record it for future reaction/reply
+        lookups. Safe to call from any thread via run_coroutine_threadsafe.
+        """
+        if not self.enabled or not self._loop:
+            return None
+        target_chat = int(chat_id) if chat_id else self.authorized_user
+
+        async def _send():
+            bot = Bot(token=self.token)
+            kwargs: dict = {"chat_id": target_chat, "text": text}
+            if reply_to is not None:
+                try:
+                    kwargs["reply_to_message_id"] = int(reply_to)
+                except (TypeError, ValueError):
+                    pass
+            msg = await bot.send_message(**kwargs)
+            return getattr(msg, "message_id", None)
+
+        future = asyncio.run_coroutine_threadsafe(_send(), self._loop)
+        try:
+            msg_id = future.result(timeout=30)
+            return str(msg_id) if msg_id is not None else None
+        except Exception as e:
+            logger.error("card message send failed: %s", e)
+            return None
+
+    async def _try_card_reply_intent(self, update, text: str) -> bool:
+        """Check whether the incoming message (or reaction) is a reply
+        to an outstanding approval card. If yes, run the pipeline reply
+        handler and return True (we handled it — don't fall through).
+        If no, return False so the normal chat flow continues."""
+        pipe = self._get_pipeline()
+        if pipe is None:
+            return False
+
+        # Zero-latency short-circuit: if no open cards, skip everything.
+        try:
+            open_cards = pipe.card_store.get_open_for_channel(
+                "telegram_text", chat_id=str(self.authorized_user)
+            )
+        except Exception as e:
+            logger.debug("card store unavailable: %s", e)
+            return False
+        if not open_cards:
+            return False
+
+        reply_to_id = None
+        try:
+            if update.message and update.message.reply_to_message:
+                reply_to_id = str(update.message.reply_to_message.message_id)
+        except Exception:
+            pass
+
+        try:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: pipe.handle_reply(
+                    text=text,
+                    user_id="rohit",
+                    chat_id=str(self.authorized_user),
+                    reply_to_message_id=reply_to_id,
+                    channel="telegram_text",
+                ),
+            )
+        except Exception as e:
+            logger.warning("pipeline reply handler failed: %s", e)
+            return False
+
+        if result is None:
+            return False  # reply was unrelated to any card
+
+        # Pipeline already sent the resolution notice via the renderer.
+        # Nothing else to do here; the normal chat flow is short-circuited.
+        logger.info(
+            "card reply handled: status=%s card=%s",
+            result.status.value if result.status else "?",
+            result.card.request_id if result.card else "?",
+        )
+        return True
+
     def _load_soul(self) -> str:
         try:
             soul = SOUL_PATH.read_text().strip()
@@ -749,6 +889,19 @@ class TelegramVoice:
         # Initialize interrupt queue for this generation
         self._interrupt_queue = asyncio.Queue()
 
+        # Session 11z Part 2: pipeline card-reply interceptor.
+        # If there's an outstanding approval card and the owner's message
+        # resolves to an approve/deny/defer/re-explain/modify intent,
+        # route it through the decision pipeline and short-circuit.
+        # If there are no open cards, or the message is unrelated,
+        # this is a ~zero-latency no-op and we fall through.
+        try:
+            if await self._try_card_reply_intent(update, user_text):
+                self._generating = False
+                return
+        except Exception as e:
+            logger.debug("card reply interceptor failed: %s", e)
+
         # Session 11x: intercept natural-language proposal approvals
         # ("yes", "do it", "reject #22", "tell me more about 22") BEFORE
         # we burn an LLM call on it. Only bounded phrases match; anything
@@ -951,6 +1104,54 @@ class TelegramVoice:
                 continue
 
             tier = ACTION_TIERS.get(action, 2)
+
+            # Session 11z Part 2: route the two primitives through the
+            # decision pipeline instead of calling _execute_action
+            # directly. Lane 0 still runs inline; Lane 2/3 creates a
+            # persistent approval card that the owner resolves async.
+            pipeline_actions = {"run_shell", "write_any_file"}
+            pipe = self._get_pipeline() if action in pipeline_actions else None
+
+            if pipe is not None:
+                try:
+                    presult = pipe.handle_action(
+                        action=action,
+                        params=params,
+                        reason=f"chat: {user_text[:140]}",
+                        user_id="rohit",
+                        chat_id=str(self.authorized_user),
+                        channel="telegram_text",
+                    )
+                except Exception as e:
+                    logger.warning("pipeline dispatch %s failed: %s", action, e)
+                    msg = f"ERROR: {e}"
+                    transcript.append((action, params, msg, False))
+                    history.append(f"TOOL_CALL: {_json.dumps(call)}\nRESULT: {msg}")
+                    continue
+
+                from core.decision_pipeline import PipelineStatus as _PS
+
+                if presult.status == _PS.EXECUTED:
+                    out = (presult.execution_output or "").strip()[:1500] or "(no output)"
+                    ok = bool(presult.execution_success)
+                    transcript.append((action, params, out if ok else (presult.execution_error or "?"), ok))
+                    history.append(f"TOOL_CALL: {_json.dumps(call)}\nRESULT: {out}")
+                elif presult.status in (_PS.PENDING_APPROVAL, _PS.PENDING_DIALOG):
+                    msg = (
+                        "CARD_CREATED: a persistent approval card was sent to the owner. "
+                        "I will run this when he tells me yes. "
+                        "Acknowledge this in your reply — say that you proposed the action "
+                        "and are waiting for his approval. Do not claim it already ran."
+                    )
+                    transcript.append((action, params, msg, True))
+                    history.append(f"TOOL_CALL: {_json.dumps(call)}\nRESULT: {msg}")
+                else:  # REFUSED_COVENANT / REFUSED_AUDIT / ERROR
+                    msg = f"REFUSED: {presult.message}"
+                    transcript.append((action, params, msg, False))
+                    history.append(f"TOOL_CALL: {_json.dumps(call)}\nRESULT: {msg}")
+                continue
+
+            # Legacy path for non-primitive actions (read_file etc.)
             try:
                 result = self.actions._execute_action(
                     action, params,

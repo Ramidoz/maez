@@ -1318,6 +1318,27 @@ class MaezDaemon:
             for r in tier1_results + tier2_results:
                 logger.info("Deferred action result: %s", r)
 
+            # Session 11z Part 2: fire due card reminders.
+            # Any pending_cards row in 'deferred' status whose remind_at
+            # has arrived gets re-presented to the owner on whatever channel
+            # the original card was sent on. This is the mechanism that
+            # makes "wait an hour" actually work — Maez proactively comes
+            # back when the hour is up. Failure here must never crash
+            # the cycle, so the whole block is guarded.
+            try:
+                pipe = self.telegram._get_pipeline() if hasattr(self.telegram, "_get_pipeline") else None
+                if pipe is not None:
+                    due = pipe.tick_reminders()
+                    if due:
+                        logger.info("Re-presented %d deferred card(s)", len(due))
+                    # Also expire cards that have been sitting untouched
+                    # for > 7 days so the open-card list stays finite.
+                    expired = pipe.card_store.expire_abandoned(older_than_seconds=7 * 86400)
+                    if expired:
+                        logger.info("Expired %d abandoned card(s)", expired)
+            except Exception as e:
+                logger.debug("card reminder tick failed: %s", e)
+
             # Broadcast cycle start to UI
             self._ws_broadcast({"type": "cycle_start", "cycle": self.cycle_count})
 

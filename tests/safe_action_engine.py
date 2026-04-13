@@ -314,6 +314,69 @@ class SandboxedActionEngine:
                 patcher.start()
                 self._patchers.append(patcher)
 
+        # Override _check_path_allowed to also allow paths inside the
+        # sandbox root. The real ActionEngine hardcodes a `/home/rohit/`
+        # prefix check which is correct in production but prevents the
+        # sandbox (living under /tmp) from running write primitives at
+        # all. The sandbox's own _wrap_write_methods layer is still the
+        # fail-closed outer guard — this override only adds a second
+        # allowed prefix, never weakens the real one.
+        root_str_local = str(self.root)
+        original_check = ae.ActionEngine._check_path_allowed
+        forbidden_paths = getattr(ae, "FORBIDDEN_PATHS", [])
+
+        def sandbox_check_path_allowed(self_engine, path):
+            from pathlib import Path as _P
+            p = _P(path).resolve()
+            s = str(p)
+            if not (s.startswith("/home/rohit/") or s.startswith(root_str_local)):
+                from core.action_engine import ForbiddenActionError
+                raise ForbiddenActionError(f"Path outside allowed prefixes: {path}")
+            for forbidden in forbidden_paths:
+                fp = forbidden.resolve()
+                if p == fp or fp in p.parents:
+                    from core.action_engine import ForbiddenActionError
+                    raise ForbiddenActionError(f"Path is forbidden: {path}")
+            return p
+
+        patcher = mock.patch.object(
+            ae.ActionEngine, "_check_path_allowed", sandbox_check_path_allowed
+        )
+        patcher.start()
+        self._patchers.append(patcher)
+
+        # Several _do_* write methods hardcode a literal `/home/rohit/`
+        # prefix check INSIDE the method body, bypassing the sandbox's
+        # patched _check_path_allowed. Replace those methods with clean
+        # sandbox-internal implementations that honor the same safety
+        # rules (no covenant path, no fail-closed escape) but allow the
+        # sandbox root as a valid prefix.
+        root_str_inner = str(self.root)
+        covenant_paths_local = list(getattr(ae, "COVENANT_PATHS", []))
+
+        def sandbox_do_write_any_file(self_engine, path, content, reason=""):
+            from pathlib import Path as _P
+            from core.action_engine import ForbiddenActionError
+            p = _P(path).resolve()
+            s = str(p)
+            if not (s.startswith("/home/rohit/") or s.startswith(root_str_inner)):
+                raise ForbiddenActionError(f"Path outside allowed prefixes: {path}")
+            for forbidden in covenant_paths_local:
+                fp = forbidden.resolve()
+                if p == fp or fp in p.parents:
+                    raise ForbiddenActionError(
+                        f"Write to covenant-protected path refused: {path}"
+                    )
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content)
+            return f"Written: {p} ({len(content)} chars)"
+
+        patcher = mock.patch.object(
+            ae.ActionEngine, "_do_write_any_file", sandbox_do_write_any_file
+        )
+        patcher.start()
+        self._patchers.append(patcher)
+
 
 # ------------------------------------------------------------------ #
 #  Self-test — run this module directly to verify the harness works   #
