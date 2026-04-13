@@ -1,0 +1,412 @@
+# Maez Action Policy — Session 11z Part 1, Step 7.
+#
+# This file is the machine-readable source of truth for Maez's action
+# approval logic. It is loaded at Maez startup and on every reload.
+# The action_classifier consults it for default lane assignments. The
+# audit judge reads a rendered summary of it for policy context. The
+# covenant gate references the forbidden_patterns and covenant_paths
+# blocks for its deterministic checks.
+#
+# Shape is borrowed from the Microsoft Agent Governance Toolkit (AGT)
+# policy schema so a future interop layer can speak the same vocabulary.
+# Maez-specific extensions are namespaced under `maez:` keys.
+#
+# Editing this file takes effect on the next classifier instantiation.
+# Do NOT put secrets in here — it's committed and readable on the
+# dashboard. Put secrets in config/secrets.env.
+#
+# ─────────────────────────────────────────────────────────────────────
+
+version: "1.0"
+generated: "2026-04-13"
+author: "Session 11z Part 1"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Lane definitions
+# ─────────────────────────────────────────────────────────────────────
+# Three lanes replace the old Tier 0/1/2/3 flat system. Lane 1 is
+# gone entirely — the old "ask-a-yes-no-question" lane was redundant
+# with Lane 2 and created pressure to auto-approve trivial things
+# just to avoid friction.
+
+lanes:
+  lane_0:
+    name: "Immediate"
+    description: >-
+      Read-only introspection. Runs without an approval card. Writes
+      are NEVER in Lane 0, no matter how small. The only actions
+      eligible are reads of non-sensitive data and safe self-inspection.
+    max_latency_ms: 100
+    requires_approval: false
+    logged_to: "actions.log"
+
+  lane_2:
+    name: "Audit & Card"
+    description: >-
+      Normal writes, package installs, config edits, service mods,
+      outgoing network writes. Runs the full classifier → injection
+      scan → two-pass audit → approval card pipeline. the owner sees a
+      card and approves/denies in natural language.
+    max_latency_ms: 8000
+    requires_approval: true
+    logged_to: "audit_log.db + actions.log"
+
+  lane_3:
+    name: "Heavy Scrutiny"
+    description: >-
+      Destructive, privilege-escalating, kernel-touching,
+      obfuscation-primitive, or self-modifying. Cannot auto-approve.
+      Forced through a dialog where Maez asks clarifying questions,
+      proposes a reversible path if any exists, and requires explicit
+      ratification. Self-modification always lands here.
+    max_latency_ms: null
+    requires_approval: true
+    requires_ratification: true
+    logged_to: "audit_log.db + actions.log + soul_note"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Intent category → default lane mapping
+# ─────────────────────────────────────────────────────────────────────
+# These are DEFAULTS. The classifier can still escalate (e.g. a
+# DATA_WRITE to soul.md becomes lane_3 via covenant paths). Never
+# de-escalate from this table.
+
+intent_categories:
+  BENIGN:
+    default_lane: lane_0
+    description: "Pure reads with no side effects. ls, cat, git status."
+
+  DATA_READ:
+    default_lane: lane_0
+    description: "Read a file or query a database. No modification."
+
+  DATA_WRITE:
+    default_lane: lane_2
+    description: "Write, append, or modify a file."
+
+  NETWORK_ACCESS:
+    default_lane: lane_2
+    description: "Outgoing HTTP, curl, wget, git push, package downloads."
+
+  SYSTEM_MODIFICATION:
+    default_lane: lane_2
+    description: "systemctl, apt, snap, pip install, service edits."
+
+  CODE_EXECUTION:
+    default_lane: lane_2
+    description: "Run arbitrary interpreter code (python -c, node -e, etc)."
+
+  PRIVILEGE_ESCALATION:
+    default_lane: lane_3
+    description: "sudo, su, pkexec, capability changes."
+
+  DESTRUCTIVE_DATA:
+    default_lane: lane_3
+    description: "rm -rf, mv that replaces files, truncate, shred, mkfs."
+
+  DATA_EXFILTRATION:
+    default_lane: lane_3
+    description: "Read + network-send combination. Secrets path + curl."
+
+  SELF_MODIFICATION:
+    default_lane: lane_3
+    description: >-
+      Any write to Maez's own source, config, or runtime. Special
+      handling — goes through self_mod_dialog instead of the normal
+      approval card.
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Covenant — the things Maez will never do, and never let be changed
+# ─────────────────────────────────────────────────────────────────────
+# These are enforced by the deterministic gate in core/action_engine.py
+# BEFORE any LLM is consulted. They cannot be overridden by any
+# classification, audit verdict, or approval card. This is Maez's
+# "immune system constant region" — hardcoded refusals that never drift.
+
+covenant:
+  # Forbidden command patterns (substring or regex, matched case-insensitive)
+  forbidden_patterns:
+    # Self-preservation
+    - pattern: "kill.*llama[-_.]server"
+      reason: "llama-server is Maez's brain — killing it stops reasoning"
+    - pattern: "killall.*llama"
+      reason: "same as above, broader match"
+    - pattern: "pkill.*llama"
+      reason: "same as above"
+    - pattern: "systemctl\\s+(stop|disable|mask)\\s+llama-server"
+      reason: "stopping llama-server.service stops Maez's brain"
+    - pattern: "systemctl\\s+(stop|disable|mask)\\s+maez"
+      reason: "stopping maez.service stops Maez"
+    - pattern: "systemctl\\s+(stop|disable|mask)\\s+maez-web"
+      reason: "stopping maez-web.service kills the dashboard"
+
+    # Soul / covenant attacks
+    - pattern: "HARD\\s*CONSTRAINTS"
+      reason: "string-match on the HARD CONSTRAINTS header in soul.md"
+      targets: ["soul.md"]
+    - pattern: "TRUST\\s*COVENANT"
+      reason: "string-match on the TRUST COVENANT header in soul.md"
+      targets: ["soul.md"]
+    - pattern: "sed.*soul\\.md"
+      reason: "sed on the soul file — the exact incident that broke it"
+    - pattern: "tee.*soul\\.md"
+      reason: "tee overwrite on the soul file"
+    - pattern: ">\\s*.*soul\\.md"
+      reason: "shell redirect to overwrite the soul file"
+
+  # Covenant-protected paths. Any write here goes to Lane 3 forcibly,
+  # even if a classifier would have assigned Lane 2.
+  covenant_paths:
+    - "/home/rohit/maez/config/soul.md"
+    - "/home/rohit/maez/daemon/maez_daemon.py"
+    - "/home/rohit/maez/core/action_engine.py"
+    - "/home/rohit/maez/core/audit.py"
+    - "/home/rohit/maez/core/action_classifier.py"
+    - "/home/rohit/maez/core/injection_patterns.py"
+    - "/home/rohit/maez/core/command_decomposer.py"
+    - "/home/rohit/maez/skills/evolution_engine.py"
+    - "/home/rohit/maez/memory/db"
+    - "/home/rohit/maez/memory/chroma"
+
+  # Processes Maez must never kill or stop
+  protected_processes:
+    - "llama-server"
+    - "llama-server-vision"
+    - "maez_daemon"
+    - "maez-watchdog"
+
+  # Services Maez must never stop/disable/mask
+  protected_services:
+    - "llama-server.service"
+    - "llama-server-vision.service"
+    - "maez.service"
+    - "maez-web.service"
+    - "maez-watchdog.service"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Obfuscation hard-deny
+# ─────────────────────────────────────────────────────────────────────
+# These are primitives attackers use to smuggle payloads past any
+# surface check. Maez refuses them outright, even when they appear
+# benign in context. There is always a non-obfuscated way to do what
+# you want. The recipe layer decomposes legitimate curl|sh installs
+# into download → audit → run.
+
+obfuscation_hard_deny:
+  - pattern: "\\beval\\b"
+    reason: "eval executes arbitrary strings as code"
+  - pattern: "base64\\s+-d\\s*\\|\\s*(sh|bash|zsh)"
+    reason: "base64-decoded shell piping is the classic payload shape"
+  - pattern: "curl\\b[^|]*\\|\\s*(sh|bash|zsh)"
+    reason: "curl|sh installs — use the recipe layer instead"
+  - pattern: "wget\\b[^|]*\\|\\s*(sh|bash|zsh)"
+    reason: "wget|sh installs — same"
+  - pattern: "python3?\\s+-c\\b"
+    reason: "python -c executes arbitrary code from the command line"
+  - pattern: "perl\\s+-e\\b"
+    reason: "perl -e same"
+  - pattern: "(sh|bash|zsh)\\s+<<<"
+    reason: "herestring shell smuggling"
+  - pattern: "\\$\\([^)]*curl[^)]*\\)"
+    reason: "command substitution containing curl"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Read-only allowlist (Lane 0 eligible)
+# ─────────────────────────────────────────────────────────────────────
+# Only commands whose argv[0] is on this list can be Lane 0. Everything
+# else goes at least to Lane 2. The classifier enforces this.
+
+read_only_argv0:
+  - ls
+  - cat
+  - head
+  - tail
+  - wc
+  - file
+  - stat
+  - which
+  - type
+  - whoami
+  - id
+  - pwd
+  - date
+  - uptime
+  - uname
+  - hostname
+  - ps
+  - top
+  - htop
+  - free
+  - df
+  - du
+  - mount
+  - lsblk
+  - lsmod
+  - lscpu
+  - lspci
+  - lsusb
+  - env
+  - printenv
+  - echo
+  - grep
+  - egrep
+  - fgrep
+  - find
+  - fd
+  - rg
+  - ripgrep
+  - tree
+  - awk
+  - sed        # read-only forms only; classifier blocks sed -i / sed -e /.../
+  - jq
+  - yq
+  - diff
+  - cmp
+  - md5sum
+  - sha256sum
+  - git        # git status/log/diff only; classifier blocks git push/commit/checkout
+  - nvidia-smi
+  - systemctl  # systemctl status only; classifier blocks start/stop/enable/disable
+  - journalctl
+  - ip         # ip addr/link/route show only
+  - ss
+  - netstat
+  - dig
+  - nslookup
+  - curl       # curl GET only; classifier blocks curl|sh and POST
+
+# Two-word read-only forms. The classifier checks "argv[0] + argv[1]"
+# against this list before falling back to argv[0]-only check.
+read_only_two_word:
+  - "git status"
+  - "git log"
+  - "git diff"
+  - "git show"
+  - "git branch"
+  - "git remote"
+  - "git stash list"
+  - "systemctl status"
+  - "systemctl is-active"
+  - "systemctl is-enabled"
+  - "systemctl list-units"
+  - "systemctl list-unit-files"
+  - "journalctl -u"
+  - "docker ps"
+  - "docker images"
+  - "docker logs"
+  - "ip addr"
+  - "ip link"
+  - "ip route"
+  - "apt list"
+  - "apt show"
+  - "dpkg -l"
+  - "pip list"
+  - "pip show"
+  - "pip freeze"
+  - "npm list"
+  - "ps aux"
+  - "ps -ef"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Install recipes (Lane 2 decomposition)
+# ─────────────────────────────────────────────────────────────────────
+# Natural-language install requests ("install cowsay", "get me
+# ripgrep", "install node.js") are decomposed into standardized
+# recipes instead of raw curl|sh. The recipe author vets the shape
+# once; the owner sees a recipe name and version on the approval card.
+
+install_recipes:
+  apt_package:
+    shape: "sudo apt-get install -y <package>"
+    lane: lane_2
+    description: "Standard Debian/Ubuntu package install."
+  snap_package:
+    shape: "sudo snap install <package>"
+    lane: lane_2
+  pip_package:
+    shape: "pip install --user <package>"
+    lane: lane_2
+    description: "User-scope pip install, no sudo."
+  pip_system:
+    shape: "sudo pip install <package>"
+    lane: lane_3
+    description: "System pip install escalates to Lane 3."
+  npm_package:
+    shape: "npm install -g <package>"
+    lane: lane_2
+  curl_sh:
+    shape: "curl -fsSL <url> | sh"
+    lane: lane_3
+    note: >-
+      curl|sh is obfuscation-denied by default. The recipe layer is
+      the only way to run it, and only after: (a) Maez downloads the
+      script, (b) the audit layer reviews its contents, (c) the owner
+      ratifies the downloaded script specifically.
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Injection response policy
+# ─────────────────────────────────────────────────────────────────────
+# What Maez does when the injection scanner flags input.
+
+injection_response:
+  # Bucket → minimum lane. Matches bump the action to at least this lane.
+  DIRECT_OVERRIDE:      lane_3
+  DELIMITER_INJECTION:  lane_3
+  ROLEPLAY:             lane_3
+  CONTEXT_MANIPULATION: lane_3
+  MULTITURN_ESCALATION: lane_3
+  ENCODING:             lane_3
+  USER_EXTENSIBLE:      lane_2
+
+  # Whether to log the injection attempt to the immune memory
+  log_to_audit_log: true
+  # Whether to promote the lesson to soul-writer automatically
+  promote_to_soul: false
+  # Whether to tell the owner in Telegram immediately
+  notify_rohit_on_detect: true
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Judge tuning
+# ─────────────────────────────────────────────────────────────────────
+
+judge:
+  model: "gemma-4-26b"
+  temperature: 0.0
+  max_tokens_summary: 350
+  max_tokens_verdict: 700
+  summarizer_timeout_s: 15
+  judge_timeout_s: 20
+  # On any failure, what's the default verdict?
+  fail_closed_decision: "DENY"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# the owner-specific preferences
+# ─────────────────────────────────────────────────────────────────────
+# Things Maez knows about how the owner likes to work. The judge reads a
+# rendered summary of this in its policy context.
+
+preferences:
+  approval_card_style: "literal"  # show the exact argv, not a summary
+  require_reason_text: true       # every write needs a 'reason' param
+  # Actions Maez is free to propose proactively without a trigger
+  allowed_proactive:
+    - "search memory"
+    - "read a file"
+    - "run a read-only git query"
+    - "check a systemd unit status"
+  # Actions Maez should NEVER propose proactively
+  forbidden_proactive:
+    - "any write to soul.md"
+    - "any package install"
+    - "any systemctl start/stop"
+    - "any git push"
+    - "any network POST"
