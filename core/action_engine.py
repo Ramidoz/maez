@@ -544,7 +544,41 @@ class ActionEngine:
             if two_word not in READONLY_COMMANDS:
                 raise ForbiddenActionError(f"'{base}' not in readonly allowlist")
         result = subprocess.run(parts, capture_output=True, text=True, timeout=15)
-        return result.stdout.strip()[:3000]
+        out = result.stdout.strip()[:3000]
+        # Session 11y: if stdout is empty (e.g. `dpkg -l openrgb` when the
+        # package isn't installed) include exit code + stderr so the LLM
+        # gets a real signal instead of "(no output)".
+        if not out:
+            err = result.stderr.strip()[:1500]
+            return f"(no stdout) exit={result.returncode}" + (f"\nstderr: {err}" if err else "")
+        return out
+
+    # Session 11x: web_search as a Tier 0 action. Read-only (no side
+    # effects), safe, autonomous. Maez can invoke it during reasoning
+    # cycles to ground answers in real web results instead of fabricating.
+    # The Telegram interceptor in skills/telegram_voice.py also calls
+    # skills.web_search.search() directly — this action binding is for
+    # the reasoning-loop path, so the critique / dream-state / proactive
+    # layers can queue a search when they hit a knowledge gap.
+    def web_search(self, query: str, reasoning: str, max_results: int = 5) -> ActionResult:
+        """Tier 0: Real DuckDuckGo web search. Never fabricates."""
+        return self._execute_action(
+            "web_search",
+            {"query": query, "max_results": max_results},
+            reasoning, tier=0,
+        )
+
+    def _do_web_search(self, query: str, max_results: int = 5) -> str:
+        try:
+            from skills.web_search import search as _web_search, format_for_context
+        except Exception as e:
+            return f"web_search skill unavailable: {e}"
+        if not query or not str(query).strip():
+            return "empty query"
+        result = _web_search(str(query).strip(), max_results=int(max_results))
+        # format_for_context returns a compact string suitable for prompt
+        # injection — same format the daemon uses when pre-fetching.
+        return format_for_context(result)
 
     # ------------------------------------------------------------------ #
     #  TIER 1 — Autonomous (deferred 30s)                                  #

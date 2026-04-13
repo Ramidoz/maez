@@ -22,7 +22,15 @@ _cache_ttl = 300  # 5 minutes
 
 
 def search(query: str, max_results: int = 5) -> dict:
-    """Search the web using DuckDuckGo. Returns dict with results."""
+    """Search the web using DuckDuckGo. Returns dict with results.
+
+    Session 11x: made exception-handling resilient. Previously, if the
+    DuckDuckGo Instant Answer API returned non-JSON (which it does for
+    many technical/specific queries), the whole search gave up without
+    trying the HTML fallback. Now the IA path is wrapped in its own
+    try/except so a JSON parse failure there still drops through to
+    _html_search() as intended.
+    """
     cache_key = query.lower().strip()
     if cache_key in _cache:
         age = time.time() - _cache[cache_key]['timestamp']
@@ -31,9 +39,12 @@ def search(query: str, max_results: int = 5) -> dict:
             return _cache[cache_key]['result']
 
     logger.info("Web search: %s", query)
+    results = []
 
+    # --- Attempt 1: DuckDuckGo Instant Answer API ---
+    # Best for well-known topics (Wikipedia-style summaries). Returns
+    # empty or raises for most specific technical queries.
     try:
-        # DuckDuckGo instant answer API
         params = urllib.parse.urlencode({
             'q': query, 'format': 'json',
             'no_html': '1', 'skip_disambig': '1',
@@ -44,8 +55,6 @@ def search(query: str, max_results: int = 5) -> dict:
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
-
-        results = []
 
         # Abstract (direct answer)
         if data.get('Abstract'):
@@ -65,29 +74,31 @@ def search(query: str, max_results: int = 5) -> dict:
                     'url': topic.get('FirstURL', ''),
                     'source': 'DuckDuckGo',
                 })
-
-        # Fallback to HTML search if no instant answer
-        if not results:
-            results = _html_search(query, max_results)
-
-        result = {
-            'query': query,
-            'results': results[:max_results],
-            'result_count': len(results),
-            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-            'success': len(results) > 0,
-        }
-
-        _cache[cache_key] = {'result': result, 'timestamp': time.time()}
-        logger.info("Web search: %d results for '%s'", len(results), query)
-        return result
-
     except Exception as e:
-        logger.error("Web search failed: %s", e)
-        return {
-            'query': query, 'results': [], 'result_count': 0,
-            'error': str(e), 'success': False,
-        }
+        logger.debug("Instant Answer API failed for %r: %s — trying HTML fallback", query, e)
+        # Fall through to HTML search
+
+    # --- Attempt 2: HTML search (always try if Attempt 1 gave nothing) ---
+    if not results:
+        try:
+            results = _html_search(query, max_results)
+        except Exception as e:
+            logger.error("HTML fallback also failed for %r: %s", query, e)
+            results = []
+
+    result = {
+        'query': query,
+        'results': results[:max_results] if results else [],
+        'result_count': len(results[:max_results]) if results else 0,
+        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'success': bool(results),
+    }
+    if not results:
+        result['error'] = 'no results from either Instant Answer API or HTML search'
+
+    _cache[cache_key] = {'result': result, 'timestamp': time.time()}
+    logger.info("Web search: %d results for '%s'", len(results), query)
+    return result
 
 
 def _html_search(query: str, max_results: int = 5) -> list:

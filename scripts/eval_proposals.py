@@ -19,6 +19,19 @@ import subprocess
 
 sys.path.insert(0, '/home/rohit/maez')
 
+# Session 11x: auto-load config/.env so ad-hoc CLI runs pick up
+# MAEZ_LLM_BACKEND=llamacpp. Without this, llm_client defaults to Ollama
+# when the env var is missing, and the eval hangs on a ghost Ollama the
+# repo isn't supposed to use anymore. This cost us 7 real minutes during
+# the 11x eval sprint. Wrapped in a try/except so the script still runs
+# if python-dotenv isn't installed — it'll just fall back to whatever
+# the caller's environment happens to have.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv('/home/rohit/maez/config/.env')
+except Exception:
+    pass
+
 MAEZ_ROOT = '/home/rohit/maez'
 TARGET = 'core/cognition_quality.py'
 EVOLUTION_DB = os.path.join(MAEZ_ROOT, 'memory', 'evolution_track.db')
