@@ -1,0 +1,39 @@
+# Session 11t — Maez QLoRA training pipeline
+#
+# Isolated from the daemon venv. These packages are huge and conflict
+# with the daemon's transformers/torch baseline — keep them here.
+#
+# Install with:
+#   cd /home/rohit/maez/training
+#   python3 -m venv .venv
+#   .venv/bin/pip install --upgrade pip
+#   .venv/bin/pip install -r requirements.txt
+#
+# After a successful install, freeze:
+#   .venv/bin/pip freeze > requirements.lock.txt
+
+# Core training stack
+unsloth
+unsloth_zoo
+peft>=0.13.0
+trl>=0.11.0
+transformers>=4.46.0
+accelerate>=0.34.0
+datasets>=3.0.0
+bitsandbytes>=0.44.0
+
+# Torch — let unsloth's dependency resolver pick the CUDA build for
+# the RTX 4090 (compute 8.9, CUDA 12.x). If the resolver picks the CPU
+# wheel, we override manually with:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+torch>=2.4.0
+
+# Tokenizer / serialization support
+sentencepiece
+protobuf
+safetensors
+tokenizers
+
+# Convenience
+tqdm
+numpy

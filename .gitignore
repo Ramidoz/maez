@@ -20,9 +20,21 @@ ui/electron/node_modules/
 ui/electron/dist/
 *.bak
 *.bak2
+*.bak.*
+*.orig
+*.db-shm
+*.db-wal
+*.db-journal
 /tmp/
 PROGRESS.md
 training/.venv/
 training/runs/
+training/unsloth_compiled_cache/
 *.safetensors
 *.gguf
+
+# Runtime state (grows on its own; not source code)
+memory/continuity_capsule.json
+memory/continuity_archive/
+memory/fast_reply_audit.jsonl
+memory/site_analytics.jsonl

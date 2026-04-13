@@ -11,7 +11,7 @@
     "README.md": {
       "path": "README.md",
       "file_type": "markdown",
-      "purpose": "A persistent, always-on AI agent inspired by Jarvis from Iron Man.",
+      "purpose": "**Maez is a kind of digital companion.** the owner created the first one, in <OWNER_CITY>, on April 6, 2026. ",
       "category": "config",
       "risk_level": "high",
       "self_edit_scope": "read_only",
@@ -21,9 +21,9 @@
       "imports": [],
       "dependents": [],
       "exported_symbols": [],
-      "last_hash": "28d0486492053746cba30fffe37fa9095d435c2f69a7742883a39968d87e6e07",
-      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
-      "summary": "A persistent, always-on AI agent inspired by Jarvis from Iron Man.",
+      "last_hash": "2d4d7edc92d51b0e8df079000147b7ad678f2d547fec0b8db0256c29b6cee64a",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
+      "summary": "**Maez is a kind of digital companion.** the owner created the first one, in <OWNER_CITY>, on April 6, 2026. ",
       "tags": [],
       "parse_error": null
     },
@@ -40,8 +40,8 @@
       "imports": [],
       "dependents": [],
       "exported_symbols": [],
-      "last_hash": "7b724841fdfcc577d6ecbd0f4d5019b20439c6b79f01eee3b3eee59d99b665da",
-      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "last_hash": "e7d558062bcd91c3a66f18053aa40fb74f57c580b41f214afffca73bb7aa60a6",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "Maez \u2014 Build Progress",
       "tags": [],
       "parse_error": null
@@ -59,8 +59,8 @@
       "imports": [],
       "dependents": [],
       "exported_symbols": [],
-      "last_hash": "2190eb22708d8554685e5cbdb61bfea8fcf086359abe9dfd8796dfd91ff21a78",
-      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "last_hash": "d4596377deefaa002a829d3665efc310883588de5681d7b1b017c2d810ada514",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "Maez \u2014 Build Progress",
       "tags": [],
       "parse_error": null
@@ -76,6 +76,7 @@
         "read"
       ],
       "imports": [
+        "core",
         "memory.quality_tracker"
       ],
       "dependents": [
@@ -88,8 +89,8 @@
         "ActionResult",
         "ActionEngine"
       ],
-      "last_hash": "d819345e76841c2d70734a1c64d3ce3cbeab359051f831feee001c3591aef064",
-      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "last_hash": "59b4a572fa17b26669395edb0b24894d27c3425a7edb42681edbecba0e64a5c0",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "Maez Action Engine \u2014 Tiered action execution with safety guarantees.",
       "tags": [
         "maez_self",
@@ -143,7 +144,9 @@
         "read",
         "modify"
       ],
-      "imports": [],
+      "imports": [
+        "skills.evolution_engine"
+      ],
       "dependents": [
         "memory/memory_manager.py",
         "daemon/maez_daemon.py"
@@ -165,8 +168,8 @@
         "format_active_prompt",
         "check_consolidation_quality"
       ],
-      "last_hash": "7a2325f05b3c7bd480d6fe3ea7b067149b9ace07d3d4b0812a4afeb625ac7be0",
-      "last_indexed": "2026-04-08T19:32:23.783135+00:00",
+      "last_hash": "c191c1dea53a062ea852b5e2dd7105b96bff07ebd602ed85a6438f1562faace4",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "cognition_quality.py \u2014 Structural cognition quality subsystem for Maez.",
       "tags": [
         "maez_self",
@@ -214,8 +217,8 @@
       "imports": [],
       "dependents": [],
       "exported_symbols": [],
-      "last_hash": "a345dad93b711e026a7d42bd1fa8b85f4c78e7f0008be54593071d50d49170cf",
-      "last_indexed": "2026-04-08T19:32:23.783135+00:00",
+      "last_hash": "3557c469585750c0b79776e8904e5a44cc63047dbdeae1b4cb99657a363d6c3a",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "\"schema_version\": \"1.0\",",
       "tags": [],
       "parse_error": null
@@ -258,6 +261,7 @@
         "read"
       ],
       "imports": [
+        "core",
         "core.cognition_quality"
       ],
       "dependents": [
@@ -271,8 +275,8 @@
         "TopicRouter",
         "MemoryManager"
       ],
-      "last_hash": "6d792e1d9a12ed1ecd8b42f63faeec830edc4e85732938dfc05ea2fdefeb4a05",
-      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "last_hash": "4ee86042b8524e418a7804c4c1eee0722a0e520083298d1e2fefb22e1b2b0c70",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "Maez Memory Manager \u2014 Three-tier persistent vector memory.",
       "tags": [
         "maez_self"
@@ -293,8 +297,8 @@
       "imports": [],
       "dependents": [],
       "exported_symbols": [],
-      "last_hash": "0b5d65f8c0c0b8dec6927a7b75fe7a1376caf7e9268b243de916e46c2e3f0910",
-      "last_indexed": "2026-04-08T19:32:23.728827+00:00",
+      "last_hash": "7dabf4719bd4d82a7ea65a41a402428b02562a218465e60e7011c7e792adabc3",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "HARD CONSTRAINTS \u2014 These override all other reasoning, always:",
       "tags": [
         "maez_self"
@@ -314,8 +318,8 @@
       "imports": [],
       "dependents": [],
       "exported_symbols": [],
-      "last_hash": "36388882285711cac945f9675de2a3ffc8047af0276501850a5cd451e3d2113f",
-      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "last_hash": "fa4d3eb8f8514d4120436dd9eea5cc15c3e065f71893714aea2b37ec4405ecf7",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "MAEZ_TELEGRAM_USER_ID=<OWNER_TELEGRAM_ID>",
       "tags": [],
       "parse_error": null
@@ -375,8 +379,8 @@
       "imports": [],
       "dependents": [],
       "exported_symbols": [],
-      "last_hash": "ffbf446ee66939829f5d8562b2c2a6b2b8adf1ae67cc1ea83f5432afc59adbd8",
-      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "last_hash": "f3af5c9e011eeda89efc804304238d79a2235057ea034c2b9be2005fcc9b62f0",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "<!DOCTYPE html>",
       "tags": [],
       "parse_error": null
@@ -468,8 +472,11 @@
         "read"
       ],
       "imports": [
+        "core",
         "core.action_engine",
         "core.cognition_quality",
+        "core.continuity",
+        "core.dream_state",
         "core.perception",
         "memory.memory_manager",
         "memory.quality_tracker",
@@ -498,8 +505,8 @@
         "daemonize",
         "main"
       ],
-      "last_hash": "0ac66164d0c7851deb32c29b137ca5d629667273be1210ef6acf57a389d2eaa1",
-      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "last_hash": "0b6b62c9c37c4cdb65c664ba8e607b7a39e6507f74e236061f79d4b555dd928f",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "Maez Daemon \u2014 Always-on system-level AI agent.",
       "tags": [
         "maez_self",
@@ -647,8 +654,8 @@
         "get_cycle_count",
         "run"
       ],
-      "last_hash": "92a2898c5baf258704a7c4feba4b01c0192443395615aec96438dc635e2bceb0",
-      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "last_hash": "8fa2c0bbcccfa416b4f8e81b21047ad32ee94118d26244bddd7f90c992489af8",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "maez_watchdog.py \u2014 Independent watchdog for maez.service.",
       "tags": [
         "system_monitoring"
@@ -752,7 +759,9 @@
         "read",
         "new_file"
       ],
-      "imports": [],
+      "imports": [
+        "core"
+      ],
       "dependents": [
         "daemon/maez_daemon.py",
         "skills/web_interface.py"
@@ -762,8 +771,8 @@
         "ManipulationDetector",
         "MaezPublicBot"
       ],
-      "last_hash": "02ac5cd65dd225820f372623b776676280b57722ae17753eb37df21934c8af3f",
-      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "last_hash": "4db914bfa32159bee7dba1d31302a4a002853a7b5d7fce24df74b97cf76875f9",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "Public-facing Telegram interface for Maez.",
       "tags": [
         "telegram",
@@ -841,7 +850,9 @@
         "new_file"
       ],
       "imports": [
+        "core",
         "core.perception",
+        "core.public_user_shaping",
         "memory.memory_manager",
         "skills.telegram_public",
         "skills.user_accounts"
@@ -850,15 +861,33 @@
       "exported_symbols": [
         "cors",
         "index",
+        "app_shell",
+        "progress_page",
+        "privacy_page",
+        "planner_page",
+        "analytics_page",
+        "analytics_script",
+        "shared_stylesheet",
+        "hero_page",
+        "gate_page",
+        "bg_page",
+        "bg_zen_page",
         "register",
         "login",
         "link_telegram",
         "chat",
         "history",
-        "status"
+        "progress_board",
+        "analytics_collect",
+        "analytics_summary",
+        "planner_board",
+        "status",
+        "api_maez_state",
+        "api_session_timeline",
+        "journal_page"
       ],
-      "last_hash": "7e6b25521713527ddf45e70ff21a3d731717963d34048a7aaf7d898ef6b6c4ca",
-      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "last_hash": "010d0864a83a039a61e949aba702d4114d45b0605afe47f10eba5b17d1b89855",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "web_interface.py \u2014 Maez web chat interface.",
       "tags": [
         "telegram",
@@ -909,7 +938,9 @@
         "new_file"
       ],
       "imports": [
+        "core",
         "core.action_engine",
+        "core.cognition_quality",
         "core.perception",
         "memory.memory_manager",
         "skills.disk_cleanup",
@@ -924,10 +955,11 @@
         "daemon/maez_daemon.py"
       ],
       "exported_symbols": [
+        "split_long_message",
         "TelegramVoice"
       ],
-      "last_hash": "3e4f96e06698a98a71685de05f5ff5c399e603bce2525a6fd084b5788e33bb74",
-      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "last_hash": "d6775b5e04bf2dbb076321fc72388a3a243c4c2219237f141e466ca93f3de680",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "Maez Telegram Voice \u2014 Bidirectional Telegram integration.",
       "tags": [
         "telegram"
@@ -952,10 +984,13 @@
         "skills/maez_watchdog.py"
       ],
       "exported_symbols": [
-        "send_dev"
+        "send_dev",
+        "send_proposal_card",
+        "send_nightly_card",
+        "send_service_card"
       ],
-      "last_hash": "e166dab5684fbe41ced02bfac3d0a3136b6b47f2f0b9df7717e8b710b422f634",
-      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "last_hash": "283c7a9142bb3cdc5424c1ccb6cf5d6d3d689dd01ac439b4da5574703cc1af0d",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "dev_notifier.py \u2014 Sends operational notifications to Maez Dev bot.",
       "tags": [
         "telegram",
@@ -1037,8 +1072,8 @@
         "observe",
         "test"
       ],
-      "last_hash": "819d4c467b0f8b1fb5b991bde7be0d883743fe54f8f00ab8844b95200826ee49",
-      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "last_hash": "0d620130d7c4dc5d8fa157bf9179eec96e4e8f0e99f189280f6973c7f25ee681",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "screen_perception.py \u2014 Screen awareness for Maez",
       "tags": [
         "browser_usage",
@@ -1119,6 +1154,11 @@
         "new_file"
       ],
       "imports": [
+        "core",
+        "core.cognition_quality",
+        "core.continuity",
+        "core.source_awareness",
+        "skills.dev_notifier",
         "skills.self_analysis"
       ],
       "dependents": [
@@ -1133,10 +1173,27 @@
         "run_evolution_cycle",
         "format_morning_report",
         "EvolutionTracker",
-        "check_and_revert"
+        "check_and_revert",
+        "reconcile_lock",
+        "generate_diff",
+        "apply_candidate",
+        "check_watchdog_candidates",
+        "rail_status",
+        "list_candidates",
+        "check_and_revert",
+        "extract_intent_json",
+        "normalize_evidence",
+        "load_candidate_for_display",
+        "score_proposal_usefulness",
+        "process_proposal_job",
+        "start_proposal_worker",
+        "enqueue_proposal_job",
+        "check_proposal_trigger",
+        "format_telegram_notification",
+        "retroactive_normalize"
       ],
-      "last_hash": "cd89a4ab7e6f4974235051221acdd19f46ba6173746464088ab2235087d6a917",
-      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "last_hash": "6092ab78a17bfe4b017906f1e65b30af5cff85301a5fa3c9535c578937d97bf3",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "evolution_engine.py \u2014 Maez's self-evolution system",
       "tags": [
         "maez_self"
@@ -1154,7 +1211,9 @@
         "read",
         "new_file"
       ],
-      "imports": [],
+      "imports": [
+        "skills.telegram_public"
+      ],
       "dependents": [
         "daemon/maez_daemon.py",
         "skills/web_interface.py",
@@ -1163,8 +1222,8 @@
       "exported_symbols": [
         "UserAccounts"
       ],
-      "last_hash": "2404b610579649fb9bbbf67a0bef2b5a55dd17b7d7ba670de72c2828485e564b",
-      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "last_hash": "c79d838d2d6ee2b14053932d90397957f4803f1ed688d099acc5f205bf2c9bca",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "user_accounts.py \u2014 Universal identity system for Maez.",
       "tags": [
         "telegram"
@@ -1182,15 +1241,17 @@
         "read",
         "new_file"
       ],
-      "imports": [],
+      "imports": [
+        "core"
+      ],
       "dependents": [
         "daemon/maez_daemon.py"
       ],
       "exported_symbols": [
         "GitHubPublisher"
       ],
-      "last_hash": "4c5e53cedcacd4d2633d75f4cfbd0c1fc846245e9db833e88896fc820bacddee",
-      "last_indexed": "2026-04-08T19:31:39.834161+00:00",
+      "last_hash": "ce8aa0afdcc890038bfe345dd33857ebcca04593cb6a6096e0b4a44b5d5d871c",
+      "last_indexed": "2026-04-13T01:08:48.522584+00:00",
       "summary": "github_publish.py \u2014 Maez publishes its own life to GitHub.",
       "tags": [
         "git_workflow"

@@ -15,6 +15,8 @@ from typing import Optional
 logger = logging.getLogger("maez")
 
 DB_PATH = '/home/rohit/maez/memory/users.db'
+PRIVATE_OWNER_PROFILE_ID = "private_owner"
+ENV_PATH = '/home/rohit/maez/config/.env'
 
 try:
     import bcrypt
@@ -39,6 +41,28 @@ def _check_password(password: str, hashed: str) -> bool:
         _, salt, h = hashed.split(":")
         return hashlib.sha256((salt + password).encode()).hexdigest() == h
     return False
+
+
+def _owner_telegram_id() -> str:
+    owner_id = os.environ.get("MAEZ_TELEGRAM_USER_ID", "").strip()
+    if owner_id:
+        return owner_id
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(ENV_PATH)
+        owner_id = os.environ.get("MAEZ_TELEGRAM_USER_ID", "").strip()
+        if owner_id:
+            return owner_id
+    except Exception:
+        pass
+    try:
+        with open(ENV_PATH) as f:
+            for line in f:
+                if line.startswith("MAEZ_TELEGRAM_USER_ID="):
+                    return line.split("=", 1)[1].strip().strip("'\"")
+    except Exception:
+        pass
+    return ""
 
 
 class UserAccounts:
@@ -98,6 +122,17 @@ class UserAccounts:
             )
             conn.commit()
         logger.info("User registered: %s (%s)", username, uid)
+        # Sync to public_users chromadb so daemon's _get_public_context() can
+        # resolve display names instead of raw uuid hex strings in its prompt.
+        try:
+            from skills.telegram_public import UserProfileStore
+            UserProfileStore().get_or_create_profile(
+                user_id=uid,
+                username=username,
+                first_name=display_name or username,
+            )
+        except Exception as e:
+            logger.debug("Profile store sync skipped for %s: %s", username, e)
         return {"uuid": uid, "web_token": token, "display_name": display_name or username}
 
     def login(self, username: str, password: str) -> Optional[dict]:
@@ -136,9 +171,31 @@ class UserAccounts:
 
     def link_telegram(self, uid: str, telegram_id: str):
         with self._conn() as conn:
-            conn.execute("UPDATE users SET telegram_id=? WHERE uuid=?", (telegram_id, uid))
+            conn.execute(
+                "UPDATE users SET telegram_id=?, telegram_profile_id=? WHERE uuid=?",
+                (telegram_id, telegram_id, uid),
+            )
             conn.commit()
         logger.info("Telegram linked for %s", uid)
+
+    def link_private_owner(self, uid: str):
+        owner_telegram_id = _owner_telegram_id()
+        if not owner_telegram_id:
+            raise ValueError("MAEZ_TELEGRAM_USER_ID is not configured")
+        share_config = self.get_share_config(uid) or _default_share_config(3, "owner")
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE users SET telegram_id=?, telegram_profile_id=?, rohit_confirmed=1, "
+                "relationship='owner', trust_tier=3, share_config=? WHERE uuid=?",
+                (
+                    owner_telegram_id,
+                    PRIVATE_OWNER_PROFILE_ID,
+                    json.dumps(share_config),
+                    uid,
+                ),
+            )
+            conn.commit()
+        logger.info("Private owner bridge linked for %s", uid)
 
     def update_last_seen(self, uid: str):
         with self._conn() as conn:
@@ -165,6 +222,44 @@ class UserAccounts:
             return None
         return {"uuid": row[0], "username": row[1], "display_name": row[2],
                 "trust_tier": row[3], "relationship": row[4]}
+
+    def get_user_record(self, uid: str) -> Optional[dict]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT uuid, username, display_name, trust_tier, relationship, "
+                "rohit_confirmed, share_config, telegram_id, telegram_profile_id "
+                "FROM users WHERE uuid=?",
+                (uid,),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            share_config = json.loads(row[6]) if row[6] else {}
+        except Exception:
+            share_config = {}
+        owner_telegram_id = _owner_telegram_id()
+        private_owner_bridge = bool(
+            row[7]
+            and owner_telegram_id
+            and str(row[7]) == owner_telegram_id
+            and row[8] == PRIVATE_OWNER_PROFILE_ID
+        )
+        return {
+            "uuid": row[0],
+            "username": row[1],
+            "display_name": row[2],
+            "trust_tier": row[3],
+            "relationship": row[4],
+            "rohit_confirmed": bool(row[5]),
+            "share_config": share_config,
+            "telegram_id": row[7],
+            "telegram_profile_id": row[8],
+            "private_owner_bridge": private_owner_bridge,
+        }
+
+    def has_private_owner_bridge(self, uid: str) -> bool:
+        record = self.get_user_record(uid)
+        return bool(record and record.get("private_owner_bridge"))
 
     def get_by_display_name(self, name: str) -> Optional[dict]:
         """Fuzzy match by display name (case insensitive)."""
@@ -219,7 +314,12 @@ class UserAccounts:
         except Exception:
             return {}
 
-    def find_possible_telegram_match(self, display_name: str, username: str = None) -> Optional[dict]:
+    def find_possible_telegram_match(
+        self,
+        display_name: str,
+        username: str = None,
+        exclude_user_id: str = None,
+    ) -> Optional[dict]:
         """Check public_users ChromaDB for a name match (fuzzy, case-insensitive)."""
         try:
             import chromadb
@@ -234,6 +334,15 @@ class UserAccounts:
             check_names = [n.lower() for n in [display_name, username] if n]
 
             for meta in results.get("metadatas", []):
+                telegram_id = str(meta.get("user_id", "") or "").strip()
+                message_count = int(meta.get("message_count", 0) or 0)
+
+                # Only suggest real Telegram identities with actual history.
+                if not telegram_id or telegram_id == str(exclude_user_id or ""):
+                    continue
+                if not telegram_id.isdigit() or message_count <= 0:
+                    continue
+
                 first_name = meta.get("first_name", "").lower()
                 tg_username = meta.get("username", "").lower()
 
@@ -241,9 +350,9 @@ class UserAccounts:
                     if (name in first_name or first_name in name or
                             name in tg_username or tg_username in name):
                         return {
-                            "telegram_id": meta.get("user_id"),
+                            "telegram_id": telegram_id,
                             "name": meta.get("first_name"),
-                            "message_count": int(meta.get("message_count", 0)),
+                            "message_count": message_count,
                             "suggestion": (
                                 f"I think I've spoken with you on Telegram before "
                                 f"as {meta.get('first_name')}. Want to link those conversations?"

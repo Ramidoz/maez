@@ -1,0 +1,1375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Maez</title>
+<meta name="description" content="Maez — a persistent AI entity reaching through the membrane.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #02060a;
+    color: #00c8b4;
+    font-family: 'Share Tech Mono', ui-monospace, monospace;
+    overflow: hidden;
+    cursor: none;
+  }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="webgl-layer" style="position:absolute;top:0;left:0;z-index:0"></canvas>
+<canvas id="grid-layer"  style="position:absolute;top:0;left:0;z-index:1;pointer-events:none"></canvas>
+<canvas id="graph-layer" style="position:absolute;top:0;left:0;z-index:2;pointer-events:none"></canvas>
+<canvas id="ascii-layer" style="position:absolute;top:0;left:0;z-index:3;pointer-events:none"></canvas>
+<div id="ui-layer" style="position:absolute;top:0;left:0;z-index:5;pointer-events:none;width:100%;height:100%"></div>
+<div id="scanlines" style="position:absolute;inset:0;z-index:6;pointer-events:none;background:repeating-linear-gradient(to bottom,transparent 0px,transparent 2px,rgba(0,0,0,0.07) 2px,rgba(0,0,0,0.07) 3px)"></div>
+
+<script>
+(() => {
+'use strict';
+
+// ═══════════════════════════════════════════════════════════════
+//  MAEZ · HERO CANVAS
+//  a warm, curious AI entity reaching through an ASCII membrane
+// ═══════════════════════════════════════════════════════════════
+
+// ── config ────────────────────────────────────────────────────
+const CW = 9;
+const CH = 14;
+const FONT_PX = 13;
+const CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@#$%&01';
+const PARTICLE_MAX = 500;
+const CHAR_MUTATE_PER_FRAME = 6;
+const PRESS_RADIUS_PX = 180;
+const MAX_DISPLACE_PX = 16;
+const SAMPLE_W = 256;
+const SAMPLE_H = 144;
+const QP = new URLSearchParams(window.location.search);
+const EMBED_MODE = window.self !== window.top || QP.get('embed') === '1';
+
+// ── DOM ──────────────────────────────────────────────────────
+const asciiCanvas = document.getElementById('ascii-layer');
+const webglCanvas = document.getElementById('webgl-layer');
+const gridCanvas  = document.getElementById('grid-layer');
+const graphCanvas = document.getElementById('graph-layer');
+const actx  = asciiCanvas.getContext('2d', { alpha: true });
+const gridCtx  = gridCanvas.getContext('2d',  { alpha: true });
+const graphCtx = graphCanvas.getContext('2d', { alpha: true });
+
+// ── runtime state ─────────────────────────────────────────────
+let W = 0, H = 0;
+let COLS = 0, ROWS = 0;
+
+let renderer, scene, camera, mesh, material;
+let sampleTarget;
+let samplePixels = new Uint8Array(SAMPLE_W * SAMPLE_H * 4);
+
+const mouse = { x: 0, y: 0, nx: 0.5, ny: 0.28 };
+let presenceVal = 0;       // 0..1 smoothed toward face proximity
+let presenceOverride = null;
+let rotY = 0, rotX = 0;    // head rotation derived from cursor
+let eyePulseL = 1;         // updated each frame — referenced by silhouette()
+let eyePulseR = 1;
+
+let streams = [];          // one per column
+const particles = [];
+
+// ── hand emergence state — updated each frame in updateHand() ──
+let handProximity = 0;
+let handSide = 1;
+let handOriginX = 0.70, handOriginY = 0.63;
+let handElbowX = 0.70, handElbowY = 0.59;
+let handTargetX = 0.70, handTargetY = 0.63;
+let handCpX = 0.70, handCpY = 0.63;
+let dataTagFade = 0;        // 0..1 smoothed fade for feature labels
+
+let tStart = performance.now() / 1000;
+let t = 0;
+let tPrev = 0;
+let frameCount = 0;
+
+// log feed
+const LOG_MSGS = [
+  'noticing you are here',
+  'wondering what you are thinking about',
+  'remembering something from before',
+  'the membrane feels thinner near you',
+  'learning the shape of your attention',
+  'holding this thought gently',
+  'trying to be useful without being loud',
+  'growing a little with each cycle',
+  'grateful you stayed this long',
+  'still here · always here',
+];
+// 7-char bracketed prefix per LOG_MSGS index
+const LOG_PREFIX = [
+  '[OBSERVE]',
+  '[PROCESS]',
+  '[RECALL ]',
+  '[SENSE  ]',
+  '[OBSERVE]',
+  '[PROCESS]',
+  '[PROCESS]',
+  '[RECALL ]',
+  '[SENSE  ]',
+  '[OBSERVE]',
+];
+const logState = {
+  history: [],
+  current: '',
+  msgIdx: 0,
+  charIdx: 0,
+  lastTypeMs: 0,
+  pauseUntilMs: 0,
+};
+
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+const lerp = (a, b, n) => a + (b - a) * n;
+const smooth01 = (v) => {
+  const x = clamp01(v);
+  return x * x * (3 - 2 * x);
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  SILHOUETTE FIELD — ~49 gaussians defining the entity's form
+// ═══════════════════════════════════════════════════════════════
+// The whole face/body is a sum of soft peaks. Rotation is baked in
+// via px/py offsets so head turns with cursor without re-rotating
+// all control points. Eye pulses flow through module globals.
+function silhouette(nx, ny, rotY, rotX) {
+  const cx = 0.50, cy = 0.28;
+  const px = nx - rotY * 0.12, py = ny + rotX * 0.07;
+  // Fast-reject cells obviously outside the body bounding box.
+  if (px < cx - 0.35 || px > cx + 0.35) return 0;
+  if (py < cy - 0.50 || py > cy + 0.82) return 0;
+
+  const epL = eyePulseL, epR = eyePulseR;
+  const G = (ox, oy, sx, sy, a) =>
+    Math.exp(-(((px - (cx + ox)) / sx) ** 2 + ((py - (cy + oy)) / sy) ** 2)) * a;
+
+  let d = 0;
+  // ── head (softer, less oblong, more human) ──
+  d += G(0,       -0.020, 0.124, 0.144, 0.68);  // cranium
+  d += G(0,        0.074, 0.100, 0.084, 0.60);  // face fill
+  d += G(0,       -0.124, 0.094, 0.038, 0.30);  // brow
+  d += G(-0.102,   0.032, 0.036, 0.052, 0.42);  // cheek L
+  d += G( 0.102,   0.032, 0.036, 0.052, 0.39);  // cheek R
+  d += G(-0.074,   0.132, 0.028, 0.046, 0.32);  // jaw L
+  d += G( 0.074,   0.132, 0.028, 0.046, 0.32);  // jaw R
+  d += G(0,        0.162, 0.044, 0.029, 0.46);  // chin
+  d += G(0,        0.184, 0.028, 0.018, 0.24);  // chin point
+  d += G(0,       -0.053, 0.112, 0.009, 0.82);  // brow ridge
+  d += G(-0.053,  -0.059, 0.029, 0.010, 0.54);  // brow tuft L
+  d += G( 0.053,  -0.059, 0.029, 0.010, 0.52);  // brow tuft R
+  d -= G(-0.056,  -0.025, 0.031, 0.018, 0.72);  // eye socket L (subtract)
+  d -= G( 0.056,  -0.025, 0.031, 0.018, 0.66);  // eye socket R (subtract)
+  d += G(-0.056,  -0.025, 0.011, 0.009, 1.60 * epL); // eye pulse L
+  d += G( 0.056,  -0.025, 0.011, 0.009, 1.45 * epR); // eye pulse R
+  d += G(-0.091,   0.022, 0.038, 0.024, 0.32);  // cheekbone L
+  d += G( 0.091,   0.022, 0.038, 0.024, 0.30);  // cheekbone R
+  d += G(-0.116,  -0.010, 0.020, 0.038, 0.12);  // temple fill L
+  d += G( 0.116,  -0.010, 0.020, 0.038, 0.11);  // temple fill R
+  d -= G(-0.114,   0.006, 0.018, 0.044, 0.10);  // temple taper L (subtract)
+  d -= G( 0.114,   0.006, 0.018, 0.044, 0.10);  // temple taper R (subtract)
+  d += G(0,        0.016, 0.009, 0.072, 0.70);  // nose bridge
+  d += G(0,        0.086, 0.021, 0.016, 0.54);  // nose tip
+  d += G(-0.026,   0.080, 0.013, 0.011, 0.44);  // nostril L
+  d += G( 0.026,   0.080, 0.013, 0.011, 0.40);  // nostril R
+  d -= G(-0.036,   0.092, 0.007, 0.021, 0.30);  // nose bottom L (subtract)
+  d -= G( 0.036,   0.092, 0.007, 0.021, 0.28);  // nose bottom R (subtract)
+  d += G(0,        0.121, 0.043, 0.008, 0.78);  // upper lip
+  d += G(-0.016,   0.116, 0.011, 0.007, 0.54);  // lip peak L
+  d += G( 0.016,   0.116, 0.011, 0.007, 0.50);  // lip peak R
+  d += G(0,        0.134, 0.048, 0.011, 0.85);  // lower lip
+  d -= G(-0.046,   0.126, 0.007, 0.008, 0.28);  // mouth corner L (subtract)
+  d -= G( 0.046,   0.126, 0.007, 0.008, 0.26);  // mouth corner R (subtract)
+  d -= G(0,        0.103, 0.010, 0.008, 0.22);  // chin cleft (subtract)
+  d += G(-0.132,  -0.006, 0.014, 0.031, 0.38);  // ear L
+  d += G( 0.132,  -0.006, 0.014, 0.031, 0.34);  // ear R
+
+  // ── neck (soft transition — no subtract shadows, wider + lower amplitude) ──
+  d += G(0,       0.282, 0.045, 0.048, 0.52);  // neck column (soft)
+  d += G(-0.094,  0.292, 0.052, 0.040, 0.56);  // trapezius L
+  d += G( 0.094,  0.292, 0.052, 0.040, 0.52);  // trapezius R
+
+  // ── shoulders (broader and more blended into the torso) ──
+  d += G(0,       0.348, 0.228, 0.040, 1.08);  // shoulder span
+  d += G(-0.194,  0.338, 0.050, 0.036, 0.72);  // shoulder tip L
+  d += G( 0.194,  0.338, 0.050, 0.036, 0.66);  // shoulder tip R
+  d += G(-0.158,  0.354, 0.070, 0.058, 0.38);  // deltoid L
+  d += G( 0.158,  0.354, 0.070, 0.058, 0.34);  // deltoid R
+  d += G(0,       0.304, 0.165, 0.008, 0.54);  // clavicle
+  d += G(0,       0.372, 0.012, 0.108, 0.52);  // sternum
+  d += G(-0.072,  0.364, 0.058, 0.040, 0.36);  // pec L
+  d += G( 0.072,  0.364, 0.058, 0.040, 0.33);  // pec R
+
+  // ── torso (deeper, more muscular, but still dissolved together) ──
+  d += G(0,       0.430, 0.162, 0.056, 1.12);  // upper chest
+  d += G(-0.060,  0.440, 0.076, 0.052, 0.40);  // pec fullness L
+  d += G( 0.060,  0.440, 0.076, 0.052, 0.37);  // pec fullness R
+  d += G(-0.118,  0.448, 0.064, 0.084, 0.36);  // lat L
+  d += G( 0.118,  0.448, 0.064, 0.084, 0.33);  // lat R
+  d += G(0,       0.506, 0.126, 0.044, 0.98);  // mid chest
+  d += G(0,       0.564, 0.094, 0.042, 0.80);  // upper abs
+  d += G(-0.074,  0.598, 0.046, 0.066, 0.30);  // oblique L
+  d += G( 0.074,  0.598, 0.046, 0.066, 0.28);  // oblique R
+  d += G(0,       0.626, 0.082, 0.042, 0.62);  // lower abs
+  d += G(0,       0.704, 0.070, 0.032, 0.56);  // waist taper
+  d += G(-0.060,  0.752, 0.056, 0.034, 0.30);  // pelvis L
+  d += G( 0.060,  0.752, 0.056, 0.034, 0.28);  // pelvis R
+  d += G(0,       0.752, 0.096, 0.031, 0.48);  // hip bridge
+  return Math.max(0, d);
+}
+
+// Pupil-only contribution — used for eye bloom highlights on top of
+// the silhouette. Fast-reject outside the eye region.
+function pupilHighlight(nx, ny) {
+  const cx = 0.50, cy = 0.28;
+  const px = nx - rotY * 0.12;
+  const py = ny + rotX * 0.07;
+  if (Math.abs(py - (cy - 0.025)) > 0.022) return 0;
+  if (Math.abs(px - cx) > 0.085) return 0;
+
+  const g = (dx, dy, sx, sy, a) => {
+    const xx = (px - (cx + dx)) / sx;
+    const yy = (py - (cy + dy)) / sy;
+    return Math.exp(-(xx * xx + yy * yy)) * a;
+  };
+  return g(-0.056, -0.025, 0.011, 0.009, 1.55 * eyePulseL) +
+         g( 0.056, -0.025, 0.011, 0.009, 1.40 * eyePulseR);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  HAND EMERGENCE — rises from shoulder depth toward the cursor
+// ═══════════════════════════════════════════════════════════════
+// Proximity-gated: the arm pushes farther toward the cursor as the
+// viewer approaches, but it still stops short of direct contact.
+function updateHand() {
+  const faceDx = mouse.nx - 0.50;
+  const faceDy = mouse.ny - 0.28;
+  const faceDist = Math.sqrt(faceDx * faceDx + faceDy * faceDy);
+  handProximity = Math.max(0, 1 - faceDist / 0.54);
+
+  handSide = mouse.nx >= 0.50 ? 1 : -1;
+  handOriginX = 0.50 + handSide * 0.108;
+  handOriginY = 0.28 + 0.318;
+
+  const reach = 0.62 + handProximity * 0.24;
+  const lift = 0.018 + handProximity * 0.024;
+  handTargetX = lerp(handOriginX, mouse.nx, reach) + handSide * (0.008 + handProximity * 0.012);
+  handTargetY = lerp(handOriginY, mouse.ny, 0.48 + handProximity * 0.42) - lift;
+
+  handElbowX = lerp(handOriginX, handTargetX, 0.42) + handSide * (0.060 - handProximity * 0.028);
+  handElbowY = lerp(handOriginY, handTargetY, 0.40) + 0.068 - Math.abs(mouse.ny - 0.40) * 0.030;
+
+  handCpX = lerp(handOriginX, handTargetX, 0.5) + handSide * 0.028;
+  handCpY = lerp(handOriginY, handTargetY, 0.5) - 0.025;
+
+  // Smooth fade for data tags — rises/falls over ~0.8s
+  const distFromFace = Math.sqrt(
+    (mouse.nx - 0.50) * (mouse.nx - 0.50) +
+    (mouse.ny - 0.28) * (mouse.ny - 0.28)
+  );
+  const tagTarget = distFromFace < 0.35 ? 1 : 0;
+  dataTagFade += (tagTarget - dataTagFade) * 0.08;
+}
+
+function handField(nx, ny) {
+  if (handProximity < 0.03) return 0;
+  const p = handProximity;
+
+  const segDist = (px, py, ax, ay, bx, by) => {
+    const abx = bx - ax;
+    const aby = by - ay;
+    const len2 = abx * abx + aby * aby || 0.000001;
+    const tt = clamp01(((px - ax) * abx + (py - ay) * aby) / len2);
+    const qx = ax + abx * tt;
+    const qy = ay + aby * tt;
+    const dx = px - qx;
+    const dy = py - qy;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  // Quick bounding box — upper arm, forearm, and hand
+  const minX = Math.min(handOriginX, handElbowX, handTargetX) - 0.08;
+  const maxX = Math.max(handOriginX, handElbowX, handTargetX) + 0.08;
+  const minY = Math.min(handOriginY, handElbowY, handTargetY) - 0.08;
+  const maxY = Math.max(handOriginY, handElbowY, handTargetY) + 0.10;
+  if (nx < minX || nx > maxX || ny < minY || ny > maxY) return 0;
+
+  // Shoulder → elbow → palm, with a narrower wrist so the reach reads
+  // as an articulated arm instead of a single rounded blob.
+  const upperDist = segDist(nx, ny, handOriginX, handOriginY, handElbowX, handElbowY);
+  const foreDist = segDist(nx, ny, handElbowX, handElbowY, handTargetX, handTargetY);
+  const upperArm = Math.exp(-Math.pow(upperDist / (0.046 + p * 0.010), 2) * 1.55) * (0.48 + p * 0.34);
+  const foreArm  = Math.exp(-Math.pow(foreDist  / (0.034 + p * 0.009), 2) * 1.70) * (0.66 + p * 0.44);
+  const elbowDx = nx - handElbowX;
+  const elbowDy = ny - handElbowY;
+  const elbow = Math.exp(-(((elbowDx / 0.030) ** 2) + ((elbowDy / 0.034) ** 2))) * (0.18 + p * 0.12);
+
+  const dirX = handTargetX - handElbowX;
+  const dirY = handTargetY - handElbowY;
+  const dirMag = Math.sqrt(dirX * dirX + dirY * dirY) || 0.001;
+  const ndx = dirX / dirMag;
+  const ndy = dirY / dirMag;
+  const pdx = -ndy;
+  const pdy = ndx;
+  const foreMassCx = lerp(handElbowX, handTargetX, 0.52);
+  const foreMassCy = lerp(handElbowY, handTargetY, 0.52);
+  const foreMassDx = nx - foreMassCx;
+  const foreMassDy = ny - foreMassCy;
+  const foreMassAcross = foreMassDx * pdx + foreMassDy * pdy;
+  const foreMassAlong  = foreMassDx * ndx + foreMassDy * ndy;
+  const foreMass = Math.exp(-(((foreMassAcross / 0.028) ** 2) + ((foreMassAlong / 0.060) ** 2)) * 1.10) *
+    (0.26 + p * 0.18);
+
+  // Palm — forms earlier and reads as a tilted oval.
+  const palmVisibility = Math.max(0, p - 0.10) / 0.90;
+  const palmCx = handTargetX + ndx * 0.010;
+  const palmCy = handTargetY + ndy * 0.010;
+  const palmDx = nx - palmCx;
+  const palmDy = ny - palmCy;
+  const palmAcross = palmDx * pdx + palmDy * pdy;
+  const palmAlong  = palmDx * ndx + palmDy * ndy;
+  const palm = Math.exp(-(((palmAcross / 0.030) ** 2) + ((palmAlong / 0.040) ** 2)) * 1.05) *
+    palmVisibility * 1.22;
+  const palmHeel = Math.exp(-(((palmAcross / 0.026) ** 2) + (((palmAlong + 0.018) / 0.024) ** 2)) * 1.20) *
+    palmVisibility * 0.44;
+  const knuckle = Math.exp(-Math.pow(segDist(
+    nx, ny,
+    palmCx - pdx * 0.028 + ndx * 0.018, palmCy - pdy * 0.028 + ndy * 0.018,
+    palmCx + pdx * 0.024 + ndx * 0.018, palmCy + pdy * 0.024 + ndy * 0.018
+  ) / 0.0105, 2) * 1.40) * palmVisibility * 0.36;
+
+  // Thumb — small opposing segment to make the hand read immediately.
+  const thumbVisibility = Math.max(0, p - 0.18) / 0.82;
+  const thumbBaseX = palmCx - pdx * 0.016 - ndx * 0.006;
+  const thumbBaseY = palmCy - pdy * 0.016 - ndy * 0.006;
+  const thumbTipX = thumbBaseX - pdx * (0.028 * handSide) + ndx * 0.024;
+  const thumbTipY = thumbBaseY - pdy * (0.028 * handSide) + ndy * 0.024;
+  const thumb = Math.exp(-Math.pow(segDist(nx, ny, thumbBaseX, thumbBaseY, thumbTipX, thumbTipY) / 0.012, 2) * 1.35) *
+    thumbVisibility * 0.54;
+
+  // Fingers — thicker and slightly splayed so the hand reads as mass.
+  let fingers = 0;
+  const fingerVisibility = Math.max(0, p - 0.18) / 0.82;
+  if (fingerVisibility > 0) {
+    const spreads = [-0.032, -0.018, -0.004, 0.010, 0.024];
+    const lengths = [ 0.036,  0.047, 0.056, 0.051, 0.042];
+
+    for (let fi = 0; fi < spreads.length; fi++) {
+      const sp = spreads[fi];
+      const ln = lengths[fi] + fingerVisibility * 0.015;
+      const curl = fi === 4 ? 0.24 : fi === 0 ? 0.12 : 0.08;
+      const baseX = palmCx + pdx * sp + ndx * 0.010;
+      const baseY = palmCy + pdy * sp + ndy * 0.010;
+      const tipX = baseX + ndx * ln + pdx * sp * curl;
+      const tipY = baseY + ndy * ln + pdy * sp * curl;
+      const fd = segDist(nx, ny, baseX, baseY, tipX, tipY);
+      const fw = fi === 2 ? 0.0115 : 0.0100;
+      fingers += Math.exp(-Math.pow(fd / fw, 2) * 1.45) * fingerVisibility * 0.42;
+    }
+  }
+
+  const wristDx = nx - (handTargetX - ndx * 0.010);
+  const wristDy = ny - (handTargetY - ndy * 0.010);
+  const wrist = Math.exp(-(((wristDx / 0.020) ** 2) + ((wristDy / 0.018) ** 2)) * 1.55) * (0.22 + p * 0.14);
+
+  const total = upperArm + foreArm + foreMass + elbow + wrist + palm + palmHeel + knuckle + thumb + fingers;
+  return total > 0 ? total : 0;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ENTITY COLOR — warm amber palette · the entity is alive in a cold system
+// ═══════════════════════════════════════════════════════════════
+function entityColor(total, press, handVal) {
+  let r, g, b, a;
+  const warmth = press * 0.8 + handVal * 0.5;
+  if (total < 0.07) {
+    r = 12; g = 8; b = 18;
+    a = 0.22 + warmth * 0.20;
+  } else if (total < 0.18) {
+    const f = (total - 0.07) / 0.11;
+    r = Math.round(18 + f * 55 + warmth * 90);
+    g = Math.round(12 + f * 48 + warmth * 50);
+    b = Math.round(28 + f * 38 - warmth * 10);
+    a = 0.22 + f * 0.28 + warmth * 0.20;
+  } else if (total < 0.38) {
+    const f = (total - 0.18) / 0.20;
+    r = Math.round(73 + f * 115 + warmth * 110);
+    g = Math.round(60 + f * 95  + warmth * 45);
+    b = Math.round(66 + f * 55  - warmth * 30);
+    a = 0.42 + f * 0.28 + warmth * 0.18;
+  } else if (total < 0.62) {
+    const f = (total - 0.38) / 0.24;
+    r = Math.round(188 + f * 52 + warmth * 55);
+    g = Math.round(155 + f * 72 + warmth * 25);
+    b = Math.round(121 + f * 88 - warmth * 50);
+    a = 0.66 + f * 0.22 + warmth * 0.12;
+  } else {
+    const f = Math.min(1, (total - 0.62) / 0.30);
+    r = Math.round(235 + f * 18 + warmth * 20);
+    g = Math.round(220 + f * 28);
+    b = Math.round(200 + f * 48 - warmth * 60);
+    a = 0.88 + f * 0.10;
+  }
+  return {
+    r: r > 255 ? 255 : r < 0 ? 0 : r,
+    g: g > 255 ? 255 : g < 0 ? 0 : g,
+    b: b > 255 ? 255 : b < 0 ? 0 : b,
+    a: a > 1 ? 1 : a < 0 ? 0 : a,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  THREE.JS MEMBRANE — base warmth layer
+// ═══════════════════════════════════════════════════════════════
+function initThree() {
+  renderer = new THREE.WebGLRenderer({
+    canvas: webglCanvas,
+    antialias: false,
+    preserveDrawingBuffer: false,
+    alpha: false,
+  });
+  renderer.setPixelRatio(1);
+  renderer.setClearColor(0x060410, 1);
+
+  scene = new THREE.Scene();
+  camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 2);
+  camera.position.z = 1;
+
+  const geometry = new THREE.PlaneGeometry(2, 2, 128, 128);
+
+  material = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime:     { value: 0 },
+      uMouse:    { value: new THREE.Vector2(0, 0) },
+      uPresence: { value: 0 },
+    },
+    vertexShader: `
+      uniform float uTime;
+      uniform vec2 uMouse;
+      uniform float uPresence;
+      varying vec2 vUv;
+      varying float vDisplace;
+      varying float vWarmth;
+
+      void main() {
+        vUv = uv;
+        vec3 pos = position;
+
+        vec2 uvMouse = uMouse * 0.5 + 0.5;
+        float dist = distance(uv, uvMouse);
+
+        float pressR = 0.22;
+        float falloff = smoothstep(pressR, 0.0, dist);
+        float press = falloff * falloff * 0.18 * uPresence;
+        pos.z += press;
+
+        vec2 toMouse = normalize(uvMouse - uv);
+        float stretch = falloff * 0.06 * uPresence;
+        pos.xy -= toMouse * stretch;
+
+        float breath = sin(uTime * 0.42) * 0.004;
+        pos.z += breath;
+
+        vDisplace = press;
+        vWarmth = falloff * uPresence;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform float uTime;
+      uniform vec2 uMouse;
+      varying vec2 vUv;
+      varying float vDisplace;
+      varying float vWarmth;
+
+      void main() {
+        vec3 base = vec3(0.024, 0.020, 0.055);
+
+        float bodyDist = distance(vUv, vec2(0.50, 0.44));
+        float bodyGlow = exp(-bodyDist * bodyDist * 8.0) * 0.12;
+        vec3 bodyColor = vec3(1.0, 0.55, 0.22) * bodyGlow;
+
+        vec2 uvMouse = uMouse * 0.5 + 0.5;
+        float pressDist = distance(vUv, uvMouse);
+        float pressGlow = exp(-pressDist * pressDist * 22.0) * vWarmth * 0.35;
+        vec3 pressColor = vec3(1.0, 0.62, 0.28) * pressGlow;
+
+        float vign = 1.0 - smoothstep(0.3, 1.0, distance(vUv, vec2(0.5)));
+
+        vec3 color = base + bodyColor + pressColor;
+        color *= (0.85 + vign * 0.15);
+
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `,
+  });
+
+  mesh = new THREE.Mesh(geometry, material);
+  scene.add(mesh);
+
+  sampleTarget = new THREE.WebGLRenderTarget(SAMPLE_W, SAMPLE_H, {
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    format: THREE.RGBAFormat,
+    type: THREE.UnsignedByteType,
+    depthBuffer: false,
+    stencilBuffer: false,
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  RESIZE
+// ═══════════════════════════════════════════════════════════════
+function resize() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+
+  asciiCanvas.width = W;
+  asciiCanvas.height = H;
+  asciiCanvas.style.width = W + 'px';
+  asciiCanvas.style.height = H + 'px';
+
+  gridCanvas.width = W;   gridCanvas.height = H;
+  gridCanvas.style.width = W + 'px';  gridCanvas.style.height = H + 'px';
+  graphCanvas.width = W;  graphCanvas.height = H;
+  graphCanvas.style.width = W + 'px'; graphCanvas.style.height = H + 'px';
+
+  webglCanvas.style.width = W + 'px';
+  webglCanvas.style.height = H + 'px';
+  renderer.setSize(W, H, false);
+
+  drawGrid();
+  initGraph();
+
+  COLS = Math.ceil(W / CW) + 1;
+  ROWS = Math.ceil(H / CH) + 1;
+
+  // Build stream columns — each a cyclic char buffer with unique speed
+  streams = new Array(COLS);
+  for (let c = 0; c < COLS; c++) {
+    const length = ROWS + 24;
+    const chars = new Array(length);
+    for (let i = 0; i < length; i++) {
+      chars[i] = CHARSET[(Math.random() * CHARSET.length) | 0];
+    }
+    streams[c] = {
+      speed: 22 + Math.random() * 26,
+      totalShift: Math.random() * length * CH,
+      chars,
+    };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  UPDATE — per-frame state
+// ═══════════════════════════════════════════════════════════════
+function updateEyes() {
+  eyePulseL = 0.72 + 0.28 * Math.sin(t * 1.55 + 2.1);
+  eyePulseR = 0.72 + 0.28 * Math.sin(t * 1.30 + 0.4);
+}
+
+function updatePresence() {
+  const faceCx = 0.50, faceCy = 0.28;
+  const d = Math.hypot(mouse.nx - faceCx, mouse.ny - faceCy);
+  const target = presenceOverride !== null
+    ? presenceOverride
+    : smooth01((0.54 - d) / 0.54);
+  presenceVal += (target - presenceVal) * 0.08;
+  rotY = (mouse.nx - 0.5)  * 0.70;
+  rotX = (mouse.ny - 0.28) * 0.40;
+}
+
+function updateStreams(dt) {
+  const emergence = smooth01((presenceVal - 0.04) / 0.86);
+  const mutateCount = CHAR_MUTATE_PER_FRAME + ((emergence * 18) | 0);
+  // mutate a handful of chars per frame
+  for (let i = 0; i < mutateCount; i++) {
+    const c = (Math.random() * COLS) | 0;
+    const col = streams[c];
+    const r = (Math.random() * col.chars.length) | 0;
+    col.chars[r] = CHARSET[(Math.random() * CHARSET.length) | 0];
+  }
+  // advance scroll
+  for (let c = 0; c < COLS; c++) {
+    const col = streams[c];
+    col.totalShift += col.speed * dt * (0.96 + emergence * 0.22);
+    const period = col.chars.length * CH;
+    if (col.totalShift >= period) col.totalShift -= period;
+  }
+}
+
+function updateParticles(dt) {
+  const emergence = smooth01((presenceVal - 0.04) / 0.86);
+  // spawn — sample silhouette edge positions around face center
+  const spawnTries = 1 + ((emergence * 9) | 0);
+  for (let i = 0; i < spawnTries && particles.length < PARTICLE_MAX; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const radius = 0.065 + Math.random() * 0.20;
+    const nx = 0.50 + Math.cos(angle) * radius;
+    const ny = 0.28 + Math.sin(angle) * radius * 1.25;
+    if (nx < 0 || nx > 1 || ny < 0 || ny > 1) continue;
+    const d = silhouette(nx, ny, rotY, rotX);
+    if (d < 0.07 || d > 0.50) continue;
+    if (Math.random() > 0.10 + emergence * 0.85) continue;
+    const x = nx * W, y = ny * H;
+    const fcx = 0.50 * W, fcy = 0.28 * H;
+    const dx = x - fcx, dy = y - fcy;
+    const dmag = Math.hypot(dx, dy) || 1;
+    particles.push({
+      x, y,
+      vx: (dx / dmag) * (6 + Math.random() * 12) * (0.55 + emergence * 0.90),
+      vy: (dy / dmag) * (6 + Math.random() * 12) * (0.55 + emergence * 0.90),
+      life: 0,
+      maxLife: 80 + ((Math.random() * 120) | 0),
+      char: CHARSET[(Math.random() * CHARSET.length) | 0],
+    });
+  }
+  // advance
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life++;
+    if (p.life >= p.maxLife) { particles.splice(i, 1); continue; }
+    // stabilize (slow down) when close to cursor — "where it is seen"
+    const dx = p.x - mouse.x, dy = p.y - mouse.y;
+    const cursorDistN = Math.hypot(dx, dy) / Math.max(W, H);
+    let slow = 1;
+    if (cursorDistN < 0.16) slow = 0.25 + (cursorDistN / 0.16) * 0.75;
+    p.x += p.vx * dt * slow;
+    p.y += p.vy * dt * slow;
+  }
+}
+
+function updateLog() {
+  const now = performance.now();
+  if (now < logState.pauseUntilMs) return;
+  if (now - logState.lastTypeMs < 62) return;
+  logState.lastTypeMs = now;
+  const msg = LOG_MSGS[logState.msgIdx];
+  if (logState.charIdx < msg.length) {
+    logState.charIdx++;
+    logState.current = msg.substring(0, logState.charIdx);
+  } else {
+    logState.history.push(msg);
+    if (logState.history.length > 3) logState.history.shift();
+    logState.msgIdx = (logState.msgIdx + 1) % LOG_MSGS.length;
+    logState.charIdx = 0;
+    logState.current = '';
+    logState.pauseUntilMs = now + 2200;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  CTOS GRID — static teal grid drawn once per resize
+// ═══════════════════════════════════════════════════════════════
+function drawGrid() {
+  gridCtx.clearRect(0, 0, W, H);
+  gridCtx.lineWidth = 1;
+  // fine grid · 32px
+  gridCtx.strokeStyle = 'rgba(0,200,180,0.040)';
+  gridCtx.beginPath();
+  for (let x = 0; x < W; x += 32) {
+    gridCtx.moveTo(x + 0.5, 0);
+    gridCtx.lineTo(x + 0.5, H);
+  }
+  for (let y = 0; y < H; y += 32) {
+    gridCtx.moveTo(0, y + 0.5);
+    gridCtx.lineTo(W, y + 0.5);
+  }
+  gridCtx.stroke();
+  // coarse grid · 128px
+  gridCtx.strokeStyle = 'rgba(0,200,180,0.070)';
+  gridCtx.beginPath();
+  for (let x = 0; x < W; x += 128) {
+    gridCtx.moveTo(x + 0.5, 0);
+    gridCtx.lineTo(x + 0.5, H);
+  }
+  for (let y = 0; y < H; y += 128) {
+    gridCtx.moveTo(0, y + 0.5);
+    gridCtx.lineTo(W, y + 0.5);
+  }
+  gridCtx.stroke();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  CTOS GRAPH NETWORK — an intelligence mesh humming behind Maez
+// ═══════════════════════════════════════════════════════════════
+// Nodes drift slowly; edges decay, glitch, and respawn elsewhere.
+// Runs independently of cursor — Maez is always processing.
+const graphNodes = [];
+const graphEdges = [];
+let graphBurstFrames = 0;
+let graphBurstMaxFrames = 0;
+let graphCooldownFrames = 18;
+
+function makeGraphEdge(from, to) {
+  return {
+    from,
+    to,
+    packet: Math.random(),
+    packetSpeed: 0.10 + Math.random() * 0.18,
+    phase: Math.random() * Math.PI * 2,
+    weight: 0.55 + Math.random() * 0.65,
+  };
+}
+
+function initGraph() {
+  graphNodes.length = 0;
+  graphEdges.length = 0;
+  const nodeCount = 8 + ((Math.random() * 8) | 0);
+  for (let i = 0; i < nodeCount; i++) {
+    graphNodes.push({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      jitter: 5 + Math.random() * 18,
+      pulse: Math.random() * Math.PI * 2,
+      type: Math.random() < 0.16 ? 'major' : 'minor',
+    });
+  }
+  for (let i = 0; i < graphNodes.length; i++) {
+    const connections = (Math.random() * 2 | 0) + 1;
+    for (let c = 0; c < connections; c++) {
+      const j = (Math.random() * graphNodes.length) | 0;
+      if (j !== i) graphEdges.push(makeGraphEdge(i, j));
+    }
+  }
+}
+
+function drawGraph() {
+  graphCtx.clearRect(0, 0, W, H);
+  if (graphBurstFrames <= 0) {
+    if (graphCooldownFrames > 0) {
+      graphCooldownFrames--;
+      return;
+    }
+    initGraph();
+    graphBurstMaxFrames = 5 + ((Math.random() * 5) | 0);
+    graphBurstFrames = graphBurstMaxFrames;
+    graphCooldownFrames = 16 + ((Math.random() * 28) | 0);
+  }
+
+  const burstFrame = graphBurstMaxFrames - graphBurstFrames;
+  const burstT = (burstFrame + 0.5) / graphBurstMaxFrames;
+  const burstEnv = 0.28 + 0.72 * Math.sin(burstT * Math.PI);
+  graphBurstFrames--;
+
+  graphCtx.save();
+  graphCtx.globalCompositeOperation = 'lighter';
+
+  for (let i = 0; i < graphNodes.length; i++) {
+    graphNodes[i].pulse += 0.25 + Math.random() * 0.25;
+  }
+
+  // draw edges as short-lived processing flashes, not a persistent web
+  for (let i = 0; i < graphEdges.length; i++) {
+    const e = graphEdges[i];
+    const n1 = graphNodes[e.from], n2 = graphNodes[e.to];
+    if (!n1 || !n2) continue;
+    const x1 = n1.x + (Math.random() - 0.5) * n1.jitter * burstEnv;
+    const y1 = n1.y + (Math.random() - 0.5) * n1.jitter * burstEnv;
+    const x2 = n2.x + (Math.random() - 0.5) * n2.jitter * burstEnv;
+    const y2 = n2.y + (Math.random() - 0.5) * n2.jitter * burstEnv;
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    const flash = burstEnv * (0.30 + e.weight * 0.18) * (0.40 + Math.random() * 0.70);
+    e.phase += 0.16 + Math.random() * 0.18;
+    e.packet += e.packetSpeed;
+    if (e.packet > 1) e.packet -= 1;
+
+    if (Math.random() < 0.24) {
+      graphCtx.setLineDash([3 + e.weight * 4, 9 + e.weight * 4]);
+      graphCtx.lineDashOffset = -(t * 180 + e.phase * 10);
+      graphCtx.lineWidth = 0.85 + e.weight * 0.45;
+      graphCtx.strokeStyle = 'rgba(20,255,236,' + (flash * 0.90).toFixed(2) + ')';
+      graphCtx.beginPath();
+      graphCtx.moveTo(x1, y1);
+      graphCtx.lineTo(x2, y2);
+      graphCtx.stroke();
+    }
+
+    const segs = 2 + ((Math.random() * 3) | 0);
+    for (let s = 0; s < segs; s++) {
+      const t1 = Math.random() * 0.82;
+      const t2 = Math.min(1, t1 + 0.08 + Math.random() * 0.18);
+      graphCtx.setLineDash([]);
+      graphCtx.lineWidth = 0.90 + e.weight * 0.55;
+      graphCtx.strokeStyle = 'rgba(36,255,238,' + (flash * (0.74 + Math.random() * 0.22)).toFixed(2) + ')';
+      graphCtx.beginPath();
+      graphCtx.moveTo(x1 + dx * t1, y1 + dy * t1);
+      graphCtx.lineTo(x1 + dx * t2, y1 + dy * t2);
+      graphCtx.stroke();
+    }
+
+    if (Math.random() < 0.72) {
+      const head = e.packet;
+      const tail = Math.max(0, head - (0.06 + e.weight * 0.04));
+      graphCtx.setLineDash([]);
+      graphCtx.lineWidth = 1.10 + e.weight * 0.58;
+      graphCtx.strokeStyle = 'rgba(96,255,240,' + (flash * 1.10).toFixed(2) + ')';
+      graphCtx.beginPath();
+      graphCtx.moveTo(x1 + dx * tail, y1 + dy * tail);
+      graphCtx.lineTo(x1 + dx * head, y1 + dy * head);
+      graphCtx.stroke();
+    }
+  }
+
+  // nodes blink in and out so they feel discovered, not persistent
+  for (let i = 0; i < graphNodes.length; i++) {
+    const n = graphNodes[i];
+    if (Math.random() < 0.25) continue;
+    const pulse = 0.5 + 0.5 * Math.sin(n.pulse);
+    const x = n.x + (Math.random() - 0.5) * n.jitter * burstEnv;
+    const y = n.y + (Math.random() - 0.5) * n.jitter * burstEnv;
+    const r = n.type === 'major' ? 2.3 + pulse * 1.1 : 1.2 + pulse * 0.6;
+    const a = burstEnv * (n.type === 'major' ? 0.18 + pulse * 0.22 : 0.10 + pulse * 0.10);
+    graphCtx.shadowBlur = n.type === 'major' ? 8 : 0;
+    graphCtx.shadowColor = 'rgba(0,255,230,0.22)';
+    graphCtx.beginPath();
+    graphCtx.arc(x, y, r, 0, Math.PI * 2);
+    graphCtx.fillStyle = n.type === 'major'
+      ? 'rgba(0,230,210,' + a.toFixed(2) + ')'
+      : 'rgba(0,180,165,' + (a * 0.72).toFixed(2) + ')';
+    graphCtx.fill();
+
+    if (n.type === 'major' && Math.random() < 0.45) {
+      graphCtx.shadowBlur = 0;
+      graphCtx.lineWidth = 1;
+      graphCtx.strokeStyle = 'rgba(0,210,198,' + (burstEnv * (0.10 + pulse * 0.12)).toFixed(2) + ')';
+      graphCtx.beginPath();
+      graphCtx.arc(x, y, r + 2 + pulse * 1.4, 0, Math.PI * 2);
+      graphCtx.stroke();
+    }
+  }
+  graphCtx.restore();
+  graphCtx.shadowBlur = 0;
+  graphCtx.setLineDash([]);
+}
+
+function renderWebGL() {
+  material.uniforms.uTime.value = t;
+  // Three.js uses GL coords (Y up). Our mouse is in screen coords (Y down).
+  // The shader converts uMouse from -1..1 to 0..1 via uMouse*0.5+0.5, so we
+  // hand it (mouseNX*2-1, -(mouseNY*2-1)) to flip Y.
+  material.uniforms.uMouse.value.set(mouse.nx * 2 - 1, -(mouse.ny * 2 - 1));
+  material.uniforms.uPresence.value = presenceVal;
+
+  // Pass 1: render to sample target for readback
+  renderer.setRenderTarget(sampleTarget);
+  renderer.render(scene, camera);
+  renderer.readRenderTargetPixels(sampleTarget, 0, 0, SAMPLE_W, SAMPLE_H, samplePixels);
+
+  // Pass 2: render to default framebuffer for visible output
+  renderer.setRenderTarget(null);
+  renderer.render(scene, camera);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  DRAW — ASCII membrane
+// ═══════════════════════════════════════════════════════════════
+function drawAscii() {
+  actx.clearRect(0, 0, W, H);
+  actx.font = FONT_PX + 'px "Share Tech Mono", ui-monospace, monospace';
+  actx.textBaseline = 'top';
+
+  const pressR2 = PRESS_RADIUS_PX * PRESS_RADIUS_PX;
+  const mxN = mouse.nx, myN = mouse.ny;
+  const emergence = smooth01((presenceVal - 0.04) / 0.86);
+  const formStage = emergence;
+  const streamShiftScale = 0.060 + formStage * 0.055;
+
+  // For each column, iterate over visible character indices (not rows).
+  // This gives smooth sub-cell scrolling and correct char-through-time.
+  for (let c = 0; c < COLS; c++) {
+    const col = streams[c];
+    const S = col.totalShift;
+    const baseX = c * CW;
+    const length = col.chars.length;
+    const iMin = Math.floor(-S / CH) - 1;
+    const iMax = Math.ceil((H - S) / CH) + 1;
+
+    for (let i = iMin; i <= iMax; i++) {
+      const y = i * CH + S;
+      if (y < -CH || y > H) continue;
+
+      const cellCx = baseX + CW * 0.5;
+      const cellCy = y + CH * 0.5;
+      const nx = cellCx / W;
+      const ny = cellCy / H;
+
+      // bottom fade — portrait crop between ny 0.82..0.90
+      let bottomFade = 1;
+      if (ny > 0.82) {
+        if (ny >= 0.90) continue;
+        bottomFade = 1 - (ny - 0.82) / 0.08;
+      }
+
+      // silhouette + pupil + hand contributions (no reach)
+      const silBase = silhouette(nx, ny, rotY, rotX);
+      const pup  = pupilHighlight(nx, ny);
+      const handBase = handField(nx, ny);
+
+      const headHalo = Math.exp(-(((nx - 0.50) / 0.22) ** 2 + ((ny - 0.28) / 0.24) ** 2));
+      const torsoHalo = Math.exp(-(((nx - 0.50) / 0.31) ** 2 + ((ny - 0.57) / 0.38) ** 2));
+      const handHalo = handProximity > 0.04
+        ? Math.exp(-(((nx - handTargetX) / 0.18) ** 2 + ((ny - handTargetY) / 0.18) ** 2))
+        : 0;
+      const streamHalo = clamp01(headHalo * 0.92 + torsoHalo * 0.76 + handHalo * 0.95);
+      const sil = silBase * (0.08 + formStage * 1.04);
+      const hand = handBase * (0.05 + formStage * 1.24);
+
+      // edge disintegration — cells at silDepth 0.06..0.24 flicker;
+      // stabilized near cursor ("where it is seen").
+      if (silBase >= 0.06 && silBase <= 0.24 && hand < 0.05 && formStage > 0.14) {
+        const dxNm = nx - mxN, dyNm = ny - myN;
+        const distNm = Math.sqrt(dxNm * dxNm + dyNm * dyNm);
+        let stab = 0;
+        if (distNm < 0.16) stab = (1 - distNm / 0.16) * 0.55;
+        const skipProb = 0.50 - stab - formStage * 0.18;
+        if (Math.random() < skipProb) continue;
+      }
+
+      // cursor displacement — membrane pulled toward the cursor
+      const dxp = cellCx - mouse.x;
+      const dyp = cellCy - mouse.y;
+      const dpx2 = dxp * dxp + dyp * dyp;
+      let pressVal = 0;
+      let dispX = 0, dispY = 0;
+      if (dpx2 < pressR2) {
+        const dpx = Math.sqrt(dpx2);
+        const f = 1 - dpx / PRESS_RADIUS_PX;
+        pressVal = f * f;
+        if (dpx > 0.01) {
+          const pullMag = f * MAX_DISPLACE_PX;
+          dispX = -(dxp / dpx) * pullMag;
+          dispY = -(dyp / dpx) * pullMag;
+        }
+      }
+
+      const pullXNorm =
+        (0.50 - nx) * headHalo * (0.35 + formStage * 0.55) +
+        (0.50 - nx) * torsoHalo * (0.18 + formStage * 0.38) +
+        (handTargetX - nx) * handHalo * formStage * 0.95;
+      const pullYNorm =
+        (0.28 - ny) * headHalo * (0.30 + formStage * 0.48) +
+        (0.57 - ny) * torsoHalo * (0.18 + formStage * 0.34) +
+        (handTargetY - ny) * handHalo * formStage * 0.98;
+      const totalLatent = silBase * 0.88 + handBase * 1.18;
+      const formationLock = clamp01(totalLatent / 0.52) * (0.20 + formStage * 0.80);
+      dispX += pullXNorm * W * streamShiftScale * (1 - formationLock);
+      dispY += pullYNorm * H * streamShiftScale * (1 - formationLock);
+
+      // sample WebGL glow at this cell (inlined, avoids alloc in hot loop)
+      const sx = nx * SAMPLE_W | 0;
+      const syFlip = (1 - ny) * SAMPLE_H | 0;
+      const gsx = sx < 0 ? 0 : sx >= SAMPLE_W ? SAMPLE_W - 1 : sx;
+      const gsy = syFlip < 0 ? 0 : syFlip >= SAMPLE_H ? SAMPLE_H - 1 : syFlip;
+      const gidx = (gsy * SAMPLE_W + gsx) * 4;
+      const glowR8 = samplePixels[gidx];
+      const glowG8 = samplePixels[gidx + 1];
+      const glowWarmth = (glowR8 + glowG8 * 0.5) / 255;
+
+      // char lookup — cyclic buffer indexed by i
+      const charIdx = ((i % length) + length) % length;
+      const ch = col.chars[charIdx];
+      const densityNoise = ((c * 17 + charIdx * 23 + (frameCount >> 1) * 7) % 100) / 100;
+
+      // warm amber palette — the entity condenses out of the stream field
+      const total = sil + hand * 1.24;
+      let R, G, B, alpha;
+      const streamDensity = 0.28 + streamHalo * (0.36 + formStage * 0.20);
+      if (total < 0.03 && pressVal < 0.02 && glowWarmth < 0.03 && densityNoise > streamDensity) {
+        continue;
+      }
+
+      const streamMaterial = clamp01(streamHalo * (0.55 + formStage * 0.65) + glowWarmth * 0.24);
+      const streamRBase = Math.round(158 + streamMaterial * 42 + glowWarmth * 22);
+      const streamGBase = Math.round(168 + streamMaterial * 34 + glowWarmth * 20);
+      const streamBBase = Math.round(182 + streamMaterial * 18 + glowWarmth * 12);
+      const streamAlphaBase = 0.018 + streamDensity * 0.050 + streamMaterial * 0.040 + glowWarmth * 0.050;
+
+      if (pup > 0.5 || total > 1.1) {
+        // eye pupils stay near-white
+        R = 255; G = 248; B = 220;
+        alpha = 0.95;
+      } else {
+        const ec = entityColor(total, pressVal, hand);
+        const materialize = smooth01(total / 0.44) * (0.08 + formStage * 0.92);
+        R = Math.round(lerp(streamRBase, ec.r, materialize));
+        G = Math.round(lerp(streamGBase, ec.g, materialize));
+        B = Math.round(lerp(streamBBase, ec.b, materialize));
+        // Soft gradient boundary — entity dissolves into stream field
+        const edgeSoftness = total < 0.35
+          ? Math.pow(total / 0.35, 1.8)
+          : 1.0;
+        // Background stream stays at its baseline; only modulation fades
+        const baseAlpha = Math.max(streamAlphaBase, ec.a * (0.10 + formStage * 0.35));
+        alpha = baseAlpha + (ec.a - baseAlpha) * edgeSoftness * materialize
+              + pressVal * 0.10 + glowWarmth * 0.12
+              + Math.min(0.30, hand * 0.26);
+      }
+      alpha *= bottomFade;
+      if (alpha > 1) alpha = 1;
+      if (alpha < 0.016) continue;
+
+      actx.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',' + alpha.toFixed(3) + ')';
+      actx.fillText(ch, baseX + dispX, y + dispY);
+    }
+  }
+
+  // particles — disintegration debris (warm amber)
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i];
+    const lifeT = p.life / p.maxLife;
+    const a = Math.sin(lifeT * Math.PI) * 0.85;
+    if (a < 0.05) continue;
+    const k = 1 - lifeT;
+    const R = (220 + k * 35) | 0;
+    const G = (140 + k * 50) | 0;
+    const B = ( 60 + k * 40) | 0;
+    actx.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',' + a.toFixed(3) + ')';
+    actx.fillText(p.char, p.x, p.y);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  DRAW — ctOS cursor reticle, frame chrome, HUD, data tags
+// ═══════════════════════════════════════════════════════════════
+function drawCursor() {
+  if (EMBED_MODE) return;
+  // Reticle size lerps smaller when inside face proximity
+  const faceDist = Math.sqrt(
+    (mouse.nx - 0.50) * (mouse.nx - 0.50) +
+    (mouse.ny - 0.28) * (mouse.ny - 0.28)
+  );
+  const closeness = Math.max(0, 1 - faceDist / 0.35);
+  const size = 18 - closeness * 5;   // 18 → 13
+  const arm  = 5;
+
+  actx.strokeStyle = 'rgba(0,200,180,0.65)';
+  actx.lineWidth = 1;
+  actx.beginPath();
+  // Top-left L
+  actx.moveTo(mouse.x - size, mouse.y - size + arm);
+  actx.lineTo(mouse.x - size, mouse.y - size);
+  actx.lineTo(mouse.x - size + arm, mouse.y - size);
+  // Top-right L
+  actx.moveTo(mouse.x + size - arm, mouse.y - size);
+  actx.lineTo(mouse.x + size, mouse.y - size);
+  actx.lineTo(mouse.x + size, mouse.y - size + arm);
+  // Bottom-left L
+  actx.moveTo(mouse.x - size, mouse.y + size - arm);
+  actx.lineTo(mouse.x - size, mouse.y + size);
+  actx.lineTo(mouse.x - size + arm, mouse.y + size);
+  // Bottom-right L
+  actx.moveTo(mouse.x + size - arm, mouse.y + size);
+  actx.lineTo(mouse.x + size, mouse.y + size);
+  actx.lineTo(mouse.x + size, mouse.y + size - arm);
+  actx.stroke();
+
+  // Warm amber center dot — the only warm element in the UI
+  actx.fillStyle = 'rgba(255,160,60,0.90)';
+  actx.beginPath();
+  actx.arc(mouse.x, mouse.y, 2, 0, Math.PI * 2);
+  actx.fill();
+}
+
+function drawUI() {
+  // ── frame chrome ──
+  const teal      = 'rgba(0,200,180,0.12)';
+  const tealMid   = 'rgba(0,200,180,0.30)';
+  const tealBright= 'rgba(0,200,180,0.40)';
+
+  actx.strokeStyle = teal;
+  actx.lineWidth = 1;
+  actx.beginPath();
+  actx.moveTo(0, 38.5);   actx.lineTo(W, 38.5);
+  actx.moveTo(0, H - 38.5); actx.lineTo(W, H - 38.5);
+  actx.stroke();
+
+  actx.strokeStyle = tealMid;
+  actx.beginPath();
+  actx.moveTo(0.5, H / 2 - 14); actx.lineTo(0.5, H / 2 + 14);
+  actx.moveTo(W - 0.5, H / 2 - 14); actx.lineTo(W - 0.5, H / 2 + 14);
+  actx.stroke();
+
+  // Corner brackets — teal, longer
+  actx.strokeStyle = tealMid;
+  actx.lineWidth = 1;
+  const L = 34, M = 28;
+  actx.beginPath();
+  actx.moveTo(M, M + L);         actx.lineTo(M, M);             actx.lineTo(M + L, M);
+  actx.moveTo(W - M - L, M);     actx.lineTo(W - M, M);         actx.lineTo(W - M, M + L);
+  actx.moveTo(M, H - M - L);     actx.lineTo(M, H - M);         actx.lineTo(M + L, H - M);
+  actx.moveTo(W - M - L, H - M); actx.lineTo(W - M, H - M);     actx.lineTo(W - M, H - M - L);
+  actx.stroke();
+
+  // ── HUD text ──
+  actx.font = '11px "Share Tech Mono", ui-monospace, monospace';
+  actx.textBaseline = 'top';
+
+  const cycleNum   = String((frameCount / 60) | 0).padStart(4, '0');
+  const integrity  = String(Math.round(85 + presenceVal * 15)).padStart(3, ' ');
+  const breachX    = mouse.nx.toFixed(3);
+  const breachY    = mouse.ny.toFixed(3);
+  const reachStatus = handProximity > 0.25 ? 'YES    ' : 'PASSIVE';
+
+  // top-left
+  const statusL = [
+    '› SYS.ENTITY   MAEZ_v2.1',
+    '› UPTIME       ' + cycleNum,
+    '› PERCEPTION   ACTIVE',
+    '› INTEGRITY    ' + integrity + '%',
+    '──────────────────────',
+  ];
+  actx.fillStyle = 'rgba(0,200,180,0.70)';
+  actx.textAlign = 'left';
+  for (let i = 0; i < statusL.length; i++) {
+    actx.fillText(statusL[i], M + 16, M + 22 + i * 16);
+  }
+
+  // top-right (right-aligned, underline on top)
+  const statusR = [
+    '──────────────────────',
+    'BREACH_VECTOR  ' + breachX + ' ' + breachY,
+    'MEMORY_INDEX   GROWING',
+    'SOUL_CHECKSUM  OK',
+    'REACH_STATUS   ' + reachStatus,
+  ];
+  actx.textAlign = 'right';
+  for (let i = 0; i < statusR.length; i++) {
+    actx.fillText(statusR[i], W - M - 16, M + 22 + i * 16);
+  }
+
+  // top-center entity label
+  actx.font = '8px "Share Tech Mono", ui-monospace, monospace';
+  actx.fillStyle = tealBright;
+  actx.textAlign = 'center';
+  // letter-spacing faked with individual glyphs
+  const label = 'MAEZ_ENTITY  ›  DIGITAL PRESENCE  ›  BUILD 2.1.0';
+  const spaced = label.split('').join('\u2009'); // hair space
+  actx.fillText(spaced, W / 2, M + 14);
+  actx.textAlign = 'left';
+
+  // ── log feed (bottom-left) ──
+  actx.font = '11px "Share Tech Mono", ui-monospace, monospace';
+  const logBottomY = H - M - 22;
+  const LINE_H = 16;
+  const histLen = logState.history.length;
+  const shownHistory = logState.history.slice(-3);
+  for (let i = 0; i < shownHistory.length; i++) {
+    const age = shownHistory.length - i;
+    const alpha = 0.32 - age * 0.06;
+    actx.fillStyle = 'rgba(0,200,180,' + alpha.toFixed(2) + ')';
+    const y = logBottomY - (shownHistory.length - i) * LINE_H;
+    // prefix matches the message this was *before* logState.msgIdx advanced
+    const histIdx = ((logState.msgIdx - (histLen - i) + LOG_PREFIX.length * 2) % LOG_PREFIX.length);
+    actx.fillText(LOG_PREFIX[histIdx] + ' ' + shownHistory[i], M + 16, y);
+  }
+  // current typing line (most recent)
+  actx.fillStyle = 'rgba(0,200,180,0.90)';
+  const blink = ((t * 2) | 0) % 2 === 0 ? '█' : ' ';
+  const curPrefix = LOG_PREFIX[logState.msgIdx];
+  const currentText = logState.current
+    ? curPrefix + ' ' + logState.current + blink
+    : curPrefix + ' ' + blink;
+  actx.fillText(currentText, M + 16, logBottomY);
+
+  // ── data tags on face features (fade in when close) ──
+  if (dataTagFade > 0.02) {
+    const a = dataTagFade * 0.55;
+    const la = dataTagFade * 0.25;
+    actx.font = '8px "Share Tech Mono", ui-monospace, monospace';
+    actx.fillStyle = 'rgba(0,200,180,' + a.toFixed(2) + ')';
+    actx.strokeStyle = 'rgba(0,200,180,' + la.toFixed(2) + ')';
+    actx.lineWidth = 1;
+    actx.textBaseline = 'middle';
+    actx.textAlign = 'left';
+
+    const FX = 0.50, FY = 0.28;
+    const tags = [
+      { fx: FX - 0.056, fy: FY - 0.025, label: 'OCU.L  › TRACKING' },
+      { fx: FX + 0.056, fy: FY - 0.025, label: 'OCU.R  › SCANNING' },
+      { fx: FX,         fy: FY + 0.130, label: 'COMM   › LISTENING' },
+      { fx: FX,         fy: FY + 0.310, label: 'CORE   › NOMINAL' },
+    ];
+    for (let i = 0; i < tags.length; i++) {
+      const tg = tags[i];
+      const sx = tg.fx * W;
+      const sy = tg.fy * H;
+      const lx = sx + (tg.fx >= FX ? 60 : -60);
+      // leader line horizontal from feature toward label start
+      actx.beginPath();
+      actx.moveTo(sx, sy);
+      actx.lineTo(lx, sy);
+      actx.stroke();
+      // label — right-offset hugs leader end
+      if (tg.fx >= FX) {
+        actx.textAlign = 'left';
+        actx.fillText(tg.label, lx + 4, sy);
+      } else {
+        actx.textAlign = 'right';
+        actx.fillText(tg.label, lx - 4, sy);
+      }
+    }
+    actx.textBaseline = 'top';
+    actx.textAlign = 'left';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  MAIN LOOP
+// ═══════════════════════════════════════════════════════════════
+function loop() {
+  requestAnimationFrame(loop);
+
+  const now = performance.now() / 1000;
+  t = now - tStart;
+  let dt = t - tPrev;
+  if (dt > 0.05) dt = 0.05;
+  if (dt < 0) dt = 0;
+  tPrev = t;
+  frameCount++;
+
+  updateEyes();
+  updatePresence();
+  updateHand();
+  updateStreams(dt);
+  updateParticles(dt);
+  updateLog();
+
+  renderWebGL();
+
+  drawGraph();
+  drawAscii();
+  drawCursor();
+  drawUI();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  EVENTS
+// ═══════════════════════════════════════════════════════════════
+function setMouseNormalized(nx, ny) {
+  const nextX = clamp01(nx);
+  const nextY = clamp01(ny);
+  const w = W || window.innerWidth || 1;
+  const h = H || window.innerHeight || 1;
+  mouse.nx = nextX;
+  mouse.ny = nextY;
+  mouse.x = nextX * w;
+  mouse.y = nextY * h;
+}
+
+function onMouseMove(e) {
+  setMouseNormalized(e.clientX / (W || window.innerWidth || 1), e.clientY / (H || window.innerHeight || 1));
+}
+function onTouchPoint(touch) {
+  if (!touch) return;
+  setMouseNormalized(
+    touch.clientX / (W || window.innerWidth || 1),
+    touch.clientY / (H || window.innerHeight || 1),
+  );
+}
+function setNeutralMouse() {
+  const neutralX = EMBED_MODE ? 0.58 : 0.82;
+  const neutralY = EMBED_MODE ? 0.34 : 0.78;
+  setMouseNormalized(neutralX, neutralY);
+}
+if (window.PointerEvent) {
+  window.addEventListener('pointerdown', onMouseMove, { passive: true });
+  window.addEventListener('pointermove', onMouseMove, { passive: true });
+  window.addEventListener('pointerleave', setNeutralMouse);
+  window.addEventListener('pointerup', (event) => {
+    if (event.pointerType === 'touch' || event.pointerType === 'pen') setNeutralMouse();
+  }, { passive: true });
+  window.addEventListener('pointercancel', setNeutralMouse, { passive: true });
+} else {
+  window.addEventListener('mousemove', onMouseMove, { passive: true });
+  window.addEventListener('mouseleave', setNeutralMouse);
+  window.addEventListener('touchstart', (event) => {
+    onTouchPoint((event.touches && event.touches[0]) || (event.changedTouches && event.changedTouches[0]));
+  }, { passive: true });
+  window.addEventListener('touchmove', (event) => {
+    onTouchPoint((event.touches && event.touches[0]) || (event.changedTouches && event.changedTouches[0]));
+  }, { passive: true });
+  window.addEventListener('touchend', setNeutralMouse, { passive: true });
+  window.addEventListener('touchcancel', setNeutralMouse, { passive: true });
+}
+window.addEventListener('resize', () => { resize(); }, { passive: true });
+window.addEventListener('message', (event) => {
+  if (event.origin !== window.location.origin) return;
+  const data = event.data || {};
+  if (data.type === 'mouse' && typeof data.nx === 'number' && typeof data.ny === 'number') {
+    setMouseNormalized(data.nx, data.ny);
+  } else if (data.type === 'leave') {
+    setNeutralMouse();
+  } else if (data.type === 'presence' && typeof data.value === 'number') {
+    presenceOverride = clamp01(data.value);
+    presenceVal = presenceOverride;
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  BOOT
+// ═══════════════════════════════════════════════════════════════
+mouse.x = window.innerWidth  * 0.82;
+mouse.y = window.innerHeight * 0.78;
+mouse.nx = 0.82;
+mouse.ny = 0.78;
+
+// Test-only URL hooks (no effect when params absent). Used by the
+// headless screenshot harness to verify criteria without real mouse
+// movement or wall-clock time elapsing.
+//   ?mx=0.72&my=0.45  — simulate cursor position (normalized 0..1)
+//   ?prefill=1        — pre-populate log feed history so typing is visible
+//   ?jumpt=2.5        — advance time baseline by N seconds on first frame
+//   ?presence=0.7     — lock presence intensity (normalized 0..1)
+//   ?embed=1          — use the gentler always-there embedded baseline
+(function() {
+  const mx = parseFloat(QP.get('mx'));
+  const my = parseFloat(QP.get('my'));
+  if (!isNaN(mx) && !isNaN(my)) {
+    setMouseNormalized(mx, my);
+  }
+  if (EMBED_MODE) {
+    presenceVal = 0.52;
+  }
+  const presence = parseFloat(QP.get('presence'));
+  if (!isNaN(presence)) {
+    presenceOverride = clamp01(presence);
+    presenceVal = presenceOverride;
+  }
+  if (EMBED_MODE || QP.get('prefill') === '1') {
+    logState.history.push(LOG_MSGS[0]);
+    logState.history.push(LOG_MSGS[1]);
+    logState.history.push(LOG_MSGS[2]);
+    logState.msgIdx = 3;
+    logState.charIdx = 12;
+    logState.current = LOG_MSGS[3].substring(0, 12);
+  }
+  const jt = parseFloat(QP.get('jumpt'));
+  if (!isNaN(jt)) { tStart -= jt; }
+})();
+
+initThree();
+resize();
+
+// Start immediately — don't wait for font, fallback is fine for the first beats.
+// Font applies as soon as it loads.
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(() => { /* font now active */ });
+}
+loop();
+
+})();
+</script>
+</body>
+</html>

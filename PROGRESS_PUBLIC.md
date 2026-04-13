@@ -1,9 +1,46 @@
 # Maez — Build Progress
 
-**Date:** April 6, 2026
+**Original build:** April 6, 2026
+**Last updated:** April 12, 2026
 **Builder:** the owner
 **Machine:** Alienware Aurora R16, i9-14900KF, RTX 4090 (24GB VRAM), 64GB DDR5, Ubuntu 24.04
 **Brain:** gemma4:26b running locally via Ollama, permanently resident in VRAM
+
+---
+
+## Current Snapshot — April 12, 2026
+
+Maez is no longer just a proof that the daemon works. The public-facing experience now does a much better job of explaining what Maez actually is:
+
+- `Maez begins with the first interaction.`
+- `From there, it grows, remembers, and lives with you.`
+
+Public status is now tracked live from the shared planner board that feeds `/api/progress-board`, with the current public counts at:
+
+- `Done:` 5
+- `In Progress:` 2
+- `Next:` 2
+- `Planned:` 2
+
+### Newly true in public
+
+- The landing page now explains Maez in plain language before getting poetic.
+- Login now clearly distinguishes returning to the Maez already begun with you versus starting a new one.
+- The app now reinforces continuity: same Maez, same thread, remembered history.
+- Progress now reads as proof of how much of the idea is real.
+- Dashboard now reads as the technical proof layer rather than a second landing page.
+- Public progress and the private planner now operate as separate surfaces over the same board model.
+
+### What is still actively underway
+
+- Observation-window work on safe self-improvement
+- Fast-lane validation before broader rollout
+- VAGUENESS_DETECTION routing fix
+- Desktop wrapper / higher-trust surface work
+
+### Note on this file
+
+The long sections below preserve the original build narrative and historical architecture record. They are still useful context, but the snapshot above is the fastest read on where Maez stands today.
 
 ---
 

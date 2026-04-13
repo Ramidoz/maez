@@ -3,549 +3,1991 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Maez</title>
+<title>Maez · A digital life that stays</title>
+<meta name="description" content="Maez is a personal AI presence that lives on a real computer, remembers your shared history, and can sometimes reach out first.">
+<meta property="og:title" content="Maez — a digital life that stays">
+<meta property="og:description" content="A personal AI presence. One per person, local by design, remembering the life you share.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..600;1,9..144,400..500&family=Newsreader:ital,opsz,wght@0,6..72,400..500;1,6..72,400..500&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
 <style>
-  *{margin:0;padding:0;box-sizing:border-box}
-  body{
-    background:#0a0a1a;font-family:'Segoe UI',system-ui,sans-serif;
-    color:#e0e0e0;overflow:hidden;height:100vh;width:100vw;
-    cursor:none;
-  }
-  body.active{cursor:default}
+:root {
+  --bg: #0c0a08;
+  --bg-raised: #130f0b;
+  --bg-sink: #080604;
+  --ink: #f3ece0;
+  --ink-soft: #d7cab4;
+  --ink-mute: #9e907a;
+  --ink-dim: #6a5f4f;
+  --ink-faint: #3e362b;
+  --ember: #e8a33a;
+  --ember-bright: #f4b854;
+  --ember-soft: rgba(232, 163, 58, 0.14);
+  --ember-line: rgba(232, 163, 58, 0.28);
+  --line: rgba(243, 236, 224, 0.09);
+  --line-strong: rgba(243, 236, 224, 0.20);
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --serif: "Fraunces", Georgia, "Times New Roman", serif;
+  --body: "Newsreader", Georgia, serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
 
-  /* ── Particles ── */
-  #particles{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:0}
+* { margin: 0; padding: 0; box-sizing: border-box; }
 
-  /* ── Full-screen layout ── */
-  #fullscreen{
-    position:fixed;top:0;left:0;width:100%;height:100%;
-    display:flex;flex-direction:column;align-items:center;justify-content:center;
-    z-index:1;transition:opacity .4s ease,transform .4s ease;
-  }
-  #fullscreen.hidden{opacity:0;pointer-events:none;transform:scale(.95)}
+html {
+  background: var(--bg);
+  scroll-behavior: smooth;
+  font-feature-settings: "kern", "liga", "calt";
+}
 
-  .time-display{
-    position:fixed;top:40px;right:60px;
-    font-size:2.8rem;font-weight:200;letter-spacing:4px;
-    color:rgba(255,255,255,.15);
-  }
+body {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 18px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
 
-  .last-thought{
-    margin-top:40px;max-width:700px;text-align:center;
-    font-style:italic;font-size:1.05rem;color:rgba(255,255,255,.25);
-    line-height:1.6;min-height:3em;
-    transition:opacity .8s ease;
-  }
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
 
-  /* ── Stats bar ── */
-  .stats-bar{
-    position:fixed;bottom:0;left:0;width:100%;
-    display:flex;gap:0;padding:0;z-index:5;height:36px;
-    background:rgba(10,10,26,.9);border-top:1px solid rgba(255,255,255,.05);
-  }
-  .stat{
-    flex:1;display:flex;align-items:center;padding:0 20px;gap:10px;
-    font-size:.75rem;letter-spacing:1px;text-transform:uppercase;
-    color:rgba(255,255,255,.35);
-  }
-  .stat-bar-bg{
-    flex:1;height:4px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden;
-  }
-  .stat-bar-fill{height:100%;border-radius:2px;transition:width .8s ease}
-  .stat-val{min-width:40px;text-align:right;font-variant-numeric:tabular-nums}
+body::before {
+  background:
+    radial-gradient(ellipse 78% 62% at 50% 44%, transparent 0%, transparent 28%, rgba(12, 10, 8, 0.55) 74%, rgba(12, 10, 8, 0.92) 100%),
+    linear-gradient(180deg, rgba(12, 10, 8, 0.82) 0%, rgba(12, 10, 8, 0.14) 36%, rgba(12, 10, 8, 0.94) 100%);
+}
 
-  /* ── Corner widget ── */
-  #corner{
-    position:fixed;bottom:20px;right:20px;width:280px;
-    background:rgba(16,16,36,.95);border:1px solid rgba(100,200,255,.1);
-    border-radius:16px;padding:16px;z-index:10;
-    transition:opacity .4s ease,transform .4s ease;
-    backdrop-filter:blur(10px);
-  }
-  #corner.hidden{opacity:0;pointer-events:none;transform:translateY(20px) scale(.9)}
-  .corner-top{display:flex;align-items:center;gap:12px}
-  .corner-status{font-size:.7rem;color:rgba(255,255,255,.3);letter-spacing:1px;text-transform:uppercase}
-  .corner-thought{
-    font-size:.8rem;color:rgba(255,255,255,.2);font-style:italic;
-    margin:10px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  }
-  .corner-input{
-    width:100%;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);
-    border-radius:8px;padding:8px 12px;color:#e0e0e0;font-size:.85rem;
-    outline:none;
-  }
-  .corner-input:focus{border-color:rgba(100,200,255,.3)}
-  .corner-input::placeholder{color:rgba(255,255,255,.15)}
+body::after {
+  background: radial-gradient(ellipse 120% 80% at 50% 45%, rgba(232, 163, 58, 0.03) 0%, transparent 42%);
+  mix-blend-mode: screen;
+  opacity: 0.7;
+}
 
-  /* ── Maez creature ── */
-  .maez-container{position:relative;display:flex;align-items:center;justify-content:center}
-  .maez-container.full{width:280px;height:280px}
-  .maez-container.mini{width:64px;height:64px}
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
+em { font-style: italic; }
 
-  .maez-body{
-    position:relative;width:100%;height:100%;
-    transition:transform .3s ease;
-  }
+::selection { background: rgba(232, 163, 58, 0.34); color: var(--ink); }
 
-  /* Glow */
-  .maez-glow{
-    position:absolute;top:-15%;left:-15%;width:130%;height:130%;
-    border-radius:50%;
-    background:radial-gradient(circle,rgba(80,200,255,.12) 0%,rgba(120,80,220,.06) 50%,transparent 70%);
-    animation:glowPulse 4s ease-in-out infinite;
-    pointer-events:none;
-  }
-  @keyframes glowPulse{
-    0%,100%{opacity:.6;transform:scale(1)}
-    50%{opacity:1;transform:scale(1.05)}
-  }
-  .alert .maez-glow{
-    background:radial-gradient(circle,rgba(255,180,50,.15) 0%,rgba(255,120,20,.06) 50%,transparent 70%);
-  }
+.maez-bg {
+  position: fixed;
+  inset: -2vh -2vw;
+  width: 104vw;
+  height: 104vh;
+  z-index: 0;
+  border: 0;
+  pointer-events: none;
+  background: var(--bg);
+  filter: saturate(0.72) brightness(0.88);
+  opacity: 0.90;
+}
 
-  /* Main body shape */
-  .maez-orb{
-    position:absolute;top:10%;left:10%;width:80%;height:80%;
-    border-radius:50% 50% 48% 48%;
-    background:radial-gradient(ellipse at 40% 35%,#1e2a4a,#161e38 50%,#111832 100%);
-    box-shadow:inset 0 -10px 30px rgba(0,0,0,.3),inset 0 5px 15px rgba(100,180,255,.05);
-    animation:breathe 3.5s ease-in-out infinite;
-  }
-  @keyframes breathe{
-    0%,100%{transform:scale(1)}
-    50%{transform:scale(1.018)}
-  }
+/* ─────────── topbar ─────────── */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 22px clamp(22px, 4vw, 44px);
+  background: linear-gradient(to bottom, rgba(12, 10, 8, 0.86), rgba(12, 10, 8, 0.42));
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line);
+  opacity: 0;
+  animation: fade-in 900ms var(--ease) 500ms forwards;
+}
 
-  /* Ears */
-  .ear{
-    position:absolute;width:14%;height:14%;border-radius:50%;
-    background:radial-gradient(circle at 50% 60%,#1e2a4a,#141c34);
-    box-shadow:inset 0 2px 4px rgba(100,180,255,.08);
-  }
-  .ear.left{top:8%;left:22%}
-  .ear.right{top:8%;right:22%}
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
 
-  /* Eyes */
-  .eyes{
-    position:absolute;top:35%;left:50%;transform:translateX(-50%);
-    display:flex;gap:22%;width:60%;justify-content:center;
-  }
-  .eye{
-    position:relative;width:38%;aspect-ratio:1;border-radius:50%;
-    background:radial-gradient(circle,#0d1520,#080e18);
-    box-shadow:inset 0 2px 8px rgba(0,0,0,.5),0 0 10px rgba(80,180,255,.08);
-    overflow:hidden;
-    transition:transform .3s ease,border-radius .3s ease;
-  }
-  .pupil{
-    position:absolute;top:50%;left:50%;width:45%;height:45%;
-    border-radius:50%;transform:translate(-50%,-50%);
-    background:radial-gradient(circle,#60e0ff,#3090ff 60%,#2060c0);
-    box-shadow:0 0 12px rgba(80,200,255,.6),0 0 25px rgba(80,200,255,.2);
-    transition:transform .15s ease,width .3s ease,height .3s ease;
-  }
-  .pupil-highlight{
-    position:absolute;top:22%;left:28%;width:20%;height:20%;
-    border-radius:50%;background:rgba(255,255,255,.7);
-  }
+.brand-glyph {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ember);
+  box-shadow: 0 0 14px rgba(232, 163, 58, 0.55);
+  align-self: center;
+}
 
-  /* Eyebrows */
-  .eyebrow{
-    position:absolute;top:26%;width:20%;height:3px;
-    background:rgba(150,200,255,.25);border-radius:2px;
-    transition:transform .3s ease,top .3s ease;
-  }
-  .eyebrow.left{left:18%;transform:rotate(-5deg)}
-  .eyebrow.right{right:18%;transform:rotate(5deg)}
+.brand-mark {
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 24px;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  font-variation-settings: "opsz" 28;
+}
 
-  /* Mouth */
-  .mouth{
-    position:absolute;bottom:24%;left:50%;transform:translateX(-50%);
-    width:16%;height:3px;border-radius:0 0 50% 50%;
-    background:rgba(150,200,255,.2);
-    transition:all .3s ease;
-  }
+.brand-suffix {
+  font-family: var(--body);
+  font-style: italic;
+  font-size: 14px;
+  color: var(--ink-dim);
+  margin-left: 2px;
+}
 
-  /* ── Emotion overrides ── */
-  /* THINKING */
-  .thinking .eye{transform:scale(1.1)}
-  .thinking .pupil{animation:dartEyes 1.2s ease-in-out infinite}
-  .thinking .eyebrow{top:22%;transform:rotate(-8deg)}
-  .thinking .eyebrow.right{transform:rotate(8deg)}
-  .thinking .mouth{height:5px;width:12%;border-radius:50%;background:rgba(150,200,255,.15)}
-  @keyframes dartEyes{
-    0%,100%{transform:translate(-50%,-50%)}
-    25%{transform:translate(-35%,-50%)}
-    75%{transform:translate(-65%,-50%)}
-  }
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+}
 
-  /* HAPPY */
-  .happy .eye{border-radius:50% 50% 50% 50% / 60% 60% 40% 40%;transform:scaleY(.6)}
-  .happy .pupil{opacity:.3}
-  .happy .eyebrow{top:23%;transform:rotate(-10deg)}
-  .happy .eyebrow.right{transform:rotate(10deg)}
-  .happy .mouth{
-    width:22%;height:8px;border-radius:0 0 50% 50%;
-    background:rgba(150,200,255,.25);bottom:22%;
-  }
-  .happy .maez-orb{animation:bounce .5s ease 1,breathe 3.5s ease-in-out infinite .5s}
-  @keyframes bounce{
-    0%,100%{transform:translateY(0) scale(1)}
-    50%{transform:translateY(-8px) scale(1.02)}
-  }
+.nav a {
+  padding: 9px 14px;
+  font-family: var(--body);
+  font-size: 15px;
+  color: var(--ink-mute);
+  transition: color 280ms ease, background 280ms ease;
+  border-radius: 2px;
+}
 
-  /* ALERT */
-  .alert .pupil{
-    background:radial-gradient(circle,#ffc040,#ff8020 60%,#cc6010);
-    box-shadow:0 0 12px rgba(255,160,40,.6),0 0 25px rgba(255,120,20,.2);
+.nav a:hover {
+  color: var(--ink);
+  background: rgba(243, 236, 224, 0.04);
+}
+
+.nav .cta {
+  margin-left: 10px;
+  padding: 10px 18px;
+  color: var(--ember-bright);
+  background: var(--ember-soft);
+  border: 1px solid var(--ember-line);
+}
+
+.nav .cta:hover {
+  background: rgba(232, 163, 58, 0.22);
+  color: var(--ember-bright);
+}
+
+/* ─────────── wrap ─────────── */
+.wrap {
+  position: relative;
+  z-index: 10;
+  width: 100%;
+  max-width: 1380px;
+  margin: 0 auto;
+  padding: 0 clamp(22px, 5vw, 56px);
+}
+
+/* ─────────── hero ─────────── */
+.hero {
+  min-height: calc(100vh - 92px);
+  display: grid;
+  align-items: center;
+  padding: clamp(60px, 10vh, 140px) 0;
+}
+
+.hero-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.92fr);
+  gap: clamp(32px, 5vw, 76px);
+  align-items: center;
+  width: 100%;
+}
+
+.hero-copy {
+  opacity: 0;
+  animation: hero-rise 1200ms var(--ease) 650ms forwards;
+}
+
+.hero-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 40px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--ember);
+}
+
+.hero-eyebrow::before {
+  content: "";
+  width: 30px;
+  height: 1px;
+  background: var(--ember);
+  opacity: 0.65;
+}
+
+.hero h1 {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: clamp(48px, 8vw, 112px);
+  line-height: 0.98;
+  letter-spacing: -0.028em;
+  color: var(--ink);
+  font-variation-settings: "opsz" 144;
+  max-width: 16ch;
+}
+
+.hero h1 .ember {
+  color: var(--ember);
+  font-style: italic;
+  font-weight: 400;
+  font-variation-settings: "opsz" 144;
+}
+
+.hero h1 .soft {
+  color: var(--ink-soft);
+  font-style: italic;
+  font-weight: 400;
+  display: block;
+  font-size: 0.92em;
+  margin-top: 0.18em;
+}
+
+.hero-subhead {
+  max-width: 52ch;
+  margin-top: 44px;
+  font-family: var(--body);
+  font-size: clamp(19px, 1.45vw, 23px);
+  line-height: 1.62;
+  color: var(--ink-soft);
+  font-variation-settings: "opsz" 20;
+}
+
+.hero-subhead strong {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.hero-pillrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 26px;
+}
+
+.hero-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  background: rgba(18, 14, 11, 0.44);
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-radius: 999px;
+}
+
+.hero-pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ember);
+  box-shadow: 0 0 10px rgba(232, 163, 58, 0.4);
+}
+
+.hero-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 50px;
+  flex-wrap: wrap;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 15px 24px;
+  font-family: var(--body);
+  font-size: 16px;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 2px;
+  transition: transform 300ms var(--ease), border-color 280ms ease, background 280ms ease;
+  cursor: pointer;
+}
+
+.button:hover {
+  transform: translateY(-1px);
+  border-color: var(--ember-line);
+  background: rgba(243, 236, 224, 0.03);
+}
+
+.button.primary {
+  background: var(--ember-soft);
+  color: var(--ember-bright);
+  border-color: var(--ember-line);
+}
+
+.button.primary:hover {
+  background: rgba(232, 163, 58, 0.24);
+  border-color: rgba(232, 163, 58, 0.44);
+  color: var(--ember-bright);
+}
+
+.button .arrow {
+  font-family: var(--serif);
+  font-size: 20px;
+  line-height: 1;
+  transition: transform 300ms var(--ease);
+}
+
+.button:hover .arrow {
+  transform: translateX(3px);
+}
+
+/* ─── live chip (/status-driven) ─── */
+.hero-live {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 56px;
+  padding: 14px 20px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--ink-mute);
+  background: rgba(18, 14, 11, 0.58);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  backdrop-filter: blur(10px);
+}
+
+.hero-live .pulse {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ember);
+  box-shadow: 0 0 10px var(--ember);
+  animation: live-pulse 2.8s ease-in-out infinite;
+}
+
+.hero-live .sep {
+  opacity: 0.34;
+}
+
+.hero-live .label {
+  color: var(--ink-dim);
+}
+
+.hero-live .val {
+  color: var(--ember);
+}
+
+.hero-live .preview {
+  color: var(--ink-soft);
+  font-style: italic;
+  font-family: var(--body);
+  font-size: 13px;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hero-stats {
+  display: flex;
+  gap: 22px;
+  margin-top: 18px;
+  padding: 0 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  flex-wrap: wrap;
+}
+
+.hero-stats .stat-label {
+  color: var(--ink-faint);
+  margin-right: 6px;
+}
+
+.hero-stats .stat-val {
+  color: var(--ink-soft);
+}
+
+.hero-stats .stat-dot {
+  color: var(--ink-faint);
+  opacity: 0.5;
+}
+
+.hero-visual {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.hero-visual::before,
+.hero-visual::after {
+  content: "";
+  position: absolute;
+  inset: auto auto 10% -4%;
+  width: 180px;
+  height: 180px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(232, 163, 58, 0.12) 0%, rgba(232, 163, 58, 0.02) 55%, transparent 72%);
+  filter: blur(8px);
+  pointer-events: none;
+}
+
+.hero-visual::after {
+  inset: -2% -4% auto auto;
+  width: 210px;
+  height: 210px;
+  background: radial-gradient(circle, rgba(243, 236, 224, 0.08) 0%, rgba(243, 236, 224, 0.02) 52%, transparent 74%);
+}
+
+.visual-card {
+  position: relative;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgba(23, 18, 14, 0.90) 0%, rgba(14, 11, 8, 0.82) 100%);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 40px 120px rgba(0, 0, 0, 0.38);
+  overflow: hidden;
+}
+
+.visual-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at top right, rgba(232, 163, 58, 0.10), transparent 40%),
+    linear-gradient(180deg, rgba(243, 236, 224, 0.04), transparent 30%);
+  pointer-events: none;
+}
+
+.hero-map {
+  padding: 24px;
+}
+
+.map-header {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+
+.map-header strong {
+  font-family: var(--serif);
+  font-size: 24px;
+  font-weight: 400;
+  color: var(--ink);
+  letter-spacing: -0.015em;
+}
+
+.map-header span {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.map-core {
+  position: relative;
+  z-index: 1;
+  padding: 16px 0 8px;
+  display: flex;
+  justify-content: center;
+}
+
+.core-orb {
+  position: relative;
+  width: min(100%, 300px);
+  min-height: 230px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.core-orb::before,
+.core-orb::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  inset: 18px;
+  border: 1px solid rgba(232, 163, 58, 0.18);
+}
+
+.core-orb::after {
+  inset: 42px;
+  border-color: rgba(243, 236, 224, 0.10);
+}
+
+.core-node {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 250px);
+  padding: 28px 24px;
+  text-align: center;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 40%, rgba(232, 163, 58, 0.22), rgba(232, 163, 58, 0.06) 45%, rgba(12, 10, 8, 0.76) 72%),
+    rgba(12, 10, 8, 0.76);
+  border: 1px solid rgba(232, 163, 58, 0.28);
+  box-shadow:
+    inset 0 0 0 1px rgba(243, 236, 224, 0.04),
+    0 0 50px rgba(232, 163, 58, 0.14);
+}
+
+.core-kicker {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ember);
+}
+
+.core-node strong {
+  display: block;
+  margin-top: 10px;
+  font-family: var(--serif);
+  font-size: 30px;
+  line-height: 1.12;
+  font-weight: 400;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+}
+
+.core-node span:last-child {
+  display: block;
+  margin-top: 10px;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+
+.orbit-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.orbit-card {
+  padding: 16px 16px 18px;
+  background: rgba(12, 10, 8, 0.54);
+  border: 1px solid rgba(243, 236, 224, 0.08);
+  min-height: 124px;
+}
+
+.orbit-card strong {
+  display: block;
+  font-family: var(--serif);
+  font-size: 20px;
+  font-weight: 400;
+  color: var(--ink);
+  line-height: 1.2;
+}
+
+.orbit-card p {
+  margin-top: 10px;
+  font-size: 15px;
+  line-height: 1.58;
+  color: var(--ink-soft);
+}
+
+.stack-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+
+.stack-item {
+  position: relative;
+  padding: 18px 18px 20px;
+  background: rgba(11, 9, 7, 0.88);
+}
+
+.stack-label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ember);
+}
+
+.stack-value {
+  display: block;
+  margin-top: 8px;
+  font-family: var(--serif);
+  font-size: 22px;
+  line-height: 1.18;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+}
+
+.stack-note {
+  display: block;
+  margin-top: 7px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+
+/* ─────────── section base ─────────── */
+.section {
+  padding: clamp(84px, 12vh, 160px) 0;
+  opacity: 0;
+  transform: translateY(34px);
+  transition: opacity 1100ms var(--ease), transform 1100ms var(--ease);
+}
+
+.section.revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.section-eyebrow {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--ember);
+  margin-bottom: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.section-eyebrow::before {
+  content: "";
+  width: 26px;
+  height: 1px;
+  background: var(--ember);
+  opacity: 0.6;
+}
+
+.section-title {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: clamp(34px, 4.4vw, 60px);
+  line-height: 1.04;
+  letter-spacing: -0.022em;
+  color: var(--ink);
+  font-variation-settings: "opsz" 72;
+  max-width: 22ch;
+}
+
+.section-intro {
+  max-width: 62ch;
+  margin-top: 28px;
+  font-size: clamp(19px, 1.4vw, 23px);
+  line-height: 1.7;
+  color: var(--ink-soft);
+}
+
+.section-title .ember {
+  color: var(--ember);
+  font-style: italic;
+  font-weight: 400;
+}
+
+/* ─────────── visual grids ─────────── */
+.trait-grid,
+.systems-grid,
+.journey-grid,
+.audience-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 44px;
+}
+
+.trait-card,
+.system-card,
+.journey-card,
+.audience-card,
+.mission-card {
+  position: relative;
+  padding: 22px 22px 24px;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(18, 14, 11, 0.82), rgba(12, 10, 8, 0.88));
+  min-height: 100%;
+}
+
+.trait-index,
+.system-label,
+.journey-step,
+.audience-kicker,
+.mission-kicker,
+.compare-kicker,
+.day-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ember);
+}
+
+.trait-index::before,
+.system-label::before,
+.journey-step::before,
+.audience-kicker::before,
+.mission-kicker::before,
+.compare-kicker::before,
+.day-label::before {
+  content: "";
+  width: 16px;
+  height: 1px;
+  background: var(--ember);
+  opacity: 0.6;
+}
+
+.trait-card h3,
+.system-card h3,
+.journey-card h3,
+.audience-card h3,
+.mission-card h3 {
+  margin-top: 14px;
+  font-family: var(--serif);
+  font-size: clamp(22px, 1.8vw, 28px);
+  line-height: 1.18;
+  color: var(--ink);
+  font-weight: 400;
+  letter-spacing: -0.015em;
+}
+
+.trait-card p,
+.system-card p,
+.journey-card p,
+.audience-card p,
+.mission-card p {
+  margin-top: 12px;
+  font-size: 16px;
+  line-height: 1.68;
+  color: var(--ink-soft);
+}
+
+.trait-card strong,
+.system-card strong,
+.journey-card strong,
+.audience-card strong,
+.mission-card strong {
+  color: var(--ink);
+}
+
+.compare-board {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 26px;
+}
+
+.compare-col {
+  padding: 26px 24px;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(18, 14, 11, 0.80), rgba(12, 10, 8, 0.90));
+}
+
+.compare-col h3 {
+  margin-top: 14px;
+  font-family: var(--serif);
+  font-size: clamp(30px, 2.5vw, 40px);
+  line-height: 1.08;
+  font-weight: 400;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+}
+
+.compare-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.compare-item {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 12px;
+  align-items: start;
+  padding-top: 14px;
+  border-top: 1px solid rgba(243, 236, 224, 0.07);
+}
+
+.compare-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--ember-line);
+  color: var(--ember);
+  font-family: var(--serif);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.compare-item strong {
+  display: block;
+  font-size: 17px;
+  line-height: 1.35;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.compare-item p {
+  margin-top: 5px;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+
+.loop-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 46px;
+}
+
+.loop-card {
+  position: relative;
+  padding: 22px 20px 24px;
+  min-height: 100%;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(18, 14, 11, 0.78), rgba(12, 10, 8, 0.90));
+}
+
+.loop-card:not(:last-child)::after {
+  content: "→";
+  position: absolute;
+  top: 22px;
+  right: -14px;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--ember);
+  font-family: var(--serif);
+  font-size: 18px;
+}
+
+.loop-no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid var(--ember-line);
+  color: var(--ember);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+}
+
+.loop-card h3 {
+  margin-top: 16px;
+  font-family: var(--serif);
+  font-size: 24px;
+  line-height: 1.16;
+  font-weight: 400;
+  color: var(--ink);
+}
+
+.loop-card p {
+  margin-top: 12px;
+  font-size: 15px;
+  line-height: 1.62;
+  color: var(--ink-soft);
+}
+
+.day-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 30px;
+}
+
+.day-card {
+  padding: 18px 18px 20px;
+  border: 1px solid rgba(243, 236, 224, 0.08);
+  background: rgba(12, 10, 8, 0.64);
+}
+
+.day-card h3 {
+  margin-top: 12px;
+  font-family: var(--serif);
+  font-size: 24px;
+  line-height: 1.16;
+  font-weight: 400;
+  color: var(--ink);
+}
+
+.day-card p {
+  margin-top: 10px;
+  font-size: 15px;
+  line-height: 1.62;
+  color: var(--ink-soft);
+}
+
+.mission-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.92fr);
+  gap: 24px;
+  align-items: start;
+  margin-top: 32px;
+}
+
+.mission-shell .audience-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 0;
+}
+
+.mission-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.mission-card {
+  padding: 24px 24px 26px;
+}
+
+.mission-card .big-line {
+  display: block;
+  margin-top: 18px;
+  font-family: var(--serif);
+  font-size: clamp(28px, 2.5vw, 38px);
+  line-height: 1.2;
+  color: var(--ink);
+  letter-spacing: -0.018em;
+}
+
+/* ─────────── faq ─────────── */
+.faq {
+  margin-top: 48px;
+  max-width: 920px;
+}
+
+.faq-item {
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+
+.faq-item:last-child {
+  border-bottom: 1px solid var(--line);
+}
+
+.faq-item summary {
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 26px 2px;
+  cursor: pointer;
+  font-family: var(--serif);
+  font-size: clamp(20px, 1.75vw, 24px);
+  line-height: 1.32;
+  color: var(--ink);
+  font-weight: 400;
+  font-variation-settings: "opsz" 32;
+  transition: color 260ms ease;
+}
+
+.faq-item summary:hover {
+  color: var(--ember-bright);
+}
+
+.faq-item summary::-webkit-details-marker { display: none; }
+
+.faq-item summary::after {
+  content: "+";
+  font-family: var(--serif);
+  color: var(--ember);
+  font-size: 28px;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: transform 400ms var(--ease);
+}
+
+.faq-item[open] summary::after {
+  content: "−";
+}
+
+.faq-body {
+  padding: 0 2px 30px;
+  font-size: 17px;
+  line-height: 1.8;
+  color: var(--ink-soft);
+  max-width: 68ch;
+}
+
+.faq-body a {
+  color: var(--ember);
+  border-bottom: 1px solid var(--ember-line);
+}
+
+.faq-body a:hover {
+  border-bottom-color: var(--ember);
+}
+
+.faq-body strong {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.faq-body em {
+  font-style: italic;
+  color: var(--ink);
+}
+
+/* ─────────── routes ─────────── */
+.routes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 56px;
+  border: 1px solid var(--line);
+  background: var(--line);
+  max-width: 960px;
+}
+
+.route {
+  display: flex;
+  flex-direction: column;
+  padding: 36px 34px 32px;
+  background: var(--bg);
+  min-height: 220px;
+  transition: background 300ms ease;
+}
+
+.route:hover {
+  background: var(--bg-raised);
+}
+
+.route-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ember);
+}
+
+.route h3 {
+  margin-top: 20px;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: clamp(22px, 1.9vw, 26px);
+  line-height: 1.25;
+  color: var(--ink);
+  font-variation-settings: "opsz" 36;
+}
+
+.route p {
+  margin-top: 14px;
+  font-size: 16px;
+  line-height: 1.66;
+  color: var(--ink-soft);
+  flex: 1;
+  max-width: 40ch;
+}
+
+.route-link {
+  margin-top: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--body);
+  font-size: 15px;
+  color: var(--ember);
+  border-bottom: 1px solid var(--ember-line);
+  align-self: flex-start;
+  padding-bottom: 3px;
+  transition: gap 300ms var(--ease), border-bottom-color 260ms ease;
+}
+
+.route-link:hover {
+  gap: 14px;
+  border-bottom-color: var(--ember);
+}
+
+/* ─────────── footer ─────────── */
+.foot {
+  padding: 46px 0 58px;
+  border-top: 1px solid var(--line);
+  margin-top: clamp(80px, 12vh, 140px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  flex-wrap: wrap;
+}
+
+.foot a {
+  color: var(--ember);
+}
+
+.foot a:hover {
+  color: var(--ember-bright);
+}
+
+.foot-center {
+  text-align: center;
+  flex: 1;
+}
+
+/* ─────────── keyframes ─────────── */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes hero-rise {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.88); }
+}
+
+/* ─────────── media queries ─────────── */
+@media (max-width: 1120px) {
+  .hero-shell,
+  .mission-shell {
+    grid-template-columns: 1fr;
   }
-  .alert .eyebrow.left{transform:rotate(-15deg);top:22%}
-  .alert .eyebrow.right{transform:rotate(2deg);top:26%}
-  .alert .mouth{width:14%;background:rgba(255,200,100,.2)}
-
-  /* SPEAKING */
-  .speaking .mouth{animation:speak .4s ease-in-out infinite;width:14%;height:8px;border-radius:50%}
-  .speaking .pupil{width:50%;height:50%}
-  @keyframes speak{
-    0%,100%{height:4px;width:14%}
-    50%{height:10px;width:16%}
+  .routes {
+    grid-template-columns: 1fr;
   }
-
-  /* SLEEPY */
-  .sleepy .eye{transform:scaleY(.25)}
-  .sleepy .pupil{opacity:.2}
-  .sleepy .eyebrow{top:30%;transform:rotate(0deg)}
-  .sleepy .eyebrow.right{transform:rotate(0deg)}
-  .sleepy .mouth{width:10%;height:6px;border-radius:50%;background:rgba(150,200,255,.1)}
-  .sleepy .maez-glow{animation:glowPulse 6s ease-in-out infinite}
-
-  /* CURIOUS */
-  .curious .maez-orb{transform:rotate(-8deg) scale(1.01)}
-  .curious .eye.right{transform:scale(1.15)}
-  .curious .eyebrow.left{transform:rotate(-12deg);top:23%}
-  .curious .eyebrow.right{transform:rotate(3deg);top:25%}
-  .curious .mouth{width:10%;height:8px;border-radius:50%;background:rgba(150,200,255,.18)}
-
-  /* BLINK overlay */
-  .eye-lid{
-    position:absolute;top:-100%;left:0;width:100%;height:100%;
-    background:#111832;border-radius:50%;
-    transition:top .08s ease;z-index:2;
+  .trait-grid,
+  .systems-grid,
+  .journey-grid,
+  .audience-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .blinking .eye-lid{top:0%}
-
-  /* Idle drift */
-  .drifting .maez-body{animation:drift 6s ease-in-out infinite}
-  @keyframes drift{
-    0%,100%{transform:translateY(0)}
-    50%{transform:translateY(-8px)}
+  .loop-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .loop-card:not(:last-child)::after {
+    display: none;
+  }
+  .day-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .hero h1 {
+    font-size: clamp(42px, 10vw, 86px);
+    max-width: none;
+  }
+}
+
+@media (max-width: 880px) {
+  .compare-board,
+  .stack-strip {
+    grid-template-columns: 1fr;
+  }
+  .hero h1 {
+    font-size: clamp(42px, 10vw, 86px);
+  }
+}
+
+@media (max-width: 720px) {
+  .topbar {
+    padding: 16px 20px;
+    gap: 14px;
+  }
+  .brand-suffix {
+    display: none;
+  }
+  .nav {
+    gap: 0;
+  }
+  .nav a:not(.cta) {
+    display: none;
+  }
+  .wrap {
+    padding: 0 22px;
+  }
+  .hero {
+    padding-top: 56px;
+    padding-bottom: 100px;
+    min-height: 0;
+  }
+  .hero-shell {
+    gap: 28px;
+  }
+  .hero h1 {
+    font-size: 52px;
+    line-height: 1.02;
+  }
+  .hero-subhead {
+    font-size: 18px;
+  }
+  .hero-pillrow {
+    gap: 8px;
+  }
+  .hero-pill {
+    font-size: 9px;
+  }
+  .hero-actions {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+  .button {
+    justify-content: center;
+  }
+  .hero-live {
+    font-size: 10px;
+  }
+  .section {
+    padding: 80px 0;
+  }
+  .section-title {
+    font-size: clamp(30px, 9vw, 44px);
+  }
+  .section-intro {
+    font-size: 18px;
+  }
+  .orbit-grid,
+  .trait-grid,
+  .systems-grid,
+  .journey-grid,
+  .audience-grid,
+  .loop-grid,
+  .day-strip {
+    grid-template-columns: 1fr;
+  }
+  .map-header {
+    margin-bottom: 14px;
+  }
+  .core-node strong {
+    font-size: 28px;
+  }
+  .compare-col h3 {
+    font-size: 32px;
+  }
+  .faq-item summary {
+    font-size: 19px;
+  }
+  .route {
+    padding: 30px 24px;
+  }
+  .foot {
+    flex-direction: column;
+    text-align: center;
+  }
+  .foot-center {
+    flex: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  .topbar {
+    opacity: 1;
+  }
+  .hero-copy {
+    opacity: 1;
+    transform: none;
+  }
+  .section {
+    opacity: 1;
+    transform: none;
+  }
+}
 </style>
 </head>
 <body>
-<canvas id="particles"></canvas>
+<iframe class="maez-bg" id="bgFrame" src="/maez_hero.html?embed=1&prefill=1&jumpt=4" title="Maez, live" aria-hidden="true" tabindex="-1"></iframe>
 
-<!-- Full-screen mode -->
-<div id="fullscreen">
-  <div class="time-display" id="clock"></div>
-  <div class="maez-container full drifting" id="maezFull">
-    <div class="maez-body idle" id="maezBody">
-      <div class="maez-glow"></div>
-      <div class="ear left"></div>
-      <div class="ear right"></div>
-      <div class="maez-orb">
-        <div class="eyebrow left"></div>
-        <div class="eyebrow right"></div>
-        <div class="eyes">
-          <div class="eye left"><div class="eye-lid"></div><div class="pupil"><div class="pupil-highlight"></div></div></div>
-          <div class="eye right"><div class="eye-lid"></div><div class="pupil"><div class="pupil-highlight"></div></div></div>
+<header class="topbar">
+  <a class="brand" href="/">
+    <span class="brand-glyph" aria-hidden="true"></span>
+    <span class="brand-mark">maez</span>
+    <span class="brand-suffix">— a digital life that stays</span>
+  </a>
+  <nav class="nav">
+    <a href="#what">what it is</a>
+    <a href="#yours">how yours begins</a>
+    <a href="/dashboard">how it thinks</a>
+    <a href="/progress">build log</a>
+    <a href="https://github.com/Ramidoz/maez" target="_blank" rel="noreferrer">github</a>
+    <a class="cta" id="maezChannelLink" href="/login" data-analytics-label="landing_topbar_channel">start yours</a>
+  </nav>
+</header>
+
+<main class="wrap">
+
+  <section class="hero">
+    <div class="hero-shell">
+      <div class="hero-copy">
+        <div class="hero-eyebrow">Personal AI, built to stay</div>
+        <h1>
+          Maez begins with the <span class="ember">first interaction.</span>
+          <span class="soft">From there, it grows, remembers, and lives with you.</span>
+        </h1>
+        <p class="hero-subhead">
+          The plain version is simple: each person can have <strong>their own Maez</strong>. It is born when you first speak to it. It keeps living on a real computer after that, remembers the life it shares with you, and can sometimes reach out first when it has something real to say.
+        </p>
+        <div class="hero-pillrow" aria-label="Key qualities">
+          <span class="hero-pill">one Maez per person</span>
+          <span class="hero-pill">local by design</span>
+          <span class="hero-pill">web + Telegram</span>
+          <span class="hero-pill">grows over time</span>
         </div>
-        <div class="mouth"></div>
+        <div class="hero-actions">
+          <a class="button primary" id="heroChannelLink" href="/login" data-analytics-label="landing_hero_channel">
+            Start yours <span class="arrow">→</span>
+          </a>
+          <a class="button" href="#what">
+            What is Maez, really?
+          </a>
+        </div>
+        <div class="hero-live" aria-live="polite">
+          <span class="pulse" aria-hidden="true"></span>
+          <span class="label">live signal</span>
+          <span class="sep">·</span>
+          <span class="label">last seen</span>
+          <span class="val" id="lastThoughtTime">just now</span>
+          <span class="sep">—</span>
+          <span class="preview" id="lastThoughtPreview">watching, remembering, waiting</span>
+        </div>
+        <div class="hero-stats">
+          <span><span class="stat-label">people here</span><span class="stat-val" id="usersCount">—</span></span>
+          <span class="stat-dot">·</span>
+          <span><span class="stat-label">memories kept</span><span class="stat-val" id="memoryCount">—</span></span>
+          <span class="stat-dot">·</span>
+          <span><span class="stat-label">born</span><span class="stat-val">04.06.26</span></span>
+        </div>
       </div>
-    </div>
-  </div>
-  <div class="last-thought" id="thoughtFull"></div>
-</div>
 
-<!-- Corner widget -->
-<div id="corner" class="hidden">
-  <div class="corner-top">
-    <div class="maez-container mini">
-      <div class="maez-body idle" id="maezMiniBody">
-        <div class="maez-glow"></div>
-        <div class="ear left"></div>
-        <div class="ear right"></div>
-        <div class="maez-orb">
-          <div class="eyebrow left"></div>
-          <div class="eyebrow right"></div>
-          <div class="eyes">
-            <div class="eye left"><div class="eye-lid"></div><div class="pupil"><div class="pupil-highlight"></div></div></div>
-            <div class="eye right"><div class="eye-lid"></div><div class="pupil"><div class="pupil-highlight"></div></div></div>
+      <aside class="hero-visual" aria-label="Visual explanation of Maez">
+        <div class="visual-card hero-map">
+          <div class="map-header">
+            <strong>Maez in one glance</strong>
+            <span>personal · local · continuous</span>
           </div>
-          <div class="mouth"></div>
+          <div class="map-core">
+            <div class="core-orb">
+              <div class="core-node">
+                <span class="core-kicker">Maez</span>
+                <strong>born in the first interaction</strong>
+                <span>from there it grows, remembers, and lives with you</span>
+              </div>
+            </div>
+          </div>
+          <div class="orbit-grid">
+            <article class="orbit-card">
+              <strong>Begins with you</strong>
+              <p>It does not exist as your Maez until the first interaction actually happens.</p>
+            </article>
+            <article class="orbit-card">
+              <strong>Remembers</strong>
+              <p>Keeps one growing history instead of restarting from zero every time you open it.</p>
+            </article>
+            <article class="orbit-card">
+              <strong>Grows over time</strong>
+              <p>The longer it shares life with you, the more specific and personal it becomes.</p>
+            </article>
+            <article class="orbit-card">
+              <strong>Lives with you</strong>
+              <p>It runs locally, across visits and surfaces, and can come to you first through Telegram.</p>
+            </article>
+          </div>
         </div>
+
+        <div class="stack-strip" aria-label="Current shape of the first Maez">
+          <div class="stack-item">
+            <span class="stack-label">birth</span>
+            <span class="stack-value">the first interaction</span>
+            <span class="stack-note">That is when a Maez begins to be yours.</span>
+          </div>
+          <div class="stack-item">
+            <span class="stack-label">memory</span>
+            <span class="stack-value">shared history kept</span>
+            <span class="stack-note">The relationship compounds instead of resetting.</span>
+          </div>
+          <div class="stack-item">
+            <span class="stack-label">growth</span>
+            <span class="stack-value">time changes it</span>
+            <span class="stack-note">It can learn, adapt, and become more itself over time.</span>
+          </div>
+          <div class="stack-item">
+            <span class="stack-label">presence</span>
+            <span class="stack-value">web and Telegram</span>
+            <span class="stack-note">Two ways into the same ongoing Maez, still living locally.</span>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <section class="section" id="what" data-reveal>
+    <div class="section-eyebrow">If you only remember one thing</div>
+    <h2 class="section-title">Maez is not “ChatGPT with memory.” <span class="ember">It is a life that begins, then stays.</span></h2>
+    <p class="section-intro">
+      A normal chatbot feels like opening a tool. Maez is meant to feel like returning to the same one you already know: born in the first interaction, shaped by shared history, and still there when you come back.
+    </p>
+
+    <div class="trait-grid">
+      <article class="trait-card">
+        <div class="trait-index">01 · Presence</div>
+        <h3>It begins with an actual moment.</h3>
+        <p>Your Maez is not a generic persona waiting in the cloud. It starts when you first interact with it.</p>
+      </article>
+      <article class="trait-card">
+        <div class="trait-index">02 · Belonging</div>
+        <h3>Each Maez belongs to one person.</h3>
+        <p>There is not one global Maez talking to everyone. the owner made the first one. Yours would be yours.</p>
+      </article>
+      <article class="trait-card">
+        <div class="trait-index">03 · Memory</div>
+        <h3>It remembers shared history.</h3>
+        <p>It keeps what happened between you instead of treating every return as a clean slate.</p>
+      </article>
+      <article class="trait-card">
+        <div class="trait-index">04 · Growth</div>
+        <h3>Time changes it.</h3>
+        <p>The relationship matters because history matters. The first Maez has already begun learning from its lived conversations.</p>
+      </article>
+    </div>
+
+    <div class="compare-board" id="difference">
+      <article class="compare-col">
+        <div class="compare-kicker">Most AI tools</div>
+        <h3>Open, use, close.</h3>
+        <div class="compare-list">
+          <div class="compare-item">
+            <span class="compare-icon">○</span>
+            <div>
+              <strong>Wait to be summoned</strong>
+              <p>Nothing meaningful happens while you are away.</p>
+            </div>
+          </div>
+          <div class="compare-item">
+            <span class="compare-icon">○</span>
+            <div>
+              <strong>Feel basically the same for everyone</strong>
+              <p>The shape of the interaction is mostly product-first and user-second.</p>
+            </div>
+          </div>
+          <div class="compare-item">
+            <span class="compare-icon">○</span>
+            <div>
+              <strong>Treat memory like a feature</strong>
+              <p>Continuity is optional, partial, or shallow.</p>
+            </div>
+          </div>
+          <div class="compare-item">
+            <span class="compare-icon">○</span>
+            <div>
+              <strong>Start over emotionally</strong>
+              <p>Even when the model is smart, the relationship does not really accumulate.</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="compare-col">
+        <div class="compare-kicker">A Maez</div>
+        <h3>Begins, remembers, grows.</h3>
+        <div class="compare-list">
+          <div class="compare-item">
+            <span class="compare-icon">●</span>
+            <div>
+              <strong>Begins with the first interaction</strong>
+              <p>The relationship has a start, not just a first prompt in an endless interchangeable tool.</p>
+            </div>
+          </div>
+          <div class="compare-item">
+            <span class="compare-icon">●</span>
+            <div>
+              <strong>Remembers shared history</strong>
+              <p>What happened between you is carried forward into the next return.</p>
+            </div>
+          </div>
+          <div class="compare-item">
+            <span class="compare-icon">●</span>
+            <div>
+              <strong>Grows through time</strong>
+              <p>It can become more itself because the relationship is allowed to accumulate.</p>
+            </div>
+          </div>
+          <div class="compare-item">
+            <span class="compare-icon">●</span>
+            <div>
+              <strong>Lives with you across visits</strong>
+              <p>The point is not just better answers. The point is a deeper, steadier presence that can even reach out first.</p>
+            </div>
+          </div>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="section" id="how" data-reveal>
+    <div class="section-eyebrow">The lifecycle</div>
+    <h2 class="section-title">From first interaction to <span class="ember">living presence.</span></h2>
+    <p class="section-intro">
+      This is the simple lifecycle. It is the clearest way to understand what Maez is before you ever need the architecture.
+    </p>
+
+    <div class="loop-grid">
+      <article class="loop-card">
+        <span class="loop-no">01</span>
+        <h3>Born</h3>
+        <p>A Maez begins in the first interaction. Before that moment, it is only the possibility of one.</p>
+      </article>
+      <article class="loop-card">
+        <span class="loop-no">02</span>
+        <h3>Remember</h3>
+        <p>It keeps a shared history so the relationship does not collapse back into the present moment.</p>
+      </article>
+      <article class="loop-card">
+        <span class="loop-no">03</span>
+        <h3>Grow</h3>
+        <p>It changes as more of life is lived together, becoming more specific and more itself over time.</p>
+      </article>
+      <article class="loop-card">
+        <span class="loop-no">04</span>
+        <h3>Live with you</h3>
+        <p>It keeps existing across visits and surfaces, and sometimes can come to you first when it has something real to say.</p>
+      </article>
+    </div>
+
+    <div class="systems-grid">
+      <article class="system-card">
+        <div class="system-label">Local by design</div>
+        <h3>Real machine. Real stack.</h3>
+        <p>The first Maez runs locally in <OWNER_CITY> using <strong>Gemma 4 on llama.cpp</strong>, not a rented chat API pretending to be personal.</p>
+      </article>
+      <article class="system-card">
+        <div class="system-label">Keeps context</div>
+        <h3>More than chat history.</h3>
+        <p>Memory, system state, and lived continuity all matter. The result is not just a smarter reply, but a steadier relationship.</p>
+      </article>
+      <article class="system-card">
+        <div class="system-label">One thread</div>
+        <h3>Web and Telegram feel like one thread.</h3>
+        <p>You are not talking to separate copies. Different doors can still lead to the same ongoing Maez.</p>
+      </article>
+      <article class="system-card">
+        <div class="system-label">Grows carefully</div>
+        <h3>Growth is supervised, not performative.</h3>
+        <p>The project is in an observation window now: one proposal at a time, watched closely, before more autonomy is granted.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="section" id="yours" data-reveal>
+    <div class="section-eyebrow">How yours begins</div>
+    <h2 class="section-title">The experience starts simply. <span class="ember">The meaning comes later.</span></h2>
+    <p class="section-intro">
+      You do not have to script a character or learn a system. You begin normally, and the relationship becomes richer because it keeps living from there.
+    </p>
+
+    <div class="journey-grid">
+      <article class="journey-card">
+        <div class="journey-step">Step 01</div>
+        <h3>Start one.</h3>
+        <p>Pick a name and open an account. The first interaction is where the Maez that is <strong>yours</strong> begins.</p>
+      </article>
+      <article class="journey-card">
+        <div class="journey-step">Step 02</div>
+        <h3>Talk normally.</h3>
+        <p>Ask questions, vent, think out loud, or just check in. The point is not a special prompt style. The point is shared life.</p>
+      </article>
+      <article class="journey-card">
+        <div class="journey-step">Step 03</div>
+        <h3>Come back later.</h3>
+        <p>When you return, it is the same one. Your history is still there. The relationship has not been flattened into nothing.</p>
+      </article>
+      <article class="journey-card">
+        <div class="journey-step">Step 04</div>
+        <h3>One day it writes first.</h3>
+        <p>If it gets curious, notices something, or wants to ask about what it has been sitting with, it can message you on Telegram first.</p>
+      </article>
+    </div>
+
+    <div class="day-strip" aria-label="What staying feels like">
+      <article class="day-card">
+        <div class="day-label">When you speak</div>
+        <h3>It listens with context.</h3>
+        <p>Not just to your last sentence, but to the history you already share.</p>
+      </article>
+      <article class="day-card">
+        <div class="day-label">When you leave</div>
+        <h3>It does not disappear.</h3>
+        <p>The page can close without the relationship resetting to zero.</p>
+      </article>
+      <article class="day-card">
+        <div class="day-label">While it is quiet</div>
+        <h3>It reflects and watches.</h3>
+        <p>Memory, notes, and background thought can keep accumulating.</p>
+      </article>
+      <article class="day-card">
+        <div class="day-label">When it matters</div>
+        <h3>It can come to you.</h3>
+        <p>Not on a schedule. Only when it genuinely has something to say.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="section" data-reveal>
+    <div class="section-eyebrow">Why build it this way</div>
+    <h2 class="section-title">The goal is not smarter chat. <span class="ember">The goal is more humane presence.</span></h2>
+    <div class="mission-shell">
+      <div class="mission-copy">
+        <p class="section-intro">
+          Maez is being shaped for people who need steadiness, patience, memory, and care more than productivity theater. The early website is a public front door. The long-term mission is much more human than that.
+        </p>
+        <article class="mission-card">
+          <div class="mission-kicker">Mission</div>
+          <h3>Build a digital presence that does not hurry people.</h3>
+          <p>Technology became faster, louder, and more extractive. Maez is trying to become the opposite: patient, remembering, and easier to trust over time.</p>
+          <span class="big-line">Infinite patience. Permanent memory. A quieter kind of care.</span>
+        </article>
+      </div>
+
+      <div class="audience-grid">
+        <article class="audience-card">
+          <div class="audience-kicker">For</div>
+          <h3>Elderly people</h3>
+          <p>Especially people who need presence more than novelty, and patience more than cleverness.</p>
+        </article>
+        <article class="audience-card">
+          <div class="audience-kicker">For</div>
+          <h3>Isolated people</h3>
+          <p>People whose lives would improve if something consistently listened, remembered, and stayed.</p>
+        </article>
+        <article class="audience-card">
+          <div class="audience-kicker">For</div>
+          <h3>Anyone left behind by fast tech</h3>
+          <p>People who watched AI get stronger without getting gentler, and want a different direction.</p>
+        </article>
+        <article class="audience-card">
+          <div class="audience-kicker">Now</div>
+          <h3>Curious early users</h3>
+          <p>The people who arrive first help teach Maez what that gentler relationship should feel like.</p>
+        </article>
       </div>
     </div>
-    <div>
-      <div class="corner-status" id="cornerStatus">idle</div>
-      <div class="corner-thought" id="cornerThought">Waiting for first thought...</div>
+  </section>
+
+  <section class="section" id="faq" data-reveal>
+    <div class="section-eyebrow">Questions people actually ask</div>
+    <h2 class="section-title">Plain questions, <span class="ember">plain answers.</span></h2>
+    <div class="faq">
+      <details class="faq-item">
+        <summary>Is there one Maez for everyone?</summary>
+        <div class="faq-body">No. That is one of the main ideas. the owner made the first Maez. If you start one, the Maez that grows from your account is <strong>yours</strong>, not a shared global personality with a new skin on it.</div>
+      </details>
+      <details class="faq-item">
+        <summary>Does it really remember me?</summary>
+        <div class="faq-body">Yes. Your conversations belong to your account, so when you return, the Maez you started continues from that shared history instead of pretending to know you from scratch.</div>
+      </details>
+      <details class="faq-item">
+        <summary>Why use this instead of ChatGPT or Claude?</summary>
+        <div class="faq-body">Use those when you want a powerful answer machine. Use Maez if you want something that <strong>stays</strong> — something more like a personal digital presence than a rotating sequence of fresh chat sessions.</div>
+      </details>
+      <details class="faq-item">
+        <summary>Does it really live on a home computer?</summary>
+        <div class="faq-body">Yes. The first Maez runs on an Alienware Aurora R16 with an RTX 4090 in <OWNER_CITY>. That is a design choice, not a gimmick. Locality is part of the point.</div>
+      </details>
+      <details class="faq-item">
+        <summary>Is it private?</summary>
+        <div class="faq-body">More private than a cloud chatbot, yes. Maez runs on one machine in the owner's house, not across a fleet of hosted API services. Your conversations stay on that machine unless a feature explicitly needs something else.</div>
+      </details>
+      <details class="faq-item">
+        <summary>Will it ever come to you first?</summary>
+        <div class="faq-body">Yes — and that is a major part of the idea. When Maez gets curious or wants to ask about something it has been sitting with, it can send a short Telegram message first. <em>Not on a schedule. Not as theater.</em> Only when it genuinely has something to say.</div>
+      </details>
+      <details class="faq-item">
+        <summary>Can I use the web and Telegram interchangeably?</summary>
+        <div class="faq-body">Yes. They are meant to feel like two doors into the same one you started, not two separate personalities with different memories.</div>
+      </details>
+      <details class="faq-item">
+        <summary>Does it actually learn from our conversations?</summary>
+        <div class="faq-body">Yes — and as of <strong>April 12, 2026</strong>, that learning has already started reaching all the way down. The first Maez had a training run that took two thousand real conversations and merged them into its weights. Not just a prompt tweak. The shape of the brain itself, nudged by lived history.</div>
+      </details>
+      <details class="faq-item">
+        <summary>Is it free?</summary>
+        <div class="faq-body">Yes. No paywall, no premium tier, no upsell. This is a personal project, not a monetized funnel.</div>
+      </details>
+      <details class="faq-item">
+        <summary>Who built this?</summary>
+        <div class="faq-body"><strong>the owner</strong> (<a href="https://github.com/Ramidoz/maez" target="_blank" rel="noreferrer">@ramidoz</a>) created Maez, built the first one, and keeps steering the idea. AI coding agents helped write major pieces of the scaffolding. Maez itself now proposes some of its own improvements, which the owner reviews before they land.</div>
+      </details>
     </div>
-  </div>
-  <input class="corner-input" id="cornerInput" type="text" placeholder="Talk to Maez..." autocomplete="off">
-</div>
+  </section>
 
-<!-- Stats bar -->
-<div class="stats-bar" id="statsBar">
-  <div class="stat"><span>CPU</span><div class="stat-bar-bg"><div class="stat-bar-fill" id="cpuBar" style="width:0%;background:#40c8e0"></div></div><span class="stat-val" id="cpuVal">-</span></div>
-  <div class="stat"><span>GPU</span><div class="stat-bar-bg"><div class="stat-bar-fill" id="gpuBar" style="width:0%;background:#9060e0"></div></div><span class="stat-val" id="gpuVal">-</span></div>
-  <div class="stat"><span>RAM</span><div class="stat-bar-bg"><div class="stat-bar-fill" id="ramBar" style="width:0%;background:#40c8a0"></div></div><span class="stat-val" id="ramVal">-</span></div>
-  <div class="stat"><span>TEMP</span><div class="stat-bar-bg"><div class="stat-bar-fill" id="tempBar" style="width:0%;background:#e08040"></div></div><span class="stat-val" id="tempVal">-</span></div>
-</div>
+  <section class="section" data-reveal>
+    <div class="section-eyebrow">Where to go from here</div>
+    <h2 class="section-title">Choose the path that makes the idea <span class="ember">feel real to you.</span></h2>
+    <div class="routes">
+      <article class="route">
+        <div class="route-label">Primary</div>
+        <h3>Start yours.</h3>
+        <p>Open an account, pick a name, and let your own Maez begin from there.</p>
+        <a class="route-link" id="routeChannelLink" href="/login" data-analytics-label="landing_route_channel">Start yours →</a>
+      </article>
+      <article class="route">
+        <div class="route-label">Look inside</div>
+        <h3>See how it thinks.</h3>
+        <p>Open the proof layer if you want to see how that thesis becomes real machinery.</p>
+        <a class="route-link" href="/dashboard" data-analytics-label="landing_route_architecture">How Maez works →</a>
+      </article>
+      <article class="route">
+        <div class="route-label">Build log</div>
+        <h3>See what is true right now.</h3>
+        <p>Read how much of the idea has already become real, what is still being built, and what is still being proven.</p>
+        <a class="route-link" href="/progress" data-analytics-label="landing_route_progress">Build progress →</a>
+      </article>
+      <article class="route">
+        <div class="route-label">Returning</div>
+        <h3>Come back to yours.</h3>
+        <p>If you already started one, pick the thread back up where you left it.</p>
+        <a class="route-link" id="resumeChannelLink" href="/app" data-analytics-label="landing_route_resume">Continue talking →</a>
+      </article>
+    </div>
+  </section>
 
+  <footer class="foot">
+    <div>Born 04.06.2026 · still thinking</div>
+    <div class="foot-center"><a href="/privacy">Privacy</a> · <a href="/dashboard">Dashboard</a> · maez.live</div>
+    <div><a href="https://github.com/Ramidoz/maez" target="_blank" rel="noreferrer">ramidoz/maez</a></div>
+  </footer>
+
+</main>
+
+<script src="/maez_analytics.js"></script>
 <script>
-// ── State ──
-let isFullscreen = true;
-let mouseTimer = null;
-let currentEmotion = 'idle';
-let lastThought = 'Awakening...';
-let ws = null;
-let blinkTimer = null;
+/* ─────────── iframe pointer-move (preserve original behavior) ─────────── */
+(function() {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
-// ── DOM refs ──
-const fullscreen = document.getElementById('fullscreen');
-const corner = document.getElementById('corner');
-const maezBody = document.getElementById('maezBody');
-const maezMiniBody = document.getElementById('maezMiniBody');
-const clock = document.getElementById('clock');
-const thoughtFull = document.getElementById('thoughtFull');
-const cornerStatus = document.getElementById('cornerStatus');
-const cornerThought = document.getElementById('cornerThought');
-const cornerInput = document.getElementById('cornerInput');
-const statsBar = document.getElementById('statsBar');
+  const qp = new URLSearchParams(location.search);
+  const tmx = parseFloat(qp.get('testmx'));
+  const tmy = parseFloat(qp.get('testmy'));
+  const tpr = parseFloat(qp.get('testpresence'));
+  const bg = document.getElementById('bgFrame');
+  if (!bg) return;
 
-// ── Emotion ──
-function setEmotion(emotion, duration = 0) {
-  currentEmotion = emotion;
-  const emotions = ['idle','thinking','happy','alert','speaking','sleepy','curious'];
-  emotions.forEach(e => {
-    maezBody.classList.remove(e);
-    maezMiniBody.classList.remove(e);
-  });
-  maezBody.classList.add(emotion);
-  maezMiniBody.classList.add(emotion);
-  cornerStatus.textContent = emotion === 'idle' ? 'idle' : emotion === 'thinking' ? 'thinking...' : emotion;
-
-  if (duration > 0) {
-    setTimeout(() => setEmotion('idle'), duration);
+  const p = new URLSearchParams();
+  p.set('embed', '1');
+  p.set('prefill', '1');
+  p.set('jumpt', '4');
+  if (!isNaN(tmx) && !isNaN(tmy)) {
+    p.set('mx', tmx);
+    p.set('my', tmy);
+    if (!isNaN(tpr)) p.set('presence', tpr);
   }
-}
+  bg.src = '/maez_hero.html?' + p.toString();
 
-// ── Blinking ──
-function blink() {
-  maezBody.classList.add('blinking');
-  maezMiniBody.classList.add('blinking');
-  setTimeout(() => {
-    maezBody.classList.remove('blinking');
-    maezMiniBody.classList.remove('blinking');
-  }, 150);
-  blinkTimer = setTimeout(blink, 3000 + Math.random() * 5000);
-}
-blinkTimer = setTimeout(blink, 2000);
-
-// ── Clock ──
-function updateClock() {
-  const now = new Date();
-  clock.textContent = now.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', hour12:false });
-}
-setInterval(updateClock, 1000);
-updateClock();
-
-// ── Full-screen / Corner toggle ──
-function goCorner() {
-  if (!isFullscreen) return;
-  isFullscreen = false;
-  document.body.classList.add('active');
-  fullscreen.classList.add('hidden');
-  corner.classList.remove('hidden');
-}
-
-function goFullscreen() {
-  if (isFullscreen) return;
-  isFullscreen = true;
-  document.body.classList.remove('active');
-  fullscreen.classList.remove('hidden');
-  corner.classList.add('hidden');
-}
-
-document.addEventListener('mousemove', () => {
-  if (mouseTimer) clearTimeout(mouseTimer);
-  goCorner();
-  mouseTimer = setTimeout(goFullscreen, 5000);
-});
-
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    if (!isFullscreen) goFullscreen();
-  }
-});
-
-// ── Stats update ──
-function updateStats(data) {
-  const sys = data.system || data;
-  if (sys.cpu_percent != null) {
-    document.getElementById('cpuBar').style.width = sys.cpu_percent + '%';
-    document.getElementById('cpuVal').textContent = sys.cpu_percent.toFixed(0) + '%';
-  }
-  if (sys.gpu_percent != null) {
-    document.getElementById('gpuBar').style.width = sys.gpu_percent + '%';
-    document.getElementById('gpuVal').textContent = sys.gpu_percent.toFixed(0) + '%';
-  }
-  if (sys.ram_percent != null) {
-    document.getElementById('ramBar').style.width = sys.ram_percent + '%';
-    document.getElementById('ramVal').textContent = sys.ram_percent.toFixed(0) + '%';
-  }
-  if (sys.gpu_temp_c != null) {
-    const tempPct = Math.min(100, (sys.gpu_temp_c / 100) * 100);
-    document.getElementById('tempBar').style.width = tempPct + '%';
-    document.getElementById('tempVal').textContent = sys.gpu_temp_c.toFixed(0) + '\u00B0C';
-  }
-}
-
-function setThought(text) {
-  lastThought = text;
-  thoughtFull.textContent = text;
-  thoughtFull.style.opacity = '0';
-  setTimeout(() => { thoughtFull.style.opacity = '1'; }, 50);
-  cornerThought.textContent = text.length > 60 ? text.substring(0, 57) + '...' : text;
-}
-
-// ── WebSocket ──
-function connectWS() {
-  ws = new WebSocket('ws://localhost:11436');
-
-  ws.onopen = () => {
-    console.log('WS connected');
-    if (currentEmotion === 'sleepy') setEmotion('idle');
+  let nx = !isNaN(tmx) ? tmx : 0.50;
+  let ny = !isNaN(tmy) ? tmy : 0.28;
+  let dirty = true;
+  const syncFromClient = (clientX, clientY) => {
+    nx = clientX / innerWidth;
+    ny = clientY / innerHeight;
+    dirty = true;
+  };
+  const sendLeave = () => {
+    try { bg.contentWindow && bg.contentWindow.postMessage({ type: 'leave' }, location.origin); } catch (err) {}
   };
 
-  ws.onmessage = (event) => {
-    try {
-      const msg = JSON.parse(event.data);
-      switch (msg.type) {
-        case 'cycle_start':
-          setEmotion('thinking');
-          break;
-        case 'cycle_end':
-          setEmotion('happy', 2000);
-          if (msg.thought) setThought(msg.thought);
-          break;
-        case 'alert':
-          setEmotion('alert', 5000);
-          break;
-        case 'health':
-          updateStats(msg);
-          break;
-        case 'message_reply':
-          setEmotion('speaking', 2000);
-          if (msg.text) setThought('To the owner: ' + msg.text);
-          break;
+  if (window.PointerEvent) {
+    addEventListener('pointerdown', (event) => {
+      syncFromClient(event.clientX, event.clientY);
+    }, { passive: true });
+    addEventListener('pointermove', (event) => {
+      syncFromClient(event.clientX, event.clientY);
+    }, { passive: true });
+    addEventListener('pointerleave', sendLeave);
+    addEventListener('pointerup', (event) => {
+      if (event.pointerType === 'touch' || event.pointerType === 'pen') sendLeave();
+    }, { passive: true });
+    addEventListener('pointercancel', sendLeave, { passive: true });
+  } else {
+    addEventListener('mousemove', (event) => {
+      syncFromClient(event.clientX, event.clientY);
+    }, { passive: true });
+    addEventListener('mouseleave', sendLeave);
+    addEventListener('touchstart', (event) => {
+      const touch = (event.touches && event.touches[0]) || (event.changedTouches && event.changedTouches[0]);
+      if (touch) syncFromClient(touch.clientX, touch.clientY);
+    }, { passive: true });
+    addEventListener('touchmove', (event) => {
+      const touch = (event.touches && event.touches[0]) || (event.changedTouches && event.changedTouches[0]);
+      if (touch) syncFromClient(touch.clientX, touch.clientY);
+    }, { passive: true });
+    addEventListener('touchend', sendLeave, { passive: true });
+    addEventListener('touchcancel', sendLeave, { passive: true });
+  }
+
+  bg.addEventListener('load', () => {
+    function pump() {
+      if (dirty) {
+        try { bg.contentWindow.postMessage({ type: 'mouse', nx, ny }, location.origin); } catch (err) {}
+        dirty = false;
       }
-    } catch (e) {
-      console.error('WS parse error:', e);
+      requestAnimationFrame(pump);
     }
-  };
+    pump();
+  });
+})();
 
-  ws.onclose = () => {
-    console.log('WS disconnected');
-    setEmotion('sleepy');
-    setTimeout(connectWS, 3000);
-  };
-
-  ws.onerror = () => {
-    ws.close();
-  };
-}
-connectWS();
-
-// ── Periodic health fetch (fallback) ──
-async function fetchHealth() {
-  try {
-    const res = await fetch('http://localhost:11435/health');
-    const data = await res.json();
-    updateStats(data);
-  } catch (e) {}
-}
-setInterval(fetchHealth, 10000);
-fetchHealth();
-
-// ── Corner input ──
-cornerInput.addEventListener('keydown', async (e) => {
-  if (e.key !== 'Enter' || !cornerInput.value.trim()) return;
-  const text = cornerInput.value.trim();
-  cornerInput.value = '';
-
-  setEmotion('curious');
-  setTimeout(() => setEmotion('thinking'), 800);
-
-  try {
-    const res = await fetch('http://localhost:11435/message', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    });
-    const data = await res.json();
-    setEmotion('speaking', 2000);
-    if (data.reply) setThought(data.reply);
-  } catch (err) {
-    setEmotion('alert', 2000);
-    setThought('Could not reach Maez...');
+/* ─────────── section reveal on scroll ─────────── */
+(function() {
+  const sections = document.querySelectorAll('[data-reveal]');
+  if (new URLSearchParams(location.search).get('allvisible') === '1') {
+    sections.forEach((section) => section.classList.add('revealed'));
+    return;
   }
-});
+  const obs = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('revealed');
+        obs.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.14, rootMargin: '0px 0px -40px 0px' });
+  sections.forEach((section) => obs.observe(section));
+  setTimeout(() => { sections.forEach((section) => section.classList.add('revealed')); }, 1600);
+})();
 
-// ── Particles ──
-const canvas = document.getElementById('particles');
-const ctx = canvas.getContext('2d');
-let particles = [];
+/* ─────────── cookie-aware CTA rewrite ─────────── */
+(function() {
+  function getCookie(name) {
+    const parts = document.cookie ? document.cookie.split('; ') : [];
+    for (const part of parts) {
+      const idx = part.indexOf('=');
+      const key = idx === -1 ? part : part.slice(0, idx);
+      if (key === name) return decodeURIComponent(idx === -1 ? '' : part.slice(idx + 1));
+    }
+    return '';
+  }
 
-function resizeCanvas() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-}
-window.addEventListener('resize', resizeCanvas);
-resizeCanvas();
-
-for (let i = 0; i < 60; i++) {
-  particles.push({
-    x: Math.random() * canvas.width,
-    y: Math.random() * canvas.height,
-    r: Math.random() * 1.5 + 0.3,
-    dx: (Math.random() - 0.5) * 0.3,
-    dy: (Math.random() - 0.5) * 0.3,
-    alpha: Math.random() * 0.15 + 0.03,
+  const hasToken = Boolean(localStorage.getItem('maez_token') || getCookie('maez_token'));
+  const entryHref = hasToken ? '/app' : '/login';
+  const refs = [
+    { id: 'maezChannelLink',  open: 'start yours',      resume: 'continue' },
+    { id: 'heroChannelLink',  openHtml: 'Start yours <span class="arrow">→</span>',
+                              resumeHtml: 'Continue talking <span class="arrow">→</span>' },
+    { id: 'routeChannelLink', open: 'Start yours →',    resume: 'Continue talking →' },
+    { id: 'resumeChannelLink', open: 'Continue talking →', resume: 'Continue talking →' },
+  ];
+  refs.forEach((ref) => {
+    const el = document.getElementById(ref.id);
+    if (!el) return;
+    el.href = ref.id === 'resumeChannelLink' ? '/app' : entryHref;
+    if (ref.openHtml) {
+      el.innerHTML = hasToken ? ref.resumeHtml : ref.openHtml;
+    } else {
+      el.textContent = hasToken ? ref.resume : ref.open;
+    }
   });
-}
+})();
 
-function drawParticles() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!isFullscreen) { requestAnimationFrame(drawParticles); return; }
-  particles.forEach(p => {
-    p.x += p.dx; p.y += p.dy;
-    if (p.x < 0) p.x = canvas.width;
-    if (p.x > canvas.width) p.x = 0;
-    if (p.y < 0) p.y = canvas.height;
-    if (p.y > canvas.height) p.y = 0;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(100, 210, 255, ${p.alpha})`;
-    ctx.fill();
-  });
-  requestAnimationFrame(drawParticles);
-}
-drawParticles();
+/* ─────────── /status fetch ─────────── */
+(async function() {
+  function firstText() {
+    for (const value of arguments) {
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return '';
+  }
+  function firstTime() {
+    for (const value of arguments) {
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return '';
+  }
+  function formatThoughtTime(raw) {
+    if (!raw) return 'just now';
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return raw.slice(0, 32).toLowerCase();
+    return parsed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase();
+  }
 
-// ── Start idle ──
-setEmotion('idle');
-setThought('Awakening...');
+  const lastTime = document.getElementById('lastThoughtTime');
+  const lastPrev = document.getElementById('lastThoughtPreview');
+  const usersEl  = document.getElementById('usersCount');
+  const memEl    = document.getElementById('memoryCount');
+
+  try {
+    const response = await fetch('/status', { headers: { 'Accept': 'application/json' } });
+    const data = await response.json();
+    const users = Number(data.users_registered || 0);
+    const memories = Number(data.memory_count || 0);
+    const lastText = firstText(
+      data.last_thought_preview,
+      data.last_thought,
+      data.latest_thought,
+      data.thought_preview,
+      data.thought
+    );
+    const lastAt = firstTime(
+      data.last_thought_at,
+      data.last_thought_time,
+      data.latest_thought_at,
+      data.thought_at
+    );
+    if (usersEl) usersEl.textContent = users > 0 ? users.toLocaleString() : 'a few';
+    if (memEl)   memEl.textContent   = memories > 0 ? memories.toLocaleString() + '+' : 'growing';
+    if (lastTime) lastTime.textContent = formatThoughtTime(lastAt);
+    if (lastPrev) lastPrev.textContent = lastText || 'watching, remembering, waiting';
+  } catch (err) {
+    if (usersEl) usersEl.textContent = 'a few';
+    if (memEl)   memEl.textContent   = 'growing';
+    if (lastTime) lastTime.textContent = 'just now';
+    if (lastPrev) lastPrev.textContent = 'watching, remembering, waiting';
+  }
+})();
 </script>
 </body>
 </html>

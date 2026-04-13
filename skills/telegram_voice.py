@@ -7,6 +7,7 @@ import asyncio
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 
 import ollama
@@ -70,7 +71,8 @@ def _get_public_context_for_telegram() -> str:
         if col.count() == 0:
             return ""
         # Fetch all and filter in Python (timestamps are ISO strings)
-        cutoff_iso = _dt.utcfromtimestamp(_time.time() - 86400).strftime('%Y-%m-%dT%H:%M:%S')
+        from datetime import timezone as _tz
+        cutoff_iso = _dt.fromtimestamp(_time.time() - 86400, tz=_tz.utc).strftime('%Y-%m-%dT%H:%M:%S')
         results = col.get(include=["documents", "metadatas"])
         filtered = [
             (doc, meta) for doc, meta in zip(results["documents"], results["metadatas"])
@@ -168,11 +170,16 @@ def _match_intent(text: str) -> str | None:
 
 
 class TelegramVoice:
-    def __init__(self, memory: MemoryManager):
+    def __init__(self, memory: MemoryManager, daemon=None):
         self.token = os.environ.get("MAEZ_TELEGRAM_TOKEN", "")
         self.authorized_user = int(os.environ.get("MAEZ_TELEGRAM_USER_ID", "0"))
         self.memory = memory
         self.actions = None  # Set by daemon after ActionEngine init
+        # Session 11m: optional daemon ref for the "the owner is talking" backoff
+        # signal. When set, _process_message bumps daemon._rohit_active_until
+        # before the ollama call so the daemon defers its next 30s reasoning
+        # cycle — freeing the GPU for a clean reply window.
+        self.daemon = daemon
         self.system_prompt = self._load_soul()
         self._app: Application | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -409,9 +416,23 @@ class TelegramVoice:
             current_msg = None
             token_count = 0
 
-            response = ollama.chat(
+            # Session 11m: signal the daemon that the owner is actively talking so
+            # its next reasoning cycle defers (frees the GPU for this reply).
+            if self.daemon is not None:
+                try:
+                    self.daemon._rohit_active_until = _time.time() + 15.0
+                except Exception:
+                    pass
+
+            # Session 11p: route through llm_client so MAEZ_LLM_BACKEND
+            # selects Ollama or llama.cpp CUDA at call time. Streaming
+            # adapter yields ollama-shaped chunks with .message.content,
+            # so the per-token iteration below doesn't need to change.
+            from core import llm_client as _llm_client
+            response = _llm_client.chat(
                 model=MODEL, messages=messages,
-                stream=True, options={"temperature": 0.7, "num_predict": 4096},
+                stream=True, think=False,
+                options={"temperature": 0.7, "num_predict": 4096},
             )
             for chunk in response:
                 token = chunk.message.content
@@ -441,11 +462,13 @@ class TelegramVoice:
                             chat_id=update.effective_chat.id, text=sentence,
                         )
                     else:
-                        await asyncio.sleep(1.2)
+                        # Session 11m: removed legacy 1.2s + 0.8s artificial pauses
+                        # between sentence fragments. The typing indicator still
+                        # fires but without dead time. Previously added 6-10s to
+                        # every multi-sentence reply.
                         await context.bot.send_chat_action(
                             chat_id=update.effective_chat.id, action="typing",
                         )
-                        await asyncio.sleep(0.8)
                         current_msg = await context.bot.send_message(
                             chat_id=update.effective_chat.id, text=sentence,
                         )
@@ -687,7 +710,10 @@ class TelegramVoice:
             await update.message.reply_text("Invalid username or password.")
             return
         telegram_id = str(update.effective_user.id)
-        accts.link_telegram(result['uuid'], telegram_id)
+        if update.effective_user.id == self.authorized_user:
+            accts.link_private_owner(result['uuid'])
+        else:
+            accts.link_telegram(result['uuid'], telegram_id)
         display = result.get('display_name') or args[0]
         await update.message.reply_text(f"Linked. I know you as {display} now, across all channels.")
 
@@ -748,6 +774,397 @@ class TelegramVoice:
             await update.message.reply_text(f"Evolution log:\n{last}")
         except Exception:
             await update.message.reply_text("No evolution log yet.")
+
+    # ── Session 11o: dream-state command handlers ──────────────────
+    async def _handle_dreams(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show pending dream insights (autonomous idle-time reflections)."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        if self.daemon is None or getattr(self.daemon, "dream", None) is None:
+            await update.message.reply_text("Dream state not available.")
+            return
+        try:
+            pending = self.daemon.dream.list_pending()
+        except Exception as e:
+            await update.message.reply_text(f"list_pending failed: {e}")
+            return
+        if not pending:
+            await update.message.reply_text("No pending dream insights.")
+            return
+        lines = [f"💭 {len(pending)} pending dream insight(s):\n"]
+        for pid, created_iso, insight in pending[:10]:
+            snippet = insight[:160].replace("\n", " ")
+            lines.append(f"#{pid} ({created_iso})")
+            lines.append(f"  {snippet}")
+            lines.append(f"  /apply_dream {pid}  ·  /reject_dream {pid}")
+            lines.append("")
+        await update.message.reply_text("\n".join(lines))
+
+    async def _handle_apply_dream(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Apply a dream proposal: append to soul.md via action_engine."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /apply_dream <id>")
+            return
+        try:
+            prop_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("Invalid id — must be an integer.")
+            return
+        if self.daemon is None or getattr(self.daemon, "dream", None) is None:
+            await update.message.reply_text("Dream state not available.")
+            return
+        try:
+            ok, msg = self.daemon.dream.apply_proposal(prop_id)
+        except Exception as e:
+            await update.message.reply_text(f"apply_proposal failed: {e}")
+            return
+        prefix = "✓" if ok else "✗"
+        await update.message.reply_text(f"{prefix} {msg}")
+
+    async def _handle_reject_dream(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Reject a dream proposal (soul.md unchanged)."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /reject_dream <id>")
+            return
+        try:
+            prop_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("Invalid id — must be an integer.")
+            return
+        if self.daemon is None or getattr(self.daemon, "dream", None) is None:
+            await update.message.reply_text("Dream state not available.")
+            return
+        try:
+            ok, msg = self.daemon.dream.reject_proposal(prop_id)
+        except Exception as e:
+            await update.message.reply_text(f"reject_proposal failed: {e}")
+            return
+        prefix = "✓" if ok else "✗"
+        await update.message.reply_text(f"{prefix} {msg}")
+
+    # ── Session 11s: soul section-edit command handlers ───────────
+    async def _handle_edit_proposals(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Show pending soul.md section-edit proposals."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        if self.daemon is None or getattr(self.daemon, "dream", None) is None:
+            await update.message.reply_text("Dream state not available.")
+            return
+        try:
+            pending = self.daemon.dream.list_pending(
+                proposal_type="section_replace"
+            )
+        except Exception as e:
+            await update.message.reply_text(f"list_pending failed: {e}")
+            return
+        if not pending:
+            await update.message.reply_text("No pending section-edit proposals.")
+            return
+        lines = [f"✏️ {len(pending)} pending section-edit proposal(s):\n"]
+        for pid, created_iso, insight in pending[:10]:
+            snippet = insight[:200].replace("\n", " ")
+            prop = self.daemon.dream.get_proposal(pid) or {}
+            target = prop.get("target_section") or "?"
+            lines.append(f"#{pid} ({created_iso}) → ## {target}")
+            lines.append(f"  {snippet}")
+            lines.append(
+                f"  /show_edit {pid}  ·  /apply_edit {pid}  ·  /reject_edit {pid}"
+            )
+            lines.append("")
+        await update.message.reply_text("\n".join(lines))
+
+    async def _handle_show_edit(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Show the unified diff for a pending section-edit proposal."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /show_edit <id>")
+            return
+        try:
+            prop_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("Invalid id — must be an integer.")
+            return
+        if self.daemon is None or getattr(self.daemon, "dream", None) is None:
+            await update.message.reply_text("Dream state not available.")
+            return
+        prop = self.daemon.dream.get_proposal(prop_id)
+        if prop is None:
+            await update.message.reply_text(f"Proposal #{prop_id} not found.")
+            return
+        if prop.get("proposal_type") != "section_replace":
+            await update.message.reply_text(
+                f"#{prop_id} is type {prop.get('proposal_type')!r}, "
+                f"not section_replace."
+            )
+            return
+        target = prop.get("target_section") or "?"
+        diff = prop.get("unified_diff") or "(no diff stored)"
+        insight = prop.get("insight") or ""
+        # Telegram message cap is 4096 chars; keep diff preview safe.
+        if len(diff) > 3200:
+            diff = diff[:3200] + "\n... (diff truncated)"
+        body = (
+            f"✏️ Edit #{prop_id} → ## {target}\n"
+            f"{insight}\n\n"
+            f"```\n{diff}\n```\n\n"
+            f"/apply_edit {prop_id}  ·  /reject_edit {prop_id}"
+        )
+        await update.message.reply_text(body)
+
+    async def _handle_apply_edit(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Apply a soul.md section-edit proposal."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /apply_edit <id>")
+            return
+        try:
+            prop_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("Invalid id — must be an integer.")
+            return
+        if self.daemon is None or getattr(self.daemon, "dream", None) is None:
+            await update.message.reply_text("Dream state not available.")
+            return
+        try:
+            ok, msg = self.daemon.dream.apply_section_edit_proposal(prop_id)
+        except Exception as e:
+            await update.message.reply_text(f"apply_section_edit failed: {e}")
+            return
+        prefix = "✓" if ok else "✗"
+        await update.message.reply_text(f"{prefix} {msg}")
+
+    async def _handle_reject_edit(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Reject a soul.md section-edit proposal (soul.md unchanged)."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /reject_edit <id>")
+            return
+        try:
+            prop_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("Invalid id — must be an integer.")
+            return
+        if self.daemon is None or getattr(self.daemon, "dream", None) is None:
+            await update.message.reply_text("Dream state not available.")
+            return
+        try:
+            ok, msg = self.daemon.dream.reject_proposal(prop_id)
+        except Exception as e:
+            await update.message.reply_text(f"reject_proposal failed: {e}")
+            return
+        prefix = "✓" if ok else "✗"
+        await update.message.reply_text(f"{prefix} {msg}")
+
+    # ── Session 11u: training proposal + adapter management commands ──
+    async def _handle_train_proposals(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Show pending training-run proposals."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        if self.daemon is None or getattr(self.daemon, "dream", None) is None:
+            await update.message.reply_text("Dream state not available.")
+            return
+        try:
+            pending = self.daemon.dream.list_pending(
+                proposal_type="training_run"
+            )
+        except Exception as e:
+            await update.message.reply_text(f"list_pending failed: {e}")
+            return
+        if not pending:
+            await update.message.reply_text("No pending training proposals.")
+            return
+        lines = [f"🏋️ {len(pending)} pending training proposal(s):\n"]
+        for pid, created_iso, insight in pending[:10]:
+            snippet = insight[:200].replace("\n", " ")
+            prop = self.daemon.dream.get_proposal(pid) or {}
+            corpus = prop.get("target_section") or "?"
+            lines.append(f"#{pid} ({created_iso})")
+            lines.append(f"  {snippet}")
+            lines.append(f"  Corpus: {corpus}")
+            lines.append(
+                f"  /show_train {pid}  ·  /approve_train {pid}  ·  /reject_train {pid}"
+            )
+            lines.append("")
+        await update.message.reply_text("\n".join(lines))
+
+    async def _handle_show_train(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Show details of a training proposal."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /show_train <id>")
+            return
+        try:
+            prop_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("Invalid id.")
+            return
+        if self.daemon is None or getattr(self.daemon, "dream", None) is None:
+            await update.message.reply_text("Dream state not available.")
+            return
+        prop = self.daemon.dream.get_proposal(prop_id)
+        if prop is None:
+            await update.message.reply_text(f"Proposal #{prop_id} not found.")
+            return
+        if prop.get("proposal_type") != "training_run":
+            await update.message.reply_text(
+                f"#{prop_id} is type {prop.get('proposal_type')!r}, not training_run."
+            )
+            return
+        body = (
+            f"🏋️ Training Proposal #{prop_id}\n\n"
+            f"Rationale: {prop.get('insight', '?')}\n"
+            f"Corpus: {prop.get('target_section', '?')}\n"
+            f"Hyperparams: {prop.get('proposed_new_body', '{}')}\n"
+            f"Status: {prop.get('status', '?')}\n\n"
+            f"/approve_train {prop_id}  ·  /reject_train {prop_id}"
+        )
+        await update.message.reply_text(body)
+
+    async def _handle_approve_train(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Mark a training proposal as approved."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /approve_train <id>")
+            return
+        try:
+            prop_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("Invalid id.")
+            return
+        if self.daemon is None or getattr(self.daemon, "dream", None) is None:
+            await update.message.reply_text("Dream state not available.")
+            return
+        prop = self.daemon.dream.get_proposal(prop_id)
+        if prop is None:
+            await update.message.reply_text(f"Proposal #{prop_id} not found.")
+            return
+        if prop.get("status") != "pending":
+            await update.message.reply_text(f"#{prop_id} already {prop.get('status')}.")
+            return
+        with self.daemon.dream._lock, self.daemon.dream._conn() as c:
+            c.execute(
+                "UPDATE dream_proposals SET status = 'applied', "
+                "applied_at = ? WHERE id = ?",
+                (time.time(), prop_id),
+            )
+            c.commit()
+        await update.message.reply_text(
+            f"✓ Training #{prop_id} approved. Run the training pipeline "
+            f"manually to execute."
+        )
+
+    async def _handle_reject_train(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Reject a training proposal."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /reject_train <id>")
+            return
+        try:
+            prop_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("Invalid id.")
+            return
+        if self.daemon is None or getattr(self.daemon, "dream", None) is None:
+            await update.message.reply_text("Dream state not available.")
+            return
+        try:
+            ok, msg = self.daemon.dream.reject_proposal(prop_id)
+        except Exception as e:
+            await update.message.reply_text(f"reject failed: {e}")
+            return
+        prefix = "✓" if ok else "✗"
+        await update.message.reply_text(f"{prefix} {msg}")
+
+    async def _handle_adapter_status(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Show current adapter info."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        import json as _json
+        adapter_link = Path("/home/rohit/maez/training/runs/current")
+        if not adapter_link.exists():
+            await update.message.reply_text("No adapter promoted (no 'current' symlink).")
+            return
+        target = adapter_link.resolve()
+        summary_path = target / "summary.json"
+        if summary_path.exists():
+            try:
+                s = _json.loads(summary_path.read_text())
+                body = (
+                    f"📊 Current adapter: {target.name}\n"
+                    f"  Pairs: {s.get('dataset_size', '?')}\n"
+                    f"  Loss: {s.get('train_loss', '?')}\n"
+                    f"  Rank: {s.get('lora_rank', '?')}\n"
+                    f"  Time: {s.get('train_seconds', 0):.0f}s\n"
+                    f"  Model: {s.get('model', '?')}"
+                )
+            except Exception:
+                body = f"📊 Current adapter: {target.name} (summary unreadable)"
+        else:
+            body = f"📊 Current adapter: {target.name} (no summary.json)"
+        await update.message.reply_text(body)
+
+    async def _handle_rollback_adapter(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Roll back to the previous adapter version."""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+        runs_dir = Path("/home/rohit/maez/training/runs")
+        current_link = runs_dir / "current"
+        if not current_link.is_symlink():
+            await update.message.reply_text("No current adapter symlink found.")
+            return
+        current_target = current_link.resolve().name
+        run_dirs = sorted(
+            [d for d in runs_dir.iterdir() if d.is_dir() and d.name != "current"
+             and d.name != "sanity" and d.name != "sanity-31b" and d.name != "sanity-26b"
+             and (d / "adapter.gguf").exists()],
+            key=lambda d: d.name,
+        )
+        if len(run_dirs) < 2:
+            await update.message.reply_text("Only one adapter version exists — nothing to roll back to.")
+            return
+        current_idx = next((i for i, d in enumerate(run_dirs) if d.name == current_target), -1)
+        if current_idx <= 0:
+            await update.message.reply_text(
+                f"Current adapter is already the oldest ({current_target})."
+            )
+            return
+        prev = run_dirs[current_idx - 1]
+        current_link.unlink()
+        current_link.symlink_to(prev)
+        await update.message.reply_text(
+            f"✓ Rolled back: {current_target} → {prev.name}\n"
+            f"Restart llama-server to load: sudo systemctl restart llama-server.service"
+        )
 
     async def _handle_proposals(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show last 5 proposal candidates."""
@@ -948,6 +1365,18 @@ class TelegramVoice:
                 BotCommand("show",      "Show candidate by id"),
                 BotCommand("apply",     "Apply candidate by id"),
                 BotCommand("reject",    "Reject candidate by id"),
+                BotCommand("dreams",       "Pending dream insights"),
+                BotCommand("apply_dream",  "Apply dream insight by id"),
+                BotCommand("reject_dream", "Reject dream insight by id"),
+                BotCommand("edit_proposals", "Pending soul section edits"),
+                BotCommand("show_edit",    "Show soul edit diff by id"),
+                BotCommand("apply_edit",   "Apply soul section edit by id"),
+                BotCommand("reject_edit",  "Reject soul section edit by id"),
+                BotCommand("train_proposals", "Pending training proposals"),
+                BotCommand("approve_train", "Approve training proposal"),
+                BotCommand("reject_train", "Reject training proposal"),
+                BotCommand("adapter_status", "Current adapter info"),
+                BotCommand("rollback_adapter", "Roll back to previous adapter"),
                 BotCommand("pending",   "Pending actions"),
                 BotCommand("trust",     "Trust user"),
                 BotCommand("promote",   "Promote action type"),
@@ -990,6 +1419,22 @@ class TelegramVoice:
         self._app.add_handler(CommandHandler("show", self._handle_show))
         self._app.add_handler(CommandHandler("apply", self._handle_apply))
         self._app.add_handler(CommandHandler("reject", self._handle_reject))
+        # Session 11o: dream-state commands
+        self._app.add_handler(CommandHandler("dreams", self._handle_dreams))
+        self._app.add_handler(CommandHandler("apply_dream", self._handle_apply_dream))
+        self._app.add_handler(CommandHandler("reject_dream", self._handle_reject_dream))
+        # Session 11s: soul section-edit commands
+        self._app.add_handler(CommandHandler("edit_proposals", self._handle_edit_proposals))
+        self._app.add_handler(CommandHandler("show_edit", self._handle_show_edit))
+        self._app.add_handler(CommandHandler("apply_edit", self._handle_apply_edit))
+        self._app.add_handler(CommandHandler("reject_edit", self._handle_reject_edit))
+        # Session 11u: training proposal + adapter management commands
+        self._app.add_handler(CommandHandler("train_proposals", self._handle_train_proposals))
+        self._app.add_handler(CommandHandler("show_train", self._handle_show_train))
+        self._app.add_handler(CommandHandler("approve_train", self._handle_approve_train))
+        self._app.add_handler(CommandHandler("reject_train", self._handle_reject_train))
+        self._app.add_handler(CommandHandler("adapter_status", self._handle_adapter_status))
+        self._app.add_handler(CommandHandler("rollback_adapter", self._handle_rollback_adapter))
         self._app.add_handler(CommandHandler("help", self._handle_help))
         self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
 

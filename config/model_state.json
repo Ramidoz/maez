@@ -1,0 +1,15 @@
+{
+  "base": "gemma-4-26B-A4B",
+  "quant": "Q4_K_M",
+  "runtime": "llama.cpp (CUDA)",
+  "runtime_commit": "ff5ef82",
+  "vision_model": "Qwen2.5-VL-3B",
+  "vision_port": 8081,
+  "vram_used_gb": 22.8,
+  "vram_total_gb": 24.0,
+  "vram_free_gb": 1.2,
+  "disk_gb": 16,
+  "telegram_exchanges": 184,
+  "_updated": "2026-04-12",
+  "_note": "Hand-maintained at session end. VRAM numbers come from nvidia-smi at steady state."
+}

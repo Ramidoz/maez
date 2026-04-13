@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Maez · Privacy</title>
+<meta name="description" content="What Maez tracks, what it does not, and where your data lives. First-party only. No third-party scripts.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="/maez.css">
+<style>
+:root {
+  --void: #0c0a08;
+  --deep: #130f0b;
+  --panel: rgba(18, 14, 11, 0.82);
+  --panel-hi: rgba(22, 17, 13, 0.92);
+  --line: rgba(232, 163, 58, 0.12);
+  --line-strong: rgba(232, 163, 58, 0.28);
+  --text: #f3ece0;
+  --text-soft: #d7cab4;
+  --text-dim: #9e907a;
+  --teal: #e8a33a;
+  --teal-hi: #f4b854;
+  --amber: #e8a33a;
+  --amber-hi: #f4b854;
+  --green: #8dbf6a;
+  --rose: #e86a6a;
+  --radius: 18px;
+  --shadow: 0 30px 90px rgba(0, 0, 0, 0.46);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { background: var(--void); scroll-behavior: smooth; }
+body {
+  min-height: 100vh;
+  background: var(--void);
+  color: var(--text);
+  font-family: "Newsreader", Georgia, serif;
+  overflow-x: hidden;
+}
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+body::before {
+  z-index: 4;
+  background:
+    linear-gradient(90deg, rgba(12, 10, 8, 0.82) 0%, rgba(12, 10, 8, 0.56) 18%, rgba(12, 10, 8, 0.14) 42%, rgba(12, 10, 8, 0.08) 58%, rgba(12, 10, 8, 0.50) 82%, rgba(12, 10, 8, 0.78) 100%),
+    radial-gradient(circle at 50% 44%, transparent 0%, transparent 34%, rgba(12, 10, 8, 0.16) 76%, rgba(12, 10, 8, 0.42) 100%);
+}
+body::after {
+  z-index: 6;
+  background: linear-gradient(180deg, rgba(12, 10, 8, 0.14), rgba(12, 10, 8, 0.34) 100%);
+}
+a { color: inherit; text-decoration: none; }
+strong { font-weight: 400; color: var(--text); }
+::selection {
+  background: rgba(232, 163, 58, 0.36);
+  color: var(--text);
+}
+
+.maez-bg {
+  position: fixed;
+  inset: -2vh -2vw;
+  width: 104vw;
+  height: 104vh;
+  z-index: 0;
+  border: 0;
+  pointer-events: none;
+  background: var(--void);
+  filter: saturate(1.08) brightness(1.04);
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 18px 28px;
+  background: linear-gradient(to bottom, rgba(12, 10, 8, 0.68), rgba(12, 10, 8, 0.20));
+  border-bottom: 1px solid rgba(232, 163, 58, 0.10);
+  backdrop-filter: blur(14px);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-soft);
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+}
+.brand-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--teal);
+  box-shadow: 0 0 12px rgba(232, 163, 58, 0.46);
+}
+.brand-mark { color: var(--amber); }
+.brand-label { color: var(--text-dim); }
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.nav a {
+  padding: 10px 14px;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  transition: border-color 180ms ease, color 180ms ease, background 180ms ease;
+}
+.nav a:hover {
+  border-color: var(--line);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.02);
+}
+.nav a.active {
+  border-color: var(--line);
+  color: var(--teal);
+}
+.nav .cta {
+  border-color: rgba(232, 163, 58, 0.24);
+  background: rgba(232, 163, 58, 0.12);
+  color: var(--amber-hi);
+}
+
+.wrap {
+  position: relative;
+  z-index: 10;
+  width: min(1180px, calc(100% - 56px));
+  margin: 0 auto;
+  padding: 58px 0 64px;
+}
+
+.hero {
+  display: grid;
+  gap: 22px;
+  padding: clamp(20px, 8vh, 90px) 0 clamp(30px, 8vh, 80px);
+  max-width: 860px;
+}
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--teal);
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+}
+.eyebrow::before {
+  content: "";
+  width: 40px;
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--teal));
+}
+.hero h1 {
+  max-width: 14ch;
+  font-size: clamp(48px, 6.2vw, 104px);
+  line-height: 0.88;
+  font-weight: 400;
+  letter-spacing: -0.05em;
+  text-transform: uppercase;
+}
+.hero h1 .amber { color: var(--amber); }
+.hero-lede {
+  max-width: 58ch;
+  color: var(--text-soft);
+  font-size: 15px;
+  line-height: 1.95;
+}
+
+.section {
+  display: grid;
+  gap: 22px;
+  margin-top: 34px;
+}
+.panel {
+  border: 1px solid rgba(232, 163, 58, 0.10);
+  background: linear-gradient(180deg, rgba(7, 13, 21, 0.70), rgba(4, 8, 14, 0.60));
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow);
+  padding: 30px clamp(22px, 3vw, 36px);
+}
+.section-head {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+.section-num {
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+.section-label {
+  color: var(--teal);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+.section-title {
+  font-size: clamp(26px, 3.4vw, 42px);
+  line-height: 0.96;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  text-transform: uppercase;
+}
+.section-title .amber { color: var(--amber); }
+
+.prose {
+  display: grid;
+  gap: 16px;
+  max-width: 72ch;
+  color: var(--text-soft);
+  font-size: 14px;
+  line-height: 1.95;
+}
+.prose strong { color: var(--text); }
+
+.rows {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.02);
+}
+.row .label {
+  color: var(--text);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+.row .tag {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border: 1px solid;
+}
+.tag.yes {
+  color: var(--teal-hi);
+  border-color: rgba(232, 163, 58, 0.32);
+  background: rgba(232, 163, 58, 0.06);
+}
+.tag.no {
+  color: var(--rose);
+  border-color: rgba(242, 125, 125, 0.28);
+  background: rgba(242, 125, 125, 0.06);
+}
+
+.split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 8px;
+}
+.split .panel {
+  padding: 24px;
+}
+.split h3 {
+  font-size: 13px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--teal);
+  font-weight: 400;
+  margin-bottom: 12px;
+}
+.split ul {
+  list-style: none;
+  display: grid;
+  gap: 10px;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.split ul li {
+  padding-left: 16px;
+  position: relative;
+}
+.split ul li::before {
+  content: "·";
+  position: absolute;
+  left: 4px;
+  color: var(--teal);
+  font-size: 18px;
+  line-height: 1;
+  top: 2px;
+}
+.split .panel.collect { border-color: rgba(232, 163, 58, 0.20); }
+.split .panel.reject { border-color: rgba(242, 125, 125, 0.18); }
+.split .panel.reject h3 { color: var(--rose); }
+.split .panel.reject ul li::before { color: var(--rose); }
+
+.kv {
+  display: grid;
+  gap: 14px;
+  margin-top: 4px;
+}
+.kv-row {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 22px;
+  padding: 14px 0;
+  border-top: 1px solid rgba(232, 163, 58, 0.08);
+}
+.kv-row:first-child { border-top: 0; padding-top: 0; }
+.kv-key {
+  color: var(--teal);
+  font-size: 10px;
+  letter-spacing: 0.20em;
+  text-transform: uppercase;
+  padding-top: 2px;
+}
+.kv-val {
+  color: var(--text-soft);
+  font-size: 14px;
+  line-height: 1.85;
+}
+.kv-val strong { color: var(--text); }
+.kv-val code {
+  display: inline-block;
+  padding: 1px 8px;
+  background: rgba(232, 163, 58, 0.06);
+  border: 1px solid rgba(232, 163, 58, 0.14);
+  color: var(--teal-hi);
+  font-size: 12px;
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 48px;
+  padding-top: 22px;
+  border-top: 1px solid rgba(232, 163, 58, 0.10);
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  flex-wrap: wrap;
+}
+.foot a { color: var(--text-soft); }
+.foot a:hover { color: var(--teal-hi); }
+
+@media (max-width: 820px) {
+  .wrap { width: calc(100% - 36px); padding: 36px 0 48px; }
+  .split { grid-template-columns: 1fr; }
+  .kv-row { grid-template-columns: 1fr; gap: 6px; }
+  .nav a:not(.cta) { display: none; }
+}
+</style>
+</head>
+<body>
+<iframe class="maez-bg" id="bgFrame" src="/maez_hero.html?embed=1&prefill=1&jumpt=4" title="Maez background" aria-hidden="true" tabindex="-1"></iframe>
+
+<header class="topbar">
+  <a class="brand" href="/">
+    <span class="brand-dot" aria-hidden="true"></span>
+    <span class="brand-mark" style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-size:22px;letter-spacing:-0.01em;">maez</span>
+    <span class="brand-label" style="text-transform:none;font-style:italic;">— privacy</span>
+  </a>
+  <nav class="nav">
+    <a href="/" style="text-transform:none;">home</a>
+    <a href="/progress" style="text-transform:none;">build log</a>
+    <a href="/dashboard" style="text-transform:none;">how it thinks</a>
+    <a href="/privacy" class="active" style="text-transform:none;">privacy</a>
+    <a class="cta" href="/login" data-analytics-label="privacy_topbar_channel" style="text-transform:none;">start yours</a>
+  </nav>
+</header>
+
+<main class="wrap">
+  <section class="hero">
+    <div class="eyebrow" style="text-transform:none;font-style:italic;font-size:13px;">Privacy, plainly stated</div>
+    <h1 style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.025em;line-height:0.98;">What we <span class="amber" style="font-style:italic;">see.</span> What we <span class="amber" style="font-style:italic;">don't.</span></h1>
+    <p class="hero-lede" style="font-family:'Newsreader',Georgia,serif;">
+      Maez is built on memory. That only works if you can trust where the memory lives.
+      This page exists so you don't have to guess. <strong>No third-party scripts, no fingerprinting, no surveillance business model.</strong>
+      Everything below is how the site actually behaves today — not a promise about tomorrow.
+    </p>
+  </section>
+
+  <section class="panel section">
+    <div class="section-head">
+      <div class="section-num">01</div>
+      <div class="section-label">The short version</div>
+      <h2 class="section-title" style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.025em;">The one-minute <span class="amber" style="font-style:italic;">read.</span></h2>
+    </div>
+    <div class="rows">
+      <div class="row"><div class="label">Anonymous pageviews &amp; button clicks</div><div class="tag yes">Collected</div></div>
+      <div class="row"><div class="label">Coarse device type (desktop / mobile / tablet)</div><div class="tag yes">Collected</div></div>
+      <div class="row"><div class="label">Where visitors arrived from (referrer group)</div><div class="tag yes">Collected</div></div>
+      <div class="row"><div class="label">Your conversation with Maez (so it can remember you)</div><div class="tag yes">Stored per-account</div></div>
+      <div class="row"><div class="label">Message contents sent off this server</div><div class="tag no">Never</div></div>
+      <div class="row"><div class="label">Third-party trackers, ad networks, fingerprinting</div><div class="tag no">Never</div></div>
+      <div class="row"><div class="label">Cross-site identity or profiling</div><div class="tag no">Never</div></div>
+      <div class="row"><div class="label">Selling or sharing data with anyone</div><div class="tag no">Never</div></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="split">
+      <article class="panel collect">
+        <h3>What the site analytics collects</h3>
+        <ul>
+          <li>Anonymous pageviews — which routes people visit</li>
+          <li>Explicit CTA clicks — which buttons get pressed</li>
+          <li>Coarse device bucket — desktop, mobile, or tablet</li>
+          <li>Referrer grouping — roughly where a visit came from</li>
+          <li>Timestamp of the event</li>
+        </ul>
+      </article>
+      <article class="panel reject">
+        <h3>What it explicitly does not collect</h3>
+        <ul>
+          <li>Your chat messages or Maez's replies</li>
+          <li>Your planner notes, private ideas, or scratch work</li>
+          <li>Your IP address, precise location, or device fingerprint</li>
+          <li>Identifiers tying you to other sites you visit</li>
+          <li>Anything from third-party scripts — there are none loaded</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <section class="panel section">
+    <div class="section-head">
+      <div class="section-num">02</div>
+      <div class="section-label">Where it lives</div>
+      <h2 class="section-title" style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.025em;">Your data stays <span class="amber" style="font-style:italic;">here.</span></h2>
+    </div>
+    <div class="kv">
+      <div class="kv-row">
+        <div class="kv-key">Site analytics</div>
+        <div class="kv-val">
+          Written to a local append-only file on the machine that runs Maez. Never leaves this server, never ships to any analytics provider, never joins an ad network.
+        </div>
+      </div>
+      <div class="kv-row">
+        <div class="kv-key">Your conversations</div>
+        <div class="kv-val">
+          If you create an account, your conversations with Maez are stored per-user in an isolated memory store on the same machine. Other users <strong>cannot</strong> see your memory. This is what lets Maez remember you across sessions — it is the whole promise of the product, not a side effect.
+        </div>
+      </div>
+      <div class="kv-row">
+        <div class="kv-key">Account data</div>
+        <div class="kv-val">
+          Username, a display name you choose, and a password hash. Email is <strong>not required</strong>. The less we hold, the less there is to worry about.
+        </div>
+      </div>
+      <div class="kv-row">
+        <div class="kv-key">Cookies &amp; local storage</div>
+        <div class="kv-val">
+          One authentication token (<code>maez_token</code>) so you stay signed in. No ad cookies, no analytics cookies, no cross-site trackers. Clearing your browser storage signs you out — nothing else breaks.
+        </div>
+      </div>
+      <div class="kv-row">
+        <div class="kv-key">Third-party calls</div>
+        <div class="kv-val">
+          Google Fonts is used for typography, which means your browser fetches fonts from Google's CDN. Everything else — the brain (Gemma 4, running on llama.cpp), the memory, the reasoning — runs locally on the Maez machine in <OWNER_CITY>. No OpenAI, no Anthropic, no cloud model provider in the loop.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel section">
+    <div class="section-head">
+      <div class="section-num">03</div>
+      <div class="section-label">Your choices</div>
+      <h2 class="section-title" style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.025em;">You are in <span class="amber" style="font-style:italic;">control.</span></h2>
+    </div>
+    <div class="prose">
+      <p>
+        <strong>You can browse without an account.</strong> The public pages — landing, progress, architecture, this page — do not require a sign-in. Analytics still sees the anonymous pageview, nothing more.
+      </p>
+      <p>
+        <strong>You can talk to Maez without linking other identities.</strong> The public Telegram bot and the web channel are separate doorways. Linking them is optional and only happens if you explicitly choose to.
+      </p>
+      <p>
+        <strong>You can ask for your memory to be forgotten.</strong> Maez's design philosophy is that nothing is deleted — memory is continuity. But if you want your conversation history removed, reach out via the channels below and the owner will handle it personally.
+      </p>
+      <p>
+        <strong>You can read the code.</strong> The public repository at <a href="https://github.com/Ramidoz/maez" style="color: var(--teal-hi); border-bottom: 1px dashed rgba(232, 163, 58, 0.4);">ramidoz/maez</a> is the same code that serves this site. If a claim on this page stops being true, the code will show it first.
+      </p>
+    </div>
+  </section>
+
+  <section class="panel section">
+    <div class="section-head">
+      <div class="section-num">04</div>
+      <div class="section-label">Contact &amp; changes</div>
+      <h2 class="section-title" style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.025em;">If something <span class="amber" style="font-style:italic;">changes.</span></h2>
+    </div>
+    <div class="prose">
+      <p>
+        Maez is a living project. If the data model ever changes meaningfully — a new feature, a new integration, a new backend — this page is the first thing that gets updated. The live status of the build is on the <a href="/progress" style="color: var(--teal-hi); border-bottom: 1px dashed rgba(232, 163, 58, 0.4);">build log</a>; the wiring is on the <a href="/dashboard" style="color: var(--teal-hi); border-bottom: 1px dashed rgba(232, 163, 58, 0.4);">how-it-thinks page</a>.
+      </p>
+      <p>
+        Questions, corrections, or requests can go to the owner directly through the <a href="https://github.com/Ramidoz/maez/issues" style="color: var(--teal-hi); border-bottom: 1px dashed rgba(232, 163, 58, 0.4);">GitHub issues</a> page or via the public Telegram channel.
+      </p>
+      <p style="color: var(--text-dim); font-size: 12px; margin-top: 8px;">
+        Last reviewed: 2026-04-12 &nbsp;·&nbsp; The date on the codebase is always the authoritative version.
+      </p>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <div>Born 04.06.2026</div>
+    <div>maez.live / privacy</div>
+    <div><a href="https://github.com/Ramidoz/maez" target="_blank" rel="noreferrer">ramidoz/maez</a></div>
+  </footer>
+</main>
+
+<script src="/maez_analytics.js"></script>
+</body>
+</html>

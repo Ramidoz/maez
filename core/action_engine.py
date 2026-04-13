@@ -86,6 +86,7 @@ ACTION_TIERS = {
     'read_file': 0, 'search_files': 0, 'run_readonly_command': 0,
     'query_system': 0, 'promote_to_core_memory': 0,
     'write_soul_note': 0, 'update_baseline': 0,
+    'edit_soul_section': 0,
     # Tier 1 — Auto after 30s
     'write_file': 1, 'append_file': 1, 'run_safe_command': 1,
     'delete_temp_file': 1, 'git_commit': 1,
@@ -454,6 +455,40 @@ class ActionEngine:
         with open(SOUL_PATH, "a") as f:
             f.write(entry)
         return f"Soul note appended ({len(entry)} chars)"
+
+    def edit_soul_section(
+        self, target_name: str, new_body: str, rationale: str = ""
+    ) -> ActionResult:
+        """Session 11s: rewrite a ``## Section`` of soul.md atomically.
+
+        Unlike write_soul_note (which appends a dated line), this replaces
+        an entire section body. Goes through soul_editor which enforces
+        the preamble guard, required-phrase check, and atomic write with
+        timestamped backup."""
+        return self._execute_action(
+            "edit_soul_section",
+            {
+                "target_name": target_name,
+                "new_body": new_body,
+                "rationale": rationale,
+            },
+            f"Soul edit: {target_name}",
+            tier=0,
+        )
+
+    def _do_edit_soul_section(
+        self, target_name: str, new_body: str, rationale: str = ""
+    ) -> str:
+        from core import soul_editor
+        proposal = soul_editor.propose_replacement(
+            target_name=target_name,
+            new_body=new_body,
+            rationale=rationale,
+        )
+        ok, msg = soul_editor.apply_section_replace(proposal)
+        if not ok:
+            raise ForbiddenActionError(msg)
+        return msg
 
     def update_baseline(self, observation: str) -> ActionResult:
         """Store a baseline observation as a core memory."""

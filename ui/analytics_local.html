@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Maez · Private Analytics</title>
+<meta name="description" content="Private first-party site analytics for Maez.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="/maez.css">
+<style>
+:root {
+  --void: #0c0a08;
+  --deep: #130f0b;
+  --panel: rgba(18, 14, 11, 0.84);
+  --panel-hi: rgba(22, 17, 13, 0.94);
+  --line: rgba(232, 163, 58, 0.12);
+  --text: #f3ece0;
+  --text-soft: #d7cab4;
+  --text-dim: #9e907a;
+  --teal: #e8a33a;
+  --teal-hi: #f4b854;
+  --amber: #e8a33a;
+  --amber-hi: #f4b854;
+  --green: #8dbf6a;
+  --purple: #c4a3d8;
+  --red: #e86a6a;
+  --shadow: 0 30px 90px rgba(0, 0, 0, 0.46);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body {
+  min-height: 100%;
+  background: var(--void);
+}
+body {
+  color: var(--text);
+  font-family: "Newsreader", Georgia, serif;
+  overflow-x: hidden;
+  background: var(--void);
+}
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+body::before {
+  z-index: 4;
+  background:
+    linear-gradient(90deg, rgba(12, 10, 8, 0.76) 0%, rgba(12, 10, 8, 0.48) 16%, rgba(12, 10, 8, 0.10) 42%, rgba(12, 10, 8, 0.08) 58%, rgba(12, 10, 8, 0.42) 82%, rgba(12, 10, 8, 0.72) 100%),
+    radial-gradient(circle at 52% 46%, transparent 0%, transparent 34%, rgba(12, 10, 8, 0.16) 74%, rgba(12, 10, 8, 0.40) 100%);
+}
+body::after {
+  z-index: 6;
+  background: linear-gradient(180deg, rgba(12, 10, 8, 0.14), rgba(12, 10, 8, 0.30) 100%);
+}
+a { color: inherit; text-decoration: none; }
+button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+::selection {
+  background: rgba(232, 163, 58, 0.36);
+  color: var(--text);
+}
+
+.maez-bg {
+  position: fixed;
+  inset: -2vh -2vw;
+  width: 104vw;
+  height: 104vh;
+  z-index: 0;
+  border: 0;
+  pointer-events: none;
+  background: var(--void);
+  filter: saturate(1.08) brightness(1.04);
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 16px 24px 15px;
+  background: linear-gradient(to bottom, rgba(12, 10, 8, 0.68), rgba(12, 10, 8, 0.20));
+  border-bottom: 1px solid rgba(232, 163, 58, 0.10);
+  backdrop-filter: blur(14px);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-soft);
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+}
+.brand-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--teal);
+  box-shadow: 0 0 12px rgba(232, 163, 58, 0.46);
+}
+.brand-mark { color: var(--amber); }
+.brand-label { color: var(--text-dim); }
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.nav a,
+.nav button {
+  padding: 10px 14px;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  transition: border-color 180ms ease, color 180ms ease, background 180ms ease;
+}
+.nav a:hover,
+.nav button:hover {
+  border-color: var(--line);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.02);
+}
+.nav .active {
+  border-color: var(--line);
+  color: var(--teal);
+}
+
+.wrap {
+  position: relative;
+  z-index: 10;
+  width: min(1480px, calc(100% - 42px));
+  margin: 0 auto;
+  padding: 22px 0 36px;
+}
+.hero,
+.section,
+.card {
+  background: linear-gradient(180deg, rgba(18, 14, 11, 0.68), rgba(6, 10, 16, 0.60));
+  border: 1px solid rgba(232, 163, 58, 0.10);
+  backdrop-filter: blur(16px);
+  box-shadow: var(--shadow);
+}
+.hero {
+  display: grid;
+  grid-template-columns: minmax(320px, 1.1fr) minmax(260px, 0.9fr);
+  gap: 18px;
+  padding: 26px;
+}
+.eyebrow,
+.section-kicker,
+.meta-label,
+.table-head,
+.bar-label,
+.recent-head,
+.empty-label {
+  color: var(--teal);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.hero-title,
+.section-title {
+  color: var(--text);
+  font-size: clamp(30px, 3.6vw, 50px);
+  line-height: 1;
+  text-transform: uppercase;
+  margin-top: 10px;
+}
+.hero-copy,
+.hero-note,
+.meta-value,
+.table-cell,
+.recent-body,
+.bar-meta,
+.empty-copy {
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.8;
+}
+.hero-copy {
+  margin-top: 16px;
+  max-width: 62ch;
+}
+.hero-note {
+  margin-top: 14px;
+}
+.hero-side {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+.mini-card {
+  padding: 16px;
+  border: 1px solid rgba(255,255,255,0.05);
+  background: rgba(255,255,255,0.03);
+}
+.mini-card strong {
+  display: block;
+  margin-top: 10px;
+  color: var(--text);
+  font-size: 22px;
+}
+
+.section {
+  margin-top: 18px;
+  padding: 22px;
+}
+.grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.metric-card {
+  padding: 18px;
+  border: 1px solid rgba(255,255,255,0.05);
+  background: rgba(255,255,255,0.03);
+}
+.metric-card .meta-label {
+  color: var(--text-dim);
+}
+.metric-card .metric-value {
+  margin-top: 12px;
+  color: var(--text);
+  font-size: 28px;
+}
+.metric-card .metric-value.green { color: var(--green); }
+.metric-card .metric-value.amber { color: var(--amber-hi); }
+.metric-card .metric-value.purple { color: var(--purple); }
+
+.split {
+  display: grid;
+  grid-template-columns: minmax(320px, 1.1fr) minmax(280px, 0.9fr);
+  gap: 14px;
+}
+.card {
+  padding: 18px;
+}
+.bars {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+.bar-row {
+  display: grid;
+  gap: 6px;
+}
+.bar-line {
+  height: 10px;
+  border: 1px solid rgba(255,255,255,0.05);
+  background: rgba(255,255,255,0.03);
+}
+.bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, rgba(232,163,58,0.55), rgba(244,184,84,0.9));
+}
+.bar-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.table {
+  margin-top: 14px;
+  border: 1px solid rgba(255,255,255,0.05);
+}
+.table-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 72px;
+  gap: 14px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.table-row:last-child { border-bottom: 0; }
+.table-row.multi {
+  grid-template-columns: minmax(100px, 0.9fr) minmax(100px, 1.1fr) 72px;
+}
+.table-head {
+  color: var(--text-dim);
+}
+.table-count {
+  color: var(--amber-hi);
+  text-align: right;
+}
+
+.recent-list {
+  margin-top: 14px;
+  display: grid;
+  gap: 10px;
+}
+.recent-item {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(255,255,255,0.05);
+  background: rgba(255,255,255,0.03);
+}
+.recent-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-dim);
+}
+.recent-type {
+  color: var(--amber-hi);
+}
+.empty {
+  padding: 18px;
+  border: 1px solid rgba(255,255,255,0.05);
+  background: rgba(255,255,255,0.03);
+  margin-top: 14px;
+}
+
+@media (max-width: 1080px) {
+  .hero,
+  .split {
+    grid-template-columns: 1fr;
+  }
+  .grid-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 720px) {
+  .wrap {
+    width: min(100% - 24px, 1480px);
+  }
+  .topbar {
+    padding: 14px 16px;
+  }
+  .nav a,
+  .nav button {
+    padding: 8px 10px;
+  }
+  .hero,
+  .section {
+    padding: 18px;
+  }
+  .grid-4 {
+    grid-template-columns: 1fr;
+  }
+  .table-row,
+  .table-row.multi {
+    grid-template-columns: 1fr;
+  }
+  .table-count {
+    text-align: left;
+  }
+  .recent-head {
+    display: grid;
+  }
+}
+</style>
+</head>
+<body data-analytics-pageview="off">
+<iframe class="maez-bg" id="bgFrame" src="/maez_hero.html?embed=1&prefill=1&jumpt=4" title="Maez background" aria-hidden="true" tabindex="-1"></iframe>
+
+<header class="topbar">
+  <a class="brand" href="/">
+    <span class="brand-dot" aria-hidden="true"></span>
+    <span class="brand-mark">MAEZ</span>
+    <span class="brand-label">PRIVATE ANALYTICS</span>
+  </a>
+  <nav class="nav">
+    <a href="/">Home</a>
+    <a href="/progress">Build Progress</a>
+    <a href="/dashboard">How Maez Works</a>
+    <a href="/app">Conversation</a>
+    <a href="/planner">Planner</a>
+    <a href="/analytics" class="active">Analytics</a>
+    <button type="button" onclick="doLogout()">Sign Out</button>
+  </nav>
+</header>
+
+<main class="wrap">
+  <section class="hero">
+    <div>
+      <div class="eyebrow">First-party analytics</div>
+      <h1 class="hero-title">WHAT THE SITE IS ACTUALLY DOING.</h1>
+      <div class="hero-copy">
+        This is a small private analytics layer for Maez. It tracks anonymous pageviews and explicit CTA clicks so you can tell
+        whether the public site is being understood, where people go next, and where the flow loses them.
+      </div>
+      <div class="hero-note">
+        Privacy posture: no chat-content analytics, no fingerprinting, no third-party script, and no profiling across other sites.
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="mini-card">
+        <div class="meta-label">Last sync</div>
+        <strong id="updatedAt">Loading...</strong>
+      </div>
+      <div class="mini-card">
+        <div class="meta-label">Viewer</div>
+        <strong id="viewerName">Resolving...</strong>
+      </div>
+      <div class="mini-card">
+        <div class="meta-label">Mode</div>
+        <strong id="viewerMode">Live summary</strong>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-kicker">At a glance</div>
+    <h2 class="section-title">SMALL SIGNALS, CLEARER DECISIONS.</h2>
+    <div class="grid-4" id="metricGrid"></div>
+  </section>
+
+  <section class="section split">
+    <div class="card">
+      <div class="section-kicker">Daily trend</div>
+      <h3 class="section-title" style="font-size:32px;">LAST 14 DAYS</h3>
+      <div class="bars" id="dailyBars"></div>
+    </div>
+    <div class="card">
+      <div class="section-kicker">Simple funnel</div>
+      <h3 class="section-title" style="font-size:32px;">ROUTE FLOW</h3>
+      <div class="table" id="funnelTable"></div>
+    </div>
+  </section>
+
+  <section class="section split">
+    <div class="card">
+      <div class="section-kicker">Top pages</div>
+      <h3 class="section-title" style="font-size:32px;">WHERE PEOPLE GO</h3>
+      <div class="table" id="pagesTable"></div>
+    </div>
+    <div class="card">
+      <div class="section-kicker">CTA clicks</div>
+      <h3 class="section-title" style="font-size:32px;">WHAT THEY TRY</h3>
+      <div class="table" id="ctaTable"></div>
+    </div>
+  </section>
+
+  <section class="section split">
+    <div class="card">
+      <div class="section-kicker">Referrers</div>
+      <h3 class="section-title" style="font-size:32px;">HOW THEY ARRIVE</h3>
+      <div class="table" id="referrerTable"></div>
+    </div>
+    <div class="card">
+      <div class="section-kicker">Devices</div>
+      <h3 class="section-title" style="font-size:32px;">WHAT THEY USE</h3>
+      <div class="table" id="deviceTable"></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-kicker">Recent activity</div>
+    <h2 class="section-title">LATEST TRACKED EVENTS.</h2>
+    <div class="recent-list" id="recentList"></div>
+  </section>
+</main>
+
+<script>
+(function testHook() {
+  const qp = new URLSearchParams(location.search);
+  const tt = qp.get('test_t');
+  if (tt) {
+    localStorage.setItem('maez_token', tt);
+    const tn = qp.get('test_n');
+    if (tn) localStorage.setItem('maez_name', tn);
+    sessionStorage.setItem('maez_analytics_test_mode', '1');
+    history.replaceState(null, '', '/analytics');
+  }
+})();
+
+function getCookie(name) {
+  const parts = document.cookie ? document.cookie.split('; ') : [];
+  for (const part of parts) {
+    const idx = part.indexOf('=');
+    const key = idx === -1 ? part : part.slice(0, idx);
+    if (key === name) return decodeURIComponent(idx === -1 ? '' : part.slice(idx + 1));
+  }
+  return '';
+}
+
+function currentToken() {
+  return localStorage.getItem('maez_token') || getCookie('maez_token') || '';
+}
+
+function isTestMode() {
+  return sessionStorage.getItem('maez_analytics_test_mode') === '1';
+}
+
+function withToken(url) {
+  const token = currentToken();
+  const full = new URL(url, location.origin);
+  if (token) full.searchParams.set('web_token', token);
+  return full.pathname + full.search;
+}
+
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[char]));
+}
+
+function formatStamp(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return 'Waiting';
+  return date.toLocaleString([], {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function previewData() {
+  return {
+    updated_at: new Date().toISOString(),
+    user: { display_name: localStorage.getItem('maez_name') || 'Preview User', username: 'preview' },
+    totals: {
+      pageviews_total: 148,
+      unique_visitors_total: 41,
+      pageviews_7d: 83,
+      unique_visitors_7d: 26,
+      pageviews_24h: 17,
+      cta_clicks_total: 29,
+    },
+    daily: [
+      { date: '2026-03-28', pageviews: 3, unique_visitors: 2 },
+      { date: '2026-03-29', pageviews: 4, unique_visitors: 3 },
+      { date: '2026-03-30', pageviews: 5, unique_visitors: 4 },
+      { date: '2026-03-31', pageviews: 8, unique_visitors: 5 },
+      { date: '2026-04-01', pageviews: 7, unique_visitors: 4 },
+      { date: '2026-04-02', pageviews: 10, unique_visitors: 6 },
+      { date: '2026-04-03', pageviews: 12, unique_visitors: 7 },
+      { date: '2026-04-04', pageviews: 9, unique_visitors: 6 },
+      { date: '2026-04-05', pageviews: 11, unique_visitors: 7 },
+      { date: '2026-04-06', pageviews: 13, unique_visitors: 8 },
+      { date: '2026-04-07', pageviews: 17, unique_visitors: 9 },
+      { date: '2026-04-08', pageviews: 19, unique_visitors: 10 },
+      { date: '2026-04-09', pageviews: 14, unique_visitors: 8 },
+      { date: '2026-04-10', pageviews: 16, unique_visitors: 9 },
+    ],
+    funnel: [
+      { path: '/', label: 'Home', count: 91 },
+      { path: '/progress', label: 'Build Progress', count: 28 },
+      { path: '/dashboard', label: 'Architecture', count: 22 },
+      { path: '/login', label: 'Login', count: 18 },
+      { path: '/app', label: 'Channel', count: 9 },
+    ],
+    top_pages: [
+      { path: '/', count: 91 },
+      { path: '/progress', count: 28 },
+      { path: '/dashboard', count: 22 },
+      { path: '/login', count: 18 },
+      { path: '/app', count: 9 },
+    ],
+    top_referrers: [
+      { source: 'direct', count: 66 },
+      { source: 'google.com', count: 32 },
+      { source: 'internal', count: 28 },
+      { source: 'github.com', count: 12 },
+    ],
+    devices: [
+      { device: 'mobile', count: 74 },
+      { device: 'desktop', count: 68 },
+      { device: 'tablet', count: 6 },
+    ],
+    ctas: [
+      { label: 'landing_hero_channel', path: '/', target: '/login', count: 12 },
+      { label: 'landing_route_progress', path: '/', target: '/progress', count: 7 },
+      { label: 'progress_private_planner', path: '/progress', target: '/login', count: 5 },
+      { label: 'auth_login_submit', path: '/login', target: '/login', count: 3 },
+    ],
+    recent: [
+      { ts: new Date().toISOString(), event: 'pageview', path: '/', label: '', target: '', referrer: 'google.com', device: 'mobile' },
+      { ts: new Date().toISOString(), event: 'cta_click', path: '/', label: 'landing_hero_channel', target: '/login', referrer: 'internal', device: 'mobile' },
+      { ts: new Date().toISOString(), event: 'pageview', path: '/login', label: '', target: '', referrer: 'internal', device: 'mobile' },
+    ],
+  };
+}
+
+function renderMetricGrid(totals) {
+  const metrics = [
+    { label: 'Pageviews total', value: totals.pageviews_total, tone: '' },
+    { label: 'Unique visitors total', value: totals.unique_visitors_total, tone: 'green' },
+    { label: 'Pageviews / 7d', value: totals.pageviews_7d, tone: 'amber' },
+    { label: 'Unique visitors / 7d', value: totals.unique_visitors_7d, tone: 'purple' },
+    { label: 'Pageviews / 24h', value: totals.pageviews_24h, tone: '' },
+    { label: 'CTA clicks total', value: totals.cta_clicks_total, tone: 'amber' },
+  ];
+  const grid = document.getElementById('metricGrid');
+  grid.innerHTML = metrics.map((item) => [
+    '<article class="metric-card">',
+      '<div class="meta-label">', escapeHtml(item.label), '</div>',
+      '<div class="metric-value ', escapeHtml(item.tone), '">', escapeHtml(item.value), '</div>',
+    '</article>',
+  ].join('')).join('');
+}
+
+function renderDailyBars(rows) {
+  const wrap = document.getElementById('dailyBars');
+  const max = Math.max(1, ...rows.map((row) => Number(row.pageviews || 0)));
+  wrap.innerHTML = rows.map((row) => {
+    const count = Number(row.pageviews || 0);
+    const width = Math.max(4, Math.round((count / max) * 100));
+    return [
+      '<div class="bar-row">',
+        '<div class="bar-meta"><span>', escapeHtml(row.date), '</span><span>', escapeHtml(count), ' views / ', escapeHtml(row.unique_visitors || 0), ' unique</span></div>',
+        '<div class="bar-line"><div class="bar-fill" style="width:', width, '%"></div></div>',
+      '</div>',
+    ].join('');
+  }).join('');
+}
+
+function renderSimpleTable(id, rows, emptyText, columns) {
+  const table = document.getElementById(id);
+  if (!rows || !rows.length) {
+    table.innerHTML = '<div class="empty"><div class="empty-label">No data yet</div><div class="empty-copy">' + escapeHtml(emptyText) + '</div></div>';
+    return;
+  }
+  table.innerHTML = rows.map((row) => {
+    if (columns === 'multi') {
+      return [
+        '<div class="table-row multi">',
+          '<div class="table-cell">', escapeHtml(row.label || row.path || row.source || row.device), '</div>',
+          '<div class="table-cell">', escapeHtml(row.target || row.path || ''), '</div>',
+          '<div class="table-count">', escapeHtml(row.count), '</div>',
+        '</div>',
+      ].join('');
+    }
+    return [
+      '<div class="table-row">',
+        '<div class="table-cell">', escapeHtml(row.label || row.path || row.source || row.device), '</div>',
+        '<div class="table-count">', escapeHtml(row.count), '</div>',
+      '</div>',
+    ].join('');
+  }).join('');
+}
+
+function renderRecent(rows) {
+  const list = document.getElementById('recentList');
+  if (!rows || !rows.length) {
+    list.innerHTML = '<div class="empty"><div class="empty-label">No data yet</div><div class="empty-copy">Events will appear here after the public pages start receiving traffic.</div></div>';
+    return;
+  }
+  list.innerHTML = rows.map((row) => [
+    '<article class="recent-item">',
+      '<div class="recent-head"><span class="recent-type">', escapeHtml(row.event), '</span><span>', escapeHtml(formatStamp(row.ts)), '</span></div>',
+      '<div class="recent-body">path: ', escapeHtml(row.path), row.label ? ' · label: ' + escapeHtml(row.label) : '', row.target ? ' · target: ' + escapeHtml(row.target) : '', '</div>',
+      '<div class="recent-body">referrer: ', escapeHtml(row.referrer), ' · device: ', escapeHtml(row.device), '</div>',
+    '</article>',
+  ].join('')).join('');
+}
+
+function render(data, preview) {
+  document.getElementById('updatedAt').textContent = formatStamp(data.updated_at);
+  document.getElementById('viewerName').textContent = (data.user && (data.user.display_name || data.user.username)) || 'Unknown';
+  document.getElementById('viewerMode').textContent = preview ? 'Preview mode' : 'Live summary';
+  renderMetricGrid(data.totals || {});
+  renderDailyBars(data.daily || []);
+  renderSimpleTable('funnelTable', data.funnel || [], 'The route funnel will appear after tracked pageviews arrive.');
+  renderSimpleTable('pagesTable', data.top_pages || [], 'Top pages will appear after tracked pageviews arrive.');
+  renderSimpleTable('ctaTable', data.ctas || [], 'CTA clicks will appear after tracked clicks arrive.', 'multi');
+  renderSimpleTable('referrerTable', data.top_referrers || [], 'External and direct sources will appear here.');
+  renderSimpleTable('deviceTable', data.devices || [], 'Device split will appear here.');
+  renderRecent(data.recent || []);
+}
+
+function doLogout() {
+  document.cookie = 'maez_token=; Max-Age=0; path=/; SameSite=Lax';
+  localStorage.removeItem('maez_token');
+  localStorage.removeItem('maez_name');
+  sessionStorage.removeItem('maez_analytics_test_mode');
+  location.replace('/login');
+}
+
+(function initBackground() {
+  const bg = document.getElementById('bgFrame');
+  if (!bg || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+  let nx = 0.50;
+  let ny = 0.28;
+  let dirty = true;
+  const syncFromClient = (clientX, clientY) => {
+    nx = clientX / innerWidth;
+    ny = clientY / innerHeight;
+    dirty = true;
+  };
+  const sendLeave = () => {
+    try { bg.contentWindow && bg.contentWindow.postMessage({ type: 'leave' }, location.origin); } catch (err) {}
+  };
+
+  if (window.PointerEvent) {
+    addEventListener('pointerdown', (event) => { syncFromClient(event.clientX, event.clientY); }, { passive: true });
+    addEventListener('pointermove', (event) => { syncFromClient(event.clientX, event.clientY); }, { passive: true });
+    addEventListener('pointerleave', sendLeave);
+    addEventListener('pointerup', (event) => {
+      if (event.pointerType === 'touch' || event.pointerType === 'pen') sendLeave();
+    }, { passive: true });
+    addEventListener('pointercancel', sendLeave, { passive: true });
+  } else {
+    addEventListener('mousemove', (event) => { syncFromClient(event.clientX, event.clientY); }, { passive: true });
+    addEventListener('mouseleave', sendLeave);
+    addEventListener('touchstart', (event) => {
+      const touch = (event.touches && event.touches[0]) || (event.changedTouches && event.changedTouches[0]);
+      if (touch) syncFromClient(touch.clientX, touch.clientY);
+    }, { passive: true });
+    addEventListener('touchmove', (event) => {
+      const touch = (event.touches && event.touches[0]) || (event.changedTouches && event.changedTouches[0]);
+      if (touch) syncFromClient(touch.clientX, touch.clientY);
+    }, { passive: true });
+    addEventListener('touchend', sendLeave, { passive: true });
+    addEventListener('touchcancel', sendLeave, { passive: true });
+  }
+
+  bg.addEventListener('load', () => {
+    function pump() {
+      if (dirty) {
+        try { bg.contentWindow.postMessage({ type: 'mouse', nx, ny }, location.origin); } catch (err) {}
+        dirty = false;
+      }
+      requestAnimationFrame(pump);
+    }
+    pump();
+  });
+})();
+
+async function boot() {
+  const token = currentToken();
+  if (!token && !isTestMode()) {
+    location.replace('/login');
+    return;
+  }
+
+  try {
+    const response = await fetch(withToken('/api/analytics-summary'), { headers: { 'Accept': 'application/json' } });
+    if (response.status === 401) {
+      if (isTestMode()) {
+        render(previewData(), true);
+        return;
+      }
+      doLogout();
+      return;
+    }
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || 'summary failed');
+    render(data, false);
+  } catch (err) {
+    if (isTestMode()) {
+      render(previewData(), true);
+      return;
+    }
+    render({
+      updated_at: '',
+      user: { display_name: localStorage.getItem('maez_name') || 'Unknown' },
+      totals: { pageviews_total: 0, unique_visitors_total: 0, pageviews_7d: 0, unique_visitors_7d: 0, pageviews_24h: 0, cta_clicks_total: 0 },
+      daily: [],
+      funnel: [],
+      top_pages: [],
+      ctas: [],
+      top_referrers: [],
+      devices: [],
+      recent: [],
+    }, false);
+    document.getElementById('viewerMode').textContent = 'Summary unavailable';
+  }
+}
+
+boot();
+</script>
+</body>
+</html>

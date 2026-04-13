@@ -166,7 +166,6 @@ def deploy_improvement(staging_path: str, target_path: str,
 def _generate_improvement(weakness: str, current_code: str,
                           reference_repo: dict, target_file: str) -> Optional[str]:
     try:
-        import requests
         prompt = (
             f"You are improving Maez's code.\n\n"
             f"FILE: {target_file}\nWEAKNESS: {weakness}\n"
@@ -176,14 +175,13 @@ def _generate_improvement(weakness: str, current_code: str,
             f"Keep the same function signatures and module interface. "
             f"Return ONLY valid Python code."
         )
-        resp = requests.post('http://localhost:11434/api/generate',
-                             json={'model': 'gemma4:26b', 'prompt': prompt, 'stream': False},
-                             timeout=120)
-        if resp.status_code == 200:
-            code = resp.json().get('response', '').strip()
-            if code.startswith('```'):
-                code = '\n'.join(code.split('\n')[1:-1])
-            return code
+        # Session 11r: via llm_client.generate (was missed in 11p batch —
+        # used raw requests.post to ollama /api/generate)
+        from core import llm_client as _llm_client
+        code = (_llm_client.generate(prompt=prompt, timeout_s=120) or '').strip()
+        if code.startswith('```'):
+            code = '\n'.join(code.split('\n')[1:-1])
+        return code
     except Exception as e:
         logger.error("Code generation failed: %s", e)
     return None
@@ -743,12 +741,13 @@ def generate_diff(weakness_description: str, evidence: dict = None) -> dict:
             f"Use --- a/{target} and +++ b/{target} headers.\n"
             f"No explanation. No comments. Just the diff."
         )
-        resp = requests.post('http://localhost:11434/api/generate',
-                             json={'model': 'gemma4:26b', 'prompt': prompt, 'stream': False},
-                             timeout=120)
-        if resp.status_code != 200:
-            return {'error': f'Ollama returned {resp.status_code}'}
-        diff_text = resp.json().get('response', '').strip()
+        # Session 11r: via llm_client.generate (was missed in 11p batch —
+        # used raw requests.post to ollama /api/generate)
+        try:
+            from core import llm_client as _llm_client
+            diff_text = (_llm_client.generate(prompt=prompt, timeout_s=120) or '').strip()
+        except Exception as e:
+            return {'error': f'llm_client generate failed: {e!r}'}
         # Extract diff block if wrapped in markdown
         if '```' in diff_text:
             parts = diff_text.split('```')
@@ -1575,7 +1574,7 @@ _MAX_RETRY_TARGETS = 3
 _TARGET_FAMILIES = {
     'fixation': {'FIXATION', 'STREAK', 'PENALTY', 'SUPPRESS', 'AVOID', 'RECENT', 'TOPIC', 'WINDOW', 'COOLDOWN'},
     'weak_retrieval': {'RETRIEVAL', 'RERANK', 'BOOST', 'PENALTY', 'GROUNDING', 'WING', 'ANTIFIXATION', 'FETCH'},
-    'vague': {'SPECIFIC', 'ACTIONABLE', 'GROUNDING', 'LENGTH', 'MINIMUM', 'METRIC', 'CONCRETE', 'SCORE', 'FLOOR'},
+    'vague': {'VAGUE', 'VAGUENESS', 'SPECIFIC', 'SPECIFICITY', 'ACTIONABLE', 'GROUNDING', 'LENGTH', 'MINIMUM', 'METRIC', 'CONCRETE', 'SCORE', 'FLOOR'},
     'repetition': {'OVERLAP', 'NOVELTY', 'DIVERSITY', 'SEMANTIC', 'REPETITION', 'SIMILARITY', 'WINDOW'},
 }
 
@@ -1596,17 +1595,15 @@ def _filter_targets_by_failure(targets: list, failure_mode: str | None) -> tuple
         else:
             unmatched.append(t)
 
-    if len(matched) >= 3:
-        # Take matched first (preserving rank), fill to 5 with remaining
+    if matched:
         result = matched[:_MAX_INITIAL_TARGETS]
         remaining_slots = _MAX_INITIAL_TARGETS - len(result)
         if remaining_slots > 0:
             result.extend(unmatched[:remaining_slots])
         return result, True, len(matched)
     else:
-        logger.info("Insufficient family matches for %s (%d found), using full ranked list",
-                     failure_mode, len(matched))
-        return targets[:_MAX_INITIAL_TARGETS], False, len(matched)
+        logger.info("No family matches for %s, using full ranked list", failure_mode)
+        return targets[:_MAX_INITIAL_TARGETS], False, 0
 
 
 def _generate_patch_intent(weakness: str, evidence: dict, editable_targets: list) -> dict | None:
@@ -1726,15 +1723,14 @@ def _generate_patch_intent(weakness: str, evidence: dict, editable_targets: list
 
 
 def _call_ollama_for_intent(prompt: str) -> tuple[str | None, dict | None]:
-    """Call Ollama and extract intent JSON. Returns (raw_response, parsed_intent)."""
+    """Call the LLM backend and extract intent JSON. Returns (raw_response, parsed_intent).
+
+    Session 11r: migrated from raw requests.post to ollama /api/generate
+    onto llm_client.generate, so this honors MAEZ_LLM_BACKEND. Function
+    name kept for stability in callers."""
     try:
-        import requests as _req
-        resp = _req.post('http://localhost:11434/api/generate',
-                         json={'model': 'gemma4:26b', 'prompt': prompt, 'stream': False},
-                         timeout=180)
-        if resp.status_code != 200:
-            return '__TIMEOUT__', None
-        raw = resp.json().get('response', '').strip()
+        from core import llm_client as _llm_client
+        raw = (_llm_client.generate(prompt=prompt, timeout_s=180) or '').strip()
         if not raw:
             return '', None
         intent = extract_intent_json(raw)
@@ -1742,7 +1738,7 @@ def _call_ollama_for_intent(prompt: str) -> tuple[str | None, dict | None]:
     except Exception as e:
         if 'timeout' in str(e).lower() or 'timed out' in str(e).lower():
             return '__TIMEOUT__', None
-        logger.info("Ollama intent call failed: %s", e)
+        logger.info("Intent call failed: %s", e)
         return None, None
 
 
@@ -2026,9 +2022,9 @@ def load_candidate_for_display(candidate_id: int) -> dict | None:
 _FAILURE_TARGET_FAMILIES = {
     'fixation': {'FIXATION', 'STREAK', 'PENALTY', 'TOPIC', 'THRESHOLD', 'ANTIFIXATION'},
     'weak_retrieval': {'RETRIEVAL', 'BOOST', 'PENALTY', 'RERANK', 'SCORE_WEIGHT', 'ANTIFIXATION'},
-    'vague': {'ACTIONABLE', 'SPECIFICITY', 'GROUNDING', 'MIN_ACTIONABLE', 'LENGTH'},
+    'vague': {'VAGUE', 'VAGUENESS', 'ACTIONABLE', 'SPECIFIC', 'SPECIFICITY', 'GROUNDING', 'MIN_ACTIONABLE', 'LENGTH'},
     'baseline': {'BASELINE', 'THRESHOLD', 'NORMAL'},
-    'repetition': {'FIXATION', 'NOVELTY', 'ANTIFIXATION', 'STREAK'},
+    'repetition': {'OVERLAP', 'NOVELTY', 'DIVERSITY', 'SEMANTIC', 'REPETITION', 'SIMILARITY'},
 }
 
 # Directional whitelist: (failure_mode, target_name_part) → expected direction

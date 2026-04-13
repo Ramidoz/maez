@@ -1,0 +1,3101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Maez — Your AI, Growing With You</title>
+
+<meta property="og:title" content="Maez — Your AI, Growing With You">
+<meta property="og:description" content="A persistent AI presence that learns your world, remembers everything, and compounds into something no one else can replicate.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://maez.live">
+<meta property="og:image" content="https://maez.live/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Maez — Your AI, Growing With You">
+<meta name="twitter:description" content="A persistent AI presence that learns your world, remembers everything, and compounds into something no one else can replicate.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+:root {
+  --bg: #05060c;
+  --bg-soft: #0b0d16;
+  --surface: rgba(14, 17, 28, 0.72);
+  --surface-strong: rgba(18, 22, 35, 0.88);
+  --surface-faint: rgba(13, 16, 26, 0.56);
+  --border: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.13);
+  --text: #cfd5e7;
+  --text-strong: #f5f7ff;
+  --text-soft: #98a2bd;
+  --text-dim: #65708e;
+  --orange: #f0894a;
+  --orange-hot: #ffb071;
+  --orange-deep: #d26b33;
+  --teal: #5acfd4;
+  --teal-hot: #8ce8e2;
+  --teal-deep: #245b64;
+  --green: #79e5a3;
+  --shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+  --radius-xl: 32px;
+  --radius-lg: 24px;
+  --radius-md: 18px;
+  --radius-sm: 14px;
+  --container: 1200px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background:
+    radial-gradient(circle at 18% 12%, rgba(240, 137, 74, 0.12), transparent 26%),
+    radial-gradient(circle at 82% 11%, rgba(90, 207, 212, 0.08), transparent 28%),
+    linear-gradient(180deg, #06070e 0%, #05060c 28%, #06070f 56%, #05060c 100%);
+  color: var(--text);
+  font-family: "Outfit", sans-serif;
+  line-height: 1.6;
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+
+::selection {
+  background: rgba(240, 137, 74, 0.9);
+  color: #071016;
+}
+
+a {
+  color: inherit;
+}
+
+img,
+canvas {
+  display: block;
+  max-width: 100%;
+}
+
+button,
+a,
+summary {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.page-bg {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+#ambient-field {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.95;
+}
+
+.grid-overlay {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 80px 80px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.96), rgba(0, 0, 0, 0.56) 50%, transparent 96%);
+}
+
+.top-haze,
+.bottom-haze {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 24vh;
+  filter: blur(70px);
+}
+
+.top-haze {
+  top: -10vh;
+  background: linear-gradient(90deg, rgba(240, 137, 74, 0.12), rgba(90, 207, 212, 0.06), transparent);
+}
+
+.bottom-haze {
+  bottom: -12vh;
+  background: linear-gradient(90deg, transparent, rgba(90, 207, 212, 0.08), rgba(240, 137, 74, 0.08));
+}
+
+.page-shell {
+  position: relative;
+  z-index: 1;
+}
+
+.container {
+  width: min(var(--container), calc(100% - 2.4rem));
+  margin: 0 auto;
+}
+
+.site-nav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  backdrop-filter: blur(26px);
+  background: rgba(5, 7, 12, 0.72);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.nav-inner {
+  width: min(1280px, calc(100% - 2rem));
+  margin: 0 auto;
+  min-height: 78px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.nav-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.8rem;
+  text-decoration: none;
+}
+
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1px solid rgba(240, 137, 74, 0.25);
+  background: radial-gradient(circle at 32% 30%, rgba(240, 137, 74, 0.32), rgba(10, 12, 20, 0.38) 68%);
+  box-shadow: inset 0 0 22px rgba(255, 176, 113, 0.12);
+}
+
+.brand-mark::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--orange-hot), var(--teal-hot));
+  box-shadow: 0 0 18px rgba(255, 176, 113, 0.35);
+}
+
+.brand-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+}
+
+.brand-title {
+  color: var(--text-strong);
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: 0.28rem;
+}
+
+.brand-subtitle {
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--text-dim);
+  font-size: 0.62rem;
+  letter-spacing: 0.18rem;
+  text-transform: uppercase;
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 1.45rem;
+}
+
+.nav-links a {
+  text-decoration: none;
+  color: var(--text-soft);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.12rem;
+  text-transform: uppercase;
+  transition: color 180ms ease, opacity 180ms ease;
+}
+
+.nav-links a:hover,
+.nav-links a:focus-visible {
+  color: var(--text-strong);
+}
+
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.nav-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.58rem 0.9rem;
+  border-radius: 999px;
+  background: rgba(14, 17, 28, 0.84);
+  border: 1px solid rgba(121, 229, 163, 0.16);
+  color: var(--green);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.12rem;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.nav-chip::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 10px rgba(121, 229, 163, 0.46);
+}
+
+.nav-toggle {
+  display: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: rgba(14, 17, 28, 0.92);
+  color: var(--text-strong);
+}
+
+.nav-toggle span {
+  display: block;
+  width: 18px;
+  height: 2px;
+  margin: 4px auto;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.nav-panel {
+  display: none;
+}
+
+main {
+  padding-bottom: 5rem;
+}
+
+section {
+  position: relative;
+}
+
+.hero {
+  min-height: calc(100vh - 78px);
+  display: flex;
+  align-items: center;
+  padding: 3.4rem 0 4rem;
+  overflow: visible;
+}
+
+.hero-inner {
+  width: min(1320px, calc(100% - 2rem));
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1.02fr) minmax(420px, 0.98fr);
+  gap: clamp(2.5rem, 4vw, 4.8rem);
+  align-items: center;
+  position: relative;
+  overflow: visible;
+}
+
+.hero-copy {
+  position: relative;
+  z-index: 2;
+  max-width: 620px;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-bottom: 1.3rem;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.28rem;
+  text-transform: uppercase;
+  color: var(--orange-hot);
+}
+
+.eyebrow::before {
+  content: "";
+  width: 38px;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(240, 137, 74, 0), rgba(240, 137, 74, 0.8));
+}
+
+.hero h1 {
+  font-size: clamp(3.5rem, 8vw, 7rem);
+  line-height: 0.95;
+  font-weight: 900;
+  letter-spacing: -0.05em;
+  color: var(--text-strong);
+  margin-bottom: 1.45rem;
+  text-wrap: balance;
+}
+
+.hero h1 .warm {
+  color: var(--orange);
+}
+
+.hero h1 .cool {
+  color: var(--teal);
+}
+
+.hero-lead {
+  max-width: 36rem;
+  font-size: clamp(1.04rem, 1.5vw, 1.22rem);
+  color: var(--text);
+  line-height: 1.78;
+  margin-bottom: 2rem;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-bottom: 2rem;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  padding: 0.96rem 1.38rem;
+  border-radius: 999px;
+  text-decoration: none;
+  border: 1px solid transparent;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: transform 180ms ease, box-shadow 180ms ease, background 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+
+.button:hover,
+.button:focus-visible {
+  transform: translateY(-2px);
+}
+
+.button-primary {
+  color: #081015;
+  background: linear-gradient(135deg, var(--orange-hot), var(--orange));
+  box-shadow: 0 16px 38px rgba(240, 137, 74, 0.22);
+}
+
+.button-primary:hover,
+.button-primary:focus-visible {
+  box-shadow: 0 24px 52px rgba(240, 137, 74, 0.28);
+}
+
+.button-secondary {
+  color: var(--text-strong);
+  background: rgba(14, 17, 28, 0.62);
+  border-color: rgba(90, 207, 212, 0.24);
+  box-shadow: inset 0 0 0 1px rgba(90, 207, 212, 0.04);
+}
+
+.button-secondary:hover,
+.button-secondary:focus-visible {
+  background: rgba(18, 23, 38, 0.86);
+  border-color: rgba(90, 207, 212, 0.4);
+}
+
+.hero-proof {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.proof-cell {
+  padding: 1rem 1rem 1.05rem;
+  background: rgba(10, 12, 20, 0.64);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(14px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.proof-value {
+  display: block;
+  font-size: clamp(1.4rem, 2.4vw, 1.9rem);
+  font-weight: 800;
+  color: var(--text-strong);
+  line-height: 1;
+  margin-bottom: 0.4rem;
+}
+
+.proof-value.warm {
+  color: var(--orange);
+}
+
+.proof-value.cool {
+  color: var(--teal);
+}
+
+.proof-label {
+  color: var(--text-soft);
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.hero-stage-wrap {
+  position: relative;
+  min-height: 820px;
+  display: grid;
+  align-items: center;
+  overflow: visible;
+  margin: -1.8rem -5vw -2rem -6vw;
+  pointer-events: none;
+}
+
+.hero-stage-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 8% 6% 6% 10%;
+  background:
+    radial-gradient(ellipse at 58% 44%, rgba(90, 207, 212, 0.11) 0%, rgba(90, 207, 212, 0.05) 24%, rgba(0, 0, 0, 0) 62%),
+    radial-gradient(ellipse at 61% 52%, rgba(240, 137, 74, 0.12) 0%, rgba(240, 137, 74, 0.04) 28%, rgba(0, 0, 0, 0) 66%);
+  filter: blur(34px);
+  opacity: 0.95;
+  pointer-events: none;
+}
+
+.hero-stage {
+  position: relative;
+  height: min(92vh, 940px);
+  min-height: 720px;
+  overflow: visible;
+  border: none;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+#hero-presence {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.hero-vignette {
+  display: none;
+}
+
+.hero-scan {
+  display: none;
+}
+
+.hero-panel {
+  display: none;
+}
+
+.panel-card {
+  padding: 1rem 1.1rem;
+  border-radius: 20px;
+  background: rgba(9, 11, 19, 0.74);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(18px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.panel-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.64rem;
+  color: var(--green);
+  letter-spacing: 0.14rem;
+  text-transform: uppercase;
+  margin-bottom: 0.9rem;
+}
+
+.panel-label::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 10px rgba(121, 229, 163, 0.4);
+}
+
+.hero-thought {
+  color: var(--text-strong);
+  font-size: 1.02rem;
+  line-height: 1.72;
+}
+
+.hero-thought strong {
+  color: var(--orange-hot);
+  font-weight: 600;
+}
+
+.hero-panel-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem 1rem;
+  margin-top: 0.95rem;
+  color: var(--text-dim);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.05rem;
+}
+
+.signal-list {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.signal-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.7rem;
+  align-items: center;
+  color: var(--text-soft);
+  font-size: 0.88rem;
+}
+
+.signal-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--orange-hot), var(--teal));
+  box-shadow: 0 0 14px rgba(90, 207, 212, 0.26);
+}
+
+.signal-track {
+  height: 1px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.05));
+}
+
+.signal-value {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  color: var(--text-strong);
+  letter-spacing: 0.04rem;
+}
+
+.hero-scroll {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin-top: 1.4rem;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  letter-spacing: 0.18rem;
+  text-transform: uppercase;
+}
+
+.hero-scroll::before,
+.hero-scroll::after {
+  content: "";
+  width: 26px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3));
+}
+
+.section-wrap {
+  padding: 4.6rem 0;
+}
+
+.section-shell {
+  position: relative;
+  padding: clamp(1.8rem, 3vw, 2.8rem);
+  border-radius: var(--radius-xl);
+  background:
+    linear-gradient(180deg, rgba(12, 15, 25, 0.72), rgba(9, 11, 18, 0.76)),
+    radial-gradient(circle at 14% 18%, rgba(240, 137, 74, 0.05), transparent 34%),
+    radial-gradient(circle at 86% 22%, rgba(90, 207, 212, 0.05), transparent 34%);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.section-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+  background-size: 120px 120px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.65), transparent 92%);
+  pointer-events: none;
+}
+
+.section-header {
+  position: relative;
+  z-index: 1;
+  max-width: 800px;
+  margin-bottom: 2rem;
+}
+
+.section-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.28rem;
+  text-transform: uppercase;
+  color: var(--orange-hot);
+}
+
+.section-kicker::before {
+  content: "";
+  width: 32px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(240, 137, 74, 0.75));
+}
+
+.section-title {
+  font-size: clamp(2rem, 4vw, 3.8rem);
+  line-height: 1;
+  letter-spacing: -0.05em;
+  color: var(--text-strong);
+  font-weight: 850;
+  margin-bottom: 1rem;
+  text-wrap: balance;
+}
+
+.section-title em {
+  font-style: normal;
+  color: var(--orange);
+}
+
+.section-title .cool {
+  color: var(--teal);
+}
+
+.section-body {
+  max-width: 760px;
+  color: var(--text-soft);
+  font-size: clamp(1rem, 1.2vw, 1.08rem);
+  line-height: 1.85;
+}
+
+.what-layout {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1.02fr 0.98fr;
+  gap: 1.35rem;
+  align-items: start;
+}
+
+.story-panel {
+  padding: 1.4rem;
+  border-radius: var(--radius-lg);
+  background: rgba(10, 12, 21, 0.66);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.story-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1.4rem;
+}
+
+.notice-card {
+  position: relative;
+  overflow: hidden;
+  padding: 1.25rem;
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, rgba(16, 19, 31, 0.72), rgba(10, 12, 20, 0.72));
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  transition: transform 220ms ease, border-color 220ms ease, background 220ms ease;
+  --spot-x: 50%;
+  --spot-y: 50%;
+  --spot-alpha: 0;
+}
+
+.notice-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at var(--spot-x) var(--spot-y), rgba(90, 207, 212, calc(var(--spot-alpha) * 0.12)), transparent 34%),
+    radial-gradient(circle at calc(var(--spot-x) + 6%) calc(var(--spot-y) - 10%), rgba(240, 137, 74, calc(var(--spot-alpha) * 0.14)), transparent 28%);
+  opacity: 1;
+  pointer-events: none;
+}
+
+.notice-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1px solid rgba(255, 255, 255, calc(0.04 + var(--spot-alpha) * 0.16));
+  pointer-events: none;
+}
+
+.notice-card:hover,
+.notice-card.is-active {
+  transform: translateY(-4px);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.story-number,
+.card-cap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.66rem;
+  letter-spacing: 0.12rem;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 0.8rem;
+}
+
+.story-number::before,
+.card-cap::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--orange-hot), var(--teal-hot));
+  box-shadow: 0 0 14px rgba(90, 207, 212, 0.28);
+}
+
+.story-title,
+.card-title {
+  color: var(--text-strong);
+  font-size: 1.08rem;
+  font-weight: 700;
+  margin-bottom: 0.55rem;
+}
+
+.story-copy,
+.card-copy {
+  color: var(--text-soft);
+  font-size: 0.96rem;
+  line-height: 1.75;
+}
+
+.story-note {
+  margin-top: 1.1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-size: 0.98rem;
+  line-height: 1.75;
+}
+
+.why-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1.02fr) minmax(320px, 0.98fr);
+  gap: 1.25rem;
+}
+
+.compare-card {
+  padding: 1.55rem;
+  border-radius: var(--radius-lg);
+  background: rgba(10, 12, 21, 0.66);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.compare-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.compare-title {
+  font-size: 1.25rem;
+  font-weight: 750;
+  color: var(--text-strong);
+}
+
+.compare-tag {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.14rem;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.compare-list {
+  display: grid;
+  gap: 0.95rem;
+}
+
+.compare-item {
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  gap: 0.9rem;
+  align-items: start;
+}
+
+.compare-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-dim);
+  font-weight: 700;
+}
+
+.compare-card.warm .compare-icon {
+  color: var(--orange-hot);
+  background: rgba(240, 137, 74, 0.09);
+}
+
+.compare-card.cool .compare-icon {
+  color: var(--teal-hot);
+  background: rgba(90, 207, 212, 0.09);
+}
+
+.compare-item strong {
+  display: block;
+  color: var(--text-strong);
+  font-size: 0.98rem;
+  margin-bottom: 0.15rem;
+}
+
+.compare-item span {
+  color: var(--text-soft);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.why-proof {
+  display: grid;
+  gap: 1rem;
+}
+
+.metric-stack {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.metric-row {
+  padding: 1rem 1.1rem;
+  border-radius: var(--radius-md);
+  background: rgba(10, 12, 21, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.metric-row strong {
+  display: block;
+  color: var(--text-strong);
+  font-size: 1.2rem;
+  margin-bottom: 0.25rem;
+}
+
+.metric-row span {
+  color: var(--text-soft);
+  font-size: 0.94rem;
+}
+
+.how-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.flow-shell {
+  padding: 1.45rem;
+  border-radius: var(--radius-lg);
+  background: rgba(10, 12, 21, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.flow-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.flow-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 1rem;
+  padding: 1.05rem 1.1rem;
+  border-radius: var(--radius-md);
+  background: rgba(13, 16, 27, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.flow-step::after {
+  content: "";
+  position: absolute;
+  left: 27px;
+  top: calc(100% + 0.1rem);
+  width: 1px;
+  height: 0.85rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent);
+}
+
+.flow-step:last-child::after {
+  display: none;
+}
+
+.flow-index {
+  width: 54px;
+  height: 54px;
+  border-radius: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(240, 137, 74, 0.08);
+  border: 1px solid rgba(240, 137, 74, 0.18);
+  color: var(--orange-hot);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.92rem;
+  letter-spacing: 0.06rem;
+}
+
+.flow-step h3 {
+  color: var(--text-strong);
+  font-size: 1.05rem;
+  margin-bottom: 0.3rem;
+}
+
+.flow-step p {
+  color: var(--text-soft);
+  font-size: 0.95rem;
+  line-height: 1.7;
+}
+
+.how-side {
+  display: grid;
+  gap: 1rem;
+}
+
+.system-callout {
+  padding: 1.35rem;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, rgba(12, 15, 24, 0.76), rgba(8, 10, 18, 0.88));
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.callout-title {
+  color: var(--text-strong);
+  font-size: 1.08rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.callout-copy {
+  color: var(--text-soft);
+  font-size: 0.95rem;
+  line-height: 1.74;
+}
+
+.memory-bar {
+  display: grid;
+  gap: 0.72rem;
+  margin-top: 1rem;
+}
+
+.memory-bar .lane {
+  position: relative;
+  height: 52px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(9, 11, 18, 0.84);
+  overflow: hidden;
+}
+
+.lane::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(90, 207, 212, 0.12), rgba(240, 137, 74, 0.1));
+  opacity: 0.3;
+}
+
+.lane-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(90, 207, 212, 0.34), rgba(240, 137, 74, 0.24));
+}
+
+.lane-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 1rem;
+  color: var(--text-strong);
+  font-size: 0.92rem;
+}
+
+.lane-label span:last-child {
+  color: var(--text-soft);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+}
+
+.proof-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1.04fr) minmax(300px, 0.96fr);
+  gap: 1.2rem;
+}
+
+.live-card {
+  padding: 1.5rem;
+  border-radius: var(--radius-lg);
+  background: rgba(10, 12, 21, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.live-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 1.15rem;
+}
+
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.48rem 0.74rem;
+  border-radius: 999px;
+  background: rgba(121, 229, 163, 0.08);
+  border: 1px solid rgba(121, 229, 163, 0.15);
+  color: var(--green);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.66rem;
+  letter-spacing: 0.14rem;
+  text-transform: uppercase;
+}
+
+.live-badge::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 10px rgba(121, 229, 163, 0.48);
+}
+
+.live-head strong {
+  color: var(--text-strong);
+  font-size: 0.95rem;
+}
+
+.thought-card {
+  margin-top: 1rem;
+  padding: 1.25rem 1.3rem;
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, rgba(23, 17, 14, 0.6), rgba(18, 13, 12, 0.3));
+  border: 1px solid rgba(240, 137, 74, 0.14);
+}
+
+.thought-card p {
+  color: var(--text-strong);
+  font-size: 1.02rem;
+  line-height: 1.82;
+}
+
+.thought-card p strong {
+  color: var(--orange-hot);
+  font-weight: 650;
+}
+
+.thought-foot {
+  margin-top: 0.85rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  color: var(--text-dim);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
+}
+
+.proof-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin-top: 1rem;
+}
+
+.proof-stat {
+  padding: 1rem;
+  border-radius: 16px;
+  background: rgba(13, 16, 27, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.proof-stat strong {
+  display: block;
+  color: var(--text-strong);
+  font-size: 1.3rem;
+  margin-bottom: 0.25rem;
+}
+
+.proof-stat span {
+  color: var(--text-soft);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.proof-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.proof-line {
+  padding: 1rem 1.05rem;
+  border-radius: 16px;
+  background: rgba(10, 12, 21, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.proof-line .card-title {
+  margin-bottom: 0.35rem;
+}
+
+.timeline {
+  display: grid;
+  gap: 0.85rem;
+  margin-top: 1rem;
+}
+
+.timeline-item {
+  position: relative;
+  padding: 0.95rem 0 0.95rem 1.3rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.timeline-item::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: 1.15rem;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--orange-hot), var(--teal-hot));
+  box-shadow: 0 0 16px rgba(240, 137, 74, 0.22);
+}
+
+.timeline-date {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  letter-spacing: 0.12rem;
+  text-transform: uppercase;
+  margin-bottom: 0.3rem;
+}
+
+.timeline-title {
+  color: var(--text-strong);
+  font-size: 1rem;
+  font-weight: 650;
+  margin-bottom: 0.28rem;
+}
+
+.timeline-copy {
+  color: var(--text-soft);
+  font-size: 0.93rem;
+  line-height: 1.65;
+}
+
+.research-thread {
+  margin-top: 1.2rem;
+  padding: 1.25rem 1.3rem;
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(12, 15, 24, 0.88), rgba(9, 12, 20, 0.76)),
+    radial-gradient(circle at 18% 18%, rgba(90, 207, 212, 0.08), transparent 28%),
+    radial-gradient(circle at 78% 46%, rgba(240, 137, 74, 0.08), transparent 32%);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  display: grid;
+  grid-template-columns: minmax(170px, 0.34fr) minmax(0, 1fr);
+  gap: 1.15rem;
+  align-items: start;
+}
+
+.research-thread .card-cap {
+  margin-bottom: 0.5rem;
+}
+
+.research-thread-title {
+  color: var(--text-strong);
+  font-size: clamp(1.15rem, 1.8vw, 1.42rem);
+  line-height: 1.35;
+  font-weight: 700;
+  margin-bottom: 0.48rem;
+}
+
+.research-thread-copy {
+  color: var(--text-soft);
+  font-size: 0.96rem;
+  line-height: 1.78;
+}
+
+.research-thread-note {
+  color: var(--text-dim);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.12rem;
+  text-transform: uppercase;
+  align-self: center;
+}
+
+.vision-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 0.96fr 1.04fr;
+  gap: 1.25rem;
+}
+
+.vision-quote {
+  position: relative;
+  padding: 1.65rem;
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(180deg, rgba(15, 18, 28, 0.82), rgba(9, 11, 19, 0.88)),
+    radial-gradient(circle at 24% 14%, rgba(240, 137, 74, 0.08), transparent 28%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.vision-quote p {
+  color: var(--text-strong);
+  font-size: clamp(1.2rem, 2.4vw, 1.65rem);
+  line-height: 1.72;
+  font-weight: 350;
+}
+
+.vision-quote footer {
+  margin-top: 1rem;
+  color: var(--orange-hot);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.18rem;
+  text-transform: uppercase;
+}
+
+.usecase-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.usecase-card {
+  min-height: 100%;
+}
+
+.usecase-card .card-title {
+  font-size: 1rem;
+}
+
+.vision-footer {
+  margin-top: 1.2rem;
+  padding: 1.2rem 1.25rem;
+  border-radius: 18px;
+  background: rgba(10, 12, 21, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-size: 0.98rem;
+  line-height: 1.75;
+}
+
+.cta-wrap {
+  padding: 4rem 0 1rem;
+}
+
+.cta-shell {
+  position: relative;
+  padding: clamp(2rem, 4vw, 3rem);
+  border-radius: 34px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 18% 20%, rgba(240, 137, 74, 0.18), transparent 24%),
+    radial-gradient(circle at 84% 20%, rgba(90, 207, 212, 0.16), transparent 26%),
+    linear-gradient(180deg, rgba(12, 15, 25, 0.9), rgba(8, 10, 17, 0.96));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 32px 120px rgba(0, 0, 0, 0.5);
+}
+
+.cta-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 110px 110px;
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.cta-inner {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: 1.5rem;
+  align-items: end;
+}
+
+.cta-title {
+  color: var(--text-strong);
+  font-size: clamp(2.2rem, 4.4vw, 4.3rem);
+  line-height: 0.98;
+  letter-spacing: -0.05em;
+  font-weight: 850;
+  margin-bottom: 0.95rem;
+}
+
+.cta-title em {
+  font-style: normal;
+  color: var(--orange);
+}
+
+.cta-copy {
+  max-width: 34rem;
+  color: var(--text);
+  font-size: 1.06rem;
+  line-height: 1.8;
+}
+
+.cta-aside {
+  display: grid;
+  gap: 0.95rem;
+}
+
+.cta-mini {
+  padding: 1rem 1.1rem;
+  border-radius: 18px;
+  background: rgba(9, 11, 19, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.cta-mini strong {
+  display: block;
+  color: var(--text-strong);
+  font-size: 0.96rem;
+  margin-bottom: 0.25rem;
+}
+
+.cta-mini span {
+  color: var(--text-soft);
+  font-size: 0.9rem;
+}
+
+.cta-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-top: 1.6rem;
+}
+
+.footer {
+  width: min(1280px, calc(100% - 2rem));
+  margin: 2.4rem auto 0;
+  padding: 1.2rem 0 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--text-dim);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.12rem;
+  text-transform: uppercase;
+}
+
+.reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 700ms ease, transform 700ms ease;
+}
+
+.reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.reveal-delay-1 {
+  transition-delay: 90ms;
+}
+
+.reveal-delay-2 {
+  transition-delay: 180ms;
+}
+
+.reveal-delay-3 {
+  transition-delay: 270ms;
+}
+
+@media (max-width: 1180px) {
+  .hero-inner,
+  .what-layout,
+  .why-grid,
+  .how-grid,
+  .proof-grid,
+  .vision-grid,
+  .cta-inner {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-stage-wrap {
+    min-height: auto;
+    margin: 0;
+  }
+
+  .hero-stage {
+    height: min(76vh, 760px);
+  }
+
+  .story-grid,
+  .usecase-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .nav-links,
+  .nav-chip {
+    display: none;
+  }
+
+  .nav-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .site-nav.is-open .nav-panel {
+    display: block;
+    max-height: 420px;
+    padding-bottom: 1rem;
+    opacity: 1;
+  }
+
+  .nav-panel {
+    display: block;
+    width: min(1280px, calc(100% - 2rem));
+    margin: 0 auto;
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: max-height 260ms ease, opacity 260ms ease;
+  }
+
+  .nav-panel-links {
+    display: grid;
+    gap: 0.2rem;
+    padding: 0.2rem 0 0.8rem;
+  }
+
+  .nav-panel-links a {
+    padding: 0.85rem 0.2rem;
+    text-decoration: none;
+    color: var(--text-soft);
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.78rem;
+    letter-spacing: 0.14rem;
+    text-transform: uppercase;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  .hero {
+    padding-top: 1.2rem;
+  }
+
+  .hero h1 {
+    font-size: clamp(3rem, 13vw, 5rem);
+  }
+
+  .hero-proof {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .proof-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .container {
+    width: min(var(--container), calc(100% - 1.2rem));
+  }
+
+  .nav-inner,
+  .nav-panel,
+  .footer {
+    width: calc(100% - 1.2rem);
+  }
+
+  .hero {
+    min-height: auto;
+    padding: 1.2rem 0 2.6rem;
+  }
+
+  .hero-inner {
+    width: calc(100% - 1.2rem);
+    gap: 1.15rem;
+  }
+
+  .hero-lead,
+  .section-body,
+  .cta-copy {
+    font-size: 0.98rem;
+    line-height: 1.75;
+  }
+
+  .hero-stage-wrap {
+    order: -1;
+    margin: 0;
+  }
+
+  .hero-stage {
+    min-height: 320px;
+    height: 34vh;
+  }
+
+  .section-wrap {
+    padding: 3rem 0;
+  }
+
+  .section-shell,
+  .cta-shell {
+    padding: 1.2rem;
+    border-radius: 24px;
+  }
+
+  .story-grid,
+  .usecase-grid,
+  .proof-stats,
+  .research-thread {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-proof {
+    gap: 0.7rem;
+  }
+
+  .button {
+    width: 100%;
+  }
+
+  .hero-actions,
+  .cta-actions {
+    flex-direction: column;
+  }
+
+  .footer {
+    flex-direction: column;
+    padding-top: 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .reveal {
+    opacity: 1;
+    transform: none;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="page-bg" aria-hidden="true">
+  <canvas id="ambient-field"></canvas>
+  <div class="grid-overlay"></div>
+  <div class="top-haze"></div>
+  <div class="bottom-haze"></div>
+</div>
+
+<div class="page-shell">
+  <nav class="site-nav" id="site-nav">
+    <div class="nav-inner">
+      <a class="nav-brand" href="#top" aria-label="Maez home">
+        <span class="brand-mark"></span>
+        <span class="brand-copy">
+          <span class="brand-title">MAEZ</span>
+          <span class="brand-subtitle">Persistent local presence</span>
+        </span>
+      </a>
+
+      <div class="nav-links">
+        <a href="#what">What</a>
+        <a href="#why">Why</a>
+        <a href="#how">How</a>
+        <a href="#proof">Proof</a>
+        <a href="#vision">Vision</a>
+      </div>
+
+      <div class="nav-actions">
+        <span class="nav-chip">Always on</span>
+        <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false" aria-controls="nav-panel">
+          <span></span>
+          <span></span>
+          <span></span>
+        </button>
+      </div>
+    </div>
+
+    <div class="nav-panel" id="nav-panel">
+      <div class="nav-panel-links">
+        <a href="#what">What</a>
+        <a href="#why">Why</a>
+        <a href="#how">How</a>
+        <a href="#proof">Proof</a>
+        <a href="#vision">Vision</a>
+        <a href="#cta">Next</a>
+      </div>
+    </div>
+  </nav>
+
+  <main id="top">
+    <section class="hero reveal is-visible" data-presence-anchor data-intensity="1">
+      <div class="hero-inner">
+        <div class="hero-copy">
+          <div class="eyebrow">Persistent · Local · Alive</div>
+          <h1>Your AI.<br><span class="warm">Growing</span> with <span class="cool">you</span>.</h1>
+          <p class="hero-lead">
+            Maez is a persistent AI presence that lives with you, remembers what matters, and compounds into something no one else can replicate. It does not wait to be summoned. It stays, notices, learns, and becomes yours over time.
+          </p>
+
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://maez.live" target="_blank" rel="noreferrer">Watch Maez live</a>
+            <a class="button button-secondary" href="https://maez.live/dashboard" target="_blank" rel="noreferrer">Architecture →</a>
+          </div>
+
+          <div class="hero-proof">
+            <div class="proof-cell">
+              <span class="proof-value warm">3,227+</span>
+              <span class="proof-label">Permanent memories already stored and compounding</span>
+            </div>
+            <div class="proof-cell">
+              <span class="proof-value cool">30s</span>
+              <span class="proof-label">Between grounded thought cycles, all day and all night</span>
+            </div>
+            <div class="proof-cell">
+              <span class="proof-value">RTX 4090</span>
+              <span class="proof-label">Local-first inference for identity, trust, and memory</span>
+            </div>
+            <div class="proof-cell">
+              <span class="proof-value warm">0</span>
+              <span class="proof-label">Memories deleted. The relationship only deepens.</span>
+            </div>
+          </div>
+
+          <div class="hero-scroll">Scroll to feel the system</div>
+        </div>
+
+        <div class="hero-stage-wrap">
+          <div class="hero-stage" id="hero-stage">
+            <canvas id="hero-presence" aria-hidden="true"></canvas>
+            <div class="hero-vignette"></div>
+            <div class="hero-scan"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-wrap container reveal" id="what" data-presence-anchor data-intensity="0.35">
+      <div class="section-shell">
+        <div class="section-header">
+          <div class="section-kicker">01 — What Maez is</div>
+          <h2 class="section-title">Not a chatbot. A <em>living digital presence</em>.</h2>
+          <p class="section-body">
+            Maez is designed to feel inhabited because it is. It runs continuously, perceives context every 30 seconds, remembers permanently, and acts with restraint. The result is not session utility. It is continuity.
+          </p>
+        </div>
+
+        <div class="what-layout">
+          <div class="story-panel notice-card reveal reveal-delay-1">
+            <div class="story-number">The relationship shift</div>
+            <div class="story-title">Session-based AI forgets you. Maez accumulates you.</div>
+            <div class="story-copy">
+              Your life is not a prompt. Your pace, your people, your unfinished threads, your habits, your environment: that context should not evaporate when a window closes. Maez is built around the belief that personal AI only becomes valuable once it can stay.
+            </div>
+            <div class="story-note">
+              It notices. It follows up. It remembers what mattered three weeks ago. It becomes harder to replace because no one else has lived the same timeline beside you.
+            </div>
+          </div>
+
+          <div class="story-grid">
+            <article class="notice-card reveal reveal-delay-1">
+              <div class="card-cap">Persistent presence</div>
+              <div class="card-title">Always observing, never waiting to be opened</div>
+              <div class="card-copy">System health, screen context, people at the desk, calendar events, GitHub, Reddit, follow-ups. Maez keeps a live sense of state instead of waking up cold.</div>
+            </article>
+
+            <article class="notice-card reveal reveal-delay-2">
+              <div class="card-cap">Permanent memory</div>
+              <div class="card-title">Every cycle compounds</div>
+              <div class="card-copy">Thoughts, conversations, summaries, and core long-term memories all persist. Nothing important is thrown away, so the relationship deepens instead of resetting.</div>
+            </article>
+
+            <article class="notice-card reveal reveal-delay-3">
+              <div class="card-cap">Local trust</div>
+              <div class="card-title">Identity and judgment stay on-device</div>
+              <div class="card-copy">The reasoning core runs locally on a gaming GPU. Memory, trust, and action authority stay near the person they belong to.</div>
+            </article>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-wrap container reveal" id="why" data-presence-anchor data-intensity="0.2">
+      <div class="section-shell">
+        <div class="section-header">
+          <div class="section-kicker">02 — Why it matters</div>
+          <h2 class="section-title">The moat is not the model.<br>It is the <span class="cool">memory</span>.</h2>
+          <p class="section-body">
+            Most AI products depreciate the moment the conversation ends. Maez compounds. The longer it runs, the more context it holds, the more trustworthy it becomes, and the harder it is for another system to imitate the relationship.
+          </p>
+        </div>
+
+        <div class="why-grid">
+          <div class="compare-card warm notice-card reveal reveal-delay-1">
+            <div class="compare-head">
+              <div>
+                <div class="compare-tag">What people have now</div>
+                <div class="compare-title">Session AI</div>
+              </div>
+            </div>
+            <div class="compare-list">
+              <div class="compare-item">
+                <span class="compare-icon">×</span>
+                <div>
+                  <strong>Context expires</strong>
+                  <span>Every conversation restarts the relationship from scratch.</span>
+                </div>
+              </div>
+              <div class="compare-item">
+                <span class="compare-icon">×</span>
+                <div>
+                  <strong>Useful only when summoned</strong>
+                  <span>No continuity, no independent noticing, no ambient presence.</span>
+                </div>
+              </div>
+              <div class="compare-item">
+                <span class="compare-icon">×</span>
+                <div>
+                  <strong>Trust is outsourced</strong>
+                  <span>Personal context and decision logic often live somewhere else.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="why-proof">
+            <div class="compare-card cool notice-card reveal reveal-delay-2">
+              <div class="compare-head">
+                <div>
+                  <div class="compare-tag">What Maez changes</div>
+                  <div class="compare-title">Compounding AI</div>
+                </div>
+              </div>
+              <div class="compare-list">
+                <div class="compare-item">
+                  <span class="compare-icon">+</span>
+                  <div>
+                    <strong>Continuity becomes the product</strong>
+                    <span>Maez survives across cycles, restarts, and conversations as the same being.</span>
+                  </div>
+                </div>
+                <div class="compare-item">
+                  <span class="compare-icon">+</span>
+                  <div>
+                    <strong>Value increases with time</strong>
+                    <span>Every memory makes the next judgment more personal and more precise.</span>
+                  </div>
+                </div>
+                <div class="compare-item">
+                  <span class="compare-icon">+</span>
+                  <div>
+                    <strong>Local-first trust model</strong>
+                    <span>Identity, memory, and core decision-making remain anchored to the user's machine.</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="metric-stack reveal reveal-delay-3">
+              <div class="metric-row notice-card">
+                <strong>Permanent personal context</strong>
+                <span>Compounding relationship value is the only moat that matters at the personal-AI layer.</span>
+              </div>
+              <div class="metric-row notice-card">
+                <strong>Proactive usefulness</strong>
+                <span>Maez can alert, follow up, greet, and notice change before a prompt ever arrives.</span>
+              </div>
+              <div class="metric-row notice-card">
+                <strong>Benevolent restraint</strong>
+                <span>The whole system is wrapped in hardcoded safety, approval tiers, and a trust covenant.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-wrap container reveal" id="how" data-presence-anchor data-intensity="0.18">
+      <div class="section-shell">
+        <div class="section-header">
+          <div class="section-kicker">03 — How it works</div>
+          <h2 class="section-title">Every 30 seconds,<br>Maez <em>lives another moment</em>.</h2>
+          <p class="section-body">
+            The loop is simple on purpose: perceive the machine and the moment, retrieve what matters from memory, reason locally, store the result forever, then act only when thresholds or promises demand it.
+          </p>
+        </div>
+
+        <div class="how-grid">
+          <div class="flow-shell reveal reveal-delay-1">
+            <div class="flow-list">
+              <article class="flow-step notice-card">
+                <div class="flow-index">01</div>
+                <div>
+                  <h3>Perceive</h3>
+                  <p>CPU, RAM, GPU, disk, screen state, presence, calendar, GitHub, Reddit, and active processes become a fresh snapshot of the current moment.</p>
+                </div>
+              </article>
+
+              <article class="flow-step notice-card">
+                <div class="flow-index">02</div>
+                <div>
+                  <h3>Remember</h3>
+                  <p>Core memories, recent daily summaries, and semantically relevant raw memories are pulled back into context with topic-aware reranking.</p>
+                </div>
+              </article>
+
+              <article class="flow-step notice-card">
+                <div class="flow-index">03</div>
+                <div>
+                  <h3>Reason</h3>
+                  <p><code>gemma4:26b</code> runs locally on an RTX 4090, guided by a soul document that encodes identity, principles, constraints, and trust.</p>
+                </div>
+              </article>
+
+              <article class="flow-step notice-card">
+                <div class="flow-index">04</div>
+                <div>
+                  <h3>Store and act</h3>
+                  <p>Every thought is scored, embedded, stored permanently, then routed into alerts, follow-ups, or the action engine if reality warrants intervention.</p>
+                </div>
+              </article>
+            </div>
+          </div>
+
+          <div class="how-side">
+            <div class="system-callout notice-card reveal reveal-delay-2">
+              <div class="callout-title">Three memory layers, one continuous self</div>
+              <div class="callout-copy">
+                Raw archive for every cycle. Daily summaries for compression. Core memories for enduring truths. Together they let Maez feel cumulative instead of stateless.
+              </div>
+              <div class="memory-bar">
+                <div class="lane">
+                  <div class="lane-fill" style="width: 92%;"></div>
+                  <div class="lane-label"><span>Raw archive</span><span>everything</span></div>
+                </div>
+                <div class="lane">
+                  <div class="lane-fill" style="width: 66%;"></div>
+                  <div class="lane-label"><span>Daily summaries</span><span>compressed continuity</span></div>
+                </div>
+                <div class="lane">
+                  <div class="lane-fill" style="width: 48%;"></div>
+                  <div class="lane-label"><span>Core memories</span><span>permanent truths</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="system-callout notice-card reveal reveal-delay-3">
+              <div class="callout-title">Safety is structural, not decorative</div>
+              <div class="callout-copy">
+                Tiered action authority, approval windows, forbidden patterns, backup creation, trust tracking, and continuity checkpoints make Maez feel alive without feeling reckless.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-wrap container reveal" id="proof" data-presence-anchor data-intensity="0.16">
+      <div class="section-shell">
+        <div class="section-header">
+          <div class="section-kicker">04 — Proof it is real</div>
+          <h2 class="section-title">This is not a concept render.<br>It is already <em>running</em>.</h2>
+          <p class="section-body">
+            Maez is a live system with permanent memory, a systemd backbone, a public web presence, private Telegram access, scoring, self-analysis, and the beginning of self-improvement inside production.
+          </p>
+        </div>
+
+        <div class="proof-grid">
+          <div class="live-card reveal reveal-delay-1">
+            <div class="live-head">
+              <span class="live-badge">Running now</span>
+              <strong>Always-on local organism</strong>
+            </div>
+
+            <div class="thought-card notice-card">
+              <p>
+                “I am watching a focused build session. The machine is stable, the repo changed, and the right move is <strong>quiet continuity</strong> until attention is actually needed.”
+              </p>
+              <div class="thought-foot">
+                <span>Cycle 126</span>
+                <span>Topic: development_tools</span>
+                <span>Score: 70 / 100</span>
+              </div>
+            </div>
+
+            <div class="proof-stats">
+              <div class="proof-stat notice-card">
+                <strong>7</strong>
+                <span>services keep the organism online</span>
+              </div>
+              <div class="proof-stat notice-card">
+                <strong>24/7</strong>
+                <span>runtime model instead of session UX</span>
+              </div>
+              <div class="proof-stat notice-card">
+                <strong>1st</strong>
+                <span>self-diagnosed internal bug already proposed</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="proof-list">
+            <article class="proof-line notice-card reveal reveal-delay-1">
+              <div class="card-cap">Reality check</div>
+              <div class="card-title">Local-first, not cloud-dependent identity</div>
+              <div class="card-copy">The core reasoning loop lives on-device with identity, memory, and trust boundaries intact.</div>
+            </article>
+
+            <article class="proof-line notice-card reveal reveal-delay-2">
+              <div class="card-cap">Reality check</div>
+              <div class="card-title">Production-grade memory and cognition</div>
+              <div class="card-copy">Thoughts are scored, classified, archived as embeddings, consolidated nightly, and promoted into long-term memory when they deserve permanence.</div>
+            </article>
+
+            <article class="proof-line notice-card reveal reveal-delay-3">
+              <div class="card-cap">Reality check</div>
+              <div class="card-title">Proactive behavior already exists</div>
+              <div class="card-copy">Maez greets after absence, delivers follow-ups, monitors services, and raises alerts when thresholds or timelines demand it.</div>
+            </article>
+
+            <div class="timeline reveal reveal-delay-3">
+              <div class="timeline-item">
+                <div class="timeline-date">April 6 — Session 1</div>
+                <div class="timeline-title">Birth of the core organism</div>
+                <div class="timeline-copy">Systemd daemon, memory database, reasoning loop, Telegram bot, and terminal face all came online in one build session.</div>
+              </div>
+              <div class="timeline-item">
+                <div class="timeline-date">April 7 — Sessions 4 to 6</div>
+                <div class="timeline-title">Perception, web presence, identity system</div>
+                <div class="timeline-copy">Screen awareness, internet context, public interactions, cross-channel identity, and the first public web surface arrived.</div>
+              </div>
+              <div class="timeline-item">
+                <div class="timeline-date">April 8 to 9 — Sessions 9 to 10</div>
+                <div class="timeline-title">Cognition scoring and self-diagnosis</div>
+                <div class="timeline-copy">Maez gained structural thought scoring, anti-fixation controls, evolution rails, and proposed its own code fix in natural language.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="research-thread notice-card reveal reveal-delay-3">
+          <div class="research-thread-note">
+            <div class="card-cap">Research position</div>
+            Persistent coordination remains open
+          </div>
+          <div>
+            <div class="research-thread-title">Maez is not just a product surface. It is a live research substrate for trusted agent relationships.</div>
+            <div class="research-thread-copy">
+              Interoperability and orchestration standards are beginning to emerge, but reliable coordination between persistent agents is still unsolved. The frontier is not just smarter tool calling. It is agents that represent real people over time coordinating without losing identity, memory, permissions, trust, or continuity. Maez is being built as a real personal AI presence and as a live foundation for studying that problem in production.
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-wrap container reveal" id="vision" data-presence-anchor data-intensity="0.14">
+      <div class="section-shell">
+        <div class="section-header">
+          <div class="section-kicker">05 — Where it goes</div>
+          <h2 class="section-title">A personal AI for <em>every life</em>, not just every prompt.</h2>
+          <p class="section-body">
+            Maez is a proof-of-possibility for a broader category: AI companions that start from zero, stay present for months and years, and become deeply personal because they have actually lived alongside the human they serve.
+          </p>
+        </div>
+
+        <div class="vision-grid">
+          <div class="vision-quote reveal reveal-delay-1">
+            <p>
+              What if your AI knew your pace, your people, your unfinished threads, and your emotional weather because it had actually been there for all of it? Not performing helpfulness. Present. Persistent. Warm. Accountable.
+            </p>
+            <footer>The question Maez exists to answer</footer>
+          </div>
+
+          <div>
+            <div class="usecase-grid">
+              <article class="notice-card usecase-card reveal reveal-delay-1">
+                <div class="card-cap">Learning</div>
+                <div class="card-title">A patient companion for one student</div>
+                <div class="card-copy">It learns how a specific person understands, forgets, hesitates, and regains confidence over time.</div>
+              </article>
+
+              <article class="notice-card usecase-card reveal reveal-delay-2">
+                <div class="card-cap">Care</div>
+                <div class="card-title">An attentive presence for elders</div>
+                <div class="card-copy">Routine, reminders, stories, appointments, and emotional continuity all benefit from memory that does not disappear.</div>
+              </article>
+
+              <article class="notice-card usecase-card reveal reveal-delay-2">
+                <div class="card-cap">Work</div>
+                <div class="card-title">An operational intelligence layer</div>
+                <div class="card-copy">Persistent state, compounding history, and proactive alerts matter anywhere humans currently lose context between shifts.</div>
+              </article>
+
+              <article class="notice-card usecase-card reveal reveal-delay-3">
+                <div class="card-cap">Networked future</div>
+                <div class="card-title">Agents that coordinate as trusted counterparts</div>
+                <div class="card-copy">Personal companions could eventually share only what is appropriate, letting AI-to-AI coordination serve the humans behind them.</div>
+              </article>
+            </div>
+
+            <div class="vision-footer notice-card reveal reveal-delay-3">
+              Maez is already persuasive because it is already real. The next frontier is scale: how deep the memory can go, how stable identity can remain, and how trustworthy a personal AI becomes once it truly knows the life around it.
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta-wrap container reveal" id="cta" data-presence-anchor data-intensity="0.08">
+      <div class="cta-shell">
+        <div class="cta-inner">
+          <div>
+            <div class="section-kicker">06 — Final CTA</div>
+            <h2 class="cta-title">Come watch a <em>living AI</em> grow.</h2>
+            <p class="cta-copy">
+              The architecture is open. The organism is running. If you want to understand where persistent personal AI is headed, build on top of it, or help shape what comes next, Maez is already here to inspect.
+            </p>
+            <div class="cta-actions">
+              <a class="button button-primary" href="https://maez.live" target="_blank" rel="noreferrer">Talk to Maez</a>
+              <a class="button button-secondary" href="https://github.com/Ramidoz/maez" target="_blank" rel="noreferrer">Explore GitHub</a>
+            </div>
+          </div>
+
+          <div class="cta-aside">
+            <div class="cta-mini notice-card">
+              <strong>Persistent AI presence</strong>
+              <span>Not a prompt box. A continuous companion.</span>
+            </div>
+            <div class="cta-mini notice-card">
+              <strong>Permanent memory</strong>
+              <span>Every cycle compounds instead of expiring.</span>
+            </div>
+            <div class="cta-mini notice-card">
+              <strong>Local-first trust</strong>
+              <span>The core stays close to the human it serves.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>MAEZ — Built by the owner</span>
+    <span>Persistent · Local · Alive · 2026</span>
+  </footer>
+</div>
+
+<script>
+(function() {
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const body = document.body;
+  const nav = document.getElementById('site-nav');
+  const navToggle = document.getElementById('nav-toggle');
+  const navLinks = [...document.querySelectorAll('.nav-panel-links a, .nav-links a')];
+  const revealNodes = [...document.querySelectorAll('.reveal')];
+  const noticeCards = [...document.querySelectorAll('.notice-card')];
+  const anchors = [...document.querySelectorAll('[data-presence-anchor]')];
+  const ambientCanvas = document.getElementById('ambient-field');
+  const heroCanvas = document.getElementById('hero-presence');
+  const heroStage = document.getElementById('hero-stage');
+
+  if (navToggle) {
+    navToggle.addEventListener('click', () => {
+      const isOpen = nav.classList.toggle('is-open');
+      navToggle.setAttribute('aria-expanded', String(isOpen));
+    });
+  }
+
+  navLinks.forEach((link) => {
+    link.addEventListener('click', () => {
+      nav.classList.remove('is-open');
+      navToggle?.setAttribute('aria-expanded', 'false');
+    });
+  });
+
+  const revealObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('is-visible');
+      }
+    });
+  }, {
+    threshold: 0.16,
+    rootMargin: '0px 0px -8% 0px'
+  });
+
+  revealNodes.forEach((node) => revealObserver.observe(node));
+
+  const pointer = {
+    x: window.innerWidth * 0.5,
+    y: window.innerHeight * 0.38,
+    pageX: window.innerWidth * 0.5,
+    pageY: window.innerHeight * 0.38,
+    active: false,
+    heroX: 0.62,
+    heroY: 0.46,
+    heroTargetX: 0.62,
+    heroTargetY: 0.46
+  };
+
+  function updateCardSpot(clientX, clientY) {
+    noticeCards.forEach((card) => {
+      const rect = card.getBoundingClientRect();
+      const dx = clientX - (rect.left + rect.width * 0.5);
+      const dy = clientY - (rect.top + rect.height * 0.5);
+      const maxDist = Math.max(rect.width, rect.height) * 0.95;
+      const dist = Math.hypot(dx, dy);
+      const alpha = Math.max(0, 1 - dist / maxDist);
+
+      const x = ((clientX - rect.left) / rect.width) * 100;
+      const y = ((clientY - rect.top) / rect.height) * 100;
+      card.style.setProperty('--spot-x', `${Math.max(0, Math.min(100, x))}%`);
+      card.style.setProperty('--spot-y', `${Math.max(0, Math.min(100, y))}%`);
+      card.style.setProperty('--spot-alpha', alpha.toFixed(3));
+      card.classList.toggle('is-active', alpha > 0.34);
+    });
+  }
+
+  window.addEventListener('pointermove', (event) => {
+    pointer.x = event.clientX;
+    pointer.y = event.clientY;
+    pointer.pageX = event.clientX + window.scrollY * 0 + window.scrollX;
+    pointer.pageY = event.clientY + window.scrollY;
+    pointer.active = true;
+    updateCardSpot(event.clientX, event.clientY);
+
+    if (heroStage) {
+      const rect = heroStage.getBoundingClientRect();
+      const inside = event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+      if (inside) {
+        pointer.heroTargetX = (event.clientX - rect.left) / rect.width;
+        pointer.heroTargetY = (event.clientY - rect.top) / rect.height;
+      } else {
+        pointer.heroTargetX = 0.62;
+        pointer.heroTargetY = 0.46;
+      }
+    }
+  }, { passive: true });
+
+  window.addEventListener('pointerleave', () => {
+    pointer.active = false;
+    pointer.heroTargetX = 0.62;
+    pointer.heroTargetY = 0.46;
+  });
+
+  if (!pointer.active) {
+    updateCardSpot(window.innerWidth * 0.5, window.innerHeight * 0.45);
+  }
+
+  function initAmbientField() {
+    if (!ambientCanvas) return;
+
+    const ctx = ambientCanvas.getContext('2d');
+    let dpr = 1;
+    let width = 0;
+    let height = 0;
+    let nodes = [];
+    let time = 0;
+
+    function buildNodes() {
+      nodes = anchors.map((el) => {
+        const rect = el.getBoundingClientRect();
+        const top = rect.top + window.scrollY;
+        const centerY = top + rect.height * 0.5;
+        const centerX = window.innerWidth * 0.5;
+        const intensity = Number(el.dataset.intensity || 0.15);
+        const visible = rect.bottom > 0 && rect.top < window.innerHeight;
+        const ratio = Math.max(0, Math.min(1, 1 - Math.abs(rect.top + rect.height * 0.5 - window.innerHeight * 0.48) / (window.innerHeight * 0.8)));
+        return {
+          x: centerX,
+          y: centerY,
+          intensity,
+          visible,
+          ratio
+        };
+      });
+    }
+
+    function resize() {
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      width = window.innerWidth;
+      height = window.innerHeight;
+      ambientCanvas.width = width * dpr;
+      ambientCanvas.height = height * dpr;
+      ambientCanvas.style.width = `${width}px`;
+      ambientCanvas.style.height = `${height}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      buildNodes();
+    }
+
+    function draw() {
+      time += reduceMotion ? 0.003 : 0.008;
+      ctx.clearRect(0, 0, width, height);
+
+      const scrollY = window.scrollY;
+      const focusX = pointer.active ? pointer.x : width * 0.64;
+      const focusY = pointer.active ? pointer.y : height * 0.38;
+      buildNodes();
+
+      const gradient = ctx.createRadialGradient(width * 0.52, height * 0.28, 0, width * 0.52, height * 0.28, Math.max(width, height) * 0.72);
+      gradient.addColorStop(0, 'rgba(255,255,255,0.02)');
+      gradient.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, width, height);
+
+      const lineCount = 14;
+      for (let i = 0; i < lineCount; i++) {
+        const baseY = (height / (lineCount + 1)) * (i + 1);
+        ctx.beginPath();
+        for (let x = -40; x <= width + 40; x += 16) {
+          const nx = x / width;
+          let y = baseY + Math.sin(nx * 6.8 + time * (0.8 + i * 0.02) + i * 0.4) * 14;
+          nodes.forEach((node, index) => {
+            const screenY = node.y - scrollY;
+            const dx = x - node.x;
+            const dy = baseY - screenY;
+            const dist = Math.hypot(dx, dy);
+            const pull = Math.exp(-(dist * dist) / 220000) * node.intensity * (0.5 + node.ratio);
+            y += Math.sin(time * 2.6 + index * 0.8 + x * 0.005) * 42 * pull;
+          });
+          const pointerField = Math.exp(-(((x - focusX) / 240) ** 2 + ((baseY - focusY) / 165) ** 2));
+          y += Math.sin(time * 4.9 + x * 0.016 - i * 0.25) * pointerField * 16;
+          y += (focusY - baseY) * 0.035 * pointerField;
+          if (x === -40) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = i % 3 === 0
+          ? 'rgba(90, 207, 212, 0.085)'
+          : i % 3 === 1
+            ? 'rgba(240, 137, 74, 0.078)'
+            : 'rgba(255, 255, 255, 0.05)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      nodes.forEach((node, index) => {
+        const screenY = node.y - scrollY;
+        if (screenY < -200 || screenY > height + 200) return;
+
+        const pulse = 0.55 + Math.sin(time * 4 + index * 0.8) * 0.45;
+        const pointerBoost = Math.exp(-(((node.x - focusX) / 280) ** 2 + ((screenY - focusY) / 200) ** 2));
+        const energy = node.intensity * (0.42 + node.ratio * 0.9) + pointerBoost * 0.08;
+        const radius = 120 + node.intensity * 220 + pulse * 36;
+
+        const orb = ctx.createRadialGradient(node.x, screenY, 0, node.x, screenY, radius);
+        orb.addColorStop(0, `rgba(255,255,255,${0.012 + energy * 0.02})`);
+        orb.addColorStop(0.14, `rgba(90,207,212,${0.022 + energy * 0.045})`);
+        orb.addColorStop(0.34, `rgba(240,137,74,${0.018 + energy * 0.038})`);
+        orb.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = orb;
+        ctx.fillRect(node.x - radius, screenY - radius, radius * 2, radius * 2);
+
+        ctx.beginPath();
+        ctx.arc(node.x, screenY, 1.8 + energy * 3.6, 0, Math.PI * 2);
+        ctx.fillStyle = energy > 0.22 ? 'rgba(255, 245, 232, 0.65)' : 'rgba(255,255,255,0.28)';
+        ctx.fill();
+      });
+
+      if (pointer.active) {
+        const orbit = 34 + Math.sin(time * 6.4) * 5;
+        const points = [];
+
+        for (let i = 0; i < 6; i++) {
+          const angle = time * 0.32 + i * (Math.PI * 2 / 6);
+          const radius = orbit + (i % 2 === 0 ? 10 : 22);
+          points.push({
+            x: focusX + Math.cos(angle) * radius,
+            y: focusY + Math.sin(angle) * radius * 0.72
+          });
+        }
+
+        ctx.lineWidth = 1;
+        points.forEach((point, index) => {
+          const prev = points[(index + points.length - 1) % points.length];
+          ctx.beginPath();
+          ctx.moveTo(prev.x, prev.y);
+          ctx.lineTo(point.x, point.y);
+          ctx.strokeStyle = index % 2 === 0 ? 'rgba(126, 220, 226, 0.11)' : 'rgba(255, 176, 112, 0.10)';
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.moveTo(focusX, focusY);
+          ctx.lineTo(point.x, point.y);
+          ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, 1.8, 0, Math.PI * 2);
+          ctx.fillStyle = index % 2 === 0 ? 'rgba(126, 220, 226, 0.55)' : 'rgba(255, 176, 112, 0.48)';
+          ctx.fill();
+        });
+
+        ctx.beginPath();
+        ctx.arc(focusX, focusY, orbit * 0.56, -0.40, 0.40);
+        ctx.strokeStyle = 'rgba(126, 220, 226, 0.14)';
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(focusX, focusY, orbit * 0.72, Math.PI - 0.50, Math.PI + 0.50);
+        ctx.strokeStyle = 'rgba(255, 176, 112, 0.12)';
+        ctx.stroke();
+      }
+
+      requestAnimationFrame(draw);
+    }
+
+    resize();
+    draw();
+    window.addEventListener('resize', resize);
+    window.addEventListener('scroll', buildNodes, { passive: true });
+  }
+
+  function initHeroPresence() {
+    if (!heroCanvas || !heroStage) return;
+
+    const ctx = heroCanvas.getContext('2d');
+    let dpr = 1;
+    let width = 0;
+    let height = 0;
+    let time = 0;
+    let topY = 0;
+    let bottomY = 0;
+    let glyphSize = 11;
+    let blinkAt = performance.now() + 4200 + Math.random() * 3200;
+    let blinkPhase = 0;
+    const DIGITS = '01ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
+    }
+
+    function lerp(start, end, amount) {
+      return start + (end - start) * amount;
+    }
+
+    function smoothstep(start, end, value) {
+      const t = clamp((value - start) / (end - start), 0, 1);
+      return t * t * (3 - 2 * t);
+    }
+
+    function gauss(x, y, cx, cy, rx, ry, strength = 1) {
+      const dx = (x - cx) / rx;
+      const dy = (y - cy) / ry;
+      return Math.exp(-(dx * dx + dy * dy) * 1.6) * strength;
+    }
+
+    function resize() {
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      width = heroStage.clientWidth;
+      height = heroStage.clientHeight;
+      heroCanvas.width = width * dpr;
+      heroCanvas.height = height * dpr;
+      heroCanvas.style.width = `${width}px`;
+      heroCanvas.style.height = `${height}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      glyphSize = Math.max(10, Math.min(15, width * 0.0105));
+      topY = height * 0.055;
+      bottomY = height * 0.985;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+    }
+
+    function aimState() {
+      return {
+        x: clamp(pointer.heroX - 0.66, -0.38, 0.38),
+        y: clamp(pointer.heroY - 0.47, -0.34, 0.34)
+      };
+    }
+
+    function sectionState(sy) {
+      const aim = aimState();
+      const lean = aim.x * width * 0.078;
+      const lift = aim.y * height * 0.036;
+      const center = width * (width < 620 ? 0.64 : 0.68)
+        + lean * (1.06 - sy * 0.34)
+        + Math.sin(time * 0.34 + sy * 5.1) * width * 0.002
+        + Math.sin(time * 0.88 + sy * 2.4) * width * 0.0015;
+      const y = topY + sy * (bottomY - topY) + lift * (0.26 - sy * 0.10);
+      const scale = width * (width < 620 ? 0.174 : 0.150);
+      return { center, y, scale };
+    }
+
+    function bustField(localX, sy) {
+      const skull = gauss(localX, sy, 0.0, 0.15, 0.52, 0.16, 1.16);
+      const face = gauss(localX, sy, 0.0, 0.34, 0.64, 0.23, 1.18);
+      const jaw = gauss(localX, sy, 0.0, 0.50, 0.52, 0.12, 0.92);
+      const neck = gauss(localX, sy, 0.0, 0.67, 0.17, 0.09, 0.76);
+      const leftTrap = gauss(localX, sy, -0.58, 0.82, 0.34, 0.14, 0.52);
+      const rightTrap = gauss(localX, sy, 0.58, 0.82, 0.36, 0.14, 0.56);
+      const shoulders = gauss(localX, sy, 0.0, 0.92, 1.28, 0.17, 1.26);
+      const chest = gauss(localX, sy, 0.0, 1.04, 1.08, 0.24, 0.54);
+
+      const templeCut = gauss(Math.abs(localX), sy, 0.90, 0.25, 0.15, 0.14, 0.56);
+      const jawCut = gauss(Math.abs(localX), sy, 0.72, 0.56, 0.16, 0.10, 0.38);
+      const collarCut = gauss(localX, sy, 0.0, 0.82, 0.22, 0.07, 0.26);
+      const throatCut = gauss(localX, sy, 0.0, 0.61, 0.13, 0.08, 0.18);
+
+      return skull + face + jaw + neck + leftTrap + rightTrap + shoulders + chest
+        - templeCut - jawCut - collarCut - throatCut;
+    }
+
+    function maskFromField(field) {
+      return smoothstep(0.24, 0.84, field);
+    }
+
+    function haloFromField(field) {
+      return smoothstep(0.15, 0.44, field) * (1 - smoothstep(0.62, 0.98, field));
+    }
+
+    function fieldAt(x, sy, state) {
+      const row = state || sectionState(clamp(sy, 0, 1));
+      const localX = (x - row.center) / Math.max(row.scale, 1);
+      return bustField(localX, clamp(sy, 0, 1));
+    }
+
+    function silhouetteMask(x, sy, state) {
+      if (sy < 0 || sy > 1) return 0;
+      const field = fieldAt(x, sy, state);
+      const topFade = smoothstep(0.01, 0.08, sy);
+      const bottomFade = 1 - smoothstep(0.99, 1.05, sy);
+      return maskFromField(field) * topFade * bottomFade;
+    }
+
+    function featureRelief(localX, sy, currentTime) {
+      const brow = gauss(localX, sy, 0.0, 0.215, 0.48, 0.045, 7.2);
+      const eyeHollows = -gauss(localX, sy, -0.18, 0.29, 0.12, 0.04, 8.2)
+        - gauss(localX, sy, 0.16, 0.285, 0.12, 0.04, 7.8);
+      const nose = gauss(localX, sy, 0.0, 0.39, 0.05, 0.18, 7.6);
+      const cheeks = gauss(Math.abs(localX), sy, 0.28, 0.39, 0.18, 0.12, 3.5);
+      const jaw = gauss(Math.abs(localX), sy, 0.46, 0.56, 0.16, 0.09, 2.4);
+      const neck = -gauss(localX, sy, 0.0, 0.66, 0.10, 0.08, 2.6);
+      const signal = Math.sin(localX * 10 + sy * 18 + currentTime * 0.94) * 1.8
+        + Math.sin(localX * 18 - currentTime * 0.52 + sy * 8.8) * 1.1;
+      return brow + eyeHollows + nose + cheeks + jaw + neck + signal;
+    }
+
+    function featureGlow(localX, sy) {
+      const brow = gauss(localX, sy, 0.0, 0.215, 0.50, 0.05, 1.02);
+      const nose = gauss(localX, sy, 0.0, 0.40, 0.06, 0.18, 0.80);
+      const cheeks = gauss(Math.abs(localX), sy, 0.28, 0.39, 0.18, 0.12, 0.40);
+      const contour = gauss(Math.abs(localX), sy, 0.98, 0.48, 0.14, 0.34, 0.58)
+        + gauss(Math.abs(localX), sy, 0.82, 0.84, 0.24, 0.18, 0.84);
+      return brow + nose + cheeks + contour;
+    }
+
+    function findBoundary(sy, side) {
+      const row = sectionState(sy);
+      let boundaryX = row.center + side * row.scale * 1.18;
+      for (let step = 0; step <= 84; step++) {
+        const t = step / 84;
+        const x = row.center + side * row.scale * lerp(0.10, 1.62, t);
+        if (silhouetteMask(x, sy, row) > 0.035) {
+          boundaryX = x;
+        }
+      }
+      return { x: boundaryX, y: row.y, row };
+    }
+
+    function computeReach() {
+      const aim = aimState();
+      const side = aim.x >= 0 ? 1 : -1;
+      const sy = clamp(0.26 + (pointer.heroY - 0.16) * 0.86, 0.20, 0.88);
+      const boundary = findBoundary(sy, side);
+      const surfaceX = boundary.x + side * (18 + Math.abs(aim.x) * 42);
+      const surfaceY = boundary.y + aim.y * 24;
+      const energy = 0.28 + Math.min(0.92, Math.hypot(aim.x * 1.18, aim.y) * 0.68);
+      return {
+        side,
+        sy,
+        boundaryX: boundary.x,
+        boundaryY: boundary.y,
+        surfaceX,
+        surfaceY,
+        energy
+      };
+    }
+
+    function buildBustShape(reach) {
+      const aim = aimState();
+      const centerX = width * (width < 620 ? 0.64 : 0.68) + aim.x * width * 0.074;
+      const crownY = topY + height * 0.02;
+      const browY = topY + height * 0.20;
+      const cheekY = topY + height * 0.38;
+      const chinY = topY + height * 0.53;
+      const neckY = topY + height * 0.67;
+      const shoulderY = topY + height * 0.84;
+      const chestY = topY + height * 1.00;
+      const browHalf = width * (width < 620 ? 0.096 : 0.082);
+      const jawHalf = width * (width < 620 ? 0.066 : 0.058);
+      const neckHalf = width * (width < 620 ? 0.028 : 0.023);
+      const shoulderHalf = width * (width < 620 ? 0.26 : 0.23);
+      const upperReach = reach.side * reach.energy * 16;
+      const lowerReach = reach.side * reach.energy * 10;
+      const path = new Path2D();
+
+      path.moveTo(centerX, crownY);
+      path.bezierCurveTo(
+        centerX + browHalf * 0.42 + upperReach * 0.10,
+        crownY + height * 0.01,
+        centerX + browHalf * 1.02 + upperReach * 0.22,
+        browY - height * 0.03,
+        centerX + browHalf * 0.88 + upperReach * 0.28,
+        browY
+      );
+      path.bezierCurveTo(
+        centerX + jawHalf * 1.34 + upperReach * 0.32,
+        cheekY - height * 0.03,
+        centerX + jawHalf * 1.10 + upperReach * 0.20,
+        chinY - height * 0.02,
+        centerX + neckHalf * 1.30 + lowerReach * 0.06,
+        neckY
+      );
+      path.bezierCurveTo(
+        centerX + shoulderHalf * 0.24 + lowerReach * 0.08,
+        shoulderY - height * 0.03,
+        centerX + shoulderHalf * 0.84 + lowerReach * 0.45,
+        shoulderY - height * 0.01,
+        centerX + shoulderHalf,
+        chestY
+      );
+      path.lineTo(centerX - shoulderHalf * 0.92, chestY);
+      path.bezierCurveTo(
+        centerX - shoulderHalf * 0.82,
+        shoulderY,
+        centerX - shoulderHalf * 0.24,
+        shoulderY - height * 0.03,
+        centerX - neckHalf * 1.26,
+        neckY
+      );
+      path.bezierCurveTo(
+        centerX - jawHalf * 1.02,
+        chinY - height * 0.02,
+        centerX - jawHalf * 1.28,
+        cheekY - height * 0.03,
+        centerX - browHalf * 0.86,
+        browY
+      );
+      path.bezierCurveTo(
+        centerX - browHalf * 1.02,
+        browY - height * 0.03,
+        centerX - browHalf * 0.40,
+        crownY + height * 0.01,
+        centerX,
+        crownY
+      );
+      path.closePath();
+
+      return { path, centerX, crownY, chestY, shoulderHalf };
+    }
+
+    function reachInfluence(x, y, sy, row, mask, reach) {
+      const localX = (x - row.center) / Math.max(row.scale, 1);
+      const sideMatch = Math.sign(localX || reach.side) === reach.side ? 1 : 0;
+      const edge = smoothstep(0.02, 0.22, mask) * (1 - smoothstep(0.26, 0.58, mask));
+      const vertical = Math.exp(-(((sy - reach.sy) / 0.18) ** 2));
+      const dx = reach.surfaceX - x;
+      const dy = reach.surfaceY - y;
+      const localPull = Math.exp(-((dx * dx + dy * dy) / 36000)) * sideMatch;
+      const edgePull = edge * vertical * sideMatch;
+      return {
+        x: reach.side * edgePull * (8 + reach.energy * 22) + dx * 0.06 * localPull,
+        y: dy * 0.04 * localPull - edgePull * (sy - reach.sy) * 10,
+        alpha: Math.max(edgePull * 0.95, localPull * 0.8)
+      };
+    }
+
+    function drawEyeGlint(cx, cy, length, thickness, tilt, warmth) {
+      const open = 1 - blinkPhase * 0.9;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(tilt);
+
+      const glow = ctx.createLinearGradient(-length * 0.58, 0, length * 0.58, 0);
+      glow.addColorStop(0, 'rgba(0,0,0,0)');
+      glow.addColorStop(0.20, warmth ? 'rgba(255, 176, 108, 0.42)' : 'rgba(126, 226, 230, 0.28)');
+      glow.addColorStop(0.50, 'rgba(255, 247, 236, 0.92)');
+      glow.addColorStop(0.82, warmth ? 'rgba(255, 196, 124, 0.54)' : 'rgba(126, 226, 230, 0.38)');
+      glow.addColorStop(1, 'rgba(0,0,0,0)');
+
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.moveTo(-length * 0.56, 0);
+      ctx.quadraticCurveTo(-length * 0.10, -thickness * open, length * 0.56, -thickness * 0.06 * open);
+      ctx.quadraticCurveTo(length * 0.14, thickness * 0.72 * open, -length * 0.56, 0);
+      ctx.fill();
+
+      ctx.fillStyle = 'rgba(12, 14, 20, 0.44)';
+      ctx.fillRect(-length * 0.06, -Math.max(1, thickness * 0.28 * open), length * 0.18, Math.max(1.4, thickness * 0.56 * open));
+      ctx.restore();
+    }
+
+    function render(now) {
+      time += reduceMotion ? 0.004 : 0.012;
+      pointer.heroX += (pointer.heroTargetX - pointer.heroX) * 0.055;
+      pointer.heroY += (pointer.heroTargetY - pointer.heroY) * 0.055;
+
+      if (now > blinkAt) {
+        blinkPhase += 0.16;
+        if (blinkPhase >= 1) {
+          blinkPhase = 0;
+          blinkAt = now + 3000 + Math.random() * 3600;
+        }
+      } else {
+        blinkPhase *= 0.82;
+      }
+
+      ctx.clearRect(0, 0, width, height);
+      const reach = computeReach();
+      const bustShape = buildBustShape(reach);
+      const head = sectionState(0.25);
+      const shoulder = sectionState(0.84);
+      const glyphTick = (time * 3.2) | 0;
+      const focusX = pointer.active ? pointer.x : width * 0.70;
+      const focusY = pointer.active ? pointer.y : height * 0.38;
+      const presenceAt = (x, y) => Math.exp(-(((x - head.center) / (width * 0.34)) ** 2 + ((y - height * 0.52) / (height * 0.42)) ** 2));
+
+      const ambience = ctx.createRadialGradient(head.center, head.y, 0, shoulder.center, shoulder.y, height * 0.78);
+      ambience.addColorStop(0, 'rgba(255,255,255,0.016)');
+      ambience.addColorStop(0.12, 'rgba(240,137,74,0.065)');
+      ambience.addColorStop(0.30, 'rgba(90,207,212,0.055)');
+      ambience.addColorStop(0.62, 'rgba(90,207,212,0.020)');
+      ambience.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = ambience;
+      ctx.fillRect(0, 0, width, height);
+
+      ctx.save();
+      ctx.clip(bustShape.path);
+      const bodyGradient = ctx.createLinearGradient(bustShape.centerX, bustShape.crownY, bustShape.centerX, bustShape.chestY);
+      bodyGradient.addColorStop(0, 'rgba(236, 242, 246, 0.018)');
+      bodyGradient.addColorStop(0.22, 'rgba(90, 207, 212, 0.052)');
+      bodyGradient.addColorStop(0.48, 'rgba(255, 255, 255, 0.018)');
+      bodyGradient.addColorStop(0.74, 'rgba(240, 137, 74, 0.050)');
+      bodyGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = bodyGradient;
+      ctx.fillRect(
+        bustShape.centerX - bustShape.shoulderHalf - 90,
+        bustShape.crownY - 40,
+        bustShape.shoulderHalf * 2 + 180,
+        bustShape.chestY - bustShape.crownY + 80
+      );
+
+      const faceCore = ctx.createRadialGradient(head.center, sectionState(0.36).y, 0, head.center, sectionState(0.36).y, width * 0.12);
+      faceCore.addColorStop(0, 'rgba(236, 242, 246, 0.040)');
+      faceCore.addColorStop(0.42, 'rgba(126, 220, 226, 0.032)');
+      faceCore.addColorStop(0.78, 'rgba(240, 137, 74, 0.020)');
+      faceCore.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = faceCore;
+      ctx.fillRect(head.center - width * 0.20, sectionState(0.22).y - height * 0.12, width * 0.40, height * 0.38);
+
+      for (let i = 0; i < 44; i++) {
+        const y = lerp(bustShape.crownY + 6, bustShape.chestY - 10, i / 43);
+        ctx.beginPath();
+        for (let x = bustShape.centerX - bustShape.shoulderHalf - 30; x <= bustShape.centerX + bustShape.shoulderHalf + 30; x += 14) {
+          const wave = Math.sin(time * 1.2 + i * 0.26 + x * 0.012) * (1.2 + i * 0.02);
+          if (x === bustShape.centerX - bustShape.shoulderHalf - 30) ctx.moveTo(x, y + wave);
+          else ctx.lineTo(x, y + wave);
+        }
+        ctx.strokeStyle = i % 2 === 0 ? 'rgba(236, 242, 246, 0.020)' : 'rgba(126, 220, 226, 0.018)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      ctx.strokeStyle = 'rgba(126, 220, 226, 0.050)';
+      ctx.lineWidth = 1.1;
+      ctx.stroke(bustShape.path);
+      ctx.setLineDash([8, 10]);
+      ctx.strokeStyle = 'rgba(255, 176, 112, 0.030)';
+      ctx.lineWidth = 1;
+      ctx.stroke(bustShape.path);
+      ctx.setLineDash([]);
+
+      const sweepBase = (time * 0.085) % 1;
+      for (let band = -2; band <= 2; band++) {
+        const sy = clamp(0.08 + sweepBase * 0.86 + band * 0.012, 0.06, 0.96);
+        const row = sectionState(sy);
+        const sweepY = row.y;
+        ctx.beginPath();
+        let started = false;
+        for (let x = row.center - row.scale * 1.65 - 120; x <= row.center + row.scale * 1.65 + 120; x += 10) {
+          const field = fieldAt(x, sy, row);
+          const mask = maskFromField(field);
+          const halo = haloFromField(field);
+          const total = mask + halo * 0.25;
+          if (total < 0.05) {
+            started = false;
+            continue;
+          }
+          const influence = reachInfluence(x, sweepY, sy, row, Math.max(mask, halo * 0.55), reach);
+          const y = sweepY + Math.sin(x * 0.017 + time * 3.1 + band * 0.8) * (0.9 + halo * 1.3) + influence.y * 0.08;
+          const drawX = x + influence.x * 0.10;
+          if (!started) {
+            ctx.moveTo(drawX, y);
+            started = true;
+          } else {
+            ctx.lineTo(drawX, y);
+          }
+        }
+        ctx.strokeStyle = band === 0
+          ? 'rgba(132, 222, 226, 0.10)'
+          : 'rgba(255, 176, 112, 0.045)';
+        ctx.lineWidth = band === 0 ? 1.2 : 1;
+        ctx.stroke();
+      }
+
+      for (let i = 0; i < 16; i++) {
+        const lineY = height * (0.07 + i * 0.057);
+        ctx.beginPath();
+        let started = false;
+        for (let x = -20; x <= width + 20; x += 18) {
+          const nx = x / width;
+          const wave = Math.sin(nx * 6.2 + time * (0.46 + i * 0.02) + i * 0.22) * (5.2 + i * 0.3);
+          const pointerField = Math.exp(-(((x - focusX) / 210) ** 2 + ((lineY - focusY) / 150) ** 2));
+          const reachBend = Math.exp(-(((x - reach.boundaryX) / 220) ** 2 + ((lineY - reach.boundaryY) / 165) ** 2)) * reach.side * 11;
+          const presence = presenceAt(x, lineY);
+          const energy = presence + pointerField * 0.7;
+          if (energy < 0.05) {
+            started = false;
+            continue;
+          }
+          const y = lineY + wave + pointerField * Math.sin(time * 5.3 + x * 0.014 - i * 0.4) * 9 + reachBend;
+          if (!started) {
+            ctx.moveTo(x, y);
+            started = true;
+          } else {
+            ctx.lineTo(x, y);
+          }
+        }
+        ctx.strokeStyle = i % 2 === 0 ? 'rgba(255,255,255,0.022)' : 'rgba(90,207,212,0.025)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      const fieldSize = Math.max(9, glyphSize - 2);
+      const fieldX = width < 620 ? 13 : 12;
+      const fieldY = width < 620 ? 14 : 13;
+      const fieldCols = Math.ceil(width / fieldX) + 2;
+      const fieldRows = Math.ceil(height / fieldY) + 2;
+      ctx.font = `400 ${fieldSize}px "IBM Plex Mono", monospace`;
+
+      for (let c = 0; c < fieldCols; c += 2) {
+        const x = c * fieldX - fieldX;
+        for (let r = 0; r < fieldRows; r += 2) {
+          const y = r * fieldY - fieldY;
+          const pointerField = Math.exp(-(((x - focusX) / 260) ** 2 + ((y - focusY) / 185) ** 2));
+          const presence = presenceAt(x, y);
+          if (presence < 0.05 && pointerField < 0.035) continue;
+          const alpha = 0.005 + presence * 0.020 + pointerField * 0.020;
+          const glyph = DIGITS[(glyphTick + c * 9 + r * 5) % DIGITS.length];
+          ctx.fillStyle = (c + r) % 3 === 0
+            ? `rgba(128, 214, 220, ${alpha})`
+            : `rgba(224, 230, 236, ${alpha * 0.6})`;
+          ctx.fillText(glyph, x + Math.sin(time * 0.25 + c * 0.4) * 1.2, y);
+        }
+      }
+
+      const bustSize = glyphSize + 0.5;
+      const bustX = width < 620 ? 12 : 10.5;
+      const bustY = width < 620 ? 14 : 12;
+      const bustCols = Math.ceil(width / bustX) + 2;
+      const bustRows = Math.ceil(height / bustY) + 2;
+      ctx.font = `600 ${bustSize}px "IBM Plex Mono", monospace`;
+
+      for (let c = 0; c < bustCols; c++) {
+        const baseX = c * bustX - bustX;
+        const columnDrift = Math.sin(time * 0.32 + c * 0.60) * 1.5;
+        const streamShift = ((time * 12) | 0) + c * 7;
+        for (let r = 0; r < bustRows; r++) {
+          const baseY = r * bustY - bustY;
+          const sy = (baseY - topY) / (bottomY - topY);
+          if (sy < -0.05 || sy > 1.06) continue;
+
+          const row = sectionState(clamp(sy, 0, 1));
+          const localX = (baseX - row.center) / Math.max(row.scale, 1);
+          const field = bustField(localX, clamp(sy, 0, 1));
+          const mask = maskFromField(field);
+          const contourHalo = haloFromField(field);
+          if (mask < 0.045 && contourHalo < 0.07) continue;
+
+          const glow = featureGlow(localX, clamp(sy, 0, 1));
+          const influence = reachInfluence(baseX, baseY, clamp(sy, 0, 1), row, Math.max(mask, contourHalo * 0.55), reach);
+          const stream = 0.5 + 0.5 * Math.sin(time * 4.2 + c * 0.16 - r * 0.52);
+          const density = mask * (0.20 + glow * 0.30 + stream * 0.18 + influence.alpha * 0.14) + contourHalo * 0.18;
+          const drawX = baseX + columnDrift + influence.x * 0.22 + Math.sin(time * 0.78 + r * 0.11 + c * 0.07) * mask * 0.8;
+          const drawY = baseY + influence.y * 0.18 + (stream - 0.5) * mask * 2.4;
+          const warmSide = localX * reach.side > 0.34 && influence.alpha > 0.12;
+          const bright = density > 0.22 || stream > 0.76;
+          const glyph = bright
+            ? DIGITS[(glyphTick * 3 + c * 11 + r * 5 + streamShift) % DIGITS.length]
+            : DIGITS[(glyphTick + c * 3 + r) % 2];
+
+          let alpha = density;
+          if (alpha < 0.05) continue;
+          alpha = clamp(alpha, 0.07, 0.46);
+
+          if (warmSide) {
+            ctx.fillStyle = `rgba(255, 182, 118, ${alpha * 0.92})`;
+          } else if (glow > 0.86 || bright) {
+            ctx.fillStyle = `rgba(236, 242, 246, ${alpha * 0.98})`;
+          } else if (glow > 0.38) {
+            ctx.fillStyle = `rgba(142, 224, 228, ${alpha * 0.92})`;
+          } else {
+            ctx.fillStyle = `rgba(214, 224, 232, ${alpha * 0.54})`;
+          }
+          ctx.fillText(glyph, drawX, drawY);
+        }
+      }
+
+      const veilRows = 38;
+      for (let i = 0; i < veilRows; i++) {
+        const sy = lerp(0.08, 0.94, i / Math.max(1, veilRows - 1));
+        const row = sectionState(sy);
+        const left = findBoundary(sy, -1).x;
+        const right = findBoundary(sy, 1).x;
+        if (right - left < 30) continue;
+        ctx.beginPath();
+        let started = false;
+        for (let x = left; x <= right; x += 10) {
+          const field = fieldAt(x, sy, row);
+          const mask = maskFromField(field);
+          if (mask < 0.04) {
+            started = false;
+            continue;
+          }
+          const influence = reachInfluence(x, row.y, sy, row, mask, reach);
+          const localX = (x - row.center) / Math.max(row.scale, 1);
+          const y = row.y + featureRelief(localX, sy, time) * 0.05 + Math.sin(x * 0.014 + time * 1.3 + i * 0.3) * 0.9 + influence.y * 0.10;
+          const drawX = x + influence.x * 0.12;
+          if (!started) {
+            ctx.moveTo(drawX, y);
+            started = true;
+          } else {
+            ctx.lineTo(drawX, y);
+          }
+        }
+        ctx.strokeStyle = i % 2 === 0 ? 'rgba(236, 242, 246, 0.028)' : 'rgba(126, 220, 226, 0.026)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      const strandCount = width < 620 ? 34 : 46;
+      for (let i = 0; i < strandCount; i++) {
+        ctx.beginPath();
+        let started = false;
+
+        const ratio = lerp(-1.08, 1.08, i / Math.max(1, strandCount - 1));
+        for (let step = 0; step <= 84; step++) {
+          const sy = step / 84;
+          const row = sectionState(sy);
+          const x = row.center + ratio * row.scale + Math.sin(time * 0.5 + i * 0.32 + sy * 6) * 1.5;
+          const localX = (x - row.center) / Math.max(row.scale, 1);
+          const field = bustField(localX, sy);
+          const mask = maskFromField(field);
+          const edgeHalo = haloFromField(field);
+          const total = mask + edgeHalo * 0.4;
+          if (total < 0.05) {
+            started = false;
+            continue;
+          }
+
+          const relief = featureRelief(localX, sy, time) * 0.12;
+          const influence = reachInfluence(x, row.y, sy, row, Math.max(mask, edgeHalo * 0.55), reach);
+          const signal = Math.sin(time * (0.82 + sy * 0.4) + i * 0.24 + sy * 18) * (1.5 + mask * 4.2);
+          const drawX = x + influence.x * 0.20;
+          const drawY = row.y + relief + signal * mask + influence.y * 0.15;
+
+          if (!started) {
+            ctx.moveTo(drawX, drawY);
+            started = true;
+          } else {
+            ctx.lineTo(drawX, drawY);
+          }
+        }
+
+        const alpha = 0.020 + (1 - Math.abs(ratio)) * 0.018;
+        ctx.strokeStyle = i % 3 === 0
+          ? `rgba(132, 218, 224, ${alpha})`
+          : i % 3 === 1
+            ? `rgba(255, 176, 112, ${alpha * 0.88})`
+            : `rgba(232, 238, 242, ${alpha * 0.48})`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      for (const side of [-1, 1]) {
+        ctx.beginPath();
+        let started = false;
+        for (let step = 0; step <= 82; step++) {
+          const sy = lerp(0.06, 0.96, step / 82);
+          const row = sectionState(sy);
+          const boundary = findBoundary(sy, side);
+          const x = boundary.x;
+          const mask = silhouetteMask(x, sy, row);
+          const influence = reachInfluence(x, row.y, sy, row, mask, reach);
+          const drawX = x + influence.x * 0.16;
+          const drawY = row.y + featureRelief(side * 0.84, sy, time) * 0.07 + influence.y * 0.12;
+          if (!started) {
+            ctx.moveTo(drawX, drawY);
+            started = true;
+          } else {
+            ctx.lineTo(drawX, drawY);
+          }
+        }
+        ctx.strokeStyle = side === reach.side
+          ? `rgba(255, 186, 122, ${0.10 + reach.energy * 0.04})`
+          : 'rgba(120, 210, 216, 0.07)';
+        ctx.lineWidth = 1.05;
+        ctx.stroke();
+      }
+
+      const eyeMetrics = sectionState(0.34);
+      const eyeSpread = eyeMetrics.scale * 0.24;
+      const eyeY = eyeMetrics.y - height * 0.004;
+      const glanceX = clamp((pointer.heroX - 0.66) * 7, -4.5, 4.5);
+      const glanceY = clamp((pointer.heroY - 0.47) * 5, -2.0, 2.0);
+      const leftEyeX = eyeMetrics.center - eyeSpread + glanceX * 0.35;
+      const rightEyeX = eyeMetrics.center + eyeSpread * 0.88 + glanceX * 0.26;
+      const leftEyeY = eyeY + glanceY * 0.25;
+      const rightEyeY = eyeY + glanceY * 0.32 - 1.2;
+
+      ctx.strokeStyle = 'rgba(255, 214, 182, 0.14)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(leftEyeX - width * 0.030, leftEyeY - height * 0.018);
+      ctx.quadraticCurveTo(leftEyeX - width * 0.008, leftEyeY - height * 0.030, leftEyeX + width * 0.026, leftEyeY - height * 0.013);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(rightEyeX - width * 0.028, rightEyeY - height * 0.016);
+      ctx.quadraticCurveTo(rightEyeX + width * 0.008, rightEyeY - height * 0.026, rightEyeX + width * 0.034, rightEyeY - height * 0.008);
+      ctx.stroke();
+
+      drawEyeGlint(leftEyeX, leftEyeY, width * 0.050, height * 0.012, -0.09, false);
+      drawEyeGlint(rightEyeX, rightEyeY, width * 0.056, height * 0.013, 0.07, true);
+
+      const noseTop = sectionState(0.36);
+      const noseMid = sectionState(0.47);
+      const noseLow = sectionState(0.60);
+      ctx.beginPath();
+      ctx.moveTo(noseTop.center + glanceX * 0.12, noseTop.y + height * 0.010);
+      ctx.quadraticCurveTo(noseMid.center + glanceX * 0.18, noseMid.y - height * 0.010, noseLow.center + glanceX * 0.08, noseLow.y - height * 0.018);
+      ctx.strokeStyle = 'rgba(232, 237, 241, 0.13)';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+
+      const reachGlow = ctx.createRadialGradient(reach.boundaryX, reach.boundaryY, 0, reach.boundaryX, reach.boundaryY, width * 0.18);
+      reachGlow.addColorStop(0, 'rgba(255, 245, 236, 0.05)');
+      reachGlow.addColorStop(0.24, 'rgba(255, 176, 112, 0.05)');
+      reachGlow.addColorStop(0.52, 'rgba(90, 207, 212, 0.04)');
+      reachGlow.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = reachGlow;
+      ctx.fillRect(0, 0, width, height);
+
+      for (let i = -7; i <= 7; i++) {
+        const sy = clamp(reach.sy + i * 0.02, 0.08, 0.92);
+        const row = sectionState(sy);
+        const boundary = findBoundary(sy, reach.side);
+        const x = boundary.x + reach.side * (8 + Math.max(0, 7 - Math.abs(i)) * 3.2);
+        const y = row.y + Math.sin(time * 1.9 + i * 0.8) * 2.4;
+        ctx.beginPath();
+        ctx.moveTo(x - reach.side * 8, y);
+        ctx.lineTo(x + reach.side * (16 + reach.energy * 8), y + i * 0.5);
+        ctx.strokeStyle = i % 2 === 0
+          ? `rgba(255, 184, 120, ${0.045 + (7 - Math.abs(i)) * 0.010})`
+          : `rgba(132, 222, 226, ${0.04 + (7 - Math.abs(i)) * 0.009})`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      ctx.beginPath();
+      ctx.moveTo(reach.boundaryX + reach.side * 12, reach.boundaryY - 16);
+      ctx.lineTo(reach.boundaryX + reach.side * 36, reach.boundaryY - 16);
+      ctx.lineTo(reach.boundaryX + reach.side * 36, reach.boundaryY - 4);
+      ctx.moveTo(reach.boundaryX + reach.side * 12, reach.boundaryY + 16);
+      ctx.lineTo(reach.boundaryX + reach.side * 36, reach.boundaryY + 16);
+      ctx.lineTo(reach.boundaryX + reach.side * 36, reach.boundaryY + 4);
+      ctx.strokeStyle = 'rgba(126, 220, 226, 0.08)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      requestAnimationFrame(render);
+    }
+
+    resize();
+    requestAnimationFrame(render);
+    window.addEventListener('resize', resize);
+  }
+
+  initAmbientField();
+  initHeroPresence();
+})();
+</script>
+
+</body>
+</html>
