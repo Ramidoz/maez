@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-13T03:03:58+00:00",
+  "updated_at": "2026-04-14T01:09:01+00:00",
   "items": [
     {
       "id": "core-heartbeat",
@@ -171,6 +171,78 @@
         "mission"
       ],
       "updated_at": "2026-04-10T20:53:39+00:00"
+    },
+    {
+      "id": "1",
+      "title": "Session 11z: decision layer + execution pipeline",
+      "status": "done",
+      "visibility": "public",
+      "summary": "",
+      "details": "",
+      "private_notes": "",
+      "tags": [
+        "session-log",
+        "part-a",
+        "decision-layer"
+      ],
+      "updated_at": "2026-04-13T17:16:41Z"
+    },
+    {
+      "id": "2",
+      "title": "Session 11z incident: soul.md damaged by runaway sed smoke test",
+      "status": "done",
+      "visibility": "public",
+      "summary": "",
+      "details": "",
+      "private_notes": "",
+      "tags": [
+        "incident",
+        "recovery"
+      ],
+      "updated_at": "2026-04-13T17:16:41Z"
+    },
+    {
+      "id": "3",
+      "title": "Part 2 live Telegram verification",
+      "status": "next",
+      "visibility": "public",
+      "summary": "",
+      "details": "",
+      "private_notes": "",
+      "tags": [
+        "part-a",
+        "verification"
+      ],
+      "updated_at": "2026-04-13T17:16:41Z"
+    },
+    {
+      "id": "4",
+      "title": "Session 11z Part 3: Telegram reactions + self-mod answerer",
+      "status": "planned",
+      "visibility": "public",
+      "summary": "",
+      "details": "",
+      "private_notes": "",
+      "tags": [
+        "part-a",
+        "telegram",
+        "voice-scaffold"
+      ],
+      "updated_at": "2026-04-13T17:16:41Z"
+    },
+    {
+      "id": "5",
+      "title": "Part 4: Actual voice transport (STT in, TTS out)",
+      "status": "planned",
+      "visibility": "public",
+      "summary": "",
+      "details": "",
+      "private_notes": "",
+      "tags": [
+        "part-a",
+        "voice"
+      ],
+      "updated_at": "2026-04-13T17:16:41Z"
     }
   ]
 }

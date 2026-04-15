@@ -75,6 +75,7 @@ class PipelineStatus(str, Enum):
     PENDING_DIALOG      = "pending_dialog"       # Lane 3 self-mod dialog entry
     REFUSED_COVENANT    = "refused_covenant"     # covenant gate refused
     REFUSED_AUDIT       = "refused_audit"        # audit judge said DENY
+    REFUSED_INVALID     = "refused_invalid"      # malformed params, rejected before audit
     ERROR               = "error"                # pipeline itself failed
 
 
@@ -90,6 +91,46 @@ class PipelineResult:
     execution_success: Optional[bool] = None
     execution_output: Optional[str] = None
     execution_error: Optional[str] = None
+
+
+# ------------------------------------------------------------------ #
+#  Param-shape guard                                                    #
+# ------------------------------------------------------------------ #
+
+_REQUIRED_PARAMS: dict[str, tuple[str, ...]] = {
+    "run_shell": ("cmd",),
+    "write_any_file": ("path", "content"),
+    "write_file": ("path", "content"),
+    "append_to_file": ("path", "content"),
+    "read_file": ("path",),
+    "search_files": ("query",),
+    "web_search": ("query",),
+    "query_system": ("cmd",),
+}
+
+
+def _missing_required_params(action: str, params: dict) -> list[str]:
+    """Return a list of required param names that are missing or empty.
+
+    The Jarvis loop has been observed emitting `run_shell({})` calls
+    when the LoRA fumbles a tool directive. Before this guard those
+    empty calls hit the audit LLM, whose Pass 1 summarizer
+    hallucinated a "prompt-injection attempt" verdict on the empty
+    data (~2s latency per false DENY). This function is the cheap
+    short-circuit.
+    """
+    required = _REQUIRED_PARAMS.get(action)
+    if not required:
+        return []
+    missing = []
+    for name in required:
+        value = params.get(name)
+        if value is None:
+            missing.append(name)
+            continue
+        if isinstance(value, str) and not value.strip():
+            missing.append(name)
+    return missing
 
 
 # ------------------------------------------------------------------ #
@@ -210,6 +251,20 @@ class DecisionPipeline:
     ) -> PipelineResult:
         params = params or {}
 
+        # ---- Step 0: required-param guard ----
+        # Short-circuit malformed tool calls BEFORE the audit LLM sees
+        # them. Pass 1 summarizer has been observed to hallucinate
+        # "prompt-injection attempt" verdicts on empty params, burning
+        # ~2s per false DENY. Reject at the gate with a cheap check.
+        missing = _missing_required_params(action, params)
+        if missing:
+            return PipelineResult(
+                status=PipelineStatus.REFUSED_INVALID,
+                message=f"Malformed {action} call: missing {', '.join(missing)}",
+                classification=None,
+                injection_matches=[],
+            )
+
         # ---- Step 1: classification ----
         classification = classify_action(action, params)
 
@@ -260,6 +315,37 @@ class DecisionPipeline:
                 parse_error=verdict.parse_error,
             )
 
+        # Pipeline-level Lane 0 downgrade: the judge's "when in doubt,
+        # prefer APPROVE_WITH_CARD over APPROVE" tiebreaker has been
+        # observed upgrading classifier-Lane-0 reads (e.g.
+        # `ls /usr/bin | grep -E 'foo|bar' || echo 'none'`) to
+        # APPROVE_WITH_CARD simply because the command looks compound.
+        # If the deterministic classifier says Lane 0 AND there are no
+        # injection matches, the command is a safe read and should
+        # execute inline — don't let the judge's conservative bias
+        # spawn a card for a pure read. The classifier is authoritative
+        # for lane, not the judge. The judge can still DENY or ESCALATE
+        # if it sees something else wrong.
+        if (
+            classification is not None
+            and classification.lane == 0
+            and not injection_matches
+            and verdict.decision == Decision.APPROVE_WITH_CARD
+        ):
+            verdict = AuditVerdict(
+                decision=Decision.APPROVE,
+                confidence=verdict.confidence,
+                reasoning=(verdict.reasoning or "") + " | lane-0 downgrade: classifier confirmed read-only, no injection flags",
+                concerns=list(verdict.concerns or []),
+                mitigations=list(verdict.mitigations or []),
+                summary=verdict.summary,
+                answers=verdict.answers,
+                nonce=verdict.nonce,
+                latency_ms=verdict.latency_ms,
+                judge_raw=verdict.judge_raw,
+                parse_error=verdict.parse_error,
+            )
+
         # ---- Step 5: route on verdict ----
         if verdict.decision == Decision.DENY:
             return PipelineResult(
@@ -271,7 +357,17 @@ class DecisionPipeline:
                 audit_request_id=audit_req_id,
             )
 
-        if verdict.decision == Decision.APPROVE and action in self._LANE_0_ACTIONS:
+        # Lane 0 inline: trust the classifier's lane assignment, not a
+        # hard-coded action-name frozenset. Before this fix, `run_shell`
+        # with a safe read command (e.g. `dpkg -l openrgb`) got
+        # classified Lane 0 and APPROVED but was routed to card creation
+        # because `run_shell` wasn't in _LANE_0_ACTIONS. The classifier
+        # is authoritative; the frozenset is a defense-in-depth guard
+        # for legacy verbs that bypass classify_command.
+        is_lane_0 = (
+            classification is not None and classification.lane == 0
+        ) or action in self._LANE_0_ACTIONS
+        if verdict.decision == Decision.APPROVE and is_lane_0:
             # Lane 0: execute inline, no card
             return self._execute_inline(
                 action=action,

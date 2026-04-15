@@ -95,7 +95,7 @@ class QualityTracker:
     def record_outcome(self, action_id: str, outcome: str,
                        rohit_feedback: str = ""):
         """Record the outcome of an action."""
-        valid = {'executed', 'approved', 'cancelled', 'rejected', 'superseded'}
+        valid = {'executed', 'approved', 'cancelled', 'rejected', 'superseded', 'failed'}
         if outcome not in valid:
             logger.warning("Invalid outcome '%s' for %s", outcome, action_id)
             return

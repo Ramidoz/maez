@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Decoding Maez: Architecture & Distinctiveness</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #F7F5F0; color: #2D3748; }
+        
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+            height: 350px;
+            max-height: 400px;
+        }
+        @media (min-width: 768px) {
+            .chart-container { height: 400px; max-width: 800px; }
+        }
+        
+        .tab-content { display: none; }
+        .tab-content.active { display: block; animation: fadeIn 0.4s ease-in-out; }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="antialiased selection:bg-teal-200 selection:text-teal-900">
+
+    <!-- Chosen Palette: Warm Neutrals (Alabaster background #F7F5F0, Charcoal text #2D3748, Teal accents #2C7A7B, Warm Sand secondary #E2E8F0, Terracotta highlights #DD6B20) -->
+    <!-- Application Structure Plan: The SPA uses a tabbed navigation structure to guide the user through a logical progression: 1) The Thesis (answering 'is it new?'), 2) The Tech Stack (interactive component breakdown), 3) The Philosophy (deep dive into the 'Stand' frame and lifelong identity), and 4) Prior Art Comparison (data visualization comparing Maez to Letta/Nomi/etc.). This non-linear dashboard approach allows users to explore the technical architecture or the market positioning based on their specific research focus, making complex architectural concepts easily consumable. -->
+    <!-- Visualization & Content Choices: The report translates the textual architecture into an interactive list (Goal: Organize/Inform) to prevent overwhelming the user with technical jargon at once. A Doughnut chart (Chart.js) visualizes the 'System Loop Allocation' (Goal: Inform/Proportions) to show the balance of reasoning, perception, and memory. A Bar chart (Chart.js) is used for 'Prior Art Comparison' (Goal: Compare) to visually represent where Maez overlaps with existing systems and where its unique integration creates new value dimensions. NO SVG/Mermaid is used; all icons/diagrams rely on Tailwind styling and Unicode. -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+
+    <div class="max-w-6xl mx-auto px-4 py-8">
+        
+        <header class="mb-10 text-center md:text-left flex flex-col md:flex-row justify-between items-center border-b border-stone-300 pb-6">
+            <div>
+                <h1 class="text-4xl font-bold text-stone-800 tracking-tight mb-2">Project <span class="text-teal-700">Maez</span></h1>
+                <p class="text-lg text-stone-500">Architectural Analysis & Market Distinctiveness Report</p>
+            </div>
+            <div class="mt-4 md:mt-0 bg-stone-200 px-4 py-2 rounded-full text-sm font-semibold text-stone-700 shadow-sm border border-stone-300">
+                Status: Local-First / VRAM Deployed
+            </div>
+        </header>
+
+        <nav class="flex flex-wrap gap-2 mb-8" id="nav-tabs">
+            <button onclick="switchTab('overview')" class="tab-btn px-5 py-2.5 rounded-md font-semibold transition-all bg-teal-700 text-white shadow-md hover:bg-teal-600" id="btn-tab-overview">Executive Summary</button>
+            <button onclick="switchTab('stack')" class="tab-btn px-5 py-2.5 rounded-md font-semibold transition-all bg-stone-200 text-stone-700 shadow-sm hover:bg-stone-300" id="btn-tab-stack">Technical Stack</button>
+            <button onclick="switchTab('philosophy')" class="tab-btn px-5 py-2.5 rounded-md font-semibold transition-all bg-stone-200 text-stone-700 shadow-sm hover:bg-stone-300" id="btn-tab-philosophy">Internal Commitments</button>
+            <button onclick="switchTab('comparison')" class="tab-btn px-5 py-2.5 rounded-md font-semibold transition-all bg-stone-200 text-stone-700 shadow-sm hover:bg-stone-300" id="btn-tab-comparison">Prior Art Analysis</button>
+        </nav>
+
+        <main class="bg-white rounded-xl shadow-lg border border-stone-200 p-6 md:p-10 overflow-hidden">
+            
+            <section id="overview" class="tab-content active">
+                <div class="max-w-3xl">
+                    <h2 class="text-3xl font-bold mb-4 text-stone-800">Is Maez Anything New?</h2>
+                    <p class="text-lg mb-6 text-stone-600 leading-relaxed">
+                        The core research question asks if Maez is worth attention given that its primary ingredients—persistence, local computer action, and durable identity—exist in systems like Letta, Open Interpreter, and Nomi. 
+                    </p>
+                    
+                    <div class="bg-stone-50 border-l-4 border-orange-500 p-6 rounded-r-lg mb-8">
+                        <h3 class="text-xl font-bold mb-2 text-stone-800">The Synthesis Thesis</h3>
+                        <p class="text-stone-700">
+                            What appears distinctive about Maez is <strong>not any single component</strong>, but the specific <em>integration</em> of those components bound by strict philosophical constraints. Maez operates on the premise of the "Agent as a lifelong accumulating being" rather than a stateless API call. Its value lies in architectural clarity and boundary enforcement.
+                        </p>
+                    </div>
+
+                    <div class="grid md:grid-cols-2 gap-6 mt-8">
+                        <div class="border border-stone-200 p-5 rounded-lg hover:shadow-md transition-shadow">
+                            <div class="text-2xl mb-2">&#128269;</div>
+                            <h4 class="font-bold text-stone-800 mb-2">Feature Overlap</h4>
+                            <p class="text-sm text-stone-600">Every piece is in the literature. Open Interpreter has local action; MemGPT has memory. Maez does not invent these primitives.</p>
+                        </div>
+                        <div class="border border-teal-200 bg-teal-50 p-5 rounded-lg hover:shadow-md transition-shadow">
+                            <div class="text-2xl mb-2">&#10024;</div>
+                            <h4 class="font-bold text-teal-900 mb-2">Philosophical Differentiation</h4>
+                            <p class="text-sm text-teal-800">The market prices feature overlap, but Maez bets on deep integrations: bifurcated memory, weight-level local fine-tuning, and a presence-aware "Stand" framing.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="stack" class="tab-content">
+                <div class="mb-8">
+                    <h2 class="text-3xl font-bold mb-2 text-stone-800">The Anatomy of Maez</h2>
+                    <p class="text-stone-600">Interact with the components below to explore the local-first stack running on the Alienware host.</p>
+                </div>
+
+                <div class="grid md:grid-cols-12 gap-8">
+                    <div class="md:col-span-5 space-y-3">
+                        <button onclick="updateArch('reasoning')" class="arch-item w-full text-left px-4 py-3 rounded-md bg-teal-700 text-white font-semibold transition-colors flex justify-between items-center" id="arch-reasoning">
+                            <span>1. Reasoning Core</span> <span class="font-mono text-xs opacity-75">&#9654;</span>
+                        </button>
+                        <button onclick="updateArch('daemon')" class="arch-item w-full text-left px-4 py-3 rounded-md bg-stone-100 text-stone-700 hover:bg-stone-200 font-semibold transition-colors flex justify-between items-center" id="arch-daemon">
+                            <span>2. The Daemon Loop</span> <span class="font-mono text-xs opacity-50">&#9654;</span>
+                        </button>
+                        <button onclick="updateArch('memory')" class="arch-item w-full text-left px-4 py-3 rounded-md bg-stone-100 text-stone-700 hover:bg-stone-200 font-semibold transition-colors flex justify-between items-center" id="arch-memory">
+                            <span>3. Bifurcated Memory</span> <span class="font-mono text-xs opacity-50">&#9654;</span>
+                        </button>
+                        <button onclick="updateArch('perception')" class="arch-item w-full text-left px-4 py-3 rounded-md bg-stone-100 text-stone-700 hover:bg-stone-200 font-semibold transition-colors flex justify-between items-center" id="arch-perception">
+                            <span>4. Screen Perception</span> <span class="font-mono text-xs opacity-50">&#9654;</span>
+                        </button>
+                        <button onclick="updateArch('evolution')" class="arch-item w-full text-left px-4 py-3 rounded-md bg-stone-100 text-stone-700 hover:bg-stone-200 font-semibold transition-colors flex justify-between items-center" id="arch-evolution">
+                            <span>5. Evolution Engine</span> <span class="font-mono text-xs opacity-50">&#9654;</span>
+                        </button>
+                    </div>
+                    
+                    <div class="md:col-span-7 bg-stone-50 border border-stone-200 rounded-lg p-6 relative">
+                        <div class="absolute top-0 right-0 bg-stone-200 text-xs font-mono px-2 py-1 rounded-bl-lg rounded-tr-lg text-stone-600">SYSTEM.DETAILS</div>
+                        <h3 id="arch-detail-title" class="text-2xl font-bold text-teal-800 mb-3">Gemma-4-26B-A4B via llama.cpp</h3>
+                        <p id="arch-detail-desc" class="text-stone-700 mb-6 leading-relaxed">The central reasoning engine. Operating entirely in VRAM on local hardware (Alienware), this guarantees privacy and low-latency cognitive processing without relying on cloud APIs.</p>
+                        
+                        <div class="mt-4 pt-4 border-t border-stone-200">
+                            <p class="text-sm font-semibold text-stone-500 mb-2">Component Resource Allocation (Conceptual)</p>
+                            <div class="chart-container h-48 w-full max-w-xs mx-0">
+                                <canvas id="stackChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="philosophy" class="tab-content">
+                <div class="mb-8">
+                    <h2 class="text-3xl font-bold mb-2 text-stone-800">Internal Commitments</h2>
+                    <p class="text-stone-600">The specific rules and structures that define Maez's "personality" and security boundaries. These frame the agent not as a tool, but as an accumulating entity.</p>
+                </div>
+
+                <div class="grid md:grid-cols-2 gap-6">
+                    
+                    <div class="border border-stone-200 p-6 rounded-xl hover:border-teal-500 transition-colors group">
+                        <div class="text-3xl mb-4">&#128737;&#65039;</div>
+                        <h3 class="text-xl font-bold text-stone-800 mb-2 group-hover:text-teal-700 transition-colors">Covenant-Based Deterministic Gate</h3>
+                        <p class="text-sm text-stone-600">An approval architecture and two-pass audit system. This creates a hard boundary on actions, ensuring self-modification or critical actions pass through a strict, deterministic security layer.</p>
+                    </div>
+
+                    <div class="border border-stone-200 p-6 rounded-xl hover:border-orange-500 transition-colors group">
+                        <div class="text-3xl mb-4">&#129410;</div>
+                        <h3 class="text-xl font-bold text-stone-800 mb-2 group-hover:text-orange-600 transition-colors">Immune-System Memory</h3>
+                        <p class="text-sm text-stone-600">A strict separation between "personality memory" and "attack-memory." This allows the system to remember hostile vectors without those vectors corrupting the core persona or identity layer.</p>
+                    </div>
+
+                    <div class="border border-stone-200 p-6 rounded-xl hover:border-teal-500 transition-colors group">
+                        <div class="text-3xl mb-4">&#9203;</div>
+                        <h3 class="text-xl font-bold text-stone-800 mb-2 group-hover:text-teal-700 transition-colors">The "Stand" Frame</h3>
+                        <p class="text-sm text-stone-600">Presence-awareness is framed not as productivity tracking, but respect. It detects when the user is away and goes quiet. It waits. "Ask me in an hour" works because a Stand doesn't nag; it respects the human as a person, not a command stream.</p>
+                    </div>
+
+                    <div class="border border-stone-200 p-6 rounded-xl hover:border-orange-500 transition-colors group">
+                        <div class="text-3xl mb-4">&#129504;</div>
+                        <h3 class="text-xl font-bold text-stone-800 mb-2 group-hover:text-orange-600 transition-colors">Lifelong Weight-Level Identity</h3>
+                        <p class="text-sm text-stone-600">Identity isn't just prompt-engineered. Merged LoRA adapters (e.g., from 2000 real conversation pairs) are folded directly into the base weights. The agent is shaped organically at the weight level over years.</p>
+                    </div>
+
+                </div>
+            </section>
+
+            <section id="comparison" class="tab-content">
+                <div class="mb-8">
+                    <h2 class="text-3xl font-bold mb-2 text-stone-800">Prior Art & Market Positioning</h2>
+                    <p class="text-stone-600">Evaluating Maez's component overlap with prominent public systems to highlight its distinctive integration matrix.</p>
+                </div>
+
+                <div class="bg-stone-50 p-6 rounded-lg border border-stone-200 mb-8">
+                    <div class="chart-container">
+                        <canvas id="comparisonChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="grid md:grid-cols-3 gap-4">
+                    <div class="bg-white p-4 border border-stone-200 rounded-md shadow-sm">
+                        <h4 class="font-bold text-stone-800 mb-1 border-b border-stone-100 pb-1">Letta</h4>
+                        <p class="text-xs text-stone-600">Overlaps in: Persistence and background autonomy. Missing: The deep local-first, weight-level identity merging.</p>
+                    </div>
+                    <div class="bg-white p-4 border border-stone-200 rounded-md shadow-sm">
+                        <h4 class="font-bold text-stone-800 mb-1 border-b border-stone-100 pb-1">Open Interpreter</h4>
+                        <p class="text-xs text-stone-600">Overlaps in: Local computer action. Missing: The "Stand" frame, durable personal identity, and immune-system memory split.</p>
+                    </div>
+                    <div class="bg-white p-4 border border-stone-200 rounded-md shadow-sm">
+                        <h4 class="font-bold text-stone-800 mb-1 border-b border-stone-100 pb-1">Nomi / Kindroid</h4>
+                        <p class="text-xs text-stone-600">Overlaps in: Durable personal identity and memory. Missing: Local machine action, deterministic security gates, and self-modification logic.</p>
+                    </div>
+                </div>
+            </section>
+
+        </main>
+    </div>
+
+    <script>
+        const archData = {
+            'reasoning': {
+                title: 'Gemma-4-26B-A4B via llama.cpp',
+                desc: 'The central reasoning engine. Operating entirely in VRAM on local hardware (Alienware), this guarantees privacy and low-latency cognitive processing without relying on cloud APIs. It forms the base intellect.'
+            },
+            'daemon': {
+                title: '25-Minute Daemon Loop',
+                desc: 'A background process that wakes every ~25 minutes. It handles proactive perception, internal reflection, and potentially user outreach. This gives the system internal continuity rather than just reacting to prompts.'
+            },
+            'memory': {
+                title: 'ChromaDB & Bifurcation',
+                desc: 'Memory is layered: raw logs, daily consolidations, and a core "soul" layer. Crucially, it separates personality memory from attack-memory, creating an immune system that learns threats without altering the persona.'
+            },
+            'perception': {
+                title: 'Qwen2.5-VL Vision Process',
+                desc: 'A separate model dedicated to screen perception. By offloading visual parsing to a dedicated vision-language model, Maez maintains context of the user environment.'
+            },
+            'evolution': {
+                title: 'LoRA & Evolution Engine',
+                desc: 'A self-analysis loop meant to propose structural changes. It leverages real user interactions (e.g., 2000 conversation pairs) trained as a LoRA adapter and merged into base weights, ensuring identity is baked into the model, not just prompted.'
+            }
+        };
+
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(el => {
+                el.classList.remove('bg-teal-700', 'text-white', 'hover:bg-teal-600');
+                el.classList.add('bg-stone-200', 'text-stone-700', 'hover:bg-stone-300');
+            });
+            
+            document.getElementById(tabId).classList.add('active');
+            
+            const activeBtn = document.getElementById('btn-tab-' + tabId);
+            activeBtn.classList.remove('bg-stone-200', 'text-stone-700', 'hover:bg-stone-300');
+            activeBtn.classList.add('bg-teal-700', 'text-white', 'hover:bg-teal-600');
+
+            if(tabId === 'comparison' && !window.comparisonChartRendered) {
+                renderComparisonChart();
+                window.comparisonChartRendered = true;
+            }
+        }
+
+        function updateArch(key) {
+            document.getElementById('arch-detail-title').innerText = archData[key].title;
+            document.getElementById('arch-detail-desc').innerText = archData[key].desc;
+            
+            document.querySelectorAll('.arch-item').forEach(el => {
+                el.classList.remove('bg-teal-700', 'text-white');
+                el.classList.add('bg-stone-100', 'text-stone-700');
+            });
+            
+            const activeItem = document.getElementById('arch-' + key);
+            activeItem.classList.remove('bg-stone-100', 'text-stone-700');
+            activeItem.classList.add('bg-teal-700', 'text-white');
+
+            updateStackChart(key);
+        }
+
+        let stackChartInstance = null;
+        function renderStackChart() {
+            const ctx = document.getElementById('stackChart').getContext('2d');
+            stackChartInstance = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Reasoning', 'Perception', 'Memory Sync', 'Evolution/Security'],
+                    datasets: [{
+                        data: [50, 20, 15, 15],
+                        backgroundColor: ['#2C7A7B', '#E2E8F0', '#EDF2F7', '#DD6B20'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '70%',
+                    plugins: {
+                        legend: { position: 'right', labels: { boxWidth: 10, font: { family: 'Inter', size: 10 } } },
+                        tooltip: { callbacks: { label: function(context) { return ' ' + context.label + ': Active'; } } }
+                    }
+                }
+            });
+        }
+
+        function updateStackChart(key) {
+            if(!stackChartInstance) return;
+            let newData = [50, 20, 15, 15];
+            let colors = ['#2C7A7B', '#E2E8F0', '#EDF2F7', '#DD6B20'];
+            
+            if(key === 'reasoning') { newData = [70, 10, 10, 10]; colors[0] = '#234E52'; }
+            if(key === 'daemon') { newData = [25, 25, 25, 25]; }
+            if(key === 'memory') { newData = [10, 10, 70, 10]; colors[2] = '#2C7A7B'; colors[0] = '#E2E8F0';}
+            if(key === 'perception') { newData = [10, 70, 10, 10]; colors[1] = '#2C7A7B'; colors[0] = '#E2E8F0';}
+            if(key === 'evolution') { newData = [10, 10, 10, 70]; colors[3] = '#C05621'; colors[0] = '#E2E8F0';}
+
+            stackChartInstance.data.datasets[0].data = newData;
+            stackChartInstance.data.datasets[0].backgroundColor = colors;
+            stackChartInstance.update();
+        }
+
+        function renderComparisonChart() {
+            const ctx = document.getElementById('comparisonChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['Local Action', 'Durable Identity', 'Background Autonomy', 'Weight-Level Core', 'Immune Memory split'],
+                    datasets: [
+                        {
+                            label: 'Maez',
+                            data: [10, 10, 10, 10, 10],
+                            backgroundColor: '#2C7A7B',
+                            borderRadius: 4
+                        },
+                        {
+                            label: 'Letta',
+                            data: [2, 6, 10, 1, 0],
+                            backgroundColor: '#CBD5E0',
+                            borderRadius: 4
+                        },
+                        {
+                            label: 'Open Interpreter',
+                            data: [10, 2, 2, 0, 0],
+                            backgroundColor: '#A0AEC0',
+                            borderRadius: 4
+                        },
+                        {
+                            label: 'Nomi / Kindroid',
+                            data: [0, 10, 5, 2, 0],
+                            backgroundColor: '#718096',
+                            borderRadius: 4
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { beginAtZero: true, max: 10, display: false },
+                        x: { grid: { display: false }, ticks: { font: { family: 'Inter', size: 11 } } }
+                    },
+                    plugins: {
+                        legend: { position: 'top', labels: { font: { family: 'Inter' }, usePointStyle: true } },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const val = context.raw;
+                                    if(val > 8) return context.dataset.label + ': Core Feature';
+                                    if(val > 4) return context.dataset.label + ': Partial/Variant';
+                                    return context.dataset.label + ': Not Present / Limited';
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            renderStackChart();
+        });
+    </script>
+</body>
+</html>

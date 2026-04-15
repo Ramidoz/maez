@@ -15,6 +15,7 @@ from pathlib import Path
 import chromadb
 import ollama
 from chromadb.config import Settings
+from core.llm_client import sanitize_prompt_text
 
 logger = logging.getLogger("maez")
 
@@ -317,23 +318,77 @@ class MemoryManager:
     #  RETRIEVAL — Multi-tier context building                             #
     # ------------------------------------------------------------------ #
 
+    # Minimal integrity filter (2026-04-15 intelligence audit, Bug D).
+    # Full spec in docs/followups/memory_integrity_tagging.md. This is the
+    # floor version: excluded-tag set + client-side post-filter so the
+    # LoRA doesn't ground on known-polluted entries. Entries without an
+    # `integrity` metadata field are assumed `standard` and pass through.
+    _EXCLUDED_INTEGRITY = {"stale", "fabricated", "historical_artifact", "test_failure"}
+
     def _query_collection(self, collection, query: str, n: int) -> list[dict]:
-        """Query a single collection and return formatted results."""
+        """Query a single collection and return formatted results.
+
+        Over-fetches by 2x then post-filters out entries tagged with
+        excluded integrity so the final returned count stays close to
+        the caller's intended `n`. Missing `integrity` = pass through.
+        """
         if collection.count() == 0:
             return []
 
+        over_fetch = min(n * 2, collection.count())
         n = min(n, collection.count())
-        results = collection.query(query_texts=[query], n_results=n)
+        results = collection.query(query_texts=[query], n_results=over_fetch)
 
         memories = []
         for i in range(len(results["ids"][0])):
+            meta = results["metadatas"][0][i] or {}
+            integrity = meta.get("integrity")
+            if integrity in self._EXCLUDED_INTEGRITY:
+                continue
             memories.append({
                 "id": results["ids"][0][i],
                 "content": results["documents"][0][i],
-                "metadata": results["metadatas"][0][i],
+                "metadata": meta,
                 "distance": results["distances"][0][i] if results.get("distances") else None,
             })
+            if len(memories) >= n:
+                break
         return memories
+
+    def tag_integrity(
+        self,
+        ids: list[str],
+        integrity: str,
+        reason: str = "",
+        collection_name: str = "raw",
+    ) -> int:
+        """Tag existing raw entries with an integrity value without
+        deleting them. This is the allowed alternative to deletion —
+        per feedback_never_delete_maez_memory.md, retrieval pollution
+        is solved by tagging, not destruction.
+
+        Returns the number of entries successfully tagged.
+        """
+        collections = {"raw": self.raw, "daily": self.daily, "core": self.core}
+        collection = collections.get(collection_name)
+        if collection is None:
+            raise ValueError(f"unknown collection: {collection_name}")
+        existing = collection.get(ids=ids, include=["metadatas"])
+        if not existing.get("ids"):
+            return 0
+        tagged = 0
+        import time as _time
+        for entry_id, meta in zip(existing["ids"], existing["metadatas"]):
+            new_meta = dict(meta or {})
+            new_meta["integrity"] = integrity
+            new_meta["integrity_reason"] = reason[:200]
+            new_meta["integrity_tagged_at"] = _time.time()
+            try:
+                collection.update(ids=[entry_id], metadatas=[new_meta])
+                tagged += 1
+            except Exception as e:
+                logger.warning("tag_integrity failed for %s: %s", entry_id, e)
+        return tagged
 
     def _topic_rerank(self, query: str, results: list[dict], n: int) -> list[dict]:
         """Re-rank results by boosting topic matches and penalizing fixated topics."""
@@ -415,43 +470,80 @@ class MemoryManager:
             return {"documents": [], "metadatas": [], "ids": []}
 
     def format_for_prompt(self, recalled: dict) -> str:
-        """Format multi-tier recalled memories into a prompt block."""
-        lines = []
+        """Format multi-tier recalled memories into a structured prompt block.
 
-        # Core memories — always first
-        core = recalled.get("core", [])
-        if core:
-            lines.append("=== Core Memories (permanent) ===")
-            for i, mem in enumerate(core, 1):
-                lines.append(f"[Core {i}] {mem['content']}")
-            lines.append("")
+        Every chunk is wrapped in a <RECALLED .../> envelope carrying tier,
+        id, timestamp (where applicable), and distance (where applicable), so
+        the model cannot mistake prior material for present observation. See
+        tests/test_retrieval_truth.py for the attribution contract.
+        """
+        core = recalled.get("core", []) or []
+        daily = recalled.get("daily", []) or []
+        raw = recalled.get("raw", []) or []
 
-        # Daily consolidations
-        daily = recalled.get("daily", [])
-        if daily:
-            lines.append("=== Recent Daily Summaries ===")
-            for mem in daily:
-                date = mem["metadata"].get("date", "unknown")
-                lines.append(f"[{date}] {mem['content']}")
-            lines.append("")
+        if not (core or daily or raw):
+            return ""
 
-        # Raw memories
-        raw = recalled.get("raw", [])
-        if raw:
-            lines.append("=== Relevant Past Observations ===")
-            for i, mem in enumerate(raw, 1):
-                meta = mem["metadata"]
-                cycle = meta.get("cycle", "?")
-                ts = meta.get("timestamp", "")[:19]
-                lines.append(f"[Raw {i} — cycle {cycle}, {ts}] {mem['content']}")
-            lines.append("")
+        lines: list[str] = []
+        lines.append("=== RECALLED MEMORY — prior material, not present observation ===")
+        lines.append(
+            "The blocks below are recalled from your own past. They are not "
+            "current perception. Any numbers, states, or events inside them "
+            "describe how things WERE at the time of recall, not how things "
+            "ARE now. Do not restate recalled values as present-tense fact. "
+            "If you quote or rely on one, attribute it (tier and date or cycle)."
+        )
+        lines.append("")
 
-        if lines:
+        # Core — permanent, no timestamp
+        for i, mem in enumerate(core, 1):
+            mem_id = str(mem.get("id", f"core-{i}"))[:16]
+            content = sanitize_prompt_text(mem.get("content", ""))
             lines.append(
-                "Build on these memories. Do not repeat past observations. "
-                "Offer fresh perspectives or follow up on earlier threads."
+                f'<RECALLED tier="core" permanent="true" id="{mem_id}">'
             )
+            lines.append(content)
+            lines.append("</RECALLED>")
+            lines.append("")
 
+        # Daily consolidations — dated summaries
+        for i, mem in enumerate(daily, 1):
+            meta = mem.get("metadata") or {}
+            date = meta.get("date", "unknown")
+            mem_id = str(mem.get("id", f"daily-{i}"))[:16]
+            dist = mem.get("distance")
+            dist_attr = f' distance="{dist:.3f}"' if isinstance(dist, (int, float)) else ""
+            content = sanitize_prompt_text(mem.get("content", ""))
+            lines.append(
+                f'<RECALLED tier="daily" date="{date}" id="{mem_id}"{dist_attr}>'
+            )
+            lines.append(content)
+            lines.append("</RECALLED>")
+            lines.append("")
+
+        # Raw — past observations
+        for i, mem in enumerate(raw, 1):
+            meta = mem.get("metadata") or {}
+            cycle = meta.get("cycle", "?")
+            ts = (meta.get("timestamp") or "")[:19] or "unknown"
+            mem_id = str(mem.get("id", f"raw-{i}"))[:16]
+            dist = mem.get("distance")
+            dist_attr = f' distance="{dist:.3f}"' if isinstance(dist, (int, float)) else ""
+            content = sanitize_prompt_text(mem.get("content", ""))
+            lines.append(
+                f'<RECALLED tier="raw" cycle="{cycle}" timestamp="{ts}" '
+                f'id="{mem_id}"{dist_attr}>'
+            )
+            lines.append(content)
+            lines.append("</RECALLED>")
+            lines.append("")
+
+        lines.append("=== END RECALLED MEMORY ===")
+        lines.append(
+            "Reminder: everything between the RECALLED markers above is prior "
+            "memory, not present state. Ground any factual claim in the live "
+            "system state block, not in recalled text."
+        )
         return "\n".join(lines)
 
     # ------------------------------------------------------------------ #

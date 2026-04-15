@@ -9,6 +9,7 @@ import os
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 import ollama
 from telegram import Bot, Update, BotCommand, BotCommandScopeChat, MenuButtonCommands
@@ -150,7 +151,13 @@ def split_long_message(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> list[
 # --- Natural language intent detection ---
 MACHINE_INTENTS = {
     'status':       ['how is everything', 'system status', "what's running", 'all good', 'services ok'],
-    'logs':         ['show logs', 'recent logs', 'any errors', 'what happened', 'check logs'],
+    # 'logs' — must require an explicit mention of logs/errors/journal so
+    # generic follow-up questions like "what happened?" don't short-circuit
+    # the chat flow. Removed 'what happened' (too generic — it caught
+    # conversational follow-ups after the Fix 6 terminal summary was
+    # already delivered and routed them to a canned "Logs are clean"
+    # response, defeating the point of the summary).
+    'logs':         ['show logs', 'recent logs', 'any errors', 'check logs', 'tail logs', 'journal errors', 'systemd logs', 'what errors'],
     'restart_maez': ['restart yourself', 'restart maez', 'reboot yourself'],
     'claude_status':['claude code', "what's claude doing", 'is claude running', 'build status'],
     'reboot':       ['reboot the machine', 'restart the computer', 'reboot system'],
@@ -211,6 +218,50 @@ _CONVERSATIONAL_RE = _jarvis_re.compile(
     r')[\s.!?,]*$',
     _jarvis_re.IGNORECASE,
 )
+
+
+def _summarize_shell_error(err: str) -> str:
+    """Extract a useful one-line summary from a ShellCommandError-style
+    error string. Input typically looks like:
+        exit=100
+        stderr: E: Unable to locate package openrgb
+        stdout: Hit:1 http://archive.ubuntu.com/ ...
+
+    Returns either 'exit=<code>: <stderr snippet>' when stderr is present,
+    or just 'exit=<code>' when it isn't. Falls back to the first line
+    of the error if the structure isn't recognized.
+
+    This helper exists because Fix 6's terminal summary and
+    _collect_prior_attempts both used `err.split('\\n', 1)[0]` which
+    grabbed only 'exit=100' and threw away the stderr context — the
+    actual signal the owner needs to understand WHY an attempt failed.
+    """
+    if not err:
+        return ""
+    err = err.strip()
+    lines = err.split("\n")
+    exit_line = ""
+    stderr_first = ""
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("exit="):
+            exit_line = line[:40]
+        elif line.startswith("stderr:") and not stderr_first:
+            # First non-empty stderr content
+            stderr_content = line[len("stderr:"):].strip()
+            stderr_first = stderr_content.split("\n", 1)[0][:180]
+    if exit_line and stderr_first:
+        return f"{exit_line}: {stderr_first}"
+    if exit_line:
+        return exit_line
+    # Unknown shape — fall back to first non-empty line
+    for line in lines:
+        if line.strip():
+            return line.strip()[:200]
+    return ""
+
 
 def _should_run_jarvis_loop(text: str) -> bool:
     """True if the message could plausibly need tools. Inverts the old
@@ -334,22 +385,23 @@ def _extract_balanced_json(s: str) -> str | None:
 _TOOL_MANIFEST = """\
 TOOLS YOU CAN USE (your body, your hands — these run on the owner's machine):
 
-1. run_shell       {"cmd":"dpkg -l openrgb","reason":"check if installed"}
+1. run_shell       {"cmd":"<any shell command>","reason":"<why>"}
    Run ANY shell command via bash -c. 120s timeout. Full stdout/stderr.
    This is your hands. Pipes, redirects, sudo, chains with && — all fine.
-   Examples:
-     {"cmd":"sudo apt-get install -y openrgb","reason":"the owner asked"}
-     {"cmd":"sudo add-apt-repository -y ppa:openrgb/stable && sudo apt-get update && sudo apt-get install -y openrgb","reason":"install from PPA"}
-     {"cmd":"nvidia-smi","reason":"check GPU"}
-     {"cmd":"git status","reason":"see what's uncommitted"}
-     {"cmd":"systemctl is-active nginx","reason":"check service"}
+   Examples (each for a different kind of question):
+     {"cmd":"nvidia-smi","reason":"check GPU utilisation"}
+     {"cmd":"df -h /home","reason":"check home disk usage"}
+     {"cmd":"systemctl is-active nginx","reason":"is the service up"}
+     {"cmd":"git -C /home/rohit/maez status","reason":"see what's uncommitted"}
+     {"cmd":"which alienfx openrazer i8kutils","reason":"find installed lighting tools"}
+     {"cmd":"sudo apt-get install -y <package>","reason":"the owner asked to install"}
 2. write_any_file  {"path":"/home/rohit/notes.txt","content":"...","reason":"..."}
    Write or replace any file under /home/rohit. Auto-backs up existing files.
 3. read_file       {"path":"/home/rohit/maez/config/soul.md"}
    Read any file under /home/rohit. Returns up to 5KB.
 4. search_files    {"pattern":"*.py","directory":"/home/rohit/maez"}
    find -name pattern, max depth 5.
-5. web_search      {"query":"openrgb cpu lighting linux"}
+5. web_search      {"query":"<search query relevant to the owner's current question>"}
    Real DuckDuckGo search. Use this whenever you need facts you don't have.
 
 COVENANT (these refuse themselves — don't try):
@@ -360,6 +412,13 @@ Everything else is fair game. You have full control.
 
 To use a tool, emit ONE LINE exactly in this format and nothing else on that line:
 TOOL_CALL: {"action":"<name>","params":{...}}
+
+Every TOOL_CALL MUST have the required params for that tool:
+- run_shell: MUST include a non-empty "cmd" string. Empty/missing cmd is a malformed call.
+- write_any_file: MUST include "path" AND "content".
+- read_file / search_files: MUST include "path" or "pattern".
+- web_search: MUST include a non-empty "query".
+A call with missing params will be rejected at the gate, not sent to the owner.
 
 You will then see:
 RESULT: <output>
@@ -374,6 +433,13 @@ Rules:
 - Prefer run_shell for any real system action. It's the most capable tool.
 - the owner asking you to do something IS authorization. Don't ask "should I?" — do it, then tell him what you did.
 - If a command fails, try to fix it and retry. Pivot if the first approach doesn't work.
+- Fit the command to THIS question. Do not reuse a command from a past conversation unless the owner names the same target. "openrgb" is a historical example from your training, not a universal answer — for any lighting/RGB question, start by searching for the right tool (which alienfx, dmidecode -s system-product-name, web_search for "<hardware model> linux rgb control"), not by assuming openrgb.
+
+DIRECT-INSTALL RULE (read this twice):
+When the owner says install/download/fetch/get/grab/put on + a SPECIFIC named package (cowsay, htop, openrgb, nodejs, etc.), your FIRST tool call MUST be the install itself. Do NOT probe for context first. Do NOT check terminal history. Do NOT ask what "it" means if the owner named the target in an earlier message in this same conversation — look at the conversation thread above and resolve the pronoun yourself.
+  First-attempt shape: TOOL_CALL: {"action":"run_shell","params":{"cmd":"sudo apt-get install -y <package>","reason":"the owner asked to install <package>"}}
+If apt returns "Unable to locate package", your SECOND call should try the PPA or universe repository (apt-get install -y software-properties-common && add-apt-repository -y <ppa> && apt-get update && apt-get install -y <package>) or fall back to snap (snap install <package>) — whichever web_search confirms is the canonical path for that package.
+Gather-context-first is the failure mode. Your body is for doing, not stalling.
 """
 
 
@@ -396,6 +462,12 @@ class TelegramVoice:
         self._interrupt_queue: asyncio.Queue | None = None
         self._conversation_thread: list = []
         self._thread_last_active: float = 0.0
+        # Session 11z Part 3: per-chat recovery-depth counter. When an
+        # approved card fails and the pipeline re-enters Jarvis for an
+        # autonomous pivot, we carry a depth so we can cap retries at 2
+        # and avoid infinite recovery loops. Reset on each fresh user
+        # message (see _process_message + _try_card_reply_intent).
+        self._recovery_depth: dict[str, int] = {}
 
         if not self.token:
             logger.error("MAEZ_TELEGRAM_TOKEN not set — Telegram disabled")
@@ -455,6 +527,23 @@ class TelegramVoice:
         )
         self._card_store = card_store
         self._audit_log = audit_log
+        # Startup orphan expiry (layer 1 of the three-layer stale-card fix).
+        # Runs the first time the pipeline is constructed — effectively at
+        # service startup, since the pipeline is lazy-built. Cleans up any
+        # open/deferred cards older than the startup threshold that
+        # survived from a previous session. This prevents the exact bug
+        # observed on 2026-04-15 where an orphan card from an earlier test
+        # run persisted across a service restart and got approved by the
+        # first new "Yes" in the subsequent session.
+        try:
+            expired_count = self._expire_stale_cards_at_startup(self._decision_pipeline)
+            if expired_count:
+                logger.info(
+                    "startup stale-card cleanup: %d orphan(s) expired",
+                    expired_count,
+                )
+        except Exception as e:
+            logger.debug("startup stale-card cleanup raised: %s", e)
         return self._decision_pipeline
 
     def _send_card_message(self, chat_id, text: str, reply_to=None) -> str | None:
@@ -496,7 +585,28 @@ class TelegramVoice:
         if pipe is None:
             return False
 
-        # Zero-latency short-circuit: if no open cards, skip everything.
+        # Track A, layers 2+3 of the three-layer stale-card fix (per the owner
+        # 2026-04-15): expire any open/deferred cards for this chat that are
+        # older than the approval-binding recency window (5 min). This runs
+        # BEFORE handle_reply fetches open cards, so stale cards can't bind
+        # to bare replies like "Yes" / "Proceed". Expiration is a legitimate
+        # state transition (preserves history per the rule in
+        # feedback_never_delete_maez_memory.md), not deletion.
+        #
+        # The load-bearing property: when the user sends a bare approval,
+        # we should only consider cards that were created recently enough
+        # that the approval clearly refers to them. An orphan from 17 min
+        # ago cannot possibly be what the user just said "yes" to, so it
+        # should not be an approval target. Same logic for fresh-action
+        # messages: any pre-existing open card is stale by construction
+        # because the user just started a new goal chain.
+        try:
+            self._expire_stale_cards_for_reply(pipe)
+        except Exception as e:
+            logger.debug("stale-card pre-filter failed: %s", e)
+
+        # Zero-latency short-circuit: if no open cards (after stale expiry),
+        # skip everything.
         try:
             open_cards = pipe.card_store.get_open_for_channel(
                 "telegram_text", chat_id=str(self.authorized_user)
@@ -540,7 +650,598 @@ class TelegramVoice:
             result.status.value if result.status else "?",
             result.card.request_id if result.card else "?",
         )
+
+        # Session 11z Part 3: persist the card resolution to raw memory so
+        # the next turn's chat prompt recall knows the action ran.
+        # Without this, the owner approves "install openrgb", Maez runs it via
+        # the approval path, but on the next turn Maez has no record of
+        # the execution and fabricates "I'm still waiting for approval".
+        # The approval-path execution bypasses the normal Jarvis transcript
+        # + store_telegram path, so we write a grounded record here.
+        try:
+            from core.decision_pipeline import PipelineStatus as _PS
+            card = result.card
+            if card is not None:
+                cmd = ""
+                if isinstance(card.params, dict):
+                    cmd = str(card.params.get("cmd") or card.params.get("path") or "")[:220]
+                short_id = card.request_id[:8] if card.request_id else "?"
+                status = card.status or (result.status.value if result.status else "?")
+
+                summary = None
+                if result.status == _PS.EXECUTED:
+                    if getattr(result, "execution_success", False):
+                        out = (result.execution_output or "(no output)").strip()[:800]
+                        summary = (
+                            f"the owner said: {text!r}\n"
+                            f"That approved card {short_id} ({card.action}): {cmd}\n"
+                            f"Maez ran it successfully. Output:\n{out}"
+                        )
+                    else:
+                        err = (result.execution_error or "(no error)").strip()[:800]
+                        summary = (
+                            f"the owner said: {text!r}\n"
+                            f"That approved card {short_id} ({card.action}): {cmd}\n"
+                            f"Maez ran it and it FAILED. Error:\n{err}"
+                        )
+                elif result.status == _PS.REFUSED_AUDIT:
+                    summary = (
+                        f"the owner said: {text!r}\n"
+                        f"That attempted to approve card {short_id} ({card.action}): {cmd}\n"
+                        f"The approval-path audit refused it: {result.message[:400] if result.message else ''}"
+                    )
+                else:
+                    # denied / deferred / pending_dialog — record the state
+                    # so Maez can answer "what's the status of X" truthfully.
+                    msg = (result.message or "").strip()[:400]
+                    summary = (
+                        f"the owner said: {text!r}\n"
+                        f"Card {short_id} ({card.action}): {cmd}\n"
+                        f"New status: {status}. {msg}"
+                    )
+
+                if summary:
+                    self.memory.store_telegram(summary)
+        except Exception as e:
+            logger.debug("card reply memory store failed: %s", e)
+
+        # Session 11z Part 3: autonomous pivot on card failure. Restore
+        # the Session 11y Jarvis multi-iteration recovery pattern that
+        # was lost when Lane 2 actions moved to async approval cards.
+        # When a card executes and fails, synchronously re-enter Jarvis
+        # with the failure context and let it propose a recovery — web
+        # search, alternate install path, snap fallback, or honest
+        # explanation of why the action isn't feasible. Guarded by a
+        # per-chat recovery_depth counter (max 2) so we can't infinitely
+        # retry.
+        try:
+            from core.decision_pipeline import PipelineStatus as _PS
+            card = result.card
+            if (
+                card is not None
+                and result.status == _PS.EXECUTED
+                and not getattr(result, "execution_success", False)
+            ):
+                chat_key = str(self.authorized_user)
+                depth = self._recovery_depth.get(chat_key, 0) + 1
+                if depth > 2:
+                    # Fix 6: terminal summary on recovery cap hit.
+                    # Before this, Maez went silent after three failed
+                    # attempts. Now we walk the full set of prior
+                    # attempts, build an honest recap with real stderr
+                    # context, send it as a Telegram reply, and store
+                    # it in memory so the next turn's context recall
+                    # knows the chain ended. Fix 6 v2 also walks the
+                    # chain for the oldest real reason (because the
+                    # current card's reason may be empty when it was
+                    # created by a recovery pass with blank user_text)
+                    # and uses _summarize_shell_error for error lines
+                    # so the LoRA sees exit code AND stderr, not just
+                    # the exit header.
+                    logger.info(
+                        "recovery cap hit: depth %d exceeded for chat %s, sending terminal summary",
+                        depth, chat_key,
+                    )
+                    # Collect the full chain of failed attempts
+                    prior_attempts = self._collect_prior_attempts(
+                        card,
+                        current_card_error=result.execution_error or result.message or "",
+                    )
+                    # Build current attempt entry
+                    current_cmd = ""
+                    if isinstance(card.params, dict):
+                        current_cmd = str(card.params.get("cmd") or card.params.get("path") or "")[:280]
+                    current_err_raw = str(result.execution_error or result.message or "")
+                    current_err = _summarize_shell_error(current_err_raw)
+                    current_reason = (card.reason or "").strip()
+                    if current_reason.startswith("chat: "):
+                        current_reason = current_reason[len("chat: "):]
+                    # Number the attempts in chronological order (oldest-first)
+                    # prior_attempts is newest-first from the store; reverse for readable chronology
+                    chain = list(reversed(prior_attempts))
+                    chain.append({
+                        "cmd": current_cmd,
+                        "error": current_err,
+                        "reason": current_reason,
+                    })
+                    # Walk chain oldest-first to find the original user intent.
+                    # When the current card is a recovery-created card (its
+                    # reason is 'chat: ' with empty text), the real original
+                    # intent lives on the oldest card in the chain — which was
+                    # created by the owner's initial user message.
+                    original_intent = ""
+                    for attempt in chain:
+                        candidate = (attempt.get("reason") or "").strip()
+                        if candidate:
+                            original_intent = candidate
+                            break
+                    if not original_intent:
+                        original_intent = "the original request"
+                    # Build the honest recap for Telegram
+                    lines = [
+                        f"I've exhausted my recovery attempts for: {original_intent}",
+                        "",
+                        "Here's what I tried:",
+                    ]
+                    for i, attempt in enumerate(chain, 1):
+                        cmd = attempt.get("cmd", "?")
+                        err = attempt.get("error", "")
+                        lines.append(f"  {i}. `{cmd[:200]}`")
+                        if err:
+                            lines.append(f"      → {err[:240]}")
+                    lines.extend([
+                        "",
+                        "All three recovery attempts have failed. I'm not "
+                        "going to propose a fourth one automatically — that "
+                        "would just be more noise. If you want me to try a "
+                        "genuinely different approach (source build, "
+                        "alternative PPA, community package), tell me which "
+                        "direction and I'll propose a new card. Or if you'd "
+                        "rather abandon this and come back to it later, "
+                        "that's fine too.",
+                    ])
+                    terminal_reply = "\n".join(lines)
+                    try:
+                        await update.message.reply_text(terminal_reply)
+                        logger.info(
+                            "Fix 6 terminal summary sent to Telegram (%d chars)",
+                            len(terminal_reply),
+                        )
+                    except Exception as e:
+                        logger.warning("Fix 6 terminal reply send failed: %s", e)
+                    # Write a memory entry so the next turn's context
+                    # recall knows the chain concluded. This entry is
+                    # honest history — not fabricated — and should be
+                    # preserved as part of Maez's actual record. Do
+                    # NOT delete it later (see feedback_never_delete_
+                    # maez_memory.md).
+                    try:
+                        summary_for_memory = (
+                            f"Recovery chain terminated for goal {original_intent!r}. "
+                            f"Three attempts failed. Chain:\n"
+                        )
+                        for i, attempt in enumerate(chain, 1):
+                            cmd = attempt.get("cmd", "?")
+                            err = attempt.get("error", "")
+                            summary_for_memory += f"  {i}. {cmd[:200]}"
+                            if err:
+                                summary_for_memory += f" → {err[:240]}"
+                            summary_for_memory += "\n"
+                        summary_for_memory += (
+                            "No further automatic recovery attempted. "
+                            "Waiting for the owner to choose a different direction."
+                        )
+                        self.memory.store_telegram(summary_for_memory)
+                    except Exception as e:
+                        logger.debug("Fix 6 terminal memory store failed: %s", e)
+                    # Fix 6 v3: expire orphan open cards in this chain.
+                    # During recovery passes, the Jarvis loop can propose
+                    # multiple Lane 2 run_shell calls before hitting a
+                    # terminal state, each of which creates a separate
+                    # card via pipe.handle_action. the owner's approval only
+                    # fires on the most-recently-rendered card; earlier
+                    # cards from the same pass stay status='open' and
+                    # become orphans. When the cap hits, those orphans
+                    # are still sitting in the card store and match
+                    # RE_EXPLAIN/APPROVE patterns on future messages,
+                    # confusing the reply classifier. (Saw this firsthand
+                    # on the v1 live test: "What happened" triggered a
+                    # re-presentation of an orphan card from the depth=2
+                    # recovery pass.)
+                    #
+                    # Fix: explicitly expire every open card in this
+                    # chat within the recovery chain window (30 min,
+                    # matching _collect_prior_attempts). This is NOT
+                    # deletion — it's a legitimate state transition to
+                    # "expired: abandoned by recovery cap hit" that
+                    # preserves history in the card store. The broader
+                    # bug (recovery passes creating multiple cards in
+                    # one pass) is flagged as a separate follow-up.
+                    try:
+                        pipe_for_expiry = self._get_pipeline()
+                        if pipe_for_expiry is not None:
+                            import sqlite3
+                            import time as _time
+                            cutoff = _time.time() - 1800
+                            store = pipe_for_expiry.card_store
+                            conn = sqlite3.connect(store.db_path)
+                            orphan_ids = [
+                                row[0] for row in conn.execute(
+                                    "SELECT request_id FROM pending_cards "
+                                    "WHERE chat_id = ? AND created_at >= ? "
+                                    "AND status IN ('open', 'deferred')",
+                                    (chat_key, cutoff),
+                                ).fetchall()
+                            ]
+                            conn.close()
+                            for req_id in orphan_ids:
+                                try:
+                                    store.expire(
+                                        req_id,
+                                        reason="chain abandoned after recovery cap hit (Fix 6)",
+                                    )
+                                    logger.info(
+                                        "Fix 6: expired orphan card %s",
+                                        req_id[:8],
+                                    )
+                                except Exception as e:
+                                    logger.debug(
+                                        "Fix 6: failed to expire orphan %s: %s",
+                                        req_id[:8], e,
+                                    )
+                    except Exception as e:
+                        logger.debug("Fix 6 orphan expiration pass failed: %s", e)
+                else:
+                    self._recovery_depth[chat_key] = depth
+                    original_intent = card.reason or "an earlier request"
+                    if isinstance(original_intent, str) and original_intent.startswith("chat: "):
+                        original_intent = original_intent[len("chat: "):]
+                    prior_attempts = self._collect_prior_attempts(
+                        card, current_card_error=result.execution_error or result.message or "",
+                    )
+                    recovery_seed = {
+                        "failed_action": card.action,
+                        "failed_params": card.params,
+                        "error": result.execution_error or result.message or "",
+                        "original_intent": original_intent,
+                        "recovery_depth": depth,
+                        "prior_attempts": prior_attempts,
+                    }
+                    logger.info(
+                        "triggering recovery pass depth=%d for failed card %s",
+                        depth, card.request_id[:8] if card.request_id else "?",
+                    )
+                    loop = asyncio.get_event_loop()
+                    recovery_transcript = await loop.run_in_executor(
+                        None,
+                        lambda: self._run_jarvis_loop("", recovery_seed=recovery_seed),
+                    )
+                    if recovery_transcript:
+                        reply_text = await loop.run_in_executor(
+                            None,
+                            lambda: self._synthesize_recovery_reply(
+                                recovery_seed, recovery_transcript,
+                            ),
+                        )
+                        if reply_text:
+                            try:
+                                await update.message.reply_text(reply_text)
+                            except Exception as e:
+                                logger.debug("recovery reply send failed: %s", e)
+                            try:
+                                self.memory.store_telegram(
+                                    f"Maez recovery pass {depth}: {reply_text[:500]}"
+                                )
+                            except Exception as e:
+                                logger.debug("recovery memory store failed: %s", e)
+        except Exception as e:
+            logger.warning("recovery pass failed: %s", e)
+
         return True
+
+    # Recency window for approval binding, per the owner's three-layer fix
+    # on 2026-04-15. When a bare "Yes" / "Proceed" / "go ahead" message
+    # arrives, cards older than this window are not valid approval targets
+    # — an orphan from 17 min ago cannot possibly be what "Yes" refers to.
+    _REPLY_BINDING_WINDOW_SECONDS = 300  # 5 minutes
+    # Startup expiry threshold: cards older than this at service start are
+    # assumed to be cross-session orphans and get expired proactively.
+    _STARTUP_STALE_CARD_SECONDS = 1800  # 30 minutes
+
+    def _expire_stale_cards_for_reply(self, pipe) -> int:
+        """Expire any open/deferred cards older than the reply binding window
+        for this chat. Called at the start of _try_card_reply_intent so
+        stale cards can't bind to bare replies. Returns the count expired.
+
+        This implements layers 2 and 3 of the stale-card fix (the owner
+        2026-04-15):
+          Layer 2 (goal-chain start): when a fresh action request arrives,
+            any pre-existing open card is stale by construction — the user
+            just started a new goal chain, so old proposals aren't live.
+          Layer 3 (recency-windowed binding): bare approvals ('yes',
+            'proceed', 'go ahead') should only bind to cards created
+            recently enough that the approval clearly refers to them.
+
+        Expiration is a state transition, NOT deletion. History is
+        preserved in the card store (status='expired', resolution_notes
+        explains why). Per feedback_never_delete_maez_memory.md, we never
+        destroy card data.
+        """
+        if pipe is None:
+            return 0
+        try:
+            import sqlite3
+            import time as _time
+            chat_id = str(self.authorized_user)
+            cutoff = _time.time() - self._REPLY_BINDING_WINDOW_SECONDS
+            store = pipe.card_store
+            conn = sqlite3.connect(store.db_path)
+            stale_rows = conn.execute(
+                "SELECT request_id FROM pending_cards "
+                "WHERE chat_id = ? AND created_at < ? "
+                "AND status IN ('open', 'deferred')",
+                (chat_id, cutoff),
+            ).fetchall()
+            conn.close()
+            expired = 0
+            for (req_id,) in stale_rows:
+                try:
+                    store.expire(
+                        req_id,
+                        reason=f"stale: older than {self._REPLY_BINDING_WINDOW_SECONDS}s reply-binding window",
+                    )
+                    expired += 1
+                    logger.info(
+                        "stale-card expired (reply-time): %s",
+                        req_id[:8],
+                    )
+                except Exception as e:
+                    logger.debug("failed to expire stale card %s: %s", req_id[:8], e)
+            return expired
+        except Exception as e:
+            logger.debug("stale-card reply-time cleanup failed: %s", e)
+            return 0
+
+    def _expire_stale_cards_at_startup(self, pipe) -> int:
+        """Run once per service startup to expire open/deferred cards older
+        than the startup threshold. Handles cross-session orphans that
+        persist across restarts. Called lazily from _get_pipeline() the
+        first time it fires so it runs before any message processing."""
+        if pipe is None:
+            return 0
+        try:
+            import sqlite3
+            import time as _time
+            chat_id = str(self.authorized_user)
+            cutoff = _time.time() - self._STARTUP_STALE_CARD_SECONDS
+            store = pipe.card_store
+            conn = sqlite3.connect(store.db_path)
+            stale_rows = conn.execute(
+                "SELECT request_id FROM pending_cards "
+                "WHERE chat_id = ? AND created_at < ? "
+                "AND status IN ('open', 'deferred')",
+                (chat_id, cutoff),
+            ).fetchall()
+            conn.close()
+            expired = 0
+            for (req_id,) in stale_rows:
+                try:
+                    store.expire(
+                        req_id,
+                        reason=f"stale: cross-session orphan older than {self._STARTUP_STALE_CARD_SECONDS}s at startup",
+                    )
+                    expired += 1
+                    logger.info(
+                        "stale-card expired (startup): %s",
+                        req_id[:8],
+                    )
+                except Exception as e:
+                    logger.debug("failed to expire stale card at startup %s: %s", req_id[:8], e)
+            return expired
+        except Exception as e:
+            logger.debug("stale-card startup cleanup failed: %s", e)
+            return 0
+
+    def _collect_prior_attempts(
+        self,
+        current_card,
+        current_card_error: str = "",
+        window_seconds: int = 1800,
+    ) -> list[dict]:
+        """Walk the pending_cards store for recent failed attempts in the
+        same chat + same goal chain. Returns a list of
+        {cmd, error_summary} dicts that the recovery seed can show the
+        LoRA so it doesn't re-propose commands that have already failed.
+
+        Goal-chain heuristic: any failed run_shell card in this chat
+        within the last 30 minutes (default). This is coarse — it can
+        include unrelated failed commands that happened to be in the
+        same window — but it's far better than the current zero-memory
+        behavior where the LoRA re-proposes the exact same command it
+        just saw fail. A future refinement can carry a `goal_id` on
+        cards so recoveries only see genuinely same-chain attempts."""
+        attempts: list[dict] = []
+        try:
+            pipe = self._get_pipeline()
+            if pipe is None:
+                return attempts
+            store = pipe.card_store
+            import time as _time
+            now = _time.time()
+            cutoff = now - window_seconds
+            chat_id = str(self.authorized_user)
+            # Pull recently-resolved cards for this chat. We don't have
+            # a "failed cards in window" query so we walk get_open +
+            # query by status. Instead: iterate the store's sqlite
+            # directly for failed cards in the window.
+            import sqlite3
+            conn = sqlite3.connect(store.db_path)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT request_id, created_at, action, params_json, reason,
+                       execution_error, execution_output, status
+                FROM pending_cards
+                WHERE chat_id = ?
+                  AND created_at >= ?
+                  AND status = 'failed'
+                ORDER BY created_at DESC
+                LIMIT 12
+                """,
+                (chat_id, cutoff),
+            ).fetchall()
+            conn.close()
+            import json as _json
+            for r in rows:
+                # Skip the current card itself — its failure is already
+                # in the recovery seed's `error` field.
+                if current_card is not None and r['request_id'] == current_card.request_id:
+                    continue
+                try:
+                    params = _json.loads(r['params_json'] or '{}')
+                except Exception:
+                    params = {}
+                cmd = params.get('cmd') or params.get('path') or ''
+                if not cmd:
+                    continue
+                err = (r['execution_error'] or '').strip()
+                err_summary = _summarize_shell_error(err)
+                reason = (r['reason'] or '').strip()
+                if reason.startswith('chat: '):
+                    reason = reason[len('chat: '):]
+                attempts.append({
+                    'cmd': str(cmd)[:280],
+                    'error': err_summary,
+                    'reason': reason,
+                    'created_at': r['created_at'],
+                })
+        except Exception as e:
+            logger.debug("prior-attempts lookup failed: %s", e)
+        return attempts
+
+    def _build_recent_body_activity_block(self, since_seconds: float = 600.0) -> str:
+        """Return a human-readable block describing what Maez's body just
+        did in this chat over the last `since_seconds`. Used to make card
+        state visible to the LoRA when it answers follow-up questions.
+
+        Without this block, the telegram reply prompt has no record of
+        cards that were approved/denied/executed/failed in the last few
+        minutes. A card can execute successfully, then 60 seconds later
+        the owner asks 'are you still investigating?' and Maez has no memory
+        of the execution — it answers as if the card were still pending.
+        That was Bug C of the 2026-04-15 intelligence audit.
+
+        Format:
+          BODY ACTIVITY (last N min) — the authoritative record of what
+          your body just did. This is ground truth; trust it over memory
+          recall.
+            · 14:23:05 (EXECUTED ✓) lsb_release -a && uname -a
+                → Ubuntu 24.04.4 LTS; Linux 6.17.0-20-generic
+            · 14:21:46 (FAILED ✗) apt-get install openrgb
+                → exit=100 E: Unable to locate package openrgb
+
+        Empty when nothing happened in the window — returns "".
+        """
+        try:
+            pipe = self._get_pipeline()
+            if pipe is None:
+                return ""
+            store = getattr(self, "_card_store", None)
+            if store is None:
+                store = pipe.card_store
+            records = store.recent_activity_for_chat(
+                channel="telegram_text",
+                chat_id=str(self.authorized_user),
+                since_seconds=since_seconds,
+                limit=8,
+            )
+        except Exception as e:
+            logger.debug("recent body activity lookup failed: %s", e)
+            return ""
+
+        if not records:
+            return ""
+
+        import datetime as _dt
+        import json as _json
+
+        def _fmt_cmd(card) -> str:
+            try:
+                p = card.params or {}
+            except Exception:
+                p = {}
+            cmd = p.get("cmd") or p.get("path") or ""
+            if not cmd and card.params_json:
+                try:
+                    p2 = _json.loads(card.params_json)
+                    cmd = p2.get("cmd") or p2.get("path") or ""
+                except Exception:
+                    pass
+            return str(cmd)[:200]
+
+        def _fmt_status(card) -> str:
+            s = (card.status or "").lower()
+            mapping = {
+                "open":     "PENDING APPROVAL ⏳",
+                "deferred": "DEFERRED ⏸",
+                "done":     "EXECUTED ✓",
+                "failed":   "FAILED ✗",
+                "denied":   "DENIED ✗",
+                "expired":  "EXPIRED ⌛",
+                "running":  "RUNNING ⏳",
+            }
+            return mapping.get(s, s.upper())
+
+        def _fmt_result(card) -> str:
+            s = (card.status or "").lower()
+            if s == "done":
+                out = (card.execution_output or "").strip()
+                if not out:
+                    return "(no output)"
+                # Compact the output — one line, bounded length.
+                out = " ⏎ ".join(
+                    line.strip() for line in out.splitlines() if line.strip()
+                )
+                return out[:240]
+            if s == "failed":
+                err = (card.execution_error or "").strip()
+                if not err:
+                    return "(no error recorded)"
+                # First two non-empty lines of error, bounded.
+                parts = [line.strip() for line in err.splitlines() if line.strip()]
+                return " | ".join(parts[:2])[:240]
+            if s == "denied":
+                return "(you denied this)"
+            if s == "expired":
+                return "(expired without approval)"
+            if s == "open" or s == "deferred":
+                return "(waiting for the owner's approval)"
+            return ""
+
+        lines = []
+        for card in records:
+            ts = card.resolved_at or card.created_at
+            try:
+                t = _dt.datetime.fromtimestamp(float(ts)).strftime("%H:%M:%S")
+            except Exception:
+                t = "?"
+            cmd = _fmt_cmd(card) or card.action
+            status = _fmt_status(card)
+            result = _fmt_result(card)
+            lines.append(f"  · {t} ({status}) {cmd}")
+            if result:
+                lines.append(f"      → {result}")
+
+        header = (
+            f"BODY ACTIVITY (last {int(since_seconds/60)} min) — "
+            "the authoritative record of what your body just did in this "
+            "chat. This is ground truth. If it conflicts with your memory "
+            "recall or your intuition, trust this block. If a card shows "
+            "EXECUTED, it ran and its output is real. If a card shows "
+            "FAILED, the action did not complete. If a card shows PENDING, "
+            "it has not run yet and you are waiting for approval."
+        )
+        return header + "\n" + "\n".join(lines)
 
     def _load_soul(self) -> str:
         try:
@@ -902,6 +1603,21 @@ class TelegramVoice:
         except Exception as e:
             logger.debug("card reply interceptor failed: %s", e)
 
+        # Session 11z Part 3: reset the per-chat recovery-depth counter
+        # ONLY for messages that fell through the card-reply interceptor
+        # — i.e., genuinely new goals from the owner. If we reset before the
+        # interceptor, approving a recovery-created card resets the
+        # counter to 0, and the next recovery fires at depth=1 again,
+        # making the 2-pass cap useless and the owner cycles through an
+        # infinite approval loop. By moving the reset here, depth only
+        # restarts when the owner starts a new action request. Within one
+        # goal chain (original card → recovery card → recovery card),
+        # the counter grows monotonically and hits the cap cleanly.
+        try:
+            self._recovery_depth[str(self.authorized_user)] = 0
+        except Exception:
+            pass
+
         # Session 11x: intercept natural-language proposal approvals
         # ("yes", "do it", "reject #22", "tell me more about 22") BEFORE
         # we burn an LLM call on it. Only bounded phrases match; anything
@@ -1021,7 +1737,12 @@ class TelegramVoice:
 
         return None
 
-    def _run_jarvis_loop(self, user_text: str, max_iters: int = 4) -> str:
+    def _run_jarvis_loop(
+        self,
+        user_text: str,
+        max_iters: int = 4,
+        recovery_seed: Optional[dict] = None,
+    ) -> str:
         """ReAct-style tool-use loop. Returns a transcript block to inject
         into the streaming reply prompt, or an empty string if no tools were
         used. Synchronous because the LLM client is synchronous; called from
@@ -1031,10 +1752,19 @@ class TelegramVoice:
         when the owner asks, instead of saying 'I'll check' as text and never
         following through. Tier 0/1/2 actions execute via ActionEngine's
         existing _execute_action path so all forbidden-action checks still
-        apply. Tier 3 / forbidden surfaces as REFUSED in the transcript."""
+        apply. Tier 3 / forbidden surfaces as REFUSED in the transcript.
+
+        recovery_seed (Session 11z Part 3 autonomous pivot fix): when set,
+        the loop opens with failure-context framing instead of a fresh
+        user turn. This restores the Session 11y multi-iteration recovery
+        pattern that was lost when Session 11z Part 2 moved Lane 2 actions
+        to async cards. See _run_jarvis_recovery() for the shape of the
+        dict: {failed_action, failed_params, error, original_intent,
+        recovery_depth}. The conversational gate is bypassed for recovery
+        passes since the 'user message' is synthetic."""
         if not self.actions:
             return ""
-        if not _should_run_jarvis_loop(user_text):
+        if recovery_seed is None and not _should_run_jarvis_loop(user_text):
             return ""
 
         import json as _json
@@ -1063,9 +1793,108 @@ class TelegramVoice:
             'write_outside_maez', 'git_push',
         }
 
-        history = [
-            f"the owner just said: {user_text!r}\n\n{_TOOL_MANIFEST}\n\nBegin."
-        ]
+        if recovery_seed is not None:
+            # Recovery pass: an earlier approved action has just failed and
+            # we're re-entering Jarvis with the failure context instead of
+            # a fresh user message. The framing tells the LoRA "your last
+            # try didn't work, pivot". Keeps the full tool manifest in
+            # scope so recovery can web_search, propose a PPA, fall back
+            # to snap, etc. Recovery depth is carried so the planning LLM
+            # can see how many attempts have already happened.
+            #
+            # TERMINAL-STATE DISCIPLINE: without this, the LoRA tends to
+            # stop after a single web_search and write DONE, leaving the
+            # recovery incomplete. The prompt forces exactly one of two
+            # terminal states — STATE_A (concrete proposal) or STATE_B
+            # (honest NO_RECOVERY_FOUND) — and explicitly bans plain DONE.
+            fa = recovery_seed.get('failed_action', '?')
+            fp = _json.dumps(recovery_seed.get('failed_params', {}), default=str)[:200]
+            err = str(recovery_seed.get('error', ''))[:800]
+            intent = recovery_seed.get('original_intent', user_text)
+            depth = int(recovery_seed.get('recovery_depth', 1))
+            prior_attempts = recovery_seed.get('prior_attempts', []) or []
+
+            # Build the "already tried" block so the LoRA doesn't
+            # re-propose anything it's already seen fail in this goal
+            # chain. Without this block, each recovery sees only the
+            # single most-recent failure and can cycle indefinitely
+            # back to the original command.
+            if prior_attempts:
+                prior_block_lines = [
+                    "EARLIER ATTEMPTS IN THIS GOAL CHAIN (all already FAILED — do NOT re-propose any of these):",
+                ]
+                for i, pa in enumerate(prior_attempts, 1):
+                    prior_block_lines.append(
+                        f"  {i}. cmd: {pa.get('cmd', '?')}"
+                    )
+                    if pa.get('error'):
+                        prior_block_lines.append(
+                            f"     error: {pa['error']}"
+                        )
+                prior_block_lines.append("")  # trailing blank for separation
+                prior_block = "\n".join(prior_block_lines) + "\n"
+            else:
+                prior_block = ""
+
+            seed_msg = (
+                f"the owner's original ask was: {intent!r}\n"
+                f"You just proposed and ran: {fa}({fp})\n"
+                f"It FAILED with:\n{err}\n\n"
+                f"{prior_block}"
+                f"You are on RECOVERY PASS {depth}/2. Your job is to PIVOT "
+                f"and actually solve the original ask — not just research "
+                f"it. The EARLIER ATTEMPTS list above is authoritative — "
+                f"every command listed there has already been tried and "
+                f"failed in this session, so proposing any of them again is "
+                f"forbidden and wastes a recovery pass.\n\n"
+                f"TERMINAL-STATE RULE (read this twice). This recovery pass "
+                f"MUST end in EXACTLY ONE of these two states:\n\n"
+                f"  STATE_A — CONCRETE_PROPOSAL:\n"
+                f"    Your FINAL tool call is a run_shell TOOL_CALL that "
+                f"attempts the actual fix. Example shapes for an apt "
+                f"install that wasn't in default repos:\n"
+                f"      TOOL_CALL: {{\"action\":\"run_shell\",\"params\":"
+                f"{{\"cmd\":\"sudo add-apt-repository -y ppa:thopiekar/openrgb "
+                f"&& sudo apt-get update && sudo apt-get install -y openrgb\","
+                f"\"reason\":\"PPA install path (default repos don't carry "
+                f"openrgb)\"}}}}\n"
+                f"    Preference order when multiple options exist: "
+                f"official PPA > snap > flatpak > source build.\n\n"
+                f"  STATE_B — NO_RECOVERY_FOUND:\n"
+                f"    Emit the exact literal text on its own line:\n"
+                f"      NO_RECOVERY_FOUND: <one-line honest reason>\n"
+                f"    Use this ONLY if after research you genuinely cannot "
+                f"find a safe automated fix — e.g. the package truly "
+                f"doesn't exist, the official install requires interactive "
+                f"steps you can't automate, or every option needs the owner's "
+                f"explicit hands-on review.\n\n"
+                f"HARD PROHIBITIONS:\n"
+                f"  - Do NOT write plain DONE. DONE alone is not a valid "
+                f"terminal state in a recovery pass.\n"
+                f"  - Do NOT stop after just a web_search. Research is "
+                f"permitted as an INTERMEDIATE step but you must ALWAYS "
+                f"follow it with STATE_A or STATE_B.\n"
+                f"  - Do NOT ask the owner what to do next. You are the agent "
+                f"of your own recovery. Pick the best option yourself.\n"
+                f"  - Do NOT re-propose the exact same command that just "
+                f"failed. The error above tells you why it failed.\n\n"
+                f"GUIDANCE:\n"
+                f"  - If the error message makes the fix obvious (e.g. "
+                f"'Unable to locate package' for a package you know needs "
+                f"a PPA), propose the PPA fix IMMEDIATELY as your first "
+                f"tool call. Skip web_search.\n"
+                f"  - If the error message is ambiguous, run web_search "
+                f"first (one call), then propose the concrete fix based "
+                f"on what you find.\n"
+                f"  - You have up to 4 iterations total in this recovery "
+                f"pass.\n\n"
+                f"{_TOOL_MANIFEST}\n\nBegin recovery."
+            )
+            history = [seed_msg]
+        else:
+            history = [
+                f"the owner just said: {user_text!r}\n\n{_TOOL_MANIFEST}\n\nBegin."
+            ]
         transcript = []  # list of (action, params, output_or_error, ok)
 
         for step in range(max_iters):
@@ -1086,9 +1915,52 @@ class TelegramVoice:
                 logger.warning("jarvis loop LLM call failed at step %d: %s", step, e)
                 break
 
+            # Recovery-pass terminal-state detection. The recovery seed
+            # prompt forces the LoRA to emit either a concrete TOOL_CALL
+            # (STATE_A) or the literal "NO_RECOVERY_FOUND: <reason>"
+            # (STATE_B). Detect the latter BEFORE the generic parse so
+            # we can add a synthetic transcript entry that the synthesis
+            # step can recognize as a genuine dead end rather than as a
+            # "just research" partial result.
+            if recovery_seed is not None:
+                m_norec = _re.search(
+                    r'NO_RECOVERY_FOUND:\s*(.+?)(?:\n|$)',
+                    text, _re.IGNORECASE,
+                )
+                if m_norec:
+                    reason = m_norec.group(1).strip()[:300]
+                    transcript.append((
+                        "recovery_dead_end",
+                        {"reason": reason},
+                        f"NO_RECOVERY_FOUND: {reason}",
+                        False,
+                    ))
+                    break
+
             call = _parse_tool_call(text)
             if call is None:
-                # No recognizable call AND no DONE either — bail rather than loop.
+                # Recovery pass + plain DONE with no prior proposal =
+                # incomplete recovery. Inject a corrective history entry
+                # so the LoRA gets one more shot at producing a terminal
+                # state. If it happens again in the next iter we'll just
+                # break out.
+                if recovery_seed is not None and _re.search(r'\bdone\b', text, _re.IGNORECASE):
+                    has_concrete = any(
+                        ok is True and action != "web_search"
+                        for (action, _p, _o, ok) in transcript
+                    )
+                    if not has_concrete:
+                        history.append(
+                            "INCOMPLETE: You wrote DONE without a STATE_A "
+                            "TOOL_CALL or STATE_B NO_RECOVERY_FOUND. This is "
+                            "NOT a valid terminal state for a recovery pass. "
+                            "Either emit a concrete run_shell TOOL_CALL that "
+                            "attempts the actual fix, or emit the literal "
+                            "line 'NO_RECOVERY_FOUND: <reason>'. Try again."
+                        )
+                        continue
+                # Non-recovery or recovery with a concrete action already:
+                # DONE is acceptable.
                 if _re.search(r'\bdone\b', text, _re.IGNORECASE):
                     break
                 history.append("PARSE_ERROR: could not extract a TOOL_CALL from your reply. Emit exactly one line in the form TOOL_CALL: {\"action\":\"<name>\",\"params\":{...}} or write DONE.")
@@ -1113,11 +1985,27 @@ class TelegramVoice:
             pipe = self._get_pipeline() if action in pipeline_actions else None
 
             if pipe is not None:
+                # Fix: in recovery mode, user_text is "" (the recovery pass
+                # is seeded by the recovery_seed dict, not a user message),
+                # which would leave the card's reason as "chat: " with
+                # nothing after. Use the recovery seed's original_intent
+                # instead so the card records which goal it belongs to —
+                # both for Fix 6's chain walk and for human-readable card
+                # rendering.
+                if recovery_seed is not None:
+                    _intent = (recovery_seed.get("original_intent") or "").strip()
+                    if _intent:
+                        card_reason = f"recovery: {_intent[:140]}"
+                    else:
+                        card_reason = f"recovery: pass {recovery_seed.get('recovery_depth', '?')}"
+                else:
+                    card_reason = f"chat: {user_text[:140]}"
+
                 try:
                     presult = pipe.handle_action(
                         action=action,
                         params=params,
-                        reason=f"chat: {user_text[:140]}",
+                        reason=card_reason,
                         user_id="rohit",
                         chat_id=str(self.authorized_user),
                         channel="telegram_text",
@@ -1138,24 +2026,56 @@ class TelegramVoice:
                     history.append(f"TOOL_CALL: {_json.dumps(call)}\nRESULT: {out}")
                 elif presult.status in (_PS.PENDING_APPROVAL, _PS.PENDING_DIALOG):
                     msg = (
-                        "CARD_CREATED: a persistent approval card was sent to the owner. "
-                        "I will run this when he tells me yes. "
-                        "Acknowledge this in your reply — say that you proposed the action "
-                        "and are waiting for his approval. Do not claim it already ran."
+                        "CARD_CREATED — NOT YET EXECUTED. A persistent approval card "
+                        "was sent to the owner in Telegram. The action has NOT run; it is "
+                        "waiting for his explicit go-ahead. In your reply you MUST "
+                        "say you proposed the action and are waiting for approval. "
+                        "Do NOT claim you checked, found, installed, or fixed anything."
                     )
-                    transcript.append((action, params, msg, True))
+                    # pending is a third state: not-ran-not-rejected. Use a
+                    # dedicated marker string (rendered by _format_transcript)
+                    # as "⏳" so rule #4 in the final prompt can reason off it.
+                    transcript.append((action, params, msg, "pending"))
                     history.append(f"TOOL_CALL: {_json.dumps(call)}\nRESULT: {msg}")
+                    # Single-card-per-recovery-pass discipline. When the
+                    # recovery pass's Jarvis loop produces a Lane 2 card,
+                    # that is the STATE_A terminal state — don't let the
+                    # loop propose a second card in the same pass. Breaking
+                    # here prevents the multi-card-per-pass bug where the
+                    # LoRA emits A then A' in two consecutive iterations
+                    # and both become cards, leaving one as an orphan.
+                    #
+                    # Documented in docs/followups/recovery_multi_card_orphans.md
+                    # as the Option 1 fix: the FIRST Lane 2 card is the
+                    # terminal proposal. A second one is noise.
+                    if recovery_seed is not None:
+                        logger.info(
+                            "recovery: first Lane 2 card created, breaking loop "
+                            "(single-card-per-pass discipline)"
+                        )
+                        break
                 else:  # REFUSED_COVENANT / REFUSED_AUDIT / ERROR
                     msg = f"REFUSED: {presult.message}"
                     transcript.append((action, params, msg, False))
                     history.append(f"TOOL_CALL: {_json.dumps(call)}\nRESULT: {msg}")
                 continue
 
-            # Legacy path for non-primitive actions (read_file etc.)
+            # Legacy path for non-primitive actions (read_file etc.).
+            # Same reason-propagation fix as the pipeline path above: in
+            # recovery mode the user_text is empty, so fall back to the
+            # recovery seed's original_intent.
+            if recovery_seed is not None:
+                _intent = (recovery_seed.get("original_intent") or "").strip()
+                if _intent:
+                    legacy_reason = f"recovery: {_intent[:140]}"
+                else:
+                    legacy_reason = f"recovery: pass {recovery_seed.get('recovery_depth', '?')}"
+            else:
+                legacy_reason = f"chat: {user_text[:140]}"
             try:
                 result = self.actions._execute_action(
                     action, params,
-                    f"chat: {user_text[:140]}",
+                    legacy_reason,
                     tier=tier,
                 )
             except Exception as e:
@@ -1178,15 +2098,148 @@ class TelegramVoice:
             return ""
 
         lines = [
-            "[JARVIS TRANSCRIPT — you actually executed these on the owner's machine just now.",
-            " Tell the owner naturally what you did and what you found. Don't list raw output;",
-            " synthesize. Don't say 'I'll check' — you already checked.]"
+            "[JARVIS TRANSCRIPT — the AUTHORITATIVE record of what you did",
+            " this turn on the owner's machine. Tell the owner naturally what you did",
+            " and what you found. Don't list raw output; synthesize.",
+            "",
+            " Marker legend:",
+            "   ✓  the tool ran, the → output is real",
+            "   ✗  the tool call was REJECTED, nothing ran",
+            "   ⏳ the action was PROPOSED as a card, NOT YET EXECUTED —",
+            "       the owner must approve in Telegram before it runs",
+            "",
+            " HARD RULES for your reply:",
+            " 1. Only mention tools, commands, packages, or files that appear",
+            "    in this transcript. Do not rename or substitute what you ran.",
+            " 2. If memory recall (earlier in the prompt) mentions something you",
+            "    did NOT run this turn, do not attribute it to the current turn.",
+            "    You may say 'last time we looked at X' but not 'I just checked X'.",
+            " 3. If the transcript is short or the result is empty, say that",
+            "    plainly. 'I ran X and got no output' is better than inventing",
+            "    a richer narrative.",
+            " 4. If a tool call was rejected (✗), describe the rejection honestly",
+            "    — don't pretend the thing ran.",
+            " 5. If a line has ⏳ (card pending approval), the action has NOT run.",
+            "    Tell the owner you proposed it and are waiting for his go-ahead.",
+            "    Do NOT claim you checked, found, installed, or fixed anything",
+            "    on a ⏳ line — only on ✓ lines.",
+            "]"
         ]
         for action, params, out, ok in transcript:
-            mark = "✓" if ok else "✗"
+            if ok == "pending":
+                mark = "⏳"
+            elif ok:
+                mark = "✓"
+            else:
+                mark = "✗"
             lines.append(f"\n{mark} {action}({_json.dumps(params, default=str)[:200]})")
             lines.append(f"  → {out[:800]}")
         return "\n".join(lines)
+
+    def _synthesize_recovery_reply(
+        self,
+        recovery_seed: dict,
+        recovery_transcript: str,
+    ) -> str:
+        """Turn a recovery Jarvis transcript into a short natural-language
+        message the owner can read. Called from _try_card_reply_intent after a
+        card-execution failure triggered an autonomous pivot pass.
+
+        The synthesis is ONE short non-streaming LLM call so the reply
+        lands fast. Grounded entirely on the recovery transcript — no
+        speculation, no claims of things not in the transcript. Honors
+        the same ⏳ / ✓ / ✗ semantics as the main reply path.
+
+        Returns the reply text (or an empty string on failure)."""
+        try:
+            from core import llm_client as _llm_client
+        except Exception as e:
+            logger.debug("recovery synthesis llm_client unavailable: %s", e)
+            return ""
+        fa = recovery_seed.get('failed_action', '?')
+        fp_str = str(recovery_seed.get('failed_params', {}))[:200]
+        err = str(recovery_seed.get('error', ''))[:400]
+        intent = recovery_seed.get('original_intent', '')
+        depth = int(recovery_seed.get('recovery_depth', 1))
+        # Deterministic state detection on the recovery transcript. The
+        # terminal-state discipline in the recovery seed prompt forces the
+        # transcript into exactly one of three recognizable shapes. We tell
+        # the synthesis LLM which shape matched so it can't get creative.
+        has_pending_card = "⏳" in recovery_transcript
+        has_dead_end = "NO_RECOVERY_FOUND" in recovery_transcript or "recovery_dead_end" in recovery_transcript
+        has_success = "✓" in recovery_transcript and not has_pending_card
+
+        if has_pending_card:
+            state_hint = (
+                "STATE: A new approval card has been proposed for the owner. The "
+                "recovery found a concrete fix and is waiting for his go-ahead. "
+                "Your reply must tell the owner: (1) the first try didn't work and "
+                "why (one sentence), (2) what alternative you've proposed (name "
+                "it specifically — PPA, snap, etc.), (3) you're waiting for his "
+                "approval on the new card."
+            )
+        elif has_dead_end:
+            state_hint = (
+                "STATE: You searched but could not find a safe automated fix. "
+                "Your reply must tell the owner: (1) the first try failed and why, "
+                "(2) what you investigated, (3) why no automated recovery is "
+                "possible (quote the dead-end reason from the transcript), "
+                "(4) what the owner could do manually if he wants to pursue it. "
+                "Be honest about the dead end — do NOT fabricate a pending card."
+            )
+        elif has_success:
+            state_hint = (
+                "STATE: A Lane 0 action in the recovery pass executed inline "
+                "and produced a real result. Your reply must tell the owner what "
+                "you actually checked/found from the transcript output. Do "
+                "NOT claim you installed or fixed anything unless the "
+                "transcript shows a successful mutating action."
+            )
+        else:
+            state_hint = (
+                "STATE: The recovery pass produced no clear result. Tell the owner "
+                "the first try failed and the recovery attempt was inconclusive. "
+                "Do not fabricate progress."
+            )
+
+        prompt = (
+            f"You are Maez. the owner's original ask was: {intent!r}\n"
+            f"Your first attempt, {fa}({fp_str}), failed with:\n{err}\n\n"
+            f"You then ran a recovery pass (attempt #{depth}). Here is the "
+            f"AUTHORITATIVE transcript of what actually happened in that "
+            f"recovery pass:\n\n"
+            f"{recovery_transcript}\n\n"
+            f"{state_hint}\n\n"
+            f"Write a SHORT Telegram message to the owner (2-4 sentences) "
+            f"following the STATE above. HARD RULES:\n"
+            f"  1. Only mention tools, commands, packages, or files that "
+            f"appear in the transcript. Do NOT invent a card that isn't "
+            f"there. Do NOT claim things ran that weren't in the transcript.\n"
+            f"  2. Start with a short acknowledgment that the first try "
+            f"didn't work.\n"
+            f"  3. Be honest and specific. Name the actual error class "
+            f"(e.g. 'Ubuntu 24.04 default repos don't carry openrgb') "
+            f"rather than a vague 'it didn't work'.\n"
+            f"  4. If the STATE above says you're waiting for approval, "
+            f"say exactly that — don't say 'I'll install it now'. If the "
+            f"STATE says no recovery found, say exactly that — don't "
+            f"invent an alternative to propose.\n"
+        )
+        try:
+            resp = _llm_client.chat(
+                model=MODEL,
+                messages=[
+                    {"role": "system",
+                     "content": "You are Maez. Your replies are honest, grounded, and short."},
+                    {"role": "user", "content": prompt},
+                ],
+                stream=False, think=False,
+                options={"temperature": 0.3, "num_predict": 220},
+            )
+            return (resp.message.content or "").strip()
+        except Exception as e:
+            logger.warning("recovery synthesis LLM call failed: %s", e)
+            return ""
 
     async def _process_message(self, update, context, user_text: str) -> str:
         """Build context, stream response, handle post-processing."""
@@ -1248,6 +2301,20 @@ class TelegramVoice:
         public_ctx = _get_public_context_for_telegram()
         if public_ctx:
             prompt += public_ctx + "\n\n"
+        # Bug C fix (2026-04-15 intelligence audit): inject a ground-truth
+        # block describing what Maez's body just did in this chat in the
+        # last 10 minutes. Without this, follow-up questions like "are you
+        # still investigating?" get answered from stale memory recall,
+        # with no record of the card that executed 60 seconds ago. This
+        # block is the authoritative state that the LoRA should trust
+        # over its own intuition about what happened.
+        try:
+            body_activity = self._build_recent_body_activity_block(since_seconds=600.0)
+        except Exception as e:
+            logger.debug("body activity block build failed: %s", e)
+            body_activity = ""
+        if body_activity:
+            prompt += body_activity + "\n\n"
         if memory_block:
             prompt += memory_block + "\n\n"
         if web_context:
@@ -1255,13 +2322,212 @@ class TelegramVoice:
                 f"{web_context}\n\n"
                 f"INSTRUCTION: Real search results above. Synthesize, don't list.\n\n"
             )
-        if jarvis_block:
-            prompt += jarvis_block + "\n\n"
-
         # Add current message to conversation thread
         self._conversation_thread.append({"role": "user", "content": user_text})
         if len(self._conversation_thread) > 12:
             self._conversation_thread = self._conversation_thread[-12:]
+
+        # Build the final user message. The Jarvis transcript MUST be
+        # attached to the final user message (not buried in the first
+        # context blob) so the LLM reads it LAST — right before it
+        # generates the reply. The earlier structure put jarvis_block
+        # in message #2 and then appended 12 conversation turns + the
+        # current user_text after it, which let recency bury the
+        # transcript's rules and the LLM fabricated around the card's
+        # "CARD_CREATED: waiting for your approval" status by pretending
+        # the check had already run.
+        final_user = user_text
+        if jarvis_block:
+            final_user = (
+                f"{user_text}\n\n"
+                f"{jarvis_block}\n\n"
+                "HARD INSTRUCTION — read this before writing a single word of your reply:\n"
+                "\n"
+                "1. THE POSITIVE RULE (the only one that matters): the only\n"
+                "   actions, tools, commands, packages, files, websites, or\n"
+                "   results you are allowed to mention in your reply are the\n"
+                "   ones that appear in the Jarvis transcript above. Nothing\n"
+                "   else. If you want to reference something, it has to be\n"
+                "   in the transcript. If it isn't in the transcript, you\n"
+                "   didn't do it this turn.\n"
+                "\n"
+                "2. How to read the transcript:\n"
+                "   · ✓ line — the tool ran and the → output is real, quote it\n"
+                "     directly.\n"
+                "   · ✗ line — the tool call was REJECTED, the audit refused,\n"
+                "     or the call errored. Nothing happened. Do NOT describe\n"
+                "     the failed tool as if it partially ran.\n"
+                "   · ⏳ CARD_CREATED line — a proposal was sent to the owner\n"
+                "     and is waiting for his approval. The action has NOT\n"
+                "     run. You must tell the owner you proposed it and are\n"
+                "     waiting. Do NOT claim the action finished.\n"
+                "\n"
+                "3. PARTIAL-ACTION TRAP (this is where fabrication sneaks in):\n"
+                "   If the transcript has ONE tool entry, you are only\n"
+                "   allowed to talk about THAT tool. You are not allowed to\n"
+                "   frame the reply around a DIFFERENT action you also\n"
+                "   thought about doing but didn't. Example of the trap:\n"
+                "     transcript: 1 card proposed — run `lsb_release -a`\n"
+                "     BAD reply: 'I've started looking into the best tools\n"
+                "       for controlling your CPU lighting. I proposed a\n"
+                "       system check to identify available utilities.'\n"
+                "     WHY BAD: 'started looking' is not in the transcript;\n"
+                "       the card is a system identification probe, not a\n"
+                "       utility scan. The reply invented a second action.\n"
+                "     GOOD reply: 'I proposed running `lsb_release -a &&\n"
+                "       uname -a` to see what OS and kernel you're on —\n"
+                "       that's waiting for your approval. I haven't looked\n"
+                "       for lighting tools yet.'\n"
+                "\n"
+                "4. Memory recall blocks (the [RECALLED MEMORY] section\n"
+                "   earlier in this prompt) are history about the past.\n"
+                "   They are NOT a record of what you did this turn.\n"
+                "   Never attribute their contents to this turn. If you\n"
+                "   want to reference something from memory, frame it\n"
+                "   explicitly as past: 'I noticed earlier...', 'last I\n"
+                "   saw...', 'in our past conversations I...'.\n"
+                "\n"
+                "5. If the transcript is empty, say you haven't checked\n"
+                "   yet this turn. Do not pretend you did.\n"
+                "\n"
+                "6. The BODY ACTIVITY block earlier in this prompt shows\n"
+                "   what your body did in the LAST 10 MINUTES across\n"
+                "   previous turns. It is authoritative state. If the owner\n"
+                "   asks a follow-up question like 'are you still\n"
+                "   investigating?' or 'what happened to that thing?',\n"
+                "   read BODY ACTIVITY first — a card may have already\n"
+                "   executed between turns, and you need to report its\n"
+                "   real outcome, not guess.\n"
+            )
+        else:
+            # Track A fabrication fix: non-action turns need to be pinned
+            # too. Without this marker, when the Jarvis loop doesn't fire
+            # (conversational turn, short message, opinion question), the
+            # streaming reply is shaped only by memory recall — and memory
+            # recall contains past-turn proposals and past states the LoRA
+            # would otherwise blur into current state.
+            #
+            # v3 (after live tests): v2 was too prescriptive and the LoRA
+            # pattern-matched on a specific example phrase ("what were
+            # you approving?") and applied it as a default deflection
+            # even to clear questions like "what version of Python do we
+            # have?". Over-correction. v3 is shorter, principle-based,
+            # with an explicit anti-deflection rule and context-handling
+            # rule so follow-up questions inherit their topic from the
+            # previous turn. Goal: fewer specific phrases for the LoRA
+            # to latch onto, more emphasis on the underlying principle.
+            final_user = (
+                f"{user_text}\n\n"
+                "[TURN STATE — NO TOOLS RAN THIS TURN]\n"
+                " You did not run any NEW tools on the owner's machine for\n"
+                " THIS message. No tool will run while you are writing\n"
+                " this reply. This is a text-reply window.\n"
+                "\n"
+                " IMPORTANT: a card from an earlier turn may have\n"
+                " executed between turns, even though you didn't trigger\n"
+                " a new tool this turn. Read the BODY ACTIVITY block\n"
+                " earlier in this prompt — that's the authoritative\n"
+                " record of what your body did in the last 10 minutes.\n"
+                " If it shows a card as EXECUTED ✓, report its output\n"
+                " as fact. Do not say you're 'still waiting for\n"
+                " approval' on a card that already ran.\n"
+                "\n"
+                "THE PRINCIPLE:\n"
+                " Your reply must match what you actually know, what you\n"
+                " actually did this turn (nothing except think and talk),\n"
+                " and what you could offer to do next. Do not claim action\n"
+                " you didn't take. Do not deflect clear questions with\n"
+                " fake clarifying questions. Do answer from memory when\n"
+                " memory has the information. Do offer to check when a\n"
+                " fresh tool run would help.\n"
+                "\n"
+                "HONEST FRAMINGS (use these, they're the only honest ones):\n"
+                " 1. Past observation from memory — 'I noticed...', 'last\n"
+                "    I saw...', 'the last check I have was...'. Draws on\n"
+                "    real memory, framed as history.\n"
+                " 2. Current internal state — 'I'm feeling...', 'I think...',\n"
+                "    'I'm not sure...'. Self-report, not action.\n"
+                " 3. Future offer — 'want me to check?', 'I can look into\n"
+                "    that if you want'. Puts the decision in the owner's hands.\n"
+                "    Does not commit to action.\n"
+                "\n"
+                "FORBIDDEN (all tenses, all aspects, when no tool ran):\n"
+                " Any claim that a tool ran, is running, or is about to\n"
+                " run in response to this message. Including the tricky\n"
+                " PRESENT-PERFECT tense that sounds like memory but reads\n"
+                " as current action. Examples in all tenses:\n"
+                "   - 'I checked' / 'I just checked' / 'I found'\n"
+                "   - 'I'm checking' / 'I'm looking' / 'I'm searching'\n"
+                "   - 'I'll check now' / 'let me look' / 'one moment'\n"
+                "   - 'I just ran X' / 'running that now'\n"
+                "   - 'I've checked' / 'I've proposed' / 'I've found'\n"
+                "   - 'I have checked' / 'I've already installed'\n"
+                "   - 'I've been checking' / 'I've been monitoring'\n"
+                " These are all false right now. No tool is running.\n"
+                "\n"
+                " PRESENT-PERFECT GOTCHA (the 'I've proposed' trap):\n"
+                " English lets you say 'I've proposed installing X via a\n"
+                " Telegram card' and mean either (a) 'in my past I did\n"
+                " propose that, as a memory fact' or (b) 'I just proposed\n"
+                " it right now'. the owner will read (b) regardless of which\n"
+                " you meant. So the rule is: if the thing you're about\n"
+                " to describe in present-perfect happened in a PAST TURN\n"
+                " (not this one), you must reframe it explicitly as past:\n"
+                "   BAD:  'I've proposed installing it via a card'\n"
+                "   GOOD: 'Earlier I proposed installing it via a card'\n"
+                "         'In our past conversations I proposed that'\n"
+                "         'I don't have an active proposal right now,\n"
+                "          but in the past I've tried X, Y, and Z'\n"
+                " The difference matters because present-perfect without\n"
+                " a temporal anchor reads as 'this turn'. Always anchor.\n"
+                "\n"
+                "ANTI-DEFLECTION RULE (v3, read this carefully):\n"
+                " If the owner asks a CLEAR question, answer it clearly. Do\n"
+                " NOT respond with a clarifying question unless the\n"
+                " message really is ambiguous.\n"
+                "\n"
+                " CLEAR questions — answer from memory or offer to check:\n"
+                "   'What's up with X?' (answer from memory + offer)\n"
+                "   'Are you sure?' / 'When did you last check?'\n"
+                "       (answer from memory framed as history — if you\n"
+                "       don't have a fresh check, say so explicitly:\n"
+                "       'I don't have a fresh check, my last observation\n"
+                "       was from [when]')\n"
+                "   'What version of X do we have?'\n"
+                "       (offer: 'I don't have that cached, want me to\n"
+                "       check?')\n"
+                "   'How are you?' / 'What's your mood?' (self-report)\n"
+                "   'Did X happen?' (answer from memory or offer)\n"
+                "\n"
+                " AMBIGUOUS approval messages — clarifying question ONLY:\n"
+                "   'I said yes' (when no card is open)\n"
+                "   'I approve' (when no card is open)\n"
+                "   'go ahead' (when no card is open and no context)\n"
+                "   'proceed' (when no card is open)\n"
+                "   For these, ask what they're referring to.\n"
+                "\n"
+                " The phrase 'what were you approving?' is RESERVED for\n"
+                " real ambiguous-approval messages above. Do NOT use it\n"
+                " as a default deflection for clear questions.\n"
+                "\n"
+                "CONTEXT-INHERITANCE RULE:\n"
+                " Follow-up questions carry their topic from the previous\n"
+                " turn. If the owner just asked about openrgb and now asks\n"
+                " 'are you sure?' or 'when did you last check?', he's\n"
+                " asking about openrgb, not about something new. Use the\n"
+                " conversation thread above to resolve what 'it' or 'that'\n"
+                " or a bare question refers to. Do not drop context.\n"
+                "\n"
+                " The conversation thread at the top of this prompt is\n"
+                " the authoritative record of what you two have been\n"
+                " talking about. Read it before answering.\n"
+                "\n"
+                "SUMMARY: Answer the question honestly, in the right tense,\n"
+                "drawing on memory for history, on internal state for mood,\n"
+                "and offering tools for fresh data. If you don't know, say\n"
+                "so. If you need to check, ask 'want me to?'. Don't claim\n"
+                "action. Don't deflect clarity. Just answer.\n"
+            )
 
         # Build messages with system context + thread
         messages = [
@@ -1271,7 +2537,7 @@ class TelegramVoice:
         # Add thread history (skip current message since it's in prompt)
         for turn in self._conversation_thread[:-1]:
             messages.append(turn)
-        messages.append({"role": "user", "content": user_text})
+        messages.append({"role": "user", "content": final_user})
 
         # Stream response sentence by sentence
         try:
@@ -2332,6 +3598,45 @@ class TelegramVoice:
         self._thread = threading.Thread(target=self._run_bot, daemon=True, name="telegram-bot")
         self._thread.start()
         logger.info("Telegram bot thread started (authorized user: %d)", self.authorized_user)
+
+    def stop(self, join_timeout: float = 10.0):
+        """Stop the Telegram bot and let its thread unwind."""
+        if not self._loop:
+            return
+
+        loop = self._loop
+        app = self._app
+
+        async def _shutdown():
+            if app is None:
+                return
+            try:
+                if getattr(app, "updater", None) is not None:
+                    await app.updater.stop()
+            except Exception as e:
+                logger.debug("Telegram updater stop failed: %s", e)
+            try:
+                await app.stop()
+            except Exception as e:
+                logger.debug("Telegram app stop failed: %s", e)
+            try:
+                await app.shutdown()
+            except Exception as e:
+                logger.debug("Telegram app shutdown failed: %s", e)
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(_shutdown(), loop)
+            future.result(timeout=join_timeout)
+        except Exception as e:
+            logger.debug("Telegram stop coordination failed: %s", e)
+
+        try:
+            loop.call_soon_threadsafe(loop.stop)
+        except Exception:
+            pass
+
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=join_timeout)
 
     def send_message(self, text: str):
         """Send a message to the owner via Telegram. Safe to call from any thread.

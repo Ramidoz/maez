@@ -373,9 +373,37 @@ Respond naturally. Be present. Be real."""
         logger.info("MaezPublicBot thread started")
 
     def stop(self):
-        if self._app and self._loop:
+        if not self._app or not self._loop:
+            return
+
+        app = self._app
+        loop = self._loop
+
+        async def _shutdown():
             try:
-                asyncio.run_coroutine_threadsafe(self._app.updater.stop(), self._loop)
-                asyncio.run_coroutine_threadsafe(self._app.stop(), self._loop)
-            except Exception:
-                pass
+                if getattr(app, 'updater', None) is not None:
+                    await app.updater.stop()
+            except Exception as e:
+                logger.debug("Public bot updater stop failed: %s", e)
+            try:
+                await app.stop()
+            except Exception as e:
+                logger.debug("Public bot stop failed: %s", e)
+            try:
+                await app.shutdown()
+            except Exception as e:
+                logger.debug("Public bot shutdown failed: %s", e)
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(_shutdown(), loop)
+            future.result(timeout=10)
+        except Exception as e:
+            logger.debug("Public bot stop coordination failed: %s", e)
+
+        try:
+            loop.call_soon_threadsafe(loop.stop)
+        except Exception:
+            pass
+
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=10)

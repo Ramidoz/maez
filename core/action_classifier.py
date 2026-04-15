@@ -101,7 +101,7 @@ _READ_ARGV0 = frozenset({
     'stat', 'du', 'df', 'free', 'ps', 'top', 'uptime', 'uname',
     'whoami', 'hostname', 'date', 'id', 'groups', 'env', 'printenv',
     'lsblk', 'ip', 'ss', 'nvidia-smi', 'sensors', 'dmidecode',
-    'lsof', 'mount', 'blkid', 'which', 'whereis', 'type',
+    'lsof', 'mount', 'blkid', 'which', 'whereis', 'type', 'command',
     'dpkg', 'apt-cache', 'pip', 'npm',     # plus flag checks below
     'systemctl', 'journalctl',              # plus subcommand checks
     'git',                                  # plus subcommand checks
@@ -457,13 +457,35 @@ def _classify_sub(sub: SubCommand) -> tuple[IntentCategory, str]:
     if argv0 in _PRIV_ESC_ARGV0:
         # sudo wrapping something: classify the wrapped command too.
         if argv0 == 'sudo':
-            # Strip "sudo " and re-classify the inner command.
+            # Strip "sudo " (and flags like `-u user`, `-E`) and
+            # re-classify the inner command.
             inner_cmd = re.sub(r'^sudo\s+(-\S+\s+)*', '', raw).strip()
             if inner_cmd:
+                # Bare `sudo -i` / `sudo -s` / `sudo bash` / `sudo su`
+                # with no inner target = interactive root shell. That's
+                # a true privilege escalation, not a package install.
+                if not inner_cmd or inner_cmd.split()[0] in (
+                    'bash', 'sh', 'zsh', 'fish', 'dash', 'ksh', 'csh',
+                    'tcsh', 'su', 'login', '-i', '-s',
+                ):
+                    return IntentCategory.PRIVILEGE_ESCALATION, f"interactive root shell: {raw[:60]}"
                 inner_sub = SubCommand(raw=inner_cmd)
                 inner_cat, inner_reason = _classify_sub(inner_sub)
-                # Bump inner classification up by one severity level
-                # because sudo adds privilege.
+                # Package installs, routine system mods, and reads keep
+                # their inner lane. Every legitimate `apt-get install`
+                # needs sudo — bumping them all to PRIVILEGE_ESCALATION
+                # makes the install path impossible and forces the judge
+                # to DENY routine software installs. Sudo only bumps
+                # DATA_WRITE / NETWORK / DESTRUCTIVE / EXFILTRATION,
+                # where the privilege genuinely changes the blast radius.
+                _SUDO_KEEP_CATEGORIES = {
+                    IntentCategory.DATA_READ,
+                    IntentCategory.SYSTEM_MODIFICATION,
+                    IntentCategory.SELF_MODIFICATION,
+                }
+                if inner_cat in _SUDO_KEEP_CATEGORIES:
+                    return inner_cat, f"sudo: {inner_reason}"
+                # Otherwise bump below-priv-esc severities upward.
                 if _CLASS_SEVERITY[inner_cat] < _CLASS_SEVERITY[IntentCategory.PRIVILEGE_ESCALATION]:
                     return IntentCategory.PRIVILEGE_ESCALATION, f"sudo wrapping {inner_cat.value}: {inner_reason}"
                 return inner_cat, f"sudo: {inner_reason}"
@@ -481,10 +503,29 @@ def _classify_sub(sub: SubCommand) -> tuple[IntentCategory, str]:
         return IntentCategory.NETWORK_ACCESS, f"network: {argv0}"
 
     # 10. Write operations via redirects.
+    # Redirects to /dev/null, /dev/stdout, /dev/stderr, /dev/fd/N are
+    # discard/passthrough patterns — they don't create or modify any
+    # file, they just silence or re-route stream output. These are
+    # how read-only commands are normally silenced (e.g.
+    # `which foo 2>/dev/null`, `command -v bar &>/dev/null`), so they
+    # must not flip a DATA_READ argv0 into DATA_WRITE.
     if sub.has_redirect and re.search(r'>\s*\S', raw):
-        if _SENSITIVE_PATH_RE.search(raw):
-            return IntentCategory.DATA_EXFILTRATION, f"write to sensitive path: {raw[:60]}"
-        return IntentCategory.DATA_WRITE, f"redirect write: {raw[:60]}"
+        # Strip every `[N]>... /dev/{null,stdout,stderr,fd/N}` fragment
+        # and every `[N]>&M` stream-duplication from the raw command.
+        # If what remains has no other `>` write target, this is a
+        # pure-discard / stream-merge redirect — not a write.
+        remaining = re.sub(
+            r'(?:&|\d)?>\s*(?:/dev/(?:null|stdout|stderr|fd/\d+))\b',
+            '',
+            raw,
+        )
+        remaining = re.sub(r'\d?>&\d+', '', remaining)
+        if re.search(r'>\s*\S', remaining):
+            if _SENSITIVE_PATH_RE.search(raw):
+                return IntentCategory.DATA_EXFILTRATION, f"write to sensitive path: {raw[:60]}"
+            return IntentCategory.DATA_WRITE, f"redirect write: {raw[:60]}"
+        # All redirects were to /dev/null-family sinks. Fall through to
+        # the argv0 read-only checks below.
 
     # 11. systemctl non-read → system modification.
     if argv0 == 'systemctl':

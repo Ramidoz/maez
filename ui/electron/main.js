@@ -4,6 +4,12 @@ const {
 } = require('electron');
 const path = require('path');
 
+// The desktop helper is a convenience layer, not a GPU stress test.
+// Disable Electron acceleration to reduce interaction with the flaky
+// NVIDIA / Chromium GPU path observed during recent Ubuntu crashes.
+app.disableHardwareAcceleration();
+app.commandLine.appendSwitch('disable-gpu');
+
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) { app.quit(); }
 

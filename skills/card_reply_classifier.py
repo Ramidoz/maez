@@ -158,6 +158,32 @@ _MODIFY_PHRASES = [
     "modify", "update it to", "make it use", "could you use",
 ]
 
+# New-action-request starters. A reply that begins with one of these
+# is a fresh command from the owner, NOT an approval for an existing open
+# card — even when a stale card happens to be open. The LLM fallback
+# has been observed mis-classifying "Install openrgb" as APPROVE on a
+# 19-minute-old `history | tail -n 20` card, then the approval path
+# re-audits the stale card and the whole flow explodes. This list
+# short-circuits those mismatches before they reach the LLM.
+_NEW_ACTION_STARTERS = [
+    "install ", "uninstall ", "remove ", "reinstall ",
+    "run ", "execute ", "exec ",
+    "check ", "check if ", "check whether ",
+    "search ", "search for ", "look for ", "look up ",
+    "find ", "grep ", "locate ",
+    "download ", "fetch ", "pull ", "clone ", "git clone",
+    "update ", "upgrade ",
+    "restart ", "reboot ", "start ", "stop ",
+    "read ", "show me ", "list ", "cat ",
+    "delete ", "rm ", "kill ",
+    "build ", "compile ", "make ",
+    "curl ", "wget ",
+    "sudo ",
+    "write ", "create ", "touch ", "mkdir ",
+    "can you install", "can you run", "can you check",
+    "please install", "please run", "please check",
+]
+
 
 def _normalize(text: str) -> str:
     """Lowercase and collapse whitespace for matching."""
@@ -172,6 +198,22 @@ def _whole_phrase_match(text: str, phrases: list[str]) -> Optional[str]:
         pattern = r"(?:^|[^a-z0-9])" + re.escape(phrase) + r"(?:$|[^a-z0-9])"
         if re.search(pattern, " " + norm + " "):
             return phrase
+    return None
+
+
+def _starts_new_action_request(text: str) -> Optional[str]:
+    """Return the starter that marks this as a fresh action request.
+
+    This check intentionally runs late in the heuristic stack, after we
+    have already given real approval/deny/defer/modify/explain phrases a
+    chance to match. That keeps legitimate card replies like "run it"
+    working while still short-circuiting fresh asks such as
+    "install openrgb" before they hit the LLM fallback.
+    """
+    norm = _normalize(text)
+    for starter in sorted(_NEW_ACTION_STARTERS, key=len, reverse=True):
+        if norm.startswith(starter):
+            return starter
     return None
 
 
@@ -435,6 +477,19 @@ def classify_reply_heuristic(
             reasoning=f"matched approve phrase: {approve_hit!r}",
         )
 
+    # Fresh action request while a stale card is open. Route it back to
+    # the main conversation loop instead of letting the LLM misread it as
+    # approval for the newest outstanding card.
+    new_action_hit = _starts_new_action_request(text)
+    if new_action_hit:
+        return ReplyClassification(
+            intent=ReplyIntent.UNRELATED,
+            target_request_id=None,
+            confidence=0.95,
+            source="keyword",
+            reasoning=f"fresh action request starts with: {new_action_hit!r}",
+        )
+
     # Nothing matched deterministically
     return ReplyClassification(
         intent=ReplyIntent.UNCLEAR,
@@ -692,6 +747,11 @@ if __name__ == "__main__":
     run("text 'change it to sudo'", ReplyIntent.MODIFY, text="change it to use sudo")
     run("text 'instead of cowsay'", ReplyIntent.MODIFY, text="instead of cowsay use fortune")
     run("text 'but with -y'", ReplyIntent.MODIFY, text="but with -y")
+
+    # Fresh requests should not get mistaken for card approvals
+    run("text 'install openrgb' stays unrelated", ReplyIntent.UNRELATED, text="Install openrgb")
+    run("text 'can you check logs' stays unrelated", ReplyIntent.UNRELATED, text="Can you check logs")
+    run("text 'run it' still approves", ReplyIntent.APPROVE, text="run it")
 
     # No open cards → UNRELATED
     r = classify_reply(text="yes", open_cards=[], use_llm_fallback=False)

@@ -448,6 +448,47 @@ class PendingCardStore:
             ).fetchone()
         return _row_to_record(row) if row else None
 
+    def recent_activity_for_chat(
+        self,
+        channel: str,
+        chat_id: str,
+        since_seconds: float = 600.0,
+        limit: int = 8,
+    ) -> list[CardRecord]:
+        """Return recently-resolved (or currently-open) cards in this chat,
+        ordered oldest → newest. Used by telegram_voice to inject a
+        'what your body just did' block into the reply context so Maez
+        can answer follow-up questions grounded in real state instead of
+        forgetting that a card resolved 60 seconds ago.
+
+        Includes: open + resolved states (done, failed, denied, expired).
+        Excludes: cards older than `since_seconds` to keep the block small
+        and relevant. The caller is responsible for formatting.
+        """
+        cutoff = time.time() - since_seconds
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM pending_cards
+                WHERE channel = ? AND chat_id = ?
+                  AND (
+                    (resolved_at IS NOT NULL AND resolved_at >= ?)
+                    OR (status = ? AND created_at >= ?)
+                  )
+                ORDER BY COALESCE(resolved_at, created_at) ASC
+                LIMIT ?
+                """,
+                (
+                    channel,
+                    chat_id,
+                    cutoff,
+                    CardStatus.OPEN.value,
+                    cutoff,
+                    int(limit),
+                ),
+            ).fetchall()
+        return [_row_to_record(r) for r in rows]
+
     def find_due_reminders(self, now: Optional[float] = None) -> list[CardRecord]:
         now = now if now is not None else time.time()
         with self._conn() as conn:

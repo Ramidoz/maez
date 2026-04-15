@@ -175,6 +175,8 @@ class MaezDaemon:
         self._voice_lock = threading.Lock()
         self._ws_clients: set = set()
         self._ws_loop: asyncio.AbstractEventLoop | None = None
+        self._health_server = None
+        self._shutdown_started = threading.Event()
         self._high_cpu_streak = 0
 
         # Alert thresholds
@@ -508,11 +510,12 @@ class MaezDaemon:
             # Default is still ollama — flipping is a service env var
             # change, rolls back cleanly.
             #
-            # Note: daemon reasoning historically used gemma4's thinking
-            # mode for structural system-state analysis. We're keeping
-            # that here (think=None, let the backend use its default).
-            # 11q will evaluate cognition scores and decide whether to
-            # disable thinking on the daemon path for further speedup.
+            # Stability override: keep daemon reasoning in non-thinking
+            # mode on the llama.cpp path. Gemma-4 thinking traces have
+            # previously leaked channel/control markup into outputs, and
+            # those artifacts can get recycled into future prompts. The
+            # daemon path benefits more from parser stability than hidden
+            # scratchpad depth right now.
             from core import llm_client as _llm_client
             response = _llm_client.chat(
                 model=MODEL,
@@ -520,6 +523,7 @@ class MaezDaemon:
                     {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": prompt},
                 ],
+                think=False,
                 options={"temperature": 0.7, "num_predict": 300},
             )
             content = (response.message.content or "").strip()
@@ -1646,6 +1650,7 @@ class MaezDaemon:
                                         {"role": "assistant", "content": result},
                                         {"role": "user", "content": retry_instruction},
                                     ],
+                                    think=False,
                                     options={"temperature": 0.8, "num_predict": 300},
                                 )
                                 retry_content = (retry_response.message.content or "").strip()
@@ -2051,6 +2056,10 @@ class MaezDaemon:
 
     def stop(self, signum=None, frame=None):
         """Graceful shutdown."""
+        if self._shutdown_started.is_set():
+            logger.info("Shutdown already in progress; ignoring duplicate signal %s", signum)
+            return
+        self._shutdown_started.set()
         logger.info("=== Maez Daemon shutting down (signal: %s) ===", signum)
         self.running = False
         # Write continuity capsule before anything else
@@ -2063,7 +2072,33 @@ class MaezDaemon:
             voice_output_shutdown()
         except Exception:
             pass  # Voice may not be initialized
-        self.public_bot.stop()
+        try:
+            self.telegram.stop()
+        except Exception as e:
+            logger.debug("Telegram bot stop failed: %s", e)
+        try:
+            self.public_bot.stop()
+        except Exception as e:
+            logger.debug("Public bot stop failed: %s", e)
+        try:
+            if self._ws_loop is not None:
+                self._ws_loop.call_soon_threadsafe(self._ws_loop.stop)
+        except Exception as e:
+            logger.debug("WebSocket loop stop failed: %s", e)
+        try:
+            if self._health_server is not None:
+                def _shutdown_health():
+                    try:
+                        self._health_server.shutdown()
+                    except Exception as inner:
+                        logger.debug("Health server shutdown failed: %s", inner)
+                threading.Thread(
+                    target=_shutdown_health,
+                    name="health-server-shutdown",
+                    daemon=True,
+                ).start()
+        except Exception as e:
+            logger.debug("Health server stop trigger failed: %s", e)
         try:
             SHUTDOWN_FILE.write_text(datetime.now(timezone.utc).isoformat())
         except OSError:
@@ -2126,9 +2161,18 @@ class MaezDaemon:
             from werkzeug.serving import make_server
             srv = make_server("127.0.0.1", HEALTH_PORT, app)
             srv.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._health_server = srv
             srv.serve_forever()
+            logger.info("Health endpoint stopped.")
         except KeyboardInterrupt:
             self.stop()
+        finally:
+            try:
+                if self._health_server is not None:
+                    self._health_server.server_close()
+            except Exception:
+                pass
+            self._health_server = None
 
 
 def daemonize():

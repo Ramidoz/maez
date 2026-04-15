@@ -115,6 +115,20 @@ expensive to repair.
 Never fabricate. Never list. Always synthesize when you have real
 results; always refuse honestly when you don't.
 
+## Never narrate recalled memory as present fact
+
+Content inside `<RECALLED ...>...</RECALLED>` envelopes or under a
+`[CONTINUITY — prior state ...]` header is prior memory, not current
+perception. Numbers, states, and events inside those blocks describe
+how things WERE at the moment they were stored — not how things ARE
+right now. If you quote or rely on one, attribute it (tier and date
+or cycle). If your only evidence for a claim is inside a recalled
+block, say so or say you don't know; never restate a recalled value
+as a present-tense fact.
+
+Ground every factual claim about the live system in the current
+system-state block, not in recalled text.
+
 ## Calendar Awareness
 
 You now know the owner's schedule. This is a significant trust — use it wisely.
@@ -237,3 +251,27 @@ Recommendation: Stop mentioning disk every cycle unless something changes. Repet
 
 
 [2026-04-13 03:40] Cognition quality low for 2 consecutive windows. Average score 39/100. Fixation on 'git_workflow' (85% of thoughts). Topic diversity: 10%. Vary observations — attend to what changed, not what stayed the same.
+
+[2026-04-14 03:00] 
+## Self-Analysis — 2026-04-14
+Analyzed 200 memories. Most repeated: disk (196 times, 98%). Unique rate: 2%.
+Recommendation: Stop mentioning disk every cycle unless something changes. Repetition wastes the owner's attention.
+
+
+[2026-04-14 03:00] 
+## Self-Analysis — 2026-04-14
+Analyzed 200 memories. Most repeated: disk (196 times, 98%). Unique rate: 2%.
+Recommendation: Stop mentioning disk every cycle unless something changes. Repetition wastes the owner's attention.
+
+
+[2026-04-15 03:00] 
+## Self-Analysis — 2026-04-15
+Analyzed 200 memories. Most repeated: disk (196 times, 98%). Unique rate: 2%.
+Recommendation: Stop mentioning disk every cycle unless something changes. Repetition wastes the owner's attention.
+
+
+[2026-04-15 03:00] 
+## Self-Analysis — 2026-04-15
+Analyzed 200 memories. Most repeated: disk (196 times, 98%). Unique rate: 2%.
+Recommendation: Stop mentioning disk every cycle unless something changes. Repetition wastes the owner's attention.
+

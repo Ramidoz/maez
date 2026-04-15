@@ -226,6 +226,28 @@ class ForbiddenActionError(Exception):
     pass
 
 
+class ShellCommandError(Exception):
+    """Raised when a run_shell command exits with a non-zero status.
+
+    Carries the full stdout, stderr, and returncode so _execute_action
+    can build a failure ActionResult that still contains enough context
+    for the LLM to reason about what went wrong. Without this, non-zero
+    exits were silently swallowed: `sudo apt-get install -y <missing>`
+    would return E: Unable to locate package on stderr, exit 100, and
+    the pipeline recorded execution_success=1 because no exception was
+    raised. Maez then told the owner "✅ Done" on a package that never
+    actually installed.
+    """
+
+    def __init__(self, stdout: str, stderr: str, returncode: int, cmd: str = ""):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+        self.cmd = cmd
+        summary = stderr.strip() or stdout.strip() or f"exit={returncode}"
+        super().__init__(f"exit={returncode}: {summary[:200]}")
+
+
 class ActionTrustTracker:
     """SQLite tracker for per-action-type trust scores."""
 
@@ -610,6 +632,29 @@ class ActionEngine:
             _quality_tracker.record_outcome(action_id, 'executed')
             _trust_tracker.record_outcome(action, 'executed')
             return ActionResult(action, tier, True, output=str(output), duration=duration)
+        except ShellCommandError as e:
+            # Non-zero exit from a run_shell command. Surface the full
+            # diagnostic (exit code + stderr + stdout) through both
+            # `output` and `error` so the Jarvis transcript, card
+            # resolution message, and memory-gap writer all see the
+            # truth. Previously the exit code was silently dropped and
+            # success was recorded for every failed install.
+            duration = time.time() - start
+            parts = [f"exit={e.returncode}"]
+            if e.stderr:
+                parts.append(f"stderr: {e.stderr}")
+            if e.stdout:
+                parts.append(f"stdout: {e.stdout}")
+            diag = "\n".join(parts)
+            self._log_action(tier, action, reasoning, params, f"SHELL_FAIL: {diag[:200]}", duration)
+            _quality_tracker.record_outcome(action_id, 'failed')
+            _trust_tracker.record_outcome(action, 'failed')
+            return ActionResult(
+                action, tier, False,
+                output=e.stdout,  # LLM can still see the stdout context
+                error=diag,       # card + memory see the full diag
+                duration=duration,
+            )
         except Exception as e:
             duration = time.time() - start
             self._log_action(tier, action, reasoning, params, f"ERROR: {e}", duration)
@@ -633,7 +678,13 @@ class ActionEngine:
     def _do_run_shell(self, cmd: str, reason: str = "") -> str:
         """Execute an arbitrary shell command via bash.
         No allowlist check — the covenant gate in _check_forbidden
-        handles survival-critical surfaces. Everything else is fair game."""
+        handles survival-critical surfaces. Everything else is fair game.
+
+        Raises ShellCommandError on non-zero exit. The previous version
+        swallowed non-zero exits and returned the output string anyway,
+        which caused `_execute_action` to record success=True on every
+        failed install. See ShellCommandError docstring for the full
+        story."""
         if not cmd or not cmd.strip():
             return "Empty command"
         # Quick covenant check on the command string itself
@@ -644,13 +695,12 @@ class ActionEngine:
         )
         out = result.stdout.strip()[:4000]
         err = result.stderr.strip()[:1500]
+        if result.returncode != 0:
+            raise ShellCommandError(
+                stdout=out, stderr=err, returncode=result.returncode, cmd=cmd,
+            )
         if not out:
-            parts = [f"exit={result.returncode}"]
-            if err:
-                parts.append(f"stderr: {err}")
-            return "(no stdout) " + " | ".join(parts)
-        if result.returncode != 0 and err:
-            out += f"\nstderr: {err}"
+            return "(no output) exit=0"
         return out
 
     def _check_covenant_command(self, cmd: str):
@@ -837,7 +887,16 @@ class ActionEngine:
             reasoning, tier=0,
         )
 
-    def _do_web_search(self, query: str, max_results: int = 5) -> str:
+    def _do_web_search(self, query: str = "", max_results: int = 5, **_ignored) -> str:
+        # Bug A fix (2026-04-15 intelligence audit): defaulted `query` to
+        # "" so a malformed tool call from the LoRA (TOOL_CALL emitted
+        # with empty params {}) returns the "empty query" string instead
+        # of crashing with TypeError. The previous signature required
+        # `query` as positional, which meant `method(**params)` in
+        # _execute_action raised on any web_search call missing params,
+        # and the chat layer then fabricated around the silent crash.
+        # **_ignored swallows any extra params the LoRA might emit
+        # (e.g. `reasoning`, `reason`) without rejecting the call.
         try:
             from skills.web_search import search as _web_search, format_for_context
         except Exception as e:

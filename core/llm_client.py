@@ -37,6 +37,7 @@ Staging-only
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Iterator, Optional
@@ -54,6 +55,29 @@ LLAMACPP_BASE_URL = os.environ.get('MAEZ_LLAMACPP_URL', 'http://127.0.0.1:8080/v
 # flag passed to llama-server at launch, or be ignored (llama-server accepts
 # any string when only one model is loaded).
 LLAMACPP_MODEL    = os.environ.get('MAEZ_LLAMACPP_MODEL', 'gemma-4-26b')
+
+# Gemma-4 / llama.cpp special tokens that should never be forwarded as
+# literal user/system content to the OpenAI-compatible chat endpoint.
+# If they leak into live prompts, llama-server's jinja chat template can
+# misparse them and return 500s like "Failed to parse input at pos ...".
+#
+# The `<|...|>` middle segment excludes `<` and `>` (not just `|`) so the
+# regex can't cross the asymmetric Gemma-native tool-call delimiters
+# `<|tool_call>call:NAME{...}<tool_call|>`. Without the `<>` exclusions
+# the greedy match would span from the opening `<|` of `<|tool_call>` to
+# the closing `|>` of `<tool_call|>` and delete the entire tool-call body
+# in between — silently destroying the LoRA's primary trained tool-call
+# format. The Jarvis parser has an explicit branch for Gemma-native, and
+# the sanitizer must leave it intact for that branch to ever fire.
+_SPECIAL_TOKEN_RE = re.compile(
+    r"<\|[^|<>]*\|>"
+    r"|<start_of_turn>"
+    r"|<end_of_turn>"
+    r"|<maez_thought>"
+    r"|</maez_thought>"
+    r"|<bos>"
+    r"|<eos>"
+)
 
 
 def active_backend() -> str:
@@ -82,6 +106,39 @@ class _LlmResponse:
     """Minimal ollama.ChatResponse-shaped object so consumers can call
     resp.message.content without caring which backend produced it."""
     message: _LlmMessage
+
+
+def _strip_special_tokens(text: str) -> str:
+    """Remove template/control tokens that break llama-server parsing."""
+    if not text:
+        return text
+    return _SPECIAL_TOKEN_RE.sub("", text)
+
+
+def sanitize_prompt_text(text: str) -> str:
+    """Public helper for text that may be fed back into live prompts."""
+    return _strip_special_tokens(text)
+
+
+def _sanitize_messages_for_llamacpp(messages: list[dict]) -> list[dict]:
+    """Return a shallow-copied message list safe for llama-server.
+
+    We only sanitize the local llama.cpp path so Ollama behavior remains
+    unchanged. This keeps Maez's higher-level prompts intact while
+    stripping the literal control tokens that have been observed to crash
+    the request parser.
+    """
+    cleaned: list[dict] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            cleaned.append(msg)
+            continue
+        clone = dict(msg)
+        content = clone.get("content")
+        if isinstance(content, str):
+            clone["content"] = _strip_special_tokens(content)
+        cleaned.append(clone)
+    return cleaned
 
 
 # ── ollama path (no-op passthrough) ──────────────────────────────────
@@ -146,6 +203,7 @@ def _chat_llamacpp(
     inside the extra_body, which this function forwards when `think=False`.
     """
     client = _get_openai_client()
+    messages = _sanitize_messages_for_llamacpp(messages)
 
     # Map ollama options.temperature/num_predict to OpenAI kwargs.
     temperature = 0.7
@@ -190,6 +248,7 @@ def _chat_llamacpp(
                     try:
                         delta = raw_chunk.choices[0].delta
                         token = getattr(delta, 'content', None) or ''
+                        token = _strip_special_tokens(token)
                     except Exception:
                         token = ''
                     yield _LlmResponse(
@@ -210,6 +269,7 @@ def _chat_llamacpp(
     # Adapt to ollama-shaped response
     try:
         content = completion.choices[0].message.content or ''
+        content = _strip_special_tokens(content)
     except Exception as e:
         raise BackendError(f'llamacpp response parse failed: {e!r}') from e
 
@@ -353,3 +413,31 @@ if __name__ == '__main__':
         print(f'  {dt:.2f}s  reply: {content[:120]!r}')
     except BackendError as e:
         print(f'  FAILED: {e}')
+
+    print('sanitizer unit checks')
+    raw = 'hello <|channel|> world <end_of_turn> <bos>'
+    cleaned = _strip_special_tokens(raw)
+    assert '<|channel|>' not in cleaned and '<end_of_turn>' not in cleaned and '<bos>' not in cleaned
+    sanitized = _sanitize_messages_for_llamacpp([
+        {'role': 'system', 'content': 'safe'},
+        {'role': 'user', 'content': raw},
+    ])
+    assert sanitized[1]['content'] == cleaned
+    assert sanitized[0]['content'] == 'safe'
+
+    # Regression: Gemma-native tool-call delimiters must survive the
+    # sanitizer intact. The regex must NOT greedy-match across the
+    # asymmetric `<|tool_call>...<tool_call|>` envelope and delete the
+    # JSON body. Previous regex `<\|[^|]*\|>` had this bug and silently
+    # destroyed the LoRA's primary trained tool-call format.
+    toolcall = '<|tool_call>call:maez.run_shell{"cmd":"ls"}<tool_call|>'
+    assert _strip_special_tokens(toolcall) == toolcall, (
+        f'Gemma-native tool call was destroyed by sanitizer: {_strip_special_tokens(toolcall)!r}'
+    )
+    assert _strip_special_tokens('<|tool_call>') == '<|tool_call>'
+    assert _strip_special_tokens('<tool_call|>') == '<tool_call|>'
+    # And the chat-template tokens still get stripped
+    assert _strip_special_tokens('<|im_start|>') == ''
+    assert _strip_special_tokens('<|im_end|>') == ''
+    assert _strip_special_tokens('<|end_of_text|>') == ''
+    print('  sanitizer OK')

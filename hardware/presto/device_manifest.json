@@ -1,0 +1,31 @@
+{
+  "id": "presto",
+  "name": "Pimoroni Presto",
+  "role": "networked bedside body surface",
+  "transport": {
+    "serial_bridge": "scripts/presto_bridge_cli.py",
+    "serial_module": "hardware/presto/bridge.py",
+    "lan_state_url": "http://<maez-host>:8765/body-state"
+  },
+  "host_components": [
+    "hardware/presto/bridge.py",
+    "hardware/presto/body_state_server.py"
+  ],
+  "device_apps": [
+    "hardware/presto/device_apps/presto_maez_face.py",
+    "hardware/presto/device_apps/presto_maez_interface.py",
+    "hardware/presto/device_apps/presto_maez_remote.py"
+  ],
+  "compatibility_paths": [
+    "skills/presto_bridge.py",
+    "scripts/presto_bridge_cli.py",
+    "scripts/presto_body_state_server.py",
+    "scripts/presto_maez_face.py",
+    "scripts/presto_maez_interface.py",
+    "scripts/presto_maez_remote.py"
+  ],
+  "notes": [
+    "Device apps remain available in scripts/ for current push-to-board workflows.",
+    "Host-side ownership now lives under hardware/presto so future hardware can be modeled the same way."
+  ]
+}

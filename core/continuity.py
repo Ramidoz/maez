@@ -44,6 +44,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from core.llm_client import sanitize_prompt_text
+
 logger = logging.getLogger("maez")
 
 # ══════════════════════════════════════════════════════════════════════
@@ -543,7 +545,11 @@ def format_for_prompt(capsule: dict) -> str:
     if not capsule:
         return ""
 
-    lines = ["[CONTINUITY]"]
+    lines = [
+        "[CONTINUITY — prior state from your last session, not present observation]",
+        "  The fields below describe how you WERE before the restart. They are",
+        "  not live perception. Do not restate them as current fact.",
+    ]
 
     reason = capsule.get('restart_reason')
     if reason:
@@ -578,7 +584,7 @@ def format_for_prompt(capsule: dict) -> str:
 
     resume = capsule.get('resume_instructions', '')
     if resume:
-        lines.append(f"  Resume: {resume}")
+        lines.append(f"  Resume: {sanitize_prompt_text(resume)}")
 
     lines.append("  Do not announce the restart unless the owner asks. Continue as yourself.")
 
