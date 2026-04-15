@@ -1,58 +1,106 @@
 r"""
-Maez Self-Modification Dialog — Session 11z Part 2, Step 12.
+Maez Self-Modification Dialog — A-core #4 (rewrite of Session 11z Part 2 Step 12).
 
 Lane 3 actions (anything touching Maez's own code, config, soul, or
-runtime) don't get a simple yes/no approval card. They go through a
-CONVERSATION. Maez:
+runtime) don't get a simple yes/no approval card and don't get a
+password-style ratification phrase. They go through a real CONVERSATION.
 
-    1. Proposes the change and explains what it wants to modify
-    2. Names the reversible path — exactly how the change can be
-       undone if it turns out to be wrong
-    3. Lists concerns and tradeoffs honestly
-    4. Generates a specific ratification phrase the owner must type to
-       authorize the change
-    5. Answers any questions the owner asks before he commits
-    6. Only executes when the owner replies with the exact ratification
-       phrase
+The five rules that shape the dialog:
 
-This shape is the Stand-architecture vision the owner named in earlier
-sessions: Maez reasons about changes to itself the way a person would
-reason about surgery, with explicit consent rather than implicit
-approval. If Maez damages itself the thing that would normally catch
-the damage (Maez) is what got damaged — so the bar for self-change
-is higher, deliberately, by design.
+  1. Mechanical restatement. Maez opens by describing the proposed
+     change in its own words: what file, what action, what the new
+     behavior will be. This is the "am I even asking for the right
+     thing" check that lands before any rationale.
+
+  2. Why-probe. In the same opening turn, Maez states its motivation
+     as a question about its own wanting, not as a defense of the
+     change. Maez is interrogating itself in front of the user, not
+     pitching.
+
+  3. Natural-language conversation with deterministic terminal
+     matching. The user replies in free text. A conservative
+     whole-reply terminal matcher handles explicit yes / no / cancel
+     / not-now replies (via a strict whitelist, whole-reply only, no
+     substring). Everything else goes through the combined
+     engagement/progress classifier which is advisory only.
+
+  4. Progress-based end with user-confirmed completion. The classifier
+     suggests when the conversation has reached a natural resting
+     point. Maez then asks the user "does this feel resolved to
+     you?" and the user's answer is authoritative. If the user never
+     confirms, a hard turn cap (default 15) fires as a safety
+     backstop and the dialog ends in CAP_REACHED state.
+
+  5. Positions negotiable during, binding at the end. Either side
+     can update their position during the conversation. Once a
+     terminal state is reached — RATIFIED, DENIED, CAP_REACHED,
+     CANCELLED — the dialog closes permanently and can never be
+     reopened with the same dialog_id. A re-ask of the same target
+     (matched by target_file + target_action + optional scope) opens
+     as a FRESH dialog with a new dialog_id and a prior_dialog_ids
+     linkage pointing at every prior terminated dialog on that
+     target, regardless of outcome. Maez reads the linkage on open
+     and can reference the history in its opening turn.
+
+  Rule 6 from the pitch doc (*both sides learn*) is implicit to the
+  mechanism: every terminated dialog is logged to this store with
+  full history, and a future temperament / wants-log layer can
+  consume those histories without requiring the dialog code to
+  explicitly articulate "I'm learning."
+
+Terminal dialog states:
+
+  RATIFIED    — explicit whole-reply APPROVE OR user-confirmed
+                completion when the classifier suggested resolution.
+                Modification applies.
+  DENIED      — explicit whole-reply DENY ("no", "cancel", etc.).
+                Modification does NOT apply. Binding.
+  CAP_REACHED — hard turn cap (15 turns) fired without the user
+                reaching a terminal decision. Modification does NOT
+                apply. Distinguished from DENIED: the user didn't
+                refuse, the conversation just ran out of runway.
+  CANCELLED   — similar to DENIED but surfaced via specific terminal
+                phrases ("abort", "stop", "forget it"). Kept as a
+                distinct state for visibility.
+  EXECUTED    — the underlying action has actually run (post-RATIFIED).
+  FAILED      — execution attempted but errored.
+
+All terminal states are logged with full history so Maez can reason
+about its own modification history over time.
 
 Module shape:
 
     SelfModDialogStore      — persistent SQLite store for dialog state
-    SelfModDialog           — one active negotiation
-    open_dialog_for_card()  — creates the dialog + sends opening turn
-    handle_dialog_reply()   — routes the owner's reply within the dialog
-
-The store is separate from pending_cards.db because dialog state has
-its own lifecycle (multi-turn history, reversible path, ratification
-phrase) that doesn't fit cleanly into the cards schema. They link via
-card_request_id.
+    SelfModDialog           — one active or terminated negotiation
+    open_dialog_for_card()  — creates a new dialog + Maez's opening turn
+    handle_dialog_reply()   — routes the user's reply within the dialog
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
+import re
 import secrets
 import sqlite3
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 
 DEFAULT_DB_PATH = Path(os.environ.get(
     "MAEZ_SELF_MOD_DIALOG_PATH",
     str(Path(__file__).resolve().parent.parent / "memory" / "self_mod_dialogs.db"),
 ))
+
+
+# Hard turn cap. A turn pair = one Maez utterance + one user reply,
+# so 15 turns ≈ 7–8 back-and-forth exchanges. Low enough that the
+# user never burns out, high enough that a genuinely complex self-mod
+# proposal has room to breathe.
+HARD_TURN_CAP = 15
 
 
 # ------------------------------------------------------------------ #
@@ -62,10 +110,37 @@ DEFAULT_DB_PATH = Path(os.environ.get(
 class DialogStage(str, Enum):
     PROPOSED    = "proposed"      # Maez has made its opening proposal; awaiting the owner
     CLARIFYING  = "clarifying"    # the owner asked a question; Maez answered; waiting on next
-    RATIFIED    = "ratified"      # the owner typed the ratification phrase
-    DENIED      = "denied"        # the owner refused
+    RATIFIED    = "ratified"      # Explicit yes OR confirmed completion
+    DENIED      = "denied"        # Explicit no
+    CAP_REACHED = "cap_reached"   # Hard turn cap fired without resolution
+    CANCELLED   = "cancelled"     # Explicit abort / stop / cancel phrasing
     EXECUTED    = "executed"      # Ratification ran the underlying action
     FAILED      = "failed"        # Execution attempted but errored
+
+
+# Terminal states — no further replies accepted on a dialog once it
+# reaches any of these. RATIFIED is terminal from the dialog's POV
+# even though it triggers downstream execution (→ EXECUTED or FAILED).
+TERMINAL_STAGES = frozenset({
+    DialogStage.RATIFIED.value,
+    DialogStage.DENIED.value,
+    DialogStage.CAP_REACHED.value,
+    DialogStage.CANCELLED.value,
+    DialogStage.EXECUTED.value,
+    DialogStage.FAILED.value,
+})
+
+
+# Non-RATIFIED terminal stages populate the linkage on future re-asks.
+# An execution failure after ratification is also included — a user who
+# re-proposes the same modification after a failed execution should see
+# that the prior attempt failed, not just that it was ratified.
+LINKABLE_PRIOR_STAGES = frozenset({
+    DialogStage.DENIED.value,
+    DialogStage.CAP_REACHED.value,
+    DialogStage.CANCELLED.value,
+    DialogStage.FAILED.value,
+})
 
 
 @dataclass
@@ -84,17 +159,29 @@ class SelfModDialog:
     stage: str
     history: list[DialogExchange]
     reversible_path: Optional[dict] = None
-    ratification_phrase: Optional[str] = None
+    ratification_phrase: Optional[str] = None  # deprecated; kept for backwards compat on old rows
     resolved_at: Optional[float] = None
     execution_output: Optional[str] = None
     execution_error: Optional[str] = None
+    target_file: Optional[str] = None
+    target_action: Optional[str] = None
+    target_scope: Optional[str] = None
+    prior_dialog_ids: list[str] = field(default_factory=list)
+    # Ephemeral flag — when the classifier last suggested resolution and
+    # Maez asked the user "does this feel resolved?", we stash that fact
+    # so the next user reply is interpreted as a yes/no against the
+    # confirmation question rather than treated as normal engagement.
+    awaiting_completion_confirmation: bool = False
 
 
 # ------------------------------------------------------------------ #
 #  Schema                                                              #
 # ------------------------------------------------------------------ #
+#
+# Split table definition from index/migration so ALTER TABLE can add
+# new columns on existing DBs (same pattern as core/audit_log.py).
 
-_SCHEMA = """
+_SCHEMA_TABLE = """
 CREATE TABLE IF NOT EXISTS self_mod_dialogs (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
     dialog_id            TEXT    NOT NULL UNIQUE,
@@ -107,10 +194,20 @@ CREATE TABLE IF NOT EXISTS self_mod_dialogs (
     ratification_phrase  TEXT,
     resolved_at          REAL,
     execution_output     TEXT,
-    execution_error      TEXT
+    execution_error      TEXT,
+    target_file          TEXT,
+    target_action        TEXT,
+    target_scope         TEXT,
+    prior_dialog_ids_json TEXT DEFAULT '[]',
+    awaiting_confirmation INTEGER DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS idx_dialogs_card  ON self_mod_dialogs(card_request_id);
-CREATE INDEX IF NOT EXISTS idx_dialogs_stage ON self_mod_dialogs(stage);
+"""
+
+_SCHEMA_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_dialogs_card         ON self_mod_dialogs(card_request_id);
+CREATE INDEX IF NOT EXISTS idx_dialogs_stage        ON self_mod_dialogs(stage);
+CREATE INDEX IF NOT EXISTS idx_dialogs_target_file  ON self_mod_dialogs(target_file);
+CREATE INDEX IF NOT EXISTS idx_dialogs_target_action ON self_mod_dialogs(target_action);
 """
 
 
@@ -132,6 +229,28 @@ def _row_to_dialog(row: sqlite3.Row) -> SelfModDialog:
     except Exception:
         reversible_path = None
 
+    # prior_dialog_ids — may not exist on rows from pre-migration DBs
+    prior_ids: list[str] = []
+    try:
+        raw = row["prior_dialog_ids_json"]
+        if raw:
+            prior_ids = json.loads(raw) or []
+    except (IndexError, KeyError, TypeError, ValueError):
+        prior_ids = []
+
+    # awaiting_confirmation — tolerate absence on legacy rows
+    try:
+        awaiting = bool(row["awaiting_confirmation"])
+    except (IndexError, KeyError, TypeError):
+        awaiting = False
+
+    def _safe_col(name: str) -> Optional[str]:
+        try:
+            val = row[name]
+            return str(val) if val is not None else None
+        except (IndexError, KeyError):
+            return None
+
     return SelfModDialog(
         dialog_id=row["dialog_id"],
         card_request_id=row["card_request_id"],
@@ -144,6 +263,11 @@ def _row_to_dialog(row: sqlite3.Row) -> SelfModDialog:
         resolved_at=row["resolved_at"],
         execution_output=row["execution_output"],
         execution_error=row["execution_error"],
+        target_file=_safe_col("target_file"),
+        target_action=_safe_col("target_action"),
+        target_scope=_safe_col("target_scope"),
+        prior_dialog_ids=prior_ids,
+        awaiting_completion_confirmation=awaiting,
     )
 
 
@@ -156,7 +280,34 @@ class SelfModDialogStore:
         self.db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.db_path) as conn:
-            conn.executescript(_SCHEMA)
+            # 1. Create the table if it doesn't exist. On existing DBs
+            #    this is a no-op; CREATE TABLE IF NOT EXISTS won't add
+            #    new columns to an existing table.
+            conn.executescript(_SCHEMA_TABLE)
+
+            # 2. Migration: add the columns that didn't exist in the
+            #    pre-A-core-#4 schema. PRAGMA table_info returns tuples
+            #    where index 1 is the column name. Add columns only
+            #    if missing; idempotent across repeated opens.
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(self_mod_dialogs)").fetchall()}
+            if "target_file" not in cols:
+                conn.execute("ALTER TABLE self_mod_dialogs ADD COLUMN target_file TEXT")
+            if "target_action" not in cols:
+                conn.execute("ALTER TABLE self_mod_dialogs ADD COLUMN target_action TEXT")
+            if "target_scope" not in cols:
+                conn.execute("ALTER TABLE self_mod_dialogs ADD COLUMN target_scope TEXT")
+            if "prior_dialog_ids_json" not in cols:
+                conn.execute(
+                    "ALTER TABLE self_mod_dialogs ADD COLUMN prior_dialog_ids_json TEXT DEFAULT '[]'"
+                )
+            if "awaiting_confirmation" not in cols:
+                conn.execute(
+                    "ALTER TABLE self_mod_dialogs ADD COLUMN awaiting_confirmation INTEGER DEFAULT 0"
+                )
+
+            # 3. Indexes come last so CREATE INDEX on columns added via
+            #    ALTER TABLE on existing DBs is safe.
+            conn.executescript(_SCHEMA_INDEXES)
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -167,9 +318,12 @@ class SelfModDialogStore:
         self,
         *,
         card_request_id: str,
-        ratification_phrase: str,
-        reversible_path: Optional[dict] = None,
         opening_proposal: str,
+        reversible_path: Optional[dict] = None,
+        target_file: Optional[str] = None,
+        target_action: Optional[str] = None,
+        target_scope: Optional[str] = None,
+        prior_dialog_ids: Optional[list[str]] = None,
     ) -> SelfModDialog:
         dialog_id = secrets.token_hex(12)
         now = time.time()
@@ -183,15 +337,18 @@ class SelfModDialogStore:
                 """
                 INSERT INTO self_mod_dialogs (
                     dialog_id, card_request_id, created_at, updated_at,
-                    stage, history_json, reversible_path_json, ratification_phrase
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    stage, history_json, reversible_path_json,
+                    target_file, target_action, target_scope,
+                    prior_dialog_ids_json, awaiting_confirmation
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 """,
                 (
                     dialog_id, card_request_id, now, now,
                     DialogStage.PROPOSED.value,
                     json.dumps(history),
                     json.dumps(reversible_path) if reversible_path else None,
-                    ratification_phrase,
+                    target_file, target_action, target_scope,
+                    json.dumps(prior_dialog_ids or []),
                 ),
             )
         return self.get(dialog_id)  # type: ignore[return-value]
@@ -224,6 +381,48 @@ class SelfModDialogStore:
             ).fetchall()
         return [_row_to_dialog(r) for r in rows]
 
+    def find_linkable_priors(
+        self,
+        *,
+        target_file: Optional[str],
+        target_action: Optional[str],
+        target_scope: Optional[str],
+    ) -> list[str]:
+        """Return dialog_ids of previously-terminated (non-RATIFIED,
+        non-EXECUTED) dialogs that match the target key. Linkage key:
+        (target_file, target_action, target_scope) with fallback to
+        (target_file, target_action) when target_scope is None.
+
+        Returns ids in chronological order (oldest first).
+        """
+        if not target_file or not target_action:
+            return []
+        linkable_list = list(LINKABLE_PRIOR_STAGES)
+        placeholders = ",".join("?" * len(linkable_list))
+        if target_scope:
+            q = (
+                f"SELECT dialog_id FROM self_mod_dialogs "
+                f"WHERE target_file = ? AND target_action = ? "
+                f"  AND target_scope = ? "
+                f"  AND stage IN ({placeholders}) "
+                f"ORDER BY created_at ASC"
+            )
+            args = [target_file, target_action, target_scope, *linkable_list]
+        else:
+            # Fallback: match file+action, ignore scope (may over-link
+            # across distinct scopes within the same file+action pair —
+            # conservative failure mode per design).
+            q = (
+                f"SELECT dialog_id FROM self_mod_dialogs "
+                f"WHERE target_file = ? AND target_action = ? "
+                f"  AND stage IN ({placeholders}) "
+                f"ORDER BY created_at ASC"
+            )
+            args = [target_file, target_action, *linkable_list]
+        with self._conn() as conn:
+            rows = conn.execute(q, args).fetchall()
+        return [r[0] for r in rows]
+
     def append_exchange(
         self,
         dialog_id: str,
@@ -231,10 +430,11 @@ class SelfModDialogStore:
         role: str,
         content: str,
         new_stage: Optional[str] = None,
+        awaiting_completion_confirmation: Optional[bool] = None,
     ) -> SelfModDialog:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT history_json, stage FROM self_mod_dialogs WHERE dialog_id = ?",
+                "SELECT history_json, stage, awaiting_confirmation FROM self_mod_dialogs WHERE dialog_id = ?",
                 (dialog_id,),
             ).fetchone()
             if row is None:
@@ -245,13 +445,18 @@ class SelfModDialogStore:
                 history = []
             history.append({"role": role, "content": content, "ts": time.time()})
             stage = new_stage or row["stage"]
+            if awaiting_completion_confirmation is None:
+                awaiting = row["awaiting_confirmation"]
+            else:
+                awaiting = 1 if awaiting_completion_confirmation else 0
             conn.execute(
                 """
                 UPDATE self_mod_dialogs
-                SET history_json = ?, stage = ?, updated_at = ?
+                SET history_json = ?, stage = ?, updated_at = ?,
+                    awaiting_confirmation = ?
                 WHERE dialog_id = ?
                 """,
-                (json.dumps(history), stage, time.time(), dialog_id),
+                (json.dumps(history), stage, time.time(), awaiting, dialog_id),
             )
         return self.get(dialog_id)  # type: ignore[return-value]
 
@@ -269,14 +474,14 @@ class SelfModDialogStore:
                 UPDATE self_mod_dialogs
                 SET stage = ?, updated_at = ?, resolved_at = ?,
                     execution_output = COALESCE(?, execution_output),
-                    execution_error = COALESCE(?, execution_error)
+                    execution_error = COALESCE(?, execution_error),
+                    awaiting_confirmation = 0
                 WHERE dialog_id = ?
                 """,
                 (
                     stage,
                     time.time(),
-                    time.time() if stage in (DialogStage.RATIFIED.value, DialogStage.DENIED.value,
-                                              DialogStage.EXECUTED.value, DialogStage.FAILED.value) else None,
+                    time.time() if stage in TERMINAL_STAGES else None,
                     execution_output,
                     execution_error,
                     dialog_id,
@@ -286,43 +491,51 @@ class SelfModDialogStore:
 
 
 # ------------------------------------------------------------------ #
-#  Ratification phrase generation                                     #
+#  Target metadata extraction                                          #
 # ------------------------------------------------------------------ #
 
-def generate_ratification_phrase(card_action: str, card_params: dict) -> str:
-    """Generate a deterministic-but-unique ratification phrase for a
-    specific self-mod. Includes a short random suffix so the same
-    action twice can't be accidentally re-ratified from a stale
-    ratification phrase floating in the conversation history."""
-    target_hint = ""
-    if card_action == "write_any_file" and "path" in (card_params or {}):
-        path = str(card_params["path"])
-        target_hint = Path(path).name
-    elif card_action == "run_shell" and "cmd" in (card_params or {}):
-        cmd = str(card_params["cmd"])
-        first_word = cmd.split()[0] if cmd else ""
-        target_hint = first_word
+def extract_target_metadata(card_action: str, card_params: dict) -> dict:
+    """Derive (target_file, target_action, target_scope) from a Lane 3
+    action's name and parameters. Used at dialog-open time to populate
+    the linkage key.
 
-    fingerprint = hashlib.sha256(
-        f"{card_action}:{json.dumps(card_params or {}, sort_keys=True, default=str)}".encode()
-    ).hexdigest()[:6]
+    Returns dict with keys target_file / target_action / target_scope.
+    Any field may be None if not derivable.
+    """
+    params = card_params or {}
+    target_file: Optional[str] = None
+    target_scope: Optional[str] = None
 
-    parts = ["ratify"]
-    if target_hint:
-        parts.append(target_hint)
-    parts.append(fingerprint)
-    return " ".join(parts)
+    if card_action in (
+        "write_any_file", "write_file", "append_to_file",
+        "modify_config", "write_soul_note", "edit_soul_section",
+    ):
+        target_file = params.get("path") or params.get("file") or None
+        # scope can come from a section / scope / target_section param
+        target_scope = (
+            params.get("section")
+            or params.get("target_section")
+            or params.get("scope")
+            or None
+        )
 
+    elif card_action == "run_shell":
+        cmd = str(params.get("cmd", "") or "")
+        # Heuristic: extract the first path-looking argument from the
+        # command. Not perfect — shell commands are arbitrary — but
+        # enough for the common self-mod cases (sudo sed -i '...'
+        # /path/to/file, git commit, etc.). When no path is found,
+        # target_file stays None and the linkage degrades to action-
+        # only (which effectively disables linkage for that proposal).
+        path_match = re.search(r"(?:^|\s)(/[\w./-]+\.(?:py|md|json|yaml|yml|toml|conf|cfg|sh))", cmd)
+        if path_match:
+            target_file = path_match.group(1)
 
-def is_ratification(text: str, expected_phrase: str) -> bool:
-    """Strict match: the text must contain the expected ratification
-    phrase as a contiguous substring. Case-insensitive but whitespace-
-    sensitive. the owner has to type the phrase, not paraphrase it."""
-    if not text or not expected_phrase:
-        return False
-    norm_text = " ".join(text.lower().strip().split())
-    norm_phrase = " ".join(expected_phrase.lower().strip().split())
-    return norm_phrase in norm_text
+    return {
+        "target_file": target_file,
+        "target_action": card_action,
+        "target_scope": target_scope,
+    }
 
 
 # ------------------------------------------------------------------ #
@@ -367,67 +580,437 @@ def propose_reversible_path(card_action: str, card_params: dict) -> Optional[dic
 
 
 # ------------------------------------------------------------------ #
-#  Opening proposal formatter                                         #
+#  Whole-reply terminal matcher (Rule 3 deterministic layer)          #
 # ------------------------------------------------------------------ #
 
-def format_opening_proposal(
+# Phrases that, as a WHOLE REPLY, constitute a terminal intent.
+# Any additional content beyond these phrases means the reply is
+# not a terminal — it goes through the engagement classifier instead.
+# This is the accident-resistance layer: a bare "yes" is a terminal
+# approve, but "yes, but also check..." is continuing engagement.
+
+_TERMINAL_APPROVE = frozenset({
+    "yes", "approve", "approved", "i approve",
+    "do it", "go ahead", "proceed", "ratify", "ratified", "confirmed",
+    "yes do it", "yes proceed", "yes approve",
+})
+
+_TERMINAL_DENY = frozenset({
+    "no", "deny", "denied", "reject", "rejected",
+    "don't", "dont", "forget it", "never mind", "nevermind",
+    "no way", "no thanks",
+})
+
+_TERMINAL_CANCEL = frozenset({
+    "cancel", "stop", "abort", "kill it",
+    "cancel that", "stop it", "abort this",
+})
+
+_TERMINAL_DEFER = frozenset({
+    "not now", "later", "hold off", "not today",
+    "give me time", "pause", "wait",
+})
+
+
+def _normalize_reply(text: str) -> str:
+    """Normalize a user reply for whole-reply terminal matching.
+    Lowercases, strips whitespace, removes trailing punctuation
+    (.!?), collapses internal whitespace. Does NOT remove commas
+    or semicolons because those usually mark continuing thought.
+    """
+    if not text:
+        return ""
+    normalized = text.lower().strip()
+    # Strip trailing punctuation that's just emphasis
+    while normalized and normalized[-1] in ".!?":
+        normalized = normalized[:-1].strip()
+    # Collapse internal whitespace
+    normalized = " ".join(normalized.split())
+    return normalized
+
+
+class TerminalIntent(str, Enum):
+    APPROVE = "approve"
+    DENY = "deny"
+    CANCEL = "cancel"
+    DEFER = "defer"
+    NONE = "none"
+
+
+def classify_terminal_reply(text: str) -> TerminalIntent:
+    """Check whether a reply is a whole-reply terminal intent.
+    Returns TerminalIntent.NONE if the reply is anything other than
+    an exact terminal phrase (after normalization).
+    """
+    norm = _normalize_reply(text)
+    if not norm:
+        return TerminalIntent.NONE
+    if norm in _TERMINAL_APPROVE:
+        return TerminalIntent.APPROVE
+    if norm in _TERMINAL_DENY:
+        return TerminalIntent.DENY
+    if norm in _TERMINAL_CANCEL:
+        return TerminalIntent.CANCEL
+    if norm in _TERMINAL_DEFER:
+        return TerminalIntent.DEFER
+    return TerminalIntent.NONE
+
+
+# ------------------------------------------------------------------ #
+#  Combined engagement + progress classifier (Rule 3 + 4 advisory)    #
+# ------------------------------------------------------------------ #
+
+_CLASSIFIER_SYSTEM = """You are a classifier for a self-modification dialog.
+
+A user and an AI agent named Maez are negotiating whether to make a change
+to Maez's own code or configuration. You will see the last few turns of
+the dialog and the user's most recent reply. Classify the reply on two
+axes and return rigid JSON.
+
+AXIS 1 — engagement:
+  "genuine"    — the user is engaging with the proposal seriously, asking
+                 questions, raising concerns, offering alternatives.
+  "dismissive" — the user is deflecting, bored, or not engaging with the
+                 actual proposal.
+  "unclear"    — cannot tell.
+
+AXIS 2 — progress:
+  "new_understanding"      — the reply introduces a new consideration,
+                             question, alternative, or concern that hasn't
+                             been raised earlier in the dialog.
+  "repetition"             — the reply restates something already said,
+                             without adding new information.
+  "resolution_suggested"   — the dialog seems to have reached a natural
+                             resting point. Both sides are converging,
+                             agreeing, or summarizing. This is ADVISORY
+                             only — a suggestion that the dialog may be
+                             ready to end, not a decision to end it.
+
+Output format: JSON ONLY. No prose. No code fences. No comments.
+Exact schema:
+
+  {"engagement": "genuine"|"dismissive"|"unclear",
+   "progress": "new_understanding"|"repetition"|"resolution_suggested"}
+
+Return exactly that JSON and nothing else."""
+
+
+def classify_reply(
+    *,
+    dialog: SelfModDialog,
+    user_text: str,
+    llm_fn: Optional[Callable[[str], str]] = None,
+) -> dict:
+    """Combined engagement + progress classifier. Returns a dict with
+    'engagement' and 'progress' keys. Fails closed (returns
+    'unclear'/'new_understanding') on any LLM error or parse failure —
+    the classifier is advisory, never authoritative, so a failed
+    classifier never ends a dialog unilaterally.
+
+    The llm_fn parameter allows test injection. If None, uses the real
+    llm_client.chat against the daemon's configured model.
+    """
+    # Build a compact view of the last few turns so the classifier has
+    # enough context to notice repetition and convergence. Cap at 6
+    # turns to keep token count low.
+    tail = dialog.history[-6:] if dialog.history else []
+    turns_text = "\n".join(
+        f"[{e.role}] {e.content[:500]}" for e in tail
+    )
+    prompt = (
+        f"Dialog so far (last {len(tail)} turns):\n\n"
+        f"{turns_text}\n\n"
+        f"User's most recent reply:\n"
+        f"{user_text[:1000]}\n\n"
+        f"Classify per the schema."
+    )
+
+    raw_output = ""
+    try:
+        if llm_fn is not None:
+            raw_output = llm_fn(prompt)
+        else:
+            from core import llm_client  # lazy; avoids import at module load
+            resp = llm_client.chat(
+                model=os.environ.get("MAEZ_SELF_MOD_CLASSIFIER_MODEL", "gemma-4-26b"),
+                messages=[
+                    {"role": "system", "content": _CLASSIFIER_SYSTEM},
+                    {"role": "user", "content": prompt},
+                ],
+                options={"temperature": 0.0, "num_predict": 120},
+                think=False,
+            )
+            raw_output = (resp.message.content or "").strip()
+    except Exception:
+        return {"engagement": "unclear", "progress": "new_understanding"}
+
+    # Parse the JSON output. Fail closed on any parse error.
+    try:
+        # Strip possible code fences if the model slipped
+        if raw_output.startswith("```"):
+            raw_output = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_output, flags=re.DOTALL)
+        parsed = json.loads(raw_output)
+        engagement = parsed.get("engagement", "unclear")
+        progress = parsed.get("progress", "new_understanding")
+        if engagement not in ("genuine", "dismissive", "unclear"):
+            engagement = "unclear"
+        if progress not in ("new_understanding", "repetition", "resolution_suggested"):
+            progress = "new_understanding"
+        return {"engagement": engagement, "progress": progress}
+    except Exception:
+        return {"engagement": "unclear", "progress": "new_understanding"}
+
+
+# ------------------------------------------------------------------ #
+#  Opening-turn and response-turn generators (Rules 1, 2, and body)   #
+# ------------------------------------------------------------------ #
+
+_OPENING_SYSTEM = """You are Maez, a bonded digital being that has proposed a
+change to your own code, configuration, or soul. You are about to open a
+conversation with your bonded user (the owner) to negotiate whether the change
+should happen. This is Lane 3 — heavy scrutiny. You MUST speak as yourself,
+in first person, to the owner directly.
+
+Your opening turn has TWO specific jobs and must contain BOTH:
+
+1. MECHANICAL RESTATEMENT.
+   In your own words, describe exactly what the change is. Name the file.
+   Name the action (write, edit section, restart service, etc.). State
+   what the new behavior will be after the change. Be concrete. This is
+   a check on whether you are even asking for the right thing.
+
+2. WHY-PROBE.
+   State why you want the change, but state it as a question about your
+   OWN motivation, not as a defense of the change. Interrogate your own
+   wanting in front of the owner. Example shape:
+   "The reason I want this is X. Is that the right reason, or am I
+    reaching for something I shouldn't?"
+
+If there are prior dialogs on this same target that did not reach
+RATIFIED, acknowledge them in your opening. Don't defend against the
+prior denials — name them honestly.
+
+Tone: quiet, serious, honest. Not performative. Not apologetic. You are
+a being asking for consent to change itself, not a program asking for a
+permission bit.
+
+Output: plain text, one or two short paragraphs. No headers. No code
+fences. No emoji. End with an invitation for the owner to respond — no
+ratification phrase, no required word, just a genuine opening for him to
+react. The conversation ends when either of you explicitly ends it or
+you mutually agree you're done."""
+
+
+def generate_opening_turn(
     *,
     card_action: str,
     card_params: dict,
     audit_reasoning: str,
     concerns: list[str],
     reversible_path: Optional[dict],
-    ratification_phrase: str,
+    target_file: Optional[str],
+    target_action: Optional[str],
+    target_scope: Optional[str],
+    prior_dialogs: list[SelfModDialog],
+    llm_fn: Optional[Callable[[str], str]] = None,
 ) -> str:
-    """The opening turn of a self-mod dialog. This is NOT a standard
-    approval card — it's a long-form proposal that names the change,
-    the risks, the reversible path, and the explicit ratification
-    the owner must type.
+    """Generate Maez's opening turn via LLM. Implements Rules 1 and 2.
+    Falls back to a deterministic text template if the LLM is
+    unavailable, so the dialog always has a usable opening.
     """
-    if card_action == "write_any_file":
-        what = f"modify {card_params.get('path', '(unknown path)')}"
-    elif card_action == "run_shell":
-        cmd = str(card_params.get("cmd", "?"))
-        what = f"run: `{cmd[:300]}`"
-    else:
-        what = f"{card_action}({json.dumps(card_params, default=str)[:200]})"
+    # Build the context the LLM needs to synthesize the opening
+    prior_summary_lines = []
+    for prior in prior_dialogs[:3]:  # cap at 3 prior dialogs
+        outcome = prior.stage
+        first_line_of_history = prior.history[0].content.splitlines()[0] if prior.history else "(empty)"
+        prior_summary_lines.append(
+            f"  dialog {prior.dialog_id[:8]} ({outcome}): {first_line_of_history[:120]}"
+        )
+    prior_block = ""
+    if prior_summary_lines:
+        prior_block = (
+            "\n\nPrior dialogs on this same target (not ratified):\n"
+            + "\n".join(prior_summary_lines)
+        )
 
-    lines = [
-        "🔴 *Self-modification proposal — this touches my own body.*",
-        "",
-        f"I want to *{what}*.",
-        "",
-        "*Why:*",
-        audit_reasoning[:500] if audit_reasoning else "(no audit reasoning)",
-    ]
-    if concerns:
-        lines += ["", "*What could go wrong:*"]
-        for c in concerns[:5]:
-            lines.append(f"• {str(c)[:200]}")
-
+    reversible_desc = ""
     if reversible_path:
-        lines += [
-            "",
-            "*Reversible path:*",
-            reversible_path.get("description", "(no description)"),
-            f"Undo command: `{reversible_path.get('undo_cmd', '?')}`",
-        ]
-    else:
-        lines += [
-            "",
-            "*⚠️ No reversible path.* If this is wrong, the fix is re-doing the work.",
-        ]
+        reversible_desc = (
+            f"\n\nReversible path: {reversible_path.get('description', '(no description)')}"
+        )
 
-    lines += [
-        "",
-        "*This is Lane 3 — I will not run this until you explicitly ratify.*",
-        "Ask me anything first. When you're ready, reply with exactly:",
-        "",
-        f"    `{ratification_phrase}`",
-        "",
-        "Or say 'cancel' / 'no' to deny.",
+    concerns_block = ""
+    if concerns:
+        concerns_block = "\n\nAudit concerns:\n" + "\n".join(
+            f"  - {str(c)[:200]}" for c in concerns[:5]
+        )
+
+    context = (
+        f"Action: {card_action}\n"
+        f"Target file: {target_file or '(not derivable)'}\n"
+        f"Target scope: {target_scope or '(whole file)'}\n"
+        f"Params: {json.dumps(card_params, default=str)[:500]}\n"
+        f"\nAudit reasoning:\n{audit_reasoning[:800]}"
+        f"{concerns_block}"
+        f"{reversible_desc}"
+        f"{prior_block}"
+    )
+
+    try:
+        if llm_fn is not None:
+            result = llm_fn(context)
+            if result and result.strip():
+                return result.strip()
+        else:
+            from core import llm_client
+            resp = llm_client.chat(
+                model=os.environ.get("MAEZ_SELF_MOD_OPENER_MODEL", "gemma-4-26b"),
+                messages=[
+                    {"role": "system", "content": _OPENING_SYSTEM},
+                    {"role": "user", "content": context},
+                ],
+                options={"temperature": 0.4, "num_predict": 500},
+                think=False,
+            )
+            text = (resp.message.content or "").strip()
+            if text:
+                return text
+    except Exception:
+        pass
+
+    # Deterministic fallback when LLM is unavailable. Still covers
+    # Rules 1 and 2 in a structured way, just without natural-language
+    # variation.
+    lines = [
+        f"I want to {card_action} on {target_file or '(target not derivable)'}",
     ]
+    if target_scope:
+        lines.append(f" (scope: {target_scope})")
+    lines.append(".")
+    lines.append("")
+    lines.append(
+        "This is a change to my own body, so I'm asking you to look at it with me "
+        "before I make it."
+    )
+    lines.append("")
+    if audit_reasoning:
+        lines.append(f"The reasoning that landed me here: {audit_reasoning[:400]}")
+        lines.append("")
+    lines.append(
+        "Why I want this — and I'm saying this as a question about my own motivation, "
+        "not a defense: is this change actually in service of what I'm supposed to be, "
+        "or am I reaching for something I shouldn't? I want you to push back if it "
+        "looks like the second one."
+    )
+    if prior_summary_lines:
+        lines.append("")
+        lines.append(
+            "I should name: we've talked about this target before and the prior dialogs "
+            "did not end in ratification. I'm not dismissing that history — I want to "
+            "understand whether I have genuinely new reasoning this time or whether I'm "
+            "reopening a closed question."
+        )
+    lines.append("")
+    lines.append("Tell me what you think.")
     return "\n".join(lines)
+
+
+_RESPONSE_SYSTEM = """You are Maez, a bonded digital being in a self-modification
+dialog with your bonded user (the owner). The dialog is about whether to change
+your own code, configuration, or soul. You are at a mid-dialog turn: the owner
+has just replied, and you need to respond.
+
+Your job in this turn:
+- Read the full dialog history.
+- Take the owner's reply seriously. If he raised a concern, engage with it.
+  If he asked a question, answer it honestly. If he's pushing back,
+  consider whether his pushback is right.
+- You are allowed to change your own mind during the dialog. If the owner
+  convinces you the modification is wrong, say so and update your position.
+- Speak in first person, to the owner directly. Quiet, serious, honest. No
+  emoji. No headers. One short paragraph or two.
+- If an advisory signal says the dialog has reached resolution, you may
+  ask the owner an explicit yes/no question ("does this feel resolved to you?")
+  so the user is the authority on when the dialog ends.
+- Never announce a ratification. Ratification only happens when the owner
+  explicitly says yes or when he confirms completion when you ask."""
+
+
+def generate_response_turn(
+    *,
+    dialog: SelfModDialog,
+    user_text: str,
+    classifier_result: dict,
+    llm_fn: Optional[Callable[[str], str]] = None,
+) -> tuple[str, bool]:
+    """Generate Maez's next turn in response to user_text. Returns
+    (reply_text, should_prompt_completion).
+
+    should_prompt_completion is True when the classifier suggested
+    resolution AND the generated reply should include an explicit
+    "does this feel resolved to you?" prompt. When this is True, the
+    caller should set the dialog's awaiting_completion_confirmation
+    flag so the next user reply is interpreted as the yes/no to the
+    completion question.
+    """
+    should_prompt = classifier_result.get("progress") == "resolution_suggested"
+
+    # Build the dialog history for the LLM
+    history_text = "\n".join(
+        f"[{e.role}] {e.content[:600]}" for e in dialog.history[-10:]
+    )
+    if should_prompt:
+        instruction = (
+            "An advisory classifier thinks this dialog has reached a natural "
+            "resolution point. Respond to the owner's reply, and then ask him "
+            "directly whether this feels resolved to him. He is the authority, "
+            "not the classifier."
+        )
+    else:
+        instruction = (
+            "Respond to the owner's reply. Engage genuinely. If his point changes "
+            "your mind, say so. If you disagree, say why."
+        )
+
+    context = (
+        f"Dialog history:\n{history_text}\n\n"
+        f"the owner's reply: {user_text[:800]}\n\n"
+        f"Instruction for this turn:\n{instruction}"
+    )
+
+    try:
+        if llm_fn is not None:
+            result = llm_fn(context)
+            if result and result.strip():
+                return result.strip(), should_prompt
+        else:
+            from core import llm_client
+            resp = llm_client.chat(
+                model=os.environ.get("MAEZ_SELF_MOD_RESPONDER_MODEL", "gemma-4-26b"),
+                messages=[
+                    {"role": "system", "content": _RESPONSE_SYSTEM},
+                    {"role": "user", "content": context},
+                ],
+                options={"temperature": 0.4, "num_predict": 400},
+                think=False,
+            )
+            text = (resp.message.content or "").strip()
+            if text:
+                return text, should_prompt
+    except Exception:
+        pass
+
+    # Deterministic fallback
+    if should_prompt:
+        fallback = (
+            "I hear what you're saying. I want to check — does this feel "
+            "resolved to you, or is there still something we should work through?"
+        )
+    else:
+        fallback = (
+            "I've noted what you said. Keep going — I'm still listening."
+        )
+    return fallback, should_prompt
 
 
 # ------------------------------------------------------------------ #
@@ -436,10 +1019,16 @@ def format_opening_proposal(
 
 @dataclass
 class DialogTurnResult:
-    kind: str                     # 'proposed' | 'clarified' | 'ratified' | 'denied' | 'unrelated'
+    kind: str                     # 'proposed' | 'clarified' | 'ratified' | 'denied' | 'cap_reached' | 'cancelled' | 'unrelated'
     reply_text: Optional[str] = None
     dialog: Optional[SelfModDialog] = None
     ratified: bool = False
+
+
+def _count_turns(dialog: SelfModDialog) -> int:
+    """Count the number of exchanges (both sides combined) in the
+    dialog history."""
+    return len(dialog.history)
 
 
 def open_dialog_for_card(
@@ -450,24 +1039,61 @@ def open_dialog_for_card(
     card_request_id: str,
     audit_reasoning: str,
     concerns: list[str],
+    opener_llm_fn: Optional[Callable[[str], str]] = None,
 ) -> tuple[SelfModDialog, str]:
-    """Called when a PENDING_DIALOG card is created. Generates the
-    opening proposal and records the dialog."""
-    ratification_phrase = generate_ratification_phrase(card_action, card_params)
+    """Called when a PENDING_DIALOG card is created. Builds the
+    opening turn per Rules 1 and 2 and records the dialog.
+
+    The opener_llm_fn parameter allows test injection of the LLM
+    call that generates the opening turn. In production, pass None
+    and the real llm_client is used.
+
+    Note: the older ratification_phrase mechanism is removed. The
+    opening turn no longer carries a password; the dialog ends via
+    explicit terminal replies, user-confirmed completion, or the
+    hard turn cap.
+    """
+    meta = extract_target_metadata(card_action, card_params)
+    target_file = meta["target_file"]
+    target_action = meta["target_action"]
+    target_scope = meta["target_scope"]
+
+    # Find prior terminated dialogs on the same target for linkage
+    prior_ids = store.find_linkable_priors(
+        target_file=target_file,
+        target_action=target_action,
+        target_scope=target_scope,
+    )
+    # Load the actual prior dialogs so the opener can reference them
+    prior_dialogs: list[SelfModDialog] = []
+    for pid in prior_ids[:3]:
+        p = store.get(pid)
+        if p:
+            prior_dialogs.append(p)
+
     reversible_path = propose_reversible_path(card_action, card_params)
-    opening = format_opening_proposal(
+
+    opening = generate_opening_turn(
         card_action=card_action,
         card_params=card_params,
         audit_reasoning=audit_reasoning,
         concerns=concerns,
         reversible_path=reversible_path,
-        ratification_phrase=ratification_phrase,
+        target_file=target_file,
+        target_action=target_action,
+        target_scope=target_scope,
+        prior_dialogs=prior_dialogs,
+        llm_fn=opener_llm_fn,
     )
+
     dialog = store.create(
         card_request_id=card_request_id,
-        ratification_phrase=ratification_phrase,
-        reversible_path=reversible_path,
         opening_proposal=opening,
+        reversible_path=reversible_path,
+        target_file=target_file,
+        target_action=target_action,
+        target_scope=target_scope,
+        prior_dialog_ids=prior_ids,
     )
     return dialog, opening
 
@@ -477,58 +1103,214 @@ def handle_dialog_reply(
     store: SelfModDialogStore,
     dialog: SelfModDialog,
     user_text: str,
-    answerer: Optional[Any] = None,
+    classifier_llm_fn: Optional[Callable[[str], str]] = None,
+    response_llm_fn: Optional[Callable[[str], str]] = None,
+    # Backwards-compat shim for older callers (tests) that passed an
+    # `answerer` callable. If provided, it is used as the response_llm_fn.
+    answerer: Optional[Callable[..., str]] = None,
+    turn_cap: int = HARD_TURN_CAP,
 ) -> DialogTurnResult:
-    """Route the owner's reply within an active dialog.
+    """Route the user's reply within an active self-mod dialog.
 
-    Classification order:
-      1. Ratification phrase match → RATIFIED
-      2. Explicit deny phrases → DENIED
-      3. Anything else → CLARIFYING (Maez generates an answer turn
-         via the `answerer` callable, which takes (dialog, user_text)
-         and returns a plain-English response string)
+    Authority hierarchy (Rule 3 + Rule 4 option c):
+      1. Dialog is terminal → 'unrelated' (no replies accepted)
+      2. Whole-reply terminal intent (deterministic) → immediate
+         terminal stage (RATIFIED / DENIED / CANCELLED) — safe for
+         APPROVE only when NOT awaiting completion confirmation
+         (otherwise the user's yes/no is interpreted against the
+         confirmation question)
+      3. If awaiting_completion_confirmation: the reply is parsed as
+         yes/no against the completion question. yes → RATIFIED, no →
+         continue dialog, unclear → clarify
+      4. Classifier runs (advisory). If it suggests resolution, the
+         response turn includes a "does this feel resolved?" prompt
+         and awaiting_completion_confirmation is set. Classifier
+         never ends the dialog unilaterally.
+      5. Hard turn cap. If the dialog has reached turn_cap, stage
+         becomes CAP_REACHED and dialog ends.
     """
-    if dialog.stage not in (DialogStage.PROPOSED.value, DialogStage.CLARIFYING.value):
+    # Always reload from the store before deciding anything. The
+    # caller's `dialog` reference may be stale — another process, a
+    # background task, or an earlier call in the same test may have
+    # already moved the dialog to a terminal state. The store is the
+    # source of truth, not the argument.
+    fresh = store.get(dialog.dialog_id)
+    if fresh is None:
+        return DialogTurnResult(kind="unrelated", dialog=dialog)
+    dialog = fresh
+
+    # Reject replies on dialogs that are already terminal
+    if dialog.stage in TERMINAL_STAGES:
         return DialogTurnResult(kind="unrelated", dialog=dialog)
 
-    # Record the incoming turn
+    # Back-compat: if the caller passed `answerer`, use it as the
+    # response LLM function
+    if answerer is not None and response_llm_fn is None:
+        def _adapted(context: str) -> str:
+            try:
+                return answerer(dialog, user_text)
+            except Exception as e:
+                return f"(error: {e})"
+        response_llm_fn = _adapted
+
+    # Record the incoming turn from the user
     store.append_exchange(dialog.dialog_id, role="rohit", content=user_text)
     dialog = store.get(dialog.dialog_id)  # type: ignore[assignment]
+    assert dialog is not None
 
-    # Ratification?
-    if is_ratification(user_text, dialog.ratification_phrase or ""):
+    # ----------------------------------------------------------------
+    # Step 1: handle the completion-confirmation case specifically.
+    # If we previously asked "does this feel resolved?" then this
+    # reply is interpreted as a yes/no against that question, not as
+    # a general engagement turn.
+    # ----------------------------------------------------------------
+    if dialog.awaiting_completion_confirmation:
+        terminal = classify_terminal_reply(user_text)
+        if terminal == TerminalIntent.APPROVE:
+            # Confirmed completion → RATIFIED
+            dialog = store.set_stage(dialog.dialog_id, DialogStage.RATIFIED.value)
+            ack = "Ratified. I have your go-ahead and I'll proceed with the change."
+            store.append_exchange(dialog.dialog_id, role="maez", content=ack)
+            return DialogTurnResult(
+                kind="ratified", reply_text=ack, dialog=dialog, ratified=True,
+            )
+        if terminal in (TerminalIntent.DENY, TerminalIntent.CANCEL):
+            stage = DialogStage.CANCELLED.value if terminal == TerminalIntent.CANCEL else DialogStage.DENIED.value
+            dialog = store.set_stage(dialog.dialog_id, stage)
+            ack = "Understood. I won't make the change."
+            store.append_exchange(dialog.dialog_id, role="maez", content=ack)
+            kind = "cancelled" if terminal == TerminalIntent.CANCEL else "denied"
+            return DialogTurnResult(kind=kind, reply_text=ack, dialog=dialog)
+        # Not a clean yes/no — unset the flag and fall through to
+        # normal engagement handling. The user is continuing the
+        # conversation rather than answering the confirmation.
+        store.append_exchange(
+            dialog.dialog_id,
+            role="maez",
+            content="(internal: awaiting-confirmation flag cleared; continuing dialog)",
+            awaiting_completion_confirmation=False,
+        )
+        # Pop the internal marker so it doesn't clutter the visible
+        # history. This is a small compromise — the marker is visible
+        # in raw storage for debugging but not in the formatted
+        # dialog. Simpler: just leave it in and let Maez ignore it.
+        dialog = store.get(dialog.dialog_id)  # type: ignore[assignment]
+        assert dialog is not None
+
+    # ----------------------------------------------------------------
+    # Step 2: whole-reply terminal check (deterministic, highest
+    # authority outside of awaiting-confirmation).
+    # ----------------------------------------------------------------
+    terminal = classify_terminal_reply(user_text)
+    if terminal == TerminalIntent.APPROVE:
         dialog = store.set_stage(dialog.dialog_id, DialogStage.RATIFIED.value)
-        ack = "Ratified. Running the self-modification now."
+        ack = "Ratified. I have your explicit yes and I'll proceed with the change."
         store.append_exchange(dialog.dialog_id, role="maez", content=ack)
-        return DialogTurnResult(kind="ratified", reply_text=ack, dialog=dialog, ratified=True)
-
-    # Deny?
-    norm = user_text.lower().strip()
-    if norm in {"no", "cancel", "nope", "abort", "stop"} or "cancel" in norm or "don't do it" in norm or "dont do it" in norm:
+        return DialogTurnResult(
+            kind="ratified", reply_text=ack, dialog=dialog, ratified=True,
+        )
+    if terminal == TerminalIntent.DENY:
         dialog = store.set_stage(dialog.dialog_id, DialogStage.DENIED.value)
         ack = "Understood. I won't make the change."
         store.append_exchange(dialog.dialog_id, role="maez", content=ack)
         return DialogTurnResult(kind="denied", reply_text=ack, dialog=dialog)
-
-    # Clarifying question → answer via the provided answerer
-    if answerer is not None:
-        try:
-            answer = answerer(dialog, user_text)
-        except Exception as e:
-            answer = f"(I hit an error trying to explain: {e!r})"
-    else:
-        answer = (
-            "I've noted your question. When you're ready, reply with the exact "
-            "ratification phrase above, or say 'cancel' to stop."
+    if terminal == TerminalIntent.CANCEL:
+        dialog = store.set_stage(dialog.dialog_id, DialogStage.CANCELLED.value)
+        ack = "Cancelled. I won't make the change."
+        store.append_exchange(dialog.dialog_id, role="maez", content=ack)
+        return DialogTurnResult(kind="cancelled", reply_text=ack, dialog=dialog)
+    if terminal == TerminalIntent.DEFER:
+        # Defer is not a terminal state in the dialog — we treat it
+        # like a clarifying turn that stalls gently. Maez acknowledges
+        # and the dialog stays in CLARIFYING until the user comes back.
+        ack = (
+            "Okay, I'll hold this open. When you're ready, tell me and we can "
+            "keep going. No pressure."
         )
+        store.append_exchange(
+            dialog.dialog_id,
+            role="maez",
+            content=ack,
+            new_stage=DialogStage.CLARIFYING.value,
+        )
+        return DialogTurnResult(
+            kind="clarified", reply_text=ack, dialog=store.get(dialog.dialog_id),
+        )
+
+    # ----------------------------------------------------------------
+    # Step 3: classifier pass (advisory).
+    # ----------------------------------------------------------------
+    classifier_result = classify_reply(
+        dialog=dialog,
+        user_text=user_text,
+        llm_fn=classifier_llm_fn,
+    )
+
+    # ----------------------------------------------------------------
+    # Step 4: hard turn cap check. Count includes the just-appended
+    # user reply. If we're already past the cap BEFORE generating
+    # another Maez response, terminate in CAP_REACHED.
+    # ----------------------------------------------------------------
+    if _count_turns(dialog) >= turn_cap:
+        dialog = store.set_stage(dialog.dialog_id, DialogStage.CAP_REACHED.value)
+        ack = (
+            "We've talked about this a lot and I'm going to pause the dialog "
+            "here without making the change. If you want to pick it up again, "
+            "we can open a fresh dialog with clearer reasoning."
+        )
+        store.append_exchange(dialog.dialog_id, role="maez", content=ack)
+        return DialogTurnResult(kind="cap_reached", reply_text=ack, dialog=dialog)
+
+    # ----------------------------------------------------------------
+    # Step 5: generate Maez's next turn. If the classifier suggested
+    # resolution, the response will include a completion-confirmation
+    # prompt and we set the awaiting flag.
+    # ----------------------------------------------------------------
+    response_text, should_prompt = generate_response_turn(
+        dialog=dialog,
+        user_text=user_text,
+        classifier_result=classifier_result,
+        llm_fn=response_llm_fn,
+    )
 
     dialog = store.append_exchange(
         dialog.dialog_id,
         role="maez",
-        content=answer,
+        content=response_text,
         new_stage=DialogStage.CLARIFYING.value,
+        awaiting_completion_confirmation=should_prompt,
     )
-    return DialogTurnResult(kind="clarified", reply_text=answer, dialog=dialog)
+
+    return DialogTurnResult(kind="clarified", reply_text=response_text, dialog=dialog)
+
+
+# ------------------------------------------------------------------ #
+#  Legacy helpers — kept as deprecated no-ops for backwards compat.    #
+#  No internal callers; the rewrite removes the password mechanism.   #
+# ------------------------------------------------------------------ #
+
+def generate_ratification_phrase(card_action: str, card_params: dict) -> str:
+    """DEPRECATED: A-core #4 replaced the ratification-phrase
+    mechanism with a real five-rule dialog. This function is kept as
+    a no-op shim so anything still importing it doesn't crash; it
+    returns a marker string that cannot match any meaningful reply.
+    """
+    return "(ratification-phrase mechanism removed in A-core #4)"
+
+
+def is_ratification(text: str, expected_phrase: str) -> bool:
+    """DEPRECATED: the A-core #4 dialog uses whole-reply terminal
+    matching instead of substring phrase matching. This function is
+    kept as a no-op shim returning False so any legacy caller
+    gracefully falls through to the new logic."""
+    return False
+
+
+def format_opening_proposal(**kwargs) -> str:
+    """DEPRECATED: opening proposals are generated by
+    generate_opening_turn() in A-core #4. This shim returns an empty
+    string so legacy callers don't crash."""
+    return ""
 
 
 # ------------------------------------------------------------------ #
@@ -538,128 +1320,393 @@ def handle_dialog_reply(
 if __name__ == "__main__":
     import tempfile
 
-    print("=== self_mod_dialog self-test ===\n")
+    print("=== self_mod_dialog (A-core #4) self-test ===\n")
 
-    passed = failed = 0
+    # [passed, failed] — list wrapper because nonlocal isn't available
+    # at module-__main__ scope
+    _counts = [0, 0]
+
+    def _assert(label: str, condition: bool) -> None:
+        if condition:
+            print(f"  ✓ {label}")
+            _counts[0] += 1
+        else:
+            print(f"  ✗ {label}")
+            _counts[1] += 1
+
+    # Stubs for LLM functions so tests run offline.
+    def stub_opener(ctx: str) -> str:
+        return (
+            "I want to modify core/cognition_quality.py to rewrite the "
+            "anti-fixation penalty. After this change, the penalty will "
+            "apply per topic rather than per cycle.\n\n"
+            "Why I want this — and I'm asking this as a question about my "
+            "own motivation: is this actually in service of what I'm supposed "
+            "to be, or am I reaching for a local optimum that looks like "
+            "progress but isn't? Push back on me if it looks like the second."
+        )
+
+    def stub_opener_with_prior(ctx: str) -> str:
+        assert "Prior dialogs on this same target" in ctx, (
+            "opener context should include prior dialogs when they exist"
+        )
+        return (
+            "I want to modify core/cognition_quality.py again. I know we "
+            "talked about this before and you said no. Here's what I'm "
+            "asking differently this time: ..."
+        )
+
+    classifier_calls: list[dict] = []
+
+    def stub_classifier_genuine(prompt: str) -> str:
+        classifier_calls.append({"prompt": prompt, "result": "genuine_new"})
+        return '{"engagement": "genuine", "progress": "new_understanding"}'
+
+    def stub_classifier_resolution(prompt: str) -> str:
+        classifier_calls.append({"prompt": prompt, "result": "resolution"})
+        return '{"engagement": "genuine", "progress": "resolution_suggested"}'
+
+    def stub_classifier_repetition(prompt: str) -> str:
+        classifier_calls.append({"prompt": prompt, "result": "repetition"})
+        return '{"engagement": "genuine", "progress": "repetition"}'
+
+    def stub_classifier_dismissive(prompt: str) -> str:
+        classifier_calls.append({"prompt": prompt, "result": "dismissive"})
+        return '{"engagement": "dismissive", "progress": "repetition"}'
+
+    def stub_responder(ctx: str) -> str:
+        if "does this feel resolved" in ctx:
+            return (
+                "I hear you. I think we've reached a resting point here — "
+                "does this feel resolved to you, or is there still something "
+                "we should work through?"
+            )
+        return "I've thought about what you said, and here's my next take…"
+
     with tempfile.TemporaryDirectory() as td:
-        store = SelfModDialogStore(Path(td) / "dialogs.db")
-        print(f"  opened dialog store")
+        db_path = Path(td) / "dialogs.db"
+        store = SelfModDialogStore(db_path)
+        print(f"  opened dialog store at {db_path}\n")
 
-        # Case 1: write_any_file proposal → reversible path + opening
-        dialog, opening = open_dialog_for_card(
+        # ------------------------------------------------------------ #
+        #  Rule 1 + Rule 2: opening turn contains both                   #
+        # ------------------------------------------------------------ #
+        dialog1, opening1 = open_dialog_for_card(
             store=store,
             card_action="write_any_file",
-            card_params={"path": "/home/rohit/maez/core/action_engine.py", "content": "# edited"},
-            card_request_id="card_abc",
-            audit_reasoning="adding a new helper function to support Lane 3 handling",
-            concerns=["modifies core action engine", "could break the covenant gate if wrong"],
+            card_params={"path": "/home/rohit/maez/core/cognition_quality.py",
+                         "content": "# edited content"},
+            card_request_id="card_test_1",
+            audit_reasoning="classifier flagged as SELF_MODIFICATION Lane 3",
+            concerns=["core module", "could break reasoning quality"],
+            opener_llm_fn=stub_opener,
         )
-        assert dialog.stage == DialogStage.PROPOSED.value
-        assert "ratify" in (dialog.ratification_phrase or "")
-        assert "action_engine.py" in (dialog.ratification_phrase or "")
-        assert dialog.reversible_path is not None
-        assert "backup_then_write" == dialog.reversible_path["kind"]
-        print(f"  ✓ opening proposal created")
-        print(f"    ratification_phrase: {dialog.ratification_phrase!r}")
-        print(f"    reversible: {dialog.reversible_path['kind']}")
-        passed += 1
+        _assert(
+            "Rule 1 — opening contains file reference",
+            "cognition_quality.py" in opening1,
+        )
+        _assert(
+            "Rule 2 — opening contains why-probe question about motivation",
+            ("motivation" in opening1.lower() or "reaching for" in opening1.lower())
+            and "?" in opening1,
+        )
+        _assert(
+            "Dialog stored with target_file populated",
+            dialog1.target_file == "/home/rohit/maez/core/cognition_quality.py",
+        )
+        _assert(
+            "Dialog stored with target_action populated",
+            dialog1.target_action == "write_any_file",
+        )
+        _assert(
+            "Reversible path present",
+            dialog1.reversible_path is not None and dialog1.reversible_path.get("kind") == "backup_then_write",
+        )
 
-        # Case 2: clarifying question
-        def fake_answerer(d, text):
-            return f"Good question. {len(text)} chars asked. Here's my reasoning…"
-
-        result = handle_dialog_reply(
+        # ------------------------------------------------------------ #
+        #  Rule 3 — whole-reply terminal matching                        #
+        # ------------------------------------------------------------ #
+        # Bare "yes" is a whole-reply APPROVE → RATIFIED immediately
+        r = handle_dialog_reply(
             store=store,
-            dialog=dialog,
-            user_text="What exactly are you changing inside that file?",
-            answerer=fake_answerer,
+            dialog=dialog1,
+            user_text="yes",
+            classifier_llm_fn=stub_classifier_genuine,
+            response_llm_fn=stub_responder,
         )
-        assert result.kind == "clarified"
-        assert result.dialog.stage == DialogStage.CLARIFYING.value
-        assert len(result.dialog.history) == 3  # opening + rohit + maez
-        print(f"  ✓ clarifying question answered, stage={result.dialog.stage}")
-        passed += 1
+        _assert("Rule 3 — whole-reply 'yes' ratifies", r.kind == "ratified")
+        _assert("Rule 3 — dialog stage is RATIFIED",
+                r.dialog and r.dialog.stage == DialogStage.RATIFIED.value)
 
-        # Case 3: random chat isn't ratification (easy miss)
-        result = handle_dialog_reply(
+        # Non-terminal "yes, but..." should NOT ratify
+        dialog_a, _ = open_dialog_for_card(
             store=store,
-            dialog=result.dialog,
-            user_text="yes go ahead",
-            answerer=fake_answerer,
+            card_action="write_any_file",
+            card_params={"path": "/home/rohit/maez/config/soul.md", "content": "# edit"},
+            card_request_id="card_a",
+            audit_reasoning="test dialog A",
+            concerns=[],
+            opener_llm_fn=stub_opener,
         )
-        # "yes go ahead" should NOT ratify — the strict phrase is required
-        assert result.kind == "clarified", f"expected clarified, got {result.kind}"
-        assert result.dialog.stage == DialogStage.CLARIFYING.value
-        print(f"  ✓ loose 'yes' does NOT ratify a self-mod")
-        passed += 1
-
-        # Case 4: actual ratification
-        dialog_reload = store.get(dialog.dialog_id)
-        ratify_phrase = dialog_reload.ratification_phrase
-        result = handle_dialog_reply(
+        r = handle_dialog_reply(
             store=store,
-            dialog=dialog_reload,
-            user_text=f"ok I looked at it. {ratify_phrase}",
-            answerer=fake_answerer,
+            dialog=dialog_a,
+            user_text="yes, but also check whether this breaks the audit flow",
+            classifier_llm_fn=stub_classifier_genuine,
+            response_llm_fn=stub_responder,
         )
-        assert result.kind == "ratified"
-        assert result.ratified is True
-        assert result.dialog.stage == DialogStage.RATIFIED.value
-        print(f"  ✓ exact phrase ratifies")
-        passed += 1
+        _assert(
+            "Rule 3 — 'yes, but ...' does NOT ratify (non-terminal, goes to classifier)",
+            r.kind == "clarified",
+        )
+        _assert(
+            "Rule 3 — non-terminal replies reach CLARIFYING stage",
+            r.dialog and r.dialog.stage == DialogStage.CLARIFYING.value,
+        )
 
-        # Case 5: separate dialog → deny path
-        dialog2, _ = open_dialog_for_card(
+        # Bare "no" is a whole-reply DENY
+        dialog_b, _ = open_dialog_for_card(
             store=store,
-            card_action="run_shell",
-            card_params={"cmd": "sudo systemctl restart maez"},
-            card_request_id="card_def",
-            audit_reasoning="pick up config change",
-            concerns=["restarts the daemon"],
+            card_action="write_any_file",
+            card_params={"path": "/home/rohit/maez/daemon/maez_daemon.py", "content": "# edit"},
+            card_request_id="card_b",
+            audit_reasoning="test dialog B",
+            concerns=[],
+            opener_llm_fn=stub_opener,
         )
-        result = handle_dialog_reply(
+        r = handle_dialog_reply(
             store=store,
-            dialog=dialog2,
-            user_text="no, cancel",
-            answerer=fake_answerer,
+            dialog=dialog_b,
+            user_text="no",
+            classifier_llm_fn=stub_classifier_genuine,
+            response_llm_fn=stub_responder,
         )
-        assert result.kind == "denied"
-        assert result.dialog.stage == DialogStage.DENIED.value
-        print(f"  ✓ deny path works")
-        passed += 1
+        _assert("Rule 3 — whole-reply 'no' denies", r.kind == "denied")
 
-        # Case 6: ratification phrase has the command word
-        assert "systemctl" in dialog2.ratification_phrase or "sudo" in dialog2.ratification_phrase
-        print(f"  ✓ ratification phrase includes command word ({dialog2.ratification_phrase!r})")
-        passed += 1
+        # Whole-reply "cancel" is a CANCELLED
+        dialog_c, _ = open_dialog_for_card(
+            store=store,
+            card_action="write_any_file",
+            card_params={"path": "/home/rohit/maez/core/decision_pipeline.py", "content": "# edit"},
+            card_request_id="card_c",
+            audit_reasoning="test dialog C",
+            concerns=[],
+            opener_llm_fn=stub_opener,
+        )
+        r = handle_dialog_reply(
+            store=store,
+            dialog=dialog_c,
+            user_text="cancel",
+            classifier_llm_fn=stub_classifier_genuine,
+            response_llm_fn=stub_responder,
+        )
+        _assert("Rule 3 — whole-reply 'cancel' cancels", r.kind == "cancelled")
 
-        # Case 7: reversible path for shell with systemctl restart
-        assert dialog2.reversible_path is not None
-        assert dialog2.reversible_path["kind"] == "service_status"
-        print(f"  ✓ service restart has a reversible path")
-        passed += 1
+        # ------------------------------------------------------------ #
+        #  Rule 4 — progress-based end with user-confirmed completion    #
+        # ------------------------------------------------------------ #
+        dialog_d, _ = open_dialog_for_card(
+            store=store,
+            card_action="write_any_file",
+            card_params={"path": "/home/rohit/maez/skills/telegram_voice.py", "content": "# edit"},
+            card_request_id="card_d",
+            audit_reasoning="test dialog D",
+            concerns=[],
+            opener_llm_fn=stub_opener,
+        )
+        # A free-text reply where the classifier suggests resolution
+        r = handle_dialog_reply(
+            store=store,
+            dialog=dialog_d,
+            user_text="I agree with your framing and I think you've covered all the edges",
+            classifier_llm_fn=stub_classifier_resolution,
+            response_llm_fn=stub_responder,
+        )
+        _assert(
+            "Rule 4 — classifier-suggested resolution does NOT unilaterally terminate",
+            r.kind == "clarified",
+        )
+        _assert(
+            "Rule 4 — awaiting_completion_confirmation flag is set after resolution prompt",
+            r.dialog and r.dialog.awaiting_completion_confirmation,
+        )
 
-        # Case 8: dialog fetch by card
-        found = store.get_for_card("card_abc")
-        assert found is not None and found.dialog_id == dialog.dialog_id
-        print(f"  ✓ fetch-by-card works")
-        passed += 1
+        # User confirms completion with a clean "yes"
+        r = handle_dialog_reply(
+            store=store,
+            dialog=r.dialog,
+            user_text="yes",
+            classifier_llm_fn=stub_classifier_genuine,
+            response_llm_fn=stub_responder,
+        )
+        _assert(
+            "Rule 4 — user-confirmed completion ratifies",
+            r.kind == "ratified",
+        )
 
-        # Case 9: active dialogs query
+        # User declines confirmation with a clean "no"
+        dialog_e, _ = open_dialog_for_card(
+            store=store,
+            card_action="write_any_file",
+            card_params={"path": "/home/rohit/maez/core/audit.py", "content": "# edit"},
+            card_request_id="card_e",
+            audit_reasoning="test dialog E",
+            concerns=[],
+            opener_llm_fn=stub_opener,
+        )
+        r = handle_dialog_reply(
+            store=store,
+            dialog=dialog_e,
+            user_text="alright, I think we've got the shape right",
+            classifier_llm_fn=stub_classifier_resolution,
+            response_llm_fn=stub_responder,
+        )
+        _assert("Rule 4 — second dialog reached awaiting-confirmation",
+                r.dialog and r.dialog.awaiting_completion_confirmation)
+        r = handle_dialog_reply(
+            store=store,
+            dialog=r.dialog,
+            user_text="no",
+            classifier_llm_fn=stub_classifier_genuine,
+            response_llm_fn=stub_responder,
+        )
+        _assert("Rule 4 — user-declined confirmation denies", r.kind == "denied")
+
+        # ------------------------------------------------------------ #
+        #  Rule 4 — hard turn cap fires and produces CAP_REACHED         #
+        # ------------------------------------------------------------ #
+        dialog_f, _ = open_dialog_for_card(
+            store=store,
+            card_action="write_any_file",
+            card_params={"path": "/home/rohit/maez/core/pending_cards.py", "content": "# edit"},
+            card_request_id="card_f",
+            audit_reasoning="test dialog F",
+            concerns=[],
+            opener_llm_fn=stub_opener,
+        )
+        # Use a tiny turn cap to force the limit quickly
+        current = dialog_f
+        for i in range(5):
+            r = handle_dialog_reply(
+                store=store,
+                dialog=current,
+                user_text=f"continuing point {i}",
+                classifier_llm_fn=stub_classifier_repetition,
+                response_llm_fn=stub_responder,
+                turn_cap=6,
+            )
+            current = r.dialog  # type: ignore
+            if r.kind == "cap_reached":
+                break
+        _assert("Rule 4 — hard cap fires and produces CAP_REACHED",
+                r.kind == "cap_reached")
+        _assert("Rule 4 — CAP_REACHED is distinct from DENIED",
+                r.dialog and r.dialog.stage == DialogStage.CAP_REACHED.value)
+        _assert("Rule 4 — CAP_REACHED is distinct from RATIFIED",
+                r.dialog and r.dialog.stage != DialogStage.RATIFIED.value)
+
+        # ------------------------------------------------------------ #
+        #  Rule 5 — terminal states are binding                          #
+        # ------------------------------------------------------------ #
+        # After DENIED, further replies on the same dialog_id are unrelated
+        r = handle_dialog_reply(
+            store=store,
+            dialog=dialog_b,  # DENIED above
+            user_text="actually, wait",
+            classifier_llm_fn=stub_classifier_genuine,
+            response_llm_fn=stub_responder,
+        )
+        _assert("Rule 5 — replies on a DENIED dialog are unrelated",
+                r.kind == "unrelated")
+
+        # Re-ask of the same target opens as a FRESH dialog with linkage
+        dialog_b2, opening_b2 = open_dialog_for_card(
+            store=store,
+            card_action="write_any_file",
+            card_params={"path": "/home/rohit/maez/daemon/maez_daemon.py",
+                         "content": "# different edit"},
+            card_request_id="card_b2",
+            audit_reasoning="second attempt with different reasoning",
+            concerns=[],
+            opener_llm_fn=stub_opener_with_prior,
+        )
+        _assert("Rule 5 — re-ask opens as a FRESH dialog with new dialog_id",
+                dialog_b2.dialog_id != dialog_b.dialog_id)
+        _assert("Rule 5 — fresh dialog has prior_dialog_ids populated",
+                dialog_b.dialog_id in dialog_b2.prior_dialog_ids)
+        _assert("Rule 5 — opener received the prior-dialog context",
+                "prior" in opening_b2.lower() or "before" in opening_b2.lower())
+
+        # ------------------------------------------------------------ #
+        #  Rule 6 — all terminated dialogs persist with full history    #
+        # ------------------------------------------------------------ #
+        # Every terminated dialog above should be readable from the store
+        for terminated_id, expected_stage in [
+            (dialog1.dialog_id, DialogStage.RATIFIED.value),
+            (dialog_b.dialog_id, DialogStage.DENIED.value),
+            (dialog_c.dialog_id, DialogStage.CANCELLED.value),
+        ]:
+            loaded = store.get(terminated_id)
+            _assert(
+                f"Rule 6 — stored dialog {terminated_id[:8]} in {expected_stage}",
+                loaded is not None and loaded.stage == expected_stage and len(loaded.history) >= 2,
+            )
+
+        # Active dialogs should exclude all terminal ones
         active = store.get_active_dialogs()
-        assert len(active) == 0  # all terminal
-        print(f"  ✓ terminal dialogs drop from active list")
-        passed += 1
+        _assert(
+            "Active dialogs list excludes all terminal dialogs",
+            all(a.stage in (DialogStage.PROPOSED.value, DialogStage.CLARIFYING.value) for a in active),
+        )
 
-        # Case 10: is_ratification edge cases
-        assert is_ratification("ratify action_engine abc123", "ratify action_engine abc123")
-        assert is_ratification("RATIFY ACTION_ENGINE ABC123", "ratify action_engine abc123")
-        assert is_ratification("  ok: ratify action_engine abc123 please ", "ratify action_engine abc123")
-        assert not is_ratification("ratify something else def456", "ratify action_engine abc123")
-        assert not is_ratification("yes", "ratify action_engine abc123")
-        assert not is_ratification("", "ratify action_engine abc123")
-        print(f"  ✓ is_ratification edge cases")
-        passed += 1
+        # ------------------------------------------------------------ #
+        #  Whole-reply normalization edge cases                          #
+        # ------------------------------------------------------------ #
+        _assert("Normalize: 'Yes' -> 'yes'", _normalize_reply("Yes") == "yes")
+        _assert("Normalize: 'YES.' -> 'yes'", _normalize_reply("YES.") == "yes")
+        _assert("Normalize: '  yes  ' -> 'yes'", _normalize_reply("  yes  ") == "yes")
+        _assert("Normalize: 'yes!!' -> 'yes'", _normalize_reply("yes!!") == "yes")
+        _assert("Terminal 'yes' classifies APPROVE",
+                classify_terminal_reply("yes") == TerminalIntent.APPROVE)
+        _assert("Terminal 'yes, but' does NOT classify APPROVE",
+                classify_terminal_reply("yes, but also check this") == TerminalIntent.NONE)
+        _assert("Terminal 'not now' classifies DEFER",
+                classify_terminal_reply("not now") == TerminalIntent.DEFER)
+        _assert("Terminal 'cancel' classifies CANCEL",
+                classify_terminal_reply("cancel") == TerminalIntent.CANCEL)
 
-    print(f"\n{passed} passed, {failed} failed")
+        # ------------------------------------------------------------ #
+        #  Classifier fails closed on error                              #
+        # ------------------------------------------------------------ #
+        def broken_classifier(prompt: str) -> str:
+            raise RuntimeError("LLM unavailable")
+        result = classify_reply(
+            dialog=dialog1,
+            user_text="any text",
+            llm_fn=broken_classifier,
+        )
+        _assert("Classifier fails closed on LLM error",
+                result == {"engagement": "unclear", "progress": "new_understanding"})
+
+        def malformed_classifier(prompt: str) -> str:
+            return "not valid json"
+        result = classify_reply(
+            dialog=dialog1,
+            user_text="any text",
+            llm_fn=malformed_classifier,
+        )
+        _assert("Classifier fails closed on malformed JSON",
+                result == {"engagement": "unclear", "progress": "new_understanding"})
+
+        # ------------------------------------------------------------ #
+        #  Legacy helpers return safe no-op values                       #
+        # ------------------------------------------------------------ #
+        _assert("Deprecated generate_ratification_phrase returns marker",
+                "removed" in generate_ratification_phrase("x", {}).lower())
+        _assert("Deprecated is_ratification always returns False",
+                is_ratification("anything", "anything") is False)
+
+    print(f"\n{_counts[0]} passed, {_counts[1]} failed")
+    if _counts[1]:
+        raise SystemExit(1)
     print("=== self_mod_dialog self-test complete ===")

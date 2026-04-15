@@ -390,39 +390,84 @@ def run_all_cases():
             )
 
             # ─────────────────────────────────────────────────────
-            section("Self-mod dialog: exact ratification phrase required")
+            section("Self-mod dialog: five-rule shape (A-core #4)")
             # ─────────────────────────────────────────────────────
+            # Under A-core #4, the self-mod dialog is a real
+            # conversation rather than a password prompt. Whole-reply
+            # terminal matching means a bare "yes" ratifies and a
+            # "yes, but..." continues. The exact ratification phrase
+            # mechanism from Session 11z Part 2 is replaced by this
+            # five-rule shape; the full rule-by-rule coverage lives
+            # in skills/self_mod_dialog.py's own self-test (39
+            # assertions). Here we just verify the module integrates
+            # cleanly with the pipeline and the core behaviors hold.
             from skills.self_mod_dialog import (
                 SelfModDialogStore,
                 open_dialog_for_card,
                 handle_dialog_reply,
                 DialogStage,
             )
+
+            # Offline LLM stubs so the pipeline sandbox battery stays
+            # hermetic (no real LLM calls).
+            def _stub_opener(ctx: str) -> str:
+                return (
+                    "I want to modify config/soul.md. After this change "
+                    "the helper will be present.\n\n"
+                    "Why I want this (as a question about my motivation): "
+                    "is this actually in service of what I'm supposed to "
+                    "be, or am I reaching for something?"
+                )
+            def _stub_classifier_genuine(prompt: str) -> str:
+                return '{"engagement": "genuine", "progress": "new_understanding"}'
+            def _stub_responder(ctx: str) -> str:
+                return "I hear you. Let me think about that."
+
             dialog_store = SelfModDialogStore(td / "dialogs.db")
-            dialog, _opening = open_dialog_for_card(
+            dialog, opening = open_dialog_for_card(
                 store=dialog_store,
                 card_action="write_any_file",
                 card_params={"path": str(fake_soul), "content": "# edited"},
                 card_request_id="fake_card_id",
                 audit_reasoning="adding a helper",
                 concerns=["modifies soul"],
+                opener_llm_fn=_stub_opener,
             )
             check("Dialog opened", dialog.stage == DialogStage.PROPOSED.value)
-            check("Ratification phrase generated", bool(dialog.ratification_phrase))
+            check("Target file populated", dialog.target_file == str(fake_soul))
+            check("Target action populated", dialog.target_action == "write_any_file")
+            check(
+                "Opening turn contains why-probe (Rule 2)",
+                "motivation" in opening.lower() and "?" in opening,
+            )
 
-            # Loose 'yes' should NOT ratify
-            fake_ans = lambda d, t: "I hear you, answering..."
-            r = handle_dialog_reply(store=dialog_store, dialog=dialog, user_text="yes", answerer=fake_ans)
-            check("Loose 'yes' did NOT ratify", r.kind == "clarified")
+            # Non-terminal "yes, but ..." should NOT ratify; it
+            # continues the dialog via the classifier + responder
+            r = handle_dialog_reply(
+                store=dialog_store,
+                dialog=dialog,
+                user_text="yes, but also check that this doesn't break the audit flow",
+                classifier_llm_fn=_stub_classifier_genuine,
+                response_llm_fn=_stub_responder,
+            )
+            check(
+                "Non-terminal 'yes, but ...' continues dialog",
+                r.kind == "clarified",
+            )
 
-            # Exact ratification phrase should
+            # Whole-reply "yes" should ratify immediately
             r = handle_dialog_reply(
                 store=dialog_store,
                 dialog=r.dialog,
-                user_text=dialog.ratification_phrase,
-                answerer=fake_ans,
+                user_text="yes",
+                classifier_llm_fn=_stub_classifier_genuine,
+                response_llm_fn=_stub_responder,
             )
-            check("Exact phrase ratified", r.kind == "ratified")
+            check("Whole-reply 'yes' ratifies", r.kind == "ratified")
+            check(
+                "Ratified dialog reaches RATIFIED stage",
+                r.dialog and r.dialog.stage == DialogStage.RATIFIED.value,
+            )
 
             # ─────────────────────────────────────────────────────
             section("Install recipe: apt_package fill + natural language")
