@@ -240,6 +240,7 @@ class MaezDaemon:
                 content = SOUL_PATH.read_text().strip()
                 current_hash = hashlib.md5(content.encode()).hexdigest()
                 if self._soul_hash and current_hash != self._soul_hash:
+                    old_hash = self._soul_hash
                     self._soul_hash = current_hash
                     self.system_prompt = content
                     logger.info("soul.md changed — hot reloaded (%d chars)", len(content))
@@ -248,6 +249,63 @@ class MaezDaemon:
                         f"Maez rewrote its own foundation.",
                         source="soul_evolution",
                     )
+                    # A-core #3 Step 6: log the soul change as a
+                    # direct_edit event so it enters Maez's perception
+                    # stream via the daemon reader. If a builder-mode
+                    # session is active, bind to that session. Otherwise
+                    # bind to the sentinel AUTONOMOUS_SESSION_ID so
+                    # dream-state-initiated soul writes are still
+                    # visible to Maez's immune memory. See
+                    # core/builder_mode_capture.py for the sentinel.
+                    try:
+                        from core.builder_mode_capture import (
+                            capture_git_diff_summary,
+                            read_active_session_id,
+                            AUTONOMOUS_SESSION_ID,
+                        )
+                        repo_root = Path(__file__).resolve().parent.parent
+                        summary, _h, _p = capture_git_diff_summary(
+                            repo_root, watched_paths=["config/soul.md"]
+                        )
+                        # If git diff is empty for any reason (soul.md
+                        # change hasn't been reflected in git yet, or
+                        # git unavailable), fall back to a hash-delta
+                        # summary so the event still carries shape.
+                        if not summary:
+                            summary = (
+                                f"  config/soul.md (md5 "
+                                f"{old_hash[:8]} -> {current_hash[:8]})"
+                            )
+                        state_file = (
+                            Path(__file__).resolve().parent
+                            / "builder_mode_current.txt"
+                        )
+                        active_sid = read_active_session_id(state_file)
+                        if active_sid:
+                            session_id = active_sid
+                            change_reason = (
+                                "soul.md changed during active builder session"
+                            )
+                        else:
+                            session_id = AUTONOMOUS_SESSION_ID
+                            change_reason = (
+                                "soul.md changed (autonomous — no active "
+                                "builder session)"
+                            )
+                        self._builder_audit_log.log_direct_edit(
+                            session_id=session_id,
+                            paths=["config/soul.md"],
+                            diff_summary=summary,
+                            commit_hash=None,
+                            reason=change_reason,
+                        )
+                        logger.info(
+                            "Builder soul-change event logged (session=%s)",
+                            session_id if session_id == AUTONOMOUS_SESSION_ID
+                            else session_id[:12],
+                        )
+                    except Exception as e:
+                        logger.debug("soul-change direct_edit logging failed: %s", e)
             except Exception:
                 pass
             time.sleep(10)

@@ -67,6 +67,37 @@ WATCHED_PATHS: list[str] = [
 ]
 
 
+# Sentinel session_id used for direct_edit events that do not belong
+# to a real user-initiated builder session — e.g. the dream state
+# writing an autonomous soul note. See A-core #3 Step 6. Events
+# tagged with this sentinel are queryable via recent_direct_edits
+# (session_id=AUTONOMOUS_SESSION_ID) and grouped under a single
+# virtual "always-open" session that has no session_start or
+# session_end rows.
+AUTONOMOUS_SESSION_ID: str = "autonomous"
+
+
+def read_active_session_id(state_file: Path) -> Optional[str]:
+    """Read the shared state file and return the currently-active
+    builder session_id, or None if no session is active. Used by
+    the daemon soul watcher (and other producers) to decide whether
+    to tag events with a real session or the autonomous sentinel.
+
+    Defensive: missing file, empty file, unreadable file → returns
+    None. Does not raise.
+    """
+    if not state_file.exists():
+        return None
+    try:
+        content = state_file.read_text().strip()
+    except OSError:
+        return None
+    if not content:
+        return None
+    first_line = content.splitlines()[0].strip()
+    return first_line or None
+
+
 # -------------------------------------------------------------------- #
 #  Primitive: capture a diff summary on the watched paths               #
 # -------------------------------------------------------------------- #
@@ -487,6 +518,28 @@ if __name__ == "__main__":
                        if e["action"] == "direct_edit"]
         assert len(edit_events) == 3, f"still 3 edit events, got {len(edit_events)}"
         print("  ✓ clean tree at session end → no event")
+
+        # ---------------------------------------------------------- #
+        #  read_active_session_id + AUTONOMOUS_SESSION_ID             #
+        # ---------------------------------------------------------- #
+        print("\n--- session state helper tests ---")
+
+        missing = tmp_root / "no_such_file.txt"
+        assert read_active_session_id(missing) is None
+        print("  ✓ missing state file → None")
+
+        empty_file = tmp_root / "empty.txt"
+        empty_file.write_text("")
+        assert read_active_session_id(empty_file) is None
+        print("  ✓ empty state file → None")
+
+        valid = tmp_root / "valid.txt"
+        valid.write_text("ed797d4f4f4abe2470917197\nreason=test\nopened_at=123.0\n")
+        assert read_active_session_id(valid) == "ed797d4f4f4abe2470917197"
+        print("  ✓ valid state file → session_id")
+
+        assert AUTONOMOUS_SESSION_ID == "autonomous"
+        print("  ✓ AUTONOMOUS_SESSION_ID constant is 'autonomous'")
 
         # Cleanup
         db_path.unlink(missing_ok=True)
