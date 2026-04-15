@@ -643,6 +643,26 @@ class TelegramVoice:
         if result is None:
             return False  # reply was unrelated to any card
 
+        # A-core #4b: if this was a reply to a Lane 3 self-mod dialog
+        # that produced a mid-dialog response, send the dialog reply
+        # as a Telegram message so the owner sees Maez's next turn. This
+        # covers three cases:
+        #   1. Mid-dialog clarification (status=PENDING_DIALOG,
+        #      dialog_reply_text set) — send the clarification.
+        #   2. Terminal ratification/denial via dialog (status=EXECUTED
+        #      or REFUSED_AUDIT, dialog_reply_text set) — send the
+        #      dialog's closing ack BEFORE the card's resolution
+        #      notice so the user sees the dialog's own voice.
+        #   3. Normal card reply (no dialog_reply_text) — skip.
+        dialog_reply_text = getattr(result, "dialog_reply_text", None)
+        if dialog_reply_text:
+            try:
+                await update.message.reply_text(dialog_reply_text)
+            except Exception as e:
+                logger.warning(
+                    "failed to send self-mod dialog reply: %s", e
+                )
+
         # Pipeline already sent the resolution notice via the renderer.
         # Nothing else to do here; the normal chat flow is short-circuited.
         logger.info(
@@ -2025,6 +2045,27 @@ class TelegramVoice:
                     transcript.append((action, params, out if ok else (presult.execution_error or "?"), ok))
                     history.append(f"TOOL_CALL: {_json.dumps(call)}\nRESULT: {out}")
                 elif presult.status in (_PS.PENDING_APPROVAL, _PS.PENDING_DIALOG):
+                    # A-core #4b: if this is a PENDING_DIALOG (Lane 3
+                    # self-mod), the pipeline also created a dialog
+                    # and returned its opening turn as dialog_opening.
+                    # Surface that to the owner as a separate Telegram
+                    # message via the thread-safe _send_card_message
+                    # helper (the Jarvis loop runs in an executor
+                    # thread, so async calls must go through
+                    # run_coroutine_threadsafe).
+                    if (
+                        presult.status == _PS.PENDING_DIALOG
+                        and getattr(presult, "dialog_opening", None)
+                    ):
+                        try:
+                            self._send_card_message(
+                                chat_id=str(self.authorized_user),
+                                text=presult.dialog_opening,  # type: ignore[arg-type]
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "failed to send self-mod dialog opening: %s", e
+                            )
                     msg = (
                         "CARD_CREATED — NOT YET EXECUTED. A persistent approval card "
                         "was sent to the owner in Telegram. The action has NOT run; it is "

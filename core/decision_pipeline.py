@@ -91,6 +91,23 @@ class PipelineResult:
     execution_success: Optional[bool] = None
     execution_output: Optional[str] = None
     execution_error: Optional[str] = None
+    # A-core #4b: self-modification dialog fields.
+    #
+    # dialog_opening is set by handle_action's Lane 3 branch when a
+    # PENDING_DIALOG card is created alongside its self-mod dialog.
+    # Carries the dialog's opening turn text (Rule 1 mechanical
+    # restatement + Rule 2 why-probe) so the caller surface (Jarvis
+    # loop in telegram_voice) can surface it to the owner in a way the
+    # user actually sees, not just via the card's card-header
+    # rendering.
+    #
+    # dialog_reply_text is set by handle_reply when a reply to an
+    # open PENDING_DIALOG card is routed through handle_dialog_reply
+    # and the dialog produces a non-terminal clarification response.
+    # Carries Maez's next turn so the caller surface can send it back
+    # to the owner as a Telegram message.
+    dialog_opening: Optional[str] = None
+    dialog_reply_text: Optional[str] = None
 
 
 # ------------------------------------------------------------------ #
@@ -413,6 +430,40 @@ class DecisionPipeline:
             else "Approval card created. I'll run this when you say yes."
         )
 
+        # A-core #4b: for Lane 3 ESCALATE, ALSO open a self-mod
+        # dialog. The card tracks the proposal; the dialog tracks the
+        # conversation. Linked via card_request_id. Telegram replies
+        # to the dialog flow through handle_reply's PENDING_DIALOG
+        # branch, which routes them to skills.self_mod_dialog.
+        # handle_dialog_reply.
+        dialog_opening_text: Optional[str] = None
+        if verdict.decision == Decision.ESCALATE:
+            try:
+                from skills.self_mod_dialog import (
+                    SelfModDialogStore,
+                    open_dialog_for_card,
+                )
+                dialog_store = self._get_dialog_store()
+                _dialog, dialog_opening_text = open_dialog_for_card(
+                    store=dialog_store,
+                    card_action=action,
+                    card_params=params,
+                    card_request_id=card.request_id,
+                    audit_reasoning=verdict.reasoning or "",
+                    concerns=list(verdict.concerns or []),
+                )
+            except Exception as e:
+                # Fail soft: if dialog creation errors, the card is
+                # still created and the owner can still see the proposal.
+                # The dialog just won't exist and replies will fall
+                # through to the normal card-reply classifier. Log so
+                # the failure is visible.
+                import logging
+                logging.getLogger(__name__).warning(
+                    "A-core #4b: failed to open self-mod dialog for card %s: %s",
+                    card.request_id, e,
+                )
+
         return PipelineResult(
             status=status,
             message=msg,
@@ -421,7 +472,24 @@ class DecisionPipeline:
             classification=classification,
             injection_matches=injection_matches,
             audit_request_id=audit_req_id,
+            dialog_opening=dialog_opening_text,
         )
+
+    def _get_dialog_store(self):
+        """Lazy-instantiate the self-mod dialog store. Cached on the
+        pipeline instance so we don't reopen it on every Lane 3
+        proposal. The store is separate from the card store because
+        dialog state has its own lifecycle (multi-turn history,
+        linkage to prior dialogs, terminal-state semantics) that
+        don't fit the card schema.
+        """
+        existing = getattr(self, "_dialog_store", None)
+        if existing is not None:
+            return existing
+        from skills.self_mod_dialog import SelfModDialogStore
+        store = SelfModDialogStore()
+        self._dialog_store = store
+        return store
 
     def _build_injection_scan_text(self, action: str, params: dict, reason: str) -> str:
         """Build the text the injection scanner sees. Includes all
@@ -495,6 +563,43 @@ class DecisionPipeline:
         if not open_cards:
             return None
 
+        # A-core #4b: if any open card is in PENDING_DIALOG state
+        # (Lane 3 self-mod), route the reply through the self-mod
+        # dialog handler BEFORE the normal card-reply classifier.
+        # Self-mod dialogs are free-text conversations, not yes/no
+        # card approvals — a "yes, but..." reply must flow to the
+        # dialog engine's whole-reply terminal matcher, not to the
+        # card reply classifier's APPROVE match.
+        #
+        # We pick the most recent PENDING_DIALOG card. If multiple
+        # are open (rare), newest wins.
+        if text:
+            # Filter to PENDING_DIALOG cards only. A PENDING_DIALOG
+            # card is one whose audit verdict was ESCALATE (Lane 3)
+            # — at creation time the audit_decision was stored on
+            # the card as "ESCALATE" and lane as "3". Check both
+            # to survive any future drift in one field or the other.
+            pending_dialog_cards = [
+                c for c in open_cards
+                if (getattr(c, "audit_decision", None) == "ESCALATE")
+                or (str(getattr(c, "lane", "")) == "3")
+            ]
+            if pending_dialog_cards:
+                pending_dialog_cards.sort(
+                    key=lambda c: getattr(c, "created_at", 0.0), reverse=True
+                )
+                dialog_card = pending_dialog_cards[0]
+                dialog_result = self._handle_dialog_reply_for_card(
+                    card=dialog_card,
+                    text=text,
+                    user_id=user_id,
+                )
+                if dialog_result is not None:
+                    return dialog_result
+                # If the dialog reply was 'unrelated' (dialog is
+                # already terminal or has no linked dialog), fall
+                # through to the normal card reply classifier.
+
         # If the reply is threaded to a specific card message, use that
         explicit_target = None
         if reply_to_message_id:
@@ -531,6 +636,100 @@ class DecisionPipeline:
         if classification.intent == ReplyIntent.MODIFY:
             return self._on_modify(card, classification, user_id)
         return None
+
+    # -------------------------------------------------------------- #
+    #  A-core #4b: self-mod dialog reply routing                      #
+    # -------------------------------------------------------------- #
+
+    def _handle_dialog_reply_for_card(
+        self,
+        *,
+        card: CardRecord,
+        text: str,
+        user_id: str,
+    ) -> Optional[PipelineResult]:
+        """Route a reply to an open PENDING_DIALOG card through the
+        self-mod dialog handler. Translates the dialog's outcome into
+        a pipeline result:
+
+        - RATIFIED → approve the card + execute the action (uses the
+          existing _on_approve path for the execute/mark_done/mark_failed
+          flow; we synthesize a lightweight classification so that path's
+          contract is satisfied)
+        - DENIED / CANCELLED / CAP_REACHED → deny the card (uses the
+          existing _on_deny path)
+        - CLARIFIED → non-terminal dialog turn; return a PipelineResult
+          with dialog_reply_text set so the caller can surface it to the
+          user as a normal chat message
+        - UNRELATED → the dialog is already terminal or has no linked
+          dialog; return None so handle_reply falls through to the
+          normal card reply classifier
+        """
+        # Look up the linked dialog via card_request_id
+        try:
+            dialog_store = self._get_dialog_store()
+            from skills.self_mod_dialog import handle_dialog_reply
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "A-core #4b: dialog store unavailable: %s", e,
+            )
+            return None
+
+        dialog = dialog_store.get_for_card(card.request_id)
+        if dialog is None:
+            # No linked dialog — legacy Lane 3 card from before #4b,
+            # or a failed open_dialog_for_card at creation time. Fall
+            # through to the normal card-reply classifier.
+            return None
+
+        turn = handle_dialog_reply(
+            store=dialog_store,
+            dialog=dialog,
+            user_text=text,
+        )
+
+        if turn.kind == "unrelated":
+            # Dialog is already terminal; fall through to normal
+            # card-reply classifier (which will either find a
+            # different open card or return None).
+            return None
+
+        if turn.kind == "ratified":
+            # Explicit or confirmed approval → run the action via the
+            # existing card approve/execute path. We synthesize a
+            # minimal classification-shaped object so _on_approve's
+            # contract (cls.source, cls.reasoning) is satisfied.
+            class _SyntheticCls:
+                source = "self_mod_dialog"
+                reasoning = f"ratified via dialog {dialog.dialog_id[:12]}"
+            result = self._on_approve(card, _SyntheticCls(), user_id)
+            # Carry the dialog's terminal reply back so the caller can
+            # surface it alongside whatever _on_approve produced
+            if result and turn.reply_text:
+                result.dialog_reply_text = turn.reply_text
+            return result
+
+        if turn.kind in ("denied", "cancelled", "cap_reached"):
+            # Explicit no, cancel, or hard-cap termination → deny the
+            # card and close it. Same shape as _on_deny.
+            class _SyntheticCls:
+                source = "self_mod_dialog"
+                reasoning = f"{turn.kind} via dialog {dialog.dialog_id[:12]}"
+            result = self._on_deny(card, _SyntheticCls(), user_id)
+            if result and turn.reply_text:
+                result.dialog_reply_text = turn.reply_text
+            return result
+
+        # turn.kind == "clarified" — mid-dialog turn. Return a non-
+        # terminal PipelineResult carrying the dialog reply text so
+        # telegram_voice can send it back as a regular message.
+        return PipelineResult(
+            status=PipelineStatus.PENDING_DIALOG,
+            message=turn.reply_text or "(dialog continues)",
+            card=card,
+            dialog_reply_text=turn.reply_text,
+        )
 
     # -------------------------------------------------------------- #
     #  Intent handlers                                                #
