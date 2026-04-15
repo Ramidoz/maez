@@ -74,7 +74,7 @@ DEFAULT_DB_PATH = Path(os.environ.get(
 #  Schema                                                              #
 # ------------------------------------------------------------------ #
 
-_SCHEMA = """
+_SCHEMA_TABLE = """
 CREATE TABLE IF NOT EXISTS audit_log (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
     request_id           TEXT    NOT NULL UNIQUE,
@@ -102,7 +102,12 @@ CREATE TABLE IF NOT EXISTS audit_log (
     memory_phase         TEXT    DEFAULT 'gestation',
     session_id           TEXT
 );
+"""
 
+# Indexes are created separately (after the migration block in
+# _initialize) so that indexes on columns added via ALTER TABLE on
+# existing DBs don't fire before those columns exist.
+_SCHEMA_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_audit_ts           ON audit_log(ts);
 CREATE INDEX IF NOT EXISTS idx_audit_action       ON audit_log(action);
 CREATE INDEX IF NOT EXISTS idx_audit_decision     ON audit_log(decision);
@@ -181,11 +186,15 @@ class AuditLog:
 
     def _initialize(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
-            conn.executescript(_SCHEMA)
-            # Migration: add memory_phase and session_id columns to
-            # existing DBs that predate the Developer Mode work.
-            # PRAGMA table_info returns tuples where index 1 is the
-            # column name; we just check for presence.
+            # 1. Create the table if it doesn't exist. On existing DBs
+            #    this is a no-op (CREATE TABLE IF NOT EXISTS won't add
+            #    new columns to an existing table).
+            conn.executescript(_SCHEMA_TABLE)
+
+            # 2. Migration: add memory_phase and session_id columns on
+            #    existing DBs that predate the Developer Mode work.
+            #    PRAGMA table_info returns tuples where index 1 is the
+            #    column name; we just check for presence.
             cols = {row[1] for row in conn.execute("PRAGMA table_info(audit_log)").fetchall()}
             if "memory_phase" not in cols:
                 conn.execute(
@@ -199,14 +208,12 @@ class AuditLog:
                 conn.execute(
                     "UPDATE audit_log SET memory_phase = 'gestation' WHERE memory_phase IS NULL"
                 )
-                conn.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_audit_memory_phase ON audit_log(memory_phase)"
-                )
             if "session_id" not in cols:
                 conn.execute("ALTER TABLE audit_log ADD COLUMN session_id TEXT")
-                conn.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_audit_session_id ON audit_log(session_id)"
-                )
+
+            # 3. Indexes come LAST so CREATE INDEX on memory_phase /
+            #    session_id is safe on both fresh and migrated DBs.
+            conn.executescript(_SCHEMA_INDEXES)
 
     # -------------------------------------------------------------- #
     #  Writers                                                        #
