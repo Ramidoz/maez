@@ -19,6 +19,7 @@ daemon/maez.pid
 daemon/pending_actions.json
 daemon/last_shutdown
 daemon/builder_mode_current.txt
+daemon/builder_mode_hwm.txt
 *.bak
 *.bak2
 *.bak.*

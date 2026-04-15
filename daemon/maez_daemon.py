@@ -134,6 +134,19 @@ class MaezDaemon:
         self._quality_tracker = QualityTracker()
         self._reflection_cycle_counter = 0
         self.REFLECTION_EVERY_N_CYCLES = 20  # every ~10 minutes
+        # A-core #3 Step 3: builder-mode perception integration. The
+        # daemon owns its own AuditLog reader and a persisted high-
+        # water-mark so direct-edit events from CLI (Step 2) and
+        # Telegram (Step 4, pending) are surfaced to Maez's
+        # perception stream as gestation-phase observations. See
+        # core/builder_mode_perception.py for the layered-replay
+        # design (persisted HWM + bounded-window fallback + open-
+        # session supplement + total-events cap).
+        from core.audit_log import AuditLog as _AuditLog
+        self._builder_audit_log = _AuditLog()
+        self._builder_hwm_file = Path(__file__).resolve().parent / "builder_mode_hwm.txt"
+        from core.builder_mode_perception import load_high_water_mark as _load_hwm
+        self._builder_hwm = _load_hwm(self._builder_hwm_file)
         self._cognition_critique_counter = 0
         self._last_cognition_critique: dict | None = None
         self._last_reasoning_prompt: str = ""
@@ -463,6 +476,27 @@ class MaezDaemon:
             cont_block = continuity_format(self._continuity_capsule)
             if cont_block:
                 prompt += f"\n{cont_block}\n"
+
+        # A-core #3 Step 3: builder-mode events block. Reads direct-
+        # edit events from audit_log.db since the last HWM, formats
+        # them into a perception block, advances the HWM AFTER
+        # successful surfacing (not before — the ordering matters for
+        # crash safety; see builder_mode_perception.py).
+        try:
+            from core.builder_mode_perception import (
+                format_recent_builder_events,
+                save_high_water_mark,
+            )
+            builder_block, new_builder_hwm = format_recent_builder_events(
+                self._builder_audit_log,
+                since_ts=self._builder_hwm,
+            )
+            if builder_block:
+                prompt += f"\n{builder_block}\n"
+                self._builder_hwm = new_builder_hwm
+                save_high_water_mark(self._builder_hwm_file, new_builder_hwm)
+        except Exception as e:
+            logger.debug("builder-mode perception block failed: %s", e)
 
         prompt += "\n"
 
