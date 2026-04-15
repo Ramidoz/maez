@@ -147,6 +147,28 @@ class MaezDaemon:
         self._builder_hwm_file = Path(__file__).resolve().parent / "builder_mode_hwm.txt"
         from core.builder_mode_perception import load_high_water_mark as _load_hwm
         self._builder_hwm = _load_hwm(self._builder_hwm_file)
+
+        # A-core #3 Step 5: on startup, if a builder-mode session is
+        # currently active, capture the working-directory diff on
+        # watched paths and log it as a direct_edit event. Duplicate
+        # suppression via last_diff_hash in the state file — repeated
+        # restarts with no new edits produce no duplicate entries.
+        try:
+            from core.builder_mode_capture import capture_startup_diff_if_active
+            repo_root = Path(__file__).resolve().parent.parent
+            state_file = Path(__file__).resolve().parent / "builder_mode_current.txt"
+            logged_session = capture_startup_diff_if_active(
+                repo_root=repo_root,
+                state_file=state_file,
+                audit_log=self._builder_audit_log,
+            )
+            if logged_session:
+                logger.info(
+                    "Builder startup diff capture: event logged for session %s",
+                    logged_session[:12],
+                )
+        except Exception as e:
+            logger.debug("builder startup diff capture failed: %s", e)
         self._cognition_critique_counter = 0
         self._last_cognition_critique: dict | None = None
         self._last_reasoning_prompt: str = ""

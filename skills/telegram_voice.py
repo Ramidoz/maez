@@ -3667,10 +3667,23 @@ class TelegramVoice:
             except ValueError:
                 pass
 
-        # Close the session via the existing AuditLog API
+        # A-core #3 Step 5: capture any git diff on watched paths
+        # before closing the session, so Maez gets a final direct_edit
+        # event recording the state of the working directory at
+        # session end. Mirrors the CLI's cmd_exit behavior for
+        # cross-surface symmetry.
+        diff_logged = False
         try:
             from core.audit_log import AuditLog
+            from core.builder_mode_capture import capture_session_end_diff
             audit = AuditLog()
+            repo_root = Path("/home/rohit/maez")
+            diff_logged = capture_session_end_diff(
+                repo_root=repo_root,
+                session_id=session_id,
+                audit_log=audit,
+                reason="session end diff capture (telegram)",
+            )
             audit.end_direct_edit_session(session_id=session_id)
         except Exception as e:
             logger.warning("builder_exit failed to close session: %s", e)
@@ -3685,6 +3698,8 @@ class TelegramVoice:
         ]
         if duration_str:
             lines.append(f"Duration: {duration_str}")
+        if diff_logged:
+            lines.append("Final diff captured as a direct_edit event.")
         await update.message.reply_text("\n".join(lines))
 
     async def _configure_bot_commands(self):

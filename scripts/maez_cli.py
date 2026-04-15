@@ -276,6 +276,24 @@ def cmd_exit(args: argparse.Namespace) -> int:
                 pass
 
     audit = AuditLog()
+
+    # A-core #3 Step 5: capture any git diff on watched paths before
+    # closing the session, so Maez gets a final direct_edit event
+    # recording the state of the working directory at session end.
+    # Always captures (no hash comparison — session end is once per
+    # session). No-op if the diff is empty or git failed.
+    diff_logged = False
+    try:
+        from core.builder_mode_capture import capture_session_end_diff
+        diff_logged = capture_session_end_diff(
+            repo_root=PROJECT_ROOT,
+            session_id=session_id,
+            audit_log=audit,
+            reason="session end diff capture (cli)",
+        )
+    except Exception as e:
+        print(f"  (warning: session-end diff capture failed: {e})", file=sys.stderr)
+
     audit.end_direct_edit_session(session_id=session_id)
 
     # Clear state file only if this was the state-tracked session.
@@ -288,6 +306,8 @@ def cmd_exit(args: argparse.Namespace) -> int:
     print(f"  Session closed: {session_id}")
     if duration_str:
         print(f"  Duration: {duration_str}")
+    if diff_logged:
+        print(f"  Final diff captured as direct_edit event.")
     print(f"  Builder mode is now INACTIVE.")
     print()
     return 0
