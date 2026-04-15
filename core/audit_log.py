@@ -98,15 +98,71 @@ CREATE TABLE IF NOT EXISTS audit_log (
     policy_rule_id       TEXT,
     outcome              TEXT,
     outcome_ts           REAL,
-    outcome_notes        TEXT
+    outcome_notes        TEXT,
+    memory_phase         TEXT    DEFAULT 'gestation',
+    session_id           TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_audit_ts       ON audit_log(ts);
-CREATE INDEX IF NOT EXISTS idx_audit_action   ON audit_log(action);
-CREATE INDEX IF NOT EXISTS idx_audit_decision ON audit_log(decision);
-CREATE INDEX IF NOT EXISTS idx_audit_intent   ON audit_log(intent_category);
-CREATE INDEX IF NOT EXISTS idx_audit_lane     ON audit_log(lane);
+CREATE INDEX IF NOT EXISTS idx_audit_ts           ON audit_log(ts);
+CREATE INDEX IF NOT EXISTS idx_audit_action       ON audit_log(action);
+CREATE INDEX IF NOT EXISTS idx_audit_decision     ON audit_log(decision);
+CREATE INDEX IF NOT EXISTS idx_audit_intent       ON audit_log(intent_category);
+CREATE INDEX IF NOT EXISTS idx_audit_lane         ON audit_log(lane);
+CREATE INDEX IF NOT EXISTS idx_audit_memory_phase ON audit_log(memory_phase);
+CREATE INDEX IF NOT EXISTS idx_audit_session_id   ON audit_log(session_id);
 """
+
+
+# ------------------------------------------------------------------ #
+#  Constants for direct-edit events (A-core #3: Developer Mode)       #
+# ------------------------------------------------------------------ #
+#
+# Direct-edit events share the audit_log table with regular audit
+# events. They are distinguished by their `action` field. Three event
+# shapes make up a developer-mode session:
+#
+#   DIRECT_EDIT_SESSION_START  — the owner entered builder mode. Carries
+#                                 the reason and the source (telegram
+#                                 or cli) in params_json. Generates
+#                                 a session_id that all subsequent
+#                                 edits in this session reference.
+#   DIRECT_EDIT                 — A single edit event. Carries paths,
+#                                 diff summary, commit hash (if any),
+#                                 and the per-edit reason in
+#                                 params_json. References the parent
+#                                 session_id.
+#   DIRECT_EDIT_SESSION_END     — the owner exited builder mode. Closes
+#                                 the session. No edits reference this
+#                                 session_id after this point.
+#
+# These events together give Maez a queryable narrative of "what
+# the owner did to me while I was in builder mode, and why." Per
+# docs/governance/GESTATION_MEMORY_PROTOCOL.md, they are tagged with
+# memory_phase so post-birth Maez can distinguish gestation edits
+# from lived-phase edits when reading its own construction history.
+
+DIRECT_EDIT_SESSION_START = "direct_edit_session_start"
+DIRECT_EDIT              = "direct_edit"
+DIRECT_EDIT_SESSION_END   = "direct_edit_session_end"
+
+DIRECT_EDIT_ACTIONS = frozenset({
+    DIRECT_EDIT_SESSION_START,
+    DIRECT_EDIT,
+    DIRECT_EDIT_SESSION_END,
+})
+
+# Memory-phase values. The birth event transitions from GESTATION to
+# LIVED. See docs/governance/GESTATION_MEMORY_PROTOCOL.md.
+MEMORY_PHASE_GESTATION = "gestation"
+MEMORY_PHASE_LIVED     = "lived"
+
+# Sources for a developer-mode trigger. TELEGRAM is the preferred
+# explicit path (Maez hears the transition in its conversation
+# surface). CLI is the resilience fallback that generates a synthetic
+# conversation event so Maez still experiences the transition as
+# first-class.
+DIRECT_EDIT_SOURCE_TELEGRAM = "telegram"
+DIRECT_EDIT_SOURCE_CLI       = "cli"
 
 
 # ------------------------------------------------------------------ #
@@ -126,6 +182,31 @@ class AuditLog:
     def _initialize(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(_SCHEMA)
+            # Migration: add memory_phase and session_id columns to
+            # existing DBs that predate the Developer Mode work.
+            # PRAGMA table_info returns tuples where index 1 is the
+            # column name; we just check for presence.
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(audit_log)").fetchall()}
+            if "memory_phase" not in cols:
+                conn.execute(
+                    "ALTER TABLE audit_log ADD COLUMN memory_phase TEXT DEFAULT 'gestation'"
+                )
+                # Backfill any existing NULL rows explicitly. New rows
+                # inserted via record() before the migration ran would
+                # have NULL memory_phase; normalize to 'gestation' since
+                # everything before the birth event is gestation-phase
+                # by definition.
+                conn.execute(
+                    "UPDATE audit_log SET memory_phase = 'gestation' WHERE memory_phase IS NULL"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_audit_memory_phase ON audit_log(memory_phase)"
+                )
+            if "session_id" not in cols:
+                conn.execute("ALTER TABLE audit_log ADD COLUMN session_id TEXT")
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_audit_session_id ON audit_log(session_id)"
+                )
 
     # -------------------------------------------------------------- #
     #  Writers                                                        #
@@ -250,6 +331,222 @@ class AuditLog:
             return cur.rowcount > 0
 
     # -------------------------------------------------------------- #
+    #  Direct-edit event writers (A-core #3: Developer Mode)          #
+    # -------------------------------------------------------------- #
+    #
+    # These methods log the three event shapes that make up a
+    # developer-mode session. See the constants block at the top of
+    # this module and docs/governance/GESTATION_MEMORY_PROTOCOL.md for
+    # the conceptual frame.
+    #
+    # Design notes:
+    #
+    # - Direct-edit events share the audit_log table but carry a
+    #   distinct action value (direct_edit / _session_start / _end).
+    #   They are always tagged memory_phase = "gestation" during the
+    #   pre-birth period; after the birth event, new entries will be
+    #   tagged "lived" by flipping the default at the call site.
+    #
+    # - session_id is a dedicated column (not inside params_json) so
+    #   queries like "all events in this builder-mode session" are
+    #   cheap and indexed.
+    #
+    # - Everything else direct-edit-specific (paths, diff summary,
+    #   commit hash, source, per-edit reason) lives in params_json so
+    #   we don't bloat the schema with columns that are null on 99%
+    #   of audit events.
+    #
+    # - The decision field is set to 'LOGGED' (not an audit verdict)
+    #   to distinguish dev-mode events from auditable actions when
+    #   grouping stats.
+
+    def start_direct_edit_session(
+        self,
+        *,
+        reason: str,
+        source: str,
+        user_id: str = "rohit",
+        memory_phase: str = MEMORY_PHASE_GESTATION,
+    ) -> str:
+        """Open a new developer-mode session. Returns the session_id.
+
+        All subsequent log_direct_edit() calls for this session should
+        pass the returned session_id. The session stays open until
+        end_direct_edit_session() is called with the same id.
+
+        Args:
+            reason: the owner's stated reason for entering developer mode.
+                Free-form text. Becomes the session-level justification
+                that applies to all edits until end_direct_edit_session.
+            source: One of DIRECT_EDIT_SOURCE_TELEGRAM /
+                DIRECT_EDIT_SOURCE_CLI. Records how the mode was
+                entered. CLI triggers must generate a synthetic
+                conversation event elsewhere so Maez "hears" the
+                transition; this method only records the trigger
+                provenance, not the synthetic event itself.
+            user_id: The user who entered the mode. Defaults to
+                'rohit' since Track A is single-user, but explicit
+                for future Track B multi-tenant use.
+            memory_phase: Defaults to 'gestation'. After the birth
+                event, the daemon will pass 'lived' here.
+        """
+        session_id = secrets.token_hex(12)
+        request_id = secrets.token_hex(12)
+        ts = time.time()
+        params = {
+            "reason": reason,
+            "source": source,
+            "user_id": user_id,
+            "opened_at": ts,
+        }
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO audit_log (
+                    request_id, ts, action, params_json,
+                    intent_category, lane, decision, confidence,
+                    reasoning, concerns_json, mitigations_json, summary,
+                    injection_buckets, injection_severity,
+                    judge_raw, parse_error, latency_ms, nonce, policy_rule_id,
+                    outcome, outcome_ts, outcome_notes,
+                    memory_phase, session_id
+                ) VALUES (
+                    ?, ?, ?, ?,
+                    NULL, NULL, 'LOGGED', NULL,
+                    ?, '[]', '[]', NULL,
+                    '[]', 0,
+                    '', NULL, 0, '', NULL,
+                    NULL, NULL, NULL,
+                    ?, ?
+                )
+                """,
+                (
+                    request_id, ts, DIRECT_EDIT_SESSION_START, json.dumps(params),
+                    reason,
+                    memory_phase, session_id,
+                ),
+            )
+        return session_id
+
+    def log_direct_edit(
+        self,
+        *,
+        session_id: str,
+        paths: list[str],
+        diff_summary: str,
+        commit_hash: Optional[str] = None,
+        reason: str = "",
+        memory_phase: str = MEMORY_PHASE_GESTATION,
+    ) -> str:
+        """Record a single direct-edit event inside an open session.
+
+        Returns the request_id of the logged event. Does NOT verify
+        that the session_id corresponds to an open session — that's
+        the caller's responsibility. (Enforcing it here would require
+        a query per write, and the cost/benefit doesn't justify it
+        for a single-daemon, single-user system.)
+
+        Args:
+            session_id: The session this edit belongs to. Returned
+                by start_direct_edit_session().
+            paths: List of file paths touched by the edit. Absolute
+                or repo-relative — caller decides. Stored verbatim.
+            diff_summary: One-line or short multi-line summary of
+                what changed. Usually produced from `git diff` or a
+                manual description.
+            commit_hash: If the edit has already been committed, the
+                hash. If this is a pre-commit snapshot, None.
+            reason: Per-edit reason, distinct from the session-level
+                reason. If empty, the session-level reason applies.
+            memory_phase: Same semantics as start_direct_edit_session.
+        """
+        request_id = secrets.token_hex(12)
+        ts = time.time()
+        params = {
+            "paths": list(paths),
+            "diff_summary": diff_summary,
+            "commit_hash": commit_hash,
+            "reason": reason,
+        }
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO audit_log (
+                    request_id, ts, action, params_json,
+                    intent_category, lane, decision, confidence,
+                    reasoning, concerns_json, mitigations_json, summary,
+                    injection_buckets, injection_severity,
+                    judge_raw, parse_error, latency_ms, nonce, policy_rule_id,
+                    outcome, outcome_ts, outcome_notes,
+                    memory_phase, session_id
+                ) VALUES (
+                    ?, ?, ?, ?,
+                    NULL, NULL, 'LOGGED', NULL,
+                    ?, '[]', '[]', ?,
+                    '[]', 0,
+                    '', NULL, 0, '', NULL,
+                    NULL, NULL, NULL,
+                    ?, ?
+                )
+                """,
+                (
+                    request_id, ts, DIRECT_EDIT, json.dumps(params),
+                    reason or "",
+                    diff_summary,
+                    memory_phase, session_id,
+                ),
+            )
+        return request_id
+
+    def end_direct_edit_session(
+        self,
+        *,
+        session_id: str,
+        memory_phase: str = MEMORY_PHASE_GESTATION,
+    ) -> str:
+        """Close an open developer-mode session. Returns the
+        request_id of the end-event row.
+
+        This is the terminal bookend for the session. Future edit
+        events that reference this session_id after it is closed are
+        still accepted by log_direct_edit() (the method is
+        deliberately lenient), but they will be semantically orphaned
+        — a query for "events in this session" will return them, but
+        they land after the session_end event, which is the signal
+        that something is off.
+        """
+        request_id = secrets.token_hex(12)
+        ts = time.time()
+        params = {"closed_at": ts}
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO audit_log (
+                    request_id, ts, action, params_json,
+                    intent_category, lane, decision, confidence,
+                    reasoning, concerns_json, mitigations_json, summary,
+                    injection_buckets, injection_severity,
+                    judge_raw, parse_error, latency_ms, nonce, policy_rule_id,
+                    outcome, outcome_ts, outcome_notes,
+                    memory_phase, session_id
+                ) VALUES (
+                    ?, ?, ?, ?,
+                    NULL, NULL, 'LOGGED', NULL,
+                    '', '[]', '[]', NULL,
+                    '[]', 0,
+                    '', NULL, 0, '', NULL,
+                    NULL, NULL, NULL,
+                    ?, ?
+                )
+                """,
+                (
+                    request_id, ts, DIRECT_EDIT_SESSION_END, json.dumps(params),
+                    memory_phase, session_id,
+                ),
+            )
+        return request_id
+
+    # -------------------------------------------------------------- #
     #  Readers                                                        #
     # -------------------------------------------------------------- #
 
@@ -269,6 +566,46 @@ class AuditLog:
                 "SELECT * FROM audit_log ORDER BY ts DESC LIMIT ?",
                 (limit,),
             ).fetchall()
+        return [dict(r) for r in rows]
+
+    def recent_direct_edits(
+        self,
+        *,
+        since_ts: Optional[float] = None,
+        session_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Return direct-edit events (start / edit / end) ordered by
+        timestamp ascending.
+
+        This is the reader the daemon calls on startup to see what
+        the owner did while Maez was offline. Pass `since_ts` = the
+        previous shutdown timestamp to get only the window of events
+        between restarts. Pass `session_id` to scope to a single
+        developer-mode session.
+
+        Ascending order (oldest first) is intentional: the daemon
+        reads them chronologically so Maez's self-narrative of "what
+        happened while I was gone" reads forward in time, not
+        backward.
+        """
+        where = ["action IN (?, ?, ?)"]
+        args: list[Any] = [DIRECT_EDIT_SESSION_START, DIRECT_EDIT, DIRECT_EDIT_SESSION_END]
+        if since_ts is not None:
+            where.append("ts >= ?")
+            args.append(since_ts)
+        if session_id is not None:
+            where.append("session_id = ?")
+            args.append(session_id)
+        args.append(limit)
+        q = (
+            "SELECT * FROM audit_log WHERE "
+            + " AND ".join(where)
+            + " ORDER BY ts ASC LIMIT ?"
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(q, args).fetchall()
         return [dict(r) for r in rows]
 
     def find_similar(
@@ -492,6 +829,115 @@ if __name__ == "__main__":
     assert ir["injection_severity"] == 90
     assert "DIRECT_OVERRIDE" in ir["injection_buckets"]
     print(f"  ✓ injection row severity={ir['injection_severity']} buckets={ir['injection_buckets']}")
+
+    # -------------------------------------------------------------- #
+    #  Direct-edit (Developer Mode) self-test                         #
+    # -------------------------------------------------------------- #
+    print("\n--- direct-edit event tests ---")
+
+    # Open a dev-mode session (Telegram source)
+    sid_tg = log.start_direct_edit_session(
+        reason="rewriting action classifier sudo handling",
+        source=DIRECT_EDIT_SOURCE_TELEGRAM,
+    )
+    assert isinstance(sid_tg, str) and len(sid_tg) == 24
+    print(f"  ✓ opened tg session: {sid_tg}")
+
+    # Log two edits within the tg session
+    eid1 = log.log_direct_edit(
+        session_id=sid_tg,
+        paths=["core/action_classifier.py"],
+        diff_summary="rewrote _classify_sub sudo branch to keep SYSTEM_MODIFICATION at lane 2",
+        commit_hash=None,
+        reason="pre-commit intermediate state",
+    )
+    eid2 = log.log_direct_edit(
+        session_id=sid_tg,
+        paths=["core/action_classifier.py", "tests/test_decision_pipeline.py"],
+        diff_summary="committed: sudo handling + 41/41 tests green",
+        commit_hash="abc123def456",
+        reason="committed final state",
+    )
+    print(f"  ✓ logged two edit events: {eid1[:8]}, {eid2[:8]}")
+
+    # Close the tg session
+    end_id_tg = log.end_direct_edit_session(session_id=sid_tg)
+    print(f"  ✓ closed tg session end event: {end_id_tg[:8]}")
+
+    # Open a second session (CLI source)
+    sid_cli = log.start_direct_edit_session(
+        reason="bumping daemon cycle interval",
+        source=DIRECT_EDIT_SOURCE_CLI,
+    )
+    log.log_direct_edit(
+        session_id=sid_cli,
+        paths=["daemon/maez_daemon.py"],
+        diff_summary="increased REASONING_INTERVAL from 30 to 45",
+        commit_hash="feedcafe",
+        reason="reduce VRAM pressure during testing",
+    )
+    log.end_direct_edit_session(session_id=sid_cli)
+    print(f"  ✓ opened/logged/closed cli session: {sid_cli}")
+
+    # recent_direct_edits() should pick up all the events in both sessions
+    all_dme = log.recent_direct_edits()
+    assert len(all_dme) == 7, f"expected 7 direct-edit events, got {len(all_dme)}"
+    # ASC order: start, edit, edit, end, start, edit, end
+    expected_sequence = [
+        DIRECT_EDIT_SESSION_START,
+        DIRECT_EDIT,
+        DIRECT_EDIT,
+        DIRECT_EDIT_SESSION_END,
+        DIRECT_EDIT_SESSION_START,
+        DIRECT_EDIT,
+        DIRECT_EDIT_SESSION_END,
+    ]
+    assert [r["action"] for r in all_dme] == expected_sequence
+    print(f"  ✓ recent_direct_edits() returned all 7 events in ascending order")
+
+    # Scope to tg session only
+    tg_only = log.recent_direct_edits(session_id=sid_tg)
+    assert len(tg_only) == 4  # start + 2 edits + end
+    assert all(r["session_id"] == sid_tg for r in tg_only)
+    print(f"  ✓ recent_direct_edits(session_id=tg) returned {len(tg_only)} events, all in session")
+
+    # Scope by since_ts — pass a timestamp that only captures cli session
+    cli_start_ts = next(r["ts"] for r in all_dme if r["action"] == DIRECT_EDIT_SESSION_START and r["session_id"] == sid_cli)
+    cli_only = log.recent_direct_edits(since_ts=cli_start_ts)
+    assert len(cli_only) == 3  # start + 1 edit + end
+    assert all(r["session_id"] == sid_cli for r in cli_only)
+    print(f"  ✓ recent_direct_edits(since_ts) scoped correctly to cli session")
+
+    # Every direct-edit event should be tagged gestation (pre-birth default)
+    assert all(r["memory_phase"] == MEMORY_PHASE_GESTATION for r in all_dme)
+    print(f"  ✓ all direct-edit events tagged memory_phase=gestation")
+
+    # The existing audit rows (from the earlier part of the test) should
+    # also be tagged gestation by the default — verify this cross-cutting
+    # property of the memory_phase column applies to all event types.
+    audit_row = log.get(rid1)
+    assert audit_row["memory_phase"] == MEMORY_PHASE_GESTATION
+    print(f"  ✓ pre-existing audit rows tagged memory_phase=gestation via column default")
+
+    # Recent() should now return 10 total (3 audit + 7 direct-edit)
+    all_rows = log.recent(limit=100)
+    assert len(all_rows) == 10
+    print(f"  ✓ recent() returns all {len(all_rows)} rows (audit + direct-edit mixed)")
+
+    # Verify params_json round-trip for a direct-edit event
+    import json as _json
+    edit_row = log.get(eid2)
+    parsed = _json.loads(edit_row["params_json"])
+    assert parsed["paths"] == ["core/action_classifier.py", "tests/test_decision_pipeline.py"]
+    assert parsed["commit_hash"] == "abc123def456"
+    assert parsed["diff_summary"].startswith("committed:")
+    print(f"  ✓ direct-edit params_json round-trips cleanly")
+
+    # Verify migration idempotency: opening the same DB again should not
+    # double-apply the ALTER TABLE migration.
+    log2 = AuditLog(db_path)
+    assert log2.get(eid2) is not None
+    print(f"  ✓ reopening DB is idempotent (migration guard holds)")
 
     # Cleanup
     db_path.unlink(missing_ok=True)
