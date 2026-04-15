@@ -3488,6 +3488,10 @@ class TelegramVoice:
             "  /apply <id> Apply candidate\n"
             "  /reject <id> Reject candidate\n"
             "\n"
+            "Builder mode:\n"
+            "  /builder_enter <reason>  Open a builder-mode session\n"
+            "  /builder_exit            Close the active session\n"
+            "\n"
             "Control:\n"
             "  /pending   Pending actions\n"
             "  /trust     Trust user\n"
@@ -3495,6 +3499,193 @@ class TelegramVoice:
             "  /help      This list"
         )
         await update.message.reply_text(text)
+
+    # -------------------------------------------------------------- #
+    #  Builder-mode commands (A-core #3, Step 4)                      #
+    # -------------------------------------------------------------- #
+    #
+    # Producer side of direct-edit session events via the Telegram
+    # surface. Writes session_start / session_end events to
+    # memory/audit_log.db via the existing AuditLog API — same writes
+    # the CLI makes from scripts/maez_cli.py. The daemon's perception
+    # reader from Step 3 (core/builder_mode_perception.py) picks up
+    # these events surface-agnostic on its next reasoning cycle, so
+    # no consumer code is added here.
+    #
+    # State file daemon/builder_mode_current.txt is shared with the
+    # CLI so cross-surface operation works: enter via Telegram and
+    # exit via CLI, or vice versa, and either surface finds the
+    # active session. Format matches the CLI exactly:
+    #     <session_id>
+    #     reason=<text>
+    #     opened_at=<unix ts>
+    # Absence of the file means no active session.
+    #
+    # Scope discipline: these two handlers and the registration in
+    # _run_bot / _configure_bot_commands are the only Telegram-side
+    # touches for Step 4. No general-Telegram-routing changes. No
+    # interactive confirmation layer (typing a slash command in a
+    # chat is already a deliberate act; the CLI's typed-phrase
+    # prompt exists to resist shell-level accidents that Telegram
+    # doesn't have).
+
+    def _builder_state_file(self) -> Path:
+        """Path to the shared current-session state file."""
+        return Path("/home/rohit/maez/daemon/builder_mode_current.txt")
+
+    def _builder_read_state(self) -> Optional[dict]:
+        """Read the shared state file (same format as scripts/maez_cli.py
+        uses). Returns None if no active session."""
+        state_file = self._builder_state_file()
+        if not state_file.exists():
+            return None
+        try:
+            content = state_file.read_text().strip()
+        except OSError:
+            return None
+        if not content:
+            return None
+        lines = content.splitlines()
+        session_id = lines[0].strip()
+        meta: dict = {"session_id": session_id}
+        for line in lines[1:]:
+            if "=" in line:
+                k, v = line.split("=", 1)
+                meta[k.strip()] = v.strip()
+        return meta
+
+    def _builder_write_state(self, session_id: str, reason: str, opened_at: float) -> None:
+        """Write the shared state file. Matches the CLI format exactly."""
+        state_file = self._builder_state_file()
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        content = (
+            f"{session_id}\n"
+            f"reason={reason}\n"
+            f"opened_at={opened_at}\n"
+        )
+        state_file.write_text(content)
+
+    def _builder_clear_state(self) -> None:
+        """Remove the shared state file on successful exit."""
+        try:
+            self._builder_state_file().unlink()
+        except FileNotFoundError:
+            pass
+
+    async def _handle_builder_enter(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Enter builder mode from Telegram. Usage: /builder_enter <reason>"""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+
+        # Reason is required, taken from everything after the command
+        reason_parts = context.args or []
+        reason = " ".join(reason_parts).strip()
+        if not reason:
+            await update.message.reply_text(
+                "Usage: /builder_enter <reason>\n"
+                "\n"
+                "Example: /builder_enter rewriting sudo handling"
+            )
+            return
+
+        # Refuse double-entry — if a session is already active, show it
+        # and tell the user to exit first. Symmetric with the CLI behavior.
+        existing = self._builder_read_state()
+        if existing is not None:
+            lines = [
+                "A builder-mode session is already active:",
+                f"  session: {existing['session_id']}",
+            ]
+            if "reason" in existing:
+                lines.append(f"  reason: {existing['reason']}")
+            if "opened_at" in existing:
+                try:
+                    opened_ts = float(existing["opened_at"])
+                    age = time.time() - opened_ts
+                    lines.append(f"  age:    {int(age // 60)}m {int(age % 60)}s")
+                except ValueError:
+                    pass
+            lines.append("")
+            lines.append("Run /builder_exit first, then try again.")
+            await update.message.reply_text("\n".join(lines))
+            return
+
+        # Open the session via the existing AuditLog API
+        try:
+            from core.audit_log import AuditLog, DIRECT_EDIT_SOURCE_TELEGRAM
+            audit = AuditLog()
+            session_id = audit.start_direct_edit_session(
+                reason=reason,
+                source=DIRECT_EDIT_SOURCE_TELEGRAM,
+            )
+        except Exception as e:
+            logger.warning("builder_enter failed to open session: %s", e)
+            await update.message.reply_text(f"Error opening builder-mode session: {e}")
+            return
+
+        opened_at = time.time()
+        self._builder_write_state(session_id, reason, opened_at)
+
+        await update.message.reply_text(
+            "Builder mode active.\n"
+            f"Session: {session_id}\n"
+            f"Reason: {reason}\n"
+            "\n"
+            "Direct edits will be logged to Maez's audit memory until\n"
+            "you run /builder_exit. Maez will see the event in its next\n"
+            "reasoning cycle."
+        )
+
+    async def _handle_builder_exit(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Exit builder mode from Telegram. Usage: /builder_exit"""
+        if not update.message or not self._is_authorized(update.effective_user.id):
+            return
+
+        state = self._builder_read_state()
+        if state is None:
+            await update.message.reply_text(
+                "No active builder-mode session. Run /builder_enter <reason> to start one."
+            )
+            return
+
+        session_id = state["session_id"]
+
+        # Compute duration if opened_at is present
+        duration_str = None
+        if "opened_at" in state:
+            try:
+                opened_ts = float(state["opened_at"])
+                dur = time.time() - opened_ts
+                hours = int(dur // 3600)
+                minutes = int((dur % 3600) // 60)
+                seconds = int(dur % 60)
+                duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            except ValueError:
+                pass
+
+        # Close the session via the existing AuditLog API
+        try:
+            from core.audit_log import AuditLog
+            audit = AuditLog()
+            audit.end_direct_edit_session(session_id=session_id)
+        except Exception as e:
+            logger.warning("builder_exit failed to close session: %s", e)
+            await update.message.reply_text(f"Error closing builder-mode session: {e}")
+            return
+
+        self._builder_clear_state()
+
+        lines = [
+            "Builder mode inactive.",
+            f"Session: {session_id} closed.",
+        ]
+        if duration_str:
+            lines.append(f"Duration: {duration_str}")
+        await update.message.reply_text("\n".join(lines))
 
     async def _configure_bot_commands(self):
         """Register bot commands and menu button for the private chat."""
@@ -3523,6 +3714,8 @@ class TelegramVoice:
                 BotCommand("pending",   "Pending actions"),
                 BotCommand("trust",     "Trust user"),
                 BotCommand("promote",   "Promote action type"),
+                BotCommand("builder_enter", "Enter builder mode (reason required)"),
+                BotCommand("builder_exit",  "Exit the active builder-mode session"),
                 BotCommand("help",      "Grouped command list"),
             ]
             await self._app.bot.set_my_commands(
@@ -3578,6 +3771,9 @@ class TelegramVoice:
         self._app.add_handler(CommandHandler("reject_train", self._handle_reject_train))
         self._app.add_handler(CommandHandler("adapter_status", self._handle_adapter_status))
         self._app.add_handler(CommandHandler("rollback_adapter", self._handle_rollback_adapter))
+        # A-core #3 Step 4: builder-mode commands
+        self._app.add_handler(CommandHandler("builder_enter", self._handle_builder_enter))
+        self._app.add_handler(CommandHandler("builder_exit",  self._handle_builder_exit))
         self._app.add_handler(CommandHandler("help", self._handle_help))
         self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
 
