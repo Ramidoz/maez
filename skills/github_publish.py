@@ -227,7 +227,6 @@ the owner — [@Ramidoz](https://github.com/Ramidoz)
                     "memory/db/\nmemory/*.db\nmodels/\nlogs/\nbackups/\n"
                     "staging/\nevolution/backups/\nevolution/pending_evolution.json\n"
                     "daemon/maez.pid\ndaemon/pending_actions.json\ndaemon/last_shutdown\n"
-                    "ui/electron/node_modules/\nui/electron/dist/\n"
                     "*.bak\n*.bak2\n/tmp/\n"
                 )
 

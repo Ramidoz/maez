@@ -75,7 +75,6 @@ JOURNAL_SERVICES = (
     'llama-server',
     'llama-server-vision',
     'maez-watchdog',
-    'maez-electron',
 )
 _SERVICE_STATE_CACHE = {}  # service_name -> (state, timestamp)
 _SERVICE_STATE_TTL = 30.0  # seconds

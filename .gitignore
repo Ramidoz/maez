@@ -7,6 +7,7 @@ config/token.json
 config/credentials.json
 memory/db/
 memory/*.db
+memory/chroma/
 models/
 logs/
 backups/
@@ -16,8 +17,6 @@ evolution/pending_evolution.json
 daemon/maez.pid
 daemon/pending_actions.json
 daemon/last_shutdown
-ui/electron/node_modules/
-ui/electron/dist/
 *.bak
 *.bak2
 *.bak.*

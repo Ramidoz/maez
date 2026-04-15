@@ -117,9 +117,9 @@ INDEX_CONFIG = ['config/soul.md', 'config/credentials.json',
                 'config/token.json']
 INDEX_JSON = ['ui/face.json']
 INDEX_MARKDOWN = ['README.md', 'PROGRESS.md', 'PROGRESS_PUBLIC.md']
-INDEX_JS = ['ui/electron/main.js']
-INDEX_HTML = ['ui/index.html', 'ui/electron/renderer/*.html']
-INDEX_OTHER = ['ui/electron/package.json']
+INDEX_JS = []
+INDEX_HTML = ['ui/index.html']
+INDEX_OTHER = []
 
 # ── Self-edit scope overrides ──
 _SCOPE_OVERRIDES = {
