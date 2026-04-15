@@ -18,6 +18,7 @@ evolution/pending_evolution.json
 daemon/maez.pid
 daemon/pending_actions.json
 daemon/last_shutdown
+daemon/builder_mode_current.txt
 *.bak
 *.bak2
 *.bak.*
