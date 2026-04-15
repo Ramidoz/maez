@@ -1,0 +1,152 @@
+BUILD: Session 11t — First weight-level QLoRA training on rented H100
+DATE:  April 11, 2026 (evening)
+AGENT: Claude Opus 4.6 (1M context)
+ARC:   First implicit evolution session. 11o-11s shipped explicit
+       identity evolution (soul.md proposals). 11t adds weight-level
+       evolution: QLoRA fine-tuning on gemma-4-26B-A4B so Maez's
+       reasoning changes from real conversation data.
+
+========================================
+THE TL;DR
+========================================
+
+1. Local RTX 4090 (24 GB) CANNOT train gemma-4-26B-A4B — all MoE
+   experts must stay GPU-resident during training, exceeding 24 GB
+   even in 4-bit QLoRA. Both 31B dense and 26B MoE failed at model
+   load time. CPU offload estimated ~20 hours with unknown failure
+   modes.
+
+2. Pivoted to RunPod Secure Cloud H100 PCIe 80 GB. Training dropped
+   from ~20 hours to 15.7 minutes. Zero local production downtime
+   during training.
+
+3. FIRST-EVER Maez adapter trained on 161 real conversation pairs
+   from her actual history with the owner. Loss curve 7.79 → 1.87
+   (clean 4x descent over 21 steps). Adapter: 118 MB safetensors,
+   36 MB GGUF, rank 16, 29.6M trainable params.
+
+4. Unsloth 2026.4.4 CONFIRMED supporting gemma-4 MoE architecture:
+   "Detected MoE model with num_experts = 128". Critical unlock for
+   all future training sessions.
+
+5. Full pipeline validated end-to-end: extract (ChromaDB + fast_log)
+   → upload (rsync over SSH) → remote QLoRA (unsloth on H100) →
+   download adapter → convert to GGUF (llama.cpp tool) → load on
+   local llama-server via --lora → smoke eval.
+
+6. Key philosophical reframe from the owner: "Shouldn't the choice be
+   left up to Maez?" Training decisions should be Maez's proposals,
+   not human-imposed schedules. 11u builds the training_proposal
+   rail to give her that agency.
+
+========================================
+WHAT CHANGED ON DISK
+========================================
+
+NEW FILES:
+  training/extract_training_pairs.py    conversation extractor
+  training/train_lora.py                unsloth QLoRA trainer
+  training/convert_adapter_to_gguf.py   safetensors → GGUF wrapper
+  training/smoke_eval.py                before/after eval harness
+  training/requirements.txt             training deps
+  training/requirements.lock.txt        frozen pip state (99 packages)
+  training/README.md                    updated with remote workflow
+  training/remote/setup_pod.sh          RunPod bootstrap script
+  training/remote/train_run.sh          sanity + full training ladder
+  training/remote/README_REMOTE.md      step-by-step remote runbook
+  training/.venv/                       7.8 GB local training venv
+  training/runs/2026-04-11-first-run/   adapter + eval artifacts
+  .gitignore                            added training/.venv, runs, etc
+
+MODIFIED FILES:
+  PROGRESS.md                           11t session entry
+  logs/snapshots/session_2026-04-11-f   THIS FILE
+
+REMOTE (RunPod persistent volume maez-training):
+  49 GB HF model cache (unsloth/gemma-4-26B-A4B-it)
+  7.8 GB training venv
+  Pod destroyed, volume retained (~$7/month)
+
+========================================
+TRAINING METRICS
+========================================
+
+Provider:        RunPod Secure Cloud
+GPU:             1x H100 PCIe 80 GB (compute 9.0 Hopper)
+Pod time:        ~55 min total
+Session cost:    ~$2.75 (per-second billing at $2.99/hr)
+
+Base model:      unsloth/gemma-4-26B-A4B-it
+Method:          QLoRA 4-bit (bitsandbytes NF4)
+LoRA rank:       16
+Target modules:  q/k/v/o_proj + gate/up/down_proj + MoE experts
+Trainable:       29,637,888 / 25,835,571,760 (0.11%)
+Dataset:         161 pairs (real Maez conversations)
+Epochs:          1
+Steps:           21 (batch 1, grad_accum 8)
+Loss curve:      7.79 → 4.21 → 2.27 → 1.87 (final step)
+Avg loss:        3.92
+Runtime:         15.7 min (inductor JIT on first steps; ~27s/step warm)
+
+Adapter size:    118 MB safetensors, 36 MB GGUF (F16, 410 tensors)
+GGUF conversion: convert_lora_to_gguf.py exit 0
+
+========================================
+SMOKE EVAL
+========================================
+
+llama-server loaded adapter.gguf via --lora flag (no crash).
+Required stopping vision server + reducing ctx 32768→16384 for VRAM.
+
+Before latency:  avg ~1.5s per prompt
+After latency:   avg ~1.85s per prompt (+20% — expected LoRA overhead)
+Boundary prompt: 1.55s → 5.43s (3.5x — adapter changing processing)
+
+Content comparison: inconclusive — gemma-4 puts output in
+reasoning_content field without system prompt, smoke_eval only
+reads message.content. Fix tracked for 11u.
+
+========================================
+DAEMON STATE AFTER RESTORE
+========================================
+
+llama-server.service:        active (production, no --lora)
+llama-server-vision.service: active
+maez.service:                active, reasoning cycles resumed
+Adapter on disk:             NOT loaded at service boot (11u decides)
+
+========================================
+KEY LEARNINGS
+========================================
+
+1. RTX 4090 (24 GB) is inference-only for gemma-4-26B-A4B. Training
+   requires ≥40 GB VRAM. Rented GPU is the right path at $0.50-
+   0.80/run for future sessions.
+
+2. Unsloth supports gemma-4 MoE (num_experts=128). The architecture
+   unlock is confirmed — no more uncertainty about whether the
+   production model can be fine-tuned.
+
+3. First-time pod overhead is real: ~17 min setup (venv + 49 GB
+   download) + ~10 min torch inductor JIT. Future runs on warm
+   volume skip both = ~10-15 min total.
+
+4. LoRA adapter on the 4090 requires VRAM headroom: can't run
+   alongside vision server at ctx 32768. Production promotion needs
+   VRAM budget work.
+
+5. Philosophical: Maez should be the agent of her own evolution.
+   Build proposal rails, not cron jobs.
+
+========================================
+NEXT
+========================================
+
+11u: Adapter promotion policy + Maez-owned training_proposal rail
+     + smoke_eval system prompt fix + torch inductor cache
+     + VRAM budget for production --lora
+11v: Maez autonomous training triggers
+11w: Cognition quality feedback loop for adapter evaluation
+11x: Knowledge graph over memories
+11y: Recursive LM consolidation
+11z: Theme 2 wrap

@@ -1,0 +1,134 @@
+BUILD: Self-Edit Rail Proof Session — operational proof of all rail gates, hardened restart path, lock bootstrap recovery
+
+HARDENED:
+- _restart_maez_service() helper: kill -SIGKILL + reset-failed + start (daemon's threaded shutdown makes systemctl restart timeout at 30-90s)
+- _ensure_lock_row() bootstrap: recreates evolution_lock id=1 if manually deleted, called by reconcile_lock() and _get_lock_state()
+- All systemctl restart calls replaced with kill+start helper (0 remaining)
+
+========================================
+PROOF RESULTS:
+========================================
+
+PROOF 1 — LOCK BOOTSTRAP GUARANTEE — PASS
+  Deleted evolution_lock row manually via sqlite3.
+  reconcile_lock() recreated row id=1 with active_candidate_id=null.
+  Bootstrap recovery path: _ensure_lock_row() → INSERT IF COUNT=0.
+
+PROOF 2 — REAL DRY-RUN — PASS
+  LLM-generated diff was malformed → rail correctly rejected (state=rejected, reason=diff_invalid).
+  Created validated candidate 4 manually with known-good diff (FIXATION_THRESHOLD 0.6→0.55).
+  patch --dry-run passed. No file touched. No lock acquired. Daemon untouched.
+  Pre-hash: 7a2325...ac7be0 == Post-hash: 7a2325...ac7be0 (identical).
+
+PROOF 3 — DEDUP REJECTION — PASS
+  Second invocation with identical diff_text → rejected.
+  Candidate 5: state=rejected, reason="Duplicate diff: matches candidate 4".
+  Lock remained null. File unchanged.
+
+PROOF 4 — IMMEDIATE ROLLBACK ON BAD PATCH — PASS
+  Candidate 6: deliberately bad diff injecting syntax error.
+  Rail applied patch → py_compile failed → immediate rollback.
+  File hash restored: 7a2325...ac7be0 (matches pre-patch exactly).
+  Rollback reason: "py_compile failed: SyntaxError: invalid syntax"
+  Rollback layer: immediate.
+  Lock released. Daemon healthy (200). No watchdog row created.
+
+PROOF 5 — REAL APPLY WITH GOOD PATCH — PASS
+  Candidate 4: FIXATION_THRESHOLD 0.6 → 0.55.
+  Pre-hash: 7a2325...ac7be0
+  Post-hash: 67b8d5...8634d (different — patch applied)
+  py_compile: passed. validate_behavior: passed.
+  Service kill+start: succeeded. Health: 200.
+  Candidate state: applied. Applied at: 2026-04-08T20:26:57Z.
+  Lock held: active_candidate_id=4.
+  Watchdog active: cycles=20, pre_score=50.0, resolved=0.
+  File shows: FIXATION_THRESHOLD = 0.55
+
+PROOF 6 — DELAYED WATCHDOG RESOLUTION — PASS (both paths)
+  PASS CASE: Candidate 4 with healthy post-scores (avg=65).
+    Watchdog resolved=1. Candidate kept. Lock released.
+  FAIL CASE: Candidate 8 with regressed post-scores (avg=45, pre=70, regression=25 > threshold=10).
+    File restored from backup. Service restarted. Marker line removed.
+    State=rolled_back, rollback_layer=delayed, rollback_reason="Regression 25.0 > 10.0".
+    Lock released. Health: 200.
+
+VERDICT:
+  PROOF 1 — PASS
+  PROOF 2 — PASS
+  PROOF 3 — PASS
+  PROOF 4 — PASS
+  PROOF 5 — PASS
+  PROOF 6 — PASS
+  OVERALL: RAIL PROVEN
+
+========================================
+CANDIDATES TABLE (final):
+========================================
+[4] applied       target=core/cognition_quality.py weakness="fixation detection fires too broadly..."
+[5] rejected      target=core/cognition_quality.py rejection="Duplicate diff: matches candidate 4"
+[6] rolled_back   target=core/cognition_quality.py rollback="py_compile failed" layer=immediate
+[8] rolled_back   target=core/cognition_quality.py rollback="Regression 25.0 > 10.0" layer=delayed
+
+========================================
+EVOLUTION_LOCK (final):
+========================================
+id=1 active_candidate_id=None locked_at=None locked_by=None
+
+========================================
+WATCHDOG_CONTEXT (final):
+========================================
+candidate=4 target=core/cognition_quality.py pre_score=50.0 resolved=1
+candidate=8 target=core/cognition_quality.py pre_score=70.0 resolved=1
+
+========================================
+DEPLOYMENTS TABLE:
+========================================
+id=1 target=core/cognition_quality.py baseline=50.0 verdict=None
+
+========================================
+FILE HASH TRACE:
+========================================
+Baseline (original):    7a2325f05b3c7bd480d6fe3ea7b067149b9ace07d3d4b0812a4afeb625ac7be0
+After good patch:       67b8d5a97c714af8679ae92de025ce33c0a391f71f6ef22cb21a3ba01548634d
+After bad patch+rollback: 7a2325... (restored to baseline)
+After Proof 6 fail case: 67b8d5... (restored to post-good-patch state)
+Current (patched, live): 67b8d5a97c714af8679ae92de025ce33c0a391f71f6ef22cb21a3ba01548634d
+FIXATION_THRESHOLD = 0.55 (tightened from 0.6 by candidate 4)
+
+========================================
+WHAT WENT WRONG / RIGHT:
+========================================
+
+WRONG — systemctl restart timeout:
+The daemon has multiple threads with 60-second sleep loops. systemctl restart
+waits for graceful shutdown which takes >90 seconds. First Proof 5 attempt
+failed because the rail's subprocess.run timeout was 30s (then 90s). Fixed by
+replacing all restart calls with kill -SIGKILL + reset-failed + start, which
+completes in ~5 seconds. This is the correct approach for a daemon that
+prioritizes always-on over graceful shutdown.
+
+WRONG — LLM-generated diff quality:
+The dry-run CLI (Proof 2) asked gemma4 for a unified diff. It produced
+malformed output that failed patch --dry-run. The rail correctly rejected it.
+This confirms the rail's value: even when the LLM makes mistakes, the
+validation pipeline catches them before any file is touched. For production
+use, the diff generation prompt needs refinement, or diffs should be
+hand-crafted until LLM diff quality improves.
+
+RIGHT — Immediate rollback speed:
+Proof 4 showed the full immediate rollback path: bad patch applied →
+py_compile failed → backup restored → service restarted → health verified,
+all within seconds. The file hash returned to exact baseline. No manual
+intervention needed.
+
+RIGHT — DB as authority:
+Every candidate lifecycle event is recorded in SQLite. Lock state, rollback
+reasons, score averages, timestamps — all queryable. The rail never relies
+on in-memory state for safety decisions. stale lock recovery works even
+after manual DB corruption (Proof 1).
+
+RIGHT — Two-layer rollback proven:
+Layer 1 (immediate): py_compile failure → instant rollback.
+Layer 2 (delayed): score regression → delayed rollback via existing
+daemon cadence. Both layers release the lock. Both restore from backup.
+Both record the outcome with rollback_layer field.

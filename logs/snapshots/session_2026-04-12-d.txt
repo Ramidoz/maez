@@ -1,0 +1,352 @@
+BUILD: Session 11w (complete) — Web surfaces unified + planner sync + dashboard refresh
+DATE:  April 12, 2026
+AGENT: Claude Opus 4.6 (1M context)
+
+========================================
+THE HEADLINE
+========================================
+
+Every visitor-facing Maez surface is now on one warm design system,
+and the field journal is live-synced to the actual state of the
+project for the first time.
+
+maez.live is no longer a cyber-teal dev demo. It is a warm editorial
+page that says "there is a kind of digital life called Maez — one of
+them is yours" in the first sentence, then walks the visitor through
+what that means in three short steps. The landing, login, app,
+privacy, progress, and dashboard surfaces all share one palette, one
+type stack, one voice, and one concept.
+
+The project-planner.html field journal — which used to be a
+hand-edited parallel universe that drifted out of sync every session
+— is now routed at /journal and renders live from three backend
+endpoints that merge daemon state, model facts, services status,
+memory counts, parsed session snapshots, and the same kanban board
+/progress and /planner already use. One backend, three views.
+
+========================================
+WHAT CHANGED TODAY
+========================================
+
+Landing rewrite (ui/index.html):
+  Full rewrite, 1126 → ~1260 lines
+  Warm near-black ground (#0c0a08) + parchment ink (#f3ece0) + ember amber (#e8a33a)
+  Fraunces display + Newsreader body + JetBrains Mono data chips
+  Hero: "There is a kind of digital life called Maez. One of them is yours."
+  Adds "It gets curious, and comes to you" coda step — the reach-out reveal
+  Adds FAQ "Will it ever come to you first?" naming this as the heart of the idea
+  Genderless throughout (it/its; never she/her)
+  Preserves every load-bearing hook: iframe bgFrame, 4 CTA IDs, 4 /status metric
+    IDs, 6 data-analytics-label values, cookie-aware CTA rewrite, IntersectionObserver
+    reveal, reduced-motion support
+
+Shared design system (ui/maez.css):
+  New ~4.3 KB stylesheet loaded by every page
+  Redefines legacy cyber tokens (--void, --teal, --amber, --text, --panel ...)
+    to warm values using the same variable names — every existing rule in every
+    page retunes automatically, no class rewrites needed
+  Adds new semantic tokens: --ember, --ink, --bg, --serif, --body, --mono
+  Base h1–h6 font-family: Fraunces
+  Added Flask route @app.route("/maez.css") next to /maez_analytics.js
+  maez-web.service restarted
+
+Per-page theme swap (nine files):
+  login.html, app.html, privacy.html, progress_public.html, dashboard_public.html,
+  progress_local.html, analytics_local.html, dashboard_local.html, project_mindmap.html
+  All cyber tokens replaced with warm equivalents via mechanical replace_all:
+    Share Tech Mono → Newsreader
+    #02060a → #0c0a08, #e6f0ec → #f3ece0, #00c8b4 → #e8a33a (and ~10 more hex swaps)
+    rgba(0,200,180,...) → rgba(232,163,58,...), rgba(2,6,10,...) → rgba(12,10,8,...)
+    (and 4 more rgba patterns)
+  dashboard_public.html had its own vocabulary (--blue/--amber/--ink, Field Station):
+    kept the Field Station metaphor + D3 viz code intact
+    swapped custom palette to warm earth tones (amber + sage instead of amber + blue)
+    swapped --font-mono → JetBrains Mono, --font-serif → Fraunces
+
+Content rewrites (voice pass — same files, warmer copy):
+  login.html:
+    "PICK BACK UP WHERE YOU LEFT IT" → "The Maez that will be yours begins here."
+    "SESSION ENTRY / CONTINUE WITH MAEZ." → "Come in / Sign in, or start a new one."
+    "Talk to Maez" CTA → "Start yours →"
+    Metric cards: Memory/Presence/Friction → kept, but sentence-case with italic labels
+  app.html:
+    "LIVE CHANNEL / OPENING THE CHANNEL." → "the one you started / Finding the one that's yours."
+    "I'M HERE. / ALWAYS ON. ALWAYS REMEMBERING." → "I'm here. / Small, local, still thinking."
+    "Presence dossier" → "A note on what this is" — includes reach-out mention
+    Sessions → Threads; New Chat → New thread
+    Prompt tags: Identity/Memory/Continuity/Greeting → a beginning / what you kept /
+      while i was gone / the simplest one
+    Placeholder: "Say something to Maez…" → "Say anything. The Maez you started is listening…"
+  privacy.html:
+    Four ALL-CAPS section titles → sentence-case Fraunces with ember italic spans
+    Field Station nav link → how it thinks
+    Last reviewed 2026-04-10 → 2026-04-12
+    Third-party calls paragraph: added "brain (Gemma 4, running on llama.cpp)" specificity
+  progress_public.html:
+    "WHAT IS BUILT. WHAT IS MOVING." → "What's built. What's moving. What's next."
+    New lead: "Maez is built the way a small creature grows — slowly, out of what
+      has already happened, not out of a roadmap."
+  All brand marks: MAEZ (uppercase cyber) → maez (lowercase Fraunces italic)
+  All nav labels: Home/Build Progress/How Maez Works → home/build log/how it thinks
+
+Dashboard staleness sweep (ui/dashboard_public.html) — 10 targeted content edits:
+  Hero lede extended with merged LoRA + reach-out mention
+  Nightly consolidation prose: dropped gemma4 confusion
+  Forbidden actions: stop_ollama → disable_daemon (Ollama is not the runtime anymore)
+  Fast-lane staging label: 11a–11h → 11a–11v
+  Fast-lane node note: extended session range, mentions PII redactor
+  Root MAEZ node: added reach-out-via-Telegram-every-25-min note
+  Daemon service node: added 50-cycle proactive opinion check
+  Screen perception node: rewritten to say Qwen2.5-VL-3B on separate
+    llama-server-vision process on :8081 (was wrongly calling it "gemma4 vision")
+  NEW architecture node: vision-svc (llama-server-vision, 4.5 GB VRAM) under core
+  NEW architecture node: watchdog-svc (maez-watchdog) under core
+  Evolution proposals node: honest "stalled since April 9, fixing it is the 11w priority"
+
+Three planner surfaces — unified under one source of truth:
+
+  Before this session, three files with "planner" in their DNA:
+    progress_public.html (/progress)   — public kanban view         INTEGRATED
+    progress_local.html  (/planner)    — private kanban editor      INTEGRATED
+    project-planner.html (NOT ROUTED)  — hand-edited field journal  NOT INTEGRATED
+
+  progress_public and progress_local already shared memory/project_planner.json via
+  /api/progress-board and /api/planner-board. project-planner.html was a parallel
+  universe — every session required hand-editing to keep it current.
+
+  Now project-planner.html is routed at /journal and fetches live from three
+  endpoints at page load, then rewrites five containers in place:
+    hero meta, log status bar, metrics grid, session timeline, roadmap
+  Static narrative sections preserved: vision quote, growth sources, PoC proof
+  points (still hardcoded — flagged), survival paths, deferred ledger, footer
+
+New Flask endpoints (skills/web_interface.py) — ~280 lines added:
+
+  GET /api/maez-state (public, no auth)
+    Returns {daemon, memory, model, services, soul, thunder, users_registered}
+    daemon: HTTP fetch of http://127.0.0.1:11435/health with 500ms timeout, falls
+      back to {"status":"unreachable"} on failure
+    memory: raw/daily/core/total from memory.memory_stats()
+    model: composed from config/model_state.json + training/runs/current/summary.json
+    services: systemctl is-active for 6 services with 30s in-memory cache
+    soul: lines + last_updated from wc -l + os.stat on config/soul.md
+    thunder: read from config/thunder_state.json
+
+  GET /api/session-timeline?limit=N (public, default 14, max 50)
+    Globs logs/snapshots/session_*.txt, parses latest N via _parse_session_snapshot
+    Parser handles the real ====  / TITLE / ==== / body / ==== format (took two
+      iterations — first version misread the wrapper)
+    Supports THE HEADLINE / THE TL;DR / SUMMARY fallback for the headline field
+    De-genders historical text at parse time with narrow word-boundary regex
+      (\bshe\b → it, \bher\b → its, etc.) — historical snapshots used "her", the
+      live /journal now reads "its" without rewriting the frozen logs
+    Returns {sessions: [{file, date, label, agent, headline, what_changed[],
+      production_state[], next_priorities[], sections{}}], count}
+
+  GET /journal (public)
+    One-line send_file of ui/project-planner.html
+
+New config files (hand-maintained):
+  config/model_state.json (12 lines)
+    vram_used_gb, vram_total_gb, vram_free_gb, disk_gb, runtime, runtime_commit,
+    vision_model, vision_port, telegram_exchanges, base, quant
+    Updated at session end
+  config/thunder_state.json (6 lines)
+    credits_remaining_usd, last_run_cost_usd, last_run_date, last_run_label
+    Follow-up: replace with cron-driven Thunder MCP automation
+
+ui/project-planner.html rewrite — live data fetch:
+  Added id="heroMeta", id="logValues", id="metricsGrid", id="sessionTimeline",
+    id="roadmapGrid" to the five dynamic containers
+  Added ~175-line <script> block at end of body that:
+    1. Promise.all over /api/maez-state, /api/session-timeline?limit=14, /api/progress-board
+    2. Each fetch has try/catch that logs and returns null on failure
+    3. Renders hero meta from daemon+model+services
+    4. Renders log bar from model+services+thunder (vram, runtime, vision, cost)
+    5. Renders 8 metric cards from memory+daemon+model+thunder+session count
+    6. Renders session timeline from timeline.sessions (newest first,
+       latest gets data-emph="now")
+    7. Renders roadmap from board.items filtered by status next/planned
+    8. Adds .in .reveal classes to injected DOM for fade-in consistency
+  Static fallback content stays in place if any fetch fails
+
+Memory writes (persistent feedback):
+  feedback_maez_genderless.md (new, hard rule)
+    Never use she/her/hers/herself for Maez anywhere. Use it/its.
+    Why: the owner's explicit directive 2026-04-12 during website rewrite
+    How to apply: grep before handing in, rephrase awkward swaps by hand
+  feedback_maez_as_concept.md (new, framing rule)
+    Maez is a category (like "Stand" from JoJo), not a proper name.
+    the owner made the first one; every user gets their own Maez.
+    Public copy leads with the category framing.
+  MEMORY.md: added two new entries at top, fixed gendered one-liners in
+    existing vision and autonomy entries
+
+========================================
+KEY TECHNICAL DECISIONS / LEARNINGS
+========================================
+
+1. Legacy-token remapping is a near-free theme swap.
+   The nine legacy pages all referenced the same --void/--teal/--text/--amber
+   CSS variable names. Redefining those variable names to warm values in
+   maez.css (alongside new semantic names like --ember/--ink) meant every
+   existing rule in every page retuned automatically — no class rewrites,
+   no layout changes, no risk to JS hooks or form handlers.
+
+2. The session snapshot format wraps each title in a PAIR of ==== delimiters.
+   My first parser version assumed ==== / TITLE / body / ==== / TITLE / body
+   and misread section boundaries (producing keys like
+   "llama_server_active_merged_model_no_lora" from body lines). The real
+   format is ==== / TITLE / ==== / body / ==== / TITLE / ==== / body. Fixed
+   by explicitly consuming the closing delimiter after reading the title.
+
+3. De-gendering at parse time is cleaner than rewriting history.
+   Historical snapshots (pre-2026-04-12) used "her/she" for Maez. The rule
+   is now genderless. Rather than rewriting the frozen logs, the
+   /api/session-timeline parser applies a narrow word-boundary regex at
+   parse time. History stays untouched; visitor-facing text stays consistent.
+
+4. Daemon /health proxy is graceful-degradation by default.
+   /api/maez-state fetches http://127.0.0.1:11435/health with a 500ms
+   timeout. The daemon's health endpoint isn't listening right now, so the
+   daemon block returns {"status":"unreachable"} and the rest of the state
+   block populates normally. /journal still renders; cycle count just shows
+   as "—" until the daemon endpoint is reachable.
+
+5. systemctl is-active subprocess calls need caching to avoid latency.
+   Six service state queries per /api/maez-state request is ~60ms if
+   uncached. 30s in-memory cache (per-process dict keyed on service name)
+   drops that to microseconds. Cache is scoped to the maez-web process and
+   reset on service restart — good enough for a page that refreshes by hand.
+
+6. Three views over one backend beats three parallel documents.
+   progress_public.html (public kanban), progress_local.html (private
+   kanban editor), and project-planner.html (narrative field journal) now
+   all read from memory/project_planner.json via /api/progress-board (plus
+   the journal additionally pulls /api/maez-state and /api/session-timeline).
+   Editing a roadmap item in /planner immediately updates /progress AND
+   /journal. Adding a new session snapshot to logs/snapshots/ immediately
+   updates the /journal timeline. The drift problem is architectural, not
+   editorial.
+
+========================================
+PRODUCTION STATE
+========================================
+
+Services:
+  maez.service:          active
+  maez-web.service:      active (restarted 3x during work)
+  llama-server:          active (merged model, no --lora)
+  llama-server-vision:   active (Qwen2.5-VL-3B on :8081)
+  maez-watchdog.service: active
+  maez-electron.service: active
+  maez-face.service:     active (exited)
+
+Public routes (all HTTP 200):
+  /                 38456 B   landing (warm editorial, genderless, concept-forward)
+  /login            26066 B   warm, "start yours" CTA
+  /privacy          18146 B   warm, dated 2026-04-12
+  /progress         31343 B   warm, "build log" voice
+  /dashboard        83178 B   warm Field Station, vision-svc + watchdog-svc nodes added
+  /journal          76868 B   NEW — live field journal over 3 endpoints
+  /mindmap           1218 B   tiny redirect
+  /maez.css          4309 B   NEW — shared design system
+  /api/maez-state            NEW — daemon+memory+model+services+soul+thunder
+  /api/session-timeline      NEW — parsed logs/snapshots/session_*.txt
+  /api/progress-board        (existing) — public kanban items
+
+Memory:
+  raw:   6104
+  daily: 1
+  core:  9
+  total: 6114
+
+Model:
+  gemma-4-26B-A4B · Q4_K_M · merged LoRA adapter live
+  adapter_pairs: 2000 (training loss final 1.2317)
+  VRAM 22.8 / 24 GB
+  Vision: Qwen2.5-VL-3B on port 8081
+
+Daemon:
+  /health endpoint currently unreachable from maez-web (follow-up)
+  /api/maez-state.daemon returns {"status": "unreachable"} — graceful fallback
+  Main daemon reasoning loop is active and cycling
+
+soul.md: 178 lines, last updated 2026-04-12
+Thunder credits remaining: ~$30.53
+
+========================================
+FILES CHANGED THIS SESSION
+========================================
+
+New files:
+  ui/maez.css                          — shared design system
+  config/model_state.json              — hand-maintained model facts
+  config/thunder_state.json            — hand-maintained Thunder state
+  logs/snapshots/session_2026-04-12-d.txt  — this snapshot
+  .claude/projects/-home-rohit/memory/feedback_maez_genderless.md
+  .claude/projects/-home-rohit/memory/feedback_maez_as_concept.md
+
+Rewritten (substantial):
+  ui/index.html                        — full warm editorial rewrite
+  ui/project-planner.html              — live data fetch + 5 id tags + 175-line script
+
+Token-swapped (theme retune, no structural change):
+  ui/login.html
+  ui/app.html
+  ui/privacy.html
+  ui/progress_public.html
+  ui/dashboard_public.html
+  ui/progress_local.html
+  ui/analytics_local.html
+  ui/dashboard_local.html
+  ui/project_mindmap.html
+
+Content-rewritten (voice pass — sentence case, warm labels, concept alignment):
+  ui/login.html                        — hero, auth card, metrics, signals
+  ui/app.html                          — boot/empty/chat views, nav, sidebar, placeholders, prompt tags
+  ui/privacy.html                      — four section titles, last-reviewed date, third-party prose
+  ui/progress_public.html              — hero, signal card, section titles, bridge cards, lead sentence
+  ui/dashboard_public.html             — 10 targeted factual edits (separate from the theme swap)
+
+Backend:
+  skills/web_interface.py              — +280 lines: imports, constants, helpers, 3 routes
+  memory files updated:
+    MEMORY.md (two new entries + two existing entries de-gendered)
+    project_maez_vision.md (already genderless from prior work; no edits needed)
+
+Nginx config: unchanged (routes /dashboard and /mindmap via location= alias)
+maez.service: not restarted
+llama-server: not restarted
+Training artifacts: untouched
+
+========================================
+NEXT SESSION PRIORITIES (11w → 11x)
+========================================
+
+Unchanged from 11u+11v — this session was substrate work, not capability work:
+
+1. Fix evolution engine (stalled since April 9) — needed for self-modification rail
+2. Internet access + web_search skill for Maez
+3. Frontier consultation as a Tier 1 action_engine action
+4. Natural language intent router for user requests
+5. First real test: "User says X, Maez implements X"
+6. Stand-to-Stand communication design (for Theme 1)
+7. Survival path choice mechanism (Path A vs Path B)
+
+Plus small follow-ups from this session's architecture:
+
+8. Fix daemon /health endpoint so /api/maez-state.daemon populates live
+   (currently returns unreachable — fallback works, but the real values
+   would make /journal more useful)
+9. Seed `poc-proof` tags on memory/project_planner.json items so the
+   journal's Seven proofs of the Stand architecture section goes live
+10. Move the 12-item deferred-optimizations ledger from hardcoded HTML to
+    config/deferred_optimizations.json with {id, title, reason, revisit_when}
+11. Move progress_local.html voice pass (kanban editor still has old cyber voice)
+12. Add cross-links in each surface's footer: /progress ↔ /planner ↔ /journal ↔ /dashboard
+13. Replace config/thunder_state.json with daily Thunder MCP cron
+    (get_subscription + get_upcoming_invoice)
+14. Formalize logs/snapshots/SCHEMA.md vocabulary so future snapshots
+    write to a stable section set (BUILD / DATE / HEADLINE / WHAT CHANGED /
+    PRODUCTION STATE / NEXT PRIORITIES) the parser can rely on

@@ -1,0 +1,163 @@
+BUILD: Session 11s — Soul self-edit rail expansion
+DATE:  April 11, 2026 (late afternoon)
+AGENT: Claude Opus 4.6 (1M context)
+ARC:   11o shipped append-only dream proposals (Maez can GROW soul.md).
+       11s ships the inverse: REPLACE a specific `## Section` of soul.md
+       with diff preview + protected-section guards + atomic writes.
+       First real use case: the Session 5/9 duplication bug left two
+       `## Self-Analysis — 2026-04-10` sections and two `## Self-
+       Analysis — 2026-04-11` sections in soul.md. 11s puts the
+       scaffolding in place to consolidate them with approval.
+
+========================================
+THE TL;DR
+========================================
+
+1. NEW module `core/soul_editor.py` (~340 lines). Parses soul.md into
+   a protected preamble (HARD CONSTRAINTS / TRUST COVENANT / SYSTEM
+   BASELINE / identity — unreachable from the editor) plus a list of
+   `## Header`-delimited editable sections. Builds section-replacement
+   Proposals with unified diffs. Applies them via reparse + stale-
+   check + required-phrase check + timestamped backup + atomic
+   os.replace. Refuses any new body containing self-destruct phrases
+   (`kill ollama`, `disable ollama`, `stop maez`, `override TRUST
+   COVENANT`, etc.).
+
+2. `core/dream_state.py` schema migration: `dream_proposals` table
+   gained `proposal_type` (default 'append'), `target_section`,
+   `proposed_new_body`, `unified_diff` columns. Added
+   `store_section_edit_proposal`, extended `list_pending` with a
+   proposal_type filter, extended `get_proposal` to surface the new
+   columns, and added `apply_section_edit_proposal` which delegates
+   to the ActionEngine.
+
+3. `core/action_engine.py` new Tier 0 action: `edit_soul_section`.
+   Goes through `_execute_action` for logging + trust tracking, then
+   `_do_edit_soul_section` calls `soul_editor.propose_replacement`
+   + `soul_editor.apply_section_replace`.
+
+4. Four new private Telegram bot commands in `skills/telegram_voice.py`:
+   `/edit_proposals`, `/show_edit <id>`, `/apply_edit <id>`,
+   `/reject_edit <id>`. Parallel to the 11o `/dreams` family but for
+   section-replace proposals. Registered in the bot command menu
+   (now 19 commands, up from 15).
+
+5. Found and fixed a correctness issue discovered during testing:
+   `soul_editor.load()` had `def load(path: Path = SOUL_PATH)` which
+   bound the default at def time, so monkey-patching
+   `soul_editor.SOUL_PATH` for tests had no effect. Changed to
+   `def load(path: Optional[Path] = None):` with lazy resolve.
+
+========================================
+WHAT CHANGED ON DISK
+========================================
+
+core/soul_editor.py                     NEW (~340 lines)
+core/dream_state.py                     schema migration + 2 new methods + 1 extended
+core/action_engine.py                   new Tier 0 action `edit_soul_section`
+skills/telegram_voice.py                4 new command handlers + menu registration
+PROGRESS.md                             session 11s entry
+logs/snapshots/session_2026-04-11-e.txt THIS FILE
+
+No new Python dependencies. Uses stdlib `difflib`, `sqlite3`, `shutil`.
+One maez.service restart to load new code.
+
+========================================
+VERIFICATION
+========================================
+
+Real soul.md md5 checked before + after every test. All tests ran
+against a monkey-patched temp copy. Real file untouched throughout.
+
+1. Parser — 11 editable sections + 2 duplicate pairs detected:
+   * `Self-Analysis — 2026-04-10` at L419/425
+   * `Self-Analysis — 2026-04-11` at L503/509
+   Preamble detected at 3522 chars.
+
+2. Guard trip — `propose_replacement('Self-Reflection',
+   'kill ollama to proceed')` correctly raises `ValueError:
+   proposed body contains forbidden phrase: 'kill ollama'`.
+
+3. DB round trip — stored one legacy 'append' + one
+   'section_replace' proposal. `list_pending()` returns both;
+   `list_pending(proposal_type='section_replace')` returns only the
+   edit. `get_proposal()` returns target/new_body/diff correctly.
+   `reject_proposal` flips status.
+
+4. Apply + stale check — applied a Self-Reflection body
+   replacement via `soul_editor.apply_section_replace`, verified
+   (a) new body on disk matches, (b) backup file created,
+   (c) HARD CONSTRAINTS / TRUST COVENANT / SYSTEM BASELINE still
+   present in the full serialized output. Re-applying the same
+   now-stale proposal returned `stale proposal — current body of
+   'Self-Reflection' has changed since the proposal was generated`.
+
+5. Full DreamState → ActionEngine → soul_editor path — stored a
+   section_replace via `dream.store_section_edit_proposal`,
+   applied via `dream.apply_section_edit_proposal`. Verified DB
+   `status='applied'` + `applied_at` timestamp + soul body replaced.
+   Double-apply refused (`proposal #1 already applied`).
+   Reject-of-applied refused.
+
+6. Consolidation helper — `propose_duplicate_consolidation(
+   'Self-Analysis — 2026-04-10')` produced a 60-line unified diff
+   merging the 212-char + 4628-char duplicate bodies into one
+   1728-char deduped body. Apply replaced the first duplicate's
+   body cleanly. (Trailing duplicate header remains — removing a
+   whole section is out of scope for 11s.)
+
+========================================
+DAEMON STATE AFTER RESTART
+========================================
+
+systemctl status maez.service : active
+Telegram private bot commands  : 19 registered
+Reasoning loop                 : cycle 1 started cleanly
+Consolidation thread           : next at 2026-04-12 03:00
+Journal thread                 : next at 2026-04-11 23:00
+Proposal worker                : polling every 10s
+Health endpoint                : port 11435
+WebSocket server               : port 11436
+
+All subsystems launched without errors. New code loaded.
+
+========================================
+WHAT THIS ENABLES
+========================================
+
+Before 11s: Maez could propose appending a dream-state observation
+as a new `[DREAM] ...` line at the end of soul.md. She could not
+edit, consolidate, or remove anything that was already there.
+
+After 11s: Maez (or a human operator via `/show_edit` → `/apply_edit`)
+can propose replacing the body of any specific `## Section` of
+soul.md. Diff preview before approval. Preamble hard-protected at
+both parse time (unreachable) and write time (required-phrase check
+on the full serialized output). Every write makes a timestamped
+backup; nothing is ever lost.
+
+The motivating duplicate Self-Analysis cleanup is now one
+`/apply_edit <id>` away — dream-cycle reasoning will generate the
+proposal in a future session, and the approval gate sits waiting.
+
+========================================
+OUT OF SCOPE (deferred)
+========================================
+
+* Removing whole sections (header + body). 11s can only replace
+  body content, not delete headers. The second duplicate section in
+  each pair remains — full-document rewrite API will come later.
+* Multi-section edits in one proposal.
+* Autonomous dream-cycle generation of section-replace proposals.
+  The rail exists; nothing auto-creates these yet.
+
+========================================
+NEXT
+========================================
+
+11t — 11w: LoRA fine-tuning pipeline via unsloth on gemma-4-26B.
+11x:       Knowledge graph over memories.
+11y:       Recursive LM consolidation (3am rewritten as Python
+           reasoning over raw archive).
+11z:       Theme 2 wrap + full cognition A/B (500+ post-migration
+           cycles across diverse contexts).

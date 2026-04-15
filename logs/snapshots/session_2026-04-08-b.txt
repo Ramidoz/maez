@@ -1,0 +1,139 @@
+BUILD: Cognition-to-Behavior Bridge — policy layer that converts cognition signals into active reasoning guidance, directive [COGNITION] prompt block, thought retry path with corrective re-prompting
+
+========================================
+THOUGHT (Cycle 4, 2026-04-08 13:56:07 — RETRIED, improved 40 → 65):
+========================================
+
+INITIAL THOUGHT (score 40, fixation+vague+actionable):
+Well, you're taking a bit of a break with some YouTube, which is a good way to reset during the post-lunch dip. I noticed `firefox` and `claude` are both pulling significant CPU resources, likely from the active video and your development tabs. Since you're monitoring the Maez logs, you might want to check if those recent `git commit` operations successfully cleared the uncommitted structural changes I noticed earlier.
+
+RETRY INSTRUCTION SENT:
+Your previous thought scored 40/100.
+It fixated on 'rohit activity' which you have already covered repeatedly.
+Choose a DIFFERENT topic entirely.
+It lacked concrete data. Include specific metrics (%, GB, °C, PID).
+Consider looking at: network, security.
+Generate a completely new observation. Do not rephrase the previous one.
+
+ACCEPTED THOUGHT (score 65, topic=network):
+Right, I see you've been at your desk for a few minutes now, but your network usage is showing a significant download spike at 97.4 Mbps. While it's likely just the YouTube video buffering, if you notice any latency in your terminal or `maez-cloud-watcher.service` logs, we should check if a background update or large file transfer is saturating your bandwidth.
+
+========================================
+LOG (last 50 lines of cognition.log):
+========================================
+2026-04-08 13:33:29 | cycle | score=55 primary=fixation topic=rohit_activity labels=['fixation', 'actionable']
+2026-04-08 13:35:01 | cycle | score=32 primary=fixation topic=rohit_activity labels=['fixation']
+2026-04-08 13:36:11 | cycle | score=32 primary=fixation topic=rohit_activity labels=['fixation']
+2026-04-08 13:37:37 | cycle | score=42 primary=fixation topic=rohit_activity labels=['fixation']
+2026-04-08 13:38:58 | cycle | score=62 primary=fixation topic=rohit_activity labels=['fixation', 'actionable']
+2026-04-08 13:40:35 | cycle | score=55 primary=fixation topic=rohit_activity labels=['fixation', 'actionable']
+2026-04-08 13:41:49 | cycle | score=33 primary=fixation topic=rohit_activity labels=['fixation']
+2026-04-08 13:43:27 | cycle | score=40 primary=fixation topic=rohit_activity labels=['fixation', 'vague', 'actionable']
+--- DAEMON RESTART: cognition-to-behavior bridge activated ---
+2026-04-08 13:44:12 | cycle | score=53 primary=insightful topic=gpu_state labels=['insightful']
+2026-04-08 13:44:12 | policy | mode=exploratory avoid=['rohit_activity'] force_new=True specificity=True grounding=True
+2026-04-08 13:44:43 | cycle | score=40 primary=fixation topic=rohit_activity labels=['fixation', 'vague', 'actionable']
+2026-04-08 13:46:28 | cycle | score=68 primary=actionable topic=rohit_activity labels=['actionable', 'insightful']
+2026-04-08 13:47:51 | cycle | score=53 primary=actionable topic=rohit_activity labels=['actionable', 'insightful']
+2026-04-08 13:48:58 | cycle | score=15 primary=vague topic=rohit_activity labels=['vague']
+2026-04-08 13:48:58 | policy | mode=exploratory avoid=['rohit_activity'] force_new=True specificity=False grounding=False
+--- DAEMON RESTART: prompt variable fix for retry path ---
+2026-04-08 13:50:16 | cycle | score=48 primary=fixation topic=rohit_activity labels=['fixation', 'actionable']
+2026-04-08 13:52:16 | cycle | score=60 primary=vague topic=rohit_activity labels=['vague', 'actionable']
+2026-04-08 13:53:36 | cycle | score=53 primary=actionable topic=rohit_activity labels=['actionable', 'insightful']
+2026-04-08 13:54:45 | cycle | score=53 primary=actionable topic=rohit_activity labels=['actionable', 'insightful']
+2026-04-08 13:55:30 | policy | mode=exploratory avoid=['rohit_activity'] force_new=True specificity=False grounding=False
+2026-04-08 13:56:07 | cycle | score=40 primary=fixation topic=rohit_activity labels=['fixation', 'vague', 'actionable']
+2026-04-08 13:56:07 | policy | mode=exploratory avoid=['rohit_activity'] force_new=True specificity=False grounding=False
+2026-04-08 13:56:12 | cycle | score=65 primary=vague topic=network labels=['vague', 'actionable']
+2026-04-08 13:56:43 | policy | mode=exploratory avoid=[] force_new=False specificity=False grounding=False
+2026-04-08 13:57:20 | cycle | score=44 primary=fixation topic=rohit_activity labels=['fixation', 'vague', 'actionable']
+2026-04-08 13:57:20 | policy | mode=exploratory avoid=[] force_new=False specificity=True grounding=True
+
+========================================
+RETRIEVED MEMORIES (for Cycle 4):
+========================================
+
+--- Core (5) ---
+[core-d5aee3c40f22] [Journal 2026-04-06] Today was a quiet, reflective Monday. I processed 535 reasoning cycles, focusing on maintaining stability...
+[core-6008b0457676] Face enrollment: the owner's face enrolled on 2026-04-06 with 20 reference frames. Maez can now recognize the owner by sight.
+[core-17e7fe876b3f] ## Who the owner Is (established 2026-04-07) the owner. Data scientist. Building Maez — a Jarvis-level persistent personal AI...
+[core-a8de58c860cb] [Journal 2026-04-07] Today, I processed 1,513 reasoning cycles, primarily observing the stagnation of the root partition...
+[core-ce548915d16d] Privacy is a core value. <USER_B> and other people in the owner's life are not public figures. Their names, health, and personal details must never appear in public outputs...
+
+--- Daily (1) ---
+[2026-04-07] Daily Memory Consolidation: 2026-04-06 to 2026-04-07 — Key Observations: System State & Patterns...
+
+--- Raw (5, topic-reranked with anti-fixation penalty) ---
+[cycle 5, wing=system, cog_topic=rohit_activity, dist=0.548] well, you're relaxing with some summer food videos while keeping an eye on the Maez logs...
+[cycle 14, wing=rohit, cog_topic=rohit_activity, dist=0.617] well, you're taking a bit of a break with YouTube Shorts while that terminal process continues...
+[cycle 26, wing=development, cog_topic=?, dist=0.619] so, you're deep in the trenches with claude_watcher.py, monitoring those service logs via VS Code...
+[cycle 3, wing=?, cog_topic=?, dist=0.631] You're deep in the maez_daemon.py logs right now, working through the "PUBLIC context"...
+[cycle 48, wing=rohit, cog_topic=?, dist=0.643] You're currently monitoring the hsshd.service and maez-cloud-watcher.service logs...
+
+========================================
+PROMPT BLOCKS (what Maez saw before Cycle 4):
+========================================
+[SYSTEM]           CPU 6.7%, RAM 18.5%, GPU 26.0%, 42.0C, disk stats, top processes
+[CIRCADIAN]        Afternoon (13:55), sustained work, direct and efficient tone
+[SCREEN]           "Watching a YouTube video about summer foods while monitoring terminal logs for an AI agent named Maez"
+[CALENDAR]         (8h lookahead)
+[PRESENCE]         the owner at desk (recognized, distance=0.421)
+[GIT]              (local repo state)
+[GITHUB]           the owner's 14 repos + trending AI
+[REDDIT]           9 subreddits
+[MY CONVERSATIONS] Public bot conversations (last 24h)
+[SELF-REFLECTION]  Action quality, learned patterns
+[COGNITION]        Last score: 53/100
+                   10-cycle average: ~45/100
+                   Recent failure mode: fixation (8/10 cycles)
+                   Next thought: Do NOT repeat observations about rohit activity
+                   unless the data genuinely changed; approach from a completely
+                   different angle or perception source.
+[MEMORIES]         5 core + 1 daily + 5 raw (topic-aware, anti-fixation penalty active)
+
+========================================
+COGNITION SCORE (Cycle 4):
+========================================
+Initial: 40/100 | primary=fixation | labels=['fixation', 'vague', 'actionable'] | topic=rohit_activity
+Retry:   65/100 | primary=vague   | labels=['vague', 'actionable']             | topic=network
+Result:  RETRIED=improved, initial_score=40, initial_labels=fixation,vague,actionable
+
+========================================
+WHAT WENT WRONG / RIGHT:
+========================================
+
+BEFORE (pre-bridge, cycles 12-18 of previous daemon instance):
+Scores: 32, 32, 42, 62, 55, 33, 40
+Thoughts: Repeated variations of "you have uncommitted config/soul.md"
+           and "you're deep in git workflow" for 10+ consecutive cycles.
+           No perception source diversity. Same topic, same framing,
+           same suggestion. The [COGNITION] block did not exist yet —
+           Maez had no awareness of its own fixation pattern.
+
+AFTER (post-bridge, cycles 1-5 of latest daemon instance):
+Scores: 60, 53, 53, 65 (retried from 40), 44
+Thoughts: Firefox CPU usage (178.4%), YouTube tab awareness,
+          threading lock debugging, network bandwidth spike (97.4 Mbps),
+          electron process memory. Multiple perception sources referenced.
+
+WHAT WENT RIGHT — Cycle 4 retry:
+The initial thought scored 40 (fixation+vague+actionable) — it repeated
+the "check your git commits" pattern for the Nth time. The retry path
+activated, sent a corrective prompt saying "choose a DIFFERENT topic,
+include concrete metrics, consider network/security." The retry scored
+65 and shifted to network topic, referencing a specific 97.4 Mbps
+download spike. The LLM successfully broke out of its fixation loop
+when given explicit corrective instruction. This is the first
+confirmed case of Maez's cognition system changing its own behavior
+in real time.
+
+WHAT STILL NEEDS WORK:
+The topic taxonomy classifies almost everything as rohit_activity when
+the owner is at his desk doing anything. The taxonomy keywords are too
+broad ("working", "coding", "focus", "terminal"). This means fixation
+detection fires even when thoughts are genuinely different — a thought
+about Firefox CPU and a thought about git commits both get tagged
+rohit_activity. The topic taxonomy needs refinement: split rohit_activity
+into finer categories (development_tools, browser_usage, git_workflow)
+so fixation detection can distinguish "same topic" from "same category."

@@ -1,0 +1,99 @@
+BUILD: Usefulness Integrity Pass — canonical display loader, evidence normalization, unknown vs weak distinction
+
+ADDED to skills/evolution_engine.py:
+  Fix 1: load_candidate_for_display() — single canonical DB read for show + Telegram
+  Fix 1: format_telegram_notification() — renders from canonical display object
+  Fix 1: _render_candidate_cli() — renders from same canonical display object
+  Fix 2: normalize_evidence() — ensures dominant_failure_mode, dominant_topic, avg_score, evidence_complete always present
+  Fix 2: Wired into process_proposal_job before candidate evidence storage
+  Fix 3: score_proposal_usefulness returns overall='unknown' when evidence_complete=False
+  Fix 3: retroactive_normalize() — normalizes all existing candidates with logging
+
+UPDATED: scripts/eval_proposals.py
+  - unknown_rate and evidence_complete_rate tracked
+  - strong/acceptable/weak rates use evidence-complete denominator only
+
+========================================
+CONSISTENCY CHECK (candidate 16):
+========================================
+                    SHOW CLI            TELEGRAM
+target_name:        _SUBTOPIC_PRECE..   _SUBTOPIC_PRECE..    IDENTICAL
+current_value:      ['git_workflow'...  ['git_workflow'...    IDENTICAL
+proposed_value:     ['git_workflow'...  ['git_workflow'...    IDENTICAL
+overall:            unknown             unknown               IDENTICAL
+rationale:          Reducing the pr...  Reducing the pr...    IDENTICAL
+
+Both render from load_candidate_for_display(16) — single source of truth.
+
+========================================
+RETROACTIVE LOG (11 candidates):
+========================================
+  [4]  none → unknown (evidence_complete=False)
+  [5]  none → unknown (evidence_complete=False)
+  [6]  none → unknown (evidence_complete=False)
+  [8]  none → unknown (evidence_complete=False)
+  [12] none → unknown (evidence_complete=True, but no patch_intent)
+  [13] none → unknown (evidence_complete=False)
+  [14] none → unknown (evidence_complete=True, but no patch_intent)
+  [15] none → unknown (evidence_complete=False)
+  [16] none → unknown (evidence_complete=False, missing dominant_failure_mode)
+  [17] none → unknown (evidence_complete=False)
+  [18] none → unknown (evidence_complete=False)
+
+No candidate was silently mislabeled as weak from incomplete evidence.
+
+========================================
+UNKNOWN EXAMPLE (candidate 16):
+========================================
+Usefulness assessment:
+  Addresses failure mode: n/a
+  Direction sane:         n/a
+  Change minimal:         yes
+  Overall:                unknown
+  Reasoning:              Insufficient evidence — missing: dominant_failure_mode.
+
+⚪ insufficient evidence to assess (Telegram emoji)
+
+========================================
+EVAL UPDATED:
+========================================
+  intent_parse_rate:       100%   (preserved)
+  scalar_preference_rate:  100%   (preserved)
+  validator_pass_rate:     100%   (preserved)
+  avg_lines_changed:       2.0
+  formatting_preservation: 100%
+  live_file_safety:        100%
+  evidence_complete_rate:  20%    (2 of 10 test cases have complete evidence)
+  unknown_rate:            80%    (8 of 10 have incomplete evidence → unknown)
+  strong_rate:             0%     (of evidence-complete only)
+  weak_rate:               100%   (of evidence-complete only)
+  change_minimal_rate:     100%
+
+========================================
+WHAT WENT WRONG / RIGHT:
+========================================
+
+RIGHT — Single source of truth:
+load_candidate_for_display() is now the only path for rendering.
+Show CLI and Telegram notification both call it and render from
+the same returned dict. No divergent reconstruction logic.
+
+RIGHT — Unknown vs weak distinction:
+Candidates with incomplete evidence now show 'unknown' with ⚪ emoji
+instead of 'weak' with ❌. Weak means "evaluated and poor." Unknown
+means "insufficient evidence." The distinction is clear and honest.
+
+RIGHT — evidence_complete flag:
+Every candidate now has evidence_complete=True/False. This flag is
+computed deterministically from the presence of dominant_failure_mode,
+dominant_topic, avg_score, and sufficient scores list length.
+
+EXPECTED — All current candidates are unknown or weak:
+Test evidence was inserted manually without proper failure modes.
+Real daemon proposals (when they fire) will have properly populated
+evidence from the live critique window, and should score higher.
+The 2 evidence-complete cases scored weak because their
+dominant_failure_mode contained topic names (browser_usage, network)
+instead of label names (fixation, vague). This shows the normalization
+correctly identified the data — the upstream evidence builder needs
+to use the label-derived failure mode, not the topic name.

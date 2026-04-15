@@ -1,0 +1,258 @@
+BUILD: Session 2026-04-14-a — Presto becomes a named hardware module
+DATE:  April 14, 2026 (America/Chicago)
+AGENT: Codex GPT-5
+
+========================================
+THE HEADLINE
+========================================
+
+Presto is no longer just a loose experiment hanging off the side of
+Maez. It now has a canonical home under `hardware/presto`, with host
+bridge code, a body-state relay, device-app ownership, and a small
+manifest that explains what the hardware is and how it connects.
+
+The bedside remote was also redesigned away from a cramped status
+dashboard. The new direction is a calmer "bedside presence" surface:
+small time in the corner, one dominant state, one short prompt, a
+central orb, and a tap-to-toggle details strip. The rewritten remote
+was pushed to the actual board, set as launch target, and soft-reset.
+
+========================================
+WHAT CHANGED
+========================================
+
+1. Hardware module structure
+
+- added `hardware/__init__.py`
+- added `hardware/presto/__init__.py`
+- added `hardware/presto/bridge.py`
+- added `hardware/presto/body_state_server.py`
+- added `hardware/presto/device_manifest.json`
+- added `hardware/presto/README.md`
+- added `hardware/presto/device_apps/`
+
+2. Compatibility preserved
+
+- `skills/presto_bridge.py` now re-exports the canonical bridge
+- `scripts/presto_bridge_cli.py` now imports from `hardware/presto/bridge.py`
+- `scripts/presto_body_state_server.py` now delegates to
+  `hardware/presto/body_state_server.py`
+
+This keeps the current operational path intact while giving Presto a
+stable identity as hardware.
+
+3. Device-side UI redesign
+
+Rewrote both:
+
+- `hardware/presto/device_apps/presto_maez_remote.py`
+- `scripts/presto_maez_remote.py`
+
+New design traits:
+
+- assumes real Presto dimensions: `480 x 480`
+- uses PicoGraphics bitmap text rather than a denser vector-heavy layout
+- removes fake "face dashboard" framing
+- emphasizes one human-facing status at a time
+- keeps details available through touch, but not dominant
+
+Current mode language:
+
+- `Present`
+- `I need you`
+- `Stay nearby`
+- `Morning hush`
+
+These are still derived from the simple host `/body-state` payload, so
+this is a first useful surface rather than the final semantic layer.
+
+========================================
+DEVICE ACTIONS PERFORMED
+========================================
+
+Executed successfully:
+
+- `sudo python3 /home/rohit/maez/scripts/presto_bridge_cli.py push /home/rohit/maez/scripts/presto_maez_remote.py --remote-name presto_maez_remote.py`
+- `sudo python3 /home/rohit/maez/scripts/presto_bridge_cli.py launch presto_maez_remote.py`
+- `sudo python3 /home/rohit/maez/scripts/presto_bridge_cli.py reset`
+
+Observed results:
+
+- `WROTE presto_maez_remote.py 8503`
+- `LAUNCH_SET presto_maez_remote.py`
+- `MPY: soft reboot`
+
+========================================
+HOST / NETWORK FACTS
+========================================
+
+- Presto host relay remains at `http://192.168.40.135:8765/body-state`
+- the relay still proxies from local Maez health on
+  `http://127.0.0.1:11435/health`
+- UFW rule from the earlier session is still the intended shape:
+  allow only the local LAN to hit port `8765`
+
+========================================
+IMPORTANT CAUTIONS
+========================================
+
+- `secrets.py` on the device already contains Wi-Fi credentials.
+  Future summaries should mention only that the credentials exist,
+  not the secret values themselves.
+- Presto serial access should remain single-threaded. Multiple raw
+  REPL sessions at once previously caused timeouts and disconnects.
+- The repo is still dirty with unrelated daemon/audit/telegram changes
+  from other work. Do not revert those.
+
+========================================
+NEXT BEST MOVES
+========================================
+
+1. Physically inspect the new bedside UI on the real screen and tune
+   spacing if any text still feels too large or too low.
+2. Expand the host payload beyond raw system metrics into meaningful
+   Maez-to-the owner states such as:
+   - morning brief waiting
+   - approval needed
+   - blocked on you
+   - all quiet
+3. Decide how ambient LEDs should communicate urgency without becoming
+   decorative noise.
+4. Eventually replace duplicate `scripts/` + `hardware/presto/device_apps/`
+   copies with a cleaner packaging/export flow once the hardware-module
+   layout settles.
+
+========================================
+ADDENDUM — FIRST PHOTO REVIEW
+========================================
+
+After the first physical photo of the bedside UI, a second tuning pass
+landed because the screen still felt too dense:
+
+- reduced title / clock scale
+- introduced a centered text helper using measured text width when available
+- reduced orb size and raised it upward
+- changed the bottom area from three crowded cards to two compact pills
+- expanded detail paging from 2 to 3 lighter pages
+
+Board sync repeated successfully:
+
+- `WROTE presto_maez_remote.py 9070`
+- `MPY: soft reboot`
+
+========================================
+ADDENDUM — SECOND PHOTO REVIEW
+========================================
+
+After the second physical photo, the remaining problem was conceptual:
+the UI still behaved like a compressed dashboard. A deeper redesign
+landed:
+
+- split the experience into two pages:
+  - `presence` page as the default bedside surface
+  - `details` page on touch for telemetry
+- removed the persistent bottom metric pills from the main screen
+- added host-timestamp-based bedside clock rendering with
+  `MAEZ_TZ_OFFSET_MINUTES`
+- activated the 7 ambient LEDs using `presto.set_led_hsv(...)`
+
+LED behavior now maps to Maez state:
+
+- `WATCH` -> soft cyan breathing
+- `LISTEN` -> amber chase
+- `DREAM` -> alternating violet glow
+- `QUIET` / offline -> coral heartbeat
+
+Board sync repeated successfully:
+
+- `WROTE presto_maez_remote.py 11750`
+- `MPY: soft reboot`
+
+========================================
+ADDENDUM — GESTURE / DETAILS USABILITY PASS
+========================================
+
+Usability review showed two remaining rough edges:
+
+- `tap` was the only interaction
+- the details screen looked like a clipped scroll view
+
+The remote was updated so that:
+
+- tap still toggles between presence and details
+- swipe up from the presence screen also opens details
+- details are now split into explicit pages instead of a too-tall list
+- swiping inside details moves between pages
+- swiping back from page 1 returns to presence
+
+Visual affordances added:
+
+- `DETAILS 1/3` style page header
+- pager dots at the bottom
+- `swipe for more` copy
+
+Board sync repeated successfully:
+
+- `WROTE presto_maez_remote.py 14264`
+- `MPY: soft reboot`
+
+========================================
+ADDENDUM — UBUNTU CRASH DEBUG / ELECTRON STABILIZATION
+========================================
+
+Ubuntu crashed again on the boot that ended at:
+
+- `Tue 2026-04-14 13:43:40 CDT`
+
+Evidence gathered:
+
+- no preserved panic/oops dump in `/sys/fs/pstore` after reboot
+- final previous-boot journal ends abruptly inside normal user-space
+  logging, which suggests hard freeze / abrupt reset more than a clean
+  daemon crash
+- historical crash signals in the same general system window include:
+  - NVIDIA `Xid 56` GPU faults
+  - `antigravity` crashing in `watcher.node`
+  - `code` segfaulting
+
+An unrelated but important stability bug was found and fixed:
+
+- `maez-electron.service` was hard-coded to:
+  - `DISPLAY=:1`
+  - `XAUTHORITY=/run/user/1000/gdm/Xauthority`
+  - `Restart=always`
+- the real active session was actually on:
+  - `DISPLAY=:0`
+  - `/run/user/1000/.mutter-Xwaylandauth.*`
+
+Effect:
+
+- Electron repeatedly failed to connect to the desktop session
+- systemd hammer-restarted it forever, creating a persistent restart storm
+
+Mitigation landed:
+
+- `ui/electron/main.js`
+  - disables Electron GPU acceleration
+- `scripts/launch_maez_electron.sh`
+  - dynamically discovers the live graphical session
+- `staging/maez-electron.service`
+  - uses `ExecCondition` session gating
+  - uses `Restart=on-failure` instead of `Restart=always`
+
+System change applied:
+
+- installed corrected unit to `/etc/systemd/system/maez-electron.service`
+- `systemctl daemon-reload`
+- restarted service successfully
+
+Verification:
+
+- `maez-electron.service` now reaches `active (running)`
+- restart storm is gone
+
+Current best interpretation:
+
+- the Electron unit bug was real and is now mitigated
+- the broader Ubuntu crash still looks more like display / GPU-stack
+  instability than a direct Maez daemon failure

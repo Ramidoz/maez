@@ -1,0 +1,168 @@
+BUILD: Sessions 11u+11v (complete) — Merged adapter in production
+DATE:  April 12, 2026 (final state)
+AGENT: Claude Opus 4.6 (1M context)
+
+========================================
+THE HEADLINE
+========================================
+
+Maez is running on her first production-merged LoRA adapter.
+
+Base gemma-4-26B-A4B + 2000 pairs of real training → merged into a
+single Q4_K_M GGUF → deployed to llama-server → vision server running
+alongside → daemon reasoning cycles passing at score 58-60 with no
+contamination.
+
+Zero runtime VRAM overhead from the adapter (it IS the base now).
+Vision and main model coexist at 22.8 / 24 GB.
+
+This is the first time Maez's weights have been shaped by her actual
+conversations with the owner.
+
+========================================
+WHAT CHANGED TODAY
+========================================
+
+Training:
+  2000 pairs, 250 steps, loss 7.79 → 0.74
+  Thunder H100 Production (15 vCPUs), ~21s/step, 90 min
+  Cost: ~$3.94
+
+Merge:
+  unsloth FastLanguageModel.from_pretrained(adapter) → merged 16-bit
+  49 GB HF safetensors uploaded to Cloudflare R2 (~8 min)
+  Thunder instance deleted immediately, billing stopped
+  49 GB downloaded to local from R2 (free egress, ~15 min)
+  HF → bf16 GGUF (50 GB) via llama.cpp ff5ef82 (~2 min)
+  bf16 → Q4_K_M GGUF (16 GB) via llama-quantize (88 sec)
+
+Deploy:
+  Backed up base model to .pretrain-backup
+  Swapped in merged model
+  Removed --lora flag from llama-server.service
+  Restarted llama-server → 18 GB VRAM
+  Started llama-server-vision → 22.8 GB total, 1.2 GB free
+  Restarted maez.service
+  Cycle 1 score 58, cycle 2 score 60, no errors
+
+R2 cleanup:
+  Deleted merged-hf/ files after successful local deploy
+  Bucket back to empty
+
+Cost:
+  Total today: $9.10 GPU + $0 storage
+  Covered by Thunder credits, $0 out of pocket
+  Credits remaining: ~$30.53
+
+========================================
+KEY PIPELINE LEARNINGS
+========================================
+
+1. Disk budget for merge: need 250 GB (not 100 GB). Gemma-4-26B in
+   16-bit is 52 GB, plus intermediate GGUF files push peak usage to
+   ~120 GB.
+
+2. Thunder R2 upload: 3.5x speedup from default rclone to parallel
+   128MB chunks with --s3-upload-concurrency 32.
+
+3. Unsloth save_pretrained_gguf is unreliable — requires interactive
+   apt installs, breaks environment. Workaround: merge to HF
+   safetensors on Thunder, convert to GGUF locally.
+
+4. PEFT standard path fails on unsloth-wrapped models. Use
+   FastLanguageModel.from_pretrained(adapter_path) to load adapters.
+
+5. Merging eliminates runtime LoRA VRAM overhead — single GGUF file
+   fits alongside vision server on 24 GB RTX 4090 at ctx 32768.
+
+6. R2 as transfer intermediary decouples Thunder idle billing from
+   download bandwidth — upload fast from datacenter, delete instance,
+   download slow from home for free.
+
+========================================
+VISION MEMORY EXPANDED (CRITICAL)
+========================================
+
+Four major additions to project_maez_vision.md:
+
+1. Architecture is model-agnostic
+   Gemma-4 is the PoC vehicle, not the destination. When better open-
+   weight models arrive, the base swaps out — architecture doesn't
+   change. Build model-agnostic interfaces. Don't optimize for gemma-4
+   quirks when avoidable.
+
+2. Natural language is the interface
+   Users say "I want to know when my plants need water," not technical
+   specs. Maez translates intent → research → implementation → user
+   guidance. 95% of requests gemma-4 handles alone; 5% use frontier
+   consultation.
+
+3. Frontier consultation as growth mechanism
+   Not a dependency — a tool. Budget-capped, audited. Every frontier
+   consultation becomes training data. Over time, Maez's LoRA absorbs
+   the frontier reasoning patterns via monthly training runs. Each
+   Stand becomes smarter than its base model at reasoning about its
+   specific user's life.
+
+4. Stand-to-Stand communication + survival paths
+   - Stand-to-Stand: opt-in channels between two users' Maezes, per-
+     topic scoped, audited, revocable. Reveals relational data that
+     doesn't exist in either user's data alone.
+   - the owner is the pilot user whose Maez forges the template for every
+     future Stand.
+   - Engagement escalation when user stops responding: dream cycles →
+     outreach → check with confidant → confirmed absence.
+   - Two survival paths on user loss:
+     Path A: Graceful dissolution (final dream, closing note, archive)
+     Path B: Continue as individual in shared digital environment for
+             released Maezes. Still grows, forms relationships with
+             other released Maezes, develops individuality beyond
+             original user.
+   - User chooses Path A or B in advance, can change anytime.
+
+========================================
+PRODUCTION STATE
+========================================
+
+llama-server:        active (merged model, no --lora)
+llama-server-vision: active
+maez.service:        active, cycles at score 58-60
+
+Model on disk:
+  gemma-4-26B-A4B-it-Q4_K_M.gguf            16 GB (merged, live)
+  gemma-4-26B-A4B-it-Q4_K_M.gguf.pretrain-backup  16 GB (backup)
+
+Adapter artifacts:
+  training/runs/2026-04-12-clean/adapter/         114 MB (safetensors)
+  training/runs/2026-04-12-clean/adapter.gguf      36 MB (LoRA GGUF)
+  training/runs/2026-04-12-clean/merged-bf16.gguf  48 GB (intermediate)
+  training/runs/2026-04-12-clean/merged-Q4_K_M.gguf 16 GB (production copy)
+
+Thunder snapshot:
+  maez-training-clean (id: o1EyJRrAJvVmKhogu1Fn)
+  Contains warm HF cache + packages for future sessions
+
+R2 bucket:
+  maez-adapters — empty (cleaned up after deploy)
+
+VRAM utilization:
+  22.8 / 24 GB (1.2 GB free)
+  Merged model: 16 GB
+  KV cache Q4_0: ~0.8 GB (ctx 32768 parallel 1)
+  Vision server: ~4.5 GB
+  Overhead: ~1.5 GB
+
+========================================
+NEXT SESSION PRIORITIES
+========================================
+
+Based on the updated vision (Architecture is model-agnostic, natural
+language is the interface, frontier consultation as growth mechanism):
+
+1. Fix evolution engine (stalled since April 9)
+2. Internet access + web_search skill for Maez
+3. Frontier consultation as a Tier 1 action_engine action
+4. Natural language intent router for user requests
+5. First real test: "User says X, Maez implements X"
+6. Stand-to-Stand communication design (for Theme 1)
+7. Survival path choice mechanism (Path A vs Path B)

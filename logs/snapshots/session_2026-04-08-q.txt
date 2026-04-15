@@ -1,0 +1,116 @@
+BUILD: Evidence Alignment Pass — dominant_failure_mode now label-derived, never topic-derived
+
+ROOT CAUSE FIXED: _build_evidence_packet line 1335
+  Was: 'dominant_failure_mode': critique.get('dominant_topic', '')
+  Now: derived from cognition labels via Counter, validated against VALID_FAILURE_LABELS
+
+ADDED: VALID_FAILURE_LABELS = {fixation, weak_retrieval, vague, repetition, baseline}
+ADDED: _POSITIVE_LABELS for exclusion during failure mode derivation
+ADDED: Safety net in normalize_evidence() — coerces topic-derived values to None with warning
+RESTORED: PROPOSAL_SCORE_THRESHOLD=45, MIN_EVIDENCE_CYCLES=10
+
+========================================
+VALIDATION LOG:
+========================================
+Candidate 12: dominant_failure_mode='browser_usage' → coerced to None (topic-derived)
+Candidate 14: dominant_failure_mode='network' → coerced to None (topic-derived)
+All other candidates: already None or absent
+
+New real candidate 19:
+  dominant_failure_mode='vague' ← derived from labels (CORRECT)
+  dominant_topic='development_tools' ← derived from topics (CORRECT)
+  evidence_complete=True
+
+========================================
+REAL PROPOSAL (candidate 19 — daemon-native):
+========================================
+══════════════════════════════════════════════════
+CANDIDATE 19 — validated — usefulness: weak
+══════════════════════════════════════════════════
+Weakness:  Fixation on development tools detected across 11 of the last 20 cycles.
+           Average score 58.1/100. Dominant failure: vague.
+Evidence:  20 cycles, avg score 58.1,
+           dominant failure: vague        ← LABEL-DERIVED (correct)
+           dominant topic: development_tools  ← TOPIC-DERIVED (correct)
+           evidence complete: True
+
+Proposed change:
+  File:    core/cognition_quality.py
+  Target:  FIXATION_THRESHOLD
+  Before:  0.55
+  After:   0.45
+  Why:     Lowering the fixation threshold will trigger anti-fixation
+           protocols earlier to prevent high topic repetition.
+
+Usefulness assessment:
+  Addresses failure mode: no   (FIXATION_THRESHOLD addresses fixation, not vague)
+  Direction sane:         no   (no direction rule for vague+THRESHOLD combo)
+  Change minimal:         yes  (2 lines)
+  Overall:                weak
+
+========================================
+USEFULNESS BREAKDOWN:
+========================================
+addresses_failure_mode: False
+  Reason: FIXATION_THRESHOLD name parts = {FIXATION, THRESHOLD}
+  Failure mode = vague
+  _FAILURE_TARGET_FAMILIES['vague'] = {ACTIONABLE, SPECIFICITY, GROUNDING, MIN_ACTIONABLE, LENGTH}
+  Intersection: empty → False
+
+direction_sane: False
+  Reason: No matching direction rule for (vague, THRESHOLD) combination
+  The model proposed lowering FIXATION_THRESHOLD, but the failure mode is vague, not fixation
+  This is the correct conservative assessment
+
+change_minimal: True
+  Reason: 2 lines changed ≤ 6
+
+Overall: weak (1 of 3 criteria true)
+
+This is an honest weak — the model proposed a fixation fix when the
+dominant failure was vague. The rubric correctly caught the mismatch.
+A truly useful proposal for vague would target MIN_ACTIONABLE_LENGTH
+or SCORE_WEIGHT_SPECIFICITY.
+
+========================================
+RETROACTIVE CLEANUP:
+========================================
+  [12] browser_usage → None (topic-derived, coerced)
+  [14] network → None (topic-derived, coerced)
+  All others: already None, unchanged
+  All candidates now have evidence_complete field
+  No candidate has topic-derived dominant_failure_mode
+
+========================================
+RESTORATION:
+========================================
+  PROPOSAL_SCORE_THRESHOLD = 45 (confirmed)
+  MIN_EVIDENCE_CYCLES = 10 (confirmed)
+  Backup file deleted
+
+========================================
+WHAT WENT WRONG / RIGHT:
+========================================
+
+RIGHT — Root cause fixed cleanly:
+One line change: derive dominant_failure_mode from label Counter
+instead of critique.dominant_topic. The safety net in normalize_evidence
+catches any future regressions.
+
+RIGHT — Real daemon proposal has correct evidence:
+Candidate 19: dominant_failure_mode='vague' (label), dominant_topic='development_tools'
+(topic), evidence_complete=True. No conflation.
+
+RIGHT — Rubric correctly identifies misalignment:
+The model proposed a fixation fix for a vague problem. The rubric
+scored this weak because FIXATION_THRESHOLD doesn't address vague.
+This is the rubric working as designed — honest assessment, not
+false confidence.
+
+INSIGHT — Next improvement target:
+The weakness description says "Fixation on development tools" but the
+dominant failure mode is actually vague. The _derive_weakness() function
+should incorporate the label-derived failure mode more prominently in
+its description, so the LLM has clearer guidance on WHICH failure to
+address. Currently the weakness text focuses on topic fixation even
+when the dominant label is vague.

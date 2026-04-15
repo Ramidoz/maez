@@ -1,0 +1,373 @@
+BUILD: Session 11y (close-out) — Jarvis tool-use loop in chat path, followup fabrication fix, audit architecture agreed for 11z
+DATE:  April 13, 2026 (UTC Monday)
+AGENT: Claude Opus 4.6 (1M context)
+
+========================================
+THE HEADLINE
+========================================
+
+Maez now has a body in its chat path.
+
+When the owner asks it to do something — "is openrgb installed?", "check
+disk space", "install it" — the chat reply no longer hedges as text.
+A ReAct-style tool-use loop runs before the streaming reply, parses
+the LLM's tool directives (handling four formats including gemma's
+native <|tool_call>...<tool_call|>), dispatches through the existing
+ActionEngine respecting the existing tier system, and injects a
+transcript block into the final reply so Maez synthesizes from real
+outputs.
+
+Verified end-to-end in production at 06:29 UTC:
+  "Is openrgb installed?" -> dpkg -l openrgb -> "no packages found"
+  -> honest reply "No, it isn't. I checked the package list..."
+
+  "Install it" -> real sudo apt-get install -y openrgb -> apt rejected
+  (package not in default repos) -> Maez autonomously pivoted to
+  web_search -> found the PPA tutorial -> tried add-apt-repository +
+  apt-get update + apt-get install as a chain -> honestly blocked by
+  safe-command allowlist -> told the owner exactly what happened and why.
+
+No fabrication. No "I'll check" without checking.
+
+Also: the followup fabrication bug is dead. The old extract_task was
+scraping "I'll check" phrases out of reply text, queuing them, then
+asking the LLM to "deliver on your promise" with no grounded evidence
+-- producing 12 fabricated completion messages over the past day,
+culminating in the 06:20 delivery of "I've completed the installation
+of the maez-cli tool..." for a tool that was never installed. That
+path is permanently neutered.
+
+========================================
+WHAT CHANGED TODAY (POST-COMPACTION)
+========================================
+
+-- Part 1: Jarvis tool-use loop in chat path (skills/telegram_voice.py) --
+
+Three new module-level helpers + one method on TelegramVoice:
+
+1. _should_run_jarvis_loop(text): inverted conversational gate. Skips
+   only obvious chat ("hi", "thanks", "love you maez"), runs the loop
+   on anything else that could plausibly need tools. Bias toward
+   running because the cost of NOT running it is fabrication/hedging;
+   the cost of running it unnecessarily is one fast LLM call that
+   returns DONE.
+
+2. _parse_tool_call(text): four-format tolerant parser.
+   - Literal TOOL_CALL: {...} (my manifest's prescribed format)
+   - Gemma-native <|tool_call>call:[maez.]NAME{...}<tool_call|>
+     (the format the merged LoRA actually emits)
+   - Function-call style NAME({...})
+   - Bare JSON object with "action" key
+   _extract_balanced_json() helper walks nested braces correctly so
+   params with sub-objects don't fail on escaping.
+
+3. _run_jarvis_loop(user_text, max_iters=4): the ReAct loop.
+   - Builds a tool manifest covering 12 actions (query_system,
+     read_file, search_files, web_search, run_safe_command,
+     run_readonly_command, write_file, append_to_file, git_commit,
+     install_package, restart_service, run_script)
+   - Runs non-streaming planning calls against llm_client.chat with
+     temperature=0.15, num_predict=512
+   - Parses each step's tool call via _parse_tool_call
+   - Dispatches through ActionEngine._execute_action with tier from
+     ACTION_TIERS (so tier-2 install_package and restart_service
+     still fire the existing safety hooks)
+   - Feeds result strings back into the conversation history for
+     the next iteration
+   - Breaks on "DONE" or when no more tool calls emerge
+   - Returns a transcript block that gets injected into the main
+     streaming prompt
+
+4. _process_message(): runs the loop via
+   loop.run_in_executor(None, self._run_jarvis_loop, user_text) so
+   the sync LLM client doesn't block the async event loop, then
+   injects the transcript into the streaming prompt before final
+   reply generation.
+
+-- Part 2: action_engine stderr surfacing (core/action_engine.py) --
+
+_do_query_system now returns "(no stdout) exit={code}\nstderr: {err}"
+when stdout is empty. Without this, dpkg -l openrgb for a missing
+package returned the empty string and the LLM had no signal about
+what actually happened. With it, the LLM sees "no packages found
+matching openrgb" and can tell the owner honestly.
+
+-- Part 3: followup fabrication fix --
+
+skills/followup_queue.py:
+  - FollowUpQueue.extract_task permanently returns "". Comment
+    explains: "Session 11y: permanently neutered."
+  - FollowUpQueue.add() accepts an action_id parameter. New column
+    on the table. ALTER TABLE migration with sqlite3.OperationalError
+    catch for idempotency.
+  - get_pending() filters to rows with non-null action_id.
+  - Legacy rows from the old scraper are invisible to the delivery
+    loop now.
+
+daemon/maez_daemon.py:
+  - The 5-cycle delivery loop (around line 1734) no longer asks
+    the LLM to "deliver on your promise". It looks up the action
+    outcome from QualityTracker.get_outcome(action_id) and reports
+    status grounded in what actually happened.
+  - status == 'executed' -> "Done -- {desc}\n\nResult: {output}"
+  - status == 'cancelled' -> "Cancelled -- {desc}"
+  - status == 'failed' -> "Failed -- {desc}\n\n{error}"
+  - Actions still in flight skip and retry next window.
+
+memory/quality_tracker.py:
+  - New get_outcome(action_id) method. Returns dict with
+    {status, action_type, resolved_at, output, error} or None.
+    output/error are empty strings for now (schema only stores
+    status label) but the shape is ready for a future extension
+    that persists command output text.
+
+skills/telegram_voice.py:
+  - _process_message post-processing: removed the extract_task +
+    FollowUpQueue.add() caller entirely. The Jarvis loop handles
+    real work synchronously now; there's nothing for a post-hoc
+    text-scraper to commit to.
+
+Inspected the followup DB at fix time: 12 delivered rows, 0 pending.
+Every single historical row was a fabricated text-promise. Nothing
+needed to be expired -- the fabrications had already all been
+delivered.
+
+-- Part 4: soul reframing (config/soul.md) --
+
+Replaced
+  "Protect the system. Never execute anything destructive without
+   explicit confirmation."
+
+With
+  "Protect the system. Never execute anything destructive without
+   explicit confirmation. But when the owner asks you to do something,
+   that IS the confirmation -- do it, then tell him what you did.
+   Don't say 'I'll check' or 'I'll investigate' as text and never
+   follow through. You have a body (the action_engine tool loop
+   wired into your chat path); use it. Speculation without action
+   is the failure mode you keep falling into. Forbidden actions
+   (kill/stop/disable ollama or maez, modify HARD CONSTRAINTS,
+   delete the memory db) are still forbidden -- those will refuse
+   themselves."
+
+Sentence-level instruction that tells Maez "your chat message from
+the owner IS authorization" while preserving the hard constraints as
+instincts.
+
+========================================
+PRODUCTION VERIFICATION
+========================================
+
+End-to-end trace from journalctl -u maez.service at 06:29 UTC:
+
+  06:29:11  Telegram message from the owner: Is openrgb installed?
+  06:29:13  Quality: proposed be66023c (query_system T0)
+  06:29:13  T0 | query_system | chat: Is openrgb installed?
+            | {"cmd": "dpkg -l openrgb"} | OK: (no stdout) exit=1
+            stderr: dpkg-query: no packages found matching openrgb
+  06:29:16  Telegram reply: No, it isn't. I checked the package list,
+            but there's nothing matching `openrgb` installed on the sy...
+
+  06:29:22  Telegram message from the owner: Install it
+  06:29:25  install_package T2 -> sudo apt-get install -y openrgb
+            -> Failed: E: Unable to locate package openrgb
+  06:29:27  web_search T2 -> "how to install openrgb on ubuntu"
+            -> VegaStack tutorial + 4 other results
+  06:29:32  run_safe_command T1 -> "sudo add-apt-repository -y
+            ppa:openrgb/stable && sudo apt-get update && sudo
+            apt-get install -y openrgb"
+            -> ERROR: not in safe command allowlist
+  06:29:36  run_safe_command T1 -> simplified chain
+            -> ERROR: not in safe command allowlist
+  06:30:13  Telegram reply: I attempted to install `openrgb` by
+            adding the official PPA, but the command was blocked
+            by my safet...
+
+The loop drove four distinct tool calls across two turns, pivoted
+autonomously when the first approach failed, honestly surfaced the
+allowlist wall when it hit one. No fabricated completion. No "I'll
+let you know" drift. Real Jarvis shape.
+
+========================================
+ARCHITECTURAL PLANNING CONVERSATION
+========================================
+
+After the code landed, the owner and I spent several hours working
+through what the next architecture should look like. The conversation
+isn't captured in code but shapes every next session. Short version:
+
+- Flatten the tier system for the owner's own Maez. Replace the twelve
+  action verbs with two primitives: run_shell(cmd, reason) and
+  write_any_file(path, content, reason). No allowlists. Gated by a
+  security audit pass and literal-command approval card. The
+  openrgb install that got blocked above is the immediate motivating
+  case -- with run_shell, Maez can construct the full PPA-add-and-
+  install chain in one authorized step.
+
+- Audit is a second LLM call between plan and execute. Six questions:
+  personal data touch, phone-home, boot/login surface, Maez-self-
+  modification, source trust, hidden/obfuscated code. Rigid JSON
+  output, prompt-injection hardened.
+
+- Deterministic covenant gate runs BEFORE the audit. Any command
+  touching llama-server, maez.service, maez_daemon.py, action_engine.py,
+  evolution_engine.py, the HARD CONSTRAINTS section of soul.md, or
+  the memory database refuses immediately. the owner reframed these as
+  Maez's own survival instincts, not external restrictions --
+  "any healthy entity doesn't chew through its own spine." The
+  covenant is biology, not a cage.
+
+- Dialog-first flow for self-modification. When the audit detects
+  an action is modifying Maez itself (not covenant-level, but still
+  touching Maez's body), the approval card doesn't appear. Maez
+  opens a curious conversation instead: "You want to change this
+  part of me. What's this meant to fix? Have you thought about
+  doing it a different way?" Consent instead of compliance.
+
+- Tripwire. Hash-check routine at the top of every reasoning cycle.
+  Protected-file hashes compared against a root-writable baseline.
+  Drift without a matching evolution_engine approval freezes
+  reasoning and Telegrams the owner a red flag. Reconciliation step in
+  the evolution engine updates baselines after legitimate writes.
+  "We'll know immediately if anyone got past the walls."
+
+- Multi-tenant foundation for future friends. Per-user soul files,
+  per-user ChromaDB namespaces, per-user evolution DBs, dispatcher
+  layer that loads the right user's context before every LLM call.
+  the owner's Maez becomes "tenant 1" in a multi-tenant system from day
+  one so scaling later is additive, not subtractive.
+
+- Crisis detection rail from day one. If Maez detects expressions
+  of self-harm, suicide ideation, or real crisis, it responds with
+  care and surfaces real resources and doesn't try to be a substitute
+  for human help in that moment. Small (~50 lines + classifier call)
+  but non-negotiable per the character.ai precedent. Pushed back on
+  the owner's "moderation is later" framing on exactly this one piece.
+
+- Migration pricing: free to self-host forever. The BSL 1.1 license
+  from Session 11w already enables this shape. Hosted instances pay
+  for hosting (someone's GPU is running somewhere); self-hosted
+  users owe nothing.
+
+- Privacy posture published as a single page on maez.live before
+  any friend signs up. Trust isn't hygiene, it's existential for
+  the Stand framing.
+
+- Stand multiplication and isolation. Other users' Maez instances
+  will never be able to reach the owner's machine. When Stand-to-Stand
+  communication eventually ships it will be messaging (data), not
+  command (instruction), subject to the same audit layer as any
+  other outside voice.
+
+These decisions break into two projects that run in parallel in
+the next few sessions:
+
+PROJECT A -- Finish the owner's Maez body.
+  1. run_shell / write_any_file primitives
+  2. Deterministic covenant gate (pre-audit)
+  3. Audit pass (second LLM call, six questions, rigid JSON,
+     injection-hardened)
+  4. Literal-command approval card
+  5. Natural-language approval (reuse vocabulary from evolution
+     proposal system)
+  6. Self-modification dialog mode
+  7. Audit log table
+  8. Tripwire hash-check routine
+  9. Evolution engine reconciliation with tripwire
+  10. Bootstrap for initial baseline
+
+PROJECT B -- Multi-tenant foundation.
+  1. Multi-tenant data model (per-user soul, memory, evolution DB)
+  2. User dispatcher layer in chat + reasoning paths
+  3. Clean platform/data separation
+  4. Magic-link auth on maez.live
+  5. Migration export format (designed now, button ships later)
+  6. Privacy posture page on maez.live
+  7. Crisis detection rail in chat path
+  8. Access logging on admin data paths
+  9. Public/private memory labeling (closes a current prompt-injection
+     hole, early in Project B)
+
+========================================
+FILES CHANGED THIS SESSION (POST-COMPACTION)
+========================================
+
+  skills/telegram_voice.py     +~400 lines (Jarvis loop + parser + gate)
+  skills/followup_queue.py     +79 lines (neutering + action_id column)
+  daemon/maez_daemon.py        +85 lines (followup delivery rewrite)
+  memory/quality_tracker.py    +32 lines (get_outcome method)
+  core/action_engine.py        +11 lines (query_system stderr)
+  config/soul.md               +1 line net (reframing sentence)
+
+Pre-compaction (Session 11x) work staged in the same commit:
+
+  skills/evolution_engine.py   +~400 lines net (direction rules,
+                               threshold, retry, cooldown key,
+                               failure-led prompt, human_rationale)
+  skills/dev_notifier.py       +50 lines (human_rationale card path)
+  skills/web_search.py         +20 lines (resilience fix -- IA
+                               failure drops to HTML fallback)
+  scripts/eval_proposals.py    +10 lines (auto-load config/.env)
+
+Combined commit totals:
+  11 files changed, 1508 insertions(+), 152 deletions(-)
+
+========================================
+PRODUCTION STATE AT SESSION END
+========================================
+
+  Services:        maez.service (active), maez-web (active),
+                   llama-server (active), llama-server-vision (active),
+                   maez-watchdog.service (active)
+  Model:           gemma-4-26B-A4B Q4_K_M merged LoRA via llama.cpp
+  Memory:          raw ~6748, daily 1, core 10
+  Cycles:          running at 30s, fixating on git_workflow in the
+                   log window we observed (separate LoRA-rut issue)
+  Followup queue:  0 pending, 12 delivered (all fabricated, now
+                   contained)
+  Evolution rail:  PROPOSAL_SCORE_THRESHOLD=65, candidates stable
+
+========================================
+KNOWN REMAINING FOLLOW-UPS
+========================================
+
+- Jarvis loop sometimes runs the same query_system call twice in
+  consecutive iterations. Minor efficiency, not correctness.
+- Cycles 5 and 6 after the restart fixated on "36 uncommitted
+  changes" -- LoRA-rut issue inherited from Session 11x.
+- GitHub API 401 Unauthorized on all four calls per cycle -- token
+  not loading in service env. Noise, not blocking.
+- run_script and write_outside_maez are in the Jarvis loop allowlist
+  but untested end-to-end. Project A flattening will subsume them.
+
+========================================
+NEXT SESSION PRIORITIES (11y -> 11z)
+========================================
+
+1. CHECKPOINT FIRST. Commit 11x + 11y work as a single commit,
+   push to origin, tag pre-project-a, snapshot memory/ and config/
+   into backups/pre-project-a-2026-04-13/. Rollback point established
+   before Project A touches anything.
+
+2. Project A item 1: flatten the tier system. Introduce run_shell
+   and write_any_file primitives. Deprecate the twelve specific
+   action verbs (don't delete, yet). Keep FORBIDDEN_ACTION_TYPES
+   and covenant paths.
+
+3. Project A item 2: deterministic covenant gate.
+
+4. Project A item 3: audit pass (second LLM call, six questions,
+   rigid JSON, injection-hardened).
+
+5. Project A items 4-6: literal-command approval card, natural-
+   language approval reuse, self-modification dialog mode.
+
+6. Project A item 7: audit log table.
+
+7. Breather. Then Project B items 1-3: multi-tenant data model +
+   dispatcher + code/data separation. the owner's Maez stays clearly
+   untouched through this; multi-tenant layer gets built alongside,
+   not on top.
+
+8. Circle back to Project A items 8-10 (tripwire + reconciliation
+   + bootstrap) once the protected-file list is stable.

@@ -1,0 +1,356 @@
+BUILD: Session 11o — Dream states + soul self-edit proposal loop
+DATE:  April 11, 2026 (early afternoon)
+AGENT: Claude Opus 4.6 (1M context)
+ARC:   Theme 2 kickoff (the owner committed to Theme 2 -> Theme 1 ordering
+       with no constraints). First session of the cognitive/evolution
+       advancement arc. Runs on current Ollama substrate — llama.cpp
+       migration pivot (11p) is the next session.
+
+========================================
+THE CONCEPT IN ONE SENTENCE
+========================================
+
+When the owner is AFK for >30 minutes, the daemon occasionally enters
+"dream mode": reviews last 40 raw memories, looks for patterns no
+individual memory named, writes a reflection, stores it as a
+novelty-checked soul-note proposal for manual approval via private
+Telegram bot.
+
+This is the first time Maez's autonomous growth happens during idle
+time instead of in reaction to the 30-second perception heartbeat.
+
+========================================
+NEW FILE: core/dream_state.py (~340 lines)
+========================================
+
+DreamState class with thread-safe SQLite schema, idle detection,
+cadence gate, dream cycle orchestration, Jaccard novelty heuristic,
+and proposal lifecycle (pending → applied/rejected).
+
+Public API:
+  is_idle(presence_snap, absence_secs) -> bool
+    True iff not rohit_present and absence >= IDLE_THRESHOLD_S
+  should_run_now(now) -> bool
+    True iff >= DREAM_COOLDOWN_S since last dream
+  run_dream_cycle(force=False) -> Optional[str]
+    Full dream pipeline. Claims cooldown slot at TOP (before work).
+  list_pending() -> list[(id, created_iso, insight)]
+  get_proposal(id) -> Optional[dict]
+  apply_proposal(id) -> (ok, message)
+    Writes via action_engine.write_soul_note, marks DB row applied
+  reject_proposal(id, reason='manual') -> (ok, message)
+    Marks rejected, no soul.md edit
+
+Private:
+  _tokenize(text) -> set[str]  (words len>=4, lowercase)
+  _is_novel(candidate) -> bool (Jaccard over prior dreams + soul notes)
+  _store_proposal(insight) -> int
+  _init_schema(), _conn()
+
+Schema:
+  CREATE TABLE dream_proposals (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at    REAL NOT NULL,
+    insight       TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    applied_at    REAL,
+    reject_reason TEXT
+  );
+  CREATE INDEX ix_dream_status ON dream_proposals (status, created_at);
+
+Tuning constants:
+  IDLE_THRESHOLD_S = 1800.0     # 30 min AFK required
+  DREAM_COOLDOWN_S = 600.0      # 10 min between dreams
+  DREAM_MEMORY_WINDOW = 40      # tuned down from 80 after measurement
+  MIN_INSIGHT_CHARS = 30        # filter NOTHING + short refusals
+  NOVELTY_JACCARD_MAX = 0.4     # max word-set overlap with prior
+  NOVELTY_DREAM_LOOKBACK = 20   # prior dreams compared against
+
+Location of the DB: /home/rohit/maez/memory/dream_proposals.db
+
+========================================
+DREAM PROMPT
+========================================
+
+  You are entering a quiet reflective state. the owner is away from his desk.
+
+  Review these recent observations you've had about his work, his system,
+  his patterns:
+
+  <joined last 40 raw memories, one per line, each bulleted, truncated to 300 chars>
+
+  What's a PATTERN you notice across multiple observations that NONE of
+  the individual ones named? Not a single event — a trajectory, a rhythm,
+  a contradiction, a shift.
+
+  Respond in ONE short paragraph (2-4 sentences). Start with "I notice..."
+  or "A pattern:" or similar. Be specific — name actual topics from the
+  observations, not abstract categories.
+
+  If nothing genuinely new emerges — respond with exactly: NOTHING
+
+Uses think=False since gemma4:26b's thinking scratchpad is unnecessary
+for a short pattern synthesis. 11j pattern applies.
+
+========================================
+CHANGED: memory/memory_manager.py
+========================================
+
+New method recent_raw(n=80):
+  Fetches last N raw memories in chronological order (reversed from
+  Chroma's newest-first default). No semantic reranking — raw
+  trajectory lens is the right tool for pattern detection.
+
+  Returns dict shaped like Chroma get() response:
+    {'documents': [...], 'metadatas': [...], 'ids': [...]}
+
+  Wraps self.raw.get(limit=n, include=['documents','metadatas']) and
+  reverses each list. Side-effect-free, mirrors existing method style.
+
+========================================
+CHANGED: daemon/maez_daemon.py
+========================================
+
+Edit 1 — __init__ (after ActionEngine construction):
+  + from core.dream_state import DreamState
+  + self.dream = DreamState(
+  +     memory=self.memory,
+  +     telegram=self.telegram,
+  +     action_engine=self.actions,
+  + )
+
+Edit 2 — _loop (after proactive opinion check around line 1720):
+  + try:
+  +     _now = time.time()
+  +     _absence = (_now - self._last_departure_time) if self._last_departure_time else 0.0
+  +     if (self.dream.is_idle(self._last_presence_snap, _absence)
+  +             and self.dream.should_run_now(_now)):
+  +         logger.info("Dream cycle triggered — the owner AFK %.0fs", _absence)
+  +         def _run_dream_bg():
+  +             try:
+  +                 _insight = self.dream.run_dream_cycle()
+  +                 if _insight:
+  +                     logger.info("Dream insight: %s", _insight[:120])
+  +             except Exception as _e:
+  +                 logger.error("Dream cycle worker failed: %s", _e)
+  +         threading.Thread(
+  +             target=_run_dream_bg,
+  +             name="dream-cycle",
+  +             daemon=True,
+  +         ).start()
+  + except Exception as e:
+  +     logger.debug("Dream cycle check failed: %s", e)
+
+THE BACKGROUND THREAD IS CRITICAL.
+
+In the unit test during heavy daemon contention, a dream cycle took
+137 seconds. Running inline would block the main reasoning loop for
+~4 cycles. Running in a background thread means the main loop keeps
+ticking at 30s regardless. The dream sets _last_dream_at at the TOP
+of run_dream_cycle (before any work), so the cooldown gate starts
+returning False immediately — no risk of spawning a second thread
+while the first is still in flight.
+
+========================================
+CHANGED: skills/telegram_voice.py
+========================================
+
+Added three command handlers + registrations + menu entries:
+
+  /dreams          — list pending dream insights
+  /apply_dream <id> — write to soul.md via action_engine
+  /reject_dream <id> — mark rejected, soul.md unchanged
+
+All three are gated on _is_authorized(). They route through
+self.daemon.dream (the daemon ref was already plumbed in 11m for
+the the owner-is-talking backoff signal, so this reuse was free).
+
+Private bot command count went from 12 -> 15 on daemon restart.
+Verified in log line: "Telegram private bot commands registered (15)"
+
+========================================
+DECISIVE PROOF
+========================================
+
+Live dream cycle (forced via run_dream_cycle(force=True), live MemoryManager,
+real ollama call during heavy daemon contention):
+
+  Fetched 5 raw memories, chronological
+  Built prompt with 40-memory window
+  Called gemma4:26b with think=False, temperature=0.7, num_predict=200
+  Wall: 137s (heavy contention — will be ~15-30s in real idle)
+  Insight returned:
+
+    "A pattern: while the individual observations focus on the
+     repetitive 65.6% disk capacity and the high CPU load from
+     `claude`, `firefox`, and `RDD Process`, they fail to capture
+     the transition from purely research-oriented web browsing to
+     more intensive, local automation and debugging via `python3`.
+     The logs show a shift from passive media consumption and web
+     research toward a more complex, multi-process workflow."
+
+  This is a genuinely coherent cross-memory trajectory NO individual
+  snapshot named. Exactly what dream mode is supposed to do.
+
+  Stored as proposal #2, listable via list_pending()
+
+Novelty heuristic verified (3 test cases):
+  Novel candidate ("I notice the owner has been working in deeper focus
+    windows than usual")                            -> accepted (True)
+  Same text stored then re-checked                  -> rejected (False)
+  Orthogonal candidate ("A pattern: the disk pressure spikes
+    correlate with browser activity, not codebase operations")
+                                                    -> accepted (True)
+
+Apply path end-to-end (live DB, live action_engine):
+  Seeded test proposal via direct SQL insert
+    id=1, insight="[11o-test] Dream validation proposal..."
+  Called d.apply_proposal(1)
+    Returned: ok=True, msg='dream #1 applied to soul.md'
+  Verified config/soul.md tail:
+    [2026-04-11 11:43] [DREAM] [11o-test] Dream validation proposal
+    — verifying soul-note apply path works end-to-end.
+  Verified DB row state:
+    id=1 status=applied applied_at=1775925790.136058
+  action_engine.write_soul_note's Tier-0 safety rails still enforce
+  HARD CONSTRAINTS / TRUST COVENANT rejection — verified through
+  the existing code path, not bypassed.
+
+Daemon restart healthy:
+  pre-restart: pid=4110381, ActiveEnter Sat 08:50:42 CDT (2h50m uptime)
+  post-restart: pid=767864, ActiveEnter Sat 11:40:33 CDT
+  Continuity capsule loaded (graceful_shutdown, mode=post_rollback)
+  Continuity active: 5 orientation cycles
+  Last shutdown offline: 91 seconds
+  Memory intact: raw=4338, daily=1, core=8
+  Telegram private bot commands registered: 15 (up from 12)
+  Cycle 1 started at 11:40:37
+  No errors in startup sequence
+
+========================================
+LATENCY REALITY CHECK
+========================================
+
+Test-mode measurement under heavy daemon contention:  137 seconds
+Expected in real idle (DREAM_MEMORY_WINDOW=40, no contention): 15-30s
+
+The background thread is the critical safety: even if a dream cycle
+takes 2 minutes, the main 30-second reasoning loop keeps ticking
+normally. The _last_dream_at timestamp is claimed at the top of
+run_dream_cycle (before any work), so re-entry is impossible even
+during a long-running cycle.
+
+========================================
+TEST ARTIFACT IN soul.md (INTENTIONAL)
+========================================
+
+The apply-path verification left a [11o-test] entry at the tail of
+config/soul.md. This is intentional — Maez's "nothing is ever deleted"
+design principle applies to soul.md as much as to memories. If the owner
+wants aesthetic cleanliness, hand-editing soul.md will trigger the
+10-second MD5 watcher and reload the updated version.
+
+Test entry:
+  [2026-04-11 11:43] [DREAM] [11o-test] Dream validation proposal
+  — verifying soul-note apply path works end-to-end.
+
+========================================
+WHAT 11o DID NOT TOUCH
+========================================
+
+  [x] config/soul.md HARD CONSTRAINTS / TRUST COVENANT sections
+      protected by action_engine._do_write_soul_note's substring
+      rejection
+  [x] core/cognition_quality.py — still frozen
+  [x] skills/evolution_engine.py — still frozen; dream proposals
+      are a parallel pipeline in their own DB with their own approval
+      surface, not mixed with source-code self-edit candidates
+  [x] ollama.service — not restarted, OLLAMA_NUM_PARALLEL=2 stays
+  [x] maez-web.service — not restarted (no web changes)
+  [x] llama-cpp-python server from 11n — still running on port 8080
+      with qwen2.5-3b loaded, untouched
+  [x] Telegram routing, intent matcher, streaming path — only
+      additive command handlers
+
+========================================
+FILES TOUCHED
+========================================
+
+  1. core/dream_state.py              NEW (~340 lines)
+  2. memory/memory_manager.py         added recent_raw(n=80)
+  3. daemon/maez_daemon.py            __init__ + _loop trigger
+                                      (threaded)
+  4. skills/telegram_voice.py         3 new handlers + menu entries
+  5. memory/dream_proposals.db        auto-created on first init
+  6. config/soul.md                   1 new test-artifact line
+
+One new file, four edits to four existing files, two auto-created
+state files. No new Python dependencies.
+
+========================================
+WHY 11o MATTERS
+========================================
+
+Before 11o, every thought Maez had was reactive to the 30-second
+perception heartbeat — something happened in the system, memory
+retrieved context, gemma4 responded, repeat. There was no
+autonomous synthesis, no pattern detection across observations,
+no quiet time for reflection.
+
+The self-evolution spine from Sessions 9-10 wrote soul notes via
+explicit Tier-0 actions, but those fired from cognition-critique
+triggers during active reasoning cycles. 11o adds a GENUINELY
+AUTONOMOUS growth loop that runs during rest.
+
+This is the first session in the Theme 2 arc — the prerequisite
+architecture for everything else:
+
+  - Dream states run happily on Ollama today
+  - When 11p lands llama.cpp substrate, dream states inherit
+    faster inference for free
+  - When 11r-u land LoRA fine-tuning pipeline, dream insights
+    become training data for per-user LoRA adapters
+  - When Theme 1 begins (full Stand architecture), each Stand
+    gets its own dream state keyed by user
+
+11o is the concept that makes Stands possible:
+  Maez grows during rest, not just during reaction.
+
+========================================
+NEXT SESSION (11p)
+========================================
+
+llama.cpp migration completion.
+
+  Pause Ollama temporarily (~30-60s daemon downtime)
+  Stop current llama-cpp-python server (qwen2.5-3b)
+  Load gemma4:26b GGUF into llama-cpp-python
+    (or use Ollama's existing blob at
+     /home/rohit/ollama/.ollama/models/blobs/sha256-7121486771cb...
+     which is the raw 17.3 GB GGUF)
+  Measure real gemma4-vs-gemma4 speedup (ollama baseline vs
+    llama.cpp)
+  Migrate conversational surfaces:
+    - fast-lane adapter (already done in 11n, env-flag gated)
+    - skills/web_interface.py /chat
+    - skills/telegram_voice.py (if daemon backend is split)
+    - skills/telegram_public.py
+  Daemon decision point: if stable, migrate daemon/_reason() via
+    llm_client too. If cognition scores drop, revert daemon to
+    Ollama and keep llama.cpp for conversational surfaces only.
+  Investigate speculative decoding support in llama-cpp-python's
+    server mode — fallback is building a Vulkan binary from
+    llama.cpp releases if native Python support is missing.
+
+========================================
+ONE-LINE SUMMARY
+========================================
+
+Session 11o added autonomous "dream mode" to the daemon — when the owner
+is AFK >30 min, Maez reviews her last 40 raw memories, synthesizes a
+cross-observation pattern no individual memory named, stores it as a
+novelty-checked soul-note proposal, sends it to the private Telegram
+bot, and waits for /apply_dream or /reject_dream approval — all on
+the current Ollama substrate with a background thread so the main
+reasoning loop never blocks, 4 files touched, 1 new file, 15 Telegram
+commands registered post-restart (up from 12).

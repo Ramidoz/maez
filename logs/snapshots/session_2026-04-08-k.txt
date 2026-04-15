@@ -1,0 +1,117 @@
+BUILD: Live Proof — Autonomous Proposal Trigger fires from real daemon critique path
+
+FIX: Notification wording bug corrected (dominant failure vs dominant topic separated)
+TEMP: PROPOSAL_SCORE_THRESHOLD 45→80, MIN_EVIDENCE_CYCLES 10→5 for proof
+RESTORED: Both constants back to production values (45, 10)
+
+========================================
+SETUP:
+========================================
+Constants temporarily changed:
+  PROPOSAL_SCORE_THRESHOLD: 45 → 80 (to allow trigger with healthy ~60 scores)
+  MIN_EVIDENCE_CYCLES: 10 → 5 (to reduce wait time)
+Daemon restarted to pick up changes.
+Original values restored after proof. Confirmed: 45, 10.
+
+========================================
+PROOF — evolution.log excerpt:
+========================================
+2026-04-08 17:22:20 | PROPOSAL_SUPPRESSED | no fixation in dominant failure mode
+  → Critique window 1: avg=60.0, labels=vague only (no fixation), suppressed correctly
+
+2026-04-08 17:47:24 | critique | avg=57.5 min=30 max=73 dominant=browser_usage fixation=0.50
+2026-04-08 17:47:24 | PROPOSAL_TRIGGERED | avg=57.5 conditions={
+    critique_fired: True,
+    score_below_threshold: True (57.5 < 80),
+    fixation_present: True,
+    no_active_lock: True,
+    no_unresolved_proposal: True,
+    cooldown_clear: True,
+    enough_evidence: True
+  }
+2026-04-08 17:47:24 | Proposal trigger: ALL CONDITIONS MET — generating proposal
+2026-04-08 17:48:55 | Rail: candidate 13 rejected: diff_invalid: patch: **** unexpected end of file in patch
+  → generate_diff() called real Ollama (~90s), got truncated diff, rejected correctly
+
+========================================
+CANDIDATE — DB row (created by daemon, not manually):
+========================================
+id: 13
+state: rejected
+target: core/cognition_quality.py
+weakness: "Fixation on browser usage detected across 10 of the last 20 cycles.
+           Average score 57.5/100. Dominant failure: vague."
+rejection: "diff_invalid: patch: **** unexpected end of file in patch"
+created_at: 2026-04-08T22:48:55+00:00
+diff_text (363 chars, truncated by model):
+  "--- a/core/cognition_quality.py\n+++ b/core/cognition_quality.py\n@@ -46,7 +46,7 @@\n..."
+
+Confirmed NOT manually inserted:
+  - created_at matches evolution.log timestamp (17:48:55 = 22:48:55 UTC)
+  - weakness auto-derived from evidence (not hardcoded)
+  - evidence packet populated from live ring buffers
+
+========================================
+CONTINUITY:
+========================================
+Mode override was not set because the candidate was rejected (not validated).
+set_mode_override('corrective') only fires for validated proposals.
+This is correct behavior.
+
+========================================
+RESTORATION:
+========================================
+PROPOSAL_SCORE_THRESHOLD = 45 (confirmed)
+MIN_EVIDENCE_CYCLES = 10 (confirmed)
+Daemon critique debug level restored.
+Backup file deleted.
+
+========================================
+VERDICT:
+========================================
+
+AUTONOMOUS PROPOSAL TRIGGER — PROVEN
+TRIGGER PROVEN, DIFF QUALITY NOT YET PROVEN
+
+The trigger correctly:
+1. Fires from the real daemon self_critique() path
+2. Evaluates all 7 conditions with real values
+3. Suppresses correctly when conditions aren't met (tested: score too high, vague-only)
+4. Calls generate_diff() against live Ollama inside the daemon process
+5. Creates a real candidate row from evidence
+6. Auto-derives weakness_description from live cognition data
+7. Rejects malformed diff via patch --dry-run
+
+The bottleneck is now diff quality from gemma4:
+  - The model produced a truncated diff (363 chars)
+  - patch --dry-run correctly caught "unexpected end of file"
+  - This is a model output quality issue, not a rail issue
+  - Next step: improve diff prompt, increase num_predict for diff generation,
+    or use a structured approach to generate constant changes
+
+========================================
+WHAT WENT WRONG / RIGHT:
+========================================
+
+WRONG — Ollama blocks daemon reasoning loop:
+generate_diff() runs inside self_critique() which runs inside the reasoning loop.
+The 90-second Ollama call blocked the daemon from reasoning during that time.
+Fix needed: run generate_diff() in a background thread, or defer it to next cycle.
+This is not a safety issue (the daemon recovered) but affects responsiveness.
+
+WRONG — Diff truncation:
+gemma4 produced 363 chars of diff before running out of visible tokens.
+The diff was structurally incomplete ("unexpected end of file").
+The generate_diff prompt may need higher num_predict or a simpler instruction.
+
+RIGHT — Trigger evaluation is thorough:
+All 7 conditions were checked and logged. The first critique window was correctly
+suppressed (vague-only, no fixation). The second window with fixation correctly triggered.
+The evolution.log has a complete audit trail of every decision.
+
+RIGHT — No lock acquired:
+The trigger never acquired the evolution_lock. Candidate 13 exists as state=rejected
+with no lock impact. The daemon continued normal operation after the rejection.
+
+RIGHT — Production constants restored:
+Both PROPOSAL_SCORE_THRESHOLD (45) and MIN_EVIDENCE_CYCLES (10) confirmed restored.

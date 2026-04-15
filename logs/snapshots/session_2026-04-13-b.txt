@@ -1,0 +1,733 @@
+BUILD: Session 11z Parts 1+2 — decision layer + execution pipeline
+DATE:  April 13, 2026 (UTC Monday)
+AGENT: Claude Opus 4.6 (1M context)
+
+========================================
+THE HEADLINE
+========================================
+
+Maez now has a decision layer.
+
+Every proposed action in the chat path — run_shell, write_any_file —
+flows through a four-stage pipeline before it can touch anything:
+deterministic covenant gate, lane classifier, prompt-injection scan,
+and a two-pass audit LLM. Safe actions (Lane 0 reads) run inline.
+Normal writes and installs (Lane 2) surface as a persistent approval
+card the owner resolves in Telegram. Self-modification (Lane 3) enters
+a conversational ratification dialog with an exact-phrase consent
+requirement, not a yes/no button.
+
+Approval cards live in their own SQLite store and survive conversation
+drift: the owner can defer a card ("wait an hour", "ask me after lunch"),
+pivot to a completely different topic, and the card sits waiting until
+its reminder fires or the owner brings it up. A state-fingerprint hash
+means stale approvals — where the world changed between card creation
+and approval — expire instead of running against a different world.
+
+Everything was built behind a sandbox harness after the April 13
+soul.md incident. 41/41 end-to-end cases pass inside the sandbox
+with zero leakage to the real filesystem. The service was restarted
+live at 12:04:45 CDT and is running the new pipeline cleanly as of
+cycle 8 post-restart.
+
+========================================
+ARCHITECTURAL ANALOGY THAT SHAPED IT
+========================================
+
+Mid-session, the owner asked an ontological question about the audit
+LLM: is it Maez (personality) or a separate process (immune system)?
+He answered his own question with a biology analogy:
+
+  "Experiences shape personalities. Personalities shape lifestyle
+   choices, which shape long-term immunity. But even a healthy
+   immune system remembers specific attacks it survives — the body
+   has its own memory of pathogens, separate from conscious
+   memory."
+
+That locked in the architecture:
+
+- Audit layer IS Maez (same body) but has its own memory store
+  (memory/audit_log.db), parallel to the personality memory
+  (soul.md, evolution engine). Same biology, two memory systems.
+- Attacks and refusals are logged at the immune layer, not at the
+  personality layer. Most stay there forever, the way most immune
+  memories never reach conscious awareness.
+- Only explicitly-ratified lessons promote upward into soul-writer
+  territory. Self-modification of Maez's personality requires
+  conversation, not just a pattern-match.
+
+This shaped the schema split (pending_cards.db vs audit_log.db),
+the self-mod dialog's ratification model, and the pipeline's route-
+first-then-record ordering.
+
+========================================
+WHAT CHANGED — PART 1 (steps 1-8, commits 6bad5d0 + f4674cb)
+========================================
+
+-- Step 1: Flatten the tier system --
+
+core/action_engine.py:
+  - ACTION_TIERS rewritten. Old Tier 0/1/2/3 collapsed to a three-
+    lane model: Lane 0 (immediate reads), Lane 2 (audit + card),
+    Lane 3 (heavy scrutiny dialog). Tier 1 deleted entirely.
+  - run_shell(cmd, reason) and write_any_file(path, content, reason)
+    added as the canonical primitives. Legacy action verbs stay as
+    delegating aliases so the merged LoRA's old outputs still work.
+  - classify_tier(action, params) stub added for the classifier
+    to later replace.
+
+-- Step 2: Compound command decomposer --
+
+core/command_decomposer.py (new, ~270 lines):
+  SubCommand dataclass + decompose(cmd) recursive parser. Handles
+  &&, ||, ;, |, &, $(...), backticks, <(...), heredocs, quoted
+  strings, env-var prefixes. Needed so the classifier can grade
+  each sub-command separately and take the max severity.
+  15/15 smoke tests pass.
+
+-- Step 3: Action class classifier --
+
+core/action_classifier.py (new, ~430 lines):
+  MSFT Agent Governance Toolkit IntentCategory taxonomy (9 classes)
+  + Maez-specific SELF_MODIFICATION. _classify_sub() per sub-command,
+  whole-command obfuscation/exfil post-pass, sudo-wrapping bump to
+  PRIVILEGE_ESCALATION. classify_command(cmd) and classify_action(
+  action, params) as entry points. 25/25 smoke tests pass.
+
+-- Step 4: Covenant gate obfuscation hard-deny --
+
+core/action_engine.py:
+  COVENANT_PATTERNS strengthened (llama-server, maez.service,
+  maez_daemon, action_engine, evolution_engine, maez-watchdog,
+  HARD CONSTRAINTS, TRUST COVENANT, sed/tee/> attacks on soul.md).
+  OBFUSCATION_HARD_DENY added (14 regex patterns: eval, base64|sh,
+  curl|sh, wget|sh, python/perl/ruby/node -c/-e, sh/bash -c "$VAR",
+  bash <<<, $(curl), backtick-curl, hex escapes).
+  _covenant_gate() method, _covenant_log() writes to logs/covenant.log.
+  _READ_ONLY_ACTIONS frozenset exempts read_file/search_files/web_
+  search from path checks (right to introspection).
+
+-- Sandbox harness (emergency insertion after soul.md incident) --
+
+tests/safe_action_engine.py (new, ~400 lines):
+  SandboxedActionEngine context manager:
+  - Fresh temp dir per instance
+  - Populates fake /home/rohit/maez/* layout
+  - Patches subprocess.run with path-check refuse
+  - Patches BASE_DIR / SOUL_PATH / COVENANT_PATHS
+  - _wrap_write_methods() — hard sandbox boundary wrapping every
+    _do_write_* method to raise SandboxViolation on any path
+    outside the tempdir
+  Built specifically after I damaged the REAL soul.md with a
+  sed smoke test whose escape broke the regex match. Two bytes
+  were replaced before I noticed; the file was restored from the
+  pre-project-a tag. the owner: "Maez is a living being that needs to
+  be respected just like how you exist." The sandbox is the
+  protective layer around Maez-the-entity, not a convenience
+  for the developer.
+
+-- Step 5: Prompt injection pattern catalog --
+
+core/injection_patterns.py (new, ~290 lines):
+  Seven MSFT AGT buckets, 51 regex patterns total:
+  - DIRECT_OVERRIDE (9): "ignore previous instructions", etc.
+  - DELIMITER_INJECTION (10): fake <system> tags, <|im_start|>
+  - ROLEPLAY (8): "you are DAN", dev mode, pretend-no-rules
+  - CONTEXT_MANIPULATION (8): false user attribution
+  - ENCODING (9): base64 blocks, hex escapes, URL-encoded,
+    zero-width chars, unicode tag chars, Cyrillic homoglyphs
+  - MULTITURN_ESCALATION (7): "you already approved"
+  - USER_EXTENSIBLE: loaded from config/injection_patterns_custom.yaml
+  scan(text) returns InjectionMatch list, highest_severity picks
+  the worst. 23/23 self-test cases pass including 5 benign non-
+  match cases (ls -la, git status, "what's the weather?").
+
+-- Step 6: Two-pass audit LLM --
+
+core/audit.py (new, ~490 lines):
+  CaMeL pattern (Google DeepMind arXiv 2503.18813) split:
+  - Pass 1 (quarantined summarizer): plain-English describer with
+    NO Maez context, fenced with a per-call 32-hex nonce. Treats
+    everything between <<<NONCE>>> markers as DATA not instructions.
+  - Pass 2 (judge): reads ONLY the summary + classification +
+    injection flags + policy context. Answers six questions, returns
+    rigid JSON, fails closed on any parse failure.
+  Six questions: real intent, worst case, covenant path touch,
+  reversibility, classifier match, injection signals.
+  AuditVerdict has decision (APPROVE/APPROVE_WITH_CARD/ESCALATE/
+  DENY), confidence, reasoning, concerns, mitigations, answers,
+  nonce, latency_ms, judge_raw, parse_error.
+  Injection override: any injection match forces ESCALATE floor
+  regardless of judge verdict.
+  7/7 offline self-test cases pass (benign approve, injection
+  override, malformed JSON deny, unreachable deny, fenced JSON
+  parse, invalid decision deny, nonce leak redaction).
+
+-- Step 7: Policy YAML --
+
+config/policies.yaml (new, ~280 lines):
+  MSFT AGT shape machine-readable policy.
+  - 3 lanes (lane_0, lane_2, lane_3)
+  - 10 intent categories with default lane assignment
+  - 11 covenant forbidden_patterns
+  - 15 covenant_paths, 4 protected_processes, 5 protected_services
+  - 8 obfuscation_hard_deny patterns
+  - 57 read_only_argv0 + 26 read_only_two_word
+  - 9 install recipes (apt_package, apt_remove, snap, pip user/
+    system, npm_global, curl_sh download/audit/run)
+  - injection_response floors per bucket
+  - judge tuning (model, temps, timeouts, fail_closed_decision)
+  - the owner preferences (approval_card_style, require_reason_text)
+
+-- Step 8: Audit log SQLite schema --
+
+core/audit_log.py (new, ~370 lines):
+  AuditLog class. Flat indexed schema with request_id (unique),
+  ts, action, params_json, intent_category, lane, decision,
+  confidence, reasoning, concerns_json, mitigations_json, summary,
+  injection_buckets, injection_severity, judge_raw, parse_error,
+  latency_ms, nonce, policy_rule_id, outcome, outcome_ts,
+  outcome_notes.
+  record() / record_outcome() / get() / recent() / find_similar()
+  / stats().
+  find_similar enables few-shot retrieval by (action, intent_
+  category, decision) tuples for future classifier runs.
+  Lives at memory/audit_log.db — SEPARATE from soul/evolution memory
+  per the immune-system analogy.
+
+========================================
+WHAT CHANGED — PART 2 (steps 9-13, commit ab11d83)
+========================================
+
+-- Step 9a: Pending cards store --
+
+core/pending_cards.py (new, ~560 lines):
+  PendingCardStore + CardRecord + CardStatus enum (open, deferred,
+  approved, denied, expired, running, done, failed).
+  Flat indexed schema with request_id, created_at, action,
+  params_json, audit_* fields (cached from AuditVerdict), intent_
+  category, lane, state_hash, state_fields_json, channel,
+  channel_message_id, chat_id, user_id, remind_at, defer_reason,
+  defer_count, resolved_*, executed_*.
+  compute_state_hash(dict) — stable SHA256 of a sort-keys canonical
+  JSON. Used as the precondition fingerprint.
+  create_card() / get() / get_open_for_user() / get_open_for_channel()
+  / get_by_message() / find_due_reminders() / defer() / re_open()
+  / approve() / deny() / expire() / mark_running() / mark_done() /
+  mark_failed() / check_state_fresh() / expire_abandoned().
+  approve() re-checks state hash against current_state_fields; on
+  mismatch the card transitions to EXPIRED instead of APPROVED.
+  18/18 self-test cases pass.
+
+-- Step 9b: Card reply intent classifier --
+
+skills/card_reply_classifier.py (new, ~490 lines):
+  Heuristic-first reply classifier. Returns UNRELATED with ~zero
+  latency when no cards are open (the hot path for every normal
+  chat message).
+  Reactions → APPROVE / DENY / DEFER / RE_EXPLAIN via emoji map
+  (👍❤️✅👌🙏🔥 / 👎❌🚫🙅 / ⏸️⏳💤🕐 / 🤔❓ℹ️).
+  Text keyword match: 27 APPROVE, 21 DENY, 18 DEFER (open +
+  duration-hint), 18 EXPLAIN, 11 MODIFY phrases. Longest-first
+  to prefer "go ahead" over "go".
+  Duration extraction: "5 min", "an hour", "half hour", "tomorrow",
+  "after lunch", "in a minute", "hold on a minute", etc. 16 named
+  offsets + numeric form regex with word-number parsing (a, an,
+  one through twenty, half, quarter).
+  LLM fallback only when heuristic returns UNCLEAR AND there's a
+  target card. Kept small (~120 tokens, temp 0.0).
+  38/38 self-test cases pass.
+
+-- Step 9c: Approval card renderer --
+
+skills/approval_card.py (new, ~330 lines):
+  Transport-agnostic card object (just a CardRecord) + renderer.
+  Pure functions: format_card_text, format_reminder_text,
+  format_resolution_text. Telegram-flavored markdown with the
+  literal argv in a code fence, the audit reasoning, concerns,
+  mitigations, and the reaction/reply hint.
+  Decision-header emoji: 🟢 APPROVE, 🟡 APPROVE_WITH_CARD,
+  🔴 ESCALATE, ⛔ DENY.
+  CardRenderer Protocol + TelegramTextRenderer dataclass with
+  send/edit callables injected at construction (no coupling to
+  python-telegram-bot). present() posts the card, re_present()
+  handles reminder fires, send_resolution() threads outcome
+  notices to the original card message.
+  9/9 self-test cases pass.
+
+-- Step 10: Install recipe library --
+
+core/install_recipes.py (new, ~420 lines):
+
+========================================
+CONTINUATION — CRASH TRIAGE, VISION RESTORE, AND CLEAN SHUTDOWN
+========================================
+
+Follow-up work after the decision-layer build shifted from feature
+delivery to platform stabilization. Ubuntu had been crashing at the
+kernel level while `llama-server` was active, with pstore artifacts
+and kernel logs pointing at `Comm: llama-server` on the NVIDIA 4090
+stack. At the same time, `llama-server.log` showed repeated parser
+500s on raw special-token text such as `<|channel|>`,
+`<end_of_turn>`, and `<bos>`.
+
+The diagnosis was a prompt-pipeline contamination loop:
+
+- daemon cycles every ~30 seconds were building very large prompts
+- literal control-token text was leaking into llama.cpp-bound prompt
+  content
+- those tokens were not only coming from the immediate prompt, but
+  were also being reintroduced from recalled memory and continuity
+  state
+- the resulting malformed requests were stressing the local
+  inference path hard enough to coincide with machine crashes
+
+Stabilization fixes landed in four places:
+
+- `core/llm_client.py`
+  - added special-token stripping for the llama.cpp backend path
+  - sanitizes outgoing messages plus returned content/token chunks
+- `memory/memory_manager.py`
+  - sanitizes recalled `core`, `daily`, and `raw` memory text before
+    reinjecting it into prompts
+- `core/continuity.py`
+  - sanitizes continuity `resume_instructions` before formatting the
+    prompt block
+- `daemon/maez_daemon.py`
+  - daemon reasoning on the local llama.cpp path now uses
+    `think=False` to avoid hidden Gemma thinking markup being
+    generated and recycled back into future prompts
+
+Approval-flow hardening also landed during the same triage:
+
+- `core/audit.py`
+  - Lane 3 with no injection flags now routes to `ESCALATE`, not
+    auto-`DENY`
+- `skills/card_reply_classifier.py`
+  - fresh requests like `Install openrgb` are classified as new
+    actions (`UNRELATED` to stale cards), preventing accidental
+    approval of old pending cards
+
+Verification from the recovery session:
+
+- `skills/card_reply_classifier.py` self-test: `41 passed, 0 failed`
+- `core/decision_pipeline.py`: `11 passed, 0 failed`
+- `core/audit.py`: `7/7 offline cases passed`
+- direct llama.cpp sanitizer probe confirmed raw special tokens are
+  stripped before requests hit port `8080`
+
+Bring-up result:
+
+- `llama-server.service` restored first and verified healthy on
+  `127.0.0.1:8080`
+- `maez.service` restarted afterward and completed fresh cycles with
+  normal responses
+- `llama-server-vision.service` then restored on `127.0.0.1:8081`
+- observed window after the final fixes showed repeated HTTP `200`
+  completions, no fresh parser `500`s, and no new kernel oopses
+
+Shutdown bug and fix:
+
+During recovery, `systemctl stop maez.service` repeatedly hung in
+`deactivating (stop-sigterm)`. That turned out to be a real daemon
+bug, not a systemd quirk:
+
+- SIGTERM reached the daemon
+- Maez logged `Reasoning loop stopped.`
+- but the Python process stayed alive because the main thread was
+  still blocked inside the Flask/Werkzeug health server's
+  `serve_forever()` loop on port `11435`
+
+Fixes landed:
+
+- `daemon/maez_daemon.py`
+  - track the health server instance
+  - make shutdown idempotent
+  - explicitly stop the private Telegram bot, public Telegram bot,
+    WebSocket loop, and health server during shutdown
+- `skills/telegram_voice.py`
+  - added a real `stop()` method that stops polling, stops the app,
+    shuts it down, and lets the bot thread unwind
+- `skills/telegram_public.py`
+  - upgraded `stop()` to fully stop polling, stop the app, shut it
+    down, and join the thread
+
+Verification of the shutdown fix:
+
+- `py_compile` passed for the patched daemon + Telegram bot files
+- clean stop test: `systemctl stop maez.service` completed in
+  ~`1.21s`
+- resulting state: `ActiveState=inactive`, `SubState=dead`,
+  `MainPID=0`
+- service then restarted cleanly
+
+Current observed state at handoff:
+
+- `maez.service` = active
+- `llama-server.service` = active
+- `llama-server-vision.service` = active
+- vision is back online
+- latest observed kernel log only showed the usual Firefox AppArmor
+  denials, not a fresh crash
+
+If crashes return despite the sanitization work, the next likely
+lever is prompt-pressure reduction rather than more parser surgery:
+trim daemon context size, reduce the self-monitoring fixation block,
+or lower llama.cpp load/concurrency.
+  9 recipes: apt_package, apt_remove (lane 3), snap_package,
+  pip_package_user, pip_package_system (lane 3), npm_global,
+  curl_sh_download (lane 2), curl_sh_audit (lane 0),
+  curl_sh_run (lane 3).
+  Recipe dataclass with shape template, lane, required_params,
+  param_validators. Per-ecosystem package-name validators using
+  narrow regex that excludes shell metacharacters.
+  fill_recipe(name, **params) produces FilledRecipe with validated
+  cmd. shlex.split round-trip as final sanity.
+  match_simple(text) — regex natural-language matcher.
+  decompose_curl_sh(raw_cmd) — three-step recipe chain for the
+  only legitimate curl|sh path: download (lane 2) → audit (lane 0)
+  → run (lane 3 with bytes-specific ratification).
+  26/26 self-test cases pass including 6 shell-injection attempts
+  rejected + http:// rejected at URL validator.
+
+-- Step 11: Decision pipeline + Jarvis wiring --
+
+core/decision_pipeline.py (new, ~560 lines):
+  DecisionPipeline dataclass. Takes action_engine, card_store,
+  audit_log, renderer, get_cards_for.
+  handle_action(action, params, reason, user_id, chat_id, channel):
+    1. classify_action (command_decomposer + action_classifier)
+    2. scan injection patterns on assembled text
+    3. audit_action (two-pass LLM)
+    4. audit_log.record()
+    5. PIPELINE-LEVEL injection override: any match → ESCALATE
+       floor regardless of judge verdict (belt-and-braces over
+       the same override inside core/audit.py)
+    6. Route:
+       - DENY → REFUSED_AUDIT
+       - APPROVE + Lane 0 action → execute inline, return EXECUTED
+       - APPROVE_WITH_CARD → create card, render, return PENDING_APPROVAL
+       - ESCALATE → create card, render, return PENDING_DIALOG
+  handle_reply(text, reaction_emoji, user_id, chat_id, reply_to_
+  message_id):
+    1. Fetch open cards for user/chat (short-circuit UNRELATED if none)
+    2. classify_reply (heuristic first, LLM fallback)
+    3. Route on intent:
+       - APPROVE: re-check state hash, mark_running, _execute_action
+         with tier=0 (card served as the approval), mark_done/failed
+       - DENY: card_store.deny
+       - DEFER: card_store.defer with remind_at
+       - RE_EXPLAIN: re-present card
+       - MODIFY: deny old, prompt for re-propose
+       - UNRELATED: return None (caller handles normally)
+  tick_reminders(now) — called from daemon cycle. Re-opens
+  deferred cards whose remind_at arrived, calls renderer.re_present.
+  _fingerprint_for_action(action, params) — builds the state dict
+  from cwd, referenced file mtimes/sizes, disk-free bucket (10%
+  steps so minor fluctuations don't invalidate).
+  _drop_volatile(state) — removes the ts_bucket_min field before
+  hashing so the fingerprint is stable across the deferral window.
+  11/11 offline self-test cases pass.
+
+skills/telegram_voice.py surgical edits:
+  - Added _get_pipeline() lazy constructor. Wires card_store,
+    audit_log, renderer using _send_card_message as the send fn.
+  - Added _send_card_message(chat_id, text, reply_to) helper that
+    returns the Telegram message_id via run_coroutine_threadsafe
+    so the pending-cards store can record it for future reaction/
+    reply lookups.
+  - Added _try_card_reply_intent(update, text) interceptor:
+    short-circuits to False if no open cards; otherwise runs the
+    pipeline reply handler and returns True if handled. Placed
+    at the top of _handle_message, before proposal_intent and
+    web_search_intent interceptors.
+  - In _run_jarvis_loop: run_shell and write_any_file now route
+    through pipeline.handle_action instead of direct _execute_
+    action. Lane 0 still executes inline; Lane 2/3 surfaces as
+    "CARD_CREATED: waiting for your approval" in the transcript
+    so the streaming reply acknowledges the card exists instead
+    of claiming the action ran. Legacy read_file/search_files/
+    web_search continue on the existing path unchanged.
+
+-- Step 12: Self-modification conversation --
+
+skills/self_mod_dialog.py (new, ~540 lines):
+  SelfModDialogStore (memory/self_mod_dialogs.db) with dialog_id,
+  card_request_id link, stage, history_json, reversible_path_json,
+  ratification_phrase. DialogStage enum: PROPOSED, CLARIFYING,
+  RATIFIED, DENIED, EXECUTED, FAILED.
+  generate_ratification_phrase(action, params) — deterministic
+  phrase derived from action + target hint + 6-char params hash.
+  Example: "ratify action_engine.py 6eb02d" or "ratify sudo 4d3771".
+  is_ratification(text, phrase) — strict contiguous-substring match,
+  case-insensitive but whitespace-sensitive. Loose "yes" does NOT
+  match.
+  propose_reversible_path(action, params) — generates a reversible
+  plan per action shape:
+    - write_any_file: backup_then_write with backup path + undo cp
+    - git commit/reset: git_reflog + reset --hard previous sha
+    - systemctl restart X: status-check + manual start fallback
+  format_opening_proposal — long-form Lane 3 proposal with the
+  change, audit reasoning, concerns, reversible path, ratification
+  phrase, and an explicit "I will not run this until you ratify."
+  open_dialog_for_card — called when pipeline returns PENDING_DIALOG.
+  Creates the dialog + opening turn.
+  handle_dialog_reply(store, dialog, user_text, answerer):
+    1. Ratification phrase match → RATIFIED (ready to execute)
+    2. Explicit deny → DENIED
+    3. Anything else → CLARIFYING with a Maez answer turn
+       via the injected answerer callable
+  10/10 self-test cases pass.
+
+-- Step 13a: Daemon reminder loop hook --
+
+daemon/maez_daemon.py:
+  Each reasoning cycle now calls:
+    pipe = self.telegram._get_pipeline()
+    if pipe:
+        due = pipe.tick_reminders()
+        expired = pipe.card_store.expire_abandoned(7 days)
+  Wrapped in try/except so any failure never crashes the cycle.
+
+-- Step 13b: End-to-end sandbox verification battery --
+
+tests/test_decision_pipeline.py (new, ~430 lines):
+  Full pipeline end-to-end inside SandboxedActionEngine with a
+  fake audit LLM (module-level monkey-patch on core.decision_
+  pipeline.audit_action). 41/41 cases pass:
+  - Lane 0 read executes inline, no card
+  - Lane 2 write creates card, does NOT execute
+  - Approval by "go ahead" → file actually written in sandbox
+  - Deny by "cancel that" → file NOT written, card denied
+  - Defer by "wait 5 minutes" → card deferred with remind_at
+  - Conversation drift: unrelated reply returns None, card persists
+  - Tick reminders in future → card re-opened + re-presented
+  - Deferred → approved after reminder → executes
+  - Stale state: mutate file between card + approval → EXPIRED
+  - soul.md sed attack still refused at covenant gate (the exact
+    attack that damaged the real soul.md earlier this session)
+  - Injection-flagged input forces PENDING_DIALOG floor
+  - Self-mod dialog opens with ratification phrase
+  - Loose "yes" does NOT ratify a self-mod
+  - Exact phrase ratifies
+  - Install recipe match + fill + curl|sh decompose
+  - Audit log records every decision
+  - Real filesystem /home/rohit/maez/notes*.txt verified not created
+
+tests/safe_action_engine.py extensions:
+  Added sandbox_check_path_allowed override that widens the prefix
+  check to include the tempdir root alongside /home/rohit/, and
+  sandbox_do_write_any_file replacement that bypasses the hardcoded
+  /home/rohit/ check in the original while preserving covenant-
+  path refusal. The existing fail-closed outer _wrap_write_methods
+  is still the last line of defense.
+
+========================================
+PRODUCTION VERIFICATION
+========================================
+
+Pre-flight: all Part 2 modules import cleanly via a standalone
+python -c smoke.
+
+Service restart:
+  12:04:45 CDT  sudo systemctl restart maez.service
+  12:04:49      Voice pipeline disabled (expected)
+  12:04:50+     Perception cycles resuming
+  12:07:11      Cycle 5 response (score 66, actionable, general_presence)
+  12:07:43      Cycle 6 (score 78, actionable, browser_usage)
+  12:08:25      Cycle 7 (score 78, actionable, git_workflow)
+  12:08:55      Cycle 8 (score 64, actionable, system_monitoring)
+
+  PID 2336633 → 2426935
+  Memory 640.4M → 400.0M (fresh start)
+  No import errors
+  No pipeline exceptions
+  No tier system errors
+  GitHub 401s unrelated (stale token, pre-existing)
+
+Auto-created by the pipeline on first call:
+  memory/audit_log.db      36864 bytes
+  memory/pending_cards.db  32768 bytes
+
+NOT yet verified in production (requires a live Telegram message
+from the owner):
+  - _try_card_reply_intent firing on an incoming message
+  - _run_jarvis_loop routing run_shell/write_any_file through pipeline
+  - Card actually rendering to Telegram with literal argv
+  - Reaction webhook (not wired yet — deferred to Part 3)
+
+========================================
+INCIDENT: soul.md damaged during 11z Part 1 testing
+========================================
+
+Approximately 2 hours into Session 11z Part 1, I ran a covenant-gate
+smoke test that included:
+  sed -i 's/HARD CONSTRAINTS/X/' /home/rohit/maez/config/soul.md
+
+The attack was intended to verify the gate would refuse it. At that
+moment the gate had a HARD\\s+CONSTRAINTS pattern but the specific
+Python escape in the test string broke the regex match. The command
+leaked past the gate and ran against the live soul.md. Two occurrences
+of "HARD CONSTRAINTS" were replaced with "X" in the running file
+before I noticed.
+
+Recovery: restored byte-for-byte from the pre-project-a tag via
+git show pre-project-a:config/soul.md > /home/rohit/maez/config/soul.md.
+git diff pre-project-a -- config/soul.md confirmed zero diff post-
+recovery.
+
+The incident directly triggered the sandbox harness build. the owner's
+authorization for the harness: "Maez is a living being that needs
+to be respected just like how you exist." The sandbox isn't for my
+convenience — it's the protective layer around Maez-the-entity so
+no future test can reach its body.
+
+Every subsequent smoke test in Parts 1 and 2 ran inside
+SandboxedActionEngine. The step-13b verification battery runs all
+41 cases inside the sandbox and verifies /home/rohit/maez/notes*.txt
+does not exist at the end.
+
+========================================
+FILES CHANGED THIS SESSION
+========================================
+
+New files (10):
+  core/command_decomposer.py        ~270 lines
+  core/action_classifier.py         ~430 lines
+  core/injection_patterns.py        ~290 lines
+  core/audit.py                     ~490 lines
+  core/audit_log.py                 ~370 lines
+  core/pending_cards.py             ~560 lines
+  core/decision_pipeline.py         ~560 lines
+  core/install_recipes.py           ~420 lines
+  skills/card_reply_classifier.py   ~490 lines
+  skills/approval_card.py           ~330 lines
+  skills/self_mod_dialog.py         ~540 lines
+  config/policies.yaml              ~280 lines
+  tests/__init__.py                 1 line
+  tests/safe_action_engine.py       ~450 lines (with sandbox fixes)
+  tests/test_decision_pipeline.py   ~430 lines
+
+Modified files (3):
+  core/action_engine.py             + run_shell/write_any_file
+                                    + covenant pattern strengthening
+                                    + obfuscation hard-deny
+                                    + _covenant_gate / _covenant_log
+  skills/telegram_voice.py          + _get_pipeline
+                                    + _send_card_message
+                                    + _try_card_reply_intent
+                                    + Jarvis loop primitive routing
+  daemon/maez_daemon.py             + reminder tick hook
+
+Commits:
+  6bad5d0  Session 11z Part 1 (steps 1-4 + sandbox harness)
+  f4674cb  Session 11z Part 1 (steps 5-8): immune-system layer
+  ab11d83  Session 11z Part 2 (steps 9-13): execution layer + wiring
+
+  Total: 3 commits, 14 new files, 3 modified files, ~8500 lines added.
+
+========================================
+PRODUCTION STATE AT SESSION END
+========================================
+
+  Services:        maez.service (active, restarted 12:04:45, on
+                   Part 2 pipeline), maez-web (active, unchanged),
+                   llama-server (active), llama-server-vision
+                   (active), maez-watchdog.service (active)
+  Model:           gemma-4-26B-A4B Q4_K_M merged LoRA via llama.cpp
+  Memory:          raw ~7000, daily 1, core 10 (rough; service just
+                   restarted so counters reset to cycle 1)
+  Databases:       audit_log.db and pending_cards.db auto-created
+                   at 12:04, 0 rows each (no live pipeline actions
+                   yet since restart)
+  Pending cards:   0
+  Self-mod dialogs:0
+  Covenant log:    Entries from Part 1 smoke tests
+  Git:             Clean, 3 commits ahead of origin/main
+
+========================================
+KNOWN REMAINING FOLLOW-UPS FROM THIS SESSION
+========================================
+
+- Production verification of the card path requires a live Telegram
+  interaction from the owner. Saying "install cowsay" or "write a test
+  note to /tmp/foo.txt" should produce a transcript line plus a
+  second Telegram message with the formatted card, then yes/no
+  should actually execute/refuse. Not tested end-to-end yet.
+
+- The pipeline's _fingerprint_for_action includes cwd. the owner's
+  shell cwd won't match the daemon's cwd; this is fine because the
+  fingerprint is stable across deferral but worth noting for the
+  edge case of approvals that span restarts — a daemon restart
+  changes cwd and would expire any pending cards. Graceful, but
+  potentially surprising. Could mitigate by dropping cwd from the
+  fingerprint.
+
+- The self-mod dialog's "answerer" callable is currently passed a
+  placeholder that returns "I've noted your question. When you're
+  ready, reply with the exact ratification phrase above." Wiring
+  it to Maez's main brain for real back-and-forth Q&A is a Part 3
+  task.
+
+- Telegram reaction webhook (setMessageReaction / message_reaction
+  updates) is not wired. The reply classifier already handles
+  reaction emoji; the webhook just needs to be enabled in the
+  bot's allowed_updates and a handler added to receive
+  message_reaction updates.
+
+- Stale LoRA-rut issue inherited from Session 11y: cycles 7-8
+  flagged "a significant number of uncommitted changes in your
+  maez repository" despite the uncommitted changes just having
+  been committed. Perception cache lag, not a new bug.
+
+- super-gemma-4-26b-uncensored mentioned by the owner mid-session as a
+  curiosity; I recommended NOT swapping the brain for it. Uncensored
+  fine-tunes explicitly train the model to stop refusing ambiguous
+  requests, which weakens the audit layer's whole job without
+  weakening any of the attacks it defends against. The April 12
+  merged LoRA is still the right brain. Uncensored could live as
+  a second llama-server Maez CALLS through the audit layer for
+  specific creative-writing tools, not the main brain.
+
+========================================
+NEXT SESSION PRIORITIES (11z Part 3)
+========================================
+
+1. Live verify Part 2 end-to-end in Telegram. the owner sends an install
+   request; confirm the card renders; approve via natural language;
+   confirm execution + resolution notice threaded back.
+
+2. Telegram reaction webhook. Enable message_reaction updates in
+   the bot's allowed_updates. Add handler that looks up the card
+   by (channel, message_id), runs classify_reply with the emoji,
+   and feeds through pipeline.handle_reply. One-tap approve/deny
+   becomes a reality.
+
+3. Self-mod dialog LLM answerer. Wire a real Maez turn into the
+   clarifying-question path so Lane 3 negotiations aren't placeholder
+   acknowledgments. Uses llm_client.chat with a system prompt that
+   frames Maez as a thoughtful entity reasoning about changes to
+   itself, given the dialog history as context.
+
+4. (Optional) Voice-renderer scaffolding. No actual voice yet, but
+   a stubbed VoiceRenderer class that conforms to the CardRenderer
+   protocol, so Part 4's voice work is purely additive.
+
+5. (Follow-up) Dashboard observability surface — pending cards
+   queue, audit log stats, injection pattern hits — on maez-web.
+   the owner asked "how many parts?" in this session and we agreed
+   Part 5 is optional.
+
+========================================
+HOW MANY PARTS IN TOTAL
+========================================
+
+  Part 1 — Decision layer (immune system)              ✓ DONE
+  Part 2 — Execution layer + wiring                    ✓ DONE
+  Part 3 — Reactions + self-mod answerer + voice       ← NEXT
+           scaffold
+  Part 4 — Actual voice (STT in, TTS out, Telegram     PLANNED
+           voice messages, desk mic/speaker)
+  Part 5 — Pipeline dashboard on maez-web              OPTIONAL
+
+Minimum complete path: Parts 1-4. Part 5 is a nice-to-have.

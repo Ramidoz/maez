@@ -1,0 +1,203 @@
+BUILD: Telegram UX pass — truncation root cause fix, command menu, Dev bot cards
+
+CHANGED: daemon/maez_daemon.py
+  - Followup delivery: num_predict 200 → 4096 (root cause of truncation)
+  - Nightly summary now uses send_nightly_card
+
+CHANGED: skills/telegram_voice.py
+  - Added split_long_message() helper (sentence > newline > space > hard split)
+  - send_message() auto-splits and sends sequentially with 0.5s delay
+  - Streaming remainder send also splits if oversized
+  - Added 5 new command handlers: /proposals /show /apply /reject /help
+  - Added _handle_cog_analyze (compact cognition snapshot, replaces old /analyze)
+  - Added _configure_bot_commands() — registers BotCommand list + MenuButtonCommands
+    via BotCommandScopeChat for the authorized user
+
+CHANGED: skills/dev_notifier.py
+  - Added send_proposal_card(), send_nightly_card(), send_service_card()
+  - send_dev() retained for short raw messages
+
+CHANGED: skills/evolution_engine.py
+  - Proposal notification now uses send_proposal_card
+
+CHANGED: skills/maez_watchdog.py
+  - Service alerts now use send_service_card
+
+========================================
+ROOT CAUSE:
+========================================
+Telegram message truncation lived in daemon/maez_daemon.py line 1602:
+
+  fu_resp = ollama.chat(
+      model=MODEL,
+      messages=[...],
+      options={"temperature": 0.5, "num_predict": 200},  # ← TOO LOW
+  )
+
+The follow-up delivery prompt called gemma4 with num_predict=200. Gemma4 is
+a thinking model that consumes ~1500-2000 tokens internally before producing
+visible content. With only 200 tokens of total budget, the visible output
+either came back empty or got cut off mid-sentence.
+
+This is the SAME bug pattern that hit:
+- Session 4 web_interface.py (num_predict=200, fixed to 4096)
+- Session 9 cognition resume_instructions (num_predict=100, fixed to 4096)
+
+The Telegram API itself (4096 char limit) was never the bottleneck —
+the model output was already truncated before send. The fix is upstream
+in the Ollama call, not in the Telegram send path.
+
+Defense layer added anyway: split_long_message() now wraps send_message()
+so any future >4000 char message splits cleanly on sentence boundaries.
+
+========================================
+LONG MESSAGE TEST 1: helper unit tests
+========================================
+Test 1 (short, 11 chars):                    1 part  PASS
+Test 2 (exactly at limit, 4000 chars):       1 part  PASS
+Test 3 (7200 chars, sentence breaks):        2 parts, lens=[3952, 3127], all sentence-bounded  PASS
+Test 4 (5000 chars, no breaks):              2 parts, lens=[4000, 1000]  PASS
+Test 5 (rejoin preserves content):           PASS
+
+========================================
+LONG MESSAGE TEST 2: live Telegram round-trip
+========================================
+Built 5441-char realistic message, sent via Dev bot:
+  Split into 2 parts: [3909, 1531]
+  Part 1: status=200 ok=True
+  Part 2: status=200 ok=True
+
+Both parts delivered. Telegram API accepted both without rejection.
+Sentence boundary preserved between parts.
+
+========================================
+COMMAND MENU REGISTRATION:
+========================================
+2026-04-09 09:47:49 [INFO] Telegram bot thread started (authorized user: ...)
+2026-04-09 09:47:49 [INFO] Telegram bot starting polling...
+2026-04-09 09:47:50 [INFO] Telegram private bot commands registered (12)
+
+12 commands registered via BotCommandScopeChat:
+  /status     System and cognition summary
+  /git        Git repo state
+  /disk       Disk usage summary
+  /analyze    Cognition snapshot
+  /proposals  Last 5 proposal candidates
+  /show       Show candidate by id
+  /apply      Apply candidate by id
+  /reject     Reject candidate by id
+  /pending    Pending actions
+  /trust      Trust user
+  /promote    Promote action type
+  /help       Grouped command list
+
+MenuButtonCommands set on the owner's chat — Telegram menu icon now
+shows the slash list directly in the input area.
+
+========================================
+/PROPOSALS SAMPLE:
+========================================
+Recent proposals:
+  [19] applied      ⚪ unknown    Fixation on development tools detected across 11
+  [18] validated    ⚪ unknown    stale reclaim test
+  [17] validated    ⚪ unknown    stale test
+  [16] rejected     ⚪ unknown    test fixation on browser_usage
+  [15] rejected     ⚪ unknown    Fixation on git workflow detected across
+
+========================================
+/ANALYZE SAMPLE:
+========================================
+Cognition snapshot:
+  Last 10 scores: [62, 73, 70, 62, 73, 60, 65, 78, 73, 70]
+  Average:        68.6/100
+  Dominant topic: git_workflow (5/10)
+  Failure mode:   vague
+  Fixation streak: 0
+  Policy mode:    normal
+
+========================================
+/HELP SAMPLE:
+========================================
+Maez commands:
+
+System:
+  /status    System and cognition summary
+  /git       Git repo state
+  /disk      Disk usage summary
+
+Cognition:
+  /analyze   Cognition snapshot (last 10 cycles)
+
+Evolution:
+  /proposals  Last 5 proposal candidates
+  /show <id>  Show candidate details
+  /apply <id> Apply candidate
+  /reject <id> Reject candidate
+
+Control:
+  /pending   Pending actions
+  /trust     Trust user
+  /promote   Promote action type
+  /help      This list
+
+========================================
+DEV CARD SAMPLE — proposal:
+========================================
+🧠 Self-edit proposal
+
+Weakness: Recent reasoning is too vague — 14 of 20 cycles lacked specific metrics
+Target: MIN_ACTIONABLE_LENGTH  30 → 60
+Why: Forces more substantive observations by raising the actionable length floor
+Confidence: ⚠️ acceptable
+
+/show 99 · /apply 99 · /reject 99
+
+========================================
+DEV CARD SAMPLE — service:
+========================================
+✅ Service recovery
+
+maez.service: back online (105 cycles)
+Downtime: 0.8 min
+
+========================================
+DEV CARD SAMPLE — nightly:
+========================================
+🌙 Nightly summary
+
+Memories: 200 analyzed · 42% unique insight rate
+Top topics: git_workflow (45), browser_usage (32), development_tools (28)
+Evolution: 3 attempted · 1 failed validation
+
+========================================
+WHAT WENT WRONG / RIGHT:
+========================================
+
+RIGHT — Root cause fix at the source:
+The bug was a 200-token Ollama budget, not a Telegram API limit.
+Bumping num_predict to 4096 stops the truncation at its origin.
+This is the same Gemma4-thinking-model gotcha we've hit before.
+
+RIGHT — Defense layer in place:
+split_long_message() now wraps every send_message() call. Even if
+future code pipes >4000 char content (unlikely now), it splits cleanly
+on sentence boundaries with 0.5s delay between parts.
+
+RIGHT — Single canonical helper for both paths:
+Both the normal reply path AND followup delivery path now go through
+the same telegram.send_message() which uses the split helper. No
+duplicate logic.
+
+RIGHT — Cards are compact and high-signal:
+Proposal card: 8 lines max, badge emoji, before→after value, one-click
+commands. Service card: 4 lines, recovery/alert distinction by emoji.
+Nightly card: 5 lines, key stats only, optional autonomy line.
+
+RIGHT — Dev bot remains outbound-only:
+No new inbound handlers added to Dev bot. Cards use the same send_dev()
+underneath. Dev bot keeps its operational role unchanged.
+
+RIGHT — Existing send_dev() calls preserved:
+Did not blindly rewrite every send_dev() call. Only swapped to cards
+where the pattern clearly fit (proposal notification, service alerts,
+nightly summary). Short alerts still use send_dev() directly.

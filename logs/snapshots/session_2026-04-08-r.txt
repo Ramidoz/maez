@@ -1,0 +1,130 @@
+BUILD: Failure-Mode-Aligned Proposal Framing — weakness templates + target filtering by failure family
+
+CHANGED: skills/evolution_engine.py
+  Change 1: _derive_weakness() rewritten with failure-mode-first templates
+    fixation → "reasoning is fixating on..."
+    vague → "reasoning is too vague..."
+    weak_retrieval → "not grounding itself in perception data..."
+    repetition → "reasoning is repeating itself..."
+    None/unknown → fallback to topic-first
+  Change 2: _filter_targets_by_failure() + _TARGET_FAMILIES keyword sets
+    Filters editable targets by failure-mode family before injection
+    Preserves scalar-first rank within filtered set
+
+UPDATED: scripts/eval_proposals.py
+  Added: derived_from_failure_mode, failure_mode_count, filtered_by_failure_mode,
+         family_match_count, failure_family_alignment per case
+  Added: failure_led_framing_rate, failure_filtered_targets_rate,
+         failure_family_alignment_rate aggregates
+
+========================================
+TEST 1 FIXATION:
+========================================
+Weakness: "Recent reasoning is fixating on browser usage — the same subject
+  appeared in 15 of the last 20 cycles. Average score 45.0/100.
+  The reasoning loop needs broader topic coverage."
+  derived_from_failure_mode: True
+
+Injected targets (filtered, 10 family matches):
+  FIXATION_THRESHOLD          rank=1 family_match=True
+  CRITIQUE_FIXATION_DOM_RATIO rank=1 family_match=True
+  ANTIFIXATION_PENALTY_MAX    rank=1 family_match=True
+  FIXATION_WINDOW             rank=2 family_match=True
+  CRITIQUE_WINDOW             rank=2 family_match=True
+
+Patch intent:
+  target: ANTIFIXATION_PENALTY_MAX = 1.6 → 2.0
+  rationale: "Increasing the maximum penalty for fixation will more
+    aggressively discourage repeating the same topic."
+  failure_family_alignment: True ✓
+
+========================================
+TEST 2 VAGUE (previously failing case):
+========================================
+Weakness: "Recent reasoning is too vague — 15 of the last 20 cycles lacked
+  specific metrics, measurements, or actionable observations.
+  Average score 45.0/100. Specificity and grounding need improvement."
+  derived_from_failure_mode: True
+
+Injected targets (filtered, 10 family matches):
+  MIN_ACTIONABLE_LENGTH          rank=1 family_match=True
+  CRITIQUE_LOW_SCORE_THRESHOLD   rank=1 family_match=True
+  CONSOLIDATION_MIN_LENGTH       rank=1 family_match=True
+  POLICY_LOW_SCORE_FLOOR         rank=1 family_match=True
+  SCORE_WEIGHT_LENGTH            rank=2 family_match=True
+
+Patch intent:
+  target: MIN_ACTIONABLE_LENGTH = 30 → 60
+  rationale: "Increasing the minimum length forces more substantive details."
+  failure_family_alignment: True ✓
+
+This was the exact case that scored weak before (model chose FIXATION_THRESHOLD
+for a vague problem). Now it correctly chooses MIN_ACTIONABLE_LENGTH.
+
+========================================
+TEST 3 WEAK_RETRIEVAL:
+========================================
+Weakness: "Recent reasoning is not grounding itself in perception data —
+  15 of the last 20 cycles lacked concrete system metrics or sensor references.
+  Average score 45.0/100. Retrieval and grounding need strengthening."
+  derived_from_failure_mode: True
+
+Injected targets (filtered, 4 family matches):
+  ANTIFIXATION_PENALTY_MAX      rank=1 family_match=True
+  SCORE_WEIGHT_GROUNDING        rank=2 family_match=True
+  ANTIFIXATION_PENALTY_DEFAULT  rank=2 family_match=True
+  ANTIFIXATION_RECENCY_WINDOW   rank=2 family_match=True
+  MIN_ACTIONABLE_LENGTH         rank=1 family_match=False (fill)
+
+Patch intent:
+  target: SCORE_WEIGHT_GROUNDING = 20 → 40
+  rationale: "Increasing grounding weight directly penalizes reasoning
+    that lacks sensor references."
+  failure_family_alignment: True ✓
+
+========================================
+EVAL BEFORE / AFTER:
+========================================
+                              BEFORE   AFTER    CHANGE
+  intent_parse_rate           100%     100%     same
+  scalar_preference_rate      100%     100%     same
+  validator_pass_rate         100%     100%     same
+  avg_lines_changed           2.0      2.0      same
+  Acceptable rate (ev-compl)  0%       100%     +100% ← main improvement
+  Weak rate (ev-complete)     100%     0%       -100%
+  Addresses failure rate      0%       100%     +100%
+  Failure-led framing rate    0%       10%      +10%  (limited by evidence completeness)
+  Failure-filtered targets    0%       10%      +10%  (limited by evidence completeness)
+  Failure family alignment    0%       10%      +10%  (limited by evidence completeness)
+
+Note: Rates are low because 90% of replay cases have incomplete evidence
+(test artifacts). The 1 evidence-complete case moved from weak → acceptable.
+Manual tests all scored failure_family_alignment=True.
+
+========================================
+WHAT WENT WRONG / RIGHT:
+========================================
+
+RIGHT — Vague case now correctly handled:
+The model was previously presented with fixation-framed weakness text and
+fixation-family targets even when the dominant failure was vague. It
+naturally chose FIXATION_THRESHOLD. Now with vague-framed text and
+vague-family targets (MIN_ACTIONABLE_LENGTH, SCORE_WEIGHT_LENGTH, etc.),
+it correctly chose MIN_ACTIONABLE_LENGTH.
+
+RIGHT — Failure family filtering works with scalar-first preservation:
+Filtered targets maintain rank order within the filtered set. Rank 1
+thresholds still appear first, but only those matching the failure family.
+When insufficient matches exist (<3), the full ranked list is used with
+a log explaining the fallback.
+
+RIGHT — No generation regression:
+All existing metrics at 100%. The changes only improved target selection
+quality without breaking intent parsing or validation.
+
+INSIGHT — Real improvement visible only with complete evidence:
+90% of replay cases are test artifacts with no dominant_failure_mode.
+These correctly show unknown usefulness. The one real case (candidate 19,
+vague) improved from weak to acceptable. Future real daemon proposals
+will all have complete evidence and should consistently score acceptable
+or strong.

@@ -1,0 +1,54 @@
+BUILD: Sessions 11u+11v — Corpus expansion + adapter promotion attempt
+DATE:  April 12, 2026
+AGENT: Claude Opus 4.6 (1M context)
+
+========================================
+THE TL;DR
+========================================
+
+1. Expanded training corpus from 161 → 2000 pairs by mining 4 new
+   data sources: daemon reasoning cycles, soul.md Q&A, evolution
+   candidates, continuity capsules.
+
+2. Built training_proposal rail — Maez can now propose her own
+   training runs via Telegram (/train_proposals, /approve_train).
+   6 new commands, 24 total registered.
+
+3. Fixed dream spam: cooldown 10min→1hr, novelty 0.4→0.25.
+   Rejected 13 identical "disk at 65%" proposals.
+
+4. Fixed context overflow: --parallel 2→1 (daemon prompt at 19.7K
+   exceeded 16K per-slot limit).
+
+5. Thunder Compute MCP integrated — can create/delete GPU instances
+   programmatically. Enables future Maez-autonomous training loop.
+
+6. ADAPTER PROMOTION BLOCKED by two issues:
+   a) VRAM: --lora doesn't fit alongside vision on 24GB
+   b) Training data contamination: model learned to emit <|channel>
+      special tokens, breaking llama-server output parser
+
+7. Fix identified: strip gemma-4 special tokens from training
+   corpus before next training run.
+
+========================================
+PRODUCTION STATE
+========================================
+
+llama-server:        active, ctx 32768 parallel 1, NO --lora
+llama-server-vision: active
+maez.service:        active, cycle 1 score=63 actionable+insightful
+Telegram bot:        24 commands registered
+Adapter on disk:     training/runs/2026-04-12-expanded/adapter.gguf
+                     (NOT loaded — blocked by data contamination)
+Thunder instance:    training still running (background)
+
+========================================
+COST SUMMARY (today)
+========================================
+
+RunPod H100 NVL:     ~$7.80 (overnight, pod destroyed)
+Thunder A100 4-vCPU: ~$2.00 (debugging, too slow)
+Thunder A100 12-vCPU: ~$1.50+ (still running)
+RunPod volume:       ~$7/month
+Total today:         ~$11.30+

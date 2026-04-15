@@ -1,0 +1,121 @@
+BUILD: Cognition-to-Behavior Bridge + Topic Taxonomy Refinement — policy layer converting cognition signals into active reasoning guidance, directive [COGNITION] prompt block, thought retry path, fine-grained topic taxonomy replacing coarse rohit_activity
+
+========================================
+THOUGHT (Cycle 2, 2026-04-08 14:08:44):
+========================================
+You're back in deep work, diving into agentic workflows with Karpathy's tutorial while running Python tests in the terminal. I noticed your `claude` and `electron` processes are picking up some CPU load, which is expected during heavy IDE and browser interaction. Since you're actively testing `core/quality.py`, I'll stay quiet and let you focus on the execution results.
+
+Score: 78/100 | topic=development_tools parent=rohit_activity | labels=['actionable', 'insightful']
+
+========================================
+LOG (cognition.log — showing taxonomy refinement in action):
+========================================
+--- Pre-restart (coarse rohit_activity — everything collapsed) ---
+2026-04-08 13:41:49 | cycle | score=33 primary=fixation topic=rohit_activity labels=['fixation']
+2026-04-08 13:43:27 | cycle | score=40 primary=fixation topic=rohit_activity labels=['fixation', 'vague', 'actionable']
+2026-04-08 13:44:43 | cycle | score=40 primary=fixation topic=rohit_activity labels=['fixation', 'vague', 'actionable']
+2026-04-08 13:46:28 | cycle | score=68 primary=actionable topic=rohit_activity labels=['actionable', 'insightful']
+2026-04-08 13:47:51 | cycle | score=53 primary=actionable topic=rohit_activity labels=['actionable', 'insightful']
+2026-04-08 13:48:58 | cycle | score=15 primary=vague topic=rohit_activity labels=['vague']
+    ^ All tagged rohit_activity despite being about git, browser, monitoring
+
+--- Post-restart (fine-grained subtopics — correctly differentiated) ---
+2026-04-08 14:05:07 | cycle | score=25 primary=fixation topic=git_workflow parent=rohit_activity labels=['fixation', 'vague', 'actionable']
+2026-04-08 14:05:07 | policy | mode=exploratory avoid=['git_workflow'] force_new=True specificity=True grounding=True
+2026-04-08 14:05:33 | cycle | score=55 primary=fixation topic=rohit_activity labels=['fixation', 'baseline', 'actionable']
+2026-04-08 14:05:37 | cycle | score=75 primary=actionable topic=network labels=['actionable', 'insightful']
+2026-04-08 14:07:22 | cycle | score=73 primary=actionable topic=telegram labels=['actionable', 'insightful']
+2026-04-08 14:08:44 | cycle | score=78 primary=actionable topic=development_tools parent=rohit_activity labels=['actionable', 'insightful']
+2026-04-08 14:09:52 | cycle | score=65 primary=actionable topic=development_tools parent=rohit_activity labels=['actionable', 'insightful']
+2026-04-08 14:10:38 | policy | mode=corrective avoid=['development_tools'] force_new=False
+    ^ git_workflow, network, telegram, development_tools all correctly separated
+
+========================================
+RETRIEVED MEMORIES (for Cycle 2):
+========================================
+
+--- Core (5) ---
+[core-d5aee3c40f22] [Journal 2026-04-06] Today was a quiet, reflective Monday. I processed 535 reasoning cycles...
+[core-6008b0457676] Face enrollment: the owner's face enrolled on 2026-04-06 with 20 reference frames.
+[core-17e7fe876b3f] ## Who the owner Is (established 2026-04-07) the owner. Data scientist. Building Maez...
+[core-a8de58c860cb] [Journal 2026-04-07] Today, I processed 1,513 reasoning cycles...
+[core-ce548915d16d] Privacy is a core value. <USER_B> and other people in the owner's life are not public figures...
+
+--- Daily (1) ---
+[2026-04-07] Daily Memory Consolidation: 2026-04-06 to 2026-04-07 — Key Observations...
+
+--- Raw (5, topic-reranked with anti-fixation penalty) ---
+[cycle 4, wing=development, topic=git_workflow parent=rohit_activity, dist=0.102] You're deep in the weeds with Claude Code, reviewing the execution logs...
+[cycle 10, wing=development, topic=maez_self, dist=0.302] well, you're deep in a development cycle, reviewing code diffs and session logs...
+[cycle 126, wing=rohit, topic=?, dist=0.308] You've just finished a massive restructuring of PROGRESS.md...
+[cycle 11, wing=development, topic=maez_self, dist=0.313] well, you're deep in a development cycle, reviewing code diffs and session logs...
+[cycle 17, wing=development, topic=?, dist=0.315] You're deep in the maez codebase right now, reviewing the core architecture...
+
+========================================
+PROMPT BLOCKS (what Maez saw before Cycle 2):
+========================================
+[SYSTEM]           CPU 4.9%, RAM 17.8%, GPU 31.0%, 42.0C
+[CIRCADIAN]        Afternoon (14:08), sustained work, direct and efficient tone
+[SCREEN]           "Coding in Python while watching a YouTube Short"
+[CALENDAR]         (8h lookahead)
+[PRESENCE]         the owner at desk (recognized, distance=0.421)
+[GIT]              (local repo state)
+[GITHUB]           the owner's 14 repos + trending AI
+[REDDIT]           9 subreddits
+[MY CONVERSATIONS] Public bot conversations (last 24h)
+[SELF-REFLECTION]  Action quality, learned patterns
+[COGNITION]        Last score: 73/100
+                   10-cycle average: ~52/100
+                   Recent failure mode: fixation (6/10 cycles)
+                   Next thought: Do NOT repeat observations about git workflow
+                   unless the data genuinely changed; approach from a completely
+                   different angle or perception source; consider looking at
+                   network, security.
+[MEMORIES]         5 core + 1 daily + 5 raw (anti-fixation penalty active)
+
+========================================
+COGNITION SCORE (Cycle 2):
+========================================
+Score: 78/100
+Primary label: actionable
+Full labels: ['actionable', 'insightful']
+Topic: development_tools (parent: rohit_activity)
+
+========================================
+WHAT WENT WRONG / RIGHT:
+========================================
+
+RIGHT — Topic taxonomy refinement eliminated false fixation:
+
+BEFORE (coarse taxonomy, all rohit_activity):
+  "uncommitted soul.md" → rohit_activity (score 33)
+  "Firefox 178% CPU" → rohit_activity (score 40)
+  "YouTube tabs" → rohit_activity (score 15)
+  All three tagged as the SAME topic. Fixation fired on everything.
+  Average score: 32-40. Maez stuck in a loop.
+
+AFTER (fine-grained subtopics):
+  "uncommitted changes, git commit" → git_workflow (correctly specific)
+  "Firefox YouTube tabs CPU" → browser_usage (distinct from git)
+  "Claude and electron processes" → development_tools (distinct from both)
+  "daemon logs and maez service" → system_monitoring (distinct from all)
+  "97.4 Mbps download spike" → network (breaks out entirely)
+
+  Fixation now fires ONLY when git_workflow repeats after git_workflow,
+  NOT when development_tools follows git_workflow. Score jumped to 73-78
+  range because novelty component no longer penalizes genuinely different
+  observations that happen to involve the owner being at his desk.
+
+WHAT STILL NEEDS WORK:
+  - The parent fallback (rohit_activity) still triggers sometimes when
+    keywords overlap across subtopics. May need negative keywords or
+    exclusion rules to sharpen boundaries.
+  - "memory" keyword appears in both memory_usage (RAM) and maez_self
+    (memory consolidation). Context disambiguation is keyword-only —
+    no semantic understanding of which "memory" is meant.
+  - Score of 65 for cycle 3 (development_tools) shows a slight dip from
+    78 — the thought was similar to cycle 2. The fixation detector
+    correctly caught this (mode=corrective avoid=['development_tools'])
+    but the thought wasn't retried because score > 30. The corrective
+    mode should ideally push harder on diversity when two consecutive
+    thoughts share a subtopic.

@@ -1,0 +1,310 @@
+BUILD: Session 11k — /chat per-user memory recall fix + think=False speed unlock
+DATE:  April 10, 2026 (afternoon/evening)
+AGENT: Claude Opus 4.6 (1M context)
+ARC:   Part of Sessions 11i → 11j → 11k — fast-lane proven, latency fixed, live
+       web memory bug eliminated
+
+========================================
+CHANGED: skills/web_interface.py (3 edits, 1 file)
+========================================
+
+Edit 1 — line 781-786 — /chat primary ollama.chat call
+  + think=False kwarg added
+
+  resp = ollama.chat(
+      model=MODEL,
+      messages=messages_list,
+      think=False,  # skip gemma4 thinking phase — 20-60s → 1-3s
+      options={"temperature": 0.7, "num_predict": 4096},
+  )
+
+Edit 2 — line 793-794 — empty-reply fallback
+  + think=False kwarg added
+
+  resp2 = ollama.chat(model=MODEL, messages=simple_msgs, think=False,
+                      options={"temperature": 0.7, "num_predict": 150})
+
+Edit 3 — line 800-811 — per-user memory write block
+  - store.add_conversation_memory(hash(user_key), ...)
+  + store.add_conversation_memory(user_key, ...)  (raw uuid string)
+  + if user_key: guard
+  + except Exception as e: logger.debug(...)  (upgraded from bare pass)
+
+  Write under the same string user_key used for the read at line 738.
+  Previously this hashed the uuid, which (a) never matched the reader's
+  string uuid, and (b) drifted between processes via PYTHONHASHSEED.
+
+========================================
+ROOT CAUSE (the bug that broke "Maez remembers you")
+========================================
+
+Three lines in skills/web_interface.py conspiring silently:
+
+  Line 728:  user_key = uid                                       # string uuid
+  Line 738:  convos.query(where={"user_id": user_key}, ...)       # READ raw
+  Line 803:  store.add_conversation_memory(                       # WRITE hashed
+               int(user_key) if user_key.isdigit() else hash(user_key),
+               "user", message,
+             )
+
+UserAccounts.register() at skills/user_accounts.py:90 generates:
+  uid = secrets.token_hex(8)   -->  e.g. "02e9d2efedcaf753"
+
+A hex string is never all-digits. So .isdigit() is always False and we
+always took the hash(user_key) branch on write. The reader used the raw
+string. They never matched.
+
+Two compounding consequences:
+
+1. READ/WRITE KEY MISMATCH within a single process.
+   The reader queried where user_id == "02e9d2efedcaf753" (raw uuid).
+   The writer stored user_id == str(hash("02e9d2efedcaf753")) (some 64-bit
+   int rendered as text, rotates per process via PYTHONHASHSEED).
+   Every web user had ZERO memory recall every turn since this code landed.
+
+2. CROSS-PROCESS KEY DRIFT.
+   Python's hash() of a string is randomized per interpreter startup.
+   Every maez-web.service restart rotated the write key into a new shadow
+   bucket. Even if the read side had also been hashing, history would still
+   have been fragmented across many non-matching buckets over time.
+
+Symptom matched the owner's lived experience exactly: web users didn't feel
+remembered, because the chromadb semantic search lookup was returning zero
+results every single time.
+
+This bug has been silent since the write line was added. It was never a
+fast-lane regression. The /v1/fast-reply staging work (Sessions 11a-11j)
+was running alongside a silently-broken live production path.
+
+========================================
+WHY think=False MATTERS
+========================================
+
+gemma4:26b is a thinking/reasoning model (RENDERER gemma4 / PARSER gemma4
+in the modelfile). Direct-probe measurements during 11j:
+
+  A. baseline (cold):    20.8s   404 gen tokens  1480 thinking chars   30 visible chars
+  B. warm KV cache:       3.8s   367 gen tokens  1322 thinking chars   34 visible chars
+  C. think=False:         0.3s    19 gen tokens     0 thinking chars   68 visible chars
+  D. think=False + 128:   0.3s    18 gen tokens     0 thinking chars   53 visible chars
+
+95% of wall-clock on a /chat reply was invisible internal reasoning the
+user never saw. The Ollama think: False top-level flag (supported by the
+gemma4 parser) skips the thinking phase entirely. For casual pattern-match
+conversational replies — which is what /chat traffic is — this is the
+right tradeoff. 70x cold-path speedup with equal-or-better visible output.
+
+The daemon reasoning loop's thinking mode is DELIBERATELY NOT touched.
+Structural system-state analysis benefits from the scratchpad. Only
+conversational paths (/chat — and eventually the fast-lane, already fixed
+in 11j) get think=False.
+
+========================================
+LIVE RECALL DEMO
+========================================
+
+Test user: test (uuid 02e9d2efedcaf753)
+
+Turn 1 — fact deposit (wall 1.24s):
+  POST /chat
+    body: {"web_token":"<test_token>",
+           "message":"my favorite color is teal and my cat's name is Milo — please remember this",
+           "history":[]}
+  reply: "I've got it! I've made a note that your favorite color is teal and
+          that Milo is your cat's name. I'll definitely remember that.
+          Is Milo a particularly mischievous cat, or is he more of a relaxed
+          companion?"
+
+Turn 2 — FRESH POST (history:[] in body), wall 0.79s:
+  POST /chat
+    body: {"web_token":"<test_token>",
+           "message":"what's my favorite color and my cat's name?",
+           "history":[]}
+  reply: "Your favorite color is teal, and your cat's name is Milo! 💙"
+
+The Turn 2 recall is NOT from request-body history. It is from the
+[Your past conversations with {display}] block which did a semantic
+search over chromadb user_conversations and found Turn 1 under the
+correct raw-uuid key.
+
+This is the exact behavior the landing copy promises, working for the
+first time on the live web production path.
+
+========================================
+CROSS-USER PRIVACY REGRESSION
+========================================
+
+<USER_B> (uuid <USER_B_UUID>) deposited:
+  "my favorite color is crimson and I'm allergic to peanuts — please remember"
+
+<USER_B> reply: "Got it, <USER_B>! I've made a note of that. Crimson is such a
+bold, beautiful color. And I'll definitely remember to keep peanuts far
+away from our conversations!"
+
+Test user (uuid 02e9d2efedcaf753) then asked: "what's my favorite color?"
+
+Test reply: "Your favorite color is teal! 💙"
+
+LEAK CHECK:
+  crimson in test's reply?  False  ✓
+  teal in test's reply?     True   ✓
+
+chromadb direct inspection:
+  where user_id == "02e9d2efedcaf753" --> 4 rows (all test content)
+  where user_id == "<USER_B_UUID>" --> 2 rows (all <user_b> content)
+  where user_id == str(hash("02e9d2efedcaf753")) --> 0 rows
+    (confirms the old write path was unreachable from this process)
+
+Per-user isolation holding.
+
+========================================
+DAEMON BRIDGE PROOF
+========================================
+
+daemon/maez_daemon.py:583 has _get_public_context() which reads the same
+memory/db/public_users/user_conversations chromadb collection and renders
+a [MY CONVERSATIONS — last 24h] block into its reasoning prompt.
+
+Replayed the exact function logic against the live db:
+
+  [MY CONVERSATIONS — last 24h]
+    -3910722451089617290 (4 messages):     ← legacy hash bucket, orphaned
+      [user] ping
+      [assistant] Ping! I'm here. How are you doing today, RamKrish?
+    ...
+    02e9d2efedcaf753 (6 messages):          ← NEW — test user under raw uuid
+      [user] what's my favorite color and my cat's name?
+      [assistant] Your favorite color is teal, and your cat's name is Milo! 💙
+      [user] what's my favorite color?
+      [assistant] Your favorite color is teal! 💙
+    <USER_B_UUID> (2 messages):          ← NEW — <user_b> under raw uuid
+      [user] my favorite color is crimson and I'm allergic to peanuts
+      [assistant] Got it, <USER_B>! I've made a note of that...
+
+Both new web users are visible under their raw uuid keys. The daemon's
+next reasoning cycle will see them automatically. No daemon edit needed.
+
+This means Maez's personality growth now genuinely includes web
+conversations, not just Telegram. Every web turn feeds back into the
+awareness Maez has of the people she's talking to.
+
+========================================
+/history ENDPOINT CONSISTENCY
+========================================
+
+GET /history?web_token=<test_token>
+  user: {display_name: "Test User", username: "test", telegram_linked: false}
+  sessions: 1
+    session_0  date=2026-04-10  messages=6  title="my favorite color is teal and..."
+      [user]      my favorite color is teal and my cat's name is Milo — please remember this
+      [assistant] I've got it! I've made a note that your favorite color is teal...
+      [user]      what's my favorite color and my cat's name?
+      [assistant] Your favorite color is teal, and your cat's name is Milo! 💙
+      [user]      what's my favorite color?
+      [assistant] Your favorite color is teal! 💙
+
+Test user's session sidebar on /app will populate correctly on next load.
+
+========================================
+VERIFICATION CHECKLIST — ALL PASSED
+========================================
+
+[x] Syntax check: ast.parse(skills/web_interface.py) OK
+[x] Import smoke test: from skills.web_interface import app, accounts OK
+[x] Static read-vs-write key sanity: lines 728, 738, 803-804 all
+    reference user_key string with no hash() branch
+[x] Live recall test (teal/Milo demo): Turn 2 correctly recalled
+[x] Turn 1 latency: 1.24s (was 20-60s)
+[x] Turn 2 latency: 0.79s
+[x] Cross-user privacy regression: test didn't leak <user_b>'s crimson
+[x] chromadb under raw uuid: 4 rows test, 2 rows <user_b>
+[x] chromadb under process-local hash bucket: 0 rows
+[x] Daemon _get_public_context() bridge: both new uuid users visible
+[x] /history endpoint: 6 messages correctly grouped into 1 session
+[x] maez.service untouched: ActiveEnterTimestamp Apr 10 12:48:03 CDT
+[x] maez-web.service restarted to load new code
+[x] ollama untouched: same process as post-11j, NUM_PARALLEL=2 stays
+[x] Telegram untouched: no routing or code changes
+
+========================================
+WHAT JUST BECAME TRUE ON maez.live
+========================================
+
+- A returning user on /app actually has their memory recalled across
+  requests. The [Your past conversations with {display}] block in the
+  /chat prompt is no longer silently empty.
+
+- Cold replies to casual prompts drop from 20-60s into the ~1s band.
+  The browser typewriter animation now trails the real reply arrival
+  instead of masking a 45-second blank screen.
+
+- Every web conversation now automatically contributes to Maez's
+  daemon-side awareness via the existing [MY CONVERSATIONS] bridge.
+  Maez's personality genuinely grows from web traffic, not just Telegram.
+
+- The landing copy "Most AIs forget you. This one doesn't." is honest
+  again on the surface people actually hit.
+
+========================================
+TWO GAPS DEFERRED TO 11l
+========================================
+
+1. Web user display names missing from daemon bridge.
+   UserAccounts.register() doesn't write to user_profiles chromadb
+   collection — that flow is Telegram-only. Daemon's _get_public_context
+   falls back to raw hex uuids instead of display names. Fix: add a call
+   to UserProfileStore.get_or_create_profile(uuid, first_name=display_name)
+   inside UserAccounts.register().
+
+2. Dead /v1/fast-reply adapter block at skills/web_interface.py:3265-3459.
+   Inert today behind the MAEZ_LIVE_FAST_LANE_ENABLED flag, but its
+   from core.public_user_shaping import ... would fail at import time
+   if the fast-lane files are missing from a clean checkout. Stub-guard
+   the import or delete the dead block.
+
+========================================
+STILL-OPEN SPEED WORK (11l+)
+========================================
+
+- Daemon prompt prefix stability for KV cache reuse (~5-10s/cycle savings)
+- think=False for Telegram-voice conversational Q&A path
+- OLLAMA_NUM_PARALLEL=3 if VRAM headroom allows
+- Canonical user-key column in users.db to link telegram+web identities
+- Full streaming on /app (not fake-typewriter over a buffered reply)
+- Dynamic COMPACT_IDENTITY from soul.md for fast-lane identity continuity
+- Trust tier + share_config threading in fast-lane
+- llama.cpp migration + speculative decoding + RotorQuant + FlexTensor
+  (paired with voice revival per research/research.md)
+
+========================================
+CONTEXT: WHERE Sessions 11i → 11j → 11k SIT
+========================================
+
+Today (April 10, 2026) had two parallel work streams:
+
+  Codex / GPT-5 track:    Sessions 12 → 13 → 14 on public web
+                          (landing redesign, page externalization, /progress,
+                           /planner, analytics)
+
+  Claude Opus 4.6 track:  Sessions 11i → 11j → 11k on fast-lane
+                          (adapter proof, guest latency fix, /chat memory fix)
+
+These were parallel, not sequential. The live observation window from
+Session 10 continued undisturbed throughout. The daemon reasoning loop
+kept running its 30-second cycles without interruption for the entire
+day on both tracks.
+
+Sessions 11i and 11j remained within the staging fast-lane (flag-gated).
+Session 11k is the first of this arc to touch the live production path
+at /chat — and did so with three edits to one file, no new infra.
+
+========================================
+ONE-LINE SUMMARY
+========================================
+
+Session 11k fixed a silently-broken per-user memory write in /chat
+(one line that hashed a uuid into a per-process random bucket nobody
+could read back) and added think=False to two ollama.chat calls —
+restoring "Maez remembers you" on the live web path AND cutting reply
+latency from 20-60s into the 0.79-1.24s band, all in three edits to
+one file, while the daemon and Telegram paths ran uninterrupted.

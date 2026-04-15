@@ -1,0 +1,276 @@
+BUILD: Session 16 — owner web continuity bridge + Telegram self-link fix
+DATE:  April 10, 2026 (late evening)
+AGENT: Codex GPT-5
+ARC:   Follow-up to Sessions 11k/11l/15 — fixes bad web-account Telegram linking,
+       then gives the owner's web account real continuity with the private Telegram lane
+
+========================================
+CHANGED
+========================================
+
+Files edited:
+
+  1. skills/user_accounts.py
+  2. skills/web_interface.py
+  3. memory/memory_manager.py
+  4. skills/telegram_voice.py
+  5. ui/app.html
+  6. PROGRESS.md
+
+Operational changes:
+
+  - Cleared bogus self-link on users.username='rohit'
+  - Linked rohit account to private owner bridge:
+      telegram_id         = <OWNER_TELEGRAM_ID>
+      telegram_profile_id = private_owner
+      relationship        = owner
+      trust_tier          = 3
+  - Restarted maez-web.service only
+  - Did NOT restart maez.service
+
+========================================
+BUG 1 — FALSE "FAMILIAR" TELEGRAM MATCH
+========================================
+
+Symptom:
+  the owner created a web account:
+    username     = rohit
+    display_name = ramidoz
+
+  The registration flow offered a "That feels familiar" / Telegram-link prompt.
+  After accepting it, the account looked linked to some strange identity.
+
+What actually happened:
+  It did NOT link the owner to another person's Telegram history.
+  It linked the new web account to its own freshly-created web profile.
+
+Proof from users.db before repair:
+
+  username     = rohit
+  display_name = ramidoz
+  uuid         = ced70c857b5d2655
+  telegram_id  = ced70c857b5d2655
+
+The telegram_id matched the account's own uuid, which is impossible for a
+real Telegram user and proves this was a self-link, not a stranger-link.
+
+Root cause:
+
+  skills/web_interface.py
+    POST /register:
+      result = accounts.register(...)
+      match  = accounts.find_possible_telegram_match(display_name, username)
+
+  skills/user_accounts.py
+    register() created a public_users profile immediately:
+      user_id    = uid
+      username   = rohit
+      first_name = ramidoz
+
+    find_possible_telegram_match() then searched *all* profiles, including the
+    one just created, and returned the first fuzzy name match.
+
+  Result:
+    The newly-created web profile matched itself and was presented as if it
+    were a pre-existing Telegram identity.
+
+Fix:
+
+  user_accounts.find_possible_telegram_match(...)
+    + accepts exclude_user_id
+    + skips candidate user_id == exclude_user_id
+    + skips non-digit user_id values
+    + skips candidates with message_count <= 0
+
+  web_interface.register()
+    + passes exclude_user_id=result['uuid']
+
+Behavior after fix:
+  New web signups no longer see bogus Telegram matches from their own brand-new
+  profile rows. Only real Telegram identities with actual conversation history
+  can be suggested.
+
+========================================
+BUG 2 — WEB COULD NOT SEE ROHIT'S REAL CONTINUITY
+========================================
+
+After clearing the bad self-link, the deeper issue became obvious:
+
+  The web app only knew how to merge history from:
+    memory/db/public_users/user_conversations
+
+  the owner's real long-running relationship with Maez lives in:
+    memory/db/raw/raw_archive
+    type = telegram_exchange
+
+So even a "linked" web account still could not actually inherit the owner's
+private Telegram continuity. The data paths were different.
+
+========================================
+OWNER BRIDGE DESIGN
+========================================
+
+Goal:
+  Give the owner's web account access to the same continuity lane as the private
+  Telegram bot, without weakening public-user isolation for everyone else.
+
+Implementation:
+
+1. Explicit owner bridge marker
+
+  skills/user_accounts.py
+    PRIVATE_OWNER_PROFILE_ID = "private_owner"
+
+    link_private_owner(uid):
+      telegram_id         = MAEZ_TELEGRAM_USER_ID  (resolved as <OWNER_TELEGRAM_ID>)
+      telegram_profile_id = private_owner
+      rohit_confirmed     = 1
+      relationship        = owner
+      trust_tier          = 3
+      share_config        = full Tier 3 config
+
+    get_user_record(uid):
+      returns private_owner_bridge=True when
+        telegram_id == owner telegram id
+        telegram_profile_id == private_owner
+
+2. Raw-memory accessor for the owner's Telegram exchanges
+
+  memory/memory_manager.py
+    get_telegram_exchanges(limit=400)
+      reads raw_archive where type == telegram_exchange
+      sorts chronologically
+
+3. Owner-aware web history
+
+  skills/web_interface.py
+    _parse_owner_exchange(...)
+    _load_private_owner_history(...)
+
+    GET /history:
+      if private_owner_bridge:
+        load parsed telegram_exchange memories from raw archive
+      merge with any web conversations under the account uuid
+      return user.owner_bridge = true
+
+4. Owner-aware web chat
+
+  skills/web_interface.py
+    POST /chat:
+      if private_owner_bridge:
+        build prompt from:
+          - SOUL
+          - memory.recall_for_telegram(message)
+          - current web turn
+        treat web + private Telegram as one continuous relationship
+        write reply back through memory.store_telegram(...)
+
+      else:
+        keep existing public-user isolated path unchanged
+
+5. Truthful UI label
+
+  ui/app.html
+    owner bridge shows:
+      "private continuity linked"
+    ordinary linked users still show:
+      "telegram history linked"
+
+6. Future recovery path
+
+  skills/telegram_voice.py
+    /login now calls link_private_owner(...) for the authorized private bot user
+    and normal link_telegram(...) for everyone else
+
+Important nuance:
+  maez.service was NOT restarted in this session, so the telegram_voice.py
+  change is committed on disk but not yet active in the running private bot
+  process. The bridge itself is already live because it was applied directly
+  to the rohit account row and maez-web.service was restarted.
+
+========================================
+LIVE STATE AFTER REPAIR
+========================================
+
+users.db row for rohit:
+
+  ('ced70c857b5d2655',
+   'rohit',
+   'ramidoz',
+   '<OWNER_TELEGRAM_ID>',
+   'private_owner',
+   'owner',
+   3)
+
+Meaning:
+  - rohit web account is explicitly marked as the owner bridge
+  - web continuity is now anchored to the owner's real private Telegram identity
+  - this is not fuzzy matching anymore; it is an explicit bridge state
+
+========================================
+VERIFICATION
+========================================
+
+Static verification:
+
+  [x] ast.parse(skills/user_accounts.py)
+  [x] ast.parse(skills/web_interface.py)
+  [x] ast.parse(memory/memory_manager.py)
+  [x] ast.parse(skills/telegram_voice.py)
+  [x] grep -c '""""' skills/web_interface.py  -> 0
+
+Data verification:
+
+  [x] bad self-link cleared from rohit account
+  [x] private owner bridge written into users.db
+  [x] recent telegram_exchange memories readable from raw archive
+
+In-process route verification:
+
+  GET /history with rohit auth cookie:
+    owner_bridge    = True
+    telegram_linked = True
+    sessions        = 31
+
+  POST /chat with ollama.chat stubbed:
+    status          = 200
+    reply           = "Bridge path OK."
+    write target    = memory.store_telegram(...)
+    prompt path     = owner continuity branch using SOUL + recall_for_telegram
+
+Live service verification:
+
+  maez-web.service restarted cleanly
+
+  journal tail:
+    Started maez-web.service - Maez Web Interface
+    Memory initialized — raw: 4121, daily: 1, core: 8
+    Running on http://127.0.0.1:11437
+
+  live HTTP request to /history:
+    {'owner_bridge': True, 'telegram_linked': True, 'sessions': 31}
+
+========================================
+WHAT IS TRUE NOW
+========================================
+
+1. the owner can log into /app as rohit and continue the same relationship that
+   already exists in the private Telegram channel.
+
+2. The site no longer suggests a bogus Telegram identity for a brand-new signup.
+
+3. Owner continuity on the web is now real:
+   - reads from the private Telegram memory lane
+   - writes back into the same lane
+   - surfaces in /history as actual sessions
+
+4. Public-user isolation remains intact for everyone except the explicit owner
+   bridge account.
+
+========================================
+KNOWN FOLLOW-UP
+========================================
+
+The private Telegram bot's upgraded /login owner-bridge path in
+skills/telegram_voice.py will become live on the next planned maez.service
+restart. This session intentionally did not touch maez.service.

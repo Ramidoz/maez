@@ -1,0 +1,122 @@
+BUILD: Runtime Continuity Layer — Maez survives restart as the same being via memory/continuity_capsule.json
+
+CREATED: core/continuity.py
+MODIFIED: daemon/maez_daemon.py (startup load, prompt injection, checkpoint, graceful shutdown, orientation expiry)
+MODIFIED: skills/evolution_engine.py (pre-restart write before kill sequence)
+
+========================================
+CAPSULE SAMPLE (full):
+========================================
+{
+  "capsule_version": "1.0",
+  "written_at": "2026-04-08T20:50:54+00:00",
+  "checkpoint_type": "periodic",
+  "restart_reason": null,
+  "last_thought": {
+    "text": "Testing continuity system",
+    "cycle": 99, "score": 65,
+    "topic": "maez_self", "labels": ["actionable"]
+  },
+  "active_concerns": [],
+  "current_mode": "post_rollback",
+  "recent_cognition_window": {},
+  "pending_followups": [],
+  "active_candidate_id": null,
+  "watchdog_context": {
+    "candidate_id": null, "cycles_remaining": null,
+    "pre_patch_score_avg": null, "target_file": null
+  },
+  "conversation_stance_with_rohit": {
+    "last_exchange_topic": "the owner (voice): Okay, guys.\nMaez: I'm here, the owner. Ready when you are.",
+    "tone": null, "unresolved_thread": null
+  },
+  "what_changed_due_to_restart": null,
+  "resume_instructions": "Continue your recent work. You were in post_rollback mode."
+}
+
+========================================
+CONTINUITY BLOCK SAMPLE:
+========================================
+[CONTINUITY]
+  You just restarted.
+  You were in post_rollback mode.
+  Your last thought was about maez_self, scored 65.
+  Resume: Continue your recent work. You were in post_rollback mode.
+  Do not announce the restart unless the owner asks. Continue as yourself.
+
+========================================
+RESUME INSTRUCTIONS SAMPLE:
+========================================
+Fallback (deterministic): "Continue your recent work. You were in post_rollback mode."
+LLM-generated: not triggered this session (no mode/candidate change to invalidate cache)
+Cache TTL: 300 seconds before regeneration
+
+========================================
+STARTUP ORDER (verified from logs):
+========================================
+15:51:12 | Continuity capsule loaded (periodic, mode=post_rollback)
+15:51:12 | Continuity active: 5 orientation cycles, mode=post_rollback
+15:51:15 | Startup message suppressed — continuity orientation active
+15:51:51 | Cycle 1 response (with [CONTINUITY] block in prompt)
+...
+15:56:56 | Continuity orientation complete. Resuming normal operation.
+
+Startup flow: load capsule → set orientation → suppress greeting →
+inject [CONTINUITY] for 5 cycles → archive capsule → normal operation
+
+========================================
+RESTART SIMULATION:
+========================================
+1. Wrote fresh capsule with build_capsule()
+2. Killed daemon, started daemon
+3. Logs confirm: capsule loaded, orientation active, greeting suppressed
+4. After 5 cycles: "Continuity orientation complete"
+5. Capsule archived to memory/continuity_archive/20260408_155656.json
+6. Active capsule deleted from memory/continuity_capsule.json
+
+========================================
+STALE TEST:
+========================================
+Wrote capsule with written_at='2020-01-01T00:00:00+00:00'
+load_capsule() returned: None
+Log: "Continuity capsule stale (54956.8 hours) — ignoring"
+PASS: stale capsule correctly ignored
+
+========================================
+LLM FAILURE TEST:
+========================================
+pre_restart_write() uses skip_llm=True:
+  - Never calls ollama
+  - Uses deterministic fallback template
+  - Writes immediately without blocking
+  - Format: "Continue your recent work. You were in {mode} mode. Active concern: {concern}."
+
+========================================
+WHAT WENT WRONG / RIGHT:
+========================================
+
+RIGHT — Atomic write:
+Capsule uses tempfile.mkstemp + os.fsync + os.replace. A crash
+during write cannot leave a partial file. Verified: capsule is
+either complete or absent.
+
+RIGHT — Startup order:
+Continuity loads BEFORE the greeting/startup-message logic.
+The `if not self._continuity_active: send_dev(startup_msg)` gate
+correctly suppressed the restart announcement during orientation.
+
+RIGHT — Orientation expiry:
+After exactly 5 cycles, the capsule was archived and deleted.
+Normal operation resumed. No lingering [CONTINUITY] block after
+the window closed.
+
+RIGHT — Three write paths work:
+- Periodic: build_capsule("periodic") → write_capsule()
+- Pre-restart: pre_restart_write(skip_llm=True) in evolution_engine
+- Graceful shutdown: continuity_shutdown() in daemon stop()
+
+MINOR — cog_metadata scope:
+The initial implementation used `'cog_metadata' in dir()` to
+check if the variable existed in the local scope. This worked
+but was fragile. Fixed to use `self._last_cog_metadata` stored
+after each scoring pass.

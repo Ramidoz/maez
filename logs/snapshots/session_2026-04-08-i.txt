@@ -1,0 +1,84 @@
+BUILD: Continuity Fidelity Verification — diagnosed apparent field failures, confirmed architecture correct
+
+NO CODE CHANGES NEEDED for the core bug. The previous session's test ran in a separate Python process where cognition ring buffers were empty. The daemon process always had correct data — the capsule just needed 10 cycles (CONTINUITY_CHECKPOINT_INTERVAL) to write.
+
+CODE CHANGES MADE (from previous session, already deployed):
+- Fix 1: _get_cognition_window returns _NULL_COGNITION_WINDOW instead of {}
+- Fix 2: _get_active_concerns excludes fixation topic, deduplicates by topic
+- Fix 3: _derive_tone deterministic from exchange text
+- Fix 4: num_predict raised to 4096 for gemma4 thinking model
+- Fix 5: pre_restart_write builds deterministic what_changed from diff
+
+========================================
+BEFORE → AFTER:
+========================================
+
+BEFORE (tested in standalone Python process):
+  recent_cognition_window: {"cycle_count": 0, ...null...}
+  active_concerns: []
+  Appeared broken because ring buffers (_recent_scores, _recent_topics, _recent_labels)
+  are in-memory module-level lists that start empty in every new Python process.
+
+AFTER (daemon process, cycle 10 checkpoint):
+  recent_cognition_window: {
+    "cycle_count": 10,
+    "average_score": 65.6,
+    "dominant_topic": "browser_usage",
+    "dominant_failure_mode": "vague",
+    "fixation_streak": 5
+  }
+  active_concerns: ["git workflow noted at score 53", "system monitoring noted at score 62"]
+
+WHY: The daemon IS the correct process. It populates ring buffers via score_and_classify()
+on every cycle. After 10 cycles, the periodic checkpoint fires and all fields populate
+from the live in-memory state. The standalone test process was a false negative.
+
+========================================
+FULL CAPSULE (daemon-written, cycle 10):
+========================================
+{
+  "capsule_version": "1.0",
+  "written_at": "2026-04-08T21:28:52+00:00",
+  "checkpoint_type": "periodic",
+  "recent_cognition_window": {
+    "cycle_count": 10,
+    "average_score": 65.6,
+    "dominant_topic": "browser_usage",
+    "dominant_failure_mode": "vague",
+    "fixation_streak": 5
+  },
+  "active_concerns": [
+    "git workflow noted at score 53",
+    "system monitoring noted at score 62"
+  ],
+  "conversation_stance_with_rohit": {
+    "tone": "curious"
+  },
+  "resume_instructions": "Keep refining the git workflow and monitoring system loads, but stop letting Firefox's YouTube Shorts drain your resources..."
+}
+
+========================================
+WHAT WENT WRONG / RIGHT:
+========================================
+
+WRONG — Previous session's verification methodology:
+Running build_capsule() from a standalone `python3 -c` process tested the capsule
+building code but NOT the live daemon state. Ring buffers exist only in the daemon
+process. The standalone test showed cycle_count=0 and active_concerns=[] because
+it was the truth for THAT process — just not for the daemon.
+
+RIGHT — Architecture was correct:
+_get_cognition_window() correctly imports _recent_scores from cognition_quality.py
+and reads the same list object that score_and_classify() populates. In the daemon
+process, this works perfectly. No import-time binding issue. No module duplication.
+
+RIGHT — Checkpoint timing:
+The daemon correctly waits 10 cycles before first periodic write, then writes every
+10 cycles. After restart, orientation uses 5 cycles, then the counter continues.
+Capsule at cycle 10 had full data.
+
+LESSON — Test continuity in the daemon process, not standalone:
+Any future verification of continuity fields should either:
+1. Wait for the daemon's periodic checkpoint and read the capsule file
+2. Or inject test values into the ring buffers before calling build_capsule()
+Never trust a standalone process to represent daemon-resident state.

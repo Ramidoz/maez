@@ -1,0 +1,167 @@
+BUILD: Self-Edit Execution Rail — candidate lifecycle, DB-backed locking, two-layer rollback, scope enforcement, delayed watchdog integration
+
+REUSED: validate_syntax(), validate_security(), validate_behavior() (called directly, not forked)
+REUSED: action_engine backup mechanism, EvolutionTracker.record_deployment()
+REUSED: existing daemon check_and_revert() cadence (patched via _original_check_and_revert wrapper)
+WRAPPED: check_and_revert() extended to also call check_watchdog_candidates()
+REPLACED: IMMUTABLE_FILES/EVOLVABLE_SKILLS → source_awareness scope checks
+FILLED: candidates table, evolution_lock, watchdog_context, locking, cooldown, dedup, diff gen, apply rail
+
+========================================
+SCHEMA:
+========================================
+
+TABLE candidates:
+  id INTEGER PK, state TEXT, weakness_description TEXT,
+  target_file TEXT, diff_text TEXT, justification TEXT,
+  cognition_evidence TEXT, rejection_reason TEXT,
+  rollback_reason TEXT, rollback_layer TEXT,
+  cooldown_key TEXT, pre_patch_hash TEXT, post_patch_hash TEXT,
+  backup_path TEXT, pre_patch_score_avg REAL,
+  post_patch_score_avg REAL, created_at TEXT,
+  validated_at TEXT, applied_at TEXT, resolved_at TEXT
+
+TABLE evolution_lock:
+  id INTEGER PK CHECK(id=1), active_candidate_id INTEGER,
+  locked_at TEXT, locked_by TEXT
+  Single-row invariant enforced by CHECK constraint.
+
+TABLE watchdog_context:
+  candidate_id INTEGER PK, target_file TEXT,
+  backup_path TEXT, pre_patch_score_avg REAL,
+  applied_at TEXT, watchdog_cycles INTEGER DEFAULT 0,
+  regression_threshold REAL, resolved INTEGER DEFAULT 0
+
+Existing deployments table: untouched, 0 rows.
+
+========================================
+DRY RUN TEST (CLI):
+========================================
+
+$ python -m skills.evolution_engine status
+{
+  "lock": {"active_candidate_id": null, "locked_at": null, "locked_by": null},
+  "reconcile_msg": null,
+  "recent_candidates": [],
+  "watchdogs": []
+}
+
+dry-run does not acquire lock, does not back up, does not
+patch, does not restart. It only generates a diff and
+creates a validated candidate row if the diff passes
+patch --dry-run.
+
+========================================
+LOCK TEST: second active candidate blocked
+========================================
+
+1. Created fake validated candidate (id=1)
+2. Acquired lock: True
+3. Policy check for another candidate while locked:
+   "Active candidate 1 holds the lock"
+4. Lock released, candidate cleaned up
+PASS
+
+========================================
+STALE LOCK TEST: stale lock reconciled and cleared
+========================================
+
+1. Set evolution_lock.active_candidate_id=9999, locked_at=2020-01-01
+2. reconcile_lock() returned: "Stale lock cleared: candidate 9999 does not exist"
+3. Lock state after: active_candidate_id=None
+PASS
+
+========================================
+REJECTION TESTS: scope, cooldown
+========================================
+
+SCOPE:
+  _check_policy("test", "daemon/maez_daemon.py") →
+    "Target 'daemon/maez_daemon.py' not allowed in v1 (only core/cognition_quality.py)"
+  _check_policy("test", "core/cognition_quality.py") → None (allowed)
+PASS
+
+COOLDOWN:
+  Created recently resolved candidate with cooldown_key
+  _check_policy("cooldown test", "core/cognition_quality.py") →
+    "Cooldown: same weakness resolved 0.0h ago (need 24h)"
+PASS
+
+========================================
+IMMEDIATE ROLLBACK TEST:
+========================================
+
+Not triggered in this session — no actual patch was applied
+via CLI. The rail is tested structurally:
+
+apply_candidate() flow:
+  preflight → scope + hash + lock
+  backup → shutil.copy2 to backups/
+  patch → subprocess patch -p1
+  py_compile → subprocess py_compile target
+  validate_behavior() → existing function, called directly
+  restart maez.service → sudo systemctl restart
+  health poll → GET localhost:11435/health, 60s timeout
+  ANY FAILURE → shutil.copy2 backup over target,
+                restart service, set state=rolled_back,
+                rollback_layer=immediate, release lock
+
+The immediate rollback path restores the backup AND
+re-restarts the service with the restored file before
+returning. Two-step: restore file, then restart.
+
+========================================
+DELAYED WATCHDOG TEST:
+========================================
+
+check_watchdog_candidates() reads watchdog_context
+where resolved=0, computes post_patch_score_avg from
+cognition_quality._recent_scores, compares against
+pre_patch_score_avg with regression_threshold.
+
+If regression > threshold: restore backup, restart,
+mark rolled_back with rollback_layer=delayed.
+If OK: mark resolved, release lock.
+
+Called by patched check_and_revert() which runs on
+existing daemon cadence (every 20 cycles).
+
+Context row: 0 rows (no applied candidates yet).
+Existing cadence confirmed: daemon line 1359 calls
+check_and_revert() which now also calls
+check_watchdog_candidates().
+
+========================================
+WHAT WENT WRONG / RIGHT:
+========================================
+
+RIGHT — DB as authority:
+All lifecycle state lives in SQLite. Locking is enforced
+via evolution_lock with CHECK(id=1) single-row constraint.
+Stale lock recovery is deterministic and logged. No
+in-memory state relied upon for safety decisions.
+
+RIGHT — Scope enforcement at two layers:
+V1_ALLOWED_TARGET hardcheck + source_awareness.get_file()
+scope check. Both must pass. Neither can be bypassed.
+
+RIGHT — validate_behavior() reused directly:
+Line in apply_candidate():
+  beh_ok, beh_err = validate_behavior(full_path)
+No fork. No reimplementation. Same subprocess import test.
+
+RIGHT — No daemon changes:
+maez_daemon.py was not modified. The patched
+check_and_revert wraps the original function at module
+level — the daemon imports check_and_revert by name,
+and gets the patched version because Python resolves
+the name at import time.
+
+NEEDS TESTING — Full apply path:
+The apply_candidate() function has not been invoked with
+a real diff in production. The structural tests verify
+each gate individually (scope, lock, cooldown, dedup)
+but the end-to-end path through patch → restart → health
+needs a real diff to exercise. Next session should do
+a controlled dry-run → apply test with a trivial
+cognition_quality.py change.

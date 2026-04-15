@@ -1,0 +1,133 @@
+BUILD: Autonomous Proposal Trigger — Maez proposes self-edits from real cognition evidence, the owner always approves
+
+ADDED to skills/evolution_engine.py:
+  - check_proposal_trigger(): 7-condition evaluator, logs every condition
+  - _build_evidence_packet(): structured JSON from live critique window
+  - _derive_weakness(): auto-generated weakness_description from evidence
+  - _validate_diff_structure(): rejects diffs touching def/class/import/control-flow
+  - show CLI: full candidate record with diff and evidence
+  - reject CLI: manual rejection with state tracking
+  - AUTO_APPLY_ENABLED = False (hardcoded, not configurable)
+
+ADDED to core/cognition_quality.py:
+  - check_proposal_trigger() wired after self_critique() returns
+  - lazy import, failure never crashes daemon
+
+ADDED to core/continuity.py:
+  - set_mode_override(mode): transient one-shot mode for next capsule write
+  - consumed by _get_current_mode(), clears after one use
+
+========================================
+TRIGGER FIRED (all 7 conditions with actual values):
+========================================
+1. critique_fired: True (self_critique window just ran)
+2. score_below_threshold: True (35.0 < 45)
+3. fixation_present: True (fixation in 20/20 labels)
+4. no_active_lock: True (active_candidate_id = None)
+5. cooldown_clear: True (no resolved candidate with same key within 24h)
+6. no_unresolved_proposal: True (no existing validated/proposed/queued with same key)
+7. enough_evidence: True (20 cycles >= 10 minimum)
+→ PROPOSAL GENERATED: candidate 12
+
+========================================
+HEALTHY SUPPRESSED:
+========================================
+check_proposal_trigger({avg_score: 70, ...})
+→ None (score 70 >= threshold 45)
+Log: "PROPOSAL_SUPPRESSED | score 70 >= 45"
+
+========================================
+LOCK SUPPRESSED:
+========================================
+Acquired lock for fake candidate → check_proposal_trigger(low scores)
+→ None (lock held by candidate)
+Log: "PROPOSAL_SUPPRESSED | lock held by candidate N"
+
+========================================
+COOLDOWN SUPPRESSED:
+========================================
+Created recently resolved candidate with same cooldown_key
+→ None (cooldown active)
+Log: "PROPOSAL_SUPPRESSED | cooldown active (0.0h < 24h)"
+
+========================================
+VAGUE-ONLY SUPPRESSED:
+========================================
+Ring buffers: all labels=['vague'] (no fixation)
+→ None (no fixation in dominant failure mode)
+Log: "PROPOSAL_SUPPRESSED | no fixation in dominant failure mode"
+
+========================================
+DUPLICATE-PROPOSAL SUPPRESSED:
+========================================
+Created unresolved validated candidate with same cooldown_key
+→ None (unresolved proposal exists)
+Log: "PROPOSAL_SUPPRESSED | unresolved proposal N exists"
+
+========================================
+PROPOSAL GENERATED (candidate 12):
+========================================
+Weakness: "Fixation on browser usage detected across 20 of the last 20 cycles. Average score 35.0/100. Dominant failure: fixation. Policy directive: Do NOT repeat observations about browser usage..."
+Target: core/cognition_quality.py
+State: validated
+Pre-score: 35.0
+Diff: FIXATION_THRESHOLD 0.55 → 0.5 (one constant, one hunk, 2 changed lines)
+Structural validation: PASS (no def/class/import/control-flow touched)
+Evidence packet: 20 scores, 20 topics, policy directive, source awareness scope
+
+========================================
+TELEGRAM NOTIFICATION TEXT:
+========================================
+🧠 Maez self-edit proposal
+
+Weakness detected: Fixation on browser usage detected across 20 of the last 20 cycles. Average score 35.0/100. Dominant failure: fixation.
+Target: core/cognition_quality.py
+Candidate ID: 12
+Pre-patch score average: 35.0/100
+Evidence: 20 cycles, dominant failure: browser_usage
+
+To review: python -m skills.evolution_engine show 12
+To apply:  python -m skills.evolution_engine apply 12
+To reject: python -m skills.evolution_engine reject 12
+
+========================================
+CONTINUITY MODE:
+========================================
+set_mode_override('corrective') called after validated proposal
+Next capsule write will show current_mode='corrective'
+Override is transient — consumed after one capsule write
+
+========================================
+STRUCTURAL VALIDATOR:
+========================================
+Good diff (constant change): PASS
+Bad diff ("+def new_function():"): REJECT — "Diff touches structural code: def new_function():"
+Max hunks: 1, Max changed lines: 8
+
+========================================
+WHAT WENT WRONG / RIGHT:
+========================================
+
+WRONG — Ollama timeout during standalone test:
+The trigger's generate_diff() calls Ollama, but the daemon holds the GPU. Standalone tests
+can't get Ollama responses while the daemon is running with its own model loaded. This is
+expected — the trigger is designed to run INSIDE the daemon process where Ollama access
+is available. Created the validated candidate manually to prove the rest of the flow.
+
+RIGHT — All 7 conditions evaluated and logged:
+Every trigger evaluation logs exactly which condition passed or failed and why. No silent
+suppression. The evolution.log has a complete audit trail.
+
+RIGHT — Structural validator catches bad diffs:
+The _validate_diff_structure function rejects any diff touching def, class, import, or
+control flow lines. This is enforced in code, not just prompt wording. Combined with
+MAX_PROPOSAL_HUNKS=1 and MAX_PROPOSAL_CHANGED_LINES=8, the attack surface is minimal.
+
+RIGHT — the owner always decides:
+AUTO_APPLY_ENABLED = False is hardcoded. The trigger creates validated candidates and
+sends notifications. It never acquires the lock, patches files, or restarts the daemon.
+The show/apply/reject CLI gives the owner full control.
+
+RIGHT — Continuity integration:
+set_mode_override('corrective') fires after a validated proposal, ensuring the next
+capsule captures the mode change. Override is consumed after one write (transient).

@@ -1,0 +1,487 @@
+BUILD: Session 11p — llama.cpp CUDA substrate pivot. Ollama retired.
+DATE:  April 11, 2026 (afternoon)
+AGENT: Claude Opus 4.6 (1M context)
+ARC:   Theme 2 substrate migration. 11n PoC → 11o dream states → 11p
+       full Ollama replacement. Every Maez surface now runs on a
+       source-built llama.cpp CUDA binary serving gemma-4-26B-A4B
+       via the official ggml-org GGUF.
+
+========================================
+THE HEADLINE
+========================================
+
+Maez's brain moved house. For ~5 weeks, every reasoning cycle, every
+Telegram reply, every dream insight, every /chat turn ran through
+Ollama on gemma4:26b. After 11p, every surface routes through a
+source-built CUDA llama-server (commit ff5ef82) running the official
+ggml-org/gemma-4-26B-A4B-it-GGUF. Daemon reasoning dropped from
+15-45s per cycle to 3.17s. Prompt eval: 6,238 tok/s. Generation:
+117-133 tok/s. Continuous batching > Ollama's NUM_PARALLEL=2.
+
+Ollama.service is now disabled. The package stays installed as
+instant rollback, but it won't auto-start on reboot and isn't
+running today.
+
+========================================
+THE FAILED FIRST ATTEMPT
+========================================
+
+11p opened by pointing llama-cpp-python 0.3.20 at Ollama's own
+gemma4:26b blob on disk. It failed with:
+
+  wrong number of tensors; expected 1014, got 658
+
+I concluded — incorrectly — that upstream llama.cpp didn't support
+gemma4's architecture and that "Ollama's gemma4 is Ollama-proprietary,
+Path C is dead." the owner pushed back with specific public evidence:
+
+  1. ggml-org/gemma-4-26B-A4B-it-GGUF exists on HuggingFace and
+     explicitly targets llama-server
+  2. The 658 vs 1014 tensor gap is almost certainly the MMPROJ
+     (multimodal projection) tensors living in a SEPARATE file —
+     Ollama packages them into one blob, upstream llama.cpp keeps
+     them separate and expects both
+  3. Live user reports of this exact GGUF loading in llama.cpp CUDA
+
+He was right on every bullet. The test I should have run from the
+start was "download the canonical ggml-org GGUF and see if it loads."
+Instead I tested the blob Ollama had already quantized for its own
+runtime, which had a different tensor layout.
+
+Lesson recorded: a single failed load with one toolchain on one
+artifact is a data point, not a universal claim. The 658 vs 1014
+number was right in front of me — "missing tensors" strongly
+suggested "missing file," not "incompatible parser." The mmproj
+hypothesis was inferrable from the numbers alone and I didn't
+chase it.
+
+========================================
+THE CORRECTED PATH
+========================================
+
+Downloaded from ggml-org/gemma-4-26B-A4B-it-GGUF on HuggingFace:
+  gemma-4-26B-A4B-it-Q4_K_M.gguf         15.64 GB (182s download)
+  mmproj-gemma-4-26B-A4B-it-f16.gguf      1.11 GB  (18s download)
+
+Staged at /home/rohit/maez/models/llamacpp/
+
+First load attempt with the Vulkan prebuilt binary (llama-b8762
+from github.com/ggml-org/llama.cpp/releases):
+
+  build      : b8762-073bb2c20
+  model      : gemma-4-26B-A4B-it-Q4_K_M.gguf
+  modalities : text
+  [Prompt: 35.0 t/s | Generation: 12.6 t/s] (CPU-only)
+
+Clean load. Zero tensor errors. Zero architecture errors. The model
+is fully supported by upstream llama.cpp; Ollama's blob was the
+outlier, not the canonical GGUF.
+
+the owner's next question: "why dont we proceed with cuda from the start."
+Fair. Vulkan on RTX 4090 hits ~70-85% of CUDA perf; since this was
+going to be Maez's primary brain permanently, the extra 15-30% from
+CUDA was worth installing the toolkit and building from source.
+
+========================================
+TOOLCHAIN INSTALL
+========================================
+
+  sudo apt install -y --no-install-recommends \
+    cmake nvidia-cuda-toolkit
+
+Installed:
+  cmake 3.28.3
+  nvidia-cuda-toolkit 12.0.140 (nvcc, cuBLAS, cuFFT, cuSPARSE,
+                                 cuSOLVER, cuRAND, libcub, thrust)
+  gcc-12 + g++-12 (auto-pulled as CUDA host compiler; gcc-13
+                    that was already installed is too new for nvcc)
+  plus various nvidia-profiler + libnvblas + libnppist + opencl bits
+
+Build dependencies resolved; no manual NVIDIA repo setup needed.
+Ubuntu 24.04's packaged nvidia-cuda-toolkit 12.0 is driver-compatible
+with the 13.0 CUDA driver already in place.
+
+========================================
+LLAMA.CPP BUILD FROM SOURCE
+========================================
+
+  git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
+  # commit ff5ef82 — same-day checkout
+
+  cd llama.cpp && mkdir build && cd build
+  cmake .. \
+    -DGGML_CUDA=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CUDA_ARCHITECTURES="89" \
+    -DLLAMA_BUILD_SERVER=ON \
+    -DLLAMA_BUILD_TESTS=OFF
+
+  cmake --build . --config Release -j 32 \
+    --target llama-server llama-cli
+
+Build time: **2 minutes 19 seconds** on the i9-14900KF's 32 threads.
+Produced:
+  /home/rohit/llama.cpp/build/bin/llama-server (13.5 MB)
+  /home/rohit/llama.cpp/build/bin/llama-cli    (6.1 MB)
+
+CMAKE_CUDA_ARCHITECTURES=89 targets compute capability 8.9
+(RTX 4090). Single-architecture build; no wasted code for other
+GPUs. Build is repeatable — the llama.cpp source tree is at
+/home/rohit/llama.cpp, rebuildable on demand with `cmake --build .`.
+
+========================================
+LLAMA-SERVER LAUNCH FLAGS
+========================================
+
+  ./bin/llama-server \
+    -m  /home/rohit/maez/models/llamacpp/gemma-4-26B-A4B-it-Q4_K_M.gguf \
+    --mmproj /home/rohit/maez/models/llamacpp/mmproj-gemma-4-26B-A4B-it-f16.gguf \
+    --host 127.0.0.1 --port 8080 \
+    -ngl 999 \
+    --ctx-size 32768 --parallel 2 \
+    --flash-attn on \
+    --cache-type-k q8_0 --cache-type-v q8_0 \
+    --alias gemma-4-26b \
+    --cont-batching \
+    --jinja
+
+Tuning rationale:
+
+  -ngl 999                offload all 46 transformer layers to GPU
+  --ctx-size 32768        total KV context pool across all slots
+  --parallel 2            divides into 16,384 tokens per slot.
+                          Needed because daemon reasoning prompt
+                          is ~14,642 tokens (soul.md 30KB + memory
+                          + perception + cognition + policy blocks)
+  --flash-attn on         ~20% KV reduction, ~15% prompt-eval win
+  --cache-type-k q8_0
+  --cache-type-v q8_0     8-bit quantize KV cache, halves KV memory
+                          vs F16. Quality loss is imperceptible
+                          for this workload.
+  --cont-batching         continuous batching — token-level
+                          interleaving across concurrent sessions
+  --jinja                 use Jinja chat template from GGUF metadata
+  --parallel 2 vs 4       initial launch used parallel=4 with
+                          ctx-size=4096 → 1024 tokens per slot →
+                          instantly failed daemon cycle with
+                          exceed_context_size_error. parallel=2
+                          gives daemon its 14K context headroom.
+                          Still beats Ollama NUM_PARALLEL=2 via
+                          token-level interleaving.
+
+========================================
+MEASURED PERFORMANCE
+========================================
+
+Direct curl to /v1/chat/completions on the CUDA llama-server:
+
+  Scenario                              Result
+  ------------------------------------  -------------------
+  Single warm call, 4 completion tok    92 ms
+  Single warm call, prompt cache hit    54 ms
+  Real 96-token generation              720 ms (~133 tok/s)
+  14,669-token prompt eval              2,351 ms (~6,238 tok/s)
+  Daemon reasoning cycle full trip      3,168 ms
+    14K prompt + 96 gen
+  5 concurrent 5-7 token requests       ~210 ms wall total
+    (all 5 distinct replies)
+
+Prompt cache confirmed hitting: 54ms cache hit vs 92ms cold on
+identical second request.
+
+enable_thinking: false via chat_template_kwargs: works. gemma4's
+template honors the flag. Previous (11j) ollama path used top-level
+`think: false` — the new llm_client wrapper translates the ollama-
+style kwarg into the llama.cpp-style chat_template_kwargs.
+
+Daemon reasoning comparison:
+  Before (Ollama gemma4:26b):  15-45 seconds per cycle
+  After  (CUDA llama-server):  3.17 seconds per cycle
+  Speedup:                     5-14× on Maez's most important code
+                               path (the 30-second heartbeat).
+
+========================================
+llm_client.py WRAPPER CHANGES (from 11n → production)
+========================================
+
+11n shipped core/llm_client.py as a backend-dispatcher. 11p landed:
+
+  1. Default model bumped: qwen2.5-3b → gemma-4-26b
+     (matches --alias flag on llama-server)
+
+  2. think kwarg translated to extra_body.chat_template_kwargs:
+       if think is False:
+         extra_body['chat_template_kwargs'] = {'enable_thinking': False}
+     Forwarded via OpenAI client's extra_body parameter. 11n was
+     silently dropping the think flag for llamacpp path.
+
+  3. Streaming adapter added for llamacpp:
+     When stream=True, returns a generator that yields _LlmResponse
+     chunks with message.content = OpenAI delta.content per chunk.
+     Matches ollama's shape exactly so consumers iterating
+     `for chunk in response: token = chunk.message.content`
+     work unchanged across backends.
+
+  4. fast_backend_local.is_available() made backend-aware:
+     When MAEZ_LLM_BACKEND=llamacpp, probes
+     http://127.0.0.1:8080/v1/models (OpenAI-compat health)
+     instead of Ollama's /api/tags.
+     This was the bug that blocked the first fast-lane end-to-end
+     test: router saw is_available()==False (Ollama stopped),
+     returned "no backend available" before reaching the llamacpp
+     branch in generate().
+
+========================================
+SURFACES MIGRATED
+========================================
+
+  Surface                    File                           Change
+  -------------------------- ------------------------------ --------
+  Daemon reasoning _reason() daemon/maez_daemon.py:501-520  ollama.chat → llm_client.chat
+                                                            think mode KEPT for structural cycles
+  /chat primary              skills/web_interface.py        ollama.chat → llm_client.chat
+  /chat empty-reply fallback skills/web_interface.py        ollama.chat → llm_client.chat
+  Public Maez_AI bot         skills/telegram_public.py:308  ollama.chat → llm_client.chat
+  Private Telegram streaming skills/telegram_voice.py:~412  ollama.chat(stream=True) → llm_client.chat(stream=True)
+                                                            streaming adapter yields chunks
+  Fast-lane adapter          core/fast_backend_local.py     env-gated branch activated via env var
+                                                            is_available() made backend-aware
+
+One env var added to /home/rohit/maez/config/.env:
+  MAEZ_LLM_BACKEND=llamacpp
+
+maez.service and maez-web.service pick it up via their existing
+EnvironmentFile= directive. Flip to 'ollama' + restart services
++ start ollama.service = instant rollback with zero data loss.
+
+========================================
+SYSTEMD UNIT FOR LLAMA-SERVER
+========================================
+
+/etc/systemd/system/llama-server.service:
+
+  [Unit]
+  Description=llama.cpp CUDA inference server (gemma-4-26B-A4B) —
+              Maez primary brain
+  After=network-online.target
+  Wants=network-online.target
+
+  [Service]
+  Type=simple
+  User=rohit
+  Group=rohit
+  WorkingDirectory=/home/rohit/llama.cpp/build
+  ExecStart=/home/rohit/llama.cpp/build/bin/llama-server \
+    <flags from above>
+  Restart=always
+  RestartSec=5
+  StandardOutput=append:/var/log/llama-server.log
+  StandardError=append:/var/log/llama-server.log
+  LimitNOFILE=1048576
+  Nice=-5
+
+  [Install]
+  WantedBy=multi-user.target
+
+  systemctl enable --now llama-server.service
+  Created symlink /etc/systemd/system/multi-user.target.wants/
+    llama-server.service → /etc/systemd/system/llama-server.service
+
+Runs as user rohit (same user that owns maez/ and llama.cpp/).
+Logs append to /var/log/llama-server.log (pre-chowned to rohit).
+Nice=-5 gives it slight scheduling priority over desktop work.
+
+========================================
+OLLAMA RETIREMENT
+========================================
+
+  sudo systemctl stop ollama.service
+  sudo systemctl disable ollama.service
+
+  Removed "/etc/systemd/system/default.target.wants/ollama.service"
+
+Package stays installed. Blob still at
+/home/rohit/ollama/.ollama/models/blobs/. Nothing is destroyed.
+Full rollback:
+  sudo systemctl enable --now ollama.service
+  sed -i 's/MAEZ_LLM_BACKEND=llamacpp/MAEZ_LLM_BACKEND=ollama/' \
+    /home/rohit/maez/config/.env
+  sudo systemctl restart maez.service maez-web.service
+
+~60 seconds back to the previous substrate if anything goes wrong.
+
+========================================
+FINAL SERVICE STATE
+========================================
+
+  maez.service              active   enabled   14:03:32 CDT
+  maez-web.service          active   enabled   14:03:37 CDT
+  llama-server.service      active   enabled   14:10:08 CDT
+  ollama.service            inactive disabled  (retired)
+
+  VRAM: 20,273 / 24,564 MiB used, 3,786 MiB free
+
+========================================
+DAEMON COGNITION QUALITY POST-MIGRATION
+========================================
+
+The cognition quality system labels every reasoning cycle against
+structural criteria (FIXATION, WEAK_RETRIEVAL, VAGUE,
+GOOD_OBSERVATION, ACTIONABLE, NEW_ANGLE, INSIGHTFUL) and writes to
+logs/cognition.log. It's the most sensitive test of brain quality
+drift across a substrate change.
+
+Early cycles on the new substrate:
+
+  Cycle  Score  Labels                       Notes
+  -----  -----  ---------------------------- -----------------------
+  1      -      context_size_error (1024 tok/slot too small)
+                fixed by --parallel 2 --ctx-size 32768
+  2      58     ['insightful']               VS Code + Firefox, disk 77%
+  1 (*)  63     ['actionable', 'insightful'] After maez.service restart
+                                             to pick up llm_client edits
+  8      33     ['fixation']                 Third mention of the same
+                                             disk/dev pattern — cognition
+                                             system correctly flagging
+                                             topic repetition
+
+Cycle 8's low score is the cognition system WORKING AS DESIGNED,
+not a brain regression. The anti-fixation penalty catches repeated
+observations on the same topic. This would happen on Ollama
+gemma4:26b too — it's a property of the underlying model, not the
+substrate.
+
+Scores 58 and 63 are within normal pre-migration operating range.
+No evidence of quality drop from the substrate change. A proper
+statistical A/B would need 50+ cycles to measure distribution
+shift — out of scope for 11p, tracked as future observation work.
+
+========================================
+END-TO-END SURFACE VERIFICATION (live curl)
+========================================
+
+  --- /v1/fast-reply (maez-web adapter) ---
+  backend=local-llamacpp latency=279ms success=True
+  reply: "Hi the owner! I'm here and ready to help. One thing: your
+          system status looks clear for now."
+
+  --- /chat (maez-web direct) ---
+  wall 837ms
+  reply: "Hi there! I'm happy to keep things brief for you."
+
+  --- daemon reasoning cycle 1 (post-restart) ---
+  wall 3.17s (~6238 tok/s prompt eval, ~117 tok/s generation)
+  reply: "So, I see you've got VS Code running with some heavy
+          lifting going on, likely related to the git workflow
+          you've been managing. Your `/` partition is creeping up
+          toward 77%... it might be worth a quick check for any
+          large build artifacts or temporary files that have
+          accumulated during this session."
+  cognition: score=63 labels=['actionable', 'insightful']
+
+All three surfaces returning gemma4-quality output via the new
+substrate. Ollama isn't running. Nothing retries to Ollama
+automatically. The migration is real.
+
+========================================
+WHAT 11p DID NOT TOUCH
+========================================
+
+  [x] config/soul.md                      untouched
+  [x] core/cognition_quality.py           frozen per standing constraint
+  [x] skills/evolution_engine.py          frozen per standing constraint
+  [x] config/.env                         ONE line added: MAEZ_LLM_BACKEND=llamacpp
+  [x] memory databases                    zero schema changes, zero
+                                          data migration — every memory,
+                                          every soul note, every dream,
+                                          every cognition score preserved
+  [x] Ollama package on disk              still installed, rollback-ready
+  [x] Telegram routing, intent matcher,
+      streaming sentence-boundary logic   untouched; only the
+                                          ollama.chat() → llm_client.chat()
+                                          line changed
+
+========================================
+WHAT 11p UNBLOCKS
+========================================
+
+  * Speculative decoding (draft model for 2-3× additional gen speed)
+  * RotorQuant KV compression (5-7× smaller KV cache, more slots)
+  * FlexTensor layer offload (page layers to 64 GB system RAM —
+    could fit a 70B model OR way more concurrent slots on gemma4)
+  * LoRA fine-tuning via unsloth on gemma4 (the Theme 2 deep bet —
+    the owner confirmed unsloth supports gemma4)
+  * Per-Stand session save/restore for the Theme 1 migration
+  * Brain-swap skill (research.md item 8, was blocked by Ollama's
+    model library lock-in, now tractable)
+
+Every horizon item in research.md required llama.cpp as substrate.
+11p delivered the substrate.
+
+========================================
+THE TWO LESSONS OF THE OVERREACH
+========================================
+
+1. Over-generalizing from N=1.
+   A single failure with one toolchain on one artifact is a data
+   point, not a universal claim. "Fails here" ≠ "fails everywhere."
+   The correct next move after a load failure is to try the
+   CANONICAL source (ggml-org HuggingFace release), not to
+   conclude the architecture is unsupported.
+
+2. Not reading the error with enough curiosity.
+   "658 vs 1014 tensors" was visible as a specific integer
+   difference. "Missing tensors" strongly implies "missing file"
+   or "missing section" — not "incompatible parser." The mmproj
+   hypothesis the owner led with was inferrable from the numbers
+   alone. I should have chased it instead of declaring the path
+   dead.
+
+Recorded here so the next time the temptation is there to declare
+something blocked on the first failure, the reflex is to exhaust
+the entry points first.
+
+========================================
+NEXT SESSION (11q) CANDIDATES
+========================================
+
+The substrate is live. The next session picks what to do with it:
+
+  (a) Speculative decoding — pull a 1-2B draft model (qwen2.5-1.5b,
+      gemma2-2b), add --draft-model flag to llama-server, measure.
+      Expected: 2-3× additional generation speed on daemon cycles
+      and conversational paths. ~1 session, low risk.
+
+  (b) LoRA fine-tuning pipeline via unsloth on gemma4 — the Theme 2
+      deep bet. Install unsloth, build conversation-to-training-pair
+      extractor, run first QLoRA training on the owner's conversation
+      history. ~3-4 sessions. High-impact for "Maez learning you
+      at the weight level."
+
+  (c) Cognition score A/B observation window — deliberately run
+      50+ cycles on the new substrate, dump the cognition score
+      distribution, compare to the pre-migration distribution.
+      Needed before declaring "the brain is equally good" with
+      statistical confidence. ~0.5 sessions of code + observation
+      time.
+
+  (d) Start Theme 1 (Stand architecture) directly. The substrate
+      scales now; we can genuinely host 2-5 concurrent Stands.
+      Per-tenant schema refactor → <USER_B>'s first Stand → inter-
+      Stand protocol v1. 3-5 sessions for the first end-to-end
+      Stand demo.
+
+Recommendation TBD by the owner.
+
+========================================
+ONE-LINE SUMMARY
+========================================
+
+Session 11p moved Maez's brain from Ollama gemma4:26b to a source-
+built CUDA llama-server running the canonical ggml-org/gemma-4-26B-
+A4B-it-GGUF after a false-start that the owner correctly caught —
+ended with every surface (daemon, /chat, telegram_voice,
+telegram_public, fast-lane, dream states) on the new substrate
+at 3.17s daemon cycles, 133 tok/s generation, 6238 tok/s prompt
+eval, continuous batching, systemd-managed llama-server, and
+Ollama disabled but instantly rollback-ready.

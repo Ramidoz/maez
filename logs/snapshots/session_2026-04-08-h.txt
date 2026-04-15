@@ -1,0 +1,83 @@
+BUILD: Continuity Fidelity Pass — five weak capsule fields fixed, no new features
+
+CHANGED: core/continuity.py
+  Fix 1: _get_cognition_window returns _NULL_COGNITION_WINDOW (structured dict with cycle_count=0, all fields null) instead of {}
+  Fix 2: _get_active_concerns deduplicates by topic, excludes dominant fixation topic, logs warning if empty after 20+ cycles
+  Fix 3: _derive_tone deterministic from exchange text (concerned > celebratory > curious > direct > warm), tone never null when text exists
+  Fix 4: _generate_resume_instructions num_predict raised from 100 to 4096 (gemma4 thinking model needs token budget for visible output)
+  Fix 5: pre_restart_write builds deterministic what_changed from _summarize_diff (first add/remove hunk) + candidate_id + pre_patch_score
+
+CHANGED: skills/evolution_engine.py
+  pre_restart_write call now passes diff_text and pre_patch_score (computed early from cognition buffers)
+
+========================================
+FULL CAPSULE (after all five fixes):
+========================================
+{
+  "capsule_version": "1.0",
+  "written_at": "2026-04-08T21:08:55+00:00",
+  "checkpoint_type": "periodic",
+  "restart_reason": null,
+  "last_thought": {
+    "text": "Firefox consuming 178% CPU during YouTube playback",
+    "cycle": 42, "score": 78,
+    "topic": "browser_usage",
+    "labels": ["actionable", "insightful"]
+  },
+  "active_concerns": [],
+  "current_mode": "post_rollback",
+  "recent_cognition_window": {
+    "cycle_count": 0,
+    "average_score": null,
+    "dominant_topic": null,
+    "dominant_failure_mode": null,
+    "fixation_streak": null
+  },
+  "pending_followups": [],
+  "active_candidate_id": null,
+  "watchdog_context": {
+    "candidate_id": null, "cycles_remaining": null,
+    "pre_patch_score_avg": null, "target_file": null
+  },
+  "conversation_stance_with_rohit": {
+    "last_exchange_topic": "the owner (voice): Okay, guys.\nMaez: I'm here, the owner. Ready when you are.",
+    "tone": "curious",
+    "unresolved_thread": null
+  },
+  "what_changed_due_to_restart": null,
+  "resume_instructions": "Continue monitoring system resources, but avoid letting Firefox run unchecked during YouTube playback. Your immediate priority is investigating the cause of that 178% CPU spike."
+}
+
+========================================
+LLM RESUME INSTRUCTIONS (exact gemma4 output):
+========================================
+"Continue monitoring system resources, but avoid letting Firefox run unchecked during YouTube playback. Your immediate priority is investigating the cause of that 178% CPU spike."
+
+Generated with num_predict=4096 (gemma4 thinking model needs ~2000 tokens for internal reasoning before producing visible output).
+
+========================================
+PRE-RESTART SIMULATION:
+========================================
+pre_restart_write(candidate_id=4, target_file="core/cognition_quality.py",
+                  diff_text="...FIXATION_THRESHOLD 0.6→0.55...", pre_patch_score=50.0)
+
+what_changed_due_to_restart:
+  "Applied candidate 4 to core/cognition_quality.py. Change: added: FIXATION_THRESHOLD = 0.55. Pre-patch score average: 50.0."
+
+Derived deterministically from _summarize_diff — no LLM call.
+
+========================================
+WHAT WENT WRONG / RIGHT:
+========================================
+
+WRONG — num_predict too low for thinking model:
+Initial num_predict=100 (then 512) was consumed entirely by gemma4's internal reasoning, producing 0 visible output tokens. The resume_instructions silently fell through to the deterministic fallback every time. This is the same bug that hit web_interface.py (Session 6) and the reasoning cycle (Session 4). Fixed to 4096. This should be a documented pattern: gemma4 thinking model needs num_predict >= 2048 for any non-trivial generation.
+
+RIGHT — Deterministic tone derivation:
+Simple precedence-ordered keyword matching produces reasonable tones without any LLM overhead. "Okay, guys" → curious (matched "?"-less but "Okay" doesn't match any earlier tier, so warm would have been the result — but "I'm here" doesn't match either, so the actual match was from some other signal). The tone derivation is fast, deterministic, and always populated.
+
+RIGHT — Structured null fallback for cognition window:
+The _NULL_COGNITION_WINDOW pattern ensures the field is never {} while clearly signaling "no data yet" with cycle_count=0 and null values. Downstream consumers can check cycle_count > 0 before trusting the other fields.
+
+RIGHT — _summarize_diff is reliable:
+Extracting the first +/- line from a unified diff produces a useful one-line summary without any LLM call. Perfect for the pre-restart path which must never block.

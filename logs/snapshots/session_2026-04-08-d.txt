@@ -1,0 +1,152 @@
+BUILD: Source Awareness — read-only self-model of Maez's codebase (core/source_awareness.py + memory/source_awareness.json)
+
+========================================
+THREE RESOLVER TESTS:
+========================================
+
+TEST 1: resolve("fixation detection fires too broadly")
+  core/cognition_quality.py (confidence=0.317, scope=allowed)
+    reason: symbol 'extract_topics' matched 'topic'; symbol 'primary_topic' matched 'topic'; symbol 'get_parent_topic' matched 'topic'; symbol 'get_fixation_penalty' matched 'fixation'; symbol 'get_recent_topics' matched 'topic'
+    risk=medium, ops=['read', 'modify']
+    dependents: ['memory/memory_manager.py', 'daemon/maez_daemon.py']
+  memory/memory_manager.py (confidence=0.167, scope=forbidden)
+    reason: symbol 'TopicRouter' matched 'topic'
+    risk=critical, ops=['read']
+  skills/wake_word.py (confidence=0.056, scope=read_only)
+    reason: purpose matched 'detection'
+    risk=medium, ops=['read', 'new_file']
+  PASS: cognition_quality.py first, scope=allowed
+
+TEST 2: resolve("soul notes are too aggressive")
+  config/soul.md (confidence=0.125, scope=append_only)
+    reason: purpose matched 'constraint'
+    risk=high, ops=['read', 'append_only']
+  skills/user_accounts.py (confidence=0.1, scope=read_only)
+    reason: purpose matched 'identity'
+    risk=medium, ops=['read', 'new_file']
+  PASS: soul.md present, ops=['read', 'append_only'], never shows modify
+
+TEST 3: resolve("public bot memory isolation issue", top_n=5)
+  core/cognition_quality.py score=8 scope=allowed
+    reason: symbol matches for 'core', 'consolidation'
+  core/perception.py score=5 scope=read_only
+    reason: tag 'memory_usage' matched 'memory'
+  memory/memory_manager.py score=5 scope=forbidden
+    reason: symbol 'MemoryManager' matched 'memory'
+    ops=['read'] only
+  skills/telegram_public.py score=5 scope=read_only
+    reason: symbol 'ManipulationDetector' matched 'manipulation'; symbol 'MaezPublicBot' matched 'public'
+    ops=['read', 'new_file']
+  PASS: telegram_public.py and memory_manager.py present, correctly scoped
+
+========================================
+STATS (summary_stats() output):
+========================================
+{
+  "total_files": 60,
+  "indexed_files": 46,
+  "parsed_files": 32,
+  "skipped_by_design": 14,
+  "by_category": {
+    "config": 7, "core": 4, "memory": 3, "ui": 7,
+    "daemon": 1, "skills": 24
+  },
+  "by_scope": {
+    "read_only": 38, "allowed": 1, "forbidden": 6, "append_only": 1
+  },
+  "by_risk": {
+    "high": 8, "critical": 6, "medium": 25, "low": 7
+  },
+  "by_file_type": {
+    "markdown": 4, "python": 32, "json": 5, "env": 1,
+    "html": 3, "javascript": 1
+  },
+  "parse_errors": 0,
+  "parse_error_files": [],
+  "files_without_purpose": 0,
+  "files_without_summary": 0,
+  "last_full_rebuild": "2026-04-08T19:31:39+00:00",
+  "schema_version": "1.0"
+}
+
+========================================
+SAMPLE ENTRY (core/cognition_quality.py — full):
+========================================
+{
+  "path": "core/cognition_quality.py",
+  "file_type": "python",
+  "purpose": "cognition_quality.py — Structural cognition quality subsystem for Maez.",
+  "category": "core",
+  "risk_level": "medium",
+  "self_edit_scope": "allowed",
+  "allowed_operations": ["read", "modify"],
+  "imports": ["core.cognition_quality"],
+  "dependents": ["memory/memory_manager.py", "daemon/maez_daemon.py"],
+  "exported_symbols": ["extract_topics", "primary_topic", "get_parent_topic",
+    "classify", "score", "score_and_classify", "self_critique",
+    "format_for_prompt", "get_fixation_penalty", "get_recent_topics",
+    "get_behavior_policy", "should_retry", "build_retry_prompt",
+    "format_active_prompt", "check_consolidation_quality"],
+  "last_hash": "7a2325f05b3c7bd480d6fe3ea7b067149b9ace07...",
+  "last_indexed": "2026-04-08T19:31:39+00:00",
+  "summary": "cognition_quality.py — Structural cognition quality subsystem for Maez.",
+  "tags": ["maez_self", "development_tools"],
+  "parse_error": null
+}
+
+========================================
+REFRESH TEST:
+========================================
+
+Step 1: Record original hash
+  7a2325f05b3c7bd480d6fe3ea7b067149b9ace07d3d4b0812a4afeb625ac7be0
+
+Step 2: Add "# refresh test marker" to cognition_quality.py
+  refresh_map() → {"updated": 3, "unchanged": 43, "errors": 0}
+  New hash: 872e277cf1c2e0fb375a8ba32391806e280bf603...
+  Hashes differ: YES
+
+Step 3: Restore original file from backup
+  refresh_map() → {"updated": 2, "unchanged": 44, "errors": 0}
+  Restored hash: 7a2325f05b3c7bd480d6fe3ea7b067149b9ace07...
+  Hash returned to original: YES
+
+No drift left behind. Test fully reversible.
+
+========================================
+WHAT WENT WRONG / RIGHT:
+========================================
+
+RIGHT — Static analysis only, zero imports:
+The entire source map was built using only ast.parse, hashlib,
+pathlib, and json. No maez module was imported or executed at
+any point. The build runs in <0.5 seconds, produces a 46-file
+map with zero parse errors, and is fully rebuildable from source.
+
+RIGHT — Scope boundaries enforced:
+soul.md correctly shows ['read', 'append_only'] — never modify.
+maez_daemon.py and memory_manager.py correctly show forbidden/['read'].
+skills/*.py correctly show read_only + new_file but not modify.
+Only cognition_quality.py shows ['read', 'modify'] as allowed.
+
+RIGHT — Dependency graph works:
+cognition_quality.py correctly shows dependents:
+['memory/memory_manager.py', 'daemon/maez_daemon.py'] — both files
+that import it. memory_manager.py shows 5 dependents. This graph
+is built from ast import analysis, not inference.
+
+NEEDS IMPROVEMENT — Resolver confidence scores:
+Confidence values are lower than ideal (0.1-0.4) because the
+scoring formula divides by max_possible which is high for files
+with many exported symbols. The SYNONYM_TABLE helps but doesn't
+fully compensate when the query is short. Consider: weighting
+tag matches higher (5 instead of 3), or using a fixed normalizer
+instead of per-file max_possible.
+
+NEEDS IMPROVEMENT — Test 3 ranking:
+"public bot memory isolation" should rank telegram_public.py
+higher than core files. The "public bot" synonym expansion works
+(tokens include manipulation, public_users, trust_tier) but
+core files with more symbols outscore it. May need domain-aware
+category boosting: if query contains "bot" or "telegram", boost
+skills/telegram_* by +5.
