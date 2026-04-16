@@ -75,6 +75,7 @@ class PipelineStatus(str, Enum):
     PENDING_DIALOG      = "pending_dialog"       # Lane 3 self-mod dialog entry
     REFUSED_COVENANT    = "refused_covenant"     # covenant gate refused
     REFUSED_AUDIT       = "refused_audit"        # audit judge said DENY
+    REFUSED_WILL        = "refused_will"         # A-core #8: will-I volitional refusal
     REFUSED_INVALID     = "refused_invalid"      # malformed params, rejected before audit
     ERROR               = "error"                # pipeline itself failed
 
@@ -385,6 +386,14 @@ class DecisionPipeline:
             classification is not None and classification.lane == 0
         ) or action in self._LANE_0_ACTIONS
         if verdict.decision == Decision.APPROVE and is_lane_0:
+            # A-core #8: will-I check before Lane 0 inline execution.
+            will_refuse = self._will_i_check(
+                action, params,
+                post_approval=False,
+                audit_req_id=audit_req_id,
+            )
+            if will_refuse is not None:
+                return will_refuse
             # Lane 0: execute inline, no card
             return self._execute_inline(
                 action=action,
@@ -490,6 +499,80 @@ class DecisionPipeline:
         store = SelfModDialogStore()
         self._dialog_store = store
         return store
+
+    def _will_i_check(
+        self,
+        action: str,
+        params: dict,
+        *,
+        post_approval: bool = False,
+        audit_req_id: str = None,
+        card: CardRecord = None,
+    ) -> Optional[PipelineResult]:
+        """Shared will-I check for both Lane 0 inline and card-approved
+        paths. Returns a REFUSED_WILL PipelineResult if the check fires,
+        or None if the action should proceed.
+
+        post_approval controls the user-facing message:
+          False -> "I decided not to do that."
+          True  -> "You approved this, but I've decided not to proceed."
+        """
+        try:
+            from core.will_i import check as will_i_check_fn
+            verdict = will_i_check_fn(action=action, params=params)
+        except Exception as e:
+            logger.debug(
+                "will-I check failed (action=%s): %s — proceeding",
+                action, e,
+            )
+            return None
+
+        if verdict.proceed:
+            return None
+
+        # Log to audit_log.db via existing record_outcome.
+        if audit_req_id:
+            try:
+                ground = verdict.ground or "UNKNOWN"
+                reason = verdict.reason or ""
+                self.audit_log.record_outcome(
+                    audit_req_id,
+                    outcome="refused_by_will",
+                    notes=f"ground={ground}: {reason}"[:400],
+                )
+            except Exception:
+                pass
+
+        # If post-approval, also close the card as denied.
+        if post_approval and card is not None:
+            try:
+                self.card_store.deny(
+                    card.request_id,
+                    user_id="maez_will_i",
+                    via="will_i_refusal",
+                    notes=f"{verdict.ground}: {verdict.reason or ''}"[:400],
+                )
+                if self.renderer:
+                    self.renderer.send_resolution(card)
+            except Exception:
+                pass
+
+        if post_approval:
+            msg = (
+                f"You approved this, but I've decided not to proceed. "
+                f"(Reason: {verdict.reason or verdict.ground})"
+            )
+        else:
+            msg = (
+                f"I decided not to do that. "
+                f"(Reason: {verdict.reason or verdict.ground})"
+            )
+
+        return PipelineResult(
+            status=PipelineStatus.REFUSED_WILL,
+            message=msg,
+            card=card,
+        )
 
     def _build_injection_scan_text(self, action: str, params: dict, reason: str) -> str:
         """Build the text the injection scanner sees. Includes all
@@ -755,6 +838,16 @@ class DecisionPipeline:
                 message="Card expired — state changed since creation. Re-ask to run a fresh audit.",
                 card=card,
             )
+
+        # A-core #8: will-I check before card-approved execution.
+        will_refuse = self._will_i_check(
+            card.action, card.params,
+            post_approval=True,
+            audit_req_id=card.audit_request_id,
+            card=card,
+        )
+        if will_refuse is not None:
+            return will_refuse
 
         # Mark running, execute, mark done/failed.
         # tier=0 here means "run immediately" — the card already served

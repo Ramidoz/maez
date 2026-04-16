@@ -242,6 +242,20 @@ class MaezDaemon:
             logger.debug("wants log init failed: %s", e)
             self.wants = None
 
+        # A-core #8: will-I check (non-covenant refusal seed). One
+        # registered ground: IMPERSONATES_USER. Architecturally live,
+        # not yet exercised by current action surfaces. The pipeline
+        # lazy-initializes the check; this handle is for the startup
+        # log line. See core/will_i.py.
+        try:
+            from core.will_i import REGISTERED_GROUNDS
+            logger.info(
+                "Will-I check active: %d registered ground(s)",
+                len(REGISTERED_GROUNDS),
+            )
+        except Exception as e:
+            logger.debug("will-I check init failed: %s", e)
+
         self._cognition_critique_counter = 0
         self._last_cognition_critique: dict | None = None
         self._last_reasoning_prompt: str = ""
