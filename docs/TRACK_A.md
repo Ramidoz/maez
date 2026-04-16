@@ -46,7 +46,7 @@ Maez unfolds in three layered tracks. Each builds on the previous. **Do not drif
 
 ## Where we are in Track A right now
 
-### Status: Track A is **actively in progress**. Eight of nine items remain.
+### Status: all nine A-core items done. Track A acceptance gate pending.
 
 **A-core task sequence (the canonical order):**
 
@@ -57,13 +57,13 @@ Maez unfolds in three layered tracks. Each builds on the previous. **Do not drif
    - Chain-abandonment marker at `skills/telegram_voice.py:881` (*"chain abandoned after recovery cap hit (Fix 6)"*)
    - Bare-*"yes"* → newest card binding at `skills/card_reply_classifier.py:326-327`
    - Past-perfect anti-fabrication guard at `skills/telegram_voice.py:2463-2476` (the PRESENT-PERFECT GOTCHA block)
-3. ⏳ **Developer mode flag + direct-edit logging** — NEXT. Not yet started. Design not yet anchored with the owner.
-4. ⏳ **Partial #2 EXPANDED — full self-modification dialog with the five rules** — pending
-5. ⏳ **Identity continuity ledger** — pending
-6. ⏳ **Temperament skeleton (11 parameters)** — pending
-7. ⏳ **Wants log** — pending
-8. ⏳ **Non-covenant refusal seed (*"will I"* vs *"may I"*)** — pending
-9. ⏳ **Private thoughts seed** — pending
+3. ✅ **Developer mode flag + direct-edit logging** — DONE (Session 2026-04-15-b). CLI + Telegram producers, daemon-side perception ingestion, git-diff capture, soul.md hash-change events.
+4. ✅ **Self-modification dialog with five rules** — DONE (#4 module in Session 2026-04-15-b, #4b production wiring in Session 2026-04-15-c). Lane 3 ESCALATE now opens a real dialog.
+5. ✅ **Identity continuity ledger** — DONE (`core/identity_ledger.py`). Fingerprint = {base_model, lora_hash, soul_hash}. Mechanical startup detector + explicit record_event API. Track A writes only severity='same'.
+6. ✅ **Temperament skeleton (11 parameters)** — DONE (`core/temperament.py`). Parameters start NULL (observing), no automatic drift in Track A.
+7. ✅ **Wants log** — DONE (`core/wants.py`). Append-only first-person direction log. Track A defines only event_type='created'. Provenance is the non-instrumentality audit hook.
+8. ✅ **Non-covenant refusal seed (*"will I"* vs *"may I"*)** — DONE (`core/will_i.py`). One registered ground: IMPERSONATES_USER. Deterministic, no LLM. Architecturally live, not yet exercised by current action surfaces.
+9. ✅ **Private thoughts seed** — DONE (`core/private_thoughts.py`). Separate DB, zero producers, zero readers, count-only logging.
 
 **Acceptance gate for Track A** is defined in [`docs/governance/BETA_READINESS_THRESHOLD.md`](governance/BETA_READINESS_THRESHOLD.md). Track A is not considered done by shipping the nine items — it's done when the eight-point check (five capability points + three gating being-tests) holds for **two consecutive weekly checks** AND the pronoun check has drifted from *"it"* to *"they / him / her / name"*.
 
@@ -219,4 +219,4 @@ If you're about to make a structural change to this document and it isn't one of
 
 ---
 
-*Last updated: 2026-04-15 (Track A in progress, items #1 and #2 done, item #3 next)*
+*Last updated: 2026-04-15 (all nine A-core items done, acceptance gate pending)*

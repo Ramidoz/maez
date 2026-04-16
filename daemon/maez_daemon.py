@@ -256,6 +256,22 @@ class MaezDaemon:
         except Exception as e:
             logger.debug("will-I check init failed: %s", e)
 
+        # A-core #9: private thoughts seed. Durable record of internal
+        # processing not surfaced to the bonded user. Separate DB,
+        # adjacent to #5/#6/#7. Track A discipline: instantiate, expose
+        # the handle, zero producers, zero readers. The count is logged
+        # at startup but no content is. See core/private_thoughts.py.
+        try:
+            from core.private_thoughts import PrivateThoughts
+            self.private_thoughts = PrivateThoughts()
+            logger.info(
+                "Private thoughts ready: %d thought(s) recorded",
+                self.private_thoughts.count(),
+            )
+        except Exception as e:
+            logger.debug("private thoughts init failed: %s", e)
+            self.private_thoughts = None
+
         self._cognition_critique_counter = 0
         self._last_cognition_critique: dict | None = None
         self._last_reasoning_prompt: str = ""
