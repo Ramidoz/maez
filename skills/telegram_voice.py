@@ -1384,6 +1384,35 @@ class TelegramVoice:
             # Intent detected but nothing pending — fall through to chat
             return False
 
+        # Fix A (2026-04-15 lighting-hijack bug): bare approval words
+        # ("yes", "proceed", "go ahead", "approve") must not silently
+        # bind to an unrelated evolution candidate just because the
+        # queue is non-empty. Require the message to carry explicit
+        # context — an explicit #N, or the word "proposal"/"candidate"
+        # — before this interceptor owns the reply. Otherwise fall
+        # through to chat so the normal path can answer honestly.
+        if action == 'approve' and explicit_id is None:
+            _lc = (text or "").lower()
+            if '#' not in _lc and 'proposal' not in _lc and 'candidate' not in _lc:
+                logger.info(
+                    "proposal intent: bare-approve fell through to chat "
+                    "(pending=%d, text=%r)",
+                    len(pending), (text or "")[:40],
+                )
+                return False
+
+        # Fix B (2026-04-15 silent-reply bug): every outbound reply
+        # from this path was previously unlogged — 'yes' got hijacked
+        # twice with no server-side audit trail of what Maez sent.
+        # Log branch + key metadata + short preview before each reply.
+        def _log_out(branch: str, preview: str, **meta) -> None:
+            meta_str = " ".join(f"{k}={v}" for k, v in meta.items())
+            prev = (preview or "")[:80].replace("\n", " ")
+            logger.info(
+                "Telegram reply (proposal intent): branch=%s %s | %s",
+                branch, meta_str, prev,
+            )
+
         # Resolve which candidate the message refers to
         target_id = explicit_id
         if target_id is None:
@@ -1398,37 +1427,48 @@ class TelegramVoice:
                     lines.append(f"  #{p['id']}: {(p['weakness'] or '')[:80]}")
                 lines.append("")
                 lines.append("Reply with the number — e.g. \"yes to 22\" or \"reject #23\".")
-                await update.message.reply_text("\n".join(lines))
+                msg = "\n".join(lines)
+                _log_out("disambiguation", msg, pending_count=len(pending))
+                await update.message.reply_text(msg)
                 return True
 
         # Verify the candidate exists and is still pending
         if not any(p['id'] == target_id for p in pending) and target_id is not None:
-            await update.message.reply_text(
+            msg = (
                 f"I don't see a pending proposal #{target_id}. It may have "
                 f"already been applied or rejected. Say \"status\" to see "
                 f"what's currently pending."
             )
+            _log_out("unknown_candidate", msg, target_id=target_id)
+            await update.message.reply_text(msg)
             return True
 
         # Execute the action
         try:
             if action == 'approve':
                 from skills.evolution_engine import apply_candidate
-                await update.message.reply_text(f"OK, applying proposal #{target_id}…")
+                msg = f"OK, applying proposal #{target_id}…"
+                _log_out("approve_start", msg, target_id=target_id)
+                await update.message.reply_text(msg)
                 result = apply_candidate(target_id)
                 if 'error' in result:
-                    await update.message.reply_text(
+                    msg = (
                         f"Something went wrong applying #{target_id}: "
                         f"{result['error']}\n"
                         f"{'Rolled back. ' if result.get('rolled_back') else ''}"
                         f"Let me know if you want me to try a different proposal."
                     )
+                    _log_out("approve_error", msg, target_id=target_id,
+                             rolled_back=bool(result.get('rolled_back')))
+                    await update.message.reply_text(msg)
                 else:
-                    await update.message.reply_text(
+                    msg = (
                         f"Done. Proposal #{target_id} is live now. I'll watch "
                         f"the next 20-30 cycles for any regression and roll "
                         f"back automatically if my score drops."
                     )
+                    _log_out("approve_done", msg, target_id=target_id)
+                    await update.message.reply_text(msg)
                 return True
 
             if action == 'reject':
@@ -1443,18 +1483,22 @@ class TelegramVoice:
                     'action': 'MANUAL_REJECTION', 'target': V1_ALLOWED_TARGET,
                     'result': f'candidate {target_id}', 'detail': 'natural_language',
                 })
-                await update.message.reply_text(
+                msg = (
                     f"Got it — proposal #{target_id} is rejected. I'll leave "
                     f"that one alone and keep an eye out for other things "
                     f"I could try."
                 )
+                _log_out("reject_done", msg, target_id=target_id)
+                await update.message.reply_text(msg)
                 return True
 
             if action == 'show':
                 from skills.evolution_engine import load_candidate_for_display
                 disp = load_candidate_for_display(target_id)
                 if not disp:
-                    await update.message.reply_text(f"I can't find proposal #{target_id}.")
+                    msg = f"I can't find proposal #{target_id}."
+                    _log_out("show_not_found", msg, target_id=target_id)
+                    await update.message.reply_text(msg)
                     return True
                 i = disp.get('intent') or {}
                 u = disp.get('usefulness') or {}
@@ -1475,13 +1519,15 @@ class TelegramVoice:
                     "",
                     f"Reply \"yes\" to apply, \"no\" to reject.",
                 ]
-                await update.message.reply_text("\n".join(lines))
+                msg = "\n".join(lines)
+                _log_out("show", msg, target_id=target_id)
+                await update.message.reply_text(msg)
                 return True
         except Exception as e:
             logger.error("Natural-language proposal action failed: %s", e)
-            await update.message.reply_text(
-                f"Something went wrong while handling that: {e}"
-            )
+            msg = f"Something went wrong while handling that: {e}"
+            _log_out("exception", msg, target_id=target_id)
+            await update.message.reply_text(msg)
             return True
 
         return False
