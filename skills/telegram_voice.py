@@ -1315,22 +1315,48 @@ class TelegramVoice:
                 getattr(getattr(self, "_audit_log", None), "db_path", None)
                 or "memory/audit_log.db"
             )
+            # 2026-04-16 (narrow expansion): include approved_and_failed
+            # rows too, but only when they still have useful stdout.
+            # A common case: `cmd1 && cmd2 | grep X` where cmd1 succeeds
+            # and emits useful output, but grep matches nothing so the
+            # whole chain exits nonzero. The outcome_notes in that case
+            # contains the real cmd1 stdout — which is exactly what the
+            # next-step proposal should ground on.
             since = _time.time() - 60
             conn = _sqlite.connect(str(db_path))
             conn.row_factory = _sqlite.Row
             rows = conn.execute(
-                "SELECT ts, action, params_json, outcome_notes "
+                "SELECT ts, action, params_json, outcome, outcome_notes "
                 "FROM audit_log "
-                "WHERE ts >= ? AND outcome='approved_and_ran' "
-                "ORDER BY ts DESC LIMIT 2",
+                "WHERE ts >= ? AND outcome IN ('approved_and_ran', "
+                "'approved_and_failed') "
+                "ORDER BY ts DESC LIMIT 4",
                 (since,),
             ).fetchall()
             conn.close()
-            if not rows:
-                return {"kind": "skipped", "summary": "no recent probe"}
+
+            # Filter: keep rows with useful notes. Length heuristic:
+            # >30 chars of stripped notes excludes trivial "(no output)
+            # exit=0" and bare "exit=1" cases. Also accept successful
+            # rows with shorter notes (their exit=0 is informative even
+            # if stdout was empty — the action did work).
+            useful_rows = []
+            for r in rows:
+                notes = (r["outcome_notes"] or "").strip()
+                is_success = r["outcome"] == "approved_and_ran"
+                if is_success:
+                    useful_rows.append(r)
+                elif len(notes) > 30:
+                    useful_rows.append(r)
+                # else: short failed note with no stdout — skip
+                if len(useful_rows) >= 2:
+                    break
+
+            if not useful_rows:
+                return {"kind": "skipped", "summary": "no recent useful probe"}
 
             probe_summaries: list[str] = []
-            for r in rows:
+            for r in useful_rows:
                 p = {}
                 try:
                     p = _json.loads(r["params_json"] or "{}")
@@ -1338,8 +1364,13 @@ class TelegramVoice:
                     pass
                 arg = p.get("cmd") or p.get("query") or "?"
                 notes = (r["outcome_notes"] or "(no output)").strip()
+                status_tag = (
+                    "SUCCESS" if r["outcome"] == "approved_and_ran"
+                    else "EXIT_NONZERO (stdout may still be useful)"
+                )
                 probe_summaries.append(
-                    f"- {r['action']}: {str(arg)[:120]}\n  result: {notes[:400]}"
+                    f"- {r['action']} [{status_tag}]: {str(arg)[:120]}\n"
+                    f"  result: {notes[:400]}"
                 )
             probes_text = "\n".join(probe_summaries)
 
@@ -1357,6 +1388,14 @@ class TelegramVoice:
                 "Rules:\n"
                 "- Command must be real and specific. No placeholders, "
                 "no ellipsis, no 'TBD'.\n"
+                "- A probe marked EXIT_NONZERO may still have useful "
+                "stdout — read the stdout, don't just trust the exit "
+                "status. A pipeline like `lsusb && grep foo` can exit "
+                "nonzero because grep matched nothing, while lsusb's "
+                "stdout still contains the answer. Do NOT propose "
+                "rerunning the same failing command — propose a "
+                "different concrete step that uses what stdout showed.\n"
+                "- Do NOT propose the same command that just failed.\n"
                 "- If the probe result already answers fully, output "
                 "'NEXT_STEP: none'.\n"
                 "- If you do not have enough data, output 'NEXT_STEP: "
