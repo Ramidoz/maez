@@ -1323,6 +1323,70 @@ class TelegramVoice:
 
     _NL_SHOW_PATTERN = r'^(tell me more|show me|details?|more info|explain|what(\'?s)? (in|that)|show)\s*(about\s+)?#?(\d+)?[\s!.?]*$'
 
+    # ═════════════════════════════════════════════════════════════════════
+    #  Honesty guard (2026-04-15 fake-action-loop bug)
+    # ═════════════════════════════════════════════════════════════════════
+    #
+    # If an outbound reply contains future-tense action-claim language
+    # ("I'll search", "I proposed X", "waiting for your approval")
+    # BUT no real tool call / card / dialog fired in this turn, the
+    # reply is lying about its own action state. Rewrite to honest
+    # non-actional language before sending. See _honesty_guard below.
+    #
+    # The regex is deliberately narrow: it targets claim verbs preceded
+    # by a first-person pronoun, not generic future tense. "I'll let
+    # you know" and "I'll stay out of your way" do not match.
+
+    import re as _re_mod  # local alias used only for the pattern below
+    _CLAIM_PATTERN = _re_mod.compile(
+        r"\b("
+        r"I[' ]?ll\s+(search|check|look|run|investigate|find|try|set|install|execute|initiate|start)"
+        r"|I[' ]?ve\s+(proposed|started|begun|initiated|searched|checked|run|set|executed)"
+        r"|I\s+proposed\s+(running|to\s+run|checking)"
+        r"|I\s+have\s+the\s+plan\s+ready"
+        r"|waiting\s+for\s+your\s+approval"
+        r"|Shall\s+I\s+(go\s+ahead|proceed|run|search|check|execute)"
+        r")",
+        _re_mod.IGNORECASE,
+    )
+    del _re_mod
+
+    # What to send instead when the guard trips. Three short sentences
+    # per the 2026-04-15 anchoring — non-actional, honest, forward-
+    # looking without claiming an action state that doesn't exist.
+    _HONEST_STUB = (
+        "I haven't actually started that yet. "
+        "I don't currently have a pending action for it. "
+        "I can do that once I create or run the correct action."
+    )
+
+    def _honesty_guard(
+        self,
+        reply: str,
+        *,
+        turn_tool_calls: int,
+        turn_cards_created: int,
+        turn_dialogs_opened: int,
+    ) -> str:
+        """If the reply contains action-claim language but no real
+        action state was created this turn, return a rewrite in honest
+        non-actional language. Otherwise return the reply unchanged."""
+        if turn_tool_calls > 0 or turn_cards_created > 0 or turn_dialogs_opened > 0:
+            return reply
+        if not reply:
+            return reply
+        m = self._CLAIM_PATTERN.search(reply)
+        if not m:
+            return reply
+        logger.info(
+            "honesty guard: chat_claim_rewritten "
+            "(tool_calls=%d cards=%d dialogs=%d matched=%r) | orig=%s",
+            turn_tool_calls, turn_cards_created, turn_dialogs_opened,
+            m.group(0),
+            reply[:100].replace("\n", " "),
+        )
+        return self._HONEST_STUB
+
     def _list_pending_candidates(self) -> list:
         """Return validated-but-not-yet-applied candidates, newest first."""
         try:
@@ -2655,58 +2719,98 @@ class TelegramVoice:
                 stream=True, think=False,
                 options={"temperature": 0.7, "num_predict": 4096},
             )
-            for chunk in response:
-                token = chunk.message.content
-                full_reply += token
-                current_sentence += token
-                token_count += 1
 
-                # Check for interrupt
-                if self._interrupt_queue and not self._interrupt_queue.empty():
-                    if current_msg:
-                        try:
-                            await context.bot.edit_message_text(
-                                chat_id=update.effective_chat.id,
-                                message_id=current_msg.message_id,
-                                text=current_sentence.strip() + "...",
-                            )
-                        except Exception:
-                            pass
-                    logger.info("Generation interrupted at %d tokens", token_count)
-                    break
+            # Honesty guard (2026-04-15 fake-action-loop bug):
+            # If no tool call / card / dialog fired this turn, the LLM
+            # cannot legitimately claim an action in its reply. Buffer
+            # the full reply silently, run the guard, then send. If the
+            # guard trips, the rewrite goes out instead of the fake
+            # claim language. If a real action fired this turn, stream
+            # as before — the claim (if any) matches reality.
+            _turn_tool_calls = (1 if web_context else 0) + (1 if jarvis_block else 0)
+            _turn_cards_created = 0  # chat path doesn't create cards directly
+            _turn_dialogs_opened = 0  # chat path doesn't open dialogs directly
+            _turn_had_action = (
+                _turn_tool_calls + _turn_cards_created + _turn_dialogs_opened
+            ) > 0
 
-                # Sentence boundary — send as fragment
-                if _re.search(r'[.!?]\s*$', current_sentence.strip()) and len(current_sentence.strip()) > 40:
-                    sentence = current_sentence.strip()
-                    if current_msg is None:
-                        current_msg = await context.bot.send_message(
-                            chat_id=update.effective_chat.id, text=sentence,
-                        )
-                    else:
-                        # Session 11m: removed legacy 1.2s + 0.8s artificial pauses
-                        # between sentence fragments. The typing indicator still
-                        # fires but without dead time. Previously added 6-10s to
-                        # every multi-sentence reply.
-                        await context.bot.send_chat_action(
-                            chat_id=update.effective_chat.id, action="typing",
-                        )
-                        current_msg = await context.bot.send_message(
-                            chat_id=update.effective_chat.id, text=sentence,
-                        )
-                    current_sentence = ""
+            if not _turn_had_action:
+                # Buffer mode — collect without streaming, guard, then send.
+                for chunk in response:
+                    token = chunk.message.content
+                    full_reply += token
+                    token_count += 1
+                    if self._interrupt_queue and not self._interrupt_queue.empty():
+                        logger.info("Generation interrupted at %d tokens", token_count)
+                        break
 
-            # Send remaining text (split if too long)
-            remainder = current_sentence.strip()
-            if remainder:
-                if current_msg is not None:
-                    await asyncio.sleep(1.0)
-                for part in split_long_message(remainder):
+                guarded = self._honesty_guard(
+                    full_reply,
+                    turn_tool_calls=_turn_tool_calls,
+                    turn_cards_created=_turn_cards_created,
+                    turn_dialogs_opened=_turn_dialogs_opened,
+                )
+                final_text = (guarded.strip() or "(Maez had no response)")
+                for part in split_long_message(final_text):
                     await context.bot.send_message(
                         chat_id=update.effective_chat.id, text=part,
                     )
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.3)
+                reply = final_text
+            else:
+                # Streaming mode — action fired this turn, send sentences as they land.
+                for chunk in response:
+                    token = chunk.message.content
+                    full_reply += token
+                    current_sentence += token
+                    token_count += 1
 
-            reply = full_reply.strip() or "(Maez had no response)"
+                    # Check for interrupt
+                    if self._interrupt_queue and not self._interrupt_queue.empty():
+                        if current_msg:
+                            try:
+                                await context.bot.edit_message_text(
+                                    chat_id=update.effective_chat.id,
+                                    message_id=current_msg.message_id,
+                                    text=current_sentence.strip() + "...",
+                                )
+                            except Exception:
+                                pass
+                        logger.info("Generation interrupted at %d tokens", token_count)
+                        break
+
+                    # Sentence boundary — send as fragment
+                    if _re.search(r'[.!?]\s*$', current_sentence.strip()) and len(current_sentence.strip()) > 40:
+                        sentence = current_sentence.strip()
+                        if current_msg is None:
+                            current_msg = await context.bot.send_message(
+                                chat_id=update.effective_chat.id, text=sentence,
+                            )
+                        else:
+                            # Session 11m: removed legacy 1.2s + 0.8s artificial pauses
+                            # between sentence fragments. The typing indicator still
+                            # fires but without dead time. Previously added 6-10s to
+                            # every multi-sentence reply.
+                            await context.bot.send_chat_action(
+                                chat_id=update.effective_chat.id, action="typing",
+                            )
+                            current_msg = await context.bot.send_message(
+                                chat_id=update.effective_chat.id, text=sentence,
+                            )
+                        current_sentence = ""
+
+                # Send remaining text (split if too long)
+                remainder = current_sentence.strip()
+                if remainder:
+                    if current_msg is not None:
+                        await asyncio.sleep(1.0)
+                    for part in split_long_message(remainder):
+                        await context.bot.send_message(
+                            chat_id=update.effective_chat.id, text=part,
+                        )
+                        await asyncio.sleep(0.5)
+
+                reply = full_reply.strip() or "(Maez had no response)"
 
         except Exception as e:
             logger.error("Telegram reasoning failed: %s", e)
