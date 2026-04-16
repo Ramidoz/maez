@@ -1370,7 +1370,8 @@ class TelegramVoice:
     # probing tool fired this turn, a fake pending/approved/session
     # narrative remains fake.
     _STATE_CLAIM_PATTERN = _re_mod.compile(
-        r"\b("
+        r"(?:"
+        r"\b(?:"
         r"waiting\s+for\s+your\s+approval"
         r"|that'?s\s+waiting\s+for\s+(?:your\s+)?(?:approval|go[\s\-]?ahead)"
         r"|you'?ve\s+approved"
@@ -1381,6 +1382,14 @@ class TelegramVoice:
         r"|the\s+previous\s+(?:request|approval|session)"
         r"|pending\s+(?:approval|request|session|investigation)"
         r"|the\s+Telegram\s+card\s+for\s+your\s+approval"
+        # 2026-04-16 fake-card/skill_id narration (advisory reply bug):
+        # chat prose never legitimately names internal refs — real
+        # cards surface via the card renderer, not narration.
+        r"|skill_id\b"
+        r"|(?:I[' ]?ve|I\s+have)\s+(?:already|now|just|recently|also)\s+proposed"
+        r")"
+        # Non-word-boundary branch (can start at position 0 of the reply).
+        r"|\(\s*ref\s*:"
         r")",
         _re_mod.IGNORECASE,
     )
