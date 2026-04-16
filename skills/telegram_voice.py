@@ -1744,6 +1744,22 @@ class TelegramVoice:
                     return max(candidates, key=len).strip().rstrip('?.!')
         return None
 
+    def _has_awaiting_card(self) -> bool:
+        """True if there's at least one real card awaiting the owner's
+        decision (status OPEN or DEFERRED). Used by the probe->pending
+        bridge to avoid auto-storing an offer that would preempt a
+        real card approval via card-reply."""
+        store = getattr(self, "_card_store", None)
+        if store is None:
+            return False
+        try:
+            from core.pending_cards import AWAITING_STATUSES
+            cards = store.get_open_for_user(str(self.authorized_user))
+            return any(getattr(c, "status", None) in AWAITING_STATUSES for c in cards)
+        except Exception as e:
+            logger.debug("awaiting-card check failed: %s", e)
+            return False
+
     async def _try_offer_binding_intent(self, update, text: str) -> bool:
         """Bind bare approvals to a fresh pending_offer. Returns True if
         the offer was fired (caller short-circuits further handling).
@@ -3089,6 +3105,42 @@ class TelegramVoice:
                     )
         except Exception as e:
             logger.debug("offer binding store failed: %s", e)
+
+        # 2026-04-16 probe->pending bridge. When:
+        #   - a probe ran this turn (Jarvis fired Lane 0 action)
+        #   - AND the reply narrated fake pending/approved/session state
+        #   - AND no explicit offer was already stored by _OFFER_PATTERN
+        #   - AND no real awaiting card exists (would preempt card-reply)
+        # ...create a REAL pending web_search offer tied to the user's
+        # original question. Turns "probe -> fake narration -> Yes does
+        # nothing" into "probe -> real pending offer -> Yes runs search".
+        # This is the narrow bridge that makes next-step action state
+        # real instead of just rewriting prose.
+        try:
+            _full2 = locals().get("full_reply", "") or ""
+            _had_action2 = bool(locals().get("_turn_had_action", False))
+            if (_had_action2
+                and _full2
+                and self._pending_offer is None
+                and TelegramVoice._STATE_CLAIM_PATTERN.search(_full2)
+                and not self._has_awaiting_card()):
+                _query = (self._last_actionable_user_text or user_text or "").strip()
+                if _query:
+                    self._pending_offer = {
+                        "kind": "web_search",
+                        "query": _query,
+                        "set_at": _time.time(),
+                        "offer_preview": (
+                            "[auto from probe+state-claim] "
+                            + _full2[:80].replace("\n", " ")
+                        ),
+                    }
+                    logger.info(
+                        "offer binding: auto-stored from probe+state-claim "
+                        "| query=%r", _query[:80],
+                    )
+        except Exception as e:
+            logger.debug("probe->pending bridge failed: %s", e)
 
         # Add response to conversation thread
         self._conversation_thread.append({"role": "assistant", "content": reply})
