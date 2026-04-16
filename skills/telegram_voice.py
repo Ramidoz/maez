@@ -2916,32 +2916,6 @@ class TelegramVoice:
                 )
                 final_text = (guarded.strip() or "(Maez had no response)")
 
-                # 2026-04-16 offer-binding: detect search-offer phrases
-                # in the ORIGINAL full_reply (before the guard rewrite)
-                # and store as a short-lived pending offer. A bare
-                # approval on the next turn will fire this instead of
-                # looping with another soft offer. Only runs in this
-                # branch (turn_had_action == False) because that's
-                # exactly the case where the offer is unbacked.
-                try:
-                    if TelegramVoice._OFFER_PATTERN.search(full_reply or ""):
-                        _query = (self._last_actionable_user_text or user_text or "").strip()
-                        if _query:
-                            self._pending_offer = {
-                                "kind": "web_search",
-                                "query": _query,
-                                "set_at": _time.time(),
-                                "offer_preview": (full_reply or "")[:120].replace("\n", " "),
-                            }
-                            logger.info(
-                                "offer binding: stored pending web_search "
-                                "| query=%r preview=%s",
-                                _query[:80],
-                                self._pending_offer["offer_preview"][:80],
-                            )
-                except Exception as e:
-                    logger.debug("offer binding store failed: %s", e)
-
                 for part in split_long_message(final_text):
                     await context.bot.send_message(
                         chat_id=update.effective_chat.id, text=part,
@@ -3009,6 +2983,33 @@ class TelegramVoice:
             await update.message.reply_text(reply)
 
         logger.info("Telegram reply: %s", reply[:100])
+
+        # 2026-04-16 offer-binding detection (moved out of buffer-mode
+        # branch). A probing Jarvis tool call ("which openrgb") and a
+        # forward commitment in the reply ("I can search for install
+        # instructions") are two different things. The tool call
+        # satisfies turn_had_action=True, but the offer in the reply
+        # is still an unbacked forward promise. Scan the ORIGINAL
+        # full_reply (before guard rewrite) in BOTH branches so the
+        # offer is captured regardless of whether tools fired.
+        try:
+            if TelegramVoice._OFFER_PATTERN.search(full_reply or ""):
+                _query = (self._last_actionable_user_text or user_text or "").strip()
+                if _query:
+                    self._pending_offer = {
+                        "kind": "web_search",
+                        "query": _query,
+                        "set_at": _time.time(),
+                        "offer_preview": (full_reply or "")[:120].replace("\n", " "),
+                    }
+                    logger.info(
+                        "offer binding: stored pending web_search "
+                        "| query=%r preview=%s",
+                        _query[:80],
+                        self._pending_offer["offer_preview"][:80],
+                    )
+        except Exception as e:
+            logger.debug("offer binding store failed: %s", e)
 
         # Add response to conversation thread
         self._conversation_thread.append({"role": "assistant", "content": reply})
