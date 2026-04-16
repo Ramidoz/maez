@@ -1146,6 +1146,125 @@ class TelegramVoice:
             logger.debug("prior-attempts lookup failed: %s", e)
         return attempts
 
+    def _build_actual_state_block(self) -> str:
+        """N+1 (2026-04-16): inject a ground-truth [ACTUAL STATE] block
+        into the chat prompt so the LLM sees real pending state and
+        real probe outcomes. Reduces fake-state narration at source
+        and helps the LLM form concrete next-step plans from probe
+        results instead of hallucinated workflow prose.
+
+        Contents:
+          - PENDING CARDS NOW: count + short summaries of awaiting cards
+          - PENDING OFFER NOW: summary if any
+          - LATEST PROBE RESULTS: last 1-2 Lane 0 tool outcomes from audit_log
+          - Directive line: don't narrate pending state beyond this block
+
+        Runtime-scoped, no persistence. Complements (doesn't duplicate)
+        _build_recent_body_activity_block which shows past transitions;
+        this block shows what's pending right now and what tools said.
+
+        Returns an empty string on total failure — prompt builds without it.
+        """
+        try:
+            import json as _json
+            import sqlite3 as _sqlite
+            import time as _time
+
+            now = _time.time()
+            lines: list[str] = ["[ACTUAL STATE — ground truth, trust this over assumptions]"]
+
+            # Pending cards awaiting decision
+            cards_line = "PENDING CARDS NOW: 0"
+            try:
+                store = getattr(self, "_card_store", None)
+                if store is not None:
+                    from core.pending_cards import AWAITING_STATUSES
+                    cards = store.get_open_for_channel(
+                        channel="telegram_text",
+                        chat_id=str(self.authorized_user),
+                    )
+                    awaiting = [c for c in cards if c.status in AWAITING_STATUSES]
+                    if awaiting:
+                        cards_line = f"PENDING CARDS NOW: {len(awaiting)} awaiting your decision"
+                        lines.append(cards_line)
+                        for c in awaiting[:3]:
+                            params = getattr(c, "params", None) or {}
+                            summary = (
+                                params.get("cmd")
+                                or params.get("path")
+                                or params.get("query")
+                                or "?"
+                            )
+                            age = int(now - (c.created_at or now))
+                            lines.append(f"  - {c.action}: {str(summary)[:80]} (age={age}s)")
+                    else:
+                        lines.append(cards_line + " — nothing is waiting for your approval")
+                else:
+                    lines.append(cards_line)
+            except Exception as e:
+                logger.debug("actual state: card lookup failed: %s", e)
+                lines.append("PENDING CARDS NOW: (unavailable)")
+
+            # Pending offer
+            offer = getattr(self, "_pending_offer", None)
+            if offer:
+                age = int(now - float(offer.get("set_at", now)))
+                kind = offer.get("kind", "?")
+                q = str(offer.get("query", ""))[:80]
+                lines.append(f"PENDING OFFER NOW: {kind} for {q!r} (age={age}s)")
+            else:
+                lines.append("PENDING OFFER NOW: none")
+
+            # Latest probe results from audit_log (Lane 0 inline + card-executed)
+            try:
+                db_path = (
+                    getattr(getattr(self, "_audit_log", None), "db_path", None)
+                    or "memory/audit_log.db"
+                )
+                since = now - 600  # last 10 min
+                conn = _sqlite.connect(str(db_path))
+                conn.row_factory = _sqlite.Row
+                rows = conn.execute(
+                    "SELECT ts, action, params_json, outcome_notes "
+                    "FROM audit_log "
+                    "WHERE ts >= ? AND outcome='approved_and_ran' "
+                    "ORDER BY ts DESC LIMIT 2",
+                    (since,),
+                ).fetchall()
+                conn.close()
+                if rows:
+                    lines.append("LATEST PROBE RESULTS (last 10 min):")
+                    for r in rows:
+                        params = {}
+                        try:
+                            params = _json.loads(r["params_json"] or "{}")
+                        except Exception:
+                            pass
+                        arg = params.get("cmd") or params.get("query") or "?"
+                        notes = (r["outcome_notes"] or "(no output)").strip()
+                        age = int(now - r["ts"])
+                        lines.append(f"  - {r['action']}: {str(arg)[:70]} (age={age}s)")
+                        lines.append(f"    result: {notes[:180]}")
+                else:
+                    lines.append("LATEST PROBE RESULTS: none in the last 10 min")
+            except Exception as e:
+                logger.debug("actual state: probe result lookup failed: %s", e)
+                lines.append("LATEST PROBE RESULTS: (unavailable)")
+
+            # Directive — narrow, focused on the specific failure mode N+1 targets
+            lines.append("")
+            lines.append(
+                "Rule: if PENDING CARDS NOW is 0, do NOT narrate 'waiting for "
+                "your approval', 'the previous request', 'you've approved', or "
+                "any other pending/approved/session state. Describe what really "
+                "is (the probe result above, or a concrete next-step offer like "
+                "'I can do X, want me to?') instead of inventing workflow state."
+            )
+            return "\n".join(lines)
+        except Exception as e:
+            logger.debug("actual state block build failed: %s", e)
+            return ""
+
     def _build_recent_body_activity_block(self, since_seconds: float = 600.0) -> str:
         """Return a human-readable block describing what Maez's body just
         did in this chat over the last `since_seconds`. Used to make card
@@ -2794,8 +2913,20 @@ class TelegramVoice:
             f"{system_state}\n"
             f"Note: VRAM usage of 17-22GB is the baseline for this system. "
             f"Do not mention it unless it exceeds 23GB.\n\n"
-            f"{_get_circadian_context()}\n\n"
         )
+        # N+1 (2026-04-16): inject [ACTUAL STATE] near the top of the
+        # prompt so the LLM anchors on real pending state and real
+        # probe outcomes. Reduces fake-state narration at source and
+        # helps the LLM build concrete next-step plans from actual
+        # tool results. See _build_actual_state_block.
+        try:
+            actual_state = self._build_actual_state_block()
+        except Exception as e:
+            logger.debug("actual state block build failed: %s", e)
+            actual_state = ""
+        if actual_state:
+            prompt += actual_state + "\n\n"
+        prompt += f"{_get_circadian_context()}\n\n"
         public_ctx = _get_public_context_for_telegram()
         if public_ctx:
             prompt += public_ctx + "\n\n"
