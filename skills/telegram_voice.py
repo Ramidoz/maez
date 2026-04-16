@@ -938,16 +938,29 @@ class TelegramVoice:
                         "triggering recovery pass depth=%d for failed card %s",
                         depth, card.request_id[:8] if card.request_id else "?",
                     )
+                    import time as _time_mod
+                    recovery_started_at = _time_mod.time()
                     loop = asyncio.get_event_loop()
                     recovery_transcript = await loop.run_in_executor(
                         None,
                         lambda: self._run_jarvis_loop("", recovery_seed=recovery_seed),
                     )
                     if recovery_transcript:
+                        # 2026-04-16 fix: recovery narrative must match
+                        # the actual card the recovery queued. Fetch the
+                        # newest open card created since recovery started
+                        # and pass its cmd verbatim to the synthesis so
+                        # the LLM can't hallucinate a generic "PPA / snap"
+                        # alternative when the real queued card is
+                        # something different.
+                        new_card_cmd = self._find_recovery_new_card_cmd(
+                            recovery_started_at
+                        )
                         reply_text = await loop.run_in_executor(
                             None,
                             lambda: self._synthesize_recovery_reply(
                                 recovery_seed, recovery_transcript,
+                                new_card_cmd=new_card_cmd,
                             ),
                         )
                         if reply_text:
@@ -2977,10 +2990,47 @@ class TelegramVoice:
             lines.append(f"  → {out[:800]}")
         return "\n".join(lines)
 
+    def _find_recovery_new_card_cmd(self, since_ts: float) -> str | None:
+        """Return the cmd/path of the newest open card created after
+        `since_ts` for this chat. Used by the recovery synthesis so the
+        narrative is grounded on the card the recovery actually queued,
+        not on generic examples in the prompt. Returns None if no new
+        card was created during the recovery pass."""
+        try:
+            store = getattr(self, "_card_store", None)
+            if store is None:
+                return None
+            from core.pending_cards import AWAITING_STATUSES
+            cards = store.get_open_for_channel(
+                channel="telegram_text",
+                chat_id=str(self.authorized_user),
+            )
+            new_awaiting = [
+                c for c in cards
+                if c.status in AWAITING_STATUSES
+                and (c.created_at or 0) >= since_ts
+            ]
+            if not new_awaiting:
+                return None
+            # Newest first
+            new_awaiting.sort(key=lambda c: c.created_at or 0, reverse=True)
+            c = new_awaiting[0]
+            params = getattr(c, "params", None) or {}
+            return (
+                params.get("cmd")
+                or params.get("path")
+                or params.get("query")
+                or None
+            )
+        except Exception as e:
+            logger.debug("recovery new-card lookup failed: %s", e)
+            return None
+
     def _synthesize_recovery_reply(
         self,
         recovery_seed: dict,
         recovery_transcript: str,
+        new_card_cmd: str | None = None,
     ) -> str:
         """Turn a recovery Jarvis transcript into a short natural-language
         message the owner can read. Called from _try_card_reply_intent after a
@@ -3010,15 +3060,39 @@ class TelegramVoice:
         has_dead_end = "NO_RECOVERY_FOUND" in recovery_transcript or "recovery_dead_end" in recovery_transcript
         has_success = "✓" in recovery_transcript and not has_pending_card
 
-        if has_pending_card:
+        # 2026-04-16 fix: only claim a pending card if a real one was
+        # actually queued. The transcript's "⏳" marker is necessary but
+        # not sufficient — we also need a real card row in the store.
+        # If new_card_cmd is None, the recovery transcript may have a
+        # pending marker but no card persisted (e.g., covenant/audit
+        # refused). Treat that as "no recovery queued" — no fake
+        # narration about a card that doesn't exist.
+        card_actually_persisted = has_pending_card and new_card_cmd is not None
+
+        if card_actually_persisted:
             state_hint = (
-                "STATE: A new approval card has been proposed for the owner. The "
-                "recovery found a concrete fix and is waiting for his go-ahead. "
-                "Your reply must tell the owner: (1) the first try didn't work and "
-                "why (one sentence), (2) what alternative you've proposed (name "
-                "it specifically — PPA, snap, etc.), (3) you're waiting for his "
-                "approval on the new card."
+                "STATE: A new approval card has been queued for the owner. "
+                "The EXACT command on that card is:\n"
+                f"    {new_card_cmd}\n"
+                "Your reply must tell the owner: (1) the first try didn't "
+                "work and why (one sentence), (2) what the new queued "
+                "command is — describe it using the EXACT command above, "
+                "not a generic label. If the new command happens to be "
+                "the same as the failed one, say so honestly ('I re-"
+                "proposed the same command'). Do not invent a different "
+                "approach that isn't in the command. (3) you're waiting "
+                "for his approval on the new card."
             )
+        elif has_pending_card and new_card_cmd is None:
+            state_hint = (
+                "STATE: The recovery transcript claims a pending card but "
+                "no real card was persisted in the store. Tell the owner: the "
+                "first try failed and the recovery attempt did not "
+                "successfully queue a new action. Do NOT claim a card is "
+                "waiting for approval — there isn't one."
+            )
+            # Override the flag so the hard rules below apply correctly
+            has_pending_card = False
         elif has_dead_end:
             state_hint = (
                 "STATE: You searched but could not find a safe automated fix. "
