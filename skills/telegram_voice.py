@@ -1296,26 +1296,83 @@ class TelegramVoice:
             logger.debug("actual state block build failed: %s", e)
             return ""
 
-    def _parse_next_step_line(self, text: str) -> str | None:
-        """Parse 'NEXT_STEP: <cmd>' or 'NEXT_STEP: none' from LLM output.
-        Returns the command string if valid/actionable, None otherwise."""
+    def _parse_next_step_line(self, text: str) -> tuple[str | None, str | None]:
+        """Parse 'NEXT_STEP: <cmd>' / 'NEXT_STEP: read: <cmd>' /
+        'NEXT_STEP: action: <cmd>' / 'NEXT_STEP: none' from LLM output.
+
+        Returns (cmd, label):
+          - (None, None) — parse failed or 'none'
+          - (cmd, None)  — plain command, no kind label (non-exploratory)
+          - (cmd, 'read') / (cmd, 'action') — labeled command (exploratory)
+
+        The label is advisory: dispatch routes uniformly through the
+        pipeline which lane-classifies. Logging uses the label when
+        present for post-hoc audit.
+        """
         if not text:
-            return None
+            return (None, None)
         for raw in text.strip().splitlines():
             line = raw.strip()
             if not line.upper().startswith("NEXT_STEP:"):
                 continue
             rest = line[len("NEXT_STEP:"):].strip().strip("`").strip()
             if not rest or rest.lower() == "none":
-                return None
+                return (None, None)
+            # Optional 'read:' / 'action:' prefix from the exploratory
+            # prompt format. Strip and record.
+            label: str | None = None
+            for pref in ("read:", "action:"):
+                if rest.lower().startswith(pref):
+                    label = pref.rstrip(":")
+                    rest = rest[len(pref):].strip().strip("`").strip()
+                    break
+            # Re-check for 'none' after stripping the label so
+            # "NEXT_STEP: read: none" parses as none, not a command.
+            if not rest or rest.lower() == "none":
+                return (None, None)
             lower = rest.lower()
             for bad in ("<cmd>", "<command>", "...", "tbd", "placeholder"):
                 if bad in lower:
-                    return None
+                    return (None, None)
             if len(rest) > 500:
-                return None
-            return rest
-        return None
+                return (None, None)
+            return (rest, label)
+        return (None, None)
+
+    # 2026-04-16 (exploratory next-step): regex-based heuristic. Matches
+    # asks like "figure out how to X", "how do I Y", "tell me about Z",
+    # "can you control/explore/investigate W". Does NOT match direct
+    # action asks ("install X", "run Y", "create file Z"). Used by the
+    # next-step proposer to pick between the existing direct-command
+    # prompt and a new exploratory-to-action prompt that forces the
+    # LLM to commit to read/action/none rather than drift into narration.
+    import re as _re_mod_exploratory
+    _EXPLORATORY_ASK_PATTERN = _re_mod_exploratory.compile(
+        r"\b("
+        r"figure\s+out"
+        r"|how\s+(?:do|can|should|would)\s+(?:i|we|you)"
+        r"|tell\s+me\s+(?:the\s+path|about|how|what|where|which)"
+        r"|what\s+(?:can|tools|options|are|is)"
+        r"|(?:please\s+)?investigate"
+        r"|explore\b"
+        r"|look\s+into"
+        r"|can\s+you\s+(?:control|find|explore|investigate|figure|identify|check)"
+        r"|any\s+way\s+to"
+        r"|what'?s\s+the\s+(?:path|way|command)"
+        r")\b",
+        _re_mod_exploratory.IGNORECASE,
+    )
+    del _re_mod_exploratory
+
+    def _is_exploratory_ask(self, user_text: str) -> bool:
+        """Heuristic: does the user's message look like exploratory
+        planning ('figure out how to', 'tell me the path', 'can you
+        find/explore') rather than a direct action ask ('install X',
+        'run Y')? Triggers the exploratory prompt in the next-step
+        proposer."""
+        if not user_text or len(user_text) > 600:
+            return False
+        return bool(self._EXPLORATORY_ASK_PATTERN.search(user_text))
 
     def _propose_next_step_from_probe(self, user_text: str) -> dict | None:
         """N+1 Option A (2026-04-16): after Jarvis probes complete, run
@@ -1405,34 +1462,90 @@ class TelegramVoice:
                 )
             probes_text = "\n".join(probe_summaries)
 
-            system_msg = (
-                "You are producing a structured next-step proposal. "
-                "Read the user question and the actual probe results, "
-                "then propose exactly ONE concrete safe shell command "
-                "that advances the user's question given what the probe "
-                "found, or 'none'.\n\n"
-                "OUTPUT FORMAT — one line, starting with exactly "
-                "'NEXT_STEP:', nothing before it, nothing after the "
-                "command. One of:\n"
-                "  NEXT_STEP: <single concrete shell command>\n"
-                "  NEXT_STEP: none\n\n"
-                "Rules:\n"
-                "- Command must be real and specific. No placeholders, "
-                "no ellipsis, no 'TBD'.\n"
-                "- A probe marked EXIT_NONZERO may still have useful "
-                "stdout — read the stdout, don't just trust the exit "
-                "status. A pipeline like `lsusb && grep foo` can exit "
-                "nonzero because grep matched nothing, while lsusb's "
-                "stdout still contains the answer. Do NOT propose "
-                "rerunning the same failing command — propose a "
-                "different concrete step that uses what stdout showed.\n"
-                "- Do NOT propose the same command that just failed.\n"
-                "- If the probe result already answers fully, output "
-                "'NEXT_STEP: none'.\n"
-                "- If you do not have enough data, output 'NEXT_STEP: "
-                "none'.\n"
-                "- No prose, no explanation. ONLY the NEXT_STEP line."
-            )
+            # 2026-04-16 (exploratory branch): when the user's ask is
+            # exploratory ("figure out how to X", "tell me the path"),
+            # use a prompt that forces a 3-way read/action/none output
+            # with explicit "stop probing, commit to action" discipline.
+            # This targets Task 1's pattern where the LLM keeps
+            # suggesting more probes instead of proposing the install.
+            exploratory = self._is_exploratory_ask(user_text)
+            if exploratory:
+                system_msg = (
+                    "You are translating an EXPLORATORY user question + "
+                    "recent probe results into ONE concrete next step "
+                    "toward the user's goal.\n\n"
+                    "OUTPUT FORMAT — one line, starting with exactly "
+                    "'NEXT_STEP:'. One of:\n"
+                    "  NEXT_STEP: read: <shell command>\n"
+                    "  NEXT_STEP: action: <shell command that changes state>\n"
+                    "  NEXT_STEP: none\n\n"
+                    "Labels:\n"
+                    "  - 'read:' = another probe or query (lsusb, cat "
+                    "/sys/..., find, grep on existing file). Use when "
+                    "probes so far haven't uncovered the key context "
+                    "you need.\n"
+                    "  - 'action:' = a state-changing command "
+                    "(sudo apt install <pkg>, echo X > /path, "
+                    "systemctl enable Y, modprobe Z). Use when you have "
+                    "enough evidence to propose a real install/config "
+                    "step.\n"
+                    "  - 'none' = the probes already answer the user's "
+                    "question, or no reasonable step exists.\n\n"
+                    "CRITICAL DISCIPLINE:\n"
+                    "- Don't keep probing forever. After 1-2 successful "
+                    "probes, strongly prefer 'action:' over more "
+                    "'read:'. The user asked for a concrete path, not "
+                    "an infinite survey.\n"
+                    "- 'action:' examples from probe evidence:\n"
+                    "    probe found 'Alienware LED controller' via "
+                    "lsusb, openrgb not installed → action: "
+                    "sudo apt install -y openrgb\n"
+                    "    probe found /sys/class/leds/X → action: "
+                    "cat /sys/class/leds/X/brightness\n"
+                    "    (when the action reads a file that's already "
+                    "known to exist, it's still 'action:' if it "
+                    "commits to 'here is the path'; label it 'read:' "
+                    "only if you're genuinely still searching.)\n"
+                    "- EXIT_NONZERO probes may still have useful stdout "
+                    "— read the stdout, don't just trust the exit code.\n"
+                    "- Don't re-propose the same command a probe "
+                    "already ran.\n"
+                    "- No placeholders, no ellipsis, no TBD.\n"
+                    "- If you emit 'action:', the pipeline will create "
+                    "a real approval card — that IS how you ask for "
+                    "permission. Do NOT also narrate 'waiting for "
+                    "approval' anywhere.\n"
+                    "- NO prose, NO explanation. ONLY the NEXT_STEP line."
+                )
+            else:
+                system_msg = (
+                    "You are producing a structured next-step proposal. "
+                    "Read the user question and the actual probe results, "
+                    "then propose exactly ONE concrete safe shell command "
+                    "that advances the user's question given what the probe "
+                    "found, or 'none'.\n\n"
+                    "OUTPUT FORMAT — one line, starting with exactly "
+                    "'NEXT_STEP:', nothing before it, nothing after the "
+                    "command. One of:\n"
+                    "  NEXT_STEP: <single concrete shell command>\n"
+                    "  NEXT_STEP: none\n\n"
+                    "Rules:\n"
+                    "- Command must be real and specific. No placeholders, "
+                    "no ellipsis, no 'TBD'.\n"
+                    "- A probe marked EXIT_NONZERO may still have useful "
+                    "stdout — read the stdout, don't just trust the exit "
+                    "status. A pipeline like `lsusb && grep foo` can exit "
+                    "nonzero because grep matched nothing, while lsusb's "
+                    "stdout still contains the answer. Do NOT propose "
+                    "rerunning the same failing command — propose a "
+                    "different concrete step that uses what stdout showed.\n"
+                    "- Do NOT propose the same command that just failed.\n"
+                    "- If the probe result already answers fully, output "
+                    "'NEXT_STEP: none'.\n"
+                    "- If you do not have enough data, output 'NEXT_STEP: "
+                    "none'.\n"
+                    "- No prose, no explanation. ONLY the NEXT_STEP line."
+                )
             user_msg = (
                 f"USER QUESTION: {user_text[:300]}\n\n"
                 f"PROBE RESULTS:\n{probes_text}\n\n"
@@ -1459,16 +1572,18 @@ class TelegramVoice:
             logger.debug("next-step proposer LLM call failed: %s", e)
             return None
 
-        cmd = self._parse_next_step_line(raw)
+        cmd, label = self._parse_next_step_line(raw)
         if cmd is None:
             logger.info(
                 "next-step proposer: NEXT_STEP: none (or parse miss) "
-                "| raw=%r", raw[:120].replace("\n", " "),
+                "| exploratory=%s raw=%r",
+                exploratory, raw[:120].replace("\n", " "),
             )
             return {"kind": "none", "summary": "no concrete next step"}
 
         logger.info(
-            "next-step proposer: dispatching cmd=%r", cmd[:120]
+            "next-step proposer: dispatching cmd=%r label=%s exploratory=%s",
+            cmd[:120], label, exploratory,
         )
 
         # Route through the existing pipeline (same API Jarvis uses).
