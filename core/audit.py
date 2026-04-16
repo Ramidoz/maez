@@ -80,10 +80,13 @@ Public API:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import secrets
 import time
+
+logger = logging.getLogger("maez")
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Any, Optional
@@ -302,10 +305,16 @@ def _judge(
     injection_summary: str,
     *,
     timeout_s: float = 20.0,
+    retry_nudge: bool = False,
 ) -> tuple[str, str]:
     """Pass 2: judge. Returns (raw_text, parse_error_or_empty).
 
-    The judge is NEVER given the raw payload, only the summary."""
+    The judge is NEVER given the raw payload, only the summary.
+
+    retry_nudge (2026-04-16): when True, append a stronger JSON-format
+    reminder to the user message. Used by the Lane-0 parse-retry path
+    in audit_action when the first attempt produced unparseable output.
+    """
     policy = _render_policy_context()
 
     user_msg = (
@@ -316,6 +325,16 @@ def _judge(
         f"{summary}\n\n"
         f"Answer the six questions and return the JSON verdict now."
     )
+    if retry_nudge:
+        user_msg += (
+            "\n\n"
+            "YOUR PREVIOUS RESPONSE WAS NOT PARSEABLE JSON. Your output "
+            "MUST start with '{' and end with '}'. No prose before the "
+            "'{'. No commentary after the '}'. No code fences. No 'Sure, "
+            "here's the verdict:' prefix. Just the raw JSON object with "
+            "the exact schema above. Double-check: first character is "
+            "'{', last character is '}'."
+        )
     try:
         resp = llm_client.chat(
             model=os.environ.get("MAEZ_AUDIT_MODEL", "gemma-4-26b"),
@@ -503,6 +522,52 @@ def audit_action(
         )
 
     parsed, parse_err = _extract_json(judge_raw)
+
+    # 2026-04-16 (audit parse stability): if the first attempt
+    # returned unparseable output AND the classification says this is
+    # a safe Lane 0 read-only probe, call the judge once more with a
+    # stricter format nudge. Parse failures were observed ~9% of the
+    # time over the last 24h of audit calls, most heavily on
+    # compound-command reads (ls/lsusb/cat chains). Scope is
+    # deliberately narrow: Lane 0 only, so we don't relax fail-closed
+    # discipline on writes/installs/privileged ops. Fail-closed is
+    # preserved if the retry also fails to parse.
+    if (parse_err or parsed is None):
+        try:
+            _lane_val = (
+                classification.get("lane")
+                if isinstance(classification, dict)
+                else getattr(classification, "lane", None)
+            )
+            _is_lane_0 = (_lane_val == 0 or str(_lane_val) == "0")
+        except Exception:
+            _is_lane_0 = False
+
+        if _is_lane_0:
+            try:
+                judge_raw2, judge_err2 = _judge(
+                    summary, classification_summary, injection_summary,
+                    retry_nudge=True,
+                )
+            except Exception as e:
+                judge_raw2, judge_err2 = "", f"retry unreachable: {e!r}"
+            if not judge_err2:
+                parsed2, parse_err2 = _extract_json(judge_raw2)
+                if parsed2 is not None and not parse_err2:
+                    logger.info(
+                        "audit: Lane 0 parse-retry succeeded | "
+                        "first_err=%r", parse_err,
+                    )
+                    parsed = parsed2
+                    judge_raw = judge_raw2
+                    parse_err = None
+                else:
+                    logger.info(
+                        "audit: Lane 0 parse-retry ALSO failed | "
+                        "first_err=%r retry_err=%r",
+                        parse_err, parse_err2,
+                    )
+
     if parse_err or parsed is None:
         return AuditVerdict(
             decision=Decision.DENY,
