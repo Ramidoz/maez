@@ -169,6 +169,64 @@ class MaezDaemon:
                 )
         except Exception as e:
             logger.debug("builder startup diff capture failed: %s", e)
+
+        # A-core #5: identity continuity ledger. Mechanical startup
+        # detector — compares current identity fingerprint (base_model,
+        # lora_hash, soul_hash) to the fingerprint stored with the
+        # latest ledger event, writes a new 'same' event if anything
+        # changed. This is the ONLY mechanical writer in Track A; the
+        # other producer is the explicit record_event() API reserved
+        # for the future birth event. See core/identity_ledger.py for
+        # the narrow-scope rationale (why code hashes are excluded
+        # during Track A, why severity is locked to 'same', etc.).
+        try:
+            from core.identity_ledger import (
+                IdentityLedger,
+                detect_and_record_startup,
+            )
+            self._identity_ledger = IdentityLedger()
+            self.continuity_id, wrote_event = detect_and_record_startup(
+                self._identity_ledger
+            )
+            if wrote_event:
+                logger.info(
+                    "Identity ledger: startup detected a fingerprint "
+                    "change (continuity_id=%s)",
+                    self.continuity_id[:12] if self.continuity_id else "?",
+                )
+            else:
+                logger.info(
+                    "Identity ledger: startup fingerprint unchanged "
+                    "(continuity_id=%s)",
+                    self.continuity_id[:12] if self.continuity_id else "?",
+                )
+        except Exception as e:
+            logger.debug("identity ledger startup detection failed: %s", e)
+            self._identity_ledger = None
+            self.continuity_id = None
+
+        # A-core #6: temperament skeleton. Eleven named parameters
+        # (Decision 14) stored as an append-only event log. Track A
+        # discipline: instantiate, expose the handle, but NOTHING in
+        # the reasoning loop reads from it yet. No automatic drift,
+        # no admin surface. The skeleton exists so #9 (private
+        # thoughts) and #17 (acceptance test) have something to read
+        # from when they come online, and so the future drift module
+        # has a landing spot without migration. See core/temperament.py
+        # for the no-fixed-floors rationale (NULL == "observing").
+        try:
+            from core.temperament import Temperament
+            self.temperament = Temperament()
+            cur = self.temperament.current()
+            observed = sum(1 for v in cur.values() if v is not None)
+            logger.info(
+                "Temperament skeleton ready: %d/11 parameters observed",
+                observed,
+            )
+        except Exception as e:
+            logger.debug("temperament skeleton init failed: %s", e)
+            self.temperament = None
+
         self._cognition_critique_counter = 0
         self._last_cognition_critique: dict | None = None
         self._last_reasoning_prompt: str = ""

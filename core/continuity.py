@@ -380,6 +380,19 @@ def build_capsule(checkpoint_type: str = "periodic",
     else:
         resume = _generate_resume_instructions(mode, concerns, last_thought or {}, watchdog)
 
+    # A-core #5: cross-reference to the identity ledger. The capsule
+    # answers "what was I doing when I shut down?" (ephemeral); the
+    # ledger answers "am I still me across that transition?" (durable).
+    # Adjacent, not nested — we just copy the current continuity_id so
+    # the loaded capsule can be correlated to a ledger event on the
+    # other side of the restart. Never raises.
+    current_continuity_id: str | None = None
+    try:
+        from core.identity_ledger import IdentityLedger
+        current_continuity_id = IdentityLedger().current_continuity_id()
+    except Exception as e:
+        logger.debug("continuity: identity ledger lookup failed: %s", e)
+
     capsule = {
         'capsule_version': CAPSULE_VERSION,
         'written_at': datetime.now(timezone.utc).isoformat(),
@@ -395,6 +408,7 @@ def build_capsule(checkpoint_type: str = "periodic",
         'conversation_stance_with_rohit': stance,
         'what_changed_due_to_restart': what_changed,
         'resume_instructions': resume,
+        'current_continuity_id': current_continuity_id,
     }
     return capsule
 

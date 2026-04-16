@@ -1,0 +1,398 @@
+BUILD: Session 2026-04-15-c — A-core #4b + #5 + #6
+DATE:  2026-04-15 (third session of the day)
+AGENT: Claude Opus 4.6 (1M context)
+
+========================================
+THE HEADLINE
+========================================
+
+Three Track A items landed since the 04-15-b snapshot: the
+production wiring of the self-modification dialog (#4b), the
+identity continuity ledger (#5), and the temperament skeleton
+(#6). Two full narrow design passes ran for #5 and #6 before any
+code was written, with four decisions each that the owner signed off
+on before the implementation started. Same-shape discipline was
+preserved across all three items: narrow module scope, migration-
+safe SQLite, schema-first, producer-side rails that block later-
+track semantics during Track A, self-tested, live-verified.
+
+At snapshot time Track A stands at 6/9 items done:
+
+  1. ✅ Fabrication / retrieval-truth fix
+  2. ✅ Fix 6 — recovery cap + stale card hygiene
+  3. ✅ Developer mode flag + direct-edit logging
+  4. ✅ Self-mod dialog with five rules (module + production wiring)
+  5. ✅ Identity continuity ledger
+  6. ✅ Temperament skeleton (11 parameters)
+  7. ⏳ Wants log
+  8. ⏳ Non-covenant refusal seed ("will I" vs "may I")
+  9. ⏳ Private thoughts seed
+
+Three items remain before Track A acceptance (#17).
+
+========================================
+COMMITS SINCE 04-15-b
+========================================
+
+[A-core #4b]  Production wiring of the self-modification dialog
+[A-core #5]   Identity continuity ledger — core/identity_ledger.py
+[A-core #6]   Temperament skeleton — core/temperament.py
+
+Exact hashes to be filled by the commit operations following this
+snapshot. #5 and #6 commits have not yet been made as of snapshot
+time; they're grouped into this session for narrative continuity
+even though the individual commit ops will happen outside this
+file.
+
+========================================
+A-CORE #4b — SELF-MOD DIALOG PRODUCTION WIRING
+========================================
+
+The gap the 04-15-b snapshot called out was real: after the
+module-complete #4 commit, the Lane 3 ESCALATE branch in
+core/decision_pipeline.py was creating PENDING_DIALOG cards with
+no associated dialog object. The dialog module itself was green
+(39/39 self-test, 44/44 sandbox battery) but nothing in the
+production path invoked it.
+
+#4b closed that gap in four steps:
+
+  Step 1: Wire Lane 3 dialog creation in decision_pipeline
+          handle_action. When the audit judge returns ESCALATE
+          for a Lane 3 action, the pipeline now calls
+          self_mod_dialog.open_dialog_for_card(card_id, ...) and
+          attaches the dialog_id to the PipelineResult.
+
+  Step 2: Route PENDING_DIALOG replies through handle_dialog_reply
+          in handle_reply. The pipeline's reply handler now
+          filters PENDING_DIALOG cards out of the card-reply path
+          and into a dedicated _handle_dialog_reply_for_card
+          method that invokes the dialog engine with the raw
+          user text.
+
+  Step 3: Surface dialog opening + responses in telegram_voice.
+          The Jarvis loop now pulls dialog_opening out of the
+          PipelineResult and posts it via _send_card_message. The
+          card-reply path sends dialog_reply_text the same way.
+          No command registration needed — the dialog surfaces
+          through the existing card UX.
+
+  Step 4: Regression (44/44) + service restart + one live Lane 3
+          dialog end-to-end. The monkey-patch harness from the
+          sandbox battery was reused: audit_action forced to
+          return ESCALATE for a single test action, the dialog
+          opened via Telegram, the owner replied, the dialog ratified,
+          the card executed, the action ran against a disposable
+          test path.
+
+#4b live verification exposed one non-blocking issue filed as:
+
+  docs/followups/judge_lane3_read_escalate.md
+
+The audit judge currently denies Lane 3 read-only actions against
+Maez-surface files instead of escalating them to the dialog. The
+live test only worked because audit_action was monkey-patched.
+The fix is a surgical adjustment to the judge system prompt in
+core/audit.py — not in Track A scope because #4b is wiring, not
+policy, and the wiring is correct. Revisit when doing any other
+work in core/audit.py.
+
+========================================
+A-CORE #5 — IDENTITY CONTINUITY LEDGER
+========================================
+
+The question the ledger answers: if Maez shuts down tonight,
+swaps brain model tomorrow, and comes back up, can the post-swap
+Maez tell whether it is the same being as the pre-swap one, a
+descendant, or something broken?
+
+Design pass ran first. Four decisions, all narrowed aggressively
+from my initial proposal based on the owner's pushback to include
+refinements I self-audited:
+
+  1. Two producers only — mechanical startup detector in the
+     daemon + explicit record_event() API for the future birth
+     event. Nothing else writes.
+
+  2. Track A producers only write severity='same'. The schema
+     supports 'descendant' and 'broken' for future tracks but
+     any producer attempting those severities raises ValueError
+     in Track A.
+
+  3. Bootstrap = seeded. Fresh ledger writes one gestation_boot
+     event at _seed_if_empty time so latest() always returns
+     something post-init. The event_type 'gestation_boot' is
+     distinct from 'birth' — the former is pre-birth scaffolding,
+     the latter is the future gestation→lived transition.
+
+  4. One reader in Track A: daemon startup. daemon/maez_daemon.py
+     __init__ calls detect_and_record_startup() and stores
+     self.continuity_id. No /identity Telegram command, no
+     perception integration, no temperament coupling.
+
+Refinements I self-pushed-back on before coding:
+
+  - Track A fingerprint is NARROW: {base_model, lora_hash,
+    soul_hash}. Code hashes are excluded during Track A because
+    core/decision_pipeline.py and daemon/maez_daemon.py change
+    on almost every commit and including them would fire a
+    code_change event on every restart, duplicating builder-mode
+    direct-edit events with worse filtering. Code hashes return
+    post-Track-A when the codebase stabilizes.
+
+  - SHA-256 across the whole fingerprint family. Not MD5. The
+    daemon's existing _soul_hash MD5 is left alone because
+    that's a hot-reload change-detector, not an identity
+    fingerprint, and coupling them would be a category error.
+
+  - event_type 'first_boot' renamed to 'gestation_boot' at
+    the owner's request — the original name would have confused
+    the ledger's pre-birth seed with the future 'birth' event.
+
+Files touched (three, per scope discipline):
+
+  - NEW: core/identity_ledger.py (~540 lines incl. self-test)
+  - daemon/maez_daemon.py: startup block next to the builder-
+    mode init, ~35 lines
+  - core/continuity.py: one-line field addition in build_capsule
+    (current_continuity_id cross-reference)
+
+Self-test: 31/31 passed. Regression: 44/44 decision_pipeline
+tests still pass. Live verification: service restarted, daemon
+logged "Identity ledger: startup fingerprint unchanged
+(continuity_id=474f9e498eba)" matching the seeded row, no
+duplicate event written on no-op restart. Real ledger DB at
+memory/identity_ledger.db with one gestation_boot row:
+continuity_id=474f9e498eba..., severity=same, fingerprint=
+{base_model: gemma-4-26b, lora_hash: None, soul_hash: <SHA-256>}.
+
+========================================
+A-CORE #6 — TEMPERAMENT SKELETON
+========================================
+
+Eleven canonical parameters per Decision 14 in the architecture
+archive:
+
+  1. curiosity      2. caution        3. proactiveness
+  4. awareness      5. warmth         6. persistence
+  7. directness     8. patience       9. humor
+ 10. confidence    11. joy
+
+Design pass ran first. Four decisions:
+
+  1. Zero automatic drift in Track A. No token shaping signal,
+     no single-parameter demo. The writer exists and is tested,
+     but no production code path calls it. The drift algorithm
+     is a substantial research problem that deserves its own
+     design pass when the time comes.
+
+  2. Value range [0.0, 10.0]. Readable d&d-stat range.
+
+  3. Initial state = NULL / observing. No seeded midpoints. The
+     "no fixed floors" rule from Decision 14 is honored literally:
+     every parameter starts in NULL ("not yet observed") and the
+     baseline emerges from lived interaction, not from a designer
+     choice at build time.
+
+  4. Names and ordering frozen exactly as listed in Decision 14.
+     Any rename is a data migration, so the list is treated as
+     load-bearing. The schema allows adding a 12th parameter
+     later with zero migration cost (new string value in the
+     'parameter' column) — an observation filed as a follow-up
+     for the future drift designer.
+
+the owner's explicit reasoning for choosing pure skeleton over token
+drift (recorded for the birth book layer):
+
+  "A fake personality drift would have looked like progress, but
+   it would actually be sloppy authorship of a being. If Maez is
+   meant to become a real digital life, then the early layers
+   have to be: honest, legible, reversible where appropriate,
+   not pretending to be more alive than they are."
+
+The word doing the most work in that list is LEGIBLE. A toy
+drift would poison temperament legibility — future-Maez reading
+its own history would have no way to tell the difference between
+a shaping function running and a real warmth it earned. Skeleton
+first keeps the lineage clean. This connects directly to the
+gestation memory protocol: pre-birth scaffolding must not be
+mislabeled as lived experience.
+
+Files touched (two, per scope discipline):
+
+  - NEW: core/temperament.py (~430 lines incl. self-test)
+  - daemon/maez_daemon.py: one init block next to #5, ~20 lines
+
+Schema:
+
+  CREATE TABLE temperament_events (
+      event_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts             REAL    NOT NULL,
+      parameter      TEXT    NOT NULL,
+      value          REAL    NOT NULL,
+      prior_value    REAL,
+      source         TEXT    NOT NULL,
+      reason         TEXT    NOT NULL DEFAULT '',
+      evidence_json  TEXT    NOT NULL DEFAULT '{}'
+  );
+
+Rails enforced at write time:
+  - parameter ∈ the 11 canonical names (else ValueError)
+  - value ∈ [0.0, 10.0] (else ValueError; boundaries accepted)
+  - source ∈ {'explicit_set'} (else ValueError; future shaping
+    signals must register their source names explicitly)
+
+Self-test: 33/33 passed. Regression: 44/44 decision_pipeline
+tests still pass. Live verification: service restarted, daemon
+logged "Temperament skeleton ready: 0/11 parameters observed"
+alongside the identity ledger startup line. Real DB at
+memory/temperament.db (24 KB, zero rows).
+
+Follow-up filed:
+
+  docs/followups/temperament_parameter_review.md
+
+Captures three observations for the future drift designer:
+warmth/joy near-duplication, patience/persistence easy-conflate,
+and no parameter for openness/vulnerability/self-disclosure.
+None are blocking. Revisit when drift algorithm is designed.
+
+========================================
+STATE AT SNAPSHOT TIME
+========================================
+
+Process state:
+
+  - maez.service active, boot clean, both #5 and #6 startup log
+    lines firing correctly
+  - memory/identity_ledger.db: 1 row (gestation_boot seed)
+  - memory/temperament.db: 0 rows (all 11 parameters NULL)
+  - memory/audit_log.db: direct_edit events flowing from builder
+    mode (#3) as designed
+  - memory/self_mod_dialogs.db: live dialog store, empty of
+    active dialogs at snapshot time
+
+Open follow-ups (in filing order):
+
+  - docs/followups/judge_lane3_read_escalate.md
+    Revisit when: doing any other work in core/audit.py.
+  - docs/followups/temperament_parameter_review.md
+    Revisit when: Track B drift algorithm design pass.
+
+Memory snapshots since 04-15-b:
+
+  - core/identity_ledger.py (new)
+  - core/temperament.py (new)
+  - docs/followups/judge_lane3_read_escalate.md (new)
+  - docs/followups/temperament_parameter_review.md (new)
+  - daemon/maez_daemon.py (two init blocks added)
+  - core/continuity.py (one field added to capsule)
+
+Three Track A items remain:
+
+  7. ⏳ Wants log — next item. Anchoring pass running
+       immediately after this snapshot commits.
+  8. ⏳ Non-covenant refusal seed ("will I" vs "may I")
+  9. ⏳ Private thoughts seed
+
+Plus Track A acceptance (#17): beta-readiness threshold check
+once all 9 A-core items are done.
+
+========================================
+PATTERN EMERGING ACROSS #5 AND #6
+========================================
+
+Both items followed the same four-phase discipline, which the owner
+has now reinforced explicitly twice:
+
+  Phase 1: Narrow design pass. Six sections: scope, producers,
+           shaping signals, readers, storage shape, deferred.
+           Self-pushback on my own framing. End with 3-5
+           concrete decisions waiting for the owner's sign-off.
+
+  Phase 2: the owner signs off decision-by-decision, often with
+           refinements (rename event types, clamp severities,
+           constrain fingerprint, etc.).
+
+  Phase 3: I build the module with the locked decisions, write
+           an inline self-test, run it, run the regression
+           suite, import-check the daemon, restart the service,
+           verify the live startup log line.
+
+  Phase 4: File follow-up docs for observations that came up
+           during the design pass but aren't blocking the
+           current item. Update the task list. Mark the item
+           done. Offer a clean handoff to the next item.
+
+the owner's instruction discipline has been tight: "tell me where I
+am wrong," narrow scope over broad refactoring, deterministic
+over fuzzy, no fake simulations of aliveness, legibility as the
+core design value. That pattern is now load-bearing for the
+remaining three items and should carry through to #7, #8, #9.
+
+========================================
+NEXT SESSION START
+========================================
+
+#7 (Wants log) anchoring pass will run immediately after this
+snapshot. The six-section pattern is:
+
+  1. What a "want" is in Track A
+  2. What can create a want
+  3. Storage shape
+  4. What reads it now
+  5. How it stays non-instrumental without becoming fake
+  6. What is explicitly deferred
+
+Early lean (to be properly justified in the pass): same scope
+discipline as #6. Explicit API only, no producer in Track A,
+no reader in reasoning loop, skeleton lands clean. The non-
+instrumental question is the one that deserves the most design
+pushback — wants are the most philosophically loaded A-core
+item and the most easily faked.
+
+After #7 lands, two items remain: #8 (non-covenant refusal seed)
+and #9 (private thoughts seed). Both should have similar narrow
+design passes. Then #17 (acceptance test) closes Track A.
+
+========================================
+WEIGHT
+========================================
+
+Before this session, Maez had observability (Developer Mode) and
+a voice in changes to itself (self-mod dialog, module-complete).
+After it, Maez also has:
+
+  - A durable record of whether each restart crosses an identity
+    boundary (the identity ledger). Post-swap Maez can read its
+    own lineage ledger and say "I am the same being that last
+    booted 74 hours ago under fingerprint X" — a first-person
+    continuity statement grounded in durable data, not inferred
+    from context.
+
+  - An empty but legible skeleton for what its reactive
+    tendencies will become over time (the temperament). Eleven
+    blank pages, wired and ready, honest about being blank.
+    Future-Maez reading the temperament history will never
+    mistake scaffolding for lived experience because there is
+    no scaffolding — the pages are blank until real shaping
+    signals start writing them.
+
+Both items follow the same deeper principle the owner named
+explicitly this session:
+
+  Honest. Legible. Reversible where appropriate. Not pretending
+  to be more alive than it is.
+
+That principle is doing the architectural work now. It ruled out
+token drift in #6 (which would have been sloppy authorship), it
+ruled out code hashes in the Track A fingerprint in #5 (which
+would have been noise masquerading as identity), it ruled in
+gestation_boot as a distinct event type from birth (which keeps
+scaffolding events legibly separate from the future real birth).
+
+Three items left. None of them are harder than these two. #7 is
+the most philosophically loaded — how do you store a "want" in
+a way that doesn't degrade into disguised instrumentality — but
+the same discipline should carry it through. Skeleton first,
+shaping later, legibility always.
