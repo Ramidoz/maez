@@ -469,6 +469,13 @@ class TelegramVoice:
         # message (see _process_message + _try_card_reply_intent).
         self._recovery_depth: dict[str, int] = {}
 
+        # 2026-04-16 offer-binding: a fresh soft offer Maez made in
+        # its last reply ("I can search for X"). Bare approvals on
+        # the next turn bind to this and fire the action. Cleared on
+        # fire / TTL expiry / non-approval context shift.
+        self._pending_offer: dict | None = None
+        self._last_actionable_user_text: str = ""
+
         if not self.token:
             logger.error("MAEZ_TELEGRAM_TOKEN not set — Telegram disabled")
         if not self.authorized_user:
@@ -1360,6 +1367,56 @@ class TelegramVoice:
         "I can do that once I create or run the correct action."
     )
 
+    # ═════════════════════════════════════════════════════════════════════
+    #  Offer-binding (2026-04-16 "Yes has nothing to bind to" bug)
+    # ═════════════════════════════════════════════════════════════════════
+    #
+    # When Maez says "I can search for X" / "want me to look up X" in a
+    # turn that created NO real action state, store that offer as a
+    # short-lived pending task. On the next bare approval from the owner,
+    # fire the offered web_search directly instead of letting "Yes"
+    # fall through to chat (which produces another soft offer loop).
+    #
+    # Scope is deliberately narrow:
+    #   - only web_search (read-only, safe) is auto-fired
+    #   - TTL 120s; context shift (any non-approval turn) clears it
+    #   - offer only stored when turn_had_action == False (buffer mode)
+    #   - precedence over _try_card_reply_intent — a fresh conversational
+    #     offer wins over a background autonomous-cycle card
+
+    import re as _re_mod  # re-alias locally; deleted after use
+    # Offer phrases: "I can (certainly|probably|maybe) search/look up X",
+    # "want me to search X", "Shall I look up X". The optional \w+\s+
+    # slot before the verb allows adverbs like "certainly", "probably",
+    # "definitely" between "can" and the action verb.
+    _OFFER_PATTERN = _re_mod.compile(
+        r"\b("
+        r"I\s+can\s+(?:\w+\s+)?(search|look\s+up|look\s+into|check|investigate|find|web[\s\-]?search)"
+        r"|want\s+me\s+to\s+(?:\w+\s+)?(search|look\s+up|check|investigate|find)"
+        r"|Shall\s+I\s+(?:\w+\s+)?(search|look\s+up|look\s+into|check|investigate|find)"
+        r")",
+        _re_mod.IGNORECASE,
+    )
+
+    # Offer-binding approval detector: broader than _NL_APPROVE_PATTERNS
+    # because we also want to bind "Proceed" and "Yeah proceed" — which
+    # the proposal-intent approval set deliberately excludes. Whole-
+    # message match only; mixed content like "yes and also..." falls
+    # through to chat.
+    _OFFER_APPROVAL_PATTERN = _re_mod.compile(
+        r"^\s*(?:"
+        r"yes|yep|yeah|yup|yuh|ok|okay|sure|sure\s+thing"
+        r"|alright|alright\s+then|absolutely|go\s+ahead|proceed"
+        r"|do\s+it|please\s+do|sounds\s+good|green\s+light|ship\s+it"
+        r"|yeah\s+proceed|yeah\s+go\s+ahead|yes\s+proceed|yes\s+go\s+ahead"
+        r"|fine|great"
+        r")[\s!.?]*$",
+        _re_mod.IGNORECASE,
+    )
+    del _re_mod
+
+    _OFFER_TTL_SECONDS = 120
+
     def _honesty_guard(
         self,
         reply: str,
@@ -1635,6 +1692,90 @@ class TelegramVoice:
                     return max(candidates, key=len).strip().rstrip('?.!')
         return None
 
+    async def _try_offer_binding_intent(self, update, text: str) -> bool:
+        """Bind bare approvals to a fresh pending_offer. Returns True if
+        the offer was fired (caller short-circuits further handling).
+
+        Clearing rules:
+          - TTL expiry (older than _OFFER_TTL_SECONDS): clear silently
+          - Non-approval text (context shift): clear silently, return False
+          - Successful fire: clear after sending results
+        Safety rail: only 'web_search' kind is auto-fired. Other kinds
+        (install, edit) fall through to the normal interceptor chain.
+        """
+        offer = self._pending_offer
+        if offer is None:
+            return False
+
+        import time as _time
+        set_at = float(offer.get("set_at", 0))
+        if (_time.time() - set_at) > self._OFFER_TTL_SECONDS:
+            self._pending_offer = None
+            return False
+
+        if not self._OFFER_APPROVAL_PATTERN.match(text or ""):
+            # Context shift — clear the offer and fall through so the
+            # new message goes through the normal routing path.
+            logger.info(
+                "offer binding: clearing stale offer on context shift "
+                "| text=%r", (text or "")[:60],
+            )
+            self._pending_offer = None
+            return False
+
+        if offer.get("kind") != "web_search":
+            # Narrow safety: only web_search is auto-fired in Track A.
+            return False
+
+        query = (offer.get("query") or "").strip()
+        if not query:
+            self._pending_offer = None
+            return False
+
+        age = _time.time() - set_at
+        logger.info(
+            "offer binding: firing pending web_search | query=%r age=%.1fs",
+            query[:80], age,
+        )
+
+        try:
+            from skills.web_search import search as _web_search
+            await update.message.reply_text(f"Running the search I offered: {query}")
+            result = _web_search(query, max_results=5)
+        except Exception as e:
+            logger.error("offer binding web_search failed: %s", e)
+            await update.message.reply_text(
+                f"I tried to run the offered search but the skill failed ({e}). "
+                f"I'm not going to make up an answer."
+            )
+            self._pending_offer = None
+            return True
+
+        self._pending_offer = None
+
+        if not result.get("success") or not result.get("results"):
+            await update.message.reply_text(
+                f"I searched for \"{query}\" but didn't get useful results back. "
+                f"Want to try different phrasing?"
+            )
+            return True
+
+        import re as _re
+        lines = [f"Here's what I found for \"{query}\":", ""]
+        for i, r in enumerate(result["results"][:5], 1):
+            title = _re.sub(r"\s+", " ", (r.get("title") or "").strip())[:90]
+            url   = _re.sub(r"\s+", "",  (r.get("url")   or "").strip())[:120]
+            snip  = _re.sub(r"\s+", " ", (r.get("snippet") or "").strip())[:220]
+            lines.append(f"{i}. {title}")
+            if snip: lines.append(f"   {snip}")
+            if url:  lines.append(f"   {url}")
+            lines.append("")
+        reply = "\n".join(lines).rstrip()
+        if len(reply) > 3500:
+            reply = reply[:3500] + "\n\n(truncated)"
+        await update.message.reply_text(reply)
+        return True
+
     async def _try_web_search_intent(self, update, text: str) -> bool:
         """Handle explicit search commands. Returns True if handled."""
         if not text or len(text) > 300:
@@ -1719,6 +1860,29 @@ class TelegramVoice:
 
         # Initialize interrupt queue for this generation
         self._interrupt_queue = asyncio.Queue()
+
+        # 2026-04-16 offer-binding: track the most recent non-affirmative
+        # user text so a later pending offer can use it as its query.
+        # A bare "Yes" / "Proceed" doesn't update this — we want the
+        # original asking message, not the approval.
+        try:
+            if not self._OFFER_APPROVAL_PATTERN.match(user_text or ""):
+                self._last_actionable_user_text = user_text
+        except Exception:
+            pass
+
+        # 2026-04-16 offer-binding interceptor. If Maez's last reply
+        # offered a safe web search (no real action state) and this
+        # message is a bare approval, fire the offered search directly
+        # instead of falling through to chat (which loops with another
+        # soft offer). Precedence over card-reply per 2026-04-16 design:
+        # a fresh conversational offer wins over a background card.
+        try:
+            if await self._try_offer_binding_intent(update, user_text):
+                self._generating = False
+                return
+        except Exception as e:
+            logger.debug("offer binding interceptor failed: %s", e)
 
         # Session 11z Part 2: pipeline card-reply interceptor.
         # If there's an outstanding approval card and the owner's message
@@ -2751,6 +2915,33 @@ class TelegramVoice:
                     turn_dialogs_opened=_turn_dialogs_opened,
                 )
                 final_text = (guarded.strip() or "(Maez had no response)")
+
+                # 2026-04-16 offer-binding: detect search-offer phrases
+                # in the ORIGINAL full_reply (before the guard rewrite)
+                # and store as a short-lived pending offer. A bare
+                # approval on the next turn will fire this instead of
+                # looping with another soft offer. Only runs in this
+                # branch (turn_had_action == False) because that's
+                # exactly the case where the offer is unbacked.
+                try:
+                    if TelegramVoice._OFFER_PATTERN.search(full_reply or ""):
+                        _query = (self._last_actionable_user_text or user_text or "").strip()
+                        if _query:
+                            self._pending_offer = {
+                                "kind": "web_search",
+                                "query": _query,
+                                "set_at": _time.time(),
+                                "offer_preview": (full_reply or "")[:120].replace("\n", " "),
+                            }
+                            logger.info(
+                                "offer binding: stored pending web_search "
+                                "| query=%r preview=%s",
+                                _query[:80],
+                                self._pending_offer["offer_preview"][:80],
+                            )
+                except Exception as e:
+                    logger.debug("offer binding store failed: %s", e)
+
                 for part in split_long_message(final_text):
                     await context.bot.send_message(
                         chat_id=update.effective_chat.id, text=part,
