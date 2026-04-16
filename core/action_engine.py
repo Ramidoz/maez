@@ -675,6 +675,33 @@ class ActionEngine:
             reason, tier=0,
         )
 
+    _DEFAULT_SHELL_TIMEOUT_S = 120
+    _APT_SHELL_TIMEOUT_S = 600  # 2026-04-16: longer budget for package-install chains
+
+    @staticmethod
+    def _shell_timeout_for(cmd: str) -> int:
+        """Return the subprocess timeout for a shell command.
+
+        Package-install operations (apt / dpkg / snap / flatpak /
+        add-apt-repository) get a longer budget because `apt-get update`
+        alone can take 60-120s on this machine, and `apt-get install`
+        on top often pushes past 120s total. The default 120s is
+        preserved for every other command — no broad bump.
+        """
+        c = (cmd or "").lower()
+        long_markers = (
+            "apt-get ",
+            "apt install", "apt upgrade", "apt update", "apt full-upgrade",
+            "apt-cache ",
+            "dpkg -i", "dpkg --install",
+            "snap install", "snap refresh",
+            "flatpak install",
+            "add-apt-repository",
+        )
+        if any(m in c for m in long_markers):
+            return ActionEngine._APT_SHELL_TIMEOUT_S
+        return ActionEngine._DEFAULT_SHELL_TIMEOUT_S
+
     def _do_run_shell(self, cmd: str, reason: str = "") -> str:
         """Execute an arbitrary shell command via bash.
         No allowlist check — the covenant gate in _check_forbidden
@@ -684,14 +711,19 @@ class ActionEngine:
         swallowed non-zero exits and returned the output string anyway,
         which caused `_execute_action` to record success=True on every
         failed install. See ShellCommandError docstring for the full
-        story."""
+        story.
+
+        Timeout is 120s by default; package-install commands
+        (apt/dpkg/snap/flatpak/add-apt-repository) get 600s via
+        _shell_timeout_for."""
         if not cmd or not cmd.strip():
             return "Empty command"
         # Quick covenant check on the command string itself
         self._check_covenant_command(cmd)
+        _timeout = self._shell_timeout_for(cmd)
         result = subprocess.run(
             ["bash", "-c", cmd],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=_timeout,
         )
         out = result.stdout.strip()[:4000]
         err = result.stderr.strip()[:1500]
@@ -1181,7 +1213,8 @@ class ActionEngine:
     def _do_install_package(self, package: str, reason: str = "") -> str:
         result = subprocess.run(
             ["sudo", "apt-get", "install", "-y", package],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True,
+            timeout=self._APT_SHELL_TIMEOUT_S,  # 2026-04-16: 600s for apt
         )
         if result.returncode != 0:
             return f"Failed: {result.stderr.strip()[:500]}"
