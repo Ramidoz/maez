@@ -1481,14 +1481,26 @@ class TelegramVoice:
 
         sm = self._STATE_CLAIM_PATTERN.search(reply)
         if sm:
-            logger.info(
-                "honesty guard: chat_state_claim_rewritten "
-                "(tool_calls=%d cards=%d dialogs=%d matched=%r) | orig=%s",
-                turn_tool_calls, turn_cards_created, turn_dialogs_opened,
-                sm.group(0),
-                reply[:100].replace("\n", " "),
-            )
-            return self._HONEST_STUB
+            # 2026-04-16 fix: if a real pending card exists, the state-
+            # claim narration is presumptively accurate (the card IS
+            # waiting). Don't rewrite it — the card renderer will also
+            # have sent the real card message to Telegram, and the
+            # prose complementing it is fine.
+            if self._has_awaiting_card():
+                logger.info(
+                    "honesty guard: state-claim suppressed in buffer "
+                    "mode — real pending card exists (matched=%r)",
+                    sm.group(0),
+                )
+            else:
+                logger.info(
+                    "honesty guard: chat_state_claim_rewritten "
+                    "(tool_calls=%d cards=%d dialogs=%d matched=%r) | orig=%s",
+                    turn_tool_calls, turn_cards_created, turn_dialogs_opened,
+                    sm.group(0),
+                    reply[:100].replace("\n", " "),
+                )
+                return self._HONEST_STUB
 
         if turn_tool_calls > 0 or turn_cards_created > 0 or turn_dialogs_opened > 0:
             return reply
@@ -1826,14 +1838,24 @@ class TelegramVoice:
     def _has_awaiting_card(self) -> bool:
         """True if there's at least one real card awaiting the owner's
         decision (status OPEN or DEFERRED). Used by the probe->pending
-        bridge to avoid auto-storing an offer that would preempt a
-        real card approval via card-reply."""
+        bridge AND by offer-binding AND by the honesty-guard correction
+        path to avoid preempting / over-correcting when a real card
+        already exists.
+
+        2026-04-16 fix: originally used get_open_for_user(authorized_user)
+        which misses because cards are stored with user_id='rohit'
+        (pipeline scope name) while authorized_user is the numeric
+        Telegram id. Query by chat_id instead — chat_id matches
+        authorized_user."""
         store = getattr(self, "_card_store", None)
         if store is None:
             return False
         try:
             from core.pending_cards import AWAITING_STATUSES
-            cards = store.get_open_for_user(str(self.authorized_user))
+            cards = store.get_open_for_channel(
+                channel="telegram_text",
+                chat_id=str(self.authorized_user),
+            )
             return any(getattr(c, "status", None) in AWAITING_STATUSES for c in cards)
         except Exception as e:
             logger.debug("awaiting-card check failed: %s", e)
@@ -1857,6 +1879,20 @@ class TelegramVoice:
         import time as _time
         set_at = float(offer.get("set_at", 0))
         if (_time.time() - set_at) > self._OFFER_TTL_SECONDS:
+            self._pending_offer = None
+            return False
+
+        # 2026-04-16 fix: real pending card takes precedence over any
+        # stored offer. Observed in benchmark Tasks 2 & 4: auto-offer
+        # was stored alongside a real Lane 2 card, then the approval
+        # fired the offer instead of the card. Clear the offer and
+        # fall through so card-reply handles the approval.
+        if self._has_awaiting_card():
+            logger.info(
+                "offer binding: real pending card exists — deferring "
+                "to card-reply, clearing stored offer | text=%r",
+                (text or "")[:60],
+            )
             self._pending_offer = None
             return False
 
@@ -3143,7 +3179,12 @@ class TelegramVoice:
             _had_action = bool(locals().get("_turn_had_action", False))
             if _had_action and _full:
                 _sm = TelegramVoice._STATE_CLAIM_PATTERN.search(_full)
-                if _sm:
+                if _sm and not self._has_awaiting_card():
+                    # 2026-04-16 fix: only send the correction when no
+                    # real pending card exists. Otherwise Maez's state-
+                    # claim narration is presumptively accurate (the
+                    # card IS waiting in Telegram) and sending "no such
+                    # state exists" contradicts what the user can see.
                     logger.info(
                         "honesty guard: chat_state_claim_correction "
                         "(streaming, matched=%r) | orig=%s",
@@ -3154,6 +3195,12 @@ class TelegramVoice:
                         f"Disregard any earlier mention of pending approval, "
                         f"a previous approved request, or an active session — "
                         f"no such state actually exists right now."
+                    )
+                elif _sm:
+                    logger.info(
+                        "honesty guard: state-claim suppressed — real "
+                        "pending card exists (matched=%r)",
+                        _sm.group(0),
                     )
         except Exception as e:
             logger.debug("state-claim correction failed: %s", e)
@@ -3167,7 +3214,8 @@ class TelegramVoice:
         # full_reply (before guard rewrite) in BOTH branches so the
         # offer is captured regardless of whether tools fired.
         try:
-            if TelegramVoice._OFFER_PATTERN.search(full_reply or ""):
+            if (TelegramVoice._OFFER_PATTERN.search(full_reply or "")
+                and not self._has_awaiting_card()):
                 _raw = (self._last_actionable_user_text or user_text or "").strip()
                 _query = self._derive_search_query(_raw)
                 if _query:
