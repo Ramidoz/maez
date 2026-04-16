@@ -1344,18 +1344,47 @@ class TelegramVoice:
     # by a first-person pronoun, not generic future tense. "I'll let
     # you know" and "I'll stay out of your way" do not match.
 
-    import re as _re_mod  # local alias used only for the pattern below
+    import re as _re_mod  # local alias used only for the patterns below
+
+    # Future-action claim pattern — matches "I'll search / I've proposed /
+    # waiting for your approval / Shall I go ahead". Subject to tool-
+    # bypass: if a tool fired this turn, the claim may be legitimate
+    # (e.g., probing tool ran and the reply promises next-step).
     _CLAIM_PATTERN = _re_mod.compile(
         r"\b("
         r"I[' ]?ll\s+(search|check|look|run|investigate|find|try|set|install|execute|initiate|start)"
         r"|I[' ]?ve\s+(proposed|started|begun|initiated|searched|checked|run|set|executed)"
         r"|I\s+proposed\s+(running|to\s+run|checking)"
         r"|I\s+have\s+the\s+plan\s+ready"
-        r"|waiting\s+for\s+your\s+approval"
         r"|Shall\s+I\s+(go\s+ahead|proceed|run|search|check|execute)"
         r")",
         _re_mod.IGNORECASE,
     )
+
+    # State-claim pattern (2026-04-16 fake-state bug) — matches
+    # "waiting for your approval in Telegram / you've approved the
+    # previous request / wait for that session to finish". These are
+    # NEVER legitimate in chat prose because real pending card state
+    # is surfaced via the card renderer (separate Telegram message),
+    # not narrated by the chat reply. No tool-bypass: even when a
+    # probing tool fired this turn, a fake pending/approved/session
+    # narrative remains fake.
+    _STATE_CLAIM_PATTERN = _re_mod.compile(
+        r"\b("
+        r"waiting\s+for\s+your\s+approval"
+        r"|that'?s\s+waiting\s+for\s+(?:your\s+)?(?:approval|go[\s\-]?ahead)"
+        r"|you'?ve\s+approved"
+        r"|since\s+you'?ve\s+approved"
+        r"|you\s+approved\s+(?:the|that|this|it)"
+        r"|wait(?:ing)?\s+for\s+(?:that|this|the)\s+session"
+        r"|(?:that|this|the)\s+session\s+to\s+(?:finish|complete|end)"
+        r"|the\s+previous\s+(?:request|approval|session)"
+        r"|pending\s+(?:approval|request|session|investigation)"
+        r"|the\s+Telegram\s+card\s+for\s+your\s+approval"
+        r")",
+        _re_mod.IGNORECASE,
+    )
+
     del _re_mod
 
     # What to send instead when the guard trips. Three short sentences
@@ -1425,13 +1454,36 @@ class TelegramVoice:
         turn_cards_created: int,
         turn_dialogs_opened: int,
     ) -> str:
-        """If the reply contains action-claim language but no real
-        action state was created this turn, return a rewrite in honest
-        non-actional language. Otherwise return the reply unchanged."""
-        if turn_tool_calls > 0 or turn_cards_created > 0 or turn_dialogs_opened > 0:
-            return reply
+        """If the reply contains action-claim or state-claim language
+        that doesn't match reality, return a rewrite in honest non-
+        actional language. Otherwise return the reply unchanged.
+
+        State claims (pending/approved/session) always fire — tool
+        calls this turn don't legitimize a fake "waiting for your
+        approval" narrative. Real pending state is surfaced via the
+        card renderer, not chat prose.
+
+        Future-action claims ("I'll search") are bypassed when a
+        tool fired this turn, because those claims may match the
+        probing tool that actually ran.
+        """
         if not reply:
             return reply
+
+        sm = self._STATE_CLAIM_PATTERN.search(reply)
+        if sm:
+            logger.info(
+                "honesty guard: chat_state_claim_rewritten "
+                "(tool_calls=%d cards=%d dialogs=%d matched=%r) | orig=%s",
+                turn_tool_calls, turn_cards_created, turn_dialogs_opened,
+                sm.group(0),
+                reply[:100].replace("\n", " "),
+            )
+            return self._HONEST_STUB
+
+        if turn_tool_calls > 0 or turn_cards_created > 0 or turn_dialogs_opened > 0:
+            return reply
+
         m = self._CLAIM_PATTERN.search(reply)
         if not m:
             return reply
@@ -2983,6 +3035,33 @@ class TelegramVoice:
             await update.message.reply_text(reply)
 
         logger.info("Telegram reply: %s", reply[:100])
+
+        # 2026-04-16 state-claim post-stream correction. In streaming
+        # mode (turn had actions), parts of the reply are already
+        # sent by the time we see the full text — we can't rewrite.
+        # Send a follow-up correction message so the user sees that
+        # the pending/approved/session narrative was not real.
+        # Buffer-mode replies are already handled by _honesty_guard,
+        # so we only correct when turn_had_action is True.
+        try:
+            _full = locals().get("full_reply", "") or ""
+            _had_action = bool(locals().get("_turn_had_action", False))
+            if _had_action and _full:
+                _sm = TelegramVoice._STATE_CLAIM_PATTERN.search(_full)
+                if _sm:
+                    logger.info(
+                        "honesty guard: chat_state_claim_correction "
+                        "(streaming, matched=%r) | orig=%s",
+                        _sm.group(0), _full[:100].replace("\n", " "),
+                    )
+                    await update.message.reply_text(
+                        f"Correction: {self._HONEST_STUB} "
+                        f"Disregard any earlier mention of pending approval, "
+                        f"a previous approved request, or an active session — "
+                        f"no such state actually exists right now."
+                    )
+        except Exception as e:
+            logger.debug("state-claim correction failed: %s", e)
 
         # 2026-04-16 offer-binding detection (moved out of buffer-mode
         # branch). A probing Jarvis tool call ("which openrgb") and a
