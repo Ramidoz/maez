@@ -1265,6 +1265,191 @@ class TelegramVoice:
             logger.debug("actual state block build failed: %s", e)
             return ""
 
+    def _parse_next_step_line(self, text: str) -> str | None:
+        """Parse 'NEXT_STEP: <cmd>' or 'NEXT_STEP: none' from LLM output.
+        Returns the command string if valid/actionable, None otherwise."""
+        if not text:
+            return None
+        for raw in text.strip().splitlines():
+            line = raw.strip()
+            if not line.upper().startswith("NEXT_STEP:"):
+                continue
+            rest = line[len("NEXT_STEP:"):].strip().strip("`").strip()
+            if not rest or rest.lower() == "none":
+                return None
+            lower = rest.lower()
+            for bad in ("<cmd>", "<command>", "...", "tbd", "placeholder"):
+                if bad in lower:
+                    return None
+            if len(rest) > 500:
+                return None
+            return rest
+        return None
+
+    def _propose_next_step_from_probe(self, user_text: str) -> dict | None:
+        """N+1 Option A (2026-04-16): after Jarvis probes complete, run
+        ONE focused structured LLM call to propose a single concrete
+        next-step action based on the real probe result, and route it
+        through the existing pipeline so classification/audit/Lane
+        routing apply uniformly.
+
+        Returns:
+          {'kind': 'executed'|'card_created'|'dialog_opened'|'refused'
+                   |'none'|'skipped', 'summary': str}
+          or None on total failure (caller proceeds without it).
+
+        Scope: synchronous (called from executor). Single-shot per
+        turn. No Lane-3 escalation aggressive-drive — we just hand
+        the proposal to the pipeline and let it route.
+        """
+        import json as _json
+        import sqlite3 as _sqlite
+        import time as _time
+
+        try:
+            # Only run if a probe actually ran recently in this turn.
+            # Probe = audit_log row with outcome='approved_and_ran' in
+            # the last 60 s. If Jarvis didn't fire a tool this turn,
+            # there's nothing for the structured call to ground on.
+            db_path = (
+                getattr(getattr(self, "_audit_log", None), "db_path", None)
+                or "memory/audit_log.db"
+            )
+            since = _time.time() - 60
+            conn = _sqlite.connect(str(db_path))
+            conn.row_factory = _sqlite.Row
+            rows = conn.execute(
+                "SELECT ts, action, params_json, outcome_notes "
+                "FROM audit_log "
+                "WHERE ts >= ? AND outcome='approved_and_ran' "
+                "ORDER BY ts DESC LIMIT 2",
+                (since,),
+            ).fetchall()
+            conn.close()
+            if not rows:
+                return {"kind": "skipped", "summary": "no recent probe"}
+
+            probe_summaries: list[str] = []
+            for r in rows:
+                p = {}
+                try:
+                    p = _json.loads(r["params_json"] or "{}")
+                except Exception:
+                    pass
+                arg = p.get("cmd") or p.get("query") or "?"
+                notes = (r["outcome_notes"] or "(no output)").strip()
+                probe_summaries.append(
+                    f"- {r['action']}: {str(arg)[:120]}\n  result: {notes[:400]}"
+                )
+            probes_text = "\n".join(probe_summaries)
+
+            system_msg = (
+                "You are producing a structured next-step proposal. "
+                "Read the user question and the actual probe results, "
+                "then propose exactly ONE concrete safe shell command "
+                "that advances the user's question given what the probe "
+                "found, or 'none'.\n\n"
+                "OUTPUT FORMAT — one line, starting with exactly "
+                "'NEXT_STEP:', nothing before it, nothing after the "
+                "command. One of:\n"
+                "  NEXT_STEP: <single concrete shell command>\n"
+                "  NEXT_STEP: none\n\n"
+                "Rules:\n"
+                "- Command must be real and specific. No placeholders, "
+                "no ellipsis, no 'TBD'.\n"
+                "- If the probe result already answers fully, output "
+                "'NEXT_STEP: none'.\n"
+                "- If you do not have enough data, output 'NEXT_STEP: "
+                "none'.\n"
+                "- No prose, no explanation. ONLY the NEXT_STEP line."
+            )
+            user_msg = (
+                f"USER QUESTION: {user_text[:300]}\n\n"
+                f"PROBE RESULTS:\n{probes_text}\n\n"
+                f"What is the single next-step command that advances "
+                f"the user's question?"
+            )
+
+            from core import llm_client as _llm_client
+            resp = _llm_client.chat(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": user_msg},
+                ],
+                stream=False,
+                think=False,
+                options={"temperature": 0.2, "num_predict": 120},
+            )
+            raw = getattr(getattr(resp, "message", None), "content", None)
+            if raw is None:
+                raw = str(resp)
+            raw = raw.strip()
+        except Exception as e:
+            logger.debug("next-step proposer LLM call failed: %s", e)
+            return None
+
+        cmd = self._parse_next_step_line(raw)
+        if cmd is None:
+            logger.info(
+                "next-step proposer: NEXT_STEP: none (or parse miss) "
+                "| raw=%r", raw[:120].replace("\n", " "),
+            )
+            return {"kind": "none", "summary": "no concrete next step"}
+
+        logger.info(
+            "next-step proposer: dispatching cmd=%r", cmd[:120]
+        )
+
+        # Route through the existing pipeline (same API Jarvis uses).
+        # Pipeline handles classify / audit / lane routing / card
+        # creation. If audit DENIES, the pipeline returns REFUSED_*
+        # and no card is created — chat reply's [ACTUAL STATE] block
+        # will show PENDING CARDS NOW: 0, and the directive keeps the
+        # LLM honest.
+        try:
+            pipe = self._get_pipeline()
+            if pipe is None:
+                return {"kind": "none", "summary": "pipeline unavailable"}
+            presult = pipe.handle_action(
+                action="run_shell",
+                params={"cmd": cmd},
+                reason=f"next-step from probe: {user_text[:100]}",
+                user_id="rohit",
+                chat_id=str(self.authorized_user),
+                channel="telegram_text",
+            )
+            from core.decision_pipeline import PipelineStatus as _PS
+            status = getattr(presult, "status", None)
+            if status == _PS.EXECUTED:
+                out = (presult.execution_output or "").strip()[:300]
+                logger.info(
+                    "next-step proposer: EXECUTED cmd=%r output=%r",
+                    cmd[:80], out[:100],
+                )
+                return {"kind": "executed", "summary": out}
+            if status == _PS.PENDING_APPROVAL:
+                card_id = getattr(presult.card, "request_id", "?")[:8] if presult.card else "?"
+                logger.info(
+                    "next-step proposer: card_created id=%s cmd=%r",
+                    card_id, cmd[:80],
+                )
+                return {"kind": "card_created", "summary": cmd[:120]}
+            if status == _PS.PENDING_DIALOG:
+                logger.info(
+                    "next-step proposer: dialog_opened cmd=%r", cmd[:80]
+                )
+                return {"kind": "dialog_opened", "summary": cmd[:120]}
+            # Refusals (covenant / audit / will_i) or other terminal
+            logger.info(
+                "next-step proposer: refused status=%s cmd=%r",
+                status, cmd[:80],
+            )
+            return {"kind": "refused", "summary": f"status={status}"}
+        except Exception as e:
+            logger.debug("next-step proposer pipeline dispatch failed: %s", e)
+            return None
+
     def _build_recent_body_activity_block(self, since_seconds: float = 600.0) -> str:
         """Return a human-readable block describing what Maez's body just
         did in this chat over the last `since_seconds`. Used to make card
@@ -2908,6 +3093,26 @@ class TelegramVoice:
             )
         except Exception as e:
             logger.warning("jarvis loop failed: %s", e)
+
+        # N+1 Option A (2026-04-16): after Jarvis probes, run one
+        # focused structured call to propose a real next-step and
+        # route it through the pipeline. This creates real pending
+        # state (card or direct execution) BEFORE the user-facing
+        # reply prompt is built — so the ACTUAL STATE block injected
+        # next will reflect the real proposal.
+        try:
+            loop = asyncio.get_running_loop()
+            next_step = await loop.run_in_executor(
+                None, self._propose_next_step_from_probe, user_text
+            )
+            if next_step:
+                logger.info(
+                    "next-step proposer: kind=%s summary=%s",
+                    next_step.get("kind"),
+                    (next_step.get("summary") or "")[:100],
+                )
+        except Exception as e:
+            logger.debug("next-step proposer dispatch failed: %s", e)
 
         prompt = (
             f"{system_state}\n"
