@@ -1744,6 +1744,76 @@ class TelegramVoice:
                     return max(candidates, key=len).strip().rstrip('?.!')
         return None
 
+    # 2026-04-16 query derivation (N+2): cache of the machine-context
+    # suffix we append to raw user questions when storing pending
+    # web_search offers. Root-free, process-lifetime, mechanical —
+    # no LLM involvement.
+    _machine_context_cache: str | None = None
+
+    @staticmethod
+    def _read_machine_context_suffix() -> str:
+        """Read OS / hardware identity into a short search suffix.
+        Root-free. Returns empty string if nothing readable."""
+        parts: list[str] = []
+        try:
+            with open("/sys/class/dmi/id/product_name", "r") as f:
+                pn = f.read().strip()
+                if pn:
+                    parts.append(pn)
+        except Exception:
+            pass
+        if not parts:
+            try:
+                with open("/sys/class/dmi/id/sys_vendor", "r") as f:
+                    v = f.read().strip()
+                    if v:
+                        parts.append(v)
+            except Exception:
+                pass
+        try:
+            name: str | None = None
+            ver: str | None = None
+            with open("/etc/os-release", "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("NAME="):
+                        name = line.split("=", 1)[1].strip().strip('"')
+                    elif line.startswith("VERSION_ID="):
+                        ver = line.split("=", 1)[1].strip().strip('"')
+            if name and ver:
+                parts.append(f"{name} {ver}")
+            elif name:
+                parts.append(name)
+        except Exception:
+            pass
+        return " ".join(parts).strip()
+
+    def _machine_search_suffix(self) -> str:
+        """Return the cached machine-context suffix (populate on first
+        call). Empty string if nothing readable."""
+        if TelegramVoice._machine_context_cache is None:
+            TelegramVoice._machine_context_cache = self._read_machine_context_suffix()
+        return TelegramVoice._machine_context_cache
+
+    def _derive_search_query(self, user_text: str) -> str:
+        """Combine user's question with machine/hardware context for
+        a more targeted web search. Mechanical concatenation; no LLM.
+        Skips appending if the user already mentioned the machine
+        (>=2 significant context tokens already present in base) or
+        if no context is readable."""
+        base = (user_text or "").strip()
+        if not base:
+            return base
+        ctx = self._machine_search_suffix()
+        if not ctx:
+            return base
+        base_lower = base.lower()
+        ctx_tokens = [t for t in ctx.lower().split() if len(t) >= 3]
+        overlap = sum(1 for t in ctx_tokens if t in base_lower)
+        if overlap >= 2:
+            return base
+        return f"{base} {ctx}"
+
     def _has_awaiting_card(self) -> bool:
         """True if there's at least one real card awaiting the owner's
         decision (status OPEN or DEFERRED). Used by the probe->pending
@@ -3089,18 +3159,20 @@ class TelegramVoice:
         # offer is captured regardless of whether tools fired.
         try:
             if TelegramVoice._OFFER_PATTERN.search(full_reply or ""):
-                _query = (self._last_actionable_user_text or user_text or "").strip()
+                _raw = (self._last_actionable_user_text or user_text or "").strip()
+                _query = self._derive_search_query(_raw)
                 if _query:
                     self._pending_offer = {
                         "kind": "web_search",
                         "query": _query,
+                        "raw_query": _raw,
                         "set_at": _time.time(),
                         "offer_preview": (full_reply or "")[:120].replace("\n", " "),
                     }
                     logger.info(
                         "offer binding: stored pending web_search "
-                        "| query=%r preview=%s",
-                        _query[:80],
+                        "| query=%r raw=%r preview=%s",
+                        _query[:80], _raw[:60],
                         self._pending_offer["offer_preview"][:80],
                     )
         except Exception as e:
@@ -3124,11 +3196,13 @@ class TelegramVoice:
                 and self._pending_offer is None
                 and TelegramVoice._STATE_CLAIM_PATTERN.search(_full2)
                 and not self._has_awaiting_card()):
-                _query = (self._last_actionable_user_text or user_text or "").strip()
+                _raw = (self._last_actionable_user_text or user_text or "").strip()
+                _query = self._derive_search_query(_raw)
                 if _query:
                     self._pending_offer = {
                         "kind": "web_search",
                         "query": _query,
+                        "raw_query": _raw,
                         "set_at": _time.time(),
                         "offer_preview": (
                             "[auto from probe+state-claim] "
@@ -3137,7 +3211,7 @@ class TelegramVoice:
                     }
                     logger.info(
                         "offer binding: auto-stored from probe+state-claim "
-                        "| query=%r", _query[:80],
+                        "| query=%r raw=%r", _query[:80], _raw[:60],
                     )
         except Exception as e:
             logger.debug("probe->pending bridge failed: %s", e)
