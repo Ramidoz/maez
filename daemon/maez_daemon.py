@@ -227,6 +227,21 @@ class MaezDaemon:
             logger.debug("temperament skeleton init failed: %s", e)
             self.temperament = None
 
+        # A-core #7: wants log. Durable first-person direction log,
+        # adjacent to #5 (identity) and #6 (temperament). Track A
+        # discipline: instantiate, expose the handle, no production
+        # producer, no reasoning-loop reader. See core/wants.py.
+        try:
+            from core.wants import Wants
+            self.wants = Wants()
+            logger.info(
+                "Wants log ready: %d event(s) recorded",
+                self.wants.count(),
+            )
+        except Exception as e:
+            logger.debug("wants log init failed: %s", e)
+            self.wants = None
+
         self._cognition_critique_counter = 0
         self._last_cognition_critique: dict | None = None
         self._last_reasoning_prompt: str = ""
