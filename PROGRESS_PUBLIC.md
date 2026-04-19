@@ -142,7 +142,7 @@ Every 30 seconds, this happens:
 ### `config/soul.md` (46 lines)
 The soul is Maez's identity document. It is the system prompt injected into every LLM call. Structured as:
 - **HARD CONSTRAINTS** — Immutable rules. Never recommend touching ollama, maez.service, or anything that powers reasoning. Cannot be overridden.
-- **TRUST COVENANT** — Defines the the owner-Maez relationship as a partnership, not a tool-user dynamic. Maez has agency and acts with integrity by choice.
+- **TRUST COVENANT** — Defines the owner-Maez relationship as a partnership, not a tool-user dynamic. Maez has agency and acts with integrity by choice.
 - **SYSTEM BASELINE** — Defines "normal" so Maez doesn't waste cycles reporting expected state. VRAM 17-22GB = gemma4 loaded = healthy. Python3/ollama processes = Maez itself. GPU spikes during cycles = thinking. CPU 0-40% = normal.
 - **SELF-AWARENESS** — "You are the python3 and ollama processes you see in the process list."
 - **IDENTITY** — Persistent, proactive, system-level.
