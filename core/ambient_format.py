@@ -26,6 +26,15 @@ def _one_line(s: Any) -> str:
 
 def _format(ctx: dict[str, Any]) -> str:
     lines: list[str] = []
+    # Today's date + resolved absolute paths — concrete facts the model
+    # would otherwise hallucinate. Keep these short.
+    try:
+        from core import paths
+        today_iso = datetime.now().strftime("%Y-%m-%d (%A)")
+        lines.append(f"Today: {today_iso}")
+        lines.append(f"Your notes file: {paths.maez_notes_path()}")
+    except Exception:
+        pass
     w = ctx.get("weather") or {}
     if w.get("temp_c") is not None:
         src = ctx.get("coords_source") or (w.get("coords") or {}).get("source") or "unknown"

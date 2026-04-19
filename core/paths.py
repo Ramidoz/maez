@@ -106,6 +106,11 @@ def trajectories_dir() -> Path:
     return logs_dir() / "trajectories"
 
 
+def maez_notes_path() -> Path:
+    """Persistent scratch notepad. Gitignored, local-only."""
+    return logs_dir() / "maez_notes.md"
+
+
 # ── training + models (often on a separate volume) ─────────────────────
 def training_dir() -> Path:
     return home() / "training"
