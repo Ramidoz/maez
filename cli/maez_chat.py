@@ -124,12 +124,18 @@ class TurnWidget(Vertical):
 
 
 # ── streaming wrappers ─────────────────────────────────────────────────
-def _stream_local(messages: list[dict], max_tokens: int = 4096,
-                  temperature: float = 0.7):
+def _stream_local(messages: list[dict], max_tokens: int = 6000,
+                  temperature: float = 0.7, think: bool = False):
     """Yield (kind, chunk) from the local llama-server.
 
     kind is "thinking" (Qwen3 reasoning_content — render in gray italic)
     or "content" (the final answer text). Callers can display them differently.
+
+    think=False by default — Qwen3 thinking mode eats 2-3k tokens before
+    producing any content. For a snappy chat UX, thinking is disabled and
+    the model jumps straight to the answer. Deep reasoning path can opt
+    in per-turn via a slash command later (not yet wired).
+
     Runs synchronously; dispatch via run_in_executor.
     """
     body = {
@@ -138,6 +144,8 @@ def _stream_local(messages: list[dict], max_tokens: int = 4096,
         "stream": True,
         "max_tokens": max_tokens,
         "temperature": temperature,
+        # Qwen3-specific knob. Recognised by llama-server's jinja template.
+        "chat_template_kwargs": {"enable_thinking": bool(think)},
     }
     req = urllib.request.Request(
         f"{LOCAL_BRAIN_URL}/chat/completions",
