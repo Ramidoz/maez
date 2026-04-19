@@ -45,6 +45,13 @@ config/reddit_subs.yaml
 config/soul.local.md
 config/soul.md
 
+# Working docs, intimate narratives, in-progress follow-ups — stay local
+docs/REBUILD_PLAN_*.md
+docs/TASK_TREEMAP.md
+docs/birth_book/
+docs/followups/
+docs/maez_facing/
+
 # Runtime state (grows on its own; not source code)
 memory/continuity_capsule.json
 memory/continuity_archive/

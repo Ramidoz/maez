@@ -29,9 +29,11 @@ logger = logging.getLogger("maez.ambient")
 SIGNALS_DIR = Path("/home/rohit/maez/logs/signals")
 
 # Fallback coords if no recent location signal from the phone.
-# The phone is the source of truth when available — the owner travels.
-FALLBACK_LAT = float(os.environ.get("MAEZ_HOME_LAT", "<OWNER_LAT>"))   # <OWNER_CITY>
-FALLBACK_LON = float(os.environ.get("MAEZ_HOME_LON", "<OWNER_LON>"))
+# The phone is the source of truth when available. Defaults here are
+# sentinel (0, 0) — override via MAEZ_HOME_LAT / MAEZ_HOME_LON in .env
+# to set your own home location, or rely on iPhone signal pulses.
+FALLBACK_LAT = float(os.environ.get("MAEZ_HOME_LAT", "0.0"))
+FALLBACK_LON = float(os.environ.get("MAEZ_HOME_LON", "0.0"))
 LOCATION_FRESHNESS_HOURS = float(os.environ.get("MAEZ_LOCATION_FRESHNESS_HOURS", "12"))
 
 # Open-Meteo WMO weather codes → human strings (subset of most common)

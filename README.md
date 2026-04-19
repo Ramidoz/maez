@@ -52,8 +52,7 @@ who need an agent that learns them specifically, at their pace, with infinite pa
 ## Install (current state)
 
 There is no one-liner installer yet. The steps below are the manual path; a
-proper `maez init` command is planned (see
-[`docs/REBUILD_PLAN_2026-04-18.md`](docs/REBUILD_PLAN_2026-04-18.md) Phase 3).
+proper `maez init` command is planned.
 
 ```bash
 git clone https://github.com/Ramidoz/maez.git
