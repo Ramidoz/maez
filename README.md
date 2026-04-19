@@ -59,7 +59,7 @@ The Licensed Work is **© 2026 the owner**, released under the **GNU Affero Gene
 - **If you host a modified Maez as a service, your modifications must be public.** AGPL's network clause: if a network user interacts with your modified Maez, you must make the modified source available to them under the same AGPL terms. This prevents "silent SaaS rehosting" where someone profits from Maez without contributing back.
 - **Commercial dual-licenses are available.** If you want to build Maez into a commercial product with proprietary extensions or without AGPL obligations, a separate commercial license can be negotiated. Reach out via [GitHub Issues](https://github.com/Ramidoz/maez/issues) or the contact in [`NOTICE`](NOTICE).
 
-The project was developed under the Business Source License 1.1 from 2026-04-12 through 2026-04-18. That historical license is preserved at [`LICENSE.BSL.previous`](LICENSE.BSL.previous) for context. Any code authored before the relicensing date remains (C) the owner and is re-released under AGPL v3; subsequent commits are AGPL-native.
+The project was developed under the Business Source License 1.1 from 2026-04-12 through 2026-04-18. All code authored before the relicensing date remains (C) the owner and is re-released under AGPL v3; subsequent commits are AGPL-native. The full BSL 1.1 text is preserved in git history (`git log --follow LICENSE`).
 
 The voice-seed LoRA adapter, when published, will be released separately under the **Apache License 2.0** on HuggingFace. Base language and vision models must be obtained directly from their upstream repositories under their own license terms. See [`NOTICE`](NOTICE) for the full third-party license inventory.
 
