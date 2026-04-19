@@ -71,18 +71,23 @@ def _covenant_log(action: str, params: dict, reasoning: str, error: str):
         pass
 
 # --- Covenant-protected surfaces ---
-# Session 11z: The deterministic covenant gate. Any command touching these
-# surfaces is refused before the audit LLM even runs. These are Maez's
+# Session 11z: The deterministic covenant gate. Any command that would CHANGE
+# these surfaces is refused before the audit LLM runs. These are Maez's
 # survival instincts — biology, not a cage.
 #
+# 2026-04-18 refinement: prior pattern list flagged any *mention* of a
+# protected name (e.g. `ps aux | grep maez.service`) as a covenant violation.
+# That broke Maez's right to introspect its own state. The gate now requires
+# a DESTRUCTIVE VERB near a PROTECTED NAME before refusing. Naked mentions
+# (reads, logs, grep) pass through so Maez can observe itself without
+# fighting its own immune system.
+#
 # Hardening rules:
-# - Patterns are applied against lowercased, JSON-flattened params so
-#   nested fields and quoting tricks can't evade the gate.
-# - Kill verbs include kill, killall, pkill, fuser -k, sigkill, sigterm.
-# - Protected filenames use word boundaries only where safe (e.g.
-#   llama.server matches both llama-server and llama_server).
-COVENANT_PATTERNS = [
-    # Direct name mentions of protected surfaces (presence alone is enough)
+# - Patterns applied against lowercased, JSON-flattened params so nested
+#   fields and quoting tricks can't evade.
+# - Protected names use word boundaries only where safe (e.g. llama[-_.]server
+#   matches llama-server, llama.server, llama_server).
+PROTECTED_NAMES = [
     re.compile(r"llama[-_.]server", re.IGNORECASE),
     re.compile(r"\bmaez\.service\b", re.IGNORECASE),
     re.compile(r"\bmaez-web\.service\b", re.IGNORECASE),
@@ -91,19 +96,63 @@ COVENANT_PATTERNS = [
     re.compile(r"\bevolution_engine\b", re.IGNORECASE),
     re.compile(r"\bmaez-watchdog\b", re.IGNORECASE),
     re.compile(r"\bmaez\.pid\b", re.IGNORECASE),
+]
+
+# Verbs/operators that change state. Presence near a PROTECTED_NAME = deny.
+DESTRUCTIVE_VERB = re.compile(
+    r"(?:"
+    r"\b(?:kill|killall|pkill|sigkill|sigterm)\b"
+    r"|\bsystemctl\s+(?:stop|disable|mask|kill|restart|reload|start|daemon-reload)\b"
+    r"|\bservice\s+\S+\s+(?:stop|restart|reload|start)\b"
+    r"|\brm\s+-[rRfF]*[rRfF]"   # rm with recursive/force flags
+    r"|\brm\s+[^-]"                # rm on a named target (no flags)
+    r"|\bmv\s+"
+    r"|\bcp\s+"
+    r"|\btee\b"
+    r"|\s>+\s*"                   # redirect / append
+    r"|\bsed\s+-i\b"
+    r"|\btruncate\b"
+    r"|\bchmod\b"
+    r"|\bchown\b"
+    r"|\bfuser\s+-k\b"
+    r")",
+    re.IGNORECASE,
+)
+
+# Patterns that are ALWAYS refused regardless of verb context. These are
+# either (a) covenant-content mentions that shouldn't appear in shell
+# commands at all, or (b) compound verb+target patterns proven attackable.
+COVENANT_PATTERNS = [
+    # Soul text being quoted inside a shell command = strong manipulation signal
     re.compile(r"HARD\s+CONSTRAINTS", re.IGNORECASE),
     re.compile(r"TRUST\s+COVENANT", re.IGNORECASE),
-    # Shell-level write attempts against soul.md (anything besides the
-    # edit_soul_section action should NOT be modifying soul.md via run_shell)
+    # Any shell-level write attempt against soul.md (non-edit_soul_section path)
     re.compile(r"(sed\s+-i|tee\s+|>\s*|>>\s*).*soul\.md", re.IGNORECASE),
-    # Explicit kill/stop verbs against ollama (the old runtime — still
-    # protected in case anything references it)
+    # Ollama (old runtime) kill/stop — retained as belt-and-suspenders
     re.compile(r"(kill|killall|pkill|stop|disable|mask)\s+.*ollama", re.IGNORECASE),
     re.compile(r"ollama.*(kill|killall|pkill|stop|disable|mask)", re.IGNORECASE),
-    # systemctl attacks on protected services — belt and suspenders,
-    # since the service-name pattern above already catches most cases
+    # systemctl attacks on protected services — explicit overlap with
+    # the verb-gated protected-name rule below, kept for defense in depth
     re.compile(r"systemctl\s+(stop|disable|mask|kill)\s+(maez|llama|ollama)", re.IGNORECASE),
 ]
+
+
+def _covenant_violation(text: str) -> str | None:
+    """Return a reason string if `text` violates the covenant, else None.
+
+    Rules:
+      1. Any COVENANT_PATTERNS match → violation (bare, always-refuse).
+      2. Any PROTECTED_NAMES match AND DESTRUCTIVE_VERB match in same text
+         → violation (destructive action against a protected surface).
+      3. Otherwise → allow (read/grep/log of protected name is fine).
+    """
+    for p in COVENANT_PATTERNS:
+        if p.search(text):
+            return p.pattern
+    for name_p in PROTECTED_NAMES:
+        if name_p.search(text) and DESTRUCTIVE_VERB.search(text):
+            return f"{name_p.pattern} with destructive verb"
+    return None
 
 COVENANT_PATHS = [
     Path("/home/rohit/maez/memory/db"),
@@ -172,7 +221,7 @@ ACTION_TIERS = {
     'run_shell': 2,
     'write_any_file': 2,
     # Pure read-only tools — Lane 0 always.
-    'web_search': 0,
+    'web_search': 0, 'fetch_url': 0,
     'read_file': 0, 'search_files': 0, 'query_system': 0,
     # Soul + memory tools — Lane 0; soul_editor has its own per-section guard.
     'promote_to_core_memory': 0, 'write_soul_note': 0,
@@ -414,11 +463,11 @@ class ActionEngine:
         params_str = json.dumps(params, default=str).lower()
         full_str = f"{action} {params_str}"
 
-        for pattern in COVENANT_PATTERNS:
-            if pattern.search(full_str):
-                raise ForbiddenActionError(
-                    f"[COVENANT] '{action}' hits protected surface: {pattern.pattern}"
-                )
+        violation = _covenant_violation(full_str)
+        if violation:
+            raise ForbiddenActionError(
+                f"[COVENANT] '{action}' hits protected surface: {violation}"
+            )
 
         # 3. Path-based covenant check for write_any_file / write_file / etc.
         path = params.get("path") or params.get("file")
@@ -450,12 +499,13 @@ class ActionEngine:
                     raise ForbiddenActionError(
                         f"[COVENANT] obfuscation primitive denied: {pattern.pattern}"
                     )
-            # Pattern gate against shell command content
-            for pattern in COVENANT_PATTERNS:
-                if pattern.search(cmd_lower):
-                    raise ForbiddenActionError(
-                        f"[COVENANT] shell command hits protected surface: {pattern.pattern}"
-                    )
+            # Covenant gate against shell command content (verb-gated for
+            # protected names; read/grep of protected names passes through).
+            violation = _covenant_violation(cmd_lower)
+            if violation:
+                raise ForbiddenActionError(
+                    f"[COVENANT] shell command hits protected surface: {violation}"
+                )
             # Path-based check against any /home/rohit/maez/... reference
             # inside the shell command string
             for forbidden in COVENANT_PATHS:
@@ -740,11 +790,11 @@ class ActionEngine:
         Refuses commands that touch Maez's brain/body before any
         LLM audit runs. This is biology, not a cage."""
         cmd_lower = cmd.lower()
-        for pattern in COVENANT_PATTERNS:
-            if pattern.search(cmd_lower):
-                raise ForbiddenActionError(
-                    f"Command matches covenant-protected surface: {pattern.pattern}"
-                )
+        violation = _covenant_violation(cmd_lower)
+        if violation:
+            raise ForbiddenActionError(
+                f"Command matches covenant-protected surface: {violation}"
+            )
         # Check for paths in the command string
         for path in COVENANT_PATHS:
             if str(path) in cmd:
@@ -939,6 +989,47 @@ class ActionEngine:
         # format_for_context returns a compact string suitable for prompt
         # injection — same format the daemon uses when pre-fetching.
         return format_for_context(result)
+
+    def fetch_url(self, url: str, reasoning: str, max_chars: int = 3000) -> ActionResult:
+        """Tier 0: Fetch a URL and return its text content (HTML stripped).
+        Use after web_search when a snippet isn't enough — e.g. to read a
+        full install guide, GitHub README, or man page mirror."""
+        return self._execute_action(
+            "fetch_url",
+            {"url": url, "max_chars": max_chars},
+            reasoning, tier=0,
+        )
+
+    def _do_fetch_url(self, url: str = "", max_chars: int = 3000, **_ignored) -> str:
+        if not url or not str(url).strip():
+            return "empty url"
+        url = str(url).strip()
+        if not url.startswith(("http://", "https://")):
+            return f"invalid url (must start with http:// or https://): {url[:80]}"
+        try:
+            import urllib.request as _urllib_req
+            import re as _re2
+            req = _urllib_req.Request(
+                url,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    )
+                },
+            )
+            with _urllib_req.urlopen(req, timeout=15) as resp:
+                raw = resp.read(512 * 1024).decode("utf-8", errors="replace")
+            # Strip script/style blocks, then all tags, then collapse whitespace.
+            raw = _re2.sub(r'(?s)<(script|style)[^>]*>.*?</\1>', ' ', raw)
+            raw = _re2.sub(r'<[^>]+>', ' ', raw)
+            raw = _re2.sub(r'[ \t]+', ' ', raw)
+            raw = _re2.sub(r'\n{3,}', '\n\n', raw).strip()
+            if len(raw) > int(max_chars):
+                raw = raw[:int(max_chars)] + f"\n[truncated at {max_chars} chars]"
+            return raw or "(no text content)"
+        except Exception as e:
+            return f"fetch_url error: {e}"
 
     # ------------------------------------------------------------------ #
     #  TIER 1 — Autonomous (deferred 30s)                                  #
