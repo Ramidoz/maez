@@ -36,6 +36,7 @@ training/unsloth_compiled_cache/
 *.gguf
 
 # Per-user config (shipped as *.template.yaml; personalized copy stays local)
+config/identity.yaml
 config/reddit_subs.yaml
 
 # Runtime state (grows on its own; not source code)

@@ -1,0 +1,42 @@
+# Maez — per-user identity configuration
+#
+# This file defines WHO this Maez belongs to, WHERE they are, and
+# WHAT policies apply. It's read at runtime by core/identity.py.
+#
+# After installing Maez:
+#   cp config/identity.template.yaml config/identity.yaml
+# then edit config/identity.yaml with your real values. The
+# `identity.yaml` file is gitignored — your values stay local.
+
+owner:
+  # Display name Maez uses when addressing you.
+  display_name: "Friend"
+
+  # Stable identifier for this owner across sessions. Matters for
+  # per-user memory and profile lookups. Safe to leave as the default
+  # unless you run multiple Maez instances on the same machine.
+  user_id: "owner"
+
+  # Where you mostly are. Used as weather/time-zone fallback when
+  # your phone hasn't pulsed a recent location signal.
+  home_place: "Somewhere"
+  home_lat: 0.0
+  home_lon: 0.0
+  timezone: "UTC"
+
+
+policies:
+  # If true, Maez may route code/reasoning-heavy questions to an
+  # external API (Claude). Requires ANTHROPIC_API_KEY in .env.
+  # Keep false if you want this Maez to stay fully local.
+  jarvis_tier: false
+
+  # If true, iOS Shortcuts can POST signals to /api/iphone/ingest
+  # to update Maez's ambient awareness. Requires MAEZ_IPHONE_INGEST_TOKEN
+  # in .env.
+  signal_ingest: false
+
+  # If true, the daemon can send unprompted Telegram messages when
+  # it wants to tell you something. If false, Maez only responds to
+  # messages you initiate.
+  proactive_messages: true
