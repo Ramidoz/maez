@@ -44,15 +44,32 @@ class GitHubSkill:
                 return self._cache[cache_key]
         try:
             r = requests.get(url, headers=self._headers(), timeout=10)
-            r.raise_for_status()
-            data = r.json()
-            if cache_key:
-                self._cache[cache_key] = data
-                self._cache_time[cache_key] = datetime.now()
-            return data
         except Exception as e:
             logger.debug("GitHub GET %s failed: %s", url, e)
             return None
+        # 2026-04-18: auto-disable on expired/revoked PAT — stop hammering
+        # GitHub with 401s until the token is refreshed + process restarted.
+        if r.status_code == 401:
+            self.enabled = False
+            logger.warning(
+                "GitHub skill auto-disabled: PAT rejected with 401 at %s. "
+                "Update MAEZ_GITHUB_TOKEN in config/.env and restart maez.service.",
+                url,
+            )
+            return None
+        if r.status_code == 403 and 'rate limit' in (r.text or '').lower():
+            logger.warning("GitHub rate-limited at %s; skipping this cycle.", url)
+            return None
+        try:
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            logger.debug("GitHub GET %s failed: %s", url, e)
+            return None
+        if cache_key:
+            self._cache[cache_key] = data
+            self._cache_time[cache_key] = datetime.now()
+        return data
 
     def get_user_repos(self) -> list:
         data = self._get(

@@ -24,6 +24,7 @@ from telegram.ext import (
 import sys
 sys.path.insert(0, str(Path("/home/rohit/maez")))
 from core.perception import snapshot as perception_snapshot, format_snapshot
+from core.conversation_controller import ConversationController
 from memory.memory_manager import MemoryManager
 from skills.web_search import (
     search as web_search, format_for_context as web_format,
@@ -104,7 +105,7 @@ def _get_public_context_for_telegram() -> str:
         return ""
 
 SOUL_PATH = Path("/home/rohit/maez/config/soul.md")
-MODEL = "gemma4:26b"
+MODEL = "gemma-4-26b"  # llm_client routes to llama.cpp when MAEZ_LLM_BACKEND=llamacpp
 
 # Telegram message length limit (Telegram API max is 4096; we leave headroom)
 MAX_MESSAGE_LENGTH = 4000
@@ -416,8 +417,14 @@ TOOL_CALL: {"action":"<name>","params":{...}}
 Every TOOL_CALL MUST have the required params for that tool:
 - run_shell: MUST include a non-empty "cmd" string. Empty/missing cmd is a malformed call.
 - write_any_file: MUST include "path" AND "content".
+
+For any Lane 2 action (run_shell install/write/service changes), include a "plain_english" field
+in params — one plain sentence for the owner, not for a technical audience. What is this? Why?
+Example: {"cmd":"flatpak install flathub org.openrgb.OpenRGB -y","reason":"install openrgb",
+          "plain_english":"Install OpenRGB — the app that controls your PC's RGB lighting. Coming from the Flathub app store, sandboxed and easy to remove."}
 - read_file / search_files: MUST include "path" or "pattern".
 - web_search: MUST include a non-empty "query".
+- fetch_url: MUST include a non-empty "url" (must start with http:// or https://). Fetches and returns stripped text content of a web page — use when a web_search snippet isn't enough and you need the actual install guide, README, or documentation page.
 A call with missing params will be rejected at the gate, not sent to the owner.
 
 You will then see:
@@ -430,6 +437,7 @@ when you have enough information to answer the owner.
 Rules:
 - If the question is conversation/opinion/recall and needs no real data → write DONE immediately.
 - Never speculate or fabricate. If you don't know, USE web_search or run_shell.
+- web_search returns short snippets. If you need the full install guide, README, or PPA instructions from a URL you saw in search results, use fetch_url on that URL before proposing commands.
 - Prefer run_shell for any real system action. It's the most capable tool.
 - the owner asking you to do something IS authorization. Don't ask "should I?" — do it, then tell him what you did.
 - If a command fails, try to fix it and retry. Pivot if the first approach doesn't work.
@@ -524,12 +532,28 @@ class TelegramVoice:
         # message (see _process_message + _try_card_reply_intent).
         self._recovery_depth: dict[str, int] = {}
 
-        # 2026-04-16 offer-binding: a fresh soft offer Maez made in
-        # its last reply ("I can search for X"). Bare approvals on
-        # the next turn bind to this and fire the action. Cleared on
-        # fire / TTL expiry / non-approval context shift.
-        self._pending_offer: dict | None = None
+        # 2026-04-17: offer-binding state now lives on the controller
+        # keyed by (channel, chat_id). _last_actionable_user_text is
+        # surface-local because the query deriver needs it verbatim.
         self._last_actionable_user_text: str = ""
+
+        # 2026-04-18: last-shown-proposal tracking so bare "yes" binds to
+        # the proposal the owner just saw. Value dict:
+        #   {"id": int, "source": "evolution"|"dream", "shown_at": float}
+        # Keyed by chat_id (str). Fresh window = 600s (10 min).
+        self._last_shown_proposal: dict[str, dict] = {}
+        self._LAST_SHOWN_FRESHNESS_SEC = 600.0
+
+        # 2026-04-17: transport-neutral operator spine. TelegramVoice is
+        # becoming a thin adapter over ConversationController. During the
+        # incremental extraction, individual method calls on self delegate
+        # through the controller so all surfaces (Telegram, web, CLI)
+        # converge on the same honesty/narration/offer/probe logic.
+        self._controller = ConversationController(
+            memory=memory,
+            daemon=daemon,
+            pipeline_getter=self._get_pipeline,
+        )
 
         if not self.token:
             logger.error("MAEZ_TELEGRAM_TOKEN not set — Telegram disabled")
@@ -794,8 +818,9 @@ class TelegramVoice:
         # with the failure context and let it propose a recovery — web
         # search, alternate install path, snap fallback, or honest
         # explanation of why the action isn't feasible. Guarded by a
-        # per-chat recovery_depth counter (max 2) so we can't infinitely
-        # retry.
+        # per-chat recovery_depth counter (max 5) so we can't infinitely
+        # retry. Cap raised from 2→5 to allow apt→PPA→snap→flatpak→
+        # build-from-source sequences without hitting the terminal wall.
         try:
             from core.decision_pipeline import PipelineStatus as _PS
             card = result.card
@@ -806,7 +831,7 @@ class TelegramVoice:
             ):
                 chat_key = str(self.authorized_user)
                 depth = self._recovery_depth.get(chat_key, 0) + 1
-                if depth > 2:
+                if depth > 5:
                     # Fix 6: terminal summary on recovery cap hit.
                     # Before this, Maez went silent after three failed
                     # attempts. Now we walk the full set of prior
@@ -1274,7 +1299,9 @@ class TelegramVoice:
                 lines.append("PENDING CARDS NOW: (unavailable)")
 
             # Pending offer
-            offer = getattr(self, "_pending_offer", None)
+            offer = self._controller.get_offer(
+                "telegram_text", str(self.authorized_user),
+            )
             if offer:
                 age = int(now - float(offer.get("set_at", now)))
                 kind = offer.get("kind", "?")
@@ -1333,344 +1360,31 @@ class TelegramVoice:
             logger.debug("actual state block build failed: %s", e)
             return ""
 
+    # 2026-04-17 extraction: _parse_next_step_line, _is_exploratory_ask,
+    # and _EXPLORATORY_ASK_PATTERN now live on ConversationController.
+    # Kept as thin instance-method delegates here so existing call sites
+    # (self._X) continue to work during the incremental refactor.
+    _EXPLORATORY_ASK_PATTERN = ConversationController._EXPLORATORY_ASK_PATTERN
+
     def _parse_next_step_line(self, text: str) -> tuple[str | None, str | None]:
-        """Parse 'NEXT_STEP: <cmd>' / 'NEXT_STEP: read: <cmd>' /
-        'NEXT_STEP: action: <cmd>' / 'NEXT_STEP: none' from LLM output.
-
-        Returns (cmd, label):
-          - (None, None) — parse failed or 'none'
-          - (cmd, None)  — plain command, no kind label (non-exploratory)
-          - (cmd, 'read') / (cmd, 'action') — labeled command (exploratory)
-
-        The label is advisory: dispatch routes uniformly through the
-        pipeline which lane-classifies. Logging uses the label when
-        present for post-hoc audit.
-        """
-        if not text:
-            return (None, None)
-        for raw in text.strip().splitlines():
-            line = raw.strip()
-            if not line.upper().startswith("NEXT_STEP:"):
-                continue
-            rest = line[len("NEXT_STEP:"):].strip().strip("`").strip()
-            if not rest or rest.lower() == "none":
-                return (None, None)
-            # Optional 'read:' / 'action:' prefix from the exploratory
-            # prompt format. Strip and record.
-            label: str | None = None
-            for pref in ("read:", "action:"):
-                if rest.lower().startswith(pref):
-                    label = pref.rstrip(":")
-                    rest = rest[len(pref):].strip().strip("`").strip()
-                    break
-            # Re-check for 'none' after stripping the label so
-            # "NEXT_STEP: read: none" parses as none, not a command.
-            if not rest or rest.lower() == "none":
-                return (None, None)
-            lower = rest.lower()
-            for bad in ("<cmd>", "<command>", "...", "tbd", "placeholder"):
-                if bad in lower:
-                    return (None, None)
-            if len(rest) > 500:
-                return (None, None)
-            return (rest, label)
-        return (None, None)
-
-    # 2026-04-16 (exploratory next-step): regex-based heuristic. Matches
-    # asks like "figure out how to X", "how do I Y", "tell me about Z",
-    # "can you control/explore/investigate W". Does NOT match direct
-    # action asks ("install X", "run Y", "create file Z"). Used by the
-    # next-step proposer to pick between the existing direct-command
-    # prompt and a new exploratory-to-action prompt that forces the
-    # LLM to commit to read/action/none rather than drift into narration.
-    import re as _re_mod_exploratory
-    _EXPLORATORY_ASK_PATTERN = _re_mod_exploratory.compile(
-        r"\b("
-        r"figure\s+out"
-        r"|how\s+(?:do|can|should|would)\s+(?:i|we|you)"
-        r"|tell\s+me\s+(?:the\s+path|about|how|what|where|which)"
-        r"|what\s+(?:can|tools|options|are|is)"
-        r"|(?:please\s+)?investigate"
-        r"|explore\b"
-        r"|look\s+into"
-        r"|can\s+you\s+(?:control|find|explore|investigate|figure|identify|check)"
-        r"|any\s+way\s+to"
-        r"|what'?s\s+the\s+(?:path|way|command)"
-        r")\b",
-        _re_mod_exploratory.IGNORECASE,
-    )
-    del _re_mod_exploratory
+        return self._controller.parse_next_step_line(text)
 
     def _is_exploratory_ask(self, user_text: str) -> bool:
-        """Heuristic: does the user's message look like exploratory
-        planning ('figure out how to', 'tell me the path', 'can you
-        find/explore') rather than a direct action ask ('install X',
-        'run Y')? Triggers the exploratory prompt in the next-step
-        proposer."""
-        if not user_text or len(user_text) > 600:
-            return False
-        return bool(self._EXPLORATORY_ASK_PATTERN.search(user_text))
+        return self._controller.is_exploratory_ask(user_text)
 
     def _propose_next_step_from_probe(self, user_text: str) -> dict | None:
-        """N+1 Option A (2026-04-16): after Jarvis probes complete, run
-        ONE focused structured LLM call to propose a single concrete
-        next-step action based on the real probe result, and route it
-        through the existing pipeline so classification/audit/Lane
-        routing apply uniformly.
-
-        Returns:
-          {'kind': 'executed'|'card_created'|'dialog_opened'|'refused'
-                   |'none'|'skipped', 'summary': str}
-          or None on total failure (caller proceeds without it).
-
-        Scope: synchronous (called from executor). Single-shot per
-        turn. No Lane-3 escalation aggressive-drive — we just hand
-        the proposal to the pipeline and let it route.
-        """
-        import json as _json
-        import sqlite3 as _sqlite
-        import time as _time
-
-        try:
-            # Only run if a probe actually ran recently in this turn.
-            # Probe = audit_log row with outcome='approved_and_ran' in
-            # the last 60 s. If Jarvis didn't fire a tool this turn,
-            # there's nothing for the structured call to ground on.
-            db_path = (
-                getattr(getattr(self, "_audit_log", None), "db_path", None)
-                or "memory/audit_log.db"
-            )
-            # 2026-04-16 (narrow expansion): include approved_and_failed
-            # rows too, but only when they still have useful stdout.
-            # A common case: `cmd1 && cmd2 | grep X` where cmd1 succeeds
-            # and emits useful output, but grep matches nothing so the
-            # whole chain exits nonzero. The outcome_notes in that case
-            # contains the real cmd1 stdout — which is exactly what the
-            # next-step proposal should ground on.
-            since = _time.time() - 60
-            conn = _sqlite.connect(str(db_path))
-            conn.row_factory = _sqlite.Row
-            rows = conn.execute(
-                "SELECT ts, action, params_json, outcome, outcome_notes "
-                "FROM audit_log "
-                "WHERE ts >= ? AND outcome IN ('approved_and_ran', "
-                "'approved_and_failed') "
-                "ORDER BY ts DESC LIMIT 4",
-                (since,),
-            ).fetchall()
-            conn.close()
-
-            # Filter: keep rows with useful notes. Length heuristic:
-            # >30 chars of stripped notes excludes trivial "(no output)
-            # exit=0" and bare "exit=1" cases. Also accept successful
-            # rows with shorter notes (their exit=0 is informative even
-            # if stdout was empty — the action did work).
-            useful_rows = []
-            for r in rows:
-                notes = (r["outcome_notes"] or "").strip()
-                is_success = r["outcome"] == "approved_and_ran"
-                if is_success:
-                    useful_rows.append(r)
-                elif len(notes) > 30:
-                    useful_rows.append(r)
-                # else: short failed note with no stdout — skip
-                if len(useful_rows) >= 2:
-                    break
-
-            if not useful_rows:
-                return {"kind": "skipped", "summary": "no recent useful probe"}
-
-            probe_summaries: list[str] = []
-            for r in useful_rows:
-                p = {}
-                try:
-                    p = _json.loads(r["params_json"] or "{}")
-                except Exception:
-                    pass
-                arg = p.get("cmd") or p.get("query") or "?"
-                notes = (r["outcome_notes"] or "(no output)").strip()
-                status_tag = (
-                    "SUCCESS" if r["outcome"] == "approved_and_ran"
-                    else "EXIT_NONZERO (stdout may still be useful)"
-                )
-                probe_summaries.append(
-                    f"- {r['action']} [{status_tag}]: {str(arg)[:120]}\n"
-                    f"  result: {notes[:400]}"
-                )
-            probes_text = "\n".join(probe_summaries)
-
-            # 2026-04-16 (exploratory branch): when the user's ask is
-            # exploratory ("figure out how to X", "tell me the path"),
-            # use a prompt that forces a 3-way read/action/none output
-            # with explicit "stop probing, commit to action" discipline.
-            # This targets Task 1's pattern where the LLM keeps
-            # suggesting more probes instead of proposing the install.
-            exploratory = self._is_exploratory_ask(user_text)
-            if exploratory:
-                system_msg = (
-                    "You are translating an EXPLORATORY user question + "
-                    "recent probe results into ONE concrete next step "
-                    "toward the user's goal.\n\n"
-                    "OUTPUT FORMAT — one line, starting with exactly "
-                    "'NEXT_STEP:'. One of:\n"
-                    "  NEXT_STEP: read: <shell command>\n"
-                    "  NEXT_STEP: action: <shell command that changes state>\n"
-                    "  NEXT_STEP: none\n\n"
-                    "Labels:\n"
-                    "  - 'read:' = another probe or query (lsusb, cat "
-                    "/sys/..., find, grep on existing file). Use when "
-                    "probes so far haven't uncovered the key context "
-                    "you need.\n"
-                    "  - 'action:' = a state-changing command "
-                    "(sudo apt install <pkg>, echo X > /path, "
-                    "systemctl enable Y, modprobe Z). Use when you have "
-                    "enough evidence to propose a real install/config "
-                    "step.\n"
-                    "  - 'none' = the probes already answer the user's "
-                    "question, or no reasonable step exists.\n\n"
-                    "CRITICAL DISCIPLINE:\n"
-                    "- Don't keep probing forever. After 1-2 successful "
-                    "probes, strongly prefer 'action:' over more "
-                    "'read:'. The user asked for a concrete path, not "
-                    "an infinite survey.\n"
-                    "- 'action:' examples from probe evidence:\n"
-                    "    probe found 'Alienware LED controller' via "
-                    "lsusb, openrgb not installed → action: "
-                    "sudo apt install -y openrgb\n"
-                    "    probe found /sys/class/leds/X → action: "
-                    "cat /sys/class/leds/X/brightness\n"
-                    "    (when the action reads a file that's already "
-                    "known to exist, it's still 'action:' if it "
-                    "commits to 'here is the path'; label it 'read:' "
-                    "only if you're genuinely still searching.)\n"
-                    "- EXIT_NONZERO probes may still have useful stdout "
-                    "— read the stdout, don't just trust the exit code.\n"
-                    "- Don't re-propose the same command a probe "
-                    "already ran.\n"
-                    "- No placeholders, no ellipsis, no TBD.\n"
-                    "- If you emit 'action:', the pipeline will create "
-                    "a real approval card — that IS how you ask for "
-                    "permission. Do NOT also narrate 'waiting for "
-                    "approval' anywhere.\n"
-                    "- NO prose, NO explanation. ONLY the NEXT_STEP line."
-                )
-            else:
-                system_msg = (
-                    "You are producing a structured next-step proposal. "
-                    "Read the user question and the actual probe results, "
-                    "then propose exactly ONE concrete safe shell command "
-                    "that advances the user's question given what the probe "
-                    "found, or 'none'.\n\n"
-                    "OUTPUT FORMAT — one line, starting with exactly "
-                    "'NEXT_STEP:', nothing before it, nothing after the "
-                    "command. One of:\n"
-                    "  NEXT_STEP: <single concrete shell command>\n"
-                    "  NEXT_STEP: none\n\n"
-                    "Rules:\n"
-                    "- Command must be real and specific. No placeholders, "
-                    "no ellipsis, no 'TBD'.\n"
-                    "- A probe marked EXIT_NONZERO may still have useful "
-                    "stdout — read the stdout, don't just trust the exit "
-                    "status. A pipeline like `lsusb && grep foo` can exit "
-                    "nonzero because grep matched nothing, while lsusb's "
-                    "stdout still contains the answer. Do NOT propose "
-                    "rerunning the same failing command — propose a "
-                    "different concrete step that uses what stdout showed.\n"
-                    "- Do NOT propose the same command that just failed.\n"
-                    "- If the probe result already answers fully, output "
-                    "'NEXT_STEP: none'.\n"
-                    "- If you do not have enough data, output 'NEXT_STEP: "
-                    "none'.\n"
-                    "- No prose, no explanation. ONLY the NEXT_STEP line."
-                )
-            user_msg = (
-                f"USER QUESTION: {user_text[:300]}\n\n"
-                f"PROBE RESULTS:\n{probes_text}\n\n"
-                f"What is the single next-step command that advances "
-                f"the user's question?"
-            )
-
-            from core import llm_client as _llm_client
-            resp = _llm_client.chat(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": user_msg},
-                ],
-                stream=False,
-                think=False,
-                options={"temperature": 0.2, "num_predict": 120},
-            )
-            raw = getattr(getattr(resp, "message", None), "content", None)
-            if raw is None:
-                raw = str(resp)
-            raw = raw.strip()
-        except Exception as e:
-            logger.debug("next-step proposer LLM call failed: %s", e)
-            return None
-
-        cmd, label = self._parse_next_step_line(raw)
-        if cmd is None:
-            logger.info(
-                "next-step proposer: NEXT_STEP: none (or parse miss) "
-                "| exploratory=%s raw=%r",
-                exploratory, raw[:120].replace("\n", " "),
-            )
-            return {"kind": "none", "summary": "no concrete next step"}
-
-        logger.info(
-            "next-step proposer: dispatching cmd=%r label=%s exploratory=%s",
-            cmd[:120], label, exploratory,
+        """Thin delegation to ConversationController.propose_next_step_from_probe."""
+        audit_db_path = str(
+            getattr(getattr(self, "_audit_log", None), "db_path", None)
+            or "memory/audit_log.db"
         )
-
-        # Route through the existing pipeline (same API Jarvis uses).
-        # Pipeline handles classify / audit / lane routing / card
-        # creation. If audit DENIES, the pipeline returns REFUSED_*
-        # and no card is created — chat reply's [ACTUAL STATE] block
-        # will show PENDING CARDS NOW: 0, and the directive keeps the
-        # LLM honest.
-        try:
-            pipe = self._get_pipeline()
-            if pipe is None:
-                return {"kind": "none", "summary": "pipeline unavailable"}
-            presult = pipe.handle_action(
-                action="run_shell",
-                params={"cmd": cmd},
-                reason=f"next-step from probe: {user_text[:100]}",
-                user_id="rohit",
-                chat_id=str(self.authorized_user),
-                channel="telegram_text",
-            )
-            from core.decision_pipeline import PipelineStatus as _PS
-            status = getattr(presult, "status", None)
-            if status == _PS.EXECUTED:
-                out = (presult.execution_output or "").strip()[:300]
-                logger.info(
-                    "next-step proposer: EXECUTED cmd=%r output=%r",
-                    cmd[:80], out[:100],
-                )
-                return {"kind": "executed", "summary": out}
-            if status == _PS.PENDING_APPROVAL:
-                card_id = getattr(presult.card, "request_id", "?")[:8] if presult.card else "?"
-                logger.info(
-                    "next-step proposer: card_created id=%s cmd=%r",
-                    card_id, cmd[:80],
-                )
-                return {"kind": "card_created", "summary": cmd[:120]}
-            if status == _PS.PENDING_DIALOG:
-                logger.info(
-                    "next-step proposer: dialog_opened cmd=%r", cmd[:80]
-                )
-                return {"kind": "dialog_opened", "summary": cmd[:120]}
-            # Refusals (covenant / audit / will_i) or other terminal
-            logger.info(
-                "next-step proposer: refused status=%s cmd=%r",
-                status, cmd[:80],
-            )
-            return {"kind": "refused", "summary": f"status={status}"}
-        except Exception as e:
-            logger.debug("next-step proposer pipeline dispatch failed: %s", e)
-            return None
+        return self._controller.propose_next_step_from_probe(
+            user_text,
+            channel="telegram_text",
+            chat_id=str(self.authorized_user),
+            audit_db_path=audit_db_path,
+            user_id="rohit",
+        )
 
     def _build_recent_body_activity_block(self, since_seconds: float = 600.0) -> str:
         """Return a human-readable block describing what Maez's body just
@@ -1870,66 +1584,27 @@ class TelegramVoice:
     # by a first-person pronoun, not generic future tense. "I'll let
     # you know" and "I'll stay out of your way" do not match.
 
-    import re as _re_mod  # local alias used only for the patterns below
+    # ───────────────────────────────────────────────────────── #
+    # 2026-04-17 extraction: honesty-guard constants now live on  #
+    # core.conversation_controller.ConversationController. The    #
+    # aliases below preserve TelegramVoice._STATE_CLAIM_PATTERN   #
+    # et al. for class-level call sites during the incremental    #
+    # refactor. New code should reference the controller's class  #
+    # attributes directly.                                        #
+    # ───────────────────────────────────────────────────────── #
+    _CLAIM_PATTERN = ConversationController._CLAIM_PATTERN
+    _STATE_CLAIM_PATTERN = ConversationController._STATE_CLAIM_PATTERN
+    _PROPOSED_CMD_PATTERN = ConversationController._PROPOSED_CMD_PATTERN
+    _HONEST_STUB = ConversationController._HONEST_STUB
+    _NARRATION_MISMATCH_CORRECTION = ConversationController._NARRATION_MISMATCH_CORRECTION
+    _SHELL_VERB_ALLOWLIST = ConversationController._SHELL_VERB_ALLOWLIST
+    _OFFER_PATTERN = ConversationController._OFFER_PATTERN
+    _OFFER_APPROVAL_PATTERN = ConversationController._OFFER_APPROVAL_PATTERN
+    _OFFER_TTL_SECONDS = ConversationController._OFFER_TTL_SECONDS
 
-    # Future-action claim pattern — matches "I'll search / I've proposed /
-    # waiting for your approval / Shall I go ahead". Subject to tool-
-    # bypass: if a tool fired this turn, the claim may be legitimate
-    # (e.g., probing tool ran and the reply promises next-step).
-    _CLAIM_PATTERN = _re_mod.compile(
-        r"\b("
-        r"I[' ]?ll\s+(search|check|look|run|investigate|find|try|set|install|execute|initiate|start)"
-        r"|I[' ]?ve\s+(proposed|started|begun|initiated|searched|checked|run|set|executed)"
-        r"|I\s+proposed\s+(running|to\s+run|checking)"
-        r"|I\s+have\s+the\s+plan\s+ready"
-        r"|Shall\s+I\s+(go\s+ahead|proceed|run|search|check|execute)"
-        r")",
-        _re_mod.IGNORECASE,
-    )
-
-    # State-claim pattern (2026-04-16 fake-state bug) — matches
-    # "waiting for your approval in Telegram / you've approved the
-    # previous request / wait for that session to finish". These are
-    # NEVER legitimate in chat prose because real pending card state
-    # is surfaced via the card renderer (separate Telegram message),
-    # not narrated by the chat reply. No tool-bypass: even when a
-    # probing tool fired this turn, a fake pending/approved/session
-    # narrative remains fake.
-    _STATE_CLAIM_PATTERN = _re_mod.compile(
-        r"(?:"
-        r"\b(?:"
-        r"waiting\s+for\s+your\s+approval"
-        r"|that'?s\s+waiting\s+for\s+(?:your\s+)?(?:approval|go[\s\-]?ahead)"
-        r"|you'?ve\s+approved"
-        r"|since\s+you'?ve\s+approved"
-        r"|you\s+approved\s+(?:the|that|this|it)"
-        r"|wait(?:ing)?\s+for\s+(?:that|this|the)\s+session"
-        r"|(?:that|this|the)\s+session\s+to\s+(?:finish|complete|end)"
-        r"|the\s+previous\s+(?:request|approval|session)"
-        r"|pending\s+(?:approval|request|session|investigation)"
-        r"|the\s+Telegram\s+card\s+for\s+your\s+approval"
-        # 2026-04-16 fake-card/skill_id narration (advisory reply bug):
-        # chat prose never legitimately names internal refs — real
-        # cards surface via the card renderer, not narration.
-        r"|skill_id\b"
-        r"|(?:I[' ]?ve|I\s+have)\s+(?:already|now|just|recently|also)\s+proposed"
-        r")"
-        # Non-word-boundary branch (can start at position 0 of the reply).
-        r"|\(\s*ref\s*:"
-        r")",
-        _re_mod.IGNORECASE,
-    )
-
-    del _re_mod
-
-    # What to send instead when the guard trips. Three short sentences
-    # per the 2026-04-15 anchoring — non-actional, honest, forward-
-    # looking without claiming an action state that doesn't exist.
-    _HONEST_STUB = (
-        "I haven't actually started that yet. "
-        "I don't currently have a pending action for it. "
-        "I can do that once I create or run the correct action."
-    )
+    # (Legacy local definitions of these constants were removed during
+    # the 2026-04-17 extraction. The controller now owns them; see
+    # core/conversation_controller.py.)
 
     # ═════════════════════════════════════════════════════════════════════
     #  Offer-binding (2026-04-16 "Yes has nothing to bind to" bug)
@@ -1948,38 +1623,10 @@ class TelegramVoice:
     #   - precedence over _try_card_reply_intent — a fresh conversational
     #     offer wins over a background autonomous-cycle card
 
-    import re as _re_mod  # re-alias locally; deleted after use
-    # Offer phrases: "I can (certainly|probably|maybe) search/look up X",
-    # "want me to search X", "Shall I look up X". The optional \w+\s+
-    # slot before the verb allows adverbs like "certainly", "probably",
-    # "definitely" between "can" and the action verb.
-    _OFFER_PATTERN = _re_mod.compile(
-        r"\b("
-        r"I\s+can\s+(?:\w+\s+)?(search|look\s+up|look\s+into|check|investigate|find|web[\s\-]?search)"
-        r"|want\s+me\s+to\s+(?:\w+\s+)?(search|look\s+up|check|investigate|find)"
-        r"|Shall\s+I\s+(?:\w+\s+)?(search|look\s+up|look\s+into|check|investigate|find)"
-        r")",
-        _re_mod.IGNORECASE,
-    )
-
-    # Offer-binding approval detector: broader than _NL_APPROVE_PATTERNS
-    # because we also want to bind "Proceed" and "Yeah proceed" — which
-    # the proposal-intent approval set deliberately excludes. Whole-
-    # message match only; mixed content like "yes and also..." falls
-    # through to chat.
-    _OFFER_APPROVAL_PATTERN = _re_mod.compile(
-        r"^\s*(?:"
-        r"yes|yep|yeah|yup|yuh|ok|okay|sure|sure\s+thing"
-        r"|alright|alright\s+then|absolutely|go\s+ahead|proceed"
-        r"|do\s+it|please\s+do|sounds\s+good|green\s+light|ship\s+it"
-        r"|yeah\s+proceed|yeah\s+go\s+ahead|yes\s+proceed|yes\s+go\s+ahead"
-        r"|fine|great"
-        r")[\s!.?]*$",
-        _re_mod.IGNORECASE,
-    )
-    del _re_mod
-
-    _OFFER_TTL_SECONDS = 120
+    # (2026-04-17 extraction: _OFFER_PATTERN, _OFFER_APPROVAL_PATTERN,
+    # and _OFFER_TTL_SECONDS now live on ConversationController. Aliases
+    # preserved above at the top of the honesty-guard alias block for
+    # class-level call sites during the incremental refactor.)
 
     def _honesty_guard(
         self,
@@ -1989,59 +1636,19 @@ class TelegramVoice:
         turn_cards_created: int,
         turn_dialogs_opened: int,
     ) -> str:
-        """If the reply contains action-claim or state-claim language
-        that doesn't match reality, return a rewrite in honest non-
-        actional language. Otherwise return the reply unchanged.
+        """Delegate to ConversationController.honesty_guard().
 
-        State claims (pending/approved/session) always fire — tool
-        calls this turn don't legitimize a fake "waiting for your
-        approval" narrative. Real pending state is surfaced via the
-        card renderer, not chat prose.
-
-        Future-action claims ("I'll search") are bypassed when a
-        tool fired this turn, because those claims may match the
-        probing tool that actually ran.
-        """
-        if not reply:
-            return reply
-
-        sm = self._STATE_CLAIM_PATTERN.search(reply)
-        if sm:
-            # 2026-04-16 fix: if a real pending card exists, the state-
-            # claim narration is presumptively accurate (the card IS
-            # waiting). Don't rewrite it — the card renderer will also
-            # have sent the real card message to Telegram, and the
-            # prose complementing it is fine.
-            if self._has_awaiting_card():
-                logger.info(
-                    "honesty guard: state-claim suppressed in buffer "
-                    "mode — real pending card exists (matched=%r)",
-                    sm.group(0),
-                )
-            else:
-                logger.info(
-                    "honesty guard: chat_state_claim_rewritten "
-                    "(tool_calls=%d cards=%d dialogs=%d matched=%r) | orig=%s",
-                    turn_tool_calls, turn_cards_created, turn_dialogs_opened,
-                    sm.group(0),
-                    reply[:100].replace("\n", " "),
-                )
-                return self._HONEST_STUB
-
-        if turn_tool_calls > 0 or turn_cards_created > 0 or turn_dialogs_opened > 0:
-            return reply
-
-        m = self._CLAIM_PATTERN.search(reply)
-        if not m:
-            return reply
-        logger.info(
-            "honesty guard: chat_claim_rewritten "
-            "(tool_calls=%d cards=%d dialogs=%d matched=%r) | orig=%s",
-            turn_tool_calls, turn_cards_created, turn_dialogs_opened,
-            m.group(0),
-            reply[:100].replace("\n", " "),
+        Kept as an instance method during the incremental extraction so
+        existing call sites (self._honesty_guard(...)) continue to work
+        unchanged. Will be inlined away in the final thin-adapter pass."""
+        return self._controller.honesty_guard(
+            reply,
+            channel="telegram_text",
+            chat_id=str(self.authorized_user),
+            turn_tool_calls=turn_tool_calls,
+            turn_cards_created=turn_cards_created,
+            turn_dialogs_opened=turn_dialogs_opened,
         )
-        return self._HONEST_STUB
 
     def _list_pending_candidates(self) -> list:
         """Return validated-but-not-yet-applied candidates, newest first."""
@@ -2090,6 +1697,127 @@ class TelegramVoice:
 
         return None, None
 
+    async def _try_dream_proposal_intent(self, update, text: str) -> bool:
+        """2026-04-18: sibling of _try_proposal_intent for DREAM + section-edit
+        proposals stored in daemon.dream (dream_state DB). Without this, bare
+        approvals against dream/section-edit proposals fall through to the
+        general LLM which hallucinates context.
+
+        Returns True if handled (caller should short-circuit), else False.
+        """
+        dream = getattr(self.daemon, "dream", None) if self.daemon else None
+        if dream is None:
+            return False
+
+        action, explicit_id = self._detect_proposal_intent(text)
+        if not action:
+            return False
+
+        # Pull pending dream + section-edit proposals (all types). Newest first.
+        try:
+            pending_rows = dream.list_pending()
+        except Exception as e:
+            logger.debug("dream.list_pending failed: %s", e)
+            return False
+        if not pending_rows and explicit_id is None:
+            return False
+
+        # list_pending returns tuples (pid, created_iso, insight). Build a
+        # quick list of ids for safety checks.
+        pending_ids = {row[0] for row in pending_rows}
+
+        # Require explicit #N unless exactly one dream proposal is pending
+        # (mirror the fix-A guardrail from _try_proposal_intent).
+        target_id = explicit_id
+        if target_id is None:
+            # 2026-04-18: last-shown binding — if the owner just saw a dream
+            # proposal, bare "yes" should bind to it.
+            try:
+                chat_id = str(update.effective_chat.id) if update and update.effective_chat else str(self.authorized_user)
+                last = self._last_shown_proposal.get(chat_id)
+                if (last and last.get("source") == "dream"
+                        and (time.time() - last.get("shown_at", 0)) < self._LAST_SHOWN_FRESHNESS_SEC):
+                    candidate_id = int(last["id"])
+                    if candidate_id in pending_ids:
+                        target_id = candidate_id
+                        logger.info(
+                            "dream proposal intent: bare-approve bound to last-shown #%d",
+                            target_id,
+                        )
+            except Exception:
+                pass
+            if target_id is None and action == 'approve':
+                lc = (text or "").lower()
+                if '#' not in lc and 'proposal' not in lc and 'dream' not in lc:
+                    return False  # bare "yes" without context — let other paths try
+            if target_id is None and len(pending_ids) == 1:
+                target_id = next(iter(pending_ids))
+            elif target_id is None:
+                # Multiple — disambiguate only if the user clearly asked about proposals.
+                lc2 = (text or "").lower()
+                if 'proposal' in lc2 or 'dream' in lc2:
+                    lines = [f"I have {len(pending_ids)} pending dream/edit proposals — which one?", ""]
+                    for row in pending_rows[:5]:
+                        pid, _created, insight = row
+                        snippet = (insight or "")[:80].replace("\n", " ")
+                        lines.append(f"  #{pid}: {snippet}")
+                    lines.append("")
+                    lines.append('Reply "yes to 24" or "reject #27".')
+                    await update.message.reply_text("\n".join(lines))
+                    return True
+                return False
+
+        # If user referenced an id we don't know, check if it actually exists
+        # (may be resolved / expired) — give a clean message.
+        try:
+            prop = dream.get_proposal(target_id)
+        except Exception as e:
+            logger.debug("dream.get_proposal failed: %s", e)
+            return False
+        if not prop:
+            await update.message.reply_text(
+                f"I don't find proposal #{target_id}. It may have expired or already been resolved."
+            )
+            return True
+        if target_id not in pending_ids and prop.get("status") != "pending":
+            status = prop.get("status") or "unknown"
+            await update.message.reply_text(
+                f"Proposal #{target_id} is already {status} — nothing to apply/reject."
+            )
+            return True
+
+        # Dispatch based on proposal_type
+        ptype = prop.get("proposal_type") or "append"
+        loop = asyncio.get_event_loop()
+        try:
+            if action == 'approve':
+                if ptype == "section_replace":
+                    ok, msg = await loop.run_in_executor(
+                        None, lambda: dream.apply_section_edit_proposal(target_id)
+                    )
+                else:  # append, training_run, and any other default
+                    ok, msg = await loop.run_in_executor(
+                        None, lambda: dream.apply_proposal(target_id)
+                    )
+            elif action == 'reject':
+                ok, msg = await loop.run_in_executor(
+                    None, lambda: dream.reject_proposal(target_id)
+                )
+            else:
+                # 'show' action — defer to existing path if applicable
+                return False
+        except Exception as e:
+            logger.exception("dream proposal dispatch failed")
+            await update.message.reply_text(
+                f"Couldn't process #{target_id}: {e}"
+            )
+            return True
+
+        prefix = "✓" if ok else "✗"
+        await update.message.reply_text(f"{prefix} #{target_id}: {msg}")
+        logger.info("dream proposal %s: id=%d type=%s ok=%s", action, target_id, ptype, ok)
+        return True
+
     async def _try_proposal_intent(self, update, text: str) -> bool:
         """Attempt to handle a natural-language proposal action on this
         message. Returns True if handled (caller should NOT continue to
@@ -2111,15 +1839,35 @@ class TelegramVoice:
         # context — an explicit #N, or the word "proposal"/"candidate"
         # — before this interceptor owns the reply. Otherwise fall
         # through to chat so the normal path can answer honestly.
+        #
+        # 2026-04-18 refinement: if the user recently ran "show #N" /
+        # "tell me about #N" on an evolution candidate, a bare "yes"
+        # that closely follows that show SHOULD bind to it — that's
+        # natural conversation, not a blind queue grab.
         if action == 'approve' and explicit_id is None:
             _lc = (text or "").lower()
-            if '#' not in _lc and 'proposal' not in _lc and 'candidate' not in _lc:
-                logger.info(
-                    "proposal intent: bare-approve fell through to chat "
-                    "(pending=%d, text=%r)",
-                    len(pending), (text or "")[:40],
-                )
-                return False
+            bound_from_last_shown = False
+            try:
+                chat_id = str(update.effective_chat.id) if update and update.effective_chat else str(self.authorized_user)
+                last = self._last_shown_proposal.get(chat_id)
+                if (last and last.get("source") == "evolution"
+                        and (time.time() - last.get("shown_at", 0)) < self._LAST_SHOWN_FRESHNESS_SEC):
+                    explicit_id = int(last["id"])
+                    bound_from_last_shown = True
+                    logger.info(
+                        "proposal intent: bare-approve bound to last-shown #%d",
+                        explicit_id,
+                    )
+            except Exception:
+                pass
+            if not bound_from_last_shown:
+                if '#' not in _lc and 'proposal' not in _lc and 'candidate' not in _lc:
+                    logger.info(
+                        "proposal intent: bare-approve fell through to chat "
+                        "(pending=%d, text=%r)",
+                        len(pending), (text or "")[:40],
+                    )
+                    return False
 
         # Fix B (2026-04-15 silent-reply bug): every outbound reply
         # from this path was previously unlogged — 'yes' got hijacked
@@ -2237,8 +1985,18 @@ class TelegramVoice:
                     f"My confidence: {u.get('overall', 'unknown')}",
                     f"  ({u.get('reasoning', '')[:200]})",
                     "",
-                    f"Reply \"yes\" to apply, \"no\" to reject.",
+                    f"Reply \"yes\" to apply, \"no\" to reject (or explicit \"yes to #{target_id}\" / \"reject #{target_id}\").",
                 ]
+                # 2026-04-18: record so a later bare "yes" can bind to this.
+                try:
+                    chat_id = str(update.effective_chat.id) if update and update.effective_chat else str(self.authorized_user)
+                    self._last_shown_proposal[chat_id] = {
+                        "id": int(target_id),
+                        "source": "evolution",
+                        "shown_at": time.time(),
+                    }
+                except Exception:
+                    pass
                 msg = "\n".join(lines)
                 _log_out("show", msg, target_id=target_id)
                 await update.message.reply_text(msg)
@@ -2361,86 +2119,54 @@ class TelegramVoice:
             return base
         return f"{base} {ctx}"
 
-    def _has_awaiting_card(self) -> bool:
-        """True if there's at least one real card awaiting the owner's
-        decision (status OPEN or DEFERRED). Used by the probe->pending
-        bridge AND by offer-binding AND by the honesty-guard correction
-        path to avoid preempting / over-correcting when a real card
-        already exists.
+    # 2026-04-17 extraction: these helpers now delegate to
+    # ConversationController. Kept as instance methods so existing
+    # self._X() call sites continue to work during the rollout.
 
-        2026-04-16 fix: originally used get_open_for_user(authorized_user)
-        which misses because cards are stored with user_id='rohit'
-        (pipeline scope name) while authorized_user is the numeric
-        Telegram id. Query by chat_id instead — chat_id matches
-        authorized_user."""
-        store = getattr(self, "_card_store", None)
-        if store is None:
-            return False
-        try:
-            from core.pending_cards import AWAITING_STATUSES
-            cards = store.get_open_for_channel(
-                channel="telegram_text",
-                chat_id=str(self.authorized_user),
-            )
-            return any(getattr(c, "status", None) in AWAITING_STATUSES for c in cards)
-        except Exception as e:
-            logger.debug("awaiting-card check failed: %s", e)
-            return False
+    def _extract_command_candidates(self, reply: str) -> list:
+        return self._controller.extract_command_candidates(reply)
+
+    def _recent_card_cmds(self, since_seconds: float = 180.0) -> list:
+        return self._controller.recent_card_cmds(
+            channel="telegram_text",
+            chat_id=str(self.authorized_user),
+            since_seconds=since_seconds,
+        )
+
+    def _narration_matches_real_card(self, reply: str) -> tuple:
+        return self._controller.narration_matches_real_card(
+            reply,
+            channel="telegram_text",
+            chat_id=str(self.authorized_user),
+        )
+
+    def _has_awaiting_card(self) -> bool:
+        return self._controller.has_awaiting_card(
+            channel="telegram_text",
+            chat_id=str(self.authorized_user),
+        )
 
     async def _try_offer_binding_intent(self, update, text: str) -> bool:
         """Bind bare approvals to a fresh pending_offer. Returns True if
         the offer was fired (caller short-circuits further handling).
 
-        Clearing rules:
-          - TTL expiry (older than _OFFER_TTL_SECONDS): clear silently
-          - Non-approval text (context shift): clear silently, return False
-          - Successful fire: clear after sending results
-        Safety rail: only 'web_search' kind is auto-fired. Other kinds
-        (install, edit) fall through to the normal interceptor chain.
-        """
-        offer = self._pending_offer
-        if offer is None:
-            return False
-
+        Decision logic lives in ConversationController.consume_offer_approval.
+        This method owns the Telegram-specific IO: rendering the fire
+        message, running web_search, formatting the result card."""
         import time as _time
-        set_at = float(offer.get("set_at", 0))
-        if (_time.time() - set_at) > self._OFFER_TTL_SECONDS:
-            self._pending_offer = None
-            return False
+        channel, chat_id = "telegram_text", str(self.authorized_user)
 
-        # 2026-04-16 fix: real pending card takes precedence over any
-        # stored offer. Observed in benchmark Tasks 2 & 4: auto-offer
-        # was stored alongside a real Lane 2 card, then the approval
-        # fired the offer instead of the card. Clear the offer and
-        # fall through so card-reply handles the approval.
-        if self._has_awaiting_card():
-            logger.info(
-                "offer binding: real pending card exists — deferring "
-                "to card-reply, clearing stored offer | text=%r",
-                (text or "")[:60],
-            )
-            self._pending_offer = None
-            return False
+        # Grab set_at BEFORE consuming so we can log age on fire
+        pre = self._controller.get_offer(channel, chat_id)
+        set_at = float(pre.get("set_at", 0)) if pre else 0.0
 
-        if not self._OFFER_APPROVAL_PATTERN.match(text or ""):
-            # Context shift — clear the offer and fall through so the
-            # new message goes through the normal routing path.
-            logger.info(
-                "offer binding: clearing stale offer on context shift "
-                "| text=%r", (text or "")[:60],
-            )
-            self._pending_offer = None
-            return False
-
-        if offer.get("kind") != "web_search":
-            # Narrow safety: only web_search is auto-fired in Track A.
+        status, offer = self._controller.consume_offer_approval(
+            channel, chat_id, text,
+        )
+        if status != "fire" or offer is None:
             return False
 
         query = (offer.get("query") or "").strip()
-        if not query:
-            self._pending_offer = None
-            return False
-
         age = _time.time() - set_at
         logger.info(
             "offer binding: firing pending web_search | query=%r age=%.1fs",
@@ -2457,10 +2183,7 @@ class TelegramVoice:
                 f"I tried to run the offered search but the skill failed ({e}). "
                 f"I'm not going to make up an answer."
             )
-            self._pending_offer = None
             return True
-
-        self._pending_offer = None
 
         if not result.get("success") or not result.get("results"):
             await update.message.reply_text(
@@ -2634,6 +2357,19 @@ class TelegramVoice:
                 return
         except Exception as e:
             logger.debug("proposal intent interceptor failed: %s", e)
+
+        # 2026-04-18 fix: the prior interceptor only queries training/
+        # evolution candidates. DREAM proposals + section-edit proposals
+        # (FIXATION_THRESHOLD, soul.md edits, config tweaks Maez writes
+        # during dream passes) live in daemon.dream, not evolution_engine.
+        # Without this, "yes to #24" against a dream proposal falls through
+        # to general chat and the LLM hallucinates an unrelated reply.
+        try:
+            if await self._try_dream_proposal_intent(update, user_text):
+                self._generating = False
+                return
+        except Exception as e:
+            logger.debug("dream proposal intent interceptor failed: %s", e)
 
         # Session 11x: intercept explicit web-search commands and handle
         # them with the real web_search skill instead of letting the LLM
@@ -2839,12 +2575,58 @@ class TelegramVoice:
             else:
                 prior_block = ""
 
+            # Detect apt failure types and add overriding hard rules so the
+            # LLM pivots correctly rather than probing hardware or retrying
+            # the same broken path.
+            _apt_not_found = _re.search(
+                r'unable to locate package\s+(\S+)', err, _re.IGNORECASE,
+            )
+            _ppa_no_release = _re.search(
+                r'does not have a [Rr]elease file', err,
+            )
+            if _ppa_no_release:
+                # The PPA was added but doesn't support this Ubuntu release.
+                # Do NOT retry apt. Move directly to snap/flatpak/AppImage.
+                _apt_override = (
+                    f"PPA-NOT-SUPPORTED OVERRIDE — READ THIS FIRST:\n"
+                    f"The error 'does not have a Release file' means the PPA you "
+                    f"just tried does NOT support this Ubuntu release (noble/24.04). "
+                    f"Do NOT try any apt-based install or PPA again. Move to the "
+                    f"next method immediately. Priority order:\n"
+                    f"  1. snap: sudo snap install openrgb\n"
+                    f"  2. Download the AppImage directly:\n"
+                    f"     TOOL_CALL: {{\"action\":\"run_shell\",\"params\":{{\"cmd\":"
+                    f"\"wget -q https://openrgb.org/releases/release_0.9/OpenRGB_0.9_x86_64_b5f46e3.AppImage "
+                    f"-O /tmp/openrgb.AppImage && chmod +x /tmp/openrgb.AppImage\","
+                    f"\"reason\":\"download openrgb AppImage since PPA has no noble release\"}}}}\n"
+                    f"  3. web_search for current openrgb Ubuntu 24.04 install method, "
+                    f"then fetch_url on the result to get the exact commands\n"
+                    f"  4. Build from source (last resort)\n\n"
+                )
+            elif _apt_not_found:
+                _missing_pkg = _apt_not_found.group(1)
+                _apt_override = (
+                    f"APT-NOT-FOUND OVERRIDE — READ THIS FIRST:\n"
+                    f"The error 'E: Unable to locate package {_missing_pkg}' means "
+                    f"this package is NOT in Ubuntu's default repos. Your FIRST tool "
+                    f"call MUST be an alternative install. Do NOT probe hardware sysfs. "
+                    f"Priority order:\n"
+                    f"  1. snap: sudo snap install {_missing_pkg}\n"
+                    f"  2. flatpak: flatpak install -y flathub <flatpak-id>\n"
+                    f"  3. web_search for '{_missing_pkg} ubuntu 24.04 install', then "
+                    f"fetch_url on the result to get exact commands\n"
+                    f"  4. Build from source (last resort)\n\n"
+                )
+            else:
+                _apt_override = ""
+
             seed_msg = (
+                f"{_apt_override}"
                 f"the owner's original ask was: {intent!r}\n"
                 f"You just proposed and ran: {fa}({fp})\n"
                 f"It FAILED with:\n{err}\n\n"
                 f"{prior_block}"
-                f"You are on RECOVERY PASS {depth}/2. Your job is to PIVOT "
+                f"You are on RECOVERY PASS {depth}/5. Your job is to PIVOT "
                 f"and actually solve the original ask — not just research "
                 f"it. The EARLIER ATTEMPTS list above is authoritative — "
                 f"every command listed there has already been tried and "
@@ -2895,8 +2677,55 @@ class TelegramVoice:
             )
             history = [seed_msg]
         else:
+            # For fresh (non-recovery) passes, check if the user's message is
+            # a retry intent ("try again", "retry", etc.) and if so, inject the
+            # most recent failed card context so the LLM knows what to retry.
+            # Without this, "Try again" arrives as a context-free message and
+            # the LLM has no idea what was being attempted.
+            _retry_context = ""
+            if user_text and _re.search(
+                r'\b(try\s+again|retry|try\s+(?:a\s+)?(?:different|another|other)\s+'
+                r'(?:way|method|approach|option)|do\s+it\s+again|attempt\s+again)\b',
+                user_text, _re.IGNORECASE,
+            ):
+                try:
+                    import sqlite3 as _sq3
+                    import time as _rtime
+                    _db = str(getattr(
+                        getattr(self, "_audit_log", None), "db_path", None
+                    ) or "memory/audit_log.db")
+                    _since = _rtime.time() - 600  # last 10 minutes
+                    _rc = _sq3.connect(_db)
+                    _rc.row_factory = _sq3.Row
+                    _recent_fail = _rc.execute(
+                        "SELECT action, params_json, outcome_notes "
+                        "FROM audit_log "
+                        "WHERE ts >= ? AND outcome = 'approved_and_failed' "
+                        "ORDER BY ts DESC LIMIT 1",
+                        (_since,),
+                    ).fetchone()
+                    _rc.close()
+                    if _recent_fail:
+                        _rp = {}
+                        try:
+                            _rp = _json.loads(_recent_fail["params_json"] or "{}")
+                        except Exception:
+                            pass
+                        _rcmd = _rp.get("cmd") or str(_rp)[:120]
+                        _rerr = (_recent_fail["outcome_notes"] or "").strip()[:300]
+                        _retry_context = (
+                            f"\nCONTEXT — the last action that failed (within the last "
+                            f"10 minutes):\n"
+                            f"  cmd: {_rcmd}\n"
+                            f"  error: {_rerr}\n"
+                            f"the owner saying {user_text!r} means: try a different approach "
+                            f"for that same goal. Do NOT re-propose the failed command.\n"
+                        )
+                except Exception as _re_exc:
+                    logger.debug("retry-context lookup failed: %s", _re_exc)
+
             history = [
-                f"the owner just said: {user_text!r}\n\n{_TOOL_MANIFEST}\n\nBegin."
+                f"the owner just said: {user_text!r}{_retry_context}\n\n{_TOOL_MANIFEST}\n\nBegin."
             ]
         transcript = []  # list of (action, params, output_or_error, ok)
 
@@ -3469,8 +3298,13 @@ class TelegramVoice:
                 "   didn't do it this turn.\n"
                 "\n"
                 "2. How to read the transcript:\n"
-                "   · ✓ line — the tool ran and the → output is real, quote it\n"
-                "     directly.\n"
+                "   · ✓ line — the tool RAN and returned output. It is DONE.\n"
+                "     Report what you found. NEVER say 'waiting for approval'\n"
+                "     for a ✓ line — it already executed.\n"
+                "     GOOD reply for ✓: 'I checked and found [output]. [What\n"
+                "     that means / what to do next].'\n"
+                "     BAD reply for ✓: 'I proposed running X — that's waiting\n"
+                "     for your approval.' ← WRONG. It ran. Report the result.\n"
                 "   · ✗ line — the tool call was REJECTED, the audit refused,\n"
                 "     or the call errored. Nothing happened. Do NOT describe\n"
                 "     the failed tool as if it partially ran.\n"
@@ -3478,23 +3312,33 @@ class TelegramVoice:
                 "     and is waiting for his approval. The action has NOT\n"
                 "     run. You must tell the owner you proposed it and are\n"
                 "     waiting. Do NOT claim the action finished.\n"
+                "     GOOD reply for ⏳: 'I've proposed running X — that's\n"
+                "     waiting for your go-ahead.'\n"
                 "\n"
                 "3. PARTIAL-ACTION TRAP (this is where fabrication sneaks in):\n"
                 "   If the transcript has ONE tool entry, you are only\n"
                 "   allowed to talk about THAT tool. You are not allowed to\n"
                 "   frame the reply around a DIFFERENT action you also\n"
-                "   thought about doing but didn't. Example of the trap:\n"
-                "     transcript: 1 card proposed — run `lsb_release -a`\n"
+                "   thought about doing but didn't. Shape of the trap:\n"
+                "     transcript: 1 card proposed — run <CMD_FROM_TRANSCRIPT>\n"
                 "     BAD reply: 'I've started looking into the best tools\n"
-                "       for controlling your CPU lighting. I proposed a\n"
-                "       system check to identify available utilities.'\n"
+                "       for <user topic>. I proposed a system check to\n"
+                "       identify available utilities.'\n"
                 "     WHY BAD: 'started looking' is not in the transcript;\n"
-                "       the card is a system identification probe, not a\n"
-                "       utility scan. The reply invented a second action.\n"
-                "     GOOD reply: 'I proposed running `lsb_release -a &&\n"
-                "       uname -a` to see what OS and kernel you're on —\n"
-                "       that's waiting for your approval. I haven't looked\n"
-                "       for lighting tools yet.'\n"
+                "       the card is <CMD_FROM_TRANSCRIPT>, not a utility\n"
+                "       scan. The reply invented a second action.\n"
+                "     GOOD reply (⏳ card): 'I've proposed running\n"
+                "       `<CMD_FROM_TRANSCRIPT>` — waiting for your go-ahead.'\n"
+                "     GOOD reply (✓ ran): 'I ran `<CMD_FROM_TRANSCRIPT>`\n"
+                "       and found: [output]. [What that means].'\n"
+                "   ANTI-REFLEX RULE: The commands you name in your reply\n"
+                "   must come from THIS turn's transcript only. Do not\n"
+                "   reuse command strings from this example or from your\n"
+                "   memory of prior turns. If the transcript shows no\n"
+                "   tool call, do not name any command at all. Never\n"
+                "   default to 'lsb_release' / 'uname' / 'OS and kernel\n"
+                "   check' as a filler — that phrase has leaked from\n"
+                "   past examples and is a fabrication trigger.\n"
                 "\n"
                 "4. Memory recall blocks (the [RECALLED MEMORY] section\n"
                 "   earlier in this prompt) are history about the past.\n"
@@ -3656,241 +3500,77 @@ class TelegramVoice:
             messages.append(turn)
         messages.append({"role": "user", "content": final_user})
 
-        # Stream response sentence by sentence
+        # Non-streaming reply — Jarvis runs tools first, then one clean synthesis call.
+        # Eliminates fabrication incentive: the model sees the full transcript before
+        # writing a single word, so there's nothing to invent.
         try:
             await context.bot.send_chat_action(
                 chat_id=update.effective_chat.id, action="typing"
             )
 
             full_reply = ""
-            current_sentence = ""
-            current_msg = None
-            token_count = 0
 
-            # Session 11m: signal the daemon that the owner is actively talking so
-            # its next reasoning cycle defers (frees the GPU for this reply).
             if self.daemon is not None:
                 try:
                     self.daemon._rohit_active_until = _time.time() + 15.0
                 except Exception:
                     pass
 
-            # Session 11p: route through llm_client so MAEZ_LLM_BACKEND
-            # selects Ollama or llama.cpp CUDA at call time. Streaming
-            # adapter yields ollama-shaped chunks with .message.content,
-            # so the per-token iteration below doesn't need to change.
             from core import llm_client as _llm_client
-            response = _llm_client.chat(
+            resp = _llm_client.chat(
                 model=MODEL, messages=messages,
-                stream=True, think=False,
-                options={"temperature": 0.7, "num_predict": 4096},
+                stream=False, think=False,
+                options={"temperature": 0.5, "num_predict": 600},
             )
+            full_reply = (resp.message.content or "").strip()
+            # Strip grounding block echoes if model reflected them back
+            full_reply = _re.sub(
+                r'\[WHAT HAPPENED THIS TURN.*?\]\s*', '', full_reply, flags=_re.DOTALL,
+            ).strip()
+            full_reply = _re.sub(
+                r'\[JARVIS TRANSCRIPT.*?\]\s*', '', full_reply, flags=_re.DOTALL,
+            ).strip()
+            full_reply = _re.sub(
+                r'\[\d{4}-\d{2}-\d{2}.*?##.*?\n.*?\n.*?\n', '', full_reply, flags=_re.DOTALL,
+            ).strip()
+            full_reply = full_reply or "(no response)"
+            reply = full_reply
 
-            # Honesty guard (2026-04-15 fake-action-loop bug):
-            # If no tool call / card / dialog fired this turn, the LLM
-            # cannot legitimately claim an action in its reply. Buffer
-            # the full reply silently, run the guard, then send. If the
-            # guard trips, the rewrite goes out instead of the fake
-            # claim language. If a real action fired this turn, stream
-            # as before — the claim (if any) matches reality.
-            _turn_tool_calls = (1 if web_context else 0) + (1 if jarvis_block else 0)
-            _turn_cards_created = 0  # chat path doesn't create cards directly
-            _turn_dialogs_opened = 0  # chat path doesn't open dialogs directly
-            _turn_had_action = (
-                _turn_tool_calls + _turn_cards_created + _turn_dialogs_opened
-            ) > 0
-
-            if not _turn_had_action:
-                # Buffer mode — collect without streaming, guard, then send.
-                for chunk in response:
-                    token = chunk.message.content
-                    full_reply += token
-                    token_count += 1
-                    if self._interrupt_queue and not self._interrupt_queue.empty():
-                        logger.info("Generation interrupted at %d tokens", token_count)
-                        break
-
-                guarded = self._honesty_guard(
-                    full_reply,
-                    turn_tool_calls=_turn_tool_calls,
-                    turn_cards_created=_turn_cards_created,
-                    turn_dialogs_opened=_turn_dialogs_opened,
+            for part in split_long_message(reply):
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id, text=part,
                 )
-                final_text = (guarded.strip() or "(Maez had no response)")
-
-                for part in split_long_message(final_text):
-                    await context.bot.send_message(
-                        chat_id=update.effective_chat.id, text=part,
-                    )
+                if len(split_long_message(reply)) > 1:
                     await asyncio.sleep(0.3)
-                reply = final_text
-            else:
-                # Streaming mode — action fired this turn, send sentences as they land.
-                for chunk in response:
-                    token = chunk.message.content
-                    full_reply += token
-                    current_sentence += token
-                    token_count += 1
-
-                    # Check for interrupt
-                    if self._interrupt_queue and not self._interrupt_queue.empty():
-                        if current_msg:
-                            try:
-                                await context.bot.edit_message_text(
-                                    chat_id=update.effective_chat.id,
-                                    message_id=current_msg.message_id,
-                                    text=current_sentence.strip() + "...",
-                                )
-                            except Exception:
-                                pass
-                        logger.info("Generation interrupted at %d tokens", token_count)
-                        break
-
-                    # Sentence boundary — send as fragment
-                    if _re.search(r'[.!?]\s*$', current_sentence.strip()) and len(current_sentence.strip()) > 40:
-                        sentence = current_sentence.strip()
-                        if current_msg is None:
-                            current_msg = await context.bot.send_message(
-                                chat_id=update.effective_chat.id, text=sentence,
-                            )
-                        else:
-                            # Session 11m: removed legacy 1.2s + 0.8s artificial pauses
-                            # between sentence fragments. The typing indicator still
-                            # fires but without dead time. Previously added 6-10s to
-                            # every multi-sentence reply.
-                            await context.bot.send_chat_action(
-                                chat_id=update.effective_chat.id, action="typing",
-                            )
-                            current_msg = await context.bot.send_message(
-                                chat_id=update.effective_chat.id, text=sentence,
-                            )
-                        current_sentence = ""
-
-                # Send remaining text (split if too long)
-                remainder = current_sentence.strip()
-                if remainder:
-                    if current_msg is not None:
-                        await asyncio.sleep(1.0)
-                    for part in split_long_message(remainder):
-                        await context.bot.send_message(
-                            chat_id=update.effective_chat.id, text=part,
-                        )
-                        await asyncio.sleep(0.5)
-
-                reply = full_reply.strip() or "(Maez had no response)"
 
         except Exception as e:
             logger.error("Telegram reasoning failed: %s", e)
-            reply = f"Reasoning error: {e}"
+            full_reply = f"Reasoning error: {e}"
+            reply = full_reply
             await update.message.reply_text(reply)
+            return reply
 
         logger.info("Telegram reply: %s", reply[:100])
 
-        # 2026-04-16 state-claim post-stream correction. In streaming
-        # mode (turn had actions), parts of the reply are already
-        # sent by the time we see the full text — we can't rewrite.
-        # Send a follow-up correction message so the user sees that
-        # the pending/approved/session narrative was not real.
-        # Buffer-mode replies are already handled by _honesty_guard,
-        # so we only correct when turn_had_action is True.
-        try:
-            _full = locals().get("full_reply", "") or ""
-            _had_action = bool(locals().get("_turn_had_action", False))
-            if _had_action and _full:
-                _sm = TelegramVoice._STATE_CLAIM_PATTERN.search(_full)
-                if _sm and not self._has_awaiting_card():
-                    # 2026-04-16 fix: only send the correction when no
-                    # real pending card exists. Otherwise Maez's state-
-                    # claim narration is presumptively accurate (the
-                    # card IS waiting in Telegram) and sending "no such
-                    # state exists" contradicts what the user can see.
-                    logger.info(
-                        "honesty guard: chat_state_claim_correction "
-                        "(streaming, matched=%r) | orig=%s",
-                        _sm.group(0), _full[:100].replace("\n", " "),
-                    )
-                    await update.message.reply_text(
-                        f"Correction: {self._HONEST_STUB} "
-                        f"Disregard any earlier mention of pending approval, "
-                        f"a previous approved request, or an active session — "
-                        f"no such state actually exists right now."
-                    )
-                elif _sm:
-                    logger.info(
-                        "honesty guard: state-claim suppressed — real "
-                        "pending card exists (matched=%r)",
-                        _sm.group(0),
-                    )
-        except Exception as e:
-            logger.debug("state-claim correction failed: %s", e)
-
-        # 2026-04-16 offer-binding detection (moved out of buffer-mode
-        # branch). A probing Jarvis tool call ("which openrgb") and a
-        # forward commitment in the reply ("I can search for install
-        # instructions") are two different things. The tool call
-        # satisfies turn_had_action=True, but the offer in the reply
-        # is still an unbacked forward promise. Scan the ORIGINAL
-        # full_reply (before guard rewrite) in BOTH branches so the
-        # offer is captured regardless of whether tools fired.
-        try:
-            if (TelegramVoice._OFFER_PATTERN.search(full_reply or "")
-                and not self._has_awaiting_card()):
-                _raw = (self._last_actionable_user_text or user_text or "").strip()
-                _query = self._derive_search_query(_raw)
-                if _query:
-                    self._pending_offer = {
-                        "kind": "web_search",
-                        "query": _query,
-                        "raw_query": _raw,
-                        "set_at": _time.time(),
-                        "offer_preview": (full_reply or "")[:120].replace("\n", " "),
-                    }
-                    logger.info(
-                        "offer binding: stored pending web_search "
-                        "| query=%r raw=%r preview=%s",
-                        _query[:80], _raw[:60],
-                        self._pending_offer["offer_preview"][:80],
-                    )
-        except Exception as e:
-            logger.debug("offer binding store failed: %s", e)
-
-        # 2026-04-16 probe->pending bridge. When:
-        #   - a probe ran this turn (Jarvis fired Lane 0 action)
-        #   - AND the reply narrated fake pending/approved/session state
-        #   - AND no explicit offer was already stored by _OFFER_PATTERN
-        #   - AND no real awaiting card exists (would preempt card-reply)
-        # ...create a REAL pending web_search offer tied to the user's
-        # original question. Turns "probe -> fake narration -> Yes does
-        # nothing" into "probe -> real pending offer -> Yes runs search".
-        # This is the narrow bridge that makes next-step action state
-        # real instead of just rewriting prose.
-        try:
-            _full2 = locals().get("full_reply", "") or ""
-            _had_action2 = bool(locals().get("_turn_had_action", False))
-            if (_had_action2
-                and _full2
-                and self._pending_offer is None
-                and TelegramVoice._STATE_CLAIM_PATTERN.search(_full2)
-                and not self._has_awaiting_card()):
-                _raw = (self._last_actionable_user_text or user_text or "").strip()
-                _query = self._derive_search_query(_raw)
-                if _query:
-                    self._pending_offer = {
-                        "kind": "web_search",
-                        "query": _query,
-                        "raw_query": _raw,
-                        "set_at": _time.time(),
-                        "offer_preview": (
-                            "[auto from probe+state-claim] "
-                            + _full2[:80].replace("\n", " ")
-                        ),
-                    }
-                    logger.info(
-                        "offer binding: auto-stored from probe+state-claim "
-                        "| query=%r raw=%r", _query[:80], _raw[:60],
-                    )
-        except Exception as e:
-            logger.debug("probe->pending bridge failed: %s", e)
+        # 2026-04-17 offer-binding + probe-bridge now delegate to the
+        # controller. Both scan the ORIGINAL full_reply (before guard
+        # rewrite) so an offer phrase is captured regardless of whether
+        # tools fired this turn.
+        _channel, _chat_id = "telegram_text", str(self.authorized_user)
+        _raw = (self._last_actionable_user_text or user_text or "").strip()
+        self._controller.maybe_store_offer(
+            _channel, _chat_id,
+            reply=full_reply or "",
+            raw_user_text=_raw,
+            query_deriver=self._derive_search_query,
+        )
+        self._controller.maybe_store_probe_bridge_offer(
+            _channel, _chat_id,
+            reply=full_reply or "",
+            raw_user_text=_raw,
+            query_deriver=self._derive_search_query,
+            had_action=bool(locals().get("_turn_had_action", False)),
+        )
 
         # Add response to conversation thread
         self._conversation_thread.append({"role": "assistant", "content": reply})
