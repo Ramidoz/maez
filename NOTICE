@@ -1,0 +1,92 @@
+Maez — a persistent per-user digital companion.
+
+Copyright © 2026 the owner
+https://github.com/Ramidoz/maez
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+See LICENSE for the full license text. See LICENSE.BSL.previous for
+the historical Business Source License under which this project was
+developed from 2026-04-12 through 2026-04-18.
+
+
+================================================================
+Third-party components
+================================================================
+
+Maez builds on and calls out to the following third-party projects.
+Each retains its own license; this notice acknowledges them.
+
+- Qwen3.6-35B-A3B (base language model)
+  Alibaba Cloud / Qwen team
+  Apache License 2.0 / Tongyi Qianwen License
+  https://huggingface.co/Qwen/Qwen3.6-35B-A3B
+
+- Qwen3-VL-8B-Instruct (vision model)
+  Alibaba Cloud / Qwen team
+  Apache License 2.0
+  https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct
+
+- llama.cpp (inference server)
+  Georgi Gerganov and contributors
+  MIT License
+  https://github.com/ggerganov/llama.cpp
+
+- Unsloth (training framework)
+  Daniel Han and contributors
+  Apache License 2.0
+  https://github.com/unslothai/unsloth
+
+- Transformers, PyTorch, HuggingFace Hub
+  Various authors; Apache 2.0 / BSD-3
+  https://huggingface.co/docs/transformers
+
+- Anthropic SDK (optional external routing for the owner's Maez)
+  Anthropic
+  MIT License
+  https://github.com/anthropics/anthropic-sdk-python
+
+- Flask, python-telegram-bot, requests, chromadb, blessed,
+  python-dotenv, PyYAML, and other Python ecosystem libraries
+  Various authors; see `pyproject.toml` (future) for pinned
+  versions and licenses.
+
+- Open-Meteo (weather data)
+  CC-BY 4.0 attribution — "Weather data by Open-Meteo.com"
+  https://open-meteo.com/
+
+- Next.js (web scaffold)
+  Vercel
+  MIT License
+  https://nextjs.org/
+
+This is not an exhaustive dependency graph. Consult `requirements.txt`
+and `web/package.json` for full dependency lists.
+
+
+================================================================
+Adapter weights (future, when published)
+================================================================
+
+The Maez voice-seed LoRA adapter, when published, will be released
+separately under the Apache License 2.0 on HuggingFace at a URL to
+be announced. Base-model weights must be obtained directly from the
+upstream Qwen repository under the Qwen/Apache license terms.
+
+
+================================================================
+Contributing
+================================================================
+
+External code contributions require a Contributor License Agreement
+(CLA) to be signed before merge. This preserves the ability to offer
+commercial dual-licenses for enterprise use cases while keeping the
+main code fully open under AGPL v3. No CLA is required to:
+  - Report issues
+  - Write documentation
+  - Fork the project and maintain a separate variant
+
+See README.md for contribution guidelines (to be added).

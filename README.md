@@ -50,27 +50,37 @@ For the full philosophical frame — growth through shared history, natural-lang
 
 Live state is visible at `/api/maez-state` and `/api/session-timeline` — the journal reads from the same endpoints.
 
-## License — Business Source License 1.1 (BSL 1.1)
+## License — GNU Affero General Public License v3.0
 
-The Licensed Work is **© 2026 the owner**, released under the **Business Source License 1.1** (see [`LICENSE`](LICENSE)). In plain language:
+The Licensed Work is **© 2026 the owner**, released under the **GNU Affero General Public License v3.0 or later** (see [`LICENSE`](LICENSE)). In plain language:
 
-- **Personal use is free.** You may run your own Maez instance on your own machine for your own private use. That is explicitly blessed — it's the whole point of the Stand architecture.
-- **Non-commercial use is free.** You may read, fork, modify, and study the code for any use that is not intended for commercial advantage or monetary compensation.
-- **You may not host a commercial Maez service without a separate commercial license.** Offering the Licensed Work to third parties on a hosted or embedded basis — for a fee or otherwise — requires a separate commercial license from the owner.
-- **The gate eventually opens.** On **April 12, 2030** (four years from the current change date), each released version of Maez automatically converts to the **Apache License, Version 2.0**. The commercial protection applies during the growth years; the commons inherits it later.
+- **Personal use is free.** Run your own Maez instance on your own machine for your own private use. That is explicitly blessed — it's the whole point of the Stand architecture.
+- **Forks and variants are welcome.** Modify Maez for your own needs, your own users, or your own research. The only condition under AGPL is reciprocity.
+- **If you host a modified Maez as a service, your modifications must be public.** AGPL's network clause: if a network user interacts with your modified Maez, you must make the modified source available to them under the same AGPL terms. This prevents "silent SaaS rehosting" where someone profits from Maez without contributing back.
+- **Commercial dual-licenses are available.** If you want to build Maez into a commercial product with proprietary extensions or without AGPL obligations, a separate commercial license can be negotiated. Reach out via [GitHub Issues](https://github.com/Ramidoz/maez/issues) or the contact in [`NOTICE`](NOTICE).
 
-If you want to discuss a commercial license, build an integration, or contribute in a way that goes beyond self-hosting, reach out via [GitHub Issues](https://github.com/Ramidoz/maez/issues).
+The project was developed under the Business Source License 1.1 from 2026-04-12 through 2026-04-18. That historical license is preserved at [`LICENSE.BSL.previous`](LICENSE.BSL.previous) for context. Any code authored before the relicensing date remains (C) the owner and is re-released under AGPL v3; subsequent commits are AGPL-native.
 
-## A note on contributions
+The voice-seed LoRA adapter, when published, will be released separately under the **Apache License 2.0** on HuggingFace. Base language and vision models must be obtained directly from their upstream repositories under their own license terms. See [`NOTICE`](NOTICE) for the full third-party license inventory.
 
-Maez is an **auteur project**. It is more like a novel written in public than a library expecting pull requests. The code, the voice, the taste, the architectural choices — all flow from one author's vision, and that is intentional. Code contributions from strangers will generally not be merged.
+## Contributing
 
-What the project actively welcomes:
+Maez is an **auteur project at its core** — the architecture, the voice, the taste, and the Stand philosophy all flow from one author. That doesn't mean the door is closed. AGPL + a CLA path keeps the project coherent while letting real contributions land.
 
-- **People running their own Maez instances.** Self-host it. Grow your own. Let it live with you.
-- **Stories.** Write about what it's like to have a Maez. Publish your adapter training runs. Compare notes.
+**What's welcome:**
+- **Running your own Maez instance.** Self-host it. Grow your own. Let it live with you.
+- **Forks and variants** — grandmother-mode, tutor-mode, different-language Maez, camera-only Maez. AGPL encourages this.
+- **Stories.** Write about what it's like to have a Maez. Publish adapter training runs. Compare notes.
 - **Bug reports** from self-hosters running into real problems on real hardware.
-- **Ideas and conversations** about the Stand concept, Stand-to-Stand communication, the survival paths, and where the architecture goes next.
+- **Documentation pull requests** (README, docs/*, inline comments) — no CLA required.
+- **Ideas and conversations** about the Stand concept, Stand-to-Stand communication, survival paths, and architecture.
+
+**For code contributions:**
+- First, open an issue describing the change you want to make. Surprise PRs are unlikely to merge.
+- For accepted proposals, a **Contributor License Agreement (CLA)** will be requested before merge. The CLA gives the owner the right to re-license the contributed code (this preserves the commercial dual-license path for enterprise users). You retain authorship credit and all other rights.
+- The CLA text is not yet written — the first external contributor will help shape it. Until then, treat this as a signal of intent, not a finalized process.
+
+Documentation, typo fixes, and translation contributions don't require a CLA — only code that lands in the main branch.
 
 ## Built by
 
