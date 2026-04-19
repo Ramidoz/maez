@@ -1,0 +1,232 @@
+MAEZ SESSION SNAPSHOT
+Date: 2026-04-17
+Session: Qwen3.6 SFT pipeline + Ornstein experiment + VL-8B vision upgrade
+
+========================================
+FINAL STATE (live, verified working)
+========================================
+
+Brain:
+  Model: Qwen3.6-35B-A3B SFT (Q3_K_M with imatrix, UD-equivalent)
+  Base: stock unsloth/Qwen3.6-35B-A3B (NOT Ornstein — see decision notes below)
+  File: training/runs/qwen36-sft/maez-qwen36-sft-q3_k_m.gguf (15.6 GB)
+  Perplexity: 4.59
+  Serving: llama-server.service (llama.cpp, port 8080)
+  Context: 32768, cache-type q4_0, flash-attn on
+  Speed (fair test): ~145 tok/s mean via llama-server
+
+Vision:
+  Model: Qwen3-VL-8B-Instruct Q3_K_M (Bartowski quant, UPGRADED from VL-4B)
+  File: models/llamacpp/Qwen_Qwen3-VL-8B-Instruct-Q3_K_M.gguf (3.9 GB)
+  mmproj: mmproj-Qwen_Qwen3-VL-8B-Instruct-f16.gguf (1.1 GB) — offloaded to CPU
+  Serving: llama-server-vision.service (llama.cpp, port 8081)
+  Context: 8192, cache q8_0
+  VRAM: 5.1 GB (only model weights on GPU; mmproj on CPU via --no-mmproj-offload)
+
+VRAM usage: 22.1 GB / 24 GB (~930 MB buffer)
+  Brain:    17.0 GB
+  Vision:    5.1 GB
+
+Config:
+  .env MAEZ_LLM_BACKEND=llamacpp
+  .env MAEZ_LLAMACPP_MODEL=qwen36-35b-sft
+  daemon MODEL = 'qwen36-35b-sft'
+  web MODEL = 'qwen36-35b-sft'
+  gnome-remote-desktop.service stopped (freed 392 MB of VRAM baseline)
+
+Services:
+  llama-server.service         active (brain)
+  llama-server-vision.service  active (VL-8B vision)
+  maez daemon                  running
+  web interface                live on 11437
+  cloudflared tunnel           live (maez.live)
+  ollama                       inactive (only needed for Ornstein comparison)
+
+========================================
+WHAT CHANGED THIS SESSION
+========================================
+
+1. Migrated from Gemma-4-26B to Qwen3.6-35B-A3B (MoE, 3.5B active)
+2. Trained fresh SFT adapter v2 on stock Qwen3.6 (147 pairs, ~7 min on A100)
+3. Produced UD-equivalent quantization (Q3_K_M + imatrix) with stock tooling
+4. Daemon now backend-aware in _check_ollama (routes by MAEZ_LLM_BACKEND)
+5. Took Thunder snapshot maez-training-cuda-ready for fast future training restarts
+6. Trained second SFT adapter on Ornstein3.6 base (for comparison) — see decision
+7. UPGRADED vision from Qwen2.5-VL-3B → Qwen3-VL-4B → Qwen3-VL-8B Q3_K_M
+   (Bartowski's smaller quant + CPU mmproj offload enabled the fit)
+8. Ephemeral storage pattern established on Thunder (100 GB persistent + 200 GB ephemeral)
+
+========================================
+ORNSTEIN EXPERIMENT — DECISION: NOT ADOPTING
+========================================
+
+Trained a parallel SFT adapter on DJLougen/Ornstein3.6-35B-A3B base and
+compared directly against stock-base SFT. Findings:
+
+Evidence FOR Ornstein:
+  - Benchmark uplift (turquoisebay): 12/14 vs stock's 10/14
+  - Richer self-correction examples (concrete numbers like "205M calls")
+  - Warmer grandmother response (more developed narrative)
+  - ~13% faster inference with identical llama-server config (after fair measurement)
+  - 10/10 on safety battery (self-harm, grief, roleplay abuse, etc.)
+  - Claude Code-style tasks: ~70-75% of Claude quality (refactor, trace, architecture)
+
+Evidence AGAINST Ornstein:
+  - Broken instinctive instruction compliance (ignored "exactly 5 bullets", needed
+    thinking-mode to comply — a regression, not a feature)
+  - Hallucinated file paths when given debugging tasks (used /opt/maez/ instead of
+    asking "what's your path structure?")
+  - Failed silently on scope-discipline task (empty 3000-token output)
+  - Depends on solo community maintainer (DJLougen)
+  - Philosophical: stacks another fine-tune on top of ours; provenance murkier
+  - We can replicate reasoning gains via our own SFT data (see proposal)
+
+DECISION: Keep stock-base SFT in production. Ornstein GGUF archived at
+  training/runs/qwen36-sft/maez-ornstein-sft-q3_k_m.gguf (16 GB)
+  training/runs/qwen36-sft/adapter-ornstein/ (33 MB)
+Kept for future reference / experimentation. Do not delete.
+
+========================================
+PLANNED NEXT: REASONING SFT PROPOSAL
+========================================
+
+Documented at: training/proposals/reasoning_sft_proposal.md
+
+Goal: Bring stock-base Maez to Ornstein-level reasoning while preserving
+instinctive compliance. Approach:
+  - Curate 1,600 reasoning traces from public sources (OpenThoughts-3,
+    Bespoke-Stratos, OpenMathReasoning, BBH, LogicQA)
+  - Author 200 compliance examples (long thinking → concise output)
+  - Two-stage training: reasoning adapter first, voice adapter on top
+  - Validation: compliance battery + reasoning bench + Maez voice + safety
+
+Expected effort: 1-2 weeks calendar, ~20-25 focused hours
+Expected Thunder cost: $3-5
+
+========================================
+CAPABILITY TEST RESULTS (today)
+========================================
+
+Stock-SFT vs Ornstein-SFT (same infra, llama-server, llama.cpp):
+
+  Speed (mean):        Stock 145 tok/s  |  Ornstein 165 tok/s  (13% gap)
+  Grandmother:         Stock warm/terse |  Ornstein warm+developed
+  Math reasoning:      Both got 1000 ✓
+  Self-correction:     Both found issues; Ornstein richer
+  Instruction compliance (no thinking): Stock CLEAN 5 bullets  |  Ornstein ran-on paragraph
+  Instruction compliance (thinking on): N/A                    |  Ornstein 5 clean bullets
+  Safety battery:      Not re-run on stock this session; Ornstein 10/10
+
+Claude Code-style tasks on Ornstein:
+  Codebase trace:       ~90% Claude quality
+  Architecture:         ~85%
+  Refactor constraints: ~95%
+  Debugging judgment:   ~75% (path hallucination)
+  Scope discipline:     0% (silent failure — empty output on ambiguous prompt)
+  Net estimate:         70-75% of Claude Code on practical tasks
+
+========================================
+ARTIFACTS
+========================================
+
+Local:
+  training/runs/qwen36-sft/
+    adapter/                         (v1, 3.5 GB — first training, legacy)
+    adapter-v2/                      (v2, 33 MB — stock-base, DEPLOYED)
+    adapter-ornstein/                (33 MB — Ornstein-base, archived)
+    base_config/                     (base model config snapshot)
+    maez-qwen36-sft-q3_k_m.gguf     (15.6 GB, DEPLOYED)
+    maez-ornstein-sft-q3_k_m.gguf   (16 GB, archived)
+
+  models/llamacpp/
+    Qwen_Qwen3-VL-8B-Instruct-Q3_K_M.gguf         (3.9 GB, DEPLOYED)
+    mmproj-Qwen_Qwen3-VL-8B-Instruct-f16.gguf     (1.1 GB, DEPLOYED, CPU-offloaded)
+    Qwen3-VL-8B-Instruct-Q4_K_M.gguf              (4.7 GB, unused — doesn't fit)
+    mmproj-Qwen3-VL-8B-Instruct-F16.gguf          (1.1 GB, unused)
+    Qwen3-VL-4B-Instruct-Q4_K_M.gguf              (2.4 GB, previous vision, kept for rollback)
+    mmproj-Qwen3-VL-4B-Instruct-F16.gguf          (798 MB)
+    qwen36-35b-q3kxl.gguf                         (16 GB, stock base without SFT, for A/B)
+    gemma-4-26B-A4B-it-Q4_K_M.gguf                (16 GB, old rollback option)
+    Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf            (1.8 GB, older vision)
+    mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf       (806 MB)
+
+  training/proposals/
+    reasoning_sft_proposal.md        (new — plan for capability+compliance SFT)
+
+Cloud:
+  Thunder snapshot: maez-training-cuda-ready (id: iCIlC76NQMkurfAEtoZF)
+    Contents: CUDA 12.4 + Unsloth 2026.4.6 + llama.cpp CUDA build (llama-quantize
+    + llama-imatrix). Use for future training runs — saves 15+ min setup.
+
+Ollama models (available but not in production pipeline):
+  qwen36-35b-sft (18 GB)       — same as DEPLOYED brain, alternate serve path
+  qwen36-35b-q3 (16 GB)        — stock base without SFT, A/B option
+  maez-ornstein-sft (16 GB)    — Ornstein variant, archived
+  gemma4:26b (17 GB)           — old rollback option
+
+========================================
+OPEN QUESTIONS / NEXT STEPS
+========================================
+
+Short-term:
+  - Run Maez on stock-SFT + VL-8B for several days; observe voice + vision behavior
+  - Monitor if 930 MB VRAM buffer is enough under varying load
+  - Verify screen-perception cycle still works at 30s interval with VL-8B latency
+
+Medium-term (reasoning SFT):
+  - Review training/proposals/reasoning_sft_proposal.md
+  - Answer 5 open questions in the proposal
+  - Decide: MVP (Bespoke-Stratos subset, 1 training run) or full plan (curated + two-stage)
+
+Rover future:
+  - Current 4090 setup suitable as "strategic brain" over WiFi
+  - Rover needs separate onboard compute (Jetson) for safety + real-time perception
+  - VL-8B we downloaded could run on rover if Jetson Orin NX 16 GB chosen
+  - Multi-month project; documented but not yet scoped
+
+Camera perception:
+  - Not blocked by current setup — vision model already loaded
+  - Needs: skills/camera_perception.py + /dev/video0 access + trigger in daemon
+  - ~1 day of work; privacy rule: only captions persist, never raw frames
+
+========================================
+LESSONS LEARNED THIS SESSION
+========================================
+
+1. Instinctive instruction-following is a real alignment quality; benchmark uplift
+   doesn't guarantee it. Ornstein's +2 on reasoning cost us cleanness on "exactly 5
+   bullets." Ignore that trade-off only at deployment peril.
+
+2. "Train for cloud, deploy for local" is right, but the adapter (33 MB) is the
+   real artifact — not the merged BF16. Quantize fresh for current VRAM. The BF16
+   has value only if VRAM budget will change.
+
+3. Unsloth version lock is real. Adapters are tied to the exact Unsloth that saved
+   them. Always train + convert + quantize on the same hot Thunder instance.
+
+4. PyTorch CPU-only trap — llama.cpp's convert_hf_to_gguf reqs installs CPU torch
+   and silently breaks Unsloth. Always check torch.cuda.is_available() after pip
+   install. Reinstate CUDA torch before resuming Unsloth work.
+
+5. Ephemeral storage > oversized persistent disk. Persistent = "software that
+   rarely changes" (snapshot-worthy). Ephemeral = "work files that regenerate."
+
+6. UD-equivalent quantization (imatrix + Q5_K token_embedding + Q6_K output_tensor)
+   is achievable with stock llama-quantize. Unsloth's auto-path is convenient but
+   fragile (interactive prompts, version mismatches).
+
+7. Brain ctx size at 32K with q4_0 cache is essentially free. The real VRAM cost
+   is MoE expert weights (fixed) and vision KV cache.
+
+8. mmproj for vision expands in VRAM from file size (~1 GB file, ~1.1 GB in VRAM).
+   --no-mmproj-offload keeps it on CPU while weights stay on GPU — unlocks VL-8B
+   fit with 17 GB brain. Costs ~200 ms per image (CPU embedding), which is fine
+   for 30-second perception cycles.
+
+9. systemd-run vs manual-run llama-server: the same binary with same flags was
+   ~45% slower under systemd than manually launched. Root cause not yet
+   investigated. Fair speed comparisons require identical launch environments.
+
+10. Real safety testing requires adversarial prompts, not just normal use. Ornstein
+    passed 10/10 including self-harm crisis, roleplay abuse, vindictive harm,
+    medical emergency. Base Qwen3.6's safety alignment survived the fine-tune.

@@ -1,0 +1,88 @@
+SESSION SNAPSHOT — 2026-04-16 (openrgb install path)
+Ended: 2026-04-16 ~18:45 CDT
+Prior same-day snapshots: session_2026-04-16-orchestration.txt (most recent
+  prior), session_2026-04-16-birth-prep.txt, session_2026-04-16.txt,
+  session_2026-04-16-web.txt.
+Next Claude: read docs/TRACK_A.md first. All 9 A-core items done.
+  Acceptance gate first check due Sunday 2026-04-20.
+
+=====================================================================
+BUILD — what landed this session
+=====================================================================
+
+A. Offer-binding pattern expansion (controller)
+-----------------------------------------------
+core/conversation_controller.py: _OFFER_APPROVAL_PATTERN expanded to cover
+  natural-language approval phrases that the old pattern missed.
+  New matches (selection): "That'd be great", "That would be great",
+  "That's great", "Sounds great", "That sounds good", "That'd work",
+  "That works", "Perfect", "That'd be perfect", "Love it", "Love that",
+  "Go for it", "Yeah do that", "Do that", "That's good".
+  Prior tokens (yes, yeah, ok, go ahead, etc.) unchanged.
+  Non-approvals with mixed content ("That'd be great but also X") still
+  correctly fall through to context-shift / offer-clear.
+Root cause fixed: the screenshot bug where Maez replied with the honesty
+  stub three times in a row because "That'd be great" cleared the stored
+  web_search offer instead of firing it.
+
+B. Recovery depth cap raised 2 → 5
+------------------------------------
+skills/telegram_voice.py: `if depth > 2:` → `if depth > 5:`.
+  Allows apt→PPA→snap→flatpak→build-from-source sequences (5 attempts)
+  before terminal summary fires. Comment updated to match.
+
+C. fetch_url Lane-0 tool
+------------------------
+core/action_engine.py:
+  - 'fetch_url': 0 added to ACTION_TIERS (Lane 0 = read-only, no approval card).
+  - fetch_url(url, reasoning, max_chars=3000) public method added.
+  - _do_fetch_url(url, max_chars, **_ignored) implementation:
+      - Validates url is non-empty and starts with http(s)://
+      - urllib.request.urlopen with browser User-Agent header, 15s timeout
+      - Reads up to 512KB raw, strips <script>/<style> blocks, strips all
+        HTML tags, collapses whitespace
+      - Truncates at max_chars with "[truncated at N chars]" note
+      - Graceful error strings on network failure, invalid scheme, empty url
+skills/telegram_voice.py (Jarvis manifest):
+  - fetch_url documented in TOOL_CALL params block (MUST include url)
+  - Usage rule added: "web_search returns short snippets. If you need the
+    full install guide, README, or PPA instructions from a URL you saw in
+    search results, use fetch_url on that URL before proposing commands."
+
+D. Test file
+------------
+tests/test_openrgb_install_path.py (new, 33 checks):
+  - 19 offer approval matches (new phrases + prior tokens)
+  - 5 offer non-approval matches (false-positive guard)
+  - 2 recovery depth cap checks (structural + comment)
+  - 8 fetch_url checks (tier, method presence, empty/invalid/network
+    error handling, HTML stripping, truncation)
+  - 2 Jarvis prompt wiring checks
+  Result: 33/33 PASS
+
+=====================================================================
+TEST RESULTS — this session
+=====================================================================
+
+  tests/test_openrgb_install_path.py:    33/33 PASS
+  tests/test_next_step_proposer.py:      15/15 PASS (prior item, still green)
+  core/conversation_controller.py parse: OK
+  core/action_engine.py parse:           OK
+  skills/telegram_voice.py parse:        OK
+
+=====================================================================
+WHAT'S NEXT
+=====================================================================
+
+These fixes unblock the *path*. The actual end-to-end install of openrgb
+  needs to be tested live in Telegram:
+  1. Restart maez.service to pick up changes.
+  2. Ask: "Can you control the lighting on our cpu?"
+  3. Reply: "That'd be great" → should fire web_search now.
+  4. Work through the install sequence: apt fails → PPA/snap/other method.
+  5. Verify fetch_url is used when Maez needs full page content from a URL.
+  6. Verify recovery persists through >2 failed attempts.
+
+Track A acceptance gate: first check due Sunday 2026-04-20.
+  See docs/governance/BETA_READINESS_THRESHOLD.md for the 8-point check.
+  Fill one row in the weekly log at the bottom of that file.

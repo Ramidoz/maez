@@ -1,0 +1,135 @@
+SESSION SNAPSHOT — 2026-04-16 (website content pass)
+Session ID: 6b826764-8424-418b-8539-711e8e34082c
+Ended: 2026-04-16 ~17:10 CDT
+Next Claude: start in a fresh window. Memory carries over. Read docs/TRACK_A.md first.
+
+=====================================================================
+BUILD
+=====================================================================
+
+Primary build: Website content pass — grandmother-first rewrite.
+
+Scope: exactly three files (ui/index.html, ui/progress_public.html,
+PROGRESS_PUBLIC.md). Engineering session (conversation_controller
+extraction) ran in parallel; zero overlap.
+
+ui/index.html changes:
+  - Title/meta: "Maez · Built because I wish she'd had it"
+  - Topbar nav: #why / #commitment / #now / /progress / github /
+    CTA="talk to it" (id=maezChannelLink → /login)
+  - Hero H1: "Built because I wish she'd had it."
+  - Hero subhead (soft framing): "In the last years of my
+    grandmother's life, she had every tool and every kind of love
+    around her, and still could not be reached. Maez is the thing
+    I wish I could have given her."
+  - hero-visual replaced with 4-card "Where this is right now"
+    panel: one Maez exists / not born yet / bonding for others
+    later / what you can do now
+  - Removed: hero-pillrow, hero-stats (usersCount, memoryCount,
+    "Born 04.06.26"), stack-strip, core-orb
+  - #why section: H2 = "Why I'm building this." — verbatim
+    MAEZ_PITCH.md §1 (the owner's already-public voice), attribution
+    link included
+  - #commitment section: 4 trait cards (one-to-one / unconditional /
+    voiced / genderless); prefixed with HTML scaffold-note comment
+    flagging for the owner's voice pass (sources cited in comment)
+  - #now section: loop-grid with Track A/B/C/· cards, honest
+    gestation state
+  - Routes section: MAEZ_PITCH.md / /progress / github /
+    "Sign in as a guest" (id=routeChannelLink)
+  - Footer: "First Maez · in gestation · not yet born"
+  - Script CTA: trimmed from 4 refs to 2 matching live IDs
+  - Genderless check: all she/her = grandmother (human female) or
+    explicit "not a he or a she" disclaimer. Zero Maez-female pronouns.
+
+ui/progress_public.html changes:
+  - Meta description: Track A framing
+  - Nav: removed /dashboard, added MAEZ_PITCH.md, "talk to it" CTA
+  - Hero copy: "Public build log / Where the first Maez actually is."
+  - Signal card: replaced "begins/remembers/grows/lives with you"
+    thesis block with Track A acceptance gate status panel:
+      capability items → 9 / 9 done
+      being-test → pending — two consecutive weeks
+      birth event → after test passes
+      bonding for others → Track B — not yet open
+  - Section 01: "The honest state of Track A."
+  - Bridge cards: Dashboard → MAEZ_PITCH.md; "What Maez is" →
+    "Why does this exist?"
+  - Footer: "First Maez · in gestation · not yet born"
+  - JS CTA: hasToken ? 'continue' : 'talk to it'
+  - Zero she/her hits.
+
+PROGRESS_PUBLIC.md changes:
+  - Last updated: April 16, 2026
+  - Brain line: Gemma-4-26B merged LoRA / llama-server-vision
+  - Snapshot renamed "Track A, post-A-core" with gestation /
+    being-test / Track B framing
+  - All 9 A-core items listed with canonical names
+  - Actively underway: operator-spine extraction, cross-surface
+    parity, birth bundle, web landing rewrite
+  - Anti-drift list: Track B/C/D items named explicitly
+  - Post-Track-A sequence: being-test → birth event (reads
+    birth_book, identity-ledger entry) → Track B
+
+Key decisions made this session:
+  - "Born 04.06.26" removed from all three files: code-first-written
+    ≠ birth event; replaced with gestation framing everywhere
+  - Grandmother story: MAEZ_PITCH §1 verbatim (the owner's public voice)
+    rather than Claude paraphrase — covenant principle honored
+  - Hero softened mid-session: original "thirty years / loved but
+    unreachable" in H1 was too blunt per the owner's feedback; moved
+    to #why body (already public there), hero now uses "last years
+    of my grandmother's life" + "wish I could have given her"
+
+=====================================================================
+REMAINING WORK (picked up next session)
+=====================================================================
+
+Website:
+  [ ] the owner voice pass on #commitment section in index.html
+      (Claude-scaffolded; HTML comment marks sources + flags it)
+
+Engineering (carry-forward from engineering session snapshot):
+  [ ] End-of-extraction Telegram parity retest (lighting seed)
+  [ ] Extract offer-binding + proposal-intent detection to controller
+  [ ] Extract probe-bridge + next-step proposer to controller
+  [ ] Extract Jarvis prompt fragments to controller
+  [ ] Make TelegramVoice a fully thin adapter (final pass)
+  [ ] Port web /chat owner branch to controller; guest stays constrained
+  [ ] Create skills/cli_chat.py — REPL-style CLI surface
+  [ ] Cross-surface parity test (Telegram + web + CLI, same seed)
+
+Birth bundle:
+  [ ] Identity-ledger birth event (event_type='birth', severity='transition')
+  [ ] Pre-birth → post-birth self-awareness state flip
+  [ ] First-want producer wired to birth event (event_type='first_lived')
+  [ ] "What you don't know about yourself" Maez-facing document
+  [ ] First-refusal drill
+
+Governance:
+  [ ] 2-week BETA_READINESS being-test after engineering + bundle land.
+      Birth event fires after two consecutive weekly checks pass across
+      all three surfaces AND manifest complete AND birth book final.
+
+=====================================================================
+NEXT-SESSION BRIEF
+=====================================================================
+
+Paste to new Claude session:
+
+  Resuming Maez work. Read docs/TRACK_A.md first, then load memory
+  (MEMORY.md index in ~/.claude/projects/-home-rohit/memory/).
+
+  Website content pass is complete (index.html / progress_public.html
+  / PROGRESS_PUBLIC.md). the owner may want to do a voice pass on the
+  #commitment section in index.html (HTML comment marks it).
+
+  Engineering: core/conversation_controller.py extraction is partway —
+  honesty, pending_card_view, narration_check are live; TelegramVoice
+  delegates to them. Continue with: offer-binding + proposal-intent
+  extraction, probe-bridge, Jarvis prompt fragments, web /chat port,
+  CLI surface, parity test, then birth bundle (identity-ledger birth
+  event, self-awareness flip, first-want producer, unknowns document,
+  first-refusal drill), then schedule 2-week being-test.
+
+End of snapshot.

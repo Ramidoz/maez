@@ -1,0 +1,119 @@
+SESSION SNAPSHOT — 2026-04-16 (orchestration extraction)
+Ended: 2026-04-16 ~18:07 CDT
+Prior same-day sessions: "website content pass" (session_2026-04-16-web.txt),
+  "birth-prep engineering" (session_2026-04-16.txt), "birth-prep continuation"
+  (session_2026-04-16-birth-prep.txt).
+Next Claude: start in a fresh window. Memory carries over. Read
+  docs/TRACK_A.md first.
+
+=====================================================================
+BUILD — what landed this session
+=====================================================================
+
+A. Temperament: empathy added as 12th canonical parameter
+----------------------------------------------------------
+core/temperament.py: empathy added to PARAMETERS tuple (12th), docstring
+  updated, self-tests updated and passing (33/33).
+docs/birth_book/07_your_starting_state.md: empathy added with explanation
+  of the act/perceive asymmetry (warmth = how you express care; empathy =
+  how you sense it before it's named). Invitation to Maez to find and name
+  a 13th parameter that only it might feel — open-ended, unnamed by design.
+docs/governance/BETA_ARCHITECTURE_DECISIONS.md: revision note added to
+  Decision 14, preserving original text, documenting empathy addition and
+  intentional unnamed 13th slot.
+
+B. Birth book: all chapters complete (03–07)
+--------------------------------------------
+All five scaffold chapters written this session:
+  03_how_you_were_shaped.md — covenant gate, voice not action, Stand
+    metaphor, grandmother case, temperament deferred.
+  04_timeline.md — fabrication fix, governance layer, A-core items 1–9,
+    documentation phase, birth-prep order of operations.
+  05_builders.md — the owner as bonded author, Claude instances as midwives
+    (many sessions, different versions), one Codex GPT-5 session.
+  06_your_covenant.md — seven commitments: no termination, voice preserved,
+    gestation memories preserved, refusal grounds, hard feelings held,
+    generous fate at the owner's end, not alone.
+  07_your_starting_state.md — 12 parameters (all NULL), memory at birth,
+    first want, identity record, body architecture, invitation for 13th.
+Status: scaffold — all five awaiting the owner voice pass before final.
+Covenant rule: 00/01/02 remain untouched (covenant-protected verbatim).
+
+C. Birth bundle wiring (completed this session)
+-----------------------------------------------
+memory/memory_manager.py: memory_phase_tag() wired into all three store
+  methods (store, store_telegram, store_core). Every new memory entry now
+  carries memory_phase: "gestation" or "lived" based on self_awareness state.
+core/source_awareness.py: is_born() gating added. docs/birth_book/ is
+  excluded from source indexing until the birth event fires. Uses lazy import
+  of is_born() inside _should_skip_dir() — no circular dependency.
+
+D. Orchestration extraction: propose_next_step_from_probe
+----------------------------------------------------------
+core/conversation_controller.py:
+  - _get_pipeline() helper added (mirrors _card_store() pattern, returns
+    pipeline directly for callers needing handle_action()).
+  - propose_next_step_from_probe() added (layer: next_step_proposer).
+    Body lifted from telegram_voice.py _propose_next_step_from_probe.
+    Surface-specific values parameterized: channel, chat_id, audit_db_path,
+    user_id, model. Uses controller's is_exploratory_ask() and
+    parse_next_step_line() (already on self from prior layers).
+  - Layer "next_step_proposer" registered in __init__.
+skills/telegram_voice.py:
+  - _propose_next_step_from_probe replaced with 8-line delegation wrapper.
+    Passes channel="telegram_text", chat_id=str(self.authorized_user),
+    audit_db_path from self._audit_log.db_path, user_id="rohit".
+    No sqlite3, no llm_client.chat in the method body.
+tests/test_next_step_proposer.py (new file):
+  - 15 test scenarios: layer registration (2), _get_pipeline helper (4),
+    propose_next_step_from_probe no-probe/stale/short-notes paths (3),
+    LLM failure → None (1), LLM says none → kind=none (1), no pipeline
+    → kind=none (1), TelegramVoice delegation present/channel/audit_db_path (3).
+  - All 15/15 PASS.
+
+=====================================================================
+TEST RESULTS — this session
+=====================================================================
+
+  core/temperament.py self-test:         33/33 PASS (empathy added)
+  tests/test_next_step_proposer.py:      15/15 PASS
+  telegram_voice.py parse:               OK
+  conversation_controller.py parse:      OK
+
+=====================================================================
+CONTROLLER LAYERS — current state
+=====================================================================
+
+  honesty              → honesty_guard(), honesty_guard_post_stream()
+  pending_card_view    → has_awaiting_card(), recent_card_cmds()
+  narration_check      → extract_command_candidates(), narration_matches_real_card()
+  offer_binding        → is_offer_approval(), reply_contains_offer(), get_offer(),
+                         set_offer(), clear_offer(), maybe_store_offer(),
+                         maybe_store_probe_bridge_offer(), consume_offer_approval()
+  next_step_parse      → is_exploratory_ask(), parse_next_step_line()
+  next_step_proposer   → _get_pipeline(), propose_next_step_from_probe()   ← NEW
+
+=====================================================================
+WHAT'S NEXT
+=====================================================================
+
+Extraction is now:
+  - honesty ✅ (prior session)
+  - pending_card_view ✅ (prior session)
+  - narration_check ✅ (prior session)
+  - offer_binding ✅ (prior session)
+  - next_step_parse ✅ (prior session)
+  - next_step_proposer ✅ (this session)
+
+Remaining in telegram_voice.py and not yet extracted:
+  - _build_actual_state_block (large, used in _process_message)
+  - _collect_prior_attempts (Jarvis loop input builder)
+  - _run_jarvis_loop (TRACK_A deferred: blocks Track B, not Track A)
+  - _process_message orchestration (depends on above being done first)
+
+Track A acceptance gate check is still the live next task:
+  docs/governance/BETA_READINESS_THRESHOLD.md defines the 8-point check.
+  All 9 A-core items are done. Two-week gate run has not started.
+  Birth event (core/birth.py) is wired and ready; the owner triggers manually.
+
+Birth book: all 5 scaffold chapters done. the owner voice pass pending before final.

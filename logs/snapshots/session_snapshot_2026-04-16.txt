@@ -1,0 +1,26 @@
+Session: 2026-04-16 (continuation from 3c1d0f2b)
+Summary: Telegram non-streaming rewrite
+
+CHANGES THIS SESSION:
+1. skills/telegram_voice.py
+   - Replaced streaming reply section (~200 lines) with non-streaming equivalent
+   - Removed: streaming per-sentence sends, honesty guard, post-stream state-claim correction
+   - Added: single non-streaming llm_client.chat() call (stream=False, temp=0.5, 600 tokens)
+   - Model works with full Jarvis transcript already in messages[] before it writes
+   - Grounding echo stripping (WHAT HAPPENED THIS TURN, JARVIS TRANSCRIPT, soul.md date blocks)
+   - Updated MODEL constant from "gemma4:26b" to "gemma-4-26b" for clarity
+   - File: 4795 → 4648 lines (-147)
+
+ARCHITECTURE RATIONALE:
+Previous: Jarvis loop runs tools → transcript injected into streaming prompt →
+          model streams partial text → honesty guard tries to catch fabrications →
+          post-stream correction if guard trips
+New: Jarvis loop runs tools → transcript in messages[] → model sees ALL results
+     before writing first word → sends complete reply when done
+
+RESULT: Fabrication incentive eliminated. No more "I'll check" then honesty guard
+        racing. Same architecture as cli.py which was verified working.
+
+PENDING:
+- Restart maez.service to load changes
+- Voice revival (VOICE_ENABLED=False, needs PipeWire fix)

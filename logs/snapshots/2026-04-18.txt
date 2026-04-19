@@ -1,0 +1,231 @@
+MAEZ SESSION SNAPSHOT
+Date: 2026-04-18
+Session: Claude Code evals across bases + Phase 1 hybrid router (Jarvis tier)
+
+========================================
+FINAL STATE (live, verified working at end of session)
+========================================
+
+Services (all systemd, active):
+  llama-server.service          brain, stock Qwen3.6-35B SFT, port 8080
+  llama-server-vision.service   VL-8B Q3_K_M Bartowski (CPU mmproj), port 8081
+  maez-web.service              web interface, port 11437
+  maez.service                  main daemon, PID 3813
+
+Endpoints: all HTTP 200 (brain / vision / web)
+VRAM: 22.9 / 24.0 GB (~1.1 GB buffer)
+
+Router:
+  skills/claude_router.py                — classifier, API client, profile gate,
+                                            trajectory logger, voice wrapper
+  config/user_profiles.yaml              — jarvis_tier: true for private_owner;
+                                            default false for everyone else
+  logs/trajectories/YYYY-MM-DD.jsonl     — per-day trajectory log
+  ANTHROPIC_API_KEY                      — already set in config/.env
+
+========================================
+WHAT CHANGED THIS SESSION
+========================================
+
+1. Ran Claude Code eval (5 prompts) against stock-SFT — 2 runs
+   Net: ~80% of Claude quality. No silent failures across 10 tests.
+   Outputs: logs/claude_code_eval_stock_run1/, logs/claude_code_eval_stock/
+
+2. Ran same eval against Ornstein (fresh, max_tokens=3000)
+   Net: ~60%. Silent-failed on codebase_trace (looped in <think>, hit token cap).
+   Hallucinated action-engine format on debugging.
+   Outputs: logs/claude_code_eval_ornstein/
+
+3. Ran eval against Ornstein with max_tokens=8000
+   Net: ~80% — silent-failure case COLLAPSED when given thinking budget.
+   Ornstein nails codebase_trace with room; still flaky on architecture (high run
+   variance, not capability).
+   Outputs: logs/claude_code_eval_ornstein_v2/
+
+4. Ran eval against Gemma4-26B base (fair: same llama.cpp infra)
+   Net: ~82%. Surprisingly competent, BUT:
+   - Confident hallucination (invented self.history, hardcoded model strings)
+   - Token corruption from Q4_K_M quant ("doesn'maez.service", "frame'1s")
+   - No native thinking mode, no tool-call template
+   Outputs: logs/claude_code_eval_gemma/
+
+5. Decision: stay on stock-SFT. Ornstein has ~same ceiling but higher variance
+   and a confident-hallucination failure mode. Gemma4 is end-of-line-generationally.
+
+6. Deeper decision: adopt hybrid routing for the owner's Maez. Route code/reasoning
+   to Claude API, log trajectories, periodically SFT on them — teacher-student
+   distillation. Over time external call rate drops.
+
+7. Built Phase 1 of hybrid router:
+   - Regex classifier: 10/10 test accuracy (trace/refactor/debug → sonnet;
+     architecture/tradeoffs → opus; grandmother/emotional → local-only)
+   - Per-user profile gate via config/user_profiles.yaml
+   - Anthropic API client (Sonnet 4.6 default, Opus 4.7 tier for deep reasoning)
+   - Trajectory logger (JSONL, ready for future distillation SFT)
+   - Thin voice wrapper ("— checking with a bigger model —" prefix)
+   - Graceful fallback to local on any Claude failure
+   - Verified end-to-end: Sonnet call 2.16s, 28+61 tokens, trajectory logged
+
+8. Restored maez-web and maez to systemd (were running via manual nohup
+   from previous session, confirmed in health check)
+
+========================================
+EVAL SCORES — SIDE BY SIDE
+========================================
+
+Task                  | Stock-SFT | Ornstein v1 | Ornstein v2 | Gemma4
+                      | (Qwen3.6) | (3k tokens) | (8k tokens) | (base)
+----------------------|-----------|-------------|-------------|--------
+Codebase trace        |    ~45%   |    0% *     |    ~90%     |  ~55% #
+Architecture          |    ~90%   |    ~90%     |    ~50% v   |  ~88%
+Refactor constraints  |    ~87%   |    ~87%     |    ~85%     |  ~90%
+Debugging judgment    |    ~86%   |    ~40% !   |    ~85%     |  ~85%
+Scope discipline      |    ~92%   |    ~90%     |    ~90%     |  ~90%
+NET                   |   ~80%    |    ~60%     |    ~80%     |  ~82%
+
+  * silent failure: reasoning loop, hit token cap, zero content
+  ! format hallucination: emitted action_engine: run_shell_command(...)
+  v punted (asked to check hardware first)
+  # confident hallucination of code details (self.history, hardcoded names)
+
+Finding: no model dominates capability-wise. Differences are in FAILURE MODES.
+  - Stock punts safely when uncertain
+  - Ornstein silent-fails on ambiguous tasks without thinking budget
+  - Gemma4 confidently fabricates, has quant artifacts
+  - All stay under ~80-85% Claude quality ceiling
+
+This is why hybrid routing (Lane 2) is higher leverage than changing bases (Lane 3).
+
+========================================
+PHASE 1 HYBRID ROUTER — DEPLOYED
+========================================
+
+Architecture:
+  chat() in web_interface.py
+    ↓
+  claude_router.classify(message)
+    → LOCAL_ONLY patterns (grandmother, emotional, identity) → local
+    → OPUS patterns (architecture, tradeoffs, design) → external:opus
+    → SONNET patterns (trace, refactor, debug, code blocks) → external:sonnet
+    → no match → local
+    ↓
+  jarvis_tier_enabled(profile_id)  — private_owner=true, rest=false
+    ↓
+  If external + enabled:
+    call_claude(system=SOUL, messages=history, tier=...)
+    wrap_maez_voice(content, tier) → prepends thin prefix
+  Else: local stock-SFT via llm_client.chat()
+    ↓
+  log_trajectory({message, reply, source, decision, claude_meta})
+    → logs/trajectories/2026-04-18.jsonl (append)
+
+Gates:
+  - Only triggers if owner_bridge=True (the owner's Maez)
+  - Every other user stays 100% local, unchanged
+  - Classifier hard-blocks grandmother/emotional/identity even for the owner's Maez
+  - Any Claude error → silent fallback to local
+
+Models:
+  MODEL_SONNET = "claude-sonnet-4-6"   default external tier
+  MODEL_OPUS   = "claude-opus-4-7"     deep-reasoning tier
+
+========================================
+OPEN QUESTIONS / NEXT STEPS
+========================================
+
+Phase 2 (weeks):
+  - Accumulate 500-1000 trajectories from real use
+  - Monitor classifier miss/false-positive rate from actual chat logs
+  - Consider upgrading regex → small LLM-based classifier once we have data
+  - Cost tracking / budget alerts
+
+Phase 3 (month+):
+  - Distill trajectories into SFT data:
+    strip Claude's voice wrapper, keep reasoning skeleton, re-voice in Maez tone
+  - Train adapter on Maez(reasoning) pairs
+  - Deploy; measure external call rate drop
+
+Remaining queue items from post-Ornstein priorities (unchanged):
+  - Camera perception skill (~1 day, queue #5)
+  - Conditional thinking-mode routing (queue #4)
+  - Reasoning SFT proposal (queue #2) — now SUPERSEDED by distillation plan
+    for the owner's Maez specifically. Still applies for grandmother's Maez and
+    other users who don't have jarvis_tier enabled.
+  - Rover embodiment (queue #6, multi-month)
+
+========================================
+ARTIFACTS
+========================================
+
+New files:
+  skills/claude_router.py                    Phase 1 router (8.2 KB)
+  config/user_profiles.yaml                  per-user capability profiles
+  logs/trajectories/2026-04-18.jsonl         today's trajectory log
+  tests/claude_code_eval_stock.py            stock eval runner
+  tests/claude_code_eval_ornstein.py         ornstein eval runner (3k)
+  tests/claude_code_eval_ornstein_v2.py      ornstein eval runner (8k)
+  tests/claude_code_eval_gemma.py            gemma4 eval runner
+  logs/claude_code_eval_stock/               stock run2 outputs
+  logs/claude_code_eval_stock_run1/          stock run1 outputs
+  logs/claude_code_eval_ornstein/            ornstein v1 outputs
+  logs/claude_code_eval_ornstein_v2/         ornstein v2 outputs
+  logs/claude_code_eval_gemma/               gemma4 outputs
+
+Modified:
+  skills/web_interface.py chat()             routing + trajectory logging
+
+Memory updated:
+  project_jarvis_tier_and_distillation.md    new (saved earlier this session)
+  MEMORY.md                                  index updated
+
+New python packages (pip --break-system-packages):
+  anthropic 0.96.0
+  python-dotenv 1.2.2
+
+========================================
+LESSONS LEARNED THIS SESSION
+========================================
+
+1. max_tokens=3000 is too small for thinking-mode models on reasoning-heavy
+   tasks. Thinking eats tokens before content starts. Default should be 8000
+   minimum for Qwen3/Ornstein with thinking on.
+
+2. "Silent failure" is often "infra too tight" rather than "model dumb."
+   Ornstein looked bad at 3k, was fine at 8k. Always tune the easy knobs
+   before blaming the model.
+
+3. N=1 evals are unreliable. Run variance was high across all three models
+   — the 5-prompt battery needs at least 3 runs per model per task for a
+   real signal. Single-run "Ornstein broken" claim didn't survive a re-test.
+
+4. Capability gaps between near-peer open-source models are small.
+   Stock/Ornstein/Gemma4 all landed within ~5 points of each other. The
+   real differentiator is FAILURE MODE (safe punt vs confident lie vs silent
+   loop), not peak performance.
+
+5. Distillation beats public-reasoning-corpus SFT *for the user's own
+   problem distribution*. Public data like OpenThoughts-3 is generic;
+   logged trajectories are aligned. The hybrid router is also a data
+   collection pipeline.
+
+6. A thin voice wrapper ("— checking with a bigger model —") is more honest
+   than a full paraphrase. User sees when the answer is external. Voice
+   consistency comes from SFT at training time, not runtime rewriting.
+
+7. Regex classifier beats LLM classifier as a starting point: inspectable
+   failures, zero extra latency, legible rules. Upgrade only when real
+   miss-rate data demands it.
+
+========================================
+COST NOTES (Phase 1 hybrid router)
+========================================
+
+Anthropic pricing (as of today):
+  Sonnet 4.6   ~$3 / $15    per M input / output tokens
+  Opus 4.7     ~$15 / $75   per M input / output tokens
+
+Smoke test today: Sonnet, 28 input + 61 output = ~$0.001. Real use will depend
+on classifier trigger rate. Expect <$5/month at current usage volume. Will
+revisit if rate spikes.
+
+========================================
