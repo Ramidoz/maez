@@ -242,10 +242,14 @@ def safety_check(cmd: str) -> Optional[str]:
     reason = _covenant_check(low)
     if reason:
         return f"covenant: {reason}"
-    # rm -rf — always refuse, even with sudo. This is never what you want
-    # from an agent loop; a human should do irreversible destruction manually.
-    if re.search(r"\brm\s+-[rRfF]*[rRfF]", low):
-        return "rm -rf forbidden from agent loop (run manually if intended)"
+
+    # rm -rf: only hard-block when the target is catastrophic.
+    # Scratch dirs (/tmp/foo), project-local paths (./build), or
+    # user-owned dirs that aren't the Maez tree → flow to approval.
+    rm_danger = _rm_rf_danger(low)
+    if rm_danger:
+        return rm_danger
+
     # Any mutation targeting the Maez tree via shell — block even with
     # approval. Code changes go through edit_soul_section / evolution
     # engine with proper diffs and rollback, not ad-hoc sed/tee.
@@ -256,6 +260,50 @@ def safety_check(cmd: str) -> Optional[str]:
     ):
         return (f"write/modify inside {maez_root} needs to go through the "
                 f"evolution engine, not an ad-hoc shell command")
+    return None
+
+
+# Absolute root-level directories where recursive deletion is catastrophic.
+# Paths starting with /<these>/ or exactly /<these> get hard-blocked.
+_DANGEROUS_ROOT_DIRS = {
+    "etc", "usr", "var", "boot", "lib", "lib64", "sys", "proc",
+    "dev", "root", "srv", "opt", "mnt", "bin", "sbin", "run", "home",
+}
+
+# Path prefixes where recursive deletion is explicitly OK (scratch/cache).
+_SAFE_RM_PREFIXES = ("/tmp/", "/var/tmp/", "/var/cache/")
+
+
+def _rm_rf_danger(cmd_low: str) -> Optional[str]:
+    """Inspect rm -rf targets. Return reason if catastrophic, else None.
+
+    Allow:  /tmp/*, /var/tmp/*, /var/cache/*, ./*, relative paths,
+            user-owned non-system absolute paths
+    Deny:   /, /* expansion, /home (root user dir), /etc, /usr, /boot,
+            /lib, /sys, /proc, /dev, /bin, /sbin, /opt, /mnt, /srv, /run,
+            and /home itself (but /home/<user>/something is allowed)
+    """
+    for m in re.finditer(r"\brm\s+(?:-[a-z]*[rRfF][a-z]*\s+)+([^\s;|&`$<>]+)",
+                          cmd_low):
+        target = m.group(1).strip().rstrip("/")
+        # Disaster: bare root or shell expansion against root
+        if target in ("/", "/*", "/.", ""):
+            return "rm -rf / forbidden"
+        # Safe scratch prefixes
+        if any(target.startswith(p) or target == p.rstrip("/")
+               for p in _SAFE_RM_PREFIXES):
+            continue
+        # Absolute paths into system directories
+        if target.startswith("/"):
+            first = target.lstrip("/").split("/")[0]
+            # /home by itself = all users' homes — deny
+            if target == "/home":
+                return "rm -rf /home forbidden"
+            if first in _DANGEROUS_ROOT_DIRS and first != "home":
+                return f"rm -rf inside /{first} forbidden"
+            # /home/<user>/... is OK — the "write inside maez tree" rule
+            # separately catches /home/rohit/maez
+        # Relative or user-owned absolute path → allow through approval
     return None
 
 
