@@ -593,7 +593,7 @@ self-analysis system will write corrective guidance to soul.md at 3am tonight.
 - UserProfileStore: per-user ChromaDB in /memory/db/public_users/
 - ManipulationDetector: injection/identity attack scoring, silent the owner alert
 - GitHub skill: 14 repos, real commits, trending AI repos (every 10 cycles)
-- Reddit skill: 9 subreddits live — stocks, h1b, pennystocks, tesla, f1visa, artificial, MachineLearning, LocalLLaMA, datascience (every 15 cycles)
+- Reddit skill: 9 subreddits live from per-user config (every 15 cycles)
 - Personal context core memory: who the owner actually is, written permanently
 - fifine Microphone wired as dedicated voice input (card 5, plughw:5,0)
 - MFCC wake word verifier v3: 50 positive samples, 30 negative, F1=0.915
@@ -626,7 +626,7 @@ fifine mic (PipeWire, 16kHz mono)
 [PRESENCE] the owner at desk, recognized by face
 [GIT] Local repos — uncommitted changes, branches
 [GITHUB] the owner's 14 repos + trending AI repos
-[REDDIT] 9 subreddits — stocks, h1b, tesla, AI, LocalLLaMA
+[REDDIT] 9 subreddits (per-user config)
 [SELF-REFLECTION] Action quality, learned patterns
 [PROACTIVE SEARCH] Auto-search when Maez expresses uncertainty
 [MEMORIES] Core truths + daily summaries + relevant raw

@@ -7,7 +7,7 @@ export function Footer() {
         <span className={styles.brand}>maez</span>
         <nav className={styles.links} aria-label="Footer navigation">
           <a href="/privacy" className={styles.link}>Privacy</a>
-          <a href="mailto:hello@maez.ai" className={styles.link}>Contact</a>
+          <a href="https://github.com/Ramidoz/maez/issues" className={styles.link} target="_blank" rel="noopener noreferrer">Contact</a>
         </nav>
         <span className={styles.copy}>© {new Date().getFullYear()} Maez</span>
       </div>

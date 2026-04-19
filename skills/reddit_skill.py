@@ -1,20 +1,48 @@
 """
-Reddit awareness for Maez. the owner's actual subreddits.
+Reddit awareness for Maez. Each user's subreddit list is per-user config.
 No API key — uses public JSON endpoints. Injected as [REDDIT] every 15 cycles.
+
+Subreddit list lives in config/reddit_subs.yaml (gitignored — per user).
+A config/reddit_subs.template.yaml ships with generic AI/tech defaults;
+each user copies and personalizes after install.
 """
 
 import logging
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import requests
+import yaml
 
 logger = logging.getLogger('maez.reddit')
 
-SUBREDDITS = [
-    'stocks', 'h1b', 'pennystocks', 'tesla', 'f1visa',
-    'artificial', 'MachineLearning', 'LocalLLaMA', 'datascience',
+# Safe generic defaults — used only if neither config nor template is found.
+_DEFAULT_SUBREDDITS = [
+    'artificial', 'MachineLearning', 'LocalLLaMA',
+    'programming', 'technology',
 ]
+
+
+def _load_subreddits() -> list:
+    """Load per-user subreddit list from config. Defaults to generic if absent."""
+    config_dir = Path(os.environ.get("MAEZ_CONFIG_DIR", "/home/rohit/maez/config"))
+    user_path = config_dir / "reddit_subs.yaml"
+    template_path = config_dir / "reddit_subs.template.yaml"
+    for path in (user_path, template_path):
+        try:
+            if path.exists():
+                data = yaml.safe_load(path.read_text()) or {}
+                subs = data.get("subreddits")
+                if isinstance(subs, list) and subs:
+                    return [str(s).strip() for s in subs if s]
+        except Exception as e:
+            logger.warning("failed to load %s: %s", path, e)
+    return list(_DEFAULT_SUBREDDITS)
+
+
+SUBREDDITS = _load_subreddits()
 
 HEADERS = {'User-Agent': 'Maez-Personal-Agent/1.0 (personal use)'}
 

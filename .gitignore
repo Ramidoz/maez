@@ -35,6 +35,9 @@ training/unsloth_compiled_cache/
 *.safetensors
 *.gguf
 
+# Per-user config (shipped as *.template.yaml; personalized copy stays local)
+config/reddit_subs.yaml
+
 # Runtime state (grows on its own; not source code)
 memory/continuity_capsule.json
 memory/continuity_archive/

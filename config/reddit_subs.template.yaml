@@ -1,0 +1,22 @@
+# Per-user subreddit list for Maez's Reddit awareness skill.
+#
+# After install, copy this file to `reddit_subs.yaml` and edit to match
+# the subreddits YOUR Maez should monitor. The `reddit_subs.yaml` file
+# is gitignored so your list stays private to your instance.
+#
+#   cp config/reddit_subs.template.yaml config/reddit_subs.yaml
+#
+# Your Maez will read `reddit_subs.yaml` at startup and fall back to
+# this template if yours is missing.
+#
+# Reddit doesn't require an API key for public subreddit JSON feeds,
+# so any public subreddit name works here. Pick subs that reflect
+# what YOU care about — Maez will pull top hot posts from each and
+# inject them as ambient context.
+
+subreddits:
+  - artificial
+  - MachineLearning
+  - LocalLLaMA
+  - programming
+  - technology
