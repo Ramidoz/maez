@@ -39,8 +39,8 @@ load_dotenv(_MAEZ_ROOT / "config" / ".env")
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
-from textual.widgets import Footer, Header, Input, Static
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.widgets import Footer, Header, Input, Markdown, Static
 
 from core import identity, soul_loader
 from core.ambient_format import ambient_prompt_block
@@ -58,47 +58,69 @@ _SENTINEL = object()
 @dataclass
 class Turn:
     role: str            # "user" | "assistant" | "system"
-    content: str = ""    # final-answer text (shown plain)
-    thinking: str = ""   # reasoning-content text (shown dim italic, collapsed)
+    content: str = ""    # final-answer text (markdown; shown below thinking)
+    thinking: str = ""   # reasoning-content (hidden by default — Ctrl+T to reveal)
     meta: str = ""       # small gray annotation (route, model, latency)
+    thinking_visible: bool = False   # per-turn toggle
 
 
-# ── one bubble in the chat pane ────────────────────────────────────────
-class TurnWidget(Static):
+# ── one turn in the transcript ────────────────────────────────────────
+# Each turn = a header row (role + meta) + optional thinking block + content.
+# We use a Vertical container with two children: a Static for the header and
+# a Markdown widget for the content so final answers render with real code
+# blocks, bullets, headers, etc.
+class TurnWidget(Vertical):
     def __init__(self, turn: Turn, **kwargs):
         super().__init__(**kwargs)
         self.turn = turn
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="turn-header")
+        yield Static(id="turn-thinking", classes="thinking")
+        yield Markdown(id="turn-content")
+
+    def on_mount(self) -> None:
         self.refresh_text()
 
-    def refresh_text(self) -> None:
+    def _header_markup(self) -> str:
         role = self.turn.role
         if role == "user":
-            prefix = "[bold cyan]you[/bold cyan]"
+            tag = "[bold cyan]you[/bold cyan]"
         elif role == "assistant":
-            prefix = "[bold magenta]maez[/bold magenta]"
+            tag = "[bold magenta]maez[/bold magenta]"
         elif role == "system":
-            prefix = "[dim]system[/dim]"
+            tag = "[dim]system[/dim]"
         else:
-            prefix = f"[dim]{role}[/dim]"
+            tag = f"[dim]{role}[/dim]"
         meta = f" [dim italic]· {self.turn.meta}[/dim italic]" if self.turn.meta else ""
-        parts = [f"{prefix}{meta}"]
-        if self.turn.thinking:
-            # Show thinking in gray italic; collapse to first 200 chars
-            # once content has arrived — otherwise show progressively.
-            t = self.turn.thinking.rstrip()
-            if self.turn.content:
-                preview = t.replace("\n", " ")
-                if len(preview) > 200:
-                    preview = preview[:200] + "…"
-                parts.append(f"[dim italic](thinking: {preview})[/dim italic]")
-            else:
-                # still streaming thinking, show in full
-                parts.append(f"[dim italic]{t}[/dim italic]")
+        return f"{tag}{meta}"
+
+    def _thinking_markup(self) -> str:
+        if not self.turn.thinking:
+            return ""
+        if self.turn.thinking_visible:
+            # expanded — show full reasoning, dim italic
+            return f"[dim italic]{self.turn.thinking.rstrip()}[/dim italic]"
+        # collapsed — show only a "thinking" status, lines count
+        lines = self.turn.thinking.count("\n") + 1
         if self.turn.content:
-            parts.append(self.turn.content.rstrip())
-        elif not self.turn.thinking:
-            parts.append("[dim]…[/dim]")
-        self.update("\n".join(parts) + "\n")
+            return f"[dim italic](hidden thinking — {lines} lines — Ctrl+T to toggle)[/dim italic]"
+        return f"[dim italic]thinking… ({lines} lines)[/dim italic]"
+
+    def refresh_text(self) -> None:
+        try:
+            header = self.query_one("#turn-header", Static)
+            thinking = self.query_one("#turn-thinking", Static)
+            content = self.query_one("#turn-content", Markdown)
+        except Exception:
+            return  # not mounted yet
+        header.update(self._header_markup())
+        thinking.update(self._thinking_markup())
+        thinking.display = bool(self.turn.thinking)
+        # For user/system messages, keep content as plain text inside Markdown.
+        # Markdown widget handles code fences, lists, bold, etc. naturally.
+        body = self.turn.content or ("" if self.turn.thinking else "…")
+        content.update(body)
 
 
 # ── streaming wrappers ─────────────────────────────────────────────────
@@ -186,6 +208,23 @@ class MaezChat(App):
     }
     TurnWidget {
         margin-bottom: 1;
+        height: auto;
+    }
+    #turn-header {
+        height: 1;
+    }
+    #turn-thinking {
+        height: auto;
+        color: $text-muted;
+        text-style: italic;
+        padding: 0 0 0 2;
+    }
+    #turn-thinking.thinking { display: block; }
+    #turn-content {
+        height: auto;
+        background: transparent;
+        padding: 0;
+        margin: 0;
     }
     #input {
         dock: bottom;
@@ -201,6 +240,7 @@ class MaezChat(App):
         Binding("ctrl+q", "quit", "Quit"),
         Binding("ctrl+l", "clear", "Clear"),
         Binding("ctrl+c", "interrupt", "Interrupt"),
+        Binding("ctrl+t", "toggle_thinking", "Toggle thinking"),
     ]
 
     TITLE = "Maez"
@@ -252,6 +292,20 @@ class MaezChat(App):
         if self.generating:
             self._cancel_flag = True
             self._append(Turn("system", "(interrupting…)"))
+
+    def action_toggle_thinking(self) -> None:
+        """Toggle visibility of the last assistant turn's thinking block."""
+        for turn, widget in reversed(list(self._turn_widgets())):
+            if turn.role == "assistant" and turn.thinking:
+                turn.thinking_visible = not turn.thinking_visible
+                widget.refresh_text()
+                return
+
+    def _turn_widgets(self):
+        transcript = self.query_one("#transcript", VerticalScroll)
+        for child in transcript.children:
+            if isinstance(child, TurnWidget):
+                yield child.turn, child
 
     # ── main chat flow ──
     async def on_input_submitted(self, message: Input.Submitted) -> None:
