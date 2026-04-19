@@ -78,7 +78,8 @@ LOCAL_MODEL = os.environ.get("MAEZ_LLAMACPP_MODEL", "qwen36-35b-sft")
 HISTORY_PATH = _MAEZ_ROOT / "logs" / ".maez_chat_history"
 
 # Tool-loop limits
-MAX_TOOL_ITERATIONS = 5  # avoid infinite agent loops
+MAX_TOOL_ITERATIONS = int(os.environ.get("MAEZ_MAX_TOOL_ITERS", "10"))
+EXTEND_ITERATIONS_BY = int(os.environ.get("MAEZ_EXTEND_ITERS_BY", "10"))
 TOOL_TIMEOUT_SEC = 60    # per-command shell timeout
 TOOL_OUTPUT_MAX = 4000   # cap per-command output fed back to the model
 
@@ -621,8 +622,10 @@ class ChatSession:
         # approval), feed results back, and let the model synthesize.
         tool_history: list[ToolRun] = []
         iteration_suffix = ""  # appended message text for continuation turns
-        for iteration in range(MAX_TOOL_ITERATIONS):
-            meta = meta_base + (f" · iter {iteration+1}" if iteration else "")
+        iteration = 0
+        cap = MAX_TOOL_ITERATIONS
+        while iteration < cap:
+            meta = meta_base + (f" · iter {iteration+1}/{cap}" if iteration else "")
             console.print(_role_header("assistant", meta))
 
             # Build the live messages for THIS iteration, including any
@@ -746,10 +749,32 @@ class ChatSession:
 
             # Feed real output back into the next iteration's context
             iteration_suffix = format_tool_results_for_model(runs_this_iter)
-        else:
-            console.print(Text.from_markup(
-                f"[yellow dim]— tool loop hit max iterations ({MAX_TOOL_ITERATIONS}) —[/yellow dim]"
-            ))
+            iteration += 1
+
+            # If we just finished the last iteration in this cap, offer extension.
+            # User decides whether the loop keeps going.
+            if iteration >= cap:
+                console.print(Text.from_markup(
+                    f"[yellow]— tool loop reached {cap} iterations; "
+                    f"extend by {EXTEND_ITERATIONS_BY} more? (tool runs so far: "
+                    f"{len([t for t in tool_history if not t.skipped])}) —[/yellow]"
+                ))
+                try:
+                    ans = self.session.prompt(
+                        HTML("<ansiyellow>extend? [y/N]:</ansiyellow> "),
+                    ).strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    ans = "n"
+                if ans in ("y", "yes"):
+                    cap += EXTEND_ITERATIONS_BY
+                    console.print(Text.from_markup(
+                        f"[dim italic](extended to {cap} iterations)[/dim italic]"
+                    ))
+                else:
+                    console.print(Text.from_markup(
+                        "[dim italic](loop stopped by user)[/dim italic]"
+                    ))
+                    break
 
         # Trajectory log (final turn only — keeps log tidy)
         final_reply = self.turns[-1].content if self.turns else ""
