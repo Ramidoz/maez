@@ -38,11 +38,11 @@ _cog_logger.setLevel(logging.INFO)
 # Classification
 MIN_ACTIONABLE_LENGTH = 30  # chars — below this, thought is too vague to be actionable
 FIXATION_WINDOW = 10        # how many recent topics to track for fixation detection
-FIXATION_THRESHOLD = 0.55   # fraction of recent topics that must match to flag fixation (tightened from 0.6)
+FIXATION_THRESHOLD = 0.5    # fraction of recent topics that must match to flag fixation (tightened from 0.6)
 
 # Scoring weights (0-100 scale)
 SCORE_WEIGHT_LENGTH = 10        # bonus for adequate length
-SCORE_WEIGHT_SPECIFICITY = 25   # bonus for concrete data references
+SCORE_WEIGHT_SPECIFICITY = 35   # bonus for concrete data references
 SCORE_WEIGHT_NOVELTY = 25       # bonus for not repeating recent topics
 SCORE_WEIGHT_GROUNDING = 20     # bonus for referencing perception data
 SCORE_WEIGHT_ACTIONABLE = 20    # bonus for containing actionable content

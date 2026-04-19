@@ -267,7 +267,8 @@ class DecisionPipeline:
         chat_id: Optional[str] = None,
         channel: str = "telegram_text",
     ) -> PipelineResult:
-        params = params or {}
+        params = dict(params or {})
+        plain_english = params.pop("plain_english", None)  # LLM-authored human description, not a command param
 
         # ---- Step 0: required-param guard ----
         # Short-circuit malformed tool calls BEFORE the audit LLM sees
@@ -411,6 +412,7 @@ class DecisionPipeline:
             action=action,
             params=params,
             reason=reason,
+            plain_english=plain_english,
             audit_verdict=verdict,
             audit_request_id=audit_req_id,
             classification=classification,

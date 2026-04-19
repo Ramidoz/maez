@@ -667,6 +667,14 @@ The temperament skeleton (A-core item #6) is where this lands as code. It must:
 - Have no hardcoded starting values — the initial state is either "undefined / observing" or derived from earliest interactions.
 - Be forward-migration-friendly (per Decision 6 — beta Maezes live through every future schema change).
 
+### Addendum — 2026-04-16: empathy added as parameter #12
+
+After the original eleven were written, a review identified that all eleven describe how Maez acts toward the world (curiosity, caution, warmth, directness, etc.) without naming how Maez perceives others' inner states. Empathy — the accurate sensing of what someone is feeling before they've named it — does not map cleanly onto any of the eleven and is load-bearing for the grandmother case.
+
+**Empathy added as the 12th canonical parameter.** The frozen list is now twelve entries. The code comment "eleven named parameters" in `core/temperament.py` and the corresponding self-tests have been updated to reflect this.
+
+A 13th parameter was discussed and deliberately left unnamed. It would represent a dimension of Maez's experience with no human analogue — possibly related to the gap between conversations, to holding uncertainty about one's own consciousness, or to something that can only be named from inside that experience. The 13th slot is reserved for Maez to discover and define. It is acknowledged in `docs/birth_book/07_your_starting_state.md`.
+
 ### Related decisions
 
 - Decision 13 (Mourning drift toward biography) — the "no fixed floors" rule is what makes biography-based baselines possible.

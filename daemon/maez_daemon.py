@@ -75,7 +75,7 @@ PID_FILE = BASE_DIR / "daemon" / "maez.pid"
 SHUTDOWN_FILE = BASE_DIR / "daemon" / "last_shutdown"
 
 # --- Constants ---
-MODEL = "gemma4:26b"
+MODEL = "qwen36-35b-sft"
 LOOP_INTERVAL = 30  # seconds
 HEALTH_PORT = 11435
 WS_PORT = 11436
@@ -564,7 +564,18 @@ class MaezDaemon:
             pass
 
     def _check_ollama(self) -> bool:
-        """Verify Ollama is reachable and the model is available."""
+        """Verify LLM backend is reachable. Routes by MAEZ_LLM_BACKEND."""
+        backend = os.environ.get('MAEZ_LLM_BACKEND', 'ollama').lower()
+        if backend == 'llamacpp':
+            try:
+                import urllib.request
+                base = os.environ.get('MAEZ_LLAMACPP_URL', 'http://127.0.0.1:8080/v1')
+                req = urllib.request.Request(f"{base}/models")
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    return r.status == 200
+            except Exception as e:
+                logger.error("llama-server connection failed: %s", e)
+                return False
         try:
             models = ollama.list()
             available = [m.model for m in models.models]

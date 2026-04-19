@@ -1283,8 +1283,44 @@ def list_candidates() -> list[dict]:
 _original_check_and_revert = check_and_revert
 
 
+_STALE_PROPOSAL_HOURS = 12  # re-notify if validated candidate sits unactioned this long
+
+
+def check_stale_proposals():
+    """Re-notify the owner about any validated candidate that hasn't been actioned in >12h.
+    Prevents the silent-death pattern where a notification failure blocks the engine forever.
+    Called from check_and_revert so it fires on the existing morning + watchdog cadence.
+    """
+    try:
+        import datetime as _sdt
+        cutoff = (_sdt.datetime.now(_tz.utc) -
+                  _sdt.timedelta(hours=_STALE_PROPOSAL_HOURS)).isoformat()
+        with _rail_conn() as conn:
+            rows = conn.execute(
+                "SELECT id, target_file, weakness_description, validated_at "
+                "FROM candidates WHERE state='validated' AND validated_at < ?",
+                (cutoff,),
+            ).fetchall()
+        if not rows:
+            return
+        from skills.dev_notifier import send_dev
+        for cand_id, target, weakness, validated_at in rows:
+            age_h = (_sdt.datetime.now(_tz.utc) -
+                     _sdt.datetime.fromisoformat(validated_at)).total_seconds() / 3600
+            msg = (f"⏰ Reminder: self-edit proposal #{cand_id} has been waiting "
+                   f"{age_h:.0f}h for your review.\n"
+                   f"File: {target}\n"
+                   f"Reply \"yes\" or \"no\" to #{cand_id} to unblock evolution.")
+            send_dev(msg)
+            _log_evolution({'action': 'STALE_PROPOSAL_REMINDER', 'target': target,
+                            'result': f'id={cand_id} age={age_h:.0f}h'})
+            logger.info("Stale proposal reminder sent for candidate %d (%.0fh old)", cand_id, age_h)
+    except Exception as e:
+        logger.warning("check_stale_proposals failed: %s", e)
+
+
 def check_and_revert(memory_manager, telegram_callback=None):
-    """Extended check_and_revert: original logic + rail watchdog candidates."""
+    """Extended check_and_revert: original logic + rail watchdog candidates + stale reminders."""
     # Run original deployment checks
     _original_check_and_revert(memory_manager, telegram_callback)
     # Run rail watchdog checks
@@ -1292,6 +1328,11 @@ def check_and_revert(memory_manager, telegram_callback=None):
         check_watchdog_candidates(memory_manager, telegram_callback)
     except Exception as e:
         logger.debug("Rail watchdog check failed: %s", e)
+    # Re-notify on stale validated candidates
+    try:
+        check_stale_proposals()
+    except Exception as e:
+        logger.debug("Stale proposal check failed: %s", e)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -2725,8 +2766,10 @@ def process_proposal_job(job_id: int) -> dict:
                 rationale=i.get('rationale', ''),
                 human_rationale=i.get('human_rationale', ''),
             )
-    except Exception:
-        pass
+    except Exception as _notify_err:
+        logger.warning("Proposal notification failed for candidate %d: %s", cand_id, _notify_err)
+        _log_evolution({'action': 'NOTIFY_FAILED', 'target': target,
+                        'result': f'id={cand_id}', 'detail': str(_notify_err)[:200]})
 
     return {'candidate_id': cand_id, 'state': 'validated', 'intent': intent,
             'usefulness': usefulness, 'diff_lines': len(diff_lines)}

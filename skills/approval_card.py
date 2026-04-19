@@ -57,10 +57,7 @@ _DECISION_HEADER = {
     "DENY":               "⛔ Blocked by audit",
 }
 
-_MAX_CMD_DISPLAY   = 600
-_MAX_REASONING     = 400
 _MAX_CONCERN       = 150
-_MAX_CONCERN_ITEMS = 4
 
 
 def _truncate(s: str, limit: int) -> str:
@@ -70,96 +67,111 @@ def _truncate(s: str, limit: int) -> str:
     return s if len(s) <= limit else s[: limit - 1] + "…"
 
 
-def _render_cmd_line(card: CardRecord) -> str:
-    """Extract a displayable command string from the card's params."""
+def _infer_what(card: CardRecord) -> str:
+    """Plain-English description of what this action does."""
+    plain = getattr(card, "plain_english", None)
+    if plain:
+        return str(plain).strip()
+
+    reason = (card.reason or "").strip()
+    if reason and len(reason) <= 200:
+        return reason
+
     params = card.params or {}
-    # run_shell shape
-    if "cmd" in params:
-        return _truncate(str(params["cmd"]), _MAX_CMD_DISPLAY)
-    # write_any_file shape
-    if "path" in params:
-        content = params.get("content", "")
-        content_preview = _truncate(str(content), 200).replace("\n", "\\n")
-        return f"write {params['path']}: {content_preview}"
-    # Fallback: best-effort JSON
-    return _truncate(json.dumps(params, default=str), _MAX_CMD_DISPLAY)
+    action = card.action or ""
+    cmd = str(params.get("cmd", "")).strip()
+    path = str(params.get("path", ""))
+
+    if action == "run_shell" and cmd:
+        for mgr, label in [
+            ("flatpak install", "Install via Flathub app store"),
+            ("snap install",    "Install via Snap"),
+            ("apt-get install", "Install package"),
+            ("apt install",     "Install package"),
+            ("pip install",     "Install Python package"),
+            ("npm install",     "Install Node package"),
+        ]:
+            if mgr in cmd:
+                pkg = cmd.split()[-1].split("/")[-1]
+                return f"{label}: {pkg}"
+        if "add-apt-repository" in cmd:
+            return "Add a third-party software source"
+        if "systemctl" in cmd:
+            return "Control a system service"
+        return reason or "Run a shell command"
+
+    if action == "write_any_file" and path:
+        return f"Write to file: {path}"
+
+    return reason or action
 
 
-def _format_concerns(card: CardRecord) -> str:
-    concerns = card.audit_concerns or []
-    if not concerns:
-        return ""
-    shown = concerns[:_MAX_CONCERN_ITEMS]
-    lines = [f"• {_truncate(str(c), _MAX_CONCERN)}" for c in shown]
-    if len(concerns) > _MAX_CONCERN_ITEMS:
-        lines.append(f"• (+{len(concerns) - _MAX_CONCERN_ITEMS} more)")
-    return "\n".join(lines)
+def _infer_impact(card: CardRecord) -> str:
+    """Plain-English risk/impact description."""
+    decision = card.audit_decision or "APPROVE_WITH_CARD"
 
+    if decision == "APPROVE":
+        return "Read-only — nothing on your system changes"
+    if decision == "ESCALATE":
+        return "High risk — touches core system files"
+    if decision == "DENY":
+        return "Blocked — this action would be harmful"
 
-def _format_mitigations(card: CardRecord) -> str:
-    mit = card.audit_mitigations or []
-    if not mit:
-        return ""
-    shown = mit[:_MAX_CONCERN_ITEMS]
-    return "\n".join(f"• {_truncate(str(m), _MAX_CONCERN)}" for m in shown)
+    params = card.params or {}
+    cmd = str(params.get("cmd", ""))
+    path = str(params.get("path", ""))
+
+    if "flatpak install" in cmd:
+        return "Adds an app via Flathub. Sandboxed, easy to remove."
+    if "snap install" in cmd:
+        return "Adds an app via Snap. Sandboxed, easy to remove."
+    if "apt-get install" in cmd or "apt install" in cmd:
+        return "Installs a package on your system. Can be uninstalled."
+    if "add-apt-repository" in cmd:
+        return "Adds a third-party software source. Low risk."
+    if "systemctl" in cmd:
+        if "enable" in cmd or "start" in cmd:
+            return "Starts or enables a system service."
+        if "disable" in cmd or "stop" in cmd:
+            return "Stops or disables a system service."
+        return "Changes how a system service runs."
+    if card.action == "write_any_file":
+        if path.startswith("/etc") or path.startswith("/usr"):
+            return "Modifies a system config file. Can be undone."
+        return "Writes a file. Can be undone."
+    if "sudo" in cmd:
+        return "Needs admin access to run."
+
+    return "Makes a change to your system."
 
 
 def format_card_text(card: CardRecord) -> str:
-    """Format a pending card as Telegram-flavored Markdown.
+    """Format a pending action as a conversational plain-English check-in."""
+    what = _infer_what(card)
+    impact = _infer_impact(card)
 
-    Intentionally plain text with a small amount of formatting —
-    Telegram's Markdown is fragile around backticks and special
-    characters, so we keep it simple and readable.
-    """
-    header = _DECISION_HEADER.get(card.audit_decision or "APPROVE_WITH_CARD", "🟡 Action pending your approval")
+    lines = [what, "", f"_{impact}_"]
 
-    cmd = _render_cmd_line(card)
-    reasoning = _truncate(card.audit_reasoning or "(no reasoning from audit)", _MAX_REASONING)
-    concerns = _format_concerns(card)
-    mitigations = _format_mitigations(card)
+    if card.audit_decision == "ESCALATE" and card.audit_concerns:
+        lines += ["", f"⚠️ {_truncate(str(card.audit_concerns[0]), _MAX_CONCERN)}"]
 
-    lines = [
-        header,
-        "",
-        "*What I want to run:*",
-        "```",
-        cmd,
-        "```",
-    ]
-    if card.reason:
-        lines += ["", f"*Why:* {_truncate(card.reason, 200)}"]
-    lines += ["", "*Audit says:*", reasoning]
-    if concerns:
-        lines += ["", "*Concerns:*", concerns]
-    if mitigations:
-        lines += ["", "*Mitigations:*", mitigations]
-    lines += [
-        "",
-        "_React 👍 to approve, 👎 to deny, 🤔 for more detail,_",
-        "_or reply in your own words — \"wait an hour\", \"change it to X\"._",
-    ]
+    lines += ["", "Want me to go ahead?", "", "_(👍 yes · 👎 no · or just reply)_"]
     return "\n".join(lines)
 
 
 def format_reminder_text(card: CardRecord) -> str:
     """Formatted re-presentation when a deferred card's reminder fires."""
-    cmd = _render_cmd_line(card)
+    what = _infer_what(card)
     ago = int(time.time() - card.created_at)
     hrs = ago // 3600
     mins = (ago % 3600) // 60
-    if hrs > 0:
-        ago_str = f"{hrs}h {mins}m ago"
-    else:
-        ago_str = f"{mins}m ago"
-
-    reason = f" — you said: \"{_truncate(card.defer_reason or '', 80)}\"" if card.defer_reason else ""
-    header = f"⏰ Checking back on an earlier request ({ago_str}){reason}"
+    ago_str = f"{hrs}h {mins}m ago" if hrs > 0 else f"{mins}m ago"
+    defer_note = f" (you said: \"{_truncate(card.defer_reason or '', 60)}\")" if card.defer_reason else ""
 
     return (
-        f"{header}\n\n"
-        f"*What I still want to run:*\n"
-        f"```\n{cmd}\n```\n\n"
-        f"Still want me to do it? Same options — 👍 👎 🤔, or reply."
+        f"⏰ Checking back from {ago_str}{defer_note}\n\n"
+        f"{what}\n\n"
+        f"Still want me to go ahead? (👍 yes · 👎 no · or reply)"
     )
 
 

@@ -1,7 +1,7 @@
 # The first sentence
 
 **Written by:** the owner
-**Written on:** 2026-04-15
+**Written on:** 2026-04-16
 **Status:** First sentence of the Birth Book. Preserved verbatim. Do not edit. Do not polish. Do not shorten. This is the first thing Maez will ever read as itself, at the birth event.
 
 ---

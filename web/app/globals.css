@@ -1,0 +1,118 @@
+/* ─────────── Luxury Craft · Dark Tokens ─────────── */
+:root {
+  /* backgrounds — deeper, warmer, single-tone */
+  --bg:              #0A0908;
+  --bg-elevated:     #12100E;
+  --bg-surface:      #17140F;
+  --bg-section:      #0D0B09;
+
+  /* glass surfaces */
+  --glass:           rgba(255, 250, 240, 0.035);
+  --glass-heavy:     rgba(255, 250, 240, 0.065);
+  --glass-border:    rgba(255, 250, 240, 0.07);
+
+  /* text — warmer cream hierarchy */
+  --ink:             #F2EEE7;
+  --ink-secondary:   #C8BDB0;
+  --ink-tertiary:    #8E8278;
+  --ink-quaternary:  #5F554D;
+  --ink-placeholder: #3A3028;
+
+  /* brand amber — single accent */
+  --amber:           #F59E0B;
+  --amber-dark:      #FDE68A;
+  --amber-light:     rgba(245, 158, 11, 0.12);
+  --amber-soft:      rgba(245, 158, 11, 0.05);
+  --amber-border:    rgba(245, 158, 11, 0.20);
+
+  /* kept only for the orb — nothing else uses these anymore */
+  --blob-amber:      rgba(245, 158, 11, 0.18);
+  --blob-purple:     rgba(139, 92, 246, 0.16);
+
+  /* canvas */
+  --canvas-bg:       #06060A;
+
+  /* separators — quieter */
+  --separator:       rgba(255, 250, 240, 0.05);
+
+  /* shadows */
+  --shadow-sm:       0 1px 4px rgba(0,0,0,0.5);
+  --shadow-md:       0 4px 16px rgba(0,0,0,0.6), 0 1px 4px rgba(0,0,0,0.4);
+  --shadow-lg:       0 12px 40px rgba(0,0,0,0.7), 0 2px 8px rgba(0,0,0,0.5);
+  --shadow-xl:       0 24px 64px rgba(0,0,0,0.8), 0 4px 16px rgba(0,0,0,0.5);
+
+  /* glows */
+  --glow-amber:      0 0 60px rgba(245, 158, 11, 0.20), 0 0 120px rgba(245, 158, 11, 0.08);
+
+  /* radii — tighter, more considered */
+  --radius-sm:       8px;
+  --radius-md:       12px;
+  --radius-lg:       18px;
+  --radius-xl:       24px;
+
+  /* motion */
+  --ease:            cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-luxe:       cubic-bezier(0.22, 1, 0.36, 1);
+  --spring:          cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* layout */
+  --nav-h:           56px;
+  --max-w:           980px;
+  --max-w-essay:     640px;
+  --gutter:          clamp(24px, 4vw, 72px);
+}
+
+/* ─────────── reset ─────────── */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+html {
+  background: var(--bg);
+  scroll-behavior: smooth;
+  font-feature-settings: "kern", "liga", "calt";
+  color-scheme: dark;
+}
+
+body {
+  min-height: 100dvh;
+  background: var(--bg);
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.035'/%3E%3C/svg%3E");
+  color: var(--ink);
+  font-family: var(--font-body), -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  font-size: 17px;
+  line-height: 1.7;
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+a  { color: inherit; text-decoration: none; }
+em { font-style: italic; }
+strong { font-weight: 600; }
+button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
+
+::selection { background: rgba(245, 158, 11, 0.28); color: var(--ink); }
+
+:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px; top: 16px;
+  z-index: 9999;
+  padding: 8px 16px;
+  background: var(--ink); color: var(--bg);
+  font-family: var(--font-body), sans-serif;
+  font-size: 13px;
+  border-radius: var(--radius-sm);
+}
+.skip-link:focus { left: 16px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

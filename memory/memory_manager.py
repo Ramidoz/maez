@@ -16,6 +16,7 @@ import chromadb
 import ollama
 from chromadb.config import Settings
 from core.llm_client import sanitize_prompt_text
+from core.birth import memory_phase_tag as _memory_phase_tag
 
 logger = logging.getLogger("maez")
 
@@ -102,6 +103,7 @@ class MemoryManager:
             "cycle": cycle,
             "timestamp": now,
             "type": "reasoning",
+            "memory_phase": _memory_phase_tag(),
         }
         if metadata:
             doc_metadata.update(metadata)
@@ -128,7 +130,8 @@ class MemoryManager:
             ids=[memory_id],
             documents=[content],
             metadatas=[{"cycle": -1, "timestamp": now, "type": "telegram_exchange",
-                        "wing": _topic_router.detect_wing(content)}],
+                        "wing": _topic_router.detect_wing(content),
+                        "memory_phase": _memory_phase_tag()}],
         )
         logger.info("Raw stored (telegram): %s (%d chars)", memory_id[:8], len(content))
         return memory_id
@@ -293,6 +296,7 @@ class MemoryManager:
                 "timestamp": now,
                 "source": source,
                 "type": "core_memory",
+                "memory_phase": _memory_phase_tag(),
             }],
         )
         logger.info("Core memory stored: %s (%d chars)", memory_id, len(content))

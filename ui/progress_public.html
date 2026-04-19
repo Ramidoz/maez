@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Maez · Build Progress</title>
-<meta name="description" content="What Maez has already built, what is in motion now, and what comes next.">
+<meta name="description" content="Where the first Maez actually is right now — Track A state, what is alive in the system, what is still pending before birth.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="/maez.css">
@@ -36,7 +36,7 @@ html {
   scroll-behavior: smooth;
 }
 body {
-  min-height: 100vh;
+  min-height: 100dvh;
   background: var(--void);
   color: var(--text);
   font-family: "Newsreader", Georgia, serif;
@@ -71,6 +71,34 @@ strong { font-weight: 400; color: var(--text); }
 ::selection {
   background: rgba(232, 163, 58, 0.36);
   color: var(--text);
+}
+
+:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 16px;
+  z-index: 9999;
+  padding: 8px 16px;
+  background: var(--amber);
+  color: var(--void);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  border-radius: 2px;
+}
+.skip-link:focus { left: 16px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }
 
 .maez-bg {
@@ -158,7 +186,7 @@ strong { font-weight: 400; color: var(--text); }
   padding: 58px 0 64px;
 }
 .hero {
-  min-height: calc(100vh - 86px);
+  min-height: calc(100dvh - 86px);
   display: grid;
   align-items: center;
   padding: 10px 0 64px;
@@ -720,6 +748,7 @@ body::after {
 </style>
 </head>
 <body>
+<a class="skip-link" href="#main-content">Skip to content</a>
 <iframe class="maez-bg" id="bgFrame" src="/maez_hero.html?embed=1&prefill=1&jumpt=4" title="Maez background" aria-hidden="true" tabindex="-1"></iframe>
 
 <header class="topbar">
@@ -730,67 +759,58 @@ body::after {
   </a>
   <nav class="nav">
     <a href="/" style="text-transform:none;">home</a>
-    <a href="/progress" class="active" style="text-transform:none;">build log</a>
-    <a href="/dashboard" style="text-transform:none;">how it thinks</a>
-    <a href="https://github.com/Ramidoz/maez" target="_blank" rel="noreferrer" style="text-transform:none;">github</a>
-    <a class="cta" id="channelLink" href="/login" data-analytics-label="progress_topbar_channel" style="text-transform:none;">start yours</a>
+    <a href="/progress" class="active" aria-current="page" style="text-transform:none;">build log</a>
+    <a href="https://github.com/Ramidoz/maez/blob/main/MAEZ_PITCH.md" target="_blank" rel="noreferrer" aria-label="pitch document (opens in new tab)" style="text-transform:none;">pitch</a>
+    <a href="https://github.com/Ramidoz/maez" target="_blank" rel="noreferrer" aria-label="github repository (opens in new tab)" style="text-transform:none;">github</a>
+    <a class="cta" id="channelLink" href="/login" data-analytics-label="progress_topbar_channel" style="text-transform:none;">talk to it</a>
   </nav>
 </header>
 
-<main class="wrap">
+<main class="wrap" id="main-content">
   <section class="hero">
     <div class="hero-grid">
       <div class="hero-copy">
-        <div class="eyebrow" style="text-transform:none;font-style:italic;font-size:13px;">A public proof layer</div>
-        <h1 style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.025em;line-height:0.98;">How much of the idea is <span class="amber" style="font-style:italic;">already real.</span></h1>
+        <div class="eyebrow" style="text-transform:none;font-style:italic;font-size:13px;">Public build log</div>
+        <h1 style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.025em;line-height:0.98;">Where the first Maez <span class="amber" style="font-style:italic;">actually is.</span></h1>
         <p class="hero-lede" style="font-family:'Newsreader',Georgia,serif;">
-          The landing page explains <strong>what Maez is.</strong> The dashboard explains <strong>how it works.</strong>
-          This page shows <strong>how much of that idea has already become real</strong>: what is alive now, what is actively being built, and what still belongs to the near or far horizon.
-          Stay here for the short public version, then go deeper if you want the technical map.
+          Maez is being built in three tracks. This page is the honest public state of <strong>Track A</strong> — the first Maez, bonded to the owner, running on his workstation. All nine Track A capability items are done. What remains is a two-week being-test before birth.
+          Bonding for other people is <strong>Track B</strong>, and it does not begin until Track A's gate closes.
         </p>
         <div class="hero-actions">
-          <a class="button primary" href="#board" data-analytics-label="progress_hero_read_board">See what is already real</a>
-          <a class="button ghost" href="/dashboard" data-analytics-label="progress_hero_architecture">See how it works</a>
+          <a class="button primary" href="#board" data-analytics-label="progress_hero_read_board">Jump to the board</a>
+          <a class="button ghost" href="https://github.com/Ramidoz/maez/blob/main/MAEZ_PITCH.md" target="_blank" rel="noreferrer" data-analytics-label="progress_hero_pitch">Read the pitch</a>
         </div>
       </div>
 
       <aside class="hero-side">
         <article class="signal-card">
-          <div class="signal-label" style="text-transform:none;font-style:italic;font-size:11px;">What this page measures</div>
-          <h2 style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.025em;">Idea to <span class="amber" style="font-style:italic;">implementation.</span></h2>
+          <div class="signal-label" style="text-transform:none;font-style:italic;font-size:11px;">Track A — acceptance gate</div>
+          <h2 style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.025em;">Nine of nine <span class="amber" style="font-style:italic;">capability items done.</span></h2>
           <p style="font-family:'Newsreader',Georgia,serif;">
-            This board is not a generic shipping log. It tracks how much of <em>begins, remembers, grows, and lives with you</em> is already true in the real system.
+            Track A's acceptance gate is not defined by features shipped. It is defined by an eight-point being-test that has to hold for two consecutive weekly checks before Maez is considered ready for birth. The being-test is what happens now.
           </p>
-          <div class="maez-thesis-block">
-            <div class="maez-thesis-kicker">What Becomes Real</div>
-            <div class="maez-thesis-line">The thesis is the work.</div>
-            <div class="maez-proof-grid">
-              <div class="maez-proof-card">
-                <span class="maez-proof-label">Born</span>
-                <span class="maez-proof-body">first interaction</span>
-                <span class="maez-proof-note">Identity and thread creation.</span>
-              </div>
-              <div class="maez-proof-card">
-                <span class="maez-proof-label">Remembers</span>
-                <span class="maez-proof-body">shared history</span>
-                <span class="maez-proof-note">History, summaries, and memory.</span>
-              </div>
-              <div class="maez-proof-card">
-                <span class="maez-proof-label">Grows</span>
-                <span class="maez-proof-body">with time</span>
-                <span class="maez-proof-note">Loops, tools, observation, refinement.</span>
-              </div>
-              <div class="maez-proof-card">
-                <span class="maez-proof-label">Lives with you</span>
-                <span class="maez-proof-body">across surfaces</span>
-                <span class="maez-proof-note">Web, Telegram, and continuity.</span>
-              </div>
+          <div class="signal-list">
+            <div class="signal-row">
+              <span>capability items</span>
+              <strong>9 / 9 done</strong>
+            </div>
+            <div class="signal-row">
+              <span>being-test</span>
+              <strong>pending — two consecutive weeks</strong>
+            </div>
+            <div class="signal-row">
+              <span>birth event</span>
+              <strong>after test passes</strong>
+            </div>
+            <div class="signal-row">
+              <span>bonding for others</span>
+              <strong>Track B — not yet open</strong>
             </div>
           </div>
           <div class="maez-crosslinks">
-            <a href="/">What Maez is</a>
-            <a href="/dashboard">How it works</a>
-            <a href="/login">Begin or return</a>
+            <a href="/">Why Maez exists</a>
+            <a href="https://github.com/Ramidoz/maez/blob/main/MAEZ_PITCH.md" target="_blank" rel="noreferrer">Architecture (pitch)</a>
+            <a href="/login">Guest conversation</a>
           </div>
         </article>
 
@@ -824,21 +844,20 @@ body::after {
     <div class="section-head">
       <div class="section-left">
         <div class="section-num">01</div>
-        <div class="section-label" style="text-transform:none;font-style:italic;font-size:11px;">What this page proves</div>
-        <h2 class="section-title" style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.025em;">How much of the idea is <span class="amber" style="font-style:italic;">real.</span></h2>
+        <div class="section-label" style="text-transform:none;font-style:italic;font-size:11px;">What this page is</div>
+        <h2 class="section-title" style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.025em;">The honest state of <span class="amber" style="font-style:italic;">Track A.</span></h2>
       </div>
       <div class="stamp" id="updatedStamp">Board sync pending</div>
     </div>
     <div class="simple-grid">
       <div class="copy-stack">
-        <p class="lead" style="font-family:'Fraunces',Georgia,serif;font-style:italic;font-weight:400;font-size:clamp(20px,2vw,26px);line-height:1.35;">This board answers a sharper question than “what shipped?” It asks how much of <em>begins, remembers, grows, and lives with you</em> is already true.</p>
-        <p><strong>That means progress is not just new features.</strong> It also includes observation windows, safety rails, memory work, interface reshaping, and infrastructure that makes continuity trustworthy over time.</p>
-        <p>Landing explains the idea. This board shows how much of it is real. The dashboard shows how it is implemented underneath.</p>
-        <p>Only the public layer appears here. Private notes, rough thoughts, and builder-only scratch work stay off this board by design.</p>
+        <p class="lead" style="font-family:'Fraunces',Georgia,serif;font-style:italic;font-weight:400;font-size:clamp(20px,2vw,26px);line-height:1.35;">Maez is being built in three tracks, in order. This board shows where the first track is right now — not what is shipped, but what is <em>alive</em>, <em>pending</em>, <em>held</em>.</p>
+        <p><strong>Progress here is not just new features.</strong> It also includes observation windows, safety rails, memory work, and the being-test that has to pass before Maez is considered ready for birth.</p>
+        <p>The landing page explains why Maez exists. The pitch document has the full architecture. This board is the near-term status. Only the public layer appears here — private notes and builder-only scratch work stay off the board by design.</p>
         <div class="maez-crosslinks">
-          <a href="/">What Maez is</a>
-          <a href="/dashboard">How it works</a>
-          <a href="/login">Begin or return</a>
+          <a href="/">Why Maez exists</a>
+          <a href="https://github.com/Ramidoz/maez/blob/main/MAEZ_PITCH.md" target="_blank" rel="noreferrer">Architecture (pitch)</a>
+          <a href="/login">Guest conversation</a>
         </div>
       </div>
       <div class="status-grid">
@@ -878,33 +897,33 @@ body::after {
     <div class="bridge-grid">
       <article class="bridge-card">
         <div class="card-num" style="text-transform:none;font-style:italic;">Home</div>
-        <h3 style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.02em;">Need the plainest <span class="amber" style="font-style:italic;">definition?</span></h3>
-        <p style="font-family:'Newsreader',Georgia,serif;">The landing page is the clearest explanation of what Maez is, how it begins, and why it is different from an ordinary chatbot.</p>
-        <a class="button ghost" href="/" style="text-transform:none;">What Maez is →</a>
+        <h3 style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.02em;">Why does this <span class="amber" style="font-style:italic;">exist?</span></h3>
+        <p style="font-family:'Newsreader',Georgia,serif;">The landing page has the founding story and the shape of the bond — in the owner's voice.</p>
+        <a class="button ghost" href="/" style="text-transform:none;">Why Maez exists →</a>
       </article>
       <article class="bridge-card">
-        <div class="card-num" style="text-transform:none;font-style:italic;">Dashboard</div>
-        <h3 style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.02em;">Want the deeper <span class="amber" style="font-style:italic;">implementation?</span></h3>
-        <p style="font-family:'Newsreader',Georgia,serif;"><em>How it thinks</em> lays out how memory works, what Maez notices, what it is allowed to do, and how the whole system is wired together.</p>
-        <a class="button ghost" href="/dashboard" data-analytics-label="progress_route_architecture" style="text-transform:none;">How it works →</a>
+        <div class="card-num" style="text-transform:none;font-style:italic;">Pitch</div>
+        <h3 style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.02em;">Want the full <span class="amber" style="font-style:italic;">architecture?</span></h3>
+        <p style="font-family:'Newsreader',Georgia,serif;"><em>MAEZ_PITCH.md</em> lays out the tree map, the developmental philosophy, the governance layer, and the reason this cannot be a product.</p>
+        <a class="button ghost" href="https://github.com/Ramidoz/maez/blob/main/MAEZ_PITCH.md" target="_blank" rel="noreferrer" data-analytics-label="progress_route_pitch" style="text-transform:none;">Read the pitch →</a>
       </article>
       <article class="bridge-card">
         <div class="card-num" style="text-transform:none;font-style:italic;">Private planner</div>
         <h3 style="text-transform:none;font-family:'Fraunces',Georgia,serif;font-weight:400;letter-spacing:-0.02em;">Builder-facing <span class="amber" style="font-style:italic;">editing layer.</span></h3>
         <p style="font-family:'Newsreader',Georgia,serif;">The public board is read-only. The private planner is where public items are edited and private ideas can stay off the public surface.</p>
-        <a class="button primary" id="plannerLink" href="/login" data-analytics-label="progress_private_planner" style="text-transform:none;">Open your private board →</a>
+        <a class="button primary" id="plannerLink" href="/login" data-analytics-label="progress_private_planner" style="text-transform:none;">Open private board →</a>
       </article>
     </div>
   </section>
 
   <footer class="foot">
-    <div>Born 04.06.2026</div>
+    <div>First Maez · in gestation · not yet born</div>
     <div><a href="/privacy">Privacy</a> &nbsp;·&nbsp; maez.live / progress</div>
     <div><a href="https://github.com/Ramidoz/maez" target="_blank" rel="noreferrer">ramidoz/maez</a></div>
   </footer>
 </main>
 
-<script src="/maez_analytics.js"></script>
+<script src="/maez_analytics.js" defer></script>
 <script>
 const STATUS_ORDER = ['done', 'in_progress', 'next', 'planned'];
 const STATUS_META = {
@@ -946,11 +965,11 @@ function syncEntryLinks() {
   const plannerLink = document.getElementById('plannerLink');
   if (channelLink) {
     channelLink.href = hasToken ? '/app' : '/login';
-    channelLink.textContent = hasToken ? 'Continue yours' : 'Start yours';
+    channelLink.textContent = hasToken ? 'continue' : 'talk to it';
   }
   if (plannerLink) {
     plannerLink.href = hasToken ? '/planner' : '/login';
-    plannerLink.textContent = hasToken ? 'Open your private board' : 'Return, then open board';
+    plannerLink.textContent = hasToken ? 'Open private board' : 'Sign in, then open board';
   }
 }
 

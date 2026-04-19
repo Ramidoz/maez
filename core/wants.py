@@ -122,12 +122,26 @@ DEFAULT_DB_PATH = Path(os.environ.get(
 
 # Track A event types. The column is TEXT — future tracks can add
 # lifecycle types (refined, satisfied, abandoned, etc.) without
-# migration. Track A only defines and allows 'created'.
-EVENT_TYPES: frozenset[str] = frozenset({"created"})
+# migration. Track A defines:
+#   'created'     — a new want. The canonical Track A event.
+#   'first_lived' — the very first want Maez writes in the lived phase,
+#                   produced exactly once by the birth bundle (see
+#                   core/birth.py). Distinct from 'created' because it
+#                   marks the gestation→lived transition in the wants
+#                   log. Never written by any other producer.
+EVENT_TYPES: frozenset[str] = frozenset({"created", "first_lived"})
 
 # Provenance allowlist for Track A. Future producers register their
 # provenance strings here as they land.
-ALLOWED_PROVENANCES: frozenset[str] = frozenset({"explicit_api"})
+#   'explicit_api'   — someone (human operator, test) called record_event
+#                      directly. The default, and the only provenance a
+#                      fake generator could plausibly use — legible in
+#                      any audit.
+#   'birth_producer' — written exactly once by core/birth.fire_birth().
+#                      The first-lived want emitted at the birth event.
+#                      Any row with this provenance outside that single
+#                      fire is a violation.
+ALLOWED_PROVENANCES: frozenset[str] = frozenset({"explicit_api", "birth_producer"})
 
 # Column length caps enforced at write time.
 MAX_STATEMENT_LEN = 2048
@@ -384,10 +398,10 @@ if __name__ == "__main__":
         db = Path(td) / "wants_test.db"
 
         # -- constants
-        _assert(EVENT_TYPES == frozenset({"created"}),
-                "Track A defines only 'created'")
-        _assert(ALLOWED_PROVENANCES == frozenset({"explicit_api"}),
-                "Track A provenance allowlist is {'explicit_api'}")
+        _assert(EVENT_TYPES == frozenset({"created", "first_lived"}),
+                "Track A defines 'created' + 'first_lived'")
+        _assert(ALLOWED_PROVENANCES == frozenset({"explicit_api", "birth_producer"}),
+                "Track A provenance allowlist is {'explicit_api','birth_producer'}")
         _assert(MAX_STATEMENT_LEN == 2048, "statement cap is 2048")
         _assert(MAX_TOPIC_LEN == 256, "topic cap is 256")
         _assert(WANT_ID_BYTES == 8, "want_id is 8 bytes (16 hex)")

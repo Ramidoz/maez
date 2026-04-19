@@ -17,7 +17,7 @@ DESIGN DECISIONS LOCKED BY A-CORE #6 DESIGN PASS
        1. curiosity      2. caution        3. proactiveness
        4. awareness      5. warmth         6. persistence
        7. directness     8. patience       9. humor
-      10. confidence    11. joy
+      10. confidence    11. joy           12. empathy
 
 2. **Value range [0.0, 10.0]**. Readable d&d-stat range. NULL means
    "not yet observed" — there are no fixed floors, per Decision 14's
@@ -115,6 +115,7 @@ PARAMETER_NAMES: tuple[str, ...] = (
     "humor",
     "confidence",
     "joy",
+    "empathy",
 )
 
 PARAMETER_SET = frozenset(PARAMETER_NAMES)
@@ -369,19 +370,19 @@ if __name__ == "__main__":
         db = Path(td) / "temperament_test.db"
 
         # -- canonical name set
-        _assert(len(PARAMETER_NAMES) == 11,
-                "PARAMETER_NAMES has exactly 11 entries")
+        _assert(len(PARAMETER_NAMES) == 12,
+                "PARAMETER_NAMES has exactly 12 entries")
         _assert(PARAMETER_NAMES[0] == "curiosity",
                 "first parameter is curiosity")
-        _assert(PARAMETER_NAMES[-1] == "joy",
-                "last parameter is joy")
+        _assert(PARAMETER_NAMES[-1] == "empathy",
+                "last parameter is empathy")
         expected_names = {
             "curiosity", "caution", "proactiveness", "awareness",
             "warmth", "persistence", "directness", "patience",
-            "humor", "confidence", "joy",
+            "humor", "confidence", "joy", "empathy",
         }
         _assert(set(PARAMETER_NAMES) == expected_names,
-                "PARAMETER_NAMES matches the frozen Decision 14 set")
+                "PARAMETER_NAMES matches Decision 14 + empathy addendum")
 
         # -- fresh ledger has NULL for every parameter
         T = Temperament(db_path=db)

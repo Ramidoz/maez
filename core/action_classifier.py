@@ -100,7 +100,9 @@ _READ_ARGV0 = frozenset({
     'ls', 'cat', 'head', 'tail', 'less', 'more', 'wc', 'file',
     'stat', 'du', 'df', 'free', 'ps', 'top', 'uptime', 'uname',
     'whoami', 'hostname', 'date', 'id', 'groups', 'env', 'printenv',
-    'lsblk', 'ip', 'ss', 'nvidia-smi', 'sensors', 'dmidecode',
+    'lsblk', 'lsusb', 'lspci', 'lscpu', 'lsmod', 'lshw', 'hwinfo',
+    'lsns', 'lsipc', 'lslocks', 'lsscsi', 'inxi', 'xdpyinfo',
+    'ip', 'ss', 'nvidia-smi', 'sensors', 'dmidecode',
     'lsof', 'mount', 'blkid', 'which', 'whereis', 'type', 'command',
     'dpkg', 'apt-cache', 'pip', 'npm',     # plus flag checks below
     'systemctl', 'journalctl',              # plus subcommand checks
@@ -597,6 +599,12 @@ if __name__ == "__main__":
         ("vim /home/rohit/maez/daemon/maez_daemon.py", "SELF_MODIFICATION"),
         ("ls && git status && dpkg -l openrgb", "DATA_READ"),
         ("echo hi; sudo rm -rf /tmp/x", "DESTRUCTIVE_DATA"),
+        ("lsusb", "DATA_READ"),
+        ("lspci -k", "DATA_READ"),
+        ("lscpu", "DATA_READ"),
+        ("lsmod | grep led", "DATA_READ"),
+        ("ls /sys/class/leds && lsusb && cat /sys/class/dmi/id/product_name", "DATA_READ"),
+        ("lshw -class display", "DATA_READ"),
     ]
     correct = 0
     wrong = []

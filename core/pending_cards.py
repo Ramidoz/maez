@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS pending_cards (
     action                  TEXT    NOT NULL,
     params_json             TEXT    NOT NULL,
     reason                  TEXT,
+    plain_english           TEXT,
 
     audit_decision          TEXT,
     audit_confidence        REAL,
@@ -186,6 +187,7 @@ class CardRecord:
     action: str
     params: dict
     reason: Optional[str] = None
+    plain_english: Optional[str] = None
 
     audit_decision: Optional[str] = None
     audit_confidence: float = 0.0
@@ -248,6 +250,7 @@ def _row_to_record(row: sqlite3.Row) -> CardRecord:
         action=row["action"],
         params=_loads(row["params_json"], {}),
         reason=row["reason"],
+        plain_english=row["plain_english"] if "plain_english" in row.keys() else None,
         audit_decision=row["audit_decision"],
         audit_confidence=row["audit_confidence"] or 0.0,
         audit_reasoning=row["audit_reasoning"] or "",
@@ -294,6 +297,10 @@ class PendingCardStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(_SCHEMA)
+            try:
+                conn.execute("ALTER TABLE pending_cards ADD COLUMN plain_english TEXT")
+            except Exception:
+                pass  # column already exists
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -310,6 +317,7 @@ class PendingCardStore:
         action: str,
         params: dict,
         reason: Optional[str] = None,
+        plain_english: Optional[str] = None,
         audit_verdict: Any = None,
         audit_request_id: Optional[str] = None,
         classification: Any = None,
@@ -361,7 +369,7 @@ class PendingCardStore:
                 """
                 INSERT INTO pending_cards (
                     request_id, created_at, updated_at, status,
-                    action, params_json, reason,
+                    action, params_json, reason, plain_english,
                     audit_decision, audit_confidence, audit_reasoning,
                     audit_concerns_json, audit_mitigations_json,
                     audit_summary, audit_answers_json, audit_request_id,
@@ -371,7 +379,7 @@ class PendingCardStore:
                     remind_at, defer_reason, defer_count
                 ) VALUES (
                     ?, ?, ?, ?,
-                    ?, ?, ?,
+                    ?, ?, ?, ?,
                     ?, ?, ?,
                     ?, ?,
                     ?, ?, ?,
@@ -383,7 +391,7 @@ class PendingCardStore:
                 """,
                 (
                     request_id, now, now, CardStatus.OPEN.value,
-                    action, json.dumps(params or {}), reason,
+                    action, json.dumps(params or {}), reason, plain_english,
                     audit_decision, audit_confidence, audit_reasoning,
                     json.dumps(concerns), json.dumps(mitigations),
                     summary, json.dumps(answers), audit_request_id,

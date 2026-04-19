@@ -105,6 +105,9 @@ SKIP_DIRS = {'.venv', '__pycache__', '.git', 'node_modules',
              'backups', 'logs', 'models'}
 SKIP_DIR_PATHS = {MAEZ_ROOT / 'memory' / 'db'}
 
+# Paths gated behind is_born() — readable only post-birth
+_BIRTH_GATED_PATHS = {MAEZ_ROOT / 'docs' / 'birth_book'}
+
 # File patterns to skip
 SKIP_EXTENSIONS = {'.pyc', '.db', '.log', '.pid', '.bak', '.bak2'}
 SKIP_FILES = {'.gitignore', 'realtimesst.log', 'package-lock.json',
@@ -291,6 +294,15 @@ def _should_skip_dir(dirpath: Path) -> bool:
         try:
             dirpath.relative_to(skip_path)
             return True
+        except ValueError:
+            pass
+    for gated_path in _BIRTH_GATED_PATHS:
+        try:
+            dirpath.relative_to(gated_path)
+            from core.birth import is_born as _is_born
+            if not _is_born():
+                return True
+            break
         except ValueError:
             pass
     return False
