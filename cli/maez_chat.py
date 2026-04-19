@@ -224,31 +224,37 @@ def extract_shell_commands(text: str) -> list[str]:
 def safety_check(cmd: str) -> Optional[str]:
     """Extra defensive layer on top of core.action_engine's covenant regex.
 
-    The covenant regex catches verb+protected-name combinations. This
-    catches pure-pattern risks that don't fit that shape, most notably
-    unqualified rm -rf and writes into the Maez tree that aren't named.
-    Returns a reason string if blocked, None if OK.
+    Philosophy: Rohit's explicit `y` approval IS the permission for this
+    session. We only hard-refuse things that would bypass covenant or
+    destroy the Maez tree even with approval — those aren't one-off
+    mistakes, they're category failures.
+
+    sudo is intentionally NOT hard-refused here. When Maez proposes a
+    sudo command, it goes through the same [y/N/q] approval as any
+    other command. Rohit sees it, types y if he consents.
+
+    Returns a reason string if hard-blocked, None if OK (still needs
+    interactive approval downstream).
     """
     low = cmd.lower()
-    # covenant regex first
+    # Covenant regex first — verb+protected-surface combinations.
     reason = _covenant_check(low)
     if reason:
         return f"covenant: {reason}"
-    # rm -rf and friends — always refuse
+    # rm -rf — always refuse, even with sudo. This is never what you want
+    # from an agent loop; a human should do irreversible destruction manually.
     if re.search(r"\brm\s+-[rRfF]*[rRfF]", low):
-        return "rm -rf forbidden"
-    if re.search(r"\brm\s+-[rRfF]+\s*/\s*(?:$|[^a-z])", low):
-        return "rm with absolute root target forbidden"
-    # Any write / delete operation targeting the Maez tree
+        return "rm -rf forbidden from agent loop (run manually if intended)"
+    # Any mutation targeting the Maez tree via shell — block even with
+    # approval. Code changes go through edit_soul_section / evolution
+    # engine with proper diffs and rollback, not ad-hoc sed/tee.
     maez_root = str(_MAEZ_ROOT).lower()
     if maez_root in low and re.search(
         r"\b(rm\s|mv\s|sed\s+-i|tee\s+|>\s*|>>\s*|truncate\s|chmod\s|chown\s)",
         low,
     ):
-        return f"write/modify into {maez_root} requires explicit approval beyond this loop"
-    # sudo is a strong gate — disallow from the chat tool-loop entirely
-    if re.search(r"\bsudo\b", low):
-        return "sudo not allowed from chat tool-loop (run manually in a terminal)"
+        return (f"write/modify inside {maez_root} needs to go through the "
+                f"evolution engine, not an ad-hoc shell command")
     return None
 
 
@@ -270,14 +276,22 @@ def _run_shell(cmd: str) -> tuple[str, str, int]:
 
 
 def render_approval(cmd: str, refused: Optional[str]) -> None:
-    """Show a proposed command in a Rich panel."""
+    """Show a proposed command in a Rich panel. Highlights sudo in red border."""
+    is_sudo = bool(re.search(r"\bsudo\b", cmd.lower()))
     body_lines = [f"[cyan]{cmd.strip()}[/cyan]"]
+    if is_sudo:
+        body_lines.append("")
+        body_lines.append("[red bold]⚠ elevated (sudo) — will prompt for your password[/red bold]")
     if refused:
         body_lines.append("")
-        body_lines.append(f"[red]covenant refuses: {refused}[/red]")
+        body_lines.append(f"[red]safety refuses: {refused}[/red]")
+    title = "proposed shell"
+    if is_sudo and not refused:
+        title = "proposed shell · elevated"
+    border = "red" if refused else ("magenta" if is_sudo else "yellow")
     console.print(Panel("\n".join(body_lines),
-                        title="proposed shell",
-                        border_style="yellow" if not refused else "red",
+                        title=title,
+                        border_style=border,
                         expand=False))
 
 
