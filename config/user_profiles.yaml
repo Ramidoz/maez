@@ -9,7 +9,7 @@ defaults:
   jarvis_tier: false
 
 users:
-  # the owner's Maez — the firstborn. Liberal capability profile.
+  # The owner's Maez — the firstborn. Liberal capability profile.
   # Matches any account where private_owner_bridge=true.
   private_owner:
     jarvis_tier: true
