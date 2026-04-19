@@ -59,7 +59,7 @@ SONNET_PATTERNS = [
     r"```[\w+-]*\n",  # fenced code blocks → code task
     r"\bwhat does (?:this|the) (?:code|function|method|class) do\b",
     r"\bexplain (?:this|the) (?:code|function|algorithm)\b",
-    r"\bpython|javascript|typescript|rust|go\b.*\b(?:error|exception|traceback)\b",
+    r"\b(?:python|javascript|typescript|rust|golang)\b.*\b(?:error|exception|traceback)\b",
     r"\bstack\s*trace\b",
 ]
 

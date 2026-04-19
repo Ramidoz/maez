@@ -352,6 +352,9 @@ class ChatSession:
         self.session = PromptSession(history=FileHistory(str(HISTORY_PATH)))
         self._stop_stream = threading.Event()
         self._deep_once = False  # re-enable thinking for one turn
+        # Per-turn routing override. None = use classifier. Set by /local,
+        # /sonnet, /opus. Consumed after one turn.
+        self._force_route_once: Optional[tuple[str, Optional[str]]] = None
         self.commands: dict[str, Callable[[str], None]] = {
             "/help": self.cmd_help,
             "/?": self.cmd_help,
@@ -360,6 +363,10 @@ class ChatSession:
             "/signals": self.cmd_signals,
             "/ambient": self.cmd_ambient,
             "/deep": self.cmd_deep,
+            "/local": self.cmd_force_local,
+            "/sonnet": self.cmd_force_sonnet,
+            "/opus": self.cmd_force_opus,
+            "/route": self.cmd_show_route,
             "/clear": self.cmd_clear,
             "/quit": self.cmd_quit,
             "/q": self.cmd_quit,
@@ -423,6 +430,10 @@ class ChatSession:
             ("/proposals",      "pending dream proposals"),
             ("/signals",        "recent iPhone signals"),
             ("/ambient",        "current ambient snapshot (weather, window, signals)"),
+            ("/route",          "show routing override for next turn"),
+            ("/local",          "force next turn → local brain"),
+            ("/sonnet",         "force next turn → Claude Sonnet 4.6"),
+            ("/opus",           "force next turn → Claude Opus 4.7"),
             ("/deep",           "re-enable thinking mode for the next turn"),
             ("/clear",          "clear screen"),
             ("/quit, /q",       "exit"),
@@ -542,6 +553,27 @@ class ChatSession:
         console.print("[dim italic](thinking mode armed — next turn will use "
                       "Qwen3 reasoning)[/dim italic]")
 
+    def cmd_force_local(self, _: str):
+        self._force_route_once = ("local", None)
+        console.print("[dim italic](next turn will route local, "
+                      "regardless of classifier)[/dim italic]")
+
+    def cmd_force_sonnet(self, _: str):
+        self._force_route_once = ("external", "sonnet")
+        console.print("[dim italic](next turn will route claude:sonnet)[/dim italic]")
+
+    def cmd_force_opus(self, _: str):
+        self._force_route_once = ("external", "opus")
+        console.print("[dim italic](next turn will route claude:opus)[/dim italic]")
+
+    def cmd_show_route(self, _: str):
+        if self._force_route_once:
+            route, tier = self._force_route_once
+            tag = f"{route}" + (f":{tier}" if tier else "")
+            console.print(f"[cyan]next turn forced: {tag}[/cyan]")
+        else:
+            console.print("[dim](no override — classifier decides next turn)[/dim]")
+
     def cmd_clear(self, _: str):
         console.clear()
         self.banner()
@@ -562,6 +594,18 @@ class ChatSession:
         system_prompt = soul + ("\n\n" + ambient if ambient else "")
 
         decision = claude_router.classify(user_text)
+        # Apply /local /sonnet /opus override if armed
+        if self._force_route_once:
+            forced_route, forced_tier = self._force_route_once
+            self._force_route_once = None
+            if forced_route == "local":
+                decision.route = "local"
+                decision.tier = None
+                decision.reason = "manual:/local"
+            else:
+                decision.route = "external"
+                decision.tier = forced_tier or "sonnet"
+                decision.reason = f"manual:/{forced_tier or 'sonnet'}"
         profile_id = identity.user_profile_id()
         route_external = (
             decision.route == "external"
