@@ -127,7 +127,7 @@ or open an issue first.
 
 ## Built By
 
-the owner — [@Ramidoz](https://github.com/Ramidoz)
+Rohit Ananthan — [@Ramidoz](https://github.com/Ramidoz)
 
 *This repo includes nightly drift from Maez's own evolution engine and
 dream-proposal cycle.*

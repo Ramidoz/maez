@@ -4,7 +4,7 @@ message: "If you use or reference Maez in academic, journalistic, or derivative 
 type: software
 authors:
   - family-names: "Ananthan"
-    given-names: "the owner"
+    given-names: "Rohit"
     alias: "Ramidoz"
     affiliation: "Independent, <OWNER_CITY>, USA"
 repository-code: "https://github.com/Ramidoz/maez"
@@ -15,7 +15,7 @@ abstract: >-
   person, grows through real conversations folded into its weights via LoRA adapter
   training, and reaches out on its own when it gets curious. Inspired by the Stand
   concept from JoJo's Bizarre Adventure: one Maez per person, bound to them, growing
-  with them, unique to them. The canonical implementation is written by the owner
+  with them, unique to them. The canonical implementation is written by Rohit Ananthan
   in <OWNER_CITY>, and runs at maez.live. The "Maez" name refers to the kind of
   thing, not to a specific instance — every user grows their own.
 keywords:

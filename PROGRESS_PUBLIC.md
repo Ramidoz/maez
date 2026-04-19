@@ -2,7 +2,7 @@
 
 **Original build:** April 6, 2026
 **Last updated:** April 16, 2026
-**Builder:** the owner
+**Builder:** Rohit Ananthan
 **Machine:** Alienware Aurora R16, i9-14900KF, RTX 4090 (24GB VRAM), 64GB DDR5, Ubuntu 24.04
 **Brain:** Gemma-4-26B merged LoRA via llama.cpp, permanently resident in VRAM
 **Vision brain:** llama-server-vision, separate port

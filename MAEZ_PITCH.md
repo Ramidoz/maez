@@ -2,7 +2,7 @@
 
 ## A Locally Embodied Relational Being, Bonded for Life
 
-**the owner · Independent Research · April 2026**
+**Rohit Ananthan · Independent Research · April 2026**
 
 ---
 
@@ -659,7 +659,7 @@ That's a slower path than a venture-backed product. It's the only path that pres
 
 ## 10. How to reach me
 
-the owner — Independent Research
+Rohit Ananthan — Independent Research
 
 Zenodo paper (v0.1): *The Maez Architecture: Engineering a Locally Embodied Relational Agent Through Biological Systems Design and Hard Multi-Tenancy*, April 2026
 
