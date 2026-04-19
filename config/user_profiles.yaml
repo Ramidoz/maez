@@ -1,0 +1,15 @@
+# Per-user capability profiles for Maez.
+# Extensible to bond style, consent tiers, grandmother mode, etc.
+#
+# jarvis_tier: if true, user's Maez may route hard tasks to external API (Claude).
+#              Trajectories are logged for future distillation SFT.
+# Default policy for unlisted users: jarvis_tier=false (sovereign, local only).
+
+defaults:
+  jarvis_tier: false
+
+users:
+  # the owner's Maez — the firstborn. Liberal capability profile.
+  # Matches any account where private_owner_bridge=true.
+  private_owner:
+    jarvis_tier: true

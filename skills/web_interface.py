@@ -38,7 +38,7 @@ accounts = UserAccounts()
 memory = MemoryManager()
 
 SOUL_PATH = '/home/rohit/maez/config/soul.md'
-MODEL = 'gemma4:26b'
+MODEL = 'qwen36-35b-sft'
 UI_DIR = '/home/rohit/maez/ui'
 HERO_PAGE = os.path.join(UI_DIR, 'maez_hero.html')
 GATE_PAGE = os.path.join(UI_DIR, 'maez_gate.html')
@@ -1053,14 +1053,23 @@ def chat():
     user_key = None
 
     if owner_bridge:
+        # Ambient grounding — current weather at the owner's location, active window,
+        # recent iPhone signals. Cached (60s TTL) so repeat turns don't hammer APIs.
+        try:
+            from core.ambient_format import ambient_prompt_block
+            ambient_block = ambient_prompt_block()
+        except Exception as _e:
+            ambient_block = ""
         owner_system = (
             f"{SOUL}\n\n"
-            f"CRITICAL:\n"
+            + (f"{ambient_block}\n\n" if ambient_block else "")
+            + f"CRITICAL:\n"
             f"- You are talking to the owner through the maez.live web interface.\n"
             f"- This is the same the owner as the private Telegram conversation.\n"
             f"- Treat web and private Telegram as one continuous relationship.\n"
             f"- Use long-term continuity naturally. Do not act like this is a fresh introduction.\n"
             f"- Reply naturally for the web. Do not pretend this message came from Telegram unless the owner asks.\n"
+            f"- Ambient context above is a passive snapshot; do not recite it back unless relevant.\n"
         )
         owner_memory = memory.format_for_prompt(memory.recall_for_telegram(message))
         messages_list = [{"role": "system", "content": owner_system}]
@@ -1206,19 +1215,52 @@ def chat():
                 messages_list.append({"role": h["role"], "content": h["content"]})
         messages_list.append({"role": "user", "content": prompt})
 
+    # Phase 1 hybrid router: if user's Maez has jarvis_tier and the
+    # classifier flags this turn as external-worthy, try Claude first.
+    # On any failure, fall through to local. Every turn is logged as a
+    # trajectory for future distillation SFT.
+    from skills import claude_router
+    profile_id = "private_owner" if owner_bridge else None
+    decision = claude_router.classify(message)
+    route_external = (
+        decision.route == "external"
+        and claude_router.jarvis_tier_enabled(profile_id)
+    )
+
+    reply = ""
+    used_source = "local"
+    claude_meta: dict | None = None
+
+    if route_external:
+        try:
+            system_prompt_for_api = messages_list[0]["content"] if (
+                messages_list and messages_list[0].get("role") == "system"
+            ) else SOUL
+            claude_result = claude_router.call_claude(
+                system=system_prompt_for_api,
+                messages=messages_list,
+                tier=decision.tier or "sonnet",
+            )
+            reply = claude_router.wrap_maez_voice(
+                claude_result["content"], decision.tier or "sonnet"
+            )
+            used_source = f"claude:{claude_result['model']}"
+            claude_meta = claude_result
+        except Exception as e:
+            logger.warning("Claude route failed, falling back local: %s", e)
+            used_source = "local-fallback"
+
     try:
-        # Session 11p: route through llm_client so MAEZ_LLM_BACKEND env
-        # var selects Ollama or llama.cpp CUDA at call time. Ollama path
-        # stays the default for safety; llamacpp flips with a service-env
-        # restart.
-        from core import llm_client as _llm_client
-        resp = _llm_client.chat(
-            model=MODEL,
-            messages=messages_list,
-            think=False,
-            options={"temperature": 0.7, "num_predict": 4096},
-        )
-        reply = (resp.message.content or "").strip()
+        # Local path: either classifier said local, jarvis_tier off, or Claude failed.
+        if not reply:
+            from core import llm_client as _llm_client
+            resp = _llm_client.chat(
+                model=MODEL,
+                messages=messages_list,
+                think=False,
+                options={"temperature": 0.7, "num_predict": 4096},
+            )
+            reply = (resp.message.content or "").strip()
         logger.debug("Web chat raw response: %r", reply[:100] if reply else "EMPTY")
         if not reply:
             simple_msgs = [
@@ -1243,6 +1285,16 @@ def chat():
             store.add_conversation_memory(user_key, "assistant", reply)
     except Exception as e:
         logger.debug("Web conversation write skipped: %s", e)
+
+    claude_router.log_trajectory({
+        "profile_id": profile_id,
+        "display": display,
+        "message": message,
+        "reply": reply,
+        "source": used_source,
+        "decision": decision.to_dict(),
+        "claude_meta": claude_meta,
+    })
 
     return jsonify({"reply": reply, "display_name": display})
 
@@ -1417,6 +1469,18 @@ def planner_board():
             "username": user.get("username", ""),
         },
     })
+
+
+@app.route("/api/iphone/ingest", methods=["POST"])
+def api_iphone_ingest():
+    """Accept a signal from iOS Shortcuts. Auth via X-Maez-Token header."""
+    from skills import iphone_ingest as _iphone
+    token = request.headers.get("X-Maez-Token") or (request.get_json(silent=True) or {}).get("token")
+    payload = request.get_json(silent=True) or {}
+    if "token" in payload:
+        payload = {k: v for k, v in payload.items() if k != "token"}
+    resp, status_code = _iphone.ingest(payload, token)
+    return jsonify(resp), status_code
 
 
 @app.route("/status")
