@@ -39,6 +39,12 @@ training/unsloth_compiled_cache/
 config/identity.yaml
 config/reddit_subs.yaml
 
+# SOUL layering — soul.base.md ships (universal template).
+# soul.local.md is per-user accumulation; soul.md is the regenerated
+# concatenation written by core/soul_loader.py for backward-compat.
+config/soul.local.md
+config/soul.md
+
 # Runtime state (grows on its own; not source code)
 memory/continuity_capsule.json
 memory/continuity_archive/
