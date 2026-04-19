@@ -33,7 +33,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -67,12 +69,24 @@ from rich.table import Table
 from core import identity, soul_loader
 from core.ambient_format import ambient_prompt_block
 from core.ambient import ambient_context, current_coords, latest_per_kind
+from core.action_engine import _covenant_violation as _covenant_check
 from skills import claude_router
 
 # ── config ─────────────────────────────────────────────────────────────
 LOCAL_BRAIN_URL = os.environ.get("MAEZ_LLAMACPP_URL", "http://127.0.0.1:8080/v1")
 LOCAL_MODEL = os.environ.get("MAEZ_LLAMACPP_MODEL", "qwen36-35b-sft")
 HISTORY_PATH = _MAEZ_ROOT / "logs" / ".maez_chat_history"
+
+# Tool-loop limits
+MAX_TOOL_ITERATIONS = 5  # avoid infinite agent loops
+TOOL_TIMEOUT_SEC = 60    # per-command shell timeout
+TOOL_OUTPUT_MAX = 4000   # cap per-command output fed back to the model
+
+# Regex to pull ```bash ...``` / ```sh ...``` / ```shell ...``` fences
+BASH_FENCE_RE = re.compile(
+    r"```(?:bash|sh|zsh|shell)?\s*\n(.*?)```",
+    re.DOTALL,
+)
 
 console = Console()
 
@@ -174,6 +188,146 @@ def _thinking_status(thinking: str, done: bool) -> Text:
         t.append(f"thinking… ", style="dim italic")
         t.append(f"[{lines} lines so far]", style="dim")
     return t
+
+
+# ── tool-use loop ──────────────────────────────────────────────────────
+# Pattern adapted from QwenLM/qwen-code (Apache 2.0) and the prior Jarvis
+# loop in the legacy cli.py. When Maez emits a ```bash``` fence, the loop
+# proposes it as an approval card, runs via subprocess on approve, and
+# feeds real output back to the model for synthesis.
+
+@dataclass
+class ToolRun:
+    cmd: str
+    stdout: str = ""
+    stderr: str = ""
+    returncode: int = 0
+    skipped: bool = False
+    refused_reason: str = ""
+
+
+def extract_shell_commands(text: str) -> list[str]:
+    """Pull ```bash/sh/shell``` blocks out of model output.
+    Returns deduplicated, stripped command strings in order of appearance.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for m in BASH_FENCE_RE.finditer(text):
+        block = m.group(1).strip()
+        if not block or block in seen:
+            continue
+        seen.add(block)
+        out.append(block)
+    return out
+
+
+def safety_check(cmd: str) -> Optional[str]:
+    """Extra defensive layer on top of core.action_engine's covenant regex.
+
+    The covenant regex catches verb+protected-name combinations. This
+    catches pure-pattern risks that don't fit that shape, most notably
+    unqualified rm -rf and writes into the Maez tree that aren't named.
+    Returns a reason string if blocked, None if OK.
+    """
+    low = cmd.lower()
+    # covenant regex first
+    reason = _covenant_check(low)
+    if reason:
+        return f"covenant: {reason}"
+    # rm -rf and friends — always refuse
+    if re.search(r"\brm\s+-[rRfF]*[rRfF]", low):
+        return "rm -rf forbidden"
+    if re.search(r"\brm\s+-[rRfF]+\s*/\s*(?:$|[^a-z])", low):
+        return "rm with absolute root target forbidden"
+    # Any write / delete operation targeting the Maez tree
+    maez_root = str(_MAEZ_ROOT).lower()
+    if maez_root in low and re.search(
+        r"\b(rm\s|mv\s|sed\s+-i|tee\s+|>\s*|>>\s*|truncate\s|chmod\s|chown\s)",
+        low,
+    ):
+        return f"write/modify into {maez_root} requires explicit approval beyond this loop"
+    # sudo is a strong gate — disallow from the chat tool-loop entirely
+    if re.search(r"\bsudo\b", low):
+        return "sudo not allowed from chat tool-loop (run manually in a terminal)"
+    return None
+
+
+def _run_shell(cmd: str) -> tuple[str, str, int]:
+    """Run a shell command, capture output. Truncates to TOOL_OUTPUT_MAX."""
+    try:
+        r = subprocess.run(
+            ["bash", "-lc", cmd],
+            capture_output=True, text=True,
+            timeout=TOOL_TIMEOUT_SEC,
+        )
+        out = (r.stdout or "")[:TOOL_OUTPUT_MAX]
+        err = (r.stderr or "")[:TOOL_OUTPUT_MAX]
+        return out, err, r.returncode
+    except subprocess.TimeoutExpired:
+        return "", f"[timeout after {TOOL_TIMEOUT_SEC}s]", 124
+    except Exception as e:
+        return "", f"[runner error: {e}]", 1
+
+
+def render_approval(cmd: str, refused: Optional[str]) -> None:
+    """Show a proposed command in a Rich panel."""
+    body_lines = [f"[cyan]{cmd.strip()}[/cyan]"]
+    if refused:
+        body_lines.append("")
+        body_lines.append(f"[red]covenant refuses: {refused}[/red]")
+    console.print(Panel("\n".join(body_lines),
+                        title="proposed shell",
+                        border_style="yellow" if not refused else "red",
+                        expand=False))
+
+
+def render_tool_result(tr: ToolRun) -> None:
+    """Show the real output of a tool run."""
+    if tr.skipped:
+        console.print(Panel(f"[dim]{tr.refused_reason or 'skipped'}[/dim]",
+                            title="skipped",
+                            border_style="dim", expand=False))
+        return
+    status_color = "green" if tr.returncode == 0 else "red"
+    body = []
+    if tr.stdout.strip():
+        body.append(f"[dim]stdout:[/dim]\n{tr.stdout.rstrip()}")
+    if tr.stderr.strip():
+        body.append(f"[dim]stderr:[/dim]\n[yellow]{tr.stderr.rstrip()}[/yellow]")
+    if not body:
+        body.append("[dim](no output)[/dim]")
+    console.print(Panel(
+        "\n".join(body),
+        title=f"exit {tr.returncode}",
+        border_style=status_color, expand=False,
+    ))
+
+
+def format_tool_results_for_model(runs: list[ToolRun]) -> str:
+    """Produce a single message the model can read as real tool output."""
+    lines = ["I ran these commands and these are the actual outputs:\n"]
+    for i, tr in enumerate(runs, 1):
+        lines.append(f"### command {i}")
+        lines.append("```bash")
+        lines.append(tr.cmd.strip())
+        lines.append("```")
+        if tr.skipped:
+            lines.append(f"_(skipped: {tr.refused_reason or 'user declined'})_")
+            lines.append("")
+            continue
+        lines.append(f"exit code: {tr.returncode}")
+        if tr.stdout.strip():
+            lines.append("stdout:")
+            lines.append("```")
+            lines.append(tr.stdout.rstrip())
+            lines.append("```")
+        if tr.stderr.strip():
+            lines.append("stderr:")
+            lines.append("```")
+            lines.append(tr.stderr.rstrip())
+            lines.append("```")
+        lines.append("")
+    return "\n".join(lines)
 
 
 # ── chat session ───────────────────────────────────────────────────────
@@ -392,14 +546,6 @@ class ChatSession:
         except Exception:
             ambient = ""
         system_prompt = soul + ("\n\n" + ambient if ambient else "")
-        history_pairs = [
-            {"role": t.role, "content": t.content}
-            for t in self.turns if t.role in ("user", "assistant") and t.content
-        ]
-        # Include current user turn
-        history_pairs.append({"role": "user", "content": user_text})
-        messages = [{"role": "system", "content": system_prompt}] + history_pairs[:-1]
-        messages.append(history_pairs[-1])
 
         decision = claude_router.classify(user_text)
         profile_id = identity.user_profile_id()
@@ -408,75 +554,159 @@ class ChatSession:
             and identity.jarvis_tier()
             and claude_router.jarvis_tier_enabled(profile_id)
         )
-        meta = f"claude:{decision.tier}" if route_external else "local"
-        console.print(_role_header("assistant", meta))
-
-        assistant = Turn("assistant", meta=meta)
-        self.turns.append(assistant)
-
-        think = self._deep_once and not route_external
+        think_opt = self._deep_once and not route_external
         if self._deep_once:
             self._deep_once = False
+        meta_base = f"claude:{decision.tier}" if route_external else "local"
 
-        # Stream into a Live-updated Markdown panel
-        self._stop_stream.clear()
-        original_sigint = signal.getsignal(signal.SIGINT)
-        def _handle_sigint(sig, frame):
-            self._stop_stream.set()
-        signal.signal(signal.SIGINT, _handle_sigint)
+        # Agent-style loop: model may propose commands, we run them (with
+        # approval), feed results back, and let the model synthesize.
+        tool_history: list[ToolRun] = []
+        iteration_suffix = ""  # appended message text for continuation turns
+        for iteration in range(MAX_TOOL_ITERATIONS):
+            meta = meta_base + (f" · iter {iteration+1}" if iteration else "")
+            console.print(_role_header("assistant", meta))
 
-        try:
-            if route_external:
-                gen = _stream_claude(system_prompt,
-                                     history_pairs,
-                                     decision.tier or "sonnet")
-            else:
-                gen = _stream_local(messages, think=think)
+            # Build the live messages for THIS iteration, including any
+            # running tool-result message appended after the user turn.
+            history_pairs = [
+                {"role": t.role, "content": t.content}
+                for t in self.turns if t.role in ("user", "assistant") and t.content
+            ]
+            history_pairs.append({"role": "user", "content": user_text})
+            if iteration_suffix:
+                history_pairs.append({"role": "user", "content": iteration_suffix})
+            messages = ([{"role": "system", "content": system_prompt}]
+                        + history_pairs)
 
-            last_render = 0.0
-            RENDER_EVERY = 0.08  # throttle — ~12 fps max
+            assistant = Turn("assistant", meta=meta)
+            self.turns.append(assistant)
+            self._stop_stream.clear()
+            original_sigint = signal.getsignal(signal.SIGINT)
+            def _handle_sigint(sig, frame):
+                self._stop_stream.set()
+            signal.signal(signal.SIGINT, _handle_sigint)
 
-            def build_renderable(done: bool = False):
-                body = assistant.content
-                md = Markdown(body) if body else Text("…", style="dim")
-                parts: list = []
-                if assistant.thinking:
-                    parts.append(_thinking_status(assistant.thinking, done))
-                parts.append(md)
-                return Group(*parts)
+            try:
+                if route_external:
+                    gen = _stream_claude(system_prompt, history_pairs,
+                                         decision.tier or "sonnet")
+                else:
+                    gen = _stream_local(messages, think=think_opt)
 
-            with Live(build_renderable(), console=console, refresh_per_second=12,
-                      transient=False, auto_refresh=False) as live:
-                for kind, chunk in gen:
-                    if self._stop_stream.is_set():
-                        assistant.content += "\n\n_(interrupted)_"
-                        live.update(build_renderable(done=True), refresh=True)
-                        break
-                    if kind == "thinking":
-                        assistant.thinking += chunk
-                    else:
-                        assistant.content += chunk
-                    now = time.time()
-                    if now - last_render > RENDER_EVERY:
-                        live.update(build_renderable(), refresh=True)
-                        last_render = now
-                live.update(build_renderable(done=True), refresh=True)
+                last_render = 0.0
+                RENDER_EVERY = 0.08
 
-        finally:
-            signal.signal(signal.SIGINT, original_sigint)
-            console.print()  # blank line between turns
+                def build_renderable(done: bool = False):
+                    body = assistant.content
+                    md = Markdown(body) if body else Text("…", style="dim")
+                    parts: list = []
+                    if assistant.thinking:
+                        parts.append(_thinking_status(assistant.thinking, done))
+                    parts.append(md)
+                    return Group(*parts)
 
-        # Trajectory log
+                with Live(build_renderable(), console=console,
+                          refresh_per_second=12, transient=False,
+                          auto_refresh=False) as live:
+                    for kind, chunk in gen:
+                        if self._stop_stream.is_set():
+                            assistant.content += "\n\n_(interrupted)_"
+                            live.update(build_renderable(done=True), refresh=True)
+                            break
+                        if kind == "thinking":
+                            assistant.thinking += chunk
+                        else:
+                            assistant.content += chunk
+                        now = time.time()
+                        if now - last_render > RENDER_EVERY:
+                            live.update(build_renderable(), refresh=True)
+                            last_render = now
+                    live.update(build_renderable(done=True), refresh=True)
+            finally:
+                signal.signal(signal.SIGINT, original_sigint)
+                console.print()
+
+            # Interrupted → exit the whole agent loop
+            if self._stop_stream.is_set():
+                break
+
+            # Look for proposed shell commands; if none, we're done
+            commands = extract_shell_commands(assistant.content)
+            if not commands:
+                break
+
+            console.print(Text.from_markup(
+                f"[dim]— {len(commands)} shell command(s) proposed —[/dim]"
+            ))
+
+            runs_this_iter: list[ToolRun] = []
+            for cmd in commands:
+                refused = safety_check(cmd)
+                render_approval(cmd, refused)
+                if refused:
+                    tr = ToolRun(cmd=cmd, skipped=True,
+                                 refused_reason=refused)
+                    render_tool_result(tr)
+                    runs_this_iter.append(tr)
+                    tool_history.append(tr)
+                    continue
+                # Prompt user
+                try:
+                    ans = self.session.prompt(
+                        HTML("<ansibrightcyan>run? [y/N/q]:</ansibrightcyan> "),
+                    ).strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    ans = "q"
+                if ans == "q":
+                    tr = ToolRun(cmd=cmd, skipped=True, refused_reason="user quit approvals")
+                    runs_this_iter.append(tr)
+                    tool_history.append(tr)
+                    break
+                if ans not in ("y", "yes"):
+                    tr = ToolRun(cmd=cmd, skipped=True, refused_reason="user declined")
+                    render_tool_result(tr)
+                    runs_this_iter.append(tr)
+                    tool_history.append(tr)
+                    continue
+                # Run
+                with console.status("[dim]running…[/dim]", spinner="dots"):
+                    out, err, rc = _run_shell(cmd)
+                tr = ToolRun(cmd=cmd, stdout=out, stderr=err, returncode=rc)
+                render_tool_result(tr)
+                runs_this_iter.append(tr)
+                tool_history.append(tr)
+
+            # If user quit approvals OR all commands were skipped, stop looping
+            if any(tr.skipped and tr.refused_reason == "user quit approvals"
+                   for tr in runs_this_iter):
+                break
+            if all(tr.skipped for tr in runs_this_iter):
+                # Nothing actually ran; don't continue the agent loop,
+                # user doesn't want these commands.
+                break
+
+            # Feed real output back into the next iteration's context
+            iteration_suffix = format_tool_results_for_model(runs_this_iter)
+        else:
+            console.print(Text.from_markup(
+                f"[yellow dim]— tool loop hit max iterations ({MAX_TOOL_ITERATIONS}) —[/yellow dim]"
+            ))
+
+        # Trajectory log (final turn only — keeps log tidy)
+        final_reply = self.turns[-1].content if self.turns else ""
         try:
             claude_router.log_trajectory({
                 "profile_id": profile_id,
                 "display": identity.display_name(),
                 "channel": "cli",
                 "message": user_text,
-                "reply": assistant.content,
-                "source": meta,
+                "reply": final_reply,
+                "source": meta_base,
                 "decision": decision.to_dict(),
-                "thinking_len": len(assistant.thinking),
+                "thinking_len": len(self.turns[-1].thinking) if self.turns else 0,
+                "tool_runs": len([t for t in tool_history if not t.skipped]),
+                "tool_skipped": len([t for t in tool_history if t.skipped]),
             })
         except Exception:
             pass
