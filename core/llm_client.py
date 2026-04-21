@@ -79,6 +79,17 @@ _SPECIAL_TOKEN_RE = re.compile(
     r"|<eos>"
 )
 
+# Maez's own memory-framing markers. If any recalled content contains these
+# (because the LLM once echoed the envelope into its output and the output got
+# persisted), the outer <RECALLED>...</RECALLED> wrapper breaks — the model
+# sees a stray close tag or a duplicate header and starts reading stale recall
+# as live state. Strip them from content before re-wrapping.
+_FRAMING_TOKEN_RE = re.compile(
+    r"</?RECALLED\b[^>]*>"
+    r"|=== (?:END )?PAST OBSERVATIONS[^=]*===",
+    re.IGNORECASE,
+)
+
 
 def active_backend() -> str:
     """Return the currently selected backend name, defaulting to 'ollama'.
@@ -115,9 +126,16 @@ def _strip_special_tokens(text: str) -> str:
     return _SPECIAL_TOKEN_RE.sub("", text)
 
 
+def _strip_framing_tokens(text: str) -> str:
+    """Remove Maez's own memory-framing envelope markers from content."""
+    if not text:
+        return text
+    return _FRAMING_TOKEN_RE.sub("", text)
+
+
 def sanitize_prompt_text(text: str) -> str:
     """Public helper for text that may be fed back into live prompts."""
-    return _strip_special_tokens(text)
+    return _strip_framing_tokens(_strip_special_tokens(text))
 
 
 def _sanitize_messages_for_llamacpp(messages: list[dict]) -> list[dict]:
@@ -440,4 +458,19 @@ if __name__ == '__main__':
     assert _strip_special_tokens('<|im_start|>') == ''
     assert _strip_special_tokens('<|im_end|>') == ''
     assert _strip_special_tokens('<|end_of_text|>') == ''
+
+    # Framing-token stripping: Maez's recall envelope must never survive
+    # inside stored content, or a future recall wraps a tag-within-a-tag.
+    assert _strip_framing_tokens('<RECALLED tier="raw" age="2h">x</RECALLED>') == 'x'
+    assert _strip_framing_tokens('</RECALLED>leak') == 'leak'
+    assert _strip_framing_tokens(
+        '=== PAST OBSERVATIONS — NOT CURRENT STATE ===\nbody'
+    ).strip() == 'body'
+    assert _strip_framing_tokens('=== END PAST OBSERVATIONS ===\nbody').strip() == 'body'
+    # Does not eat unrelated angle-bracket content
+    assert _strip_framing_tokens('<div>keep</div>') == '<div>keep</div>'
+    # sanitize_prompt_text composes both strippers
+    assert sanitize_prompt_text(
+        '<RECALLED tier="x">hi <|im_end|></RECALLED>'
+    ).strip() == 'hi'
     print('  sanitizer OK')
