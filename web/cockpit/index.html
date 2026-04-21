@@ -18,8 +18,6 @@
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <script type="text/babel" src="sim.jsx"></script>
 <script type="text/babel" src="terminal-ui.jsx"></script>
-<script type="text/babel" src="inner-ui.jsx"></script>
-<script type="text/babel" src="design-canvas.jsx"></script>
 </head>
 <body>
 <div id="root"></div>
@@ -28,7 +26,6 @@
 const { ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane, RouterPane,
         MemorySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
         DaemonDeep, S, A, Card, Glass, Chip, Pill, Dot, Button, SoftBtn, MaezAvatar, Icon } = window.TerminalUI;
-const { InnerLifeHero, InnerChat, InnerScratchpad, InstrumentRow, InnerSignals, I, ICard } = window.InnerUI;
 
 // ═══════════════════════════════════════════════════════════
 // Direction A — Terminal Command-Center
@@ -54,7 +51,7 @@ function TerminalDirection() {
   ];
 
   return (
-    <div style={{ width: 1440, height: 900, background: A.bg, color: A.text, fontFamily: A.sans,
+    <div style={{ width: '100vw', height: '100vh', background: A.bg, color: A.text, fontFamily: A.sans,
       display: 'grid', gridTemplateColumns: '228px 1fr 340px', gridTemplateRows: '44px 1fr', overflow: 'hidden',
       backgroundImage: `radial-gradient(ellipse 60% 50% at 15% 10%, ${A.indigo}22 0%, transparent 55%), radial-gradient(ellipse 60% 50% at 90% 90%, ${A.purple}1c 0%, transparent 55%), radial-gradient(ellipse 50% 40% at 60% 50%, ${A.blue}14 0%, transparent 60%)` }}
       data-screen-label="Apple Intelligence · command center">
@@ -166,10 +163,11 @@ function DashboardGrid() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Direction B — Inner Life (stretch / aspirational)
-// Maez as a being with an inner life. Warm, quiet, readable.
+// Direction B was explored on the canvas but not shipped.
+// Kept out of the bundle — see web/cockpit/inner-ui.jsx for
+// the original components if we ever want to resurrect it.
 // ═══════════════════════════════════════════════════════════
-function InnerDirection() {
+function _UnusedInnerDirection() {
   const sim = useSim();
   const [surface, setSurface] = React.useState('home');
 
@@ -437,18 +435,10 @@ function InnerLogs() {
 // Canvas
 // ═══════════════════════════════════════════════════════════
 function App() {
-  return (
-    <DesignCanvas>
-      <DCSection id="maez" title="Maez — WebUI directions" subtitle="two ways to inhabit the same system. both fully interactive — daemon ticks, signals flow, chat streams.">
-        <DCArtboard id="terminal" label="A · Apple Intelligence  ·  glass, precise, command center" width={1440} height={900}>
-          <TerminalDirection />
-        </DCArtboard>
-        <DCArtboard id="inner" label="B · Inner Life  ·  warm, literary, Maez as a being" width={1440} height={900}>
-          <InnerDirection />
-        </DCArtboard>
-      </DCSection>
-    </DesignCanvas>
-  );
+  // Direction A committed — Apple Intelligence glass command center,
+  // full viewport. Direction B source preserved at web/cockpit/inner-ui.jsx
+  // for possible future use (e.g. a grandmother-facing variant).
+  return <TerminalDirection />;
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
