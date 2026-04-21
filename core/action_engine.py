@@ -671,6 +671,46 @@ class ActionEngine:
             _covenant_log(action, params, reasoning, str(e))
             return ActionResult(action, tier, False, error=str(e))
 
+        # Pre-flight snapshot for destructive shell commands. Fails
+        # open — a snapshot error must not block the command. See
+        # core/destructive_snapshot.py.
+        if action == "run_shell":
+            try:
+                from core import destructive_snapshot as _ds
+                _cmd_str = (params or {}).get("cmd", "") if isinstance(params, dict) else ""
+                _cls = _ds.classify(_cmd_str)
+                if _cls.get("is_destructive"):
+                    _files = _cls.get("files", [])
+                    # Resolve git reset --hard sentinel by running git
+                    # diff --name-only at snapshot time. Other shapes
+                    # provide concrete paths already.
+                    if _files == ["<git-modified-tracked>"]:
+                        import subprocess
+                        import re as _re
+                        _cwd_match = _re.search(r"git\s+-C\s+(\S+)", _cmd_str)
+                        _cwd = _cwd_match.group(1) if _cwd_match else "/home/rohit/maez"
+                        try:
+                            _out = subprocess.check_output(
+                                ["git", "-C", _cwd, "diff", "--name-only"],
+                                timeout=5.0,
+                            ).decode("utf-8", errors="replace")
+                            _files = [str(_ds.Path(_cwd) / p) for p in _out.splitlines() if p.strip()]
+                        except Exception:
+                            _files = []
+                    _ds.snapshot(
+                        request_id=action_id or "unknown",
+                        cmd=_cmd_str,
+                        reason=reasoning or "",
+                        files=_files,
+                        shape=_cls.get("shape", ""),
+                    )
+            except Exception as _snap_err:
+                import logging as _lg
+                _lg.getLogger("maez.action_engine").warning(
+                    "pre-flight snapshot failed (continuing): %s",
+                    _snap_err,
+                )
+
         try:
             method = getattr(self, f"_do_{action}", None)
             if not method:

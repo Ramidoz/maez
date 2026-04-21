@@ -246,5 +246,68 @@ class ListRecentSnapshots(unittest.TestCase):
                 self.assertIn("n_files", m)
 
 
+class ActionEngineHooksSnapshot(unittest.TestCase):
+    """When action_engine dispatches a destructive run_shell command,
+    it MUST call destructive_snapshot.snapshot() before letting the
+    command execute. Without this wiring, Task 1's safety layer is
+    inert."""
+
+    def test_destructive_run_shell_triggers_snapshot(self):
+        from unittest.mock import patch, MagicMock
+        from core.action_engine import ActionEngine
+
+        engine = ActionEngine()
+        # Stub _do_run_shell to avoid actually running any command
+        engine._do_run_shell = MagicMock(return_value="(stubbed)")
+
+        with patch("core.destructive_snapshot.snapshot") as mock_snap:
+            mock_snap.return_value = {
+                "manifest_path": "/tmp/fake/manifest.json",
+                "n_files": 1,
+                "errors": [],
+            }
+            engine._execute_action(
+                action="run_shell",
+                params={
+                    "cmd": "rm /tmp/test-file-dne",
+                    "reason": "cleanup",
+                },
+                reasoning="test",
+                tier=2,
+            )
+        # Snapshot was invoked:
+        self.assertTrue(
+            mock_snap.called,
+            "action_engine must call destructive_snapshot.snapshot "
+            "for destructive run_shell commands"
+        )
+        # Invoked with the cmd that triggered it:
+        call_kwargs = mock_snap.call_args.kwargs
+        self.assertIn("rm /tmp/test-file-dne", call_kwargs.get("cmd", ""))
+        self.assertEqual(call_kwargs.get("shape"), "rm")
+
+    def test_non_destructive_run_shell_skips_snapshot(self):
+        from unittest.mock import patch, MagicMock
+        from core.action_engine import ActionEngine
+
+        engine = ActionEngine()
+        engine._do_run_shell = MagicMock(return_value="clean")
+
+        with patch("core.destructive_snapshot.snapshot") as mock_snap:
+            engine._execute_action(
+                action="run_shell",
+                params={
+                    "cmd": "git status --short",
+                    "reason": "probe",
+                },
+                reasoning="test",
+                tier=0,
+            )
+        self.assertFalse(
+            mock_snap.called,
+            "non-destructive run_shell must NOT invoke snapshot"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
