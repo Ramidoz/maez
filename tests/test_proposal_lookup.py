@@ -235,5 +235,37 @@ class LookupDoesNotCreateStrayDbFiles(unittest.TestCase):
             )
 
 
+class ActionEngineRegistration(unittest.TestCase):
+    """The lookup tool is useless to Maez until the action engine knows
+    about it AND the brain_loop is allowed to dispatch it."""
+
+    def test_action_tier_registered(self):
+        from core.action_engine import ACTION_TIERS
+        self.assertIn("lookup_proposal", ACTION_TIERS,
+                      "lookup_proposal missing from ACTION_TIERS")
+        self.assertEqual(ACTION_TIERS["lookup_proposal"], 0,
+                         "lookup_proposal must be tier 0 (read-only)")
+
+    def test_brain_loop_allows_action(self):
+        import inspect
+        from core import brain_loop
+        src = inspect.getsource(brain_loop.run_brain_loop)
+        self.assertIn("'lookup_proposal'", src,
+                      "'lookup_proposal' not in brain_loop.run_brain_loop "
+                      "allowed set — planner can't dispatch it")
+
+    def test_do_method_exists_and_dispatches(self):
+        from core.action_engine import ActionEngine
+        self.assertTrue(
+            hasattr(ActionEngine, "_do_lookup_proposal"),
+            "ActionEngine._do_lookup_proposal is missing; "
+            "the getattr(_do_<action>) dispatch will fail"
+        )
+        self.assertTrue(
+            hasattr(ActionEngine, "lookup_proposal"),
+            "ActionEngine.lookup_proposal public method is missing"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

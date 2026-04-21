@@ -17,7 +17,6 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 import sys
 sys.path.insert(0, str(Path("/home/rohit/maez")))
@@ -223,6 +222,7 @@ ACTION_TIERS = {
     # Pure read-only tools — Lane 0 always.
     'web_search': 0, 'fetch_url': 0,
     'read_file': 0, 'search_files': 0, 'query_system': 0,
+    'lookup_proposal': 0,
     # Soul + memory tools — Lane 0; soul_editor has its own per-section guard.
     'promote_to_core_memory': 0, 'write_soul_note': 0,
     'update_baseline': 0, 'edit_soul_section': 0,
@@ -548,7 +548,6 @@ class ActionEngine:
 
     def _log_action(self, tier: int, action: str, reasoning: str,
                     params: dict, outcome: str, duration: float = 0):
-        level = "DEBUG" if tier == 0 else "INFO"
         params_str = json.dumps(params, default=str)[:500]
         entry = f"T{tier} | {action} | {reasoning[:200]} | {params_str} | {outcome} | {duration:.2f}s"
         if tier == 0:
@@ -859,7 +858,6 @@ class ActionEngine:
 
     def _do_write_soul_note(self, note: str) -> str:
         # Safety: never modify constraints or covenant sections
-        soul = SOUL_PATH.read_text()
         if "HARD CONSTRAINTS" in note.upper() or "TRUST COVENANT" in note.upper():
             raise ForbiddenActionError("Cannot modify constraints or covenant sections")
         ts = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -954,6 +952,25 @@ class ActionEngine:
         # Legacy alias — delegates to run_shell
         return self._do_run_shell(cmd=cmd)
 
+    def lookup_proposal(self, proposal_id, reasoning: str) -> ActionResult:
+        """Tier 0: Look up a proposal by ID across evolution_track.db
+        (candidates) and dream_proposals.db. Read-only."""
+        return self._execute_action(
+            "lookup_proposal",
+            {"proposal_id": proposal_id},
+            reasoning,
+            tier=0,
+        )
+
+    def _do_lookup_proposal(self, proposal_id=None, **_ignored) -> str:
+        """Dispatched by _execute_action at L674 via
+        getattr(self, f'_do_{action}'). Returns the human-readable
+        summary string from core.proposal_lookup.lookup — that string
+        goes straight into the tool transcript."""
+        from core import proposal_lookup
+        result = proposal_lookup.lookup(proposal_id)
+        return result.get("summary") or "(no summary)"
+
     # Session 11x: web_search as a Tier 0 action. Read-only (no side
     # effects), safe, autonomous. Maez can invoke it during reasoning
     # cycles to ground answers in real web results instead of fabricating.
@@ -1040,7 +1057,7 @@ class ActionEngine:
         return self.queue_action("clean_temp_files", {}, reasoning, tier=1)
 
     def _do_clean_temp_files(self) -> str:
-        result = subprocess.run(
+        subprocess.run(
             ["find", "/tmp", "-maxdepth", "1", "-mtime", "+0",
              "-not", "-name", "tmp", "-not", "-name", ".", "-delete"],
             capture_output=True, text=True, timeout=30,
@@ -1453,7 +1470,7 @@ class ActionEngine:
         return action_id
 
     def _do_system_reboot(self, reason: str = "") -> str:
-        result = subprocess.run(
+        subprocess.run(
             ["sudo", "reboot"], capture_output=True, text=True, timeout=10,
         )
         return "Reboot initiated"

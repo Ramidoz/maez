@@ -544,6 +544,7 @@ def run_brain_loop(
         'run_shell', 'write_any_file',
         # Read-only — still supported as direct actions
         'query_system', 'read_file', 'search_files', 'web_search',
+        'lookup_proposal',
         # Legacy aliases — delegate to run_shell / write_any_file internally
         'run_readonly_command', 'run_safe_command',
         'write_file', 'append_to_file', 'git_commit',
