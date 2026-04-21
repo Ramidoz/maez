@@ -60,6 +60,82 @@ _CONVERSATIONAL_RE = _jarvis_re.compile(
     _jarvis_re.IGNORECASE,
 )
 
+# Broader conversational-intent patterns that should NOT trigger the
+# Jarvis tool loop. Added 2026-04-21 after a regression where questions
+# like "What proposal?", "You didn't answer my question", and "What
+# has been on your mind?" were routed into Jarvis and answered with
+# systemctl output — the LoRA-tuned planner defaults to emitting tool
+# calls even when the rule says "DONE if conversational." Gate on the
+# shape of the message rather than relying on the model to pick DONE.
+#
+# Match criteria:
+#   • pure meta-conversation ("you didn't...", "i said...", "what do you mean")
+#   • open-ended reflective questions with NO system/process/file noun
+#     ("what has been on your mind", "what are you thinking about",
+#      "how do you feel", "what are you capable of")
+#   • pure informational statements from the owner
+#     ("I am ...", "I was ...", "I live in ...", "I'm going to ...")
+#     with no imperative verb
+#   • clarifying questions without a system target
+#     ("what proposal", "what do you mean", "which one", "can you explain")
+#
+# Fail-safe: regex is intentionally conservative. Anything with a system
+# noun (disk, service, file, log, process, gpu, ram, cpu, memory,
+# command, package, etc.) falls through to Jarvis.
+_SYSTEM_NOUN_RE = _jarvis_re.compile(
+    r'\b(disk|cpu|gpu|ram|memory|mem|vram|file|files|folder|directory|'
+    r'log|logs|service|services|process|processes|daemon|systemd|systemctl|'
+    r'command|cmd|shell|bash|terminal|package|install|apt|snap|pip|npm|'
+    r'git|commit|branch|repo|repository|node|python|ubuntu|kernel|'
+    r'network|port|url|endpoint|api|http|https|curl|wget|run|check|'
+    r'show\s+me|list\s+files|what.?s\s+running|status|health)\b',
+    _jarvis_re.IGNORECASE,
+)
+
+_CONVERSATIONAL_SHAPE_RE = _jarvis_re.compile(
+    r'^\s*('
+    # Meta-conversation
+    r"you(?:\s+did(?:n['’]t|\s+not))?\s+(?:answer|reply|say|tell|understand|get)|"
+    r"(?:i|we)\s+(?:said|asked|told|meant|thought)|"
+    r"what\s+do\s+you\s+mean|"
+    r"what\s+are\s+you\s+talking\s+about|"
+    r"that['’]s\s+not\s+(?:what|it)|"
+    # Open reflective / capability questions
+    r"what(?:'s| is| has been| have you been)?\s+(?:on\s+your\s+mind|"
+    r"you\s+(?:thinking|feeling|doing|up\s+to)|making\s+you|"
+    r"going\s+on\s+(?:with\s+you|in\s+there))|"
+    r"how\s+(?:do|are)\s+you(?:\s+feeling|\s+doing)?|"
+    r"what\s+are\s+you\s+(?:capable\s+of|able\s+to\s+do|good\s+at)|"
+    r"tell\s+me\s+about\s+yourself|"
+    r"who\s+are\s+you|"
+    # Clarifying questions without system targets
+    r"what\s+(?:proposal|dream|card|idea|question|wondering)|"
+    r"which\s+one|"
+    r"can\s+you\s+(?:explain|clarify|elaborate|rephrase)|"
+    # Plain informational self-reports
+    r"i(?:['’]?m|\s+am|\s+was|\s+will\s+be|\s+have\s+been)\s+"
+    r"(?:staying|living|in|at|going|feeling|thinking|working\s+on|"
+    r"fine|good|tired|sick|home|here|there|back|away)"
+    r')\b.{0,140}[.!?,]?\s*$',
+    _jarvis_re.IGNORECASE,
+)
+
+
+def _is_conversational_intent(text: str) -> bool:
+    """True if the message shape is clearly conversational — pure framing,
+    reflection, or information — and has no system-noun anchor.
+
+    Kept separate from the greeting-only _CONVERSATIONAL_RE so the two
+    tests can be tuned independently. Falls back to False on any
+    ambiguity: anything with a system noun routes to Jarvis.
+    """
+    if not text:
+        return False
+    t = text.strip()
+    if _SYSTEM_NOUN_RE.search(t):
+        return False
+    return bool(_CONVERSATIONAL_SHAPE_RE.match(t))
+
 
 # Defensive per-exchange content cap. The adapter that assembles
 # chat_history caps the COUNT of exchanges; this caps the SIZE of any
@@ -113,15 +189,28 @@ def _summarize_shell_error(err: str) -> str:
 
 
 def _should_run_jarvis_loop(text: str) -> bool:
-    """True if the message could plausibly need tools. Inverts the old
-    keyword gate — bias toward running the loop, only skip on messages
-    that are obviously pure conversation."""
+    """True if the message could plausibly need tools.
+
+    Skips Jarvis (returns False) for:
+      1. Short/empty messages
+      2. Pure greetings + acks (_CONVERSATIONAL_RE)
+      3. Broader conversational shapes with no system-noun anchor
+         (_is_conversational_intent) — meta-conversation, open
+         reflective questions, clarifications without system targets,
+         and plain informational self-reports like "I'm staying in
+         Columbia, MO." This was added 2026-04-21 after the LoRA
+         planner over-emitted TOOL_CALLs on ordinary chat questions,
+         producing system-status replies when the owner asked a
+         conversational question.
+    """
     if not text:
         return False
     t = text.strip()
     if len(t) < 3:
         return False
     if _CONVERSATIONAL_RE.match(t):
+        return False
+    if _is_conversational_intent(t):
         return False
     return True
 
