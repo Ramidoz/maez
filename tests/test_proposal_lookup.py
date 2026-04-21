@@ -235,6 +235,29 @@ class LookupDoesNotCreateStrayDbFiles(unittest.TestCase):
             )
 
 
+class ToolManifestAdvertisesLookup(unittest.TestCase):
+    """Registering in ACTION_TIERS + allowed set isn't enough — the
+    planning LLM needs to SEE the tool in its manifest. Without a
+    manifest entry, the LLM falls back to grep/find/cat (observed
+    2026-04-20: 'what is proposal self edit #25?' still went to
+    grep -r on vocab.json, because the LLM didn't know lookup_proposal
+    existed)."""
+
+    def test_manifest_mentions_lookup_proposal(self):
+        from core.brain_loop import _TOOL_MANIFEST
+        self.assertIn(
+            "lookup_proposal", _TOOL_MANIFEST,
+            "_TOOL_MANIFEST must describe lookup_proposal so the LLM "
+            "knows it exists. Registration alone doesn't reach the "
+            "planner — the manifest is what the planner reads."
+        )
+        self.assertIn(
+            "proposal_id", _TOOL_MANIFEST,
+            "_TOOL_MANIFEST must document the proposal_id param so the "
+            "LLM emits a well-formed TOOL_CALL."
+        )
+
+
 class ActionEngineRegistration(unittest.TestCase):
     """The lookup tool is useless to Maez until the action engine knows
     about it AND the brain_loop is allowed to dispatch it."""
