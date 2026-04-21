@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import urllib.request
 from typing import Any
 
 from core import llm_client as _llm_client
@@ -33,6 +35,48 @@ logger = logging.getLogger("maez.grounding_judge")
 _MODEL_DEFAULT = "qwen36-35b-sft"
 _MAX_TOKENS = 512
 _TEMP = 0.0  # deterministic classification
+
+# Dedicated judge endpoint, wired 2026-04-21 after the regex→judge migration
+# exposed ~7s/call latency on the 35B. A separate llama-server instance runs
+# a smaller dedicated judge model (Qwen3.5-4B) on port 8081; latency drops to
+# ~300ms without meaningfully hurting recall (86% vs 35B's ~90%+ in our
+# 10-case bench).
+#
+# Env vars let the primary and judge endpoints differ. When MAEZ_JUDGE_BASE_URL
+# is set, judge() calls that endpoint directly via HTTP (OpenAI-compatible)
+# instead of routing through _llm_client.chat (which hits the primary). When
+# unset, falls back to _llm_client — preserves old behavior for anyone who
+# doesn't want to run a second llama-server.
+_JUDGE_BASE_URL = os.environ.get("MAEZ_JUDGE_BASE_URL", "").rstrip("/")
+_JUDGE_MODEL = os.environ.get("MAEZ_JUDGE_MODEL", "maez-judge")
+_JUDGE_TIMEOUT_S = float(os.environ.get("MAEZ_JUDGE_TIMEOUT_S", "30"))
+
+
+def _call_dedicated_judge(prompt: str) -> str:
+    """HTTP call to the dedicated judge llama-server. Returns raw content
+    string. Raises on network/HTTP failure — caller handles fail-open."""
+    body = json.dumps({
+        "model": _JUDGE_MODEL,
+        "messages": [
+            {"role": "system",
+             "content": "You are a strict grounding auditor. "
+                        "Output only valid JSON."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": _TEMP,
+        "max_tokens": _MAX_TOKENS,
+        # Qwen3/3.5 default to reasoning mode which floods reasoning_content
+        # and leaves message.content empty. Disable for classification.
+        "chat_template_kwargs": {"enable_thinking": False},
+    }).encode()
+    req = urllib.request.Request(
+        f"{_JUDGE_BASE_URL}/v1/chat/completions",
+        data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=_JUDGE_TIMEOUT_S) as resp:
+        data = json.loads(resp.read())
+    return data["choices"][0]["message"]["content"] or ""
 
 
 # Built-in few-shot bank covering failure classes the regex used to handle.
@@ -196,18 +240,24 @@ def judge(
         few_shots=few_shots or [],
     )
     try:
-        resp = _llm_client.chat(
-            model=model,
-            messages=[
-                {"role": "system",
-                 "content": "You are a strict grounding auditor. "
-                            "Output only valid JSON."},
-                {"role": "user", "content": prompt},
-            ],
-            stream=False, think=False,
-            options={"temperature": _TEMP, "num_predict": _MAX_TOKENS},
-        )
-        output = getattr(resp.message, "content", "") or ""
+        if _JUDGE_BASE_URL:
+            # Dedicated judge llama-server — fast path, small model.
+            output = _call_dedicated_judge(prompt)
+        else:
+            # Fallback: route through the primary llama_client.chat
+            # (historical behavior when no separate judge endpoint exists).
+            resp = _llm_client.chat(
+                model=model,
+                messages=[
+                    {"role": "system",
+                     "content": "You are a strict grounding auditor. "
+                                "Output only valid JSON."},
+                    {"role": "user", "content": prompt},
+                ],
+                stream=False, think=False,
+                options={"temperature": _TEMP, "num_predict": _MAX_TOKENS},
+            )
+            output = getattr(resp.message, "content", "") or ""
     except Exception as e:
         logger.debug("judge LLM call failed: %s", e)
         return []
