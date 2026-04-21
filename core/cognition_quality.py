@@ -70,7 +70,7 @@ POLICY_RETRY_REJECT_LABELS = {          # label combos that trigger retry
     frozenset({'fixation', 'vague'}),
     frozenset({'fixation', 'baseline'}),
 }
-POLICY_EXPLORATORY_THRESHOLD = 0.7      # fixation ratio above this → exploratory mode
+POLICY_EXPLORATORY_THRESHOLD = 0.6      # fixation ratio above this → exploratory mode
 
 
 # ══════════════════════════════════════════════════════════════════════
