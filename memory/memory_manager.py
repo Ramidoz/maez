@@ -13,7 +13,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import chromadb
-import ollama
 from chromadb.config import Settings
 from core.llm_client import sanitize_prompt_text
 from core.birth import memory_phase_tag as _memory_phase_tag
@@ -58,6 +57,83 @@ def _make_client(subdir: str) -> chromadb.PersistentClient:
         path=str(path),
         settings=Settings(anonymized_telemetry=False),
     )
+
+
+def _humanize_age(raw_ts, now: datetime) -> str:
+    """Convert a timestamp (ISO string or unix float) into age-relative
+    language for the prompt: 'just now', 'N minutes ago', 'N hours ago',
+    'N days ago', 'N weeks ago', else 'long ago'. Returns 'earlier' for
+    None / unparseable input — never raises.
+
+    Added 2026-04-21 to close the stale-observation-as-current-state
+    fabrication path. See format_for_prompt docstring."""
+    if raw_ts is None:
+        return "earlier"
+    # Parse
+    try:
+        if isinstance(raw_ts, (int, float)):
+            ts = datetime.fromtimestamp(float(raw_ts), tz=timezone.utc)
+        elif isinstance(raw_ts, str):
+            s = raw_ts.strip()
+            if not s:
+                return "earlier"
+            # Handle trailing 'Z' (ISO UTC)
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            # Python's fromisoformat handles offsets in 3.11+
+            ts = datetime.fromisoformat(s)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+        else:
+            return "earlier"
+    except (ValueError, TypeError, OverflowError):
+        return "earlier"
+
+    delta = now - ts
+    # Future timestamps (clock skew) → treat as just now
+    if delta.total_seconds() < 0:
+        return "just now"
+    secs = int(delta.total_seconds())
+    if secs < 120:
+        return "just now"
+    mins = secs // 60
+    if mins < 60:
+        return f"{mins} minutes ago"
+    hours = secs // 3600
+    if hours < 24:
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    days = delta.days
+    if days < 30:
+        return f"{days} day{'s' if days != 1 else ''} ago"
+    weeks = days // 7
+    if weeks < 12:
+        return f"{weeks} week{'s' if weeks != 1 else ''} ago"
+    return "long ago"
+
+
+def _humanize_daily_age(date_str: str, now: datetime) -> str:
+    """Convert a YYYY-MM-DD daily-summary date into age-relative
+    language. 'today', 'yesterday', 'N days ago', 'N weeks ago'."""
+    if not date_str or date_str == "unknown":
+        return "earlier"
+    try:
+        d = datetime.strptime(date_str[:10], "%Y-%m-%d")
+        d = d.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return "earlier"
+    delta_days = (now.date() - d.date()).days
+    if delta_days < 0:
+        return "today"
+    if delta_days == 0:
+        return "today"
+    if delta_days == 1:
+        return "yesterday"
+    if delta_days < 30:
+        return f"{delta_days} days ago"
+    weeks = delta_days // 7
+    if weeks < 12:
+        return f"{weeks} weeks ago"
+    return "long ago"
 
 
 class MemoryManager:
@@ -477,9 +553,20 @@ class MemoryManager:
         """Format multi-tier recalled memories into a structured prompt block.
 
         Every chunk is wrapped in a <RECALLED .../> envelope carrying tier,
-        id, timestamp (where applicable), and distance (where applicable), so
-        the model cannot mistake prior material for present observation. See
-        tests/test_retrieval_truth.py for the attribution contract.
+        id, age (e.g. "2 hours ago"), timestamp, and distance so the model
+        cannot mistake prior material for present observation. See
+        tests/test_retrieval_truth.py for the attribution contract AND
+        tests/test_memory_manager.py for the age-framing contract.
+
+        Framing upgrade 2026-04-21: age-relative prefix + PAST OBSERVATIONS
+        header. Observed after the cycle-prompt grounding fix (19cde77):
+        the LLM was re-presenting memory content as live state ("the X
+        project is still generating errors", "/home creeping" from a
+        6-hour-old reading). Root cause: recalled entries rendered with
+        only absolute ISO timestamps; the LLM never computed recency.
+        Fix: pre-compute an age-relative string ('2 hours ago', '3 days
+        ago', 'earlier' fallback) per entry, and anchor the block with
+        PAST OBSERVATIONS as the first non-whitespace tokens.
         """
         core = recalled.get("core", []) or []
         daily = recalled.get("daily", []) or []
@@ -488,23 +575,29 @@ class MemoryManager:
         if not (core or daily or raw):
             return ""
 
+        now = datetime.now(timezone.utc)
+
         lines: list[str] = []
-        lines.append("=== RECALLED MEMORY — prior material, not present observation ===")
+        lines.append("=== PAST OBSERVATIONS — NOT CURRENT STATE ===")
         lines.append(
-            "The blocks below are recalled from your own past. They are not "
-            "current perception. Any numbers, states, or events inside them "
-            "describe how things WERE at the time of recall, not how things "
-            "ARE now. Do not restate recalled values as present-tense fact. "
-            "If you quote or rely on one, attribute it (tier and date or cycle)."
+            "Every block below is a recollection from an earlier time. "
+            "Each carries an 'age' attribute showing how long ago it was "
+            "recorded. These are NOT happening now. Do not describe "
+            "recalled activities, projects, errors, disk metrics, or "
+            "states as if they are ongoing — if something appears here "
+            "but is not in the live system-state block, it is finished, "
+            "stale, or unknown in the present. To reference anything "
+            "from memory, you MUST say 'earlier' / 'N hours ago' / "
+            "'yesterday' and attribute it to its age."
         )
         lines.append("")
 
-        # Core — permanent, no timestamp
+        # Core — permanent, no timestamp (age="permanent")
         for i, mem in enumerate(core, 1):
             mem_id = str(mem.get("id", f"core-{i}"))[:16]
             content = sanitize_prompt_text(mem.get("content", ""))
             lines.append(
-                f'<RECALLED tier="core" permanent="true" id="{mem_id}">'
+                f'<RECALLED tier="core" age="permanent" id="{mem_id}">'
             )
             lines.append(content)
             lines.append("</RECALLED>")
@@ -518,35 +611,40 @@ class MemoryManager:
             dist = mem.get("distance")
             dist_attr = f' distance="{dist:.3f}"' if isinstance(dist, (int, float)) else ""
             content = sanitize_prompt_text(mem.get("content", ""))
+            age = _humanize_daily_age(date, now)
             lines.append(
-                f'<RECALLED tier="daily" date="{date}" id="{mem_id}"{dist_attr}>'
-            )
-            lines.append(content)
-            lines.append("</RECALLED>")
-            lines.append("")
-
-        # Raw — past observations
-        for i, mem in enumerate(raw, 1):
-            meta = mem.get("metadata") or {}
-            cycle = meta.get("cycle", "?")
-            ts = (meta.get("timestamp") or "")[:19] or "unknown"
-            mem_id = str(mem.get("id", f"raw-{i}"))[:16]
-            dist = mem.get("distance")
-            dist_attr = f' distance="{dist:.3f}"' if isinstance(dist, (int, float)) else ""
-            content = sanitize_prompt_text(mem.get("content", ""))
-            lines.append(
-                f'<RECALLED tier="raw" cycle="{cycle}" timestamp="{ts}" '
+                f'<RECALLED tier="daily" age="{age}" date="{date}" '
                 f'id="{mem_id}"{dist_attr}>'
             )
             lines.append(content)
             lines.append("</RECALLED>")
             lines.append("")
 
-        lines.append("=== END RECALLED MEMORY ===")
+        # Raw — past observations with per-entry age
+        for i, mem in enumerate(raw, 1):
+            meta = mem.get("metadata") or {}
+            cycle = meta.get("cycle", "?")
+            raw_ts = meta.get("timestamp")
+            ts_str = (str(raw_ts) if raw_ts else "")[:19] or "unknown"
+            age = _humanize_age(raw_ts, now)
+            mem_id = str(mem.get("id", f"raw-{i}"))[:16]
+            dist = mem.get("distance")
+            dist_attr = f' distance="{dist:.3f}"' if isinstance(dist, (int, float)) else ""
+            content = sanitize_prompt_text(mem.get("content", ""))
+            lines.append(
+                f'<RECALLED tier="raw" age="{age}" cycle="{cycle}" '
+                f'timestamp="{ts_str}" id="{mem_id}"{dist_attr}>'
+            )
+            lines.append(content)
+            lines.append("</RECALLED>")
+            lines.append("")
+
+        lines.append("=== END PAST OBSERVATIONS ===")
         lines.append(
-            "Reminder: everything between the RECALLED markers above is prior "
-            "memory, not present state. Ground any factual claim in the live "
-            "system state block, not in recalled text."
+            "Everything above is past. Ground present-tense claims only "
+            "in the live system-state block, not in recalled text. If a "
+            "project, error, or activity appears above but not in live "
+            "state, it is NOT ongoing."
         )
         return "\n".join(lines)
 
