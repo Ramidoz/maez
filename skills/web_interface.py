@@ -1439,6 +1439,46 @@ def api_dreams():
     return jsonify({"dreams": dreams[:15]})
 
 
+@app.route("/api/v1/quality")
+def api_quality():
+    """Quality-signal rollup for the cockpit.
+
+    Aggregates three cognition.log streams (self_claim_audit,
+    error_classifier, consolidation_scores) plus two SQLite sidecars
+    (fabrication_events, recall_stats) into a single JSON blob. All
+    reads are best-effort — on any source failure the corresponding
+    rollup section returns empty / zero rather than 500-ing the call.
+
+    Query params:
+        audit_lookback        — default 200
+        error_lookback        — default 200
+        consolidation_lookback — default 20
+        fabrication_limit     — default 10
+    """
+    try:
+        from core.quality_telemetry import build_rollup
+    except Exception as e:
+        return jsonify({"error": f"telemetry unavailable: {e}"}), 500
+
+    def _int_arg(name: str, default: int) -> int:
+        try:
+            v = int(request.args.get(name, default))
+            return max(1, min(v, 5000))  # clamp
+        except Exception:
+            return default
+
+    try:
+        rollup = build_rollup(
+            audit_lookback=_int_arg("audit_lookback", 200),
+            error_lookback=_int_arg("error_lookback", 200),
+            consolidation_lookback=_int_arg("consolidation_lookback", 20),
+            fabrication_limit=_int_arg("fabrication_limit", 10),
+        )
+        return jsonify(rollup.to_json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/v1/identity")
 def api_identity():
     """Owner / machine / covenant / reddit subs."""
