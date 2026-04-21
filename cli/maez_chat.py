@@ -77,7 +77,7 @@ from skills import claude_router
 
 # ── config ─────────────────────────────────────────────────────────────
 LOCAL_BRAIN_URL = os.environ.get("MAEZ_LLAMACPP_URL", "http://127.0.0.1:8080/v1")
-LOCAL_MODEL = os.environ.get("MAEZ_LLAMACPP_MODEL", "qwen36-35b-sft")
+LOCAL_MODEL = os.environ.get("MAEZ_LLAMACPP_MODEL", "qwen36-35b-base")
 HISTORY_PATH = _MAEZ_ROOT / "logs" / ".maez_chat_history"
 
 # Tool-loop iteration limits (CLI-specific — tool_loop.py has no concept of

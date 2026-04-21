@@ -119,7 +119,7 @@ def _get_public_context_for_telegram() -> str:
         return ""
 
 SOUL_PATH = Path("/home/rohit/maez/config/soul.md")
-MODEL = "qwen36-35b-sft"  # llm_client routes to llama.cpp when MAEZ_LLM_BACKEND=llamacpp
+MODEL = "qwen36-35b-base"  # llm_client routes to llama.cpp when MAEZ_LLM_BACKEND=llamacpp
 
 # Telegram message length limit (Telegram API max is 4096; we leave headroom)
 MAX_MESSAGE_LENGTH = 4000

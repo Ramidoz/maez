@@ -32,7 +32,7 @@ from core import llm_client as _llm_client
 
 logger = logging.getLogger("maez.grounding_judge")
 
-_MODEL_DEFAULT = "qwen36-35b-sft"
+_MODEL_DEFAULT = "qwen36-35b-base"
 _MAX_TOKENS = 512
 _TEMP = 0.0  # deterministic classification
 

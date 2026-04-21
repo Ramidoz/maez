@@ -37,7 +37,7 @@ accounts = UserAccounts()
 memory = MemoryManager()
 
 SOUL_PATH = '/home/rohit/maez/config/soul.md'
-MODEL = 'qwen36-35b-sft'
+MODEL = 'qwen36-35b-base'
 UI_DIR = '/home/rohit/maez/ui'
 HERO_PAGE = os.path.join(UI_DIR, 'maez_hero.html')
 GATE_PAGE = os.path.join(UI_DIR, 'maez_gate.html')

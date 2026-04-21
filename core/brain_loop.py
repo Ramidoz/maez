@@ -594,7 +594,7 @@ def run_brain_loop(
     get_pipeline,
     user_id: str = "rohit",
     chat_id: str = "",
-    model: str = "qwen36-35b-sft",
+    model: str = "qwen36-35b-base",
     max_iters: int = 4,
     recovery_seed=None,
     send_intermediate=None,

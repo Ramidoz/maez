@@ -54,7 +54,7 @@ LLAMACPP_BASE_URL = os.environ.get('MAEZ_LLAMACPP_URL', 'http://127.0.0.1:8080/v
 # with continuous batching + prompt cache. This alias must match the --alias
 # flag passed to llama-server at launch, or be ignored (llama-server accepts
 # any string when only one model is loaded).
-LLAMACPP_MODEL    = os.environ.get('MAEZ_LLAMACPP_MODEL', 'qwen36-35b-sft')
+LLAMACPP_MODEL    = os.environ.get('MAEZ_LLAMACPP_MODEL', 'qwen36-35b-base')
 
 # Gemma-4 / llama.cpp special tokens that should never be forwarded as
 # literal user/system content to the OpenAI-compatible chat endpoint.
