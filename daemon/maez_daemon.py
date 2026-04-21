@@ -80,6 +80,22 @@ LOOP_INTERVAL = 30  # seconds
 HEALTH_PORT = 11435
 WS_PORT = 11436
 
+# Sentinel the model emits when nothing noteworthy to report this cycle.
+# Storing fabricated prose is worse than storing nothing — HEARTBEAT_OK
+# short-circuits audit, storage, and broadcast so the cycle is silent.
+_HEARTBEAT_OK = "HEARTBEAT_OK"
+
+# <final> tag enforcement: model wraps grounded output in <final>...</final>.
+# Anything outside (reasoning preamble, "let me think...") is stripped.
+# Fail-open: if the model omits the tags, full content passes through.
+_FINAL_TAG_RE = re.compile(r"<final>(.*?)</final>", re.DOTALL | re.IGNORECASE)
+
+
+def _extract_final(text: str) -> str:
+    """Extract content from <final>...</final>. Falls back to full text."""
+    m = _FINAL_TAG_RE.search(text)
+    return m.group(1).strip() if m else text
+
 # --- Logging ---
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -770,6 +786,10 @@ class MaezDaemon:
             f"   time-based suggestions.\n\n"
             f"Keep your response to 2-4 sentences. Be direct and grounded in the data.\n"
             f"When a signal is absent, silence about that domain is correct behavior.\n\n"
+            f"If every metric is within its normal range and there is genuinely nothing\n"
+            f"noteworthy to report, respond with ONLY: <final>HEARTBEAT_OK</final>\n\n"
+            f"Otherwise wrap your entire response in <final>...</final> tags.\n"
+            f"Anything outside the tags is discarded — put your full observation inside.\n\n"
             f"Remember: NEVER suggest touching ollama, its models, or any\n"
             f"process that powers your reasoning."
         )
@@ -813,7 +833,7 @@ class MaezDaemon:
                 think=False,
                 options={"temperature": 0.7, "num_predict": 300},
             )
-            content = (response.message.content or "").strip()
+            content = _extract_final((response.message.content or "").strip())
             thinking = getattr(response.message, "thinking", None)
             if thinking:
                 logger.debug("Cycle %d thinking: %s", self.cycle_count, thinking.strip()[:500])
@@ -1924,6 +1944,11 @@ class MaezDaemon:
             result = self._reason(snap)
             if result is None:
                 logger.warning("Cycle %d: no response from model", self.cycle_count)
+            elif result.strip() == _HEARTBEAT_OK:
+                # Nothing noteworthy this cycle — skip audit, storage, broadcast.
+                # Storing fabricated prose is worse than storing nothing.
+                logger.info("Cycle %d: HEARTBEAT_OK — silent cycle", self.cycle_count)
+                result = None
             else:
                 # Self-claim audit on the cycle response BEFORE anything
                 # else sees it. The cycle-prompt grounding fix (commit
@@ -1937,19 +1962,33 @@ class MaezDaemon:
                 # activity_claim fires and rewrites.
                 try:
                     _audit_transcript_parts = []
+                    _cycle_signals_present = []
+                    _cycle_signals_absent = []
                     if (self._last_screen_obs is not None
                             and getattr(self._last_screen_obs, "success", False)):
                         _audit_transcript_parts.append("✓ screen_observation: present")
+                        _cycle_signals_present.append("screen observation")
+                    else:
+                        _cycle_signals_absent.append("screen observation")
                     if self._last_presence_snap is not None:
                         _audit_transcript_parts.append("✓ presence_snapshot: present")
+                        _cycle_signals_present.append("presence snapshot")
+                    else:
+                        _cycle_signals_absent.append("presence snapshot")
                     if self._last_calendar_snap is not None:
                         _audit_transcript_parts.append("✓ calendar_snapshot: present")
+                        _cycle_signals_present.append("calendar")
+                    else:
+                        _cycle_signals_absent.append("calendar")
+                    _cycle_signals_present.append("system stats")
                     _audit_transcript = "\n".join(_audit_transcript_parts)
                     from core.self_claim_audit import audit as _sc_audit
                     _audit_result = _sc_audit(
                         result,
                         surface="daemon_cycle",
                         transcript=_audit_transcript,
+                        signals_present=_cycle_signals_present,
+                        signals_absent=_cycle_signals_absent,
                     )
                     if _audit_result.rewritten:
                         logger.info(
