@@ -40,7 +40,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Iterator, Optional
+from typing import Any, Optional
 
 
 # ── backend selection ────────────────────────────────────────────────
@@ -54,7 +54,7 @@ LLAMACPP_BASE_URL = os.environ.get('MAEZ_LLAMACPP_URL', 'http://127.0.0.1:8080/v
 # with continuous batching + prompt cache. This alias must match the --alias
 # flag passed to llama-server at launch, or be ignored (llama-server accepts
 # any string when only one model is loaded).
-LLAMACPP_MODEL    = os.environ.get('MAEZ_LLAMACPP_MODEL', 'gemma-4-26b')
+LLAMACPP_MODEL    = os.environ.get('MAEZ_LLAMACPP_MODEL', 'qwen36-35b-sft')
 
 # Gemma-4 / llama.cpp special tokens that should never be forwarded as
 # literal user/system content to the OpenAI-compatible chat endpoint.
