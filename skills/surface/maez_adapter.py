@@ -298,11 +298,26 @@ class MaezMessageHandler:
                 pass
 
             # Structural self-claim audit on the final reply.
+            # When a jarvis_transcript exists, the reply is a synthesis
+            # of REAL tool output (shell commands that actually ran on
+            # the owner's machine). The judge doesn't see the transcript
+            # — it only sees the prose reply, so "disk at 70.7%, CPU at
+            # 45%" reads as an invented trend claim and triggers the
+            # shortcircuit. Observed 2026-04-21 after a simple
+            # "heartbeat" turn produced a whole-response "I don't have
+            # a grounded answer" reply.
+            #
+            # Fix: when a non-empty Jarvis transcript is present, pass
+            # in_tool_continuation=True so the audit skips the judge
+            # entirely — the real stdout is what grounds the claim by
+            # construction. This matches the v1 regex-era policy.
             try:
                 from core.self_claim_audit import audit as _sc_audit
+                _has_real_tools = bool(jarvis_transcript and jarvis_transcript.strip())
                 r = _sc_audit(
                     reply,
                     surface=SURFACE_NAME,
+                    in_tool_continuation=_has_real_tools,
                     transcript=jarvis_transcript,
                 )
                 if r.rewritten:
