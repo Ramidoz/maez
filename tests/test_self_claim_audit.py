@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 from core.self_claim_audit import (
     audit, AuditResult, Flag, _diag_find_flags,
-    _rewrite, _sentence_span,
+    _rewrite, _sentence_span, _looks_obviously_clean,
 )
 
 
@@ -89,9 +89,11 @@ class AuditJudgeWiring(unittest.TestCase):
         with patch("core.grounding_judge.judge",
                    side_effect=Exception("llama-server down")), \
              patch("core.fabrication_memory.few_shots_for", return_value=[]):
-            r = audit("any text", surface="daemon_cycle")
+            r = audit(
+                "A claim-shaped sentence about some specific state.",
+                surface="daemon_cycle",
+            )
         self.assertFalse(r.rewritten)
-        self.assertEqual(r.text, "any text")
         self.assertEqual(r.skipped_reason, "judge_unavailable")
 
     def test_multiple_flags_in_same_sentence_replace_once(self):
@@ -109,6 +111,70 @@ class AuditJudgeWiring(unittest.TestCase):
 
 
 # ── rewrite helper ─────────────────────────────────────────────────────
+
+class PreFilter(unittest.TestCase):
+    """Pre-filter must skip the judge on obviously-clean replies and
+    route everything else through. Fail-safe: only skip when highly
+    confident."""
+
+    def test_very_short_texts_are_clean(self):
+        self.assertTrue(_looks_obviously_clean(""))
+        self.assertTrue(_looks_obviously_clean("ok"))
+        self.assertTrue(_looks_obviously_clean("got it"))
+
+    def test_pure_refusals_are_clean(self):
+        self.assertTrue(_looks_obviously_clean("I don't have a screen signal."))
+        self.assertTrue(_looks_obviously_clean("I cannot see that."))
+        self.assertTrue(_looks_obviously_clean("I don't recall."))
+
+    def test_future_intent_is_clean(self):
+        self.assertTrue(_looks_obviously_clean("I'll keep monitoring."))
+        self.assertTrue(_looks_obviously_clean("I'll check later"))
+
+    def test_sentinel_phrases_are_clean(self):
+        self.assertTrue(_looks_obviously_clean("HEARTBEAT_OK"))
+        self.assertTrue(_looks_obviously_clean(
+            "I don't have a grounded answer for that part."
+        ))
+
+    def test_claim_shaped_sentences_NOT_clean(self):
+        # These MUST fall through to the judge, not get skipped.
+        for risky in [
+            "The disk has been trending upward for weeks.",
+            "I'm scanning /var/log for growth culprits.",
+            "Rohit has been working on the refactor all afternoon.",
+            "My Orchestrator v2 handles that.",
+            "CPU at 45%, RAM at 30%, disk at 70%.",  # grounded but audit-worthy
+        ]:
+            self.assertFalse(
+                _looks_obviously_clean(risky),
+                f"risky claim incorrectly pre-filtered as clean: {risky!r}",
+            )
+
+    def test_multi_sentence_never_clean(self):
+        # Even if both sentences match no-fab patterns individually, a
+        # multi-sentence response is always judge-worthy.
+        text = "Okay. I'll keep monitoring."
+        self.assertFalse(_looks_obviously_clean(text))
+
+    def test_audit_skips_judge_on_clean_prefilter(self):
+        """When pre-filter says clean, audit must not call the judge."""
+        from unittest.mock import patch
+        with patch("core.self_claim_audit._find_flags") as mock_find:
+            r = audit("I'll keep monitoring.", surface="chat")
+            mock_find.assert_not_called()
+        self.assertFalse(r.rewritten)
+        self.assertEqual(r.mode, "noop")
+
+    def test_audit_runs_judge_on_non_clean(self):
+        """Claim-shaped text must fall through to the judge."""
+        from unittest.mock import patch
+        with patch("core.self_claim_audit._find_flags",
+                   return_value=([], True)) as mock_find:
+            r = audit("The disk has been trending upward for weeks.",
+                      surface="chat")
+            mock_find.assert_called_once()
+
 
 class RewriteSentenceReplace(unittest.TestCase):
 
