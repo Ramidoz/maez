@@ -1173,6 +1173,405 @@ def api_card_deny(request_id: str):
         return jsonify({"ok": False, "error": str(e)}), 400
 
 
+@app.route("/api/v1/services")
+def api_services():
+    """systemctl status for maez/llama/ollama units."""
+    import subprocess as _sp
+    out = {}
+    try:
+        r = _sp.run(
+            ["systemctl", "list-units", "--type=service", "--all",
+             "--no-pager", "--no-legend", "maez*", "llama*", "ollama*"],
+            capture_output=True, text=True, timeout=3.0, check=False,
+        )
+        for line in (r.stdout or "").splitlines():
+            toks = line.strip().split(None, 4)
+            if len(toks) < 4 or not toks[0].endswith(".service"):
+                continue
+            name = toks[0][:-len(".service")]
+            out[name] = {
+                "status": toks[2],
+                "sub": toks[3] if len(toks) > 3 else "",
+                "desc": toks[4] if len(toks) > 4 else "",
+            }
+    except Exception as e:
+        return jsonify({"error": str(e), "services": {}}), 500
+    return jsonify({"services": out})
+
+
+@app.route("/api/v1/gpu")
+def api_gpu():
+    """nvidia-smi query for the primary GPU. Fails cleanly when no GPU."""
+    import subprocess as _sp
+    try:
+        r = _sp.run(
+            ["nvidia-smi", "--query-gpu=memory.used,memory.total,"
+             "temperature.gpu,power.draw,utilization.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=2.0, check=False,
+        )
+        line = (r.stdout or "").strip().splitlines()[0] if r.stdout else ""
+        if not line:
+            return jsonify({"error": "no gpu data"}), 404
+        parts = [p.strip() for p in line.split(",")]
+        vram_used_mb = float(parts[0])
+        vram_total_mb = float(parts[1])
+        return jsonify({
+            "vramUsed": round(vram_used_mb / 1024, 1),
+            "vramTotal": round(vram_total_mb / 1024, 1),
+            "temp": int(float(parts[2])),
+            "power": int(float(parts[3])),
+            "util": int(float(parts[4])),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/v1/signals")
+def api_signals():
+    """Best-effort recent ambient signals. Reads the perception cache
+    file + recent iphone ingest + recent active-window if present.
+    Falls back to an empty list when sources are missing."""
+    import json as _json
+    import os as _os
+    sigs = []
+    # iphone signals json if present
+    iphone_path = "/home/rohit/maez/memory/iphone_signals.json"
+    if _os.path.exists(iphone_path):
+        try:
+            with open(iphone_path) as f:
+                data = _json.load(f)
+            if isinstance(data, list):
+                for ev in data[-6:]:
+                    sigs.append({
+                        "t": str(ev.get("time") or ev.get("ts") or "")[-8:],
+                        "kind": "iphone",
+                        "text": str(ev.get("text") or ev.get("summary")
+                                    or str(ev))[:120],
+                        "src": "iphone",
+                    })
+        except Exception:
+            pass
+    # perception cache — written by the daemon each cycle
+    perception_path = "/home/rohit/maez/memory/perception_cache.json"
+    if _os.path.exists(perception_path):
+        try:
+            with open(perception_path) as f:
+                data = _json.load(f)
+            if isinstance(data, dict):
+                win = data.get("active_window")
+                if win:
+                    sigs.append({
+                        "t": str(data.get("ts", ""))[-8:],
+                        "kind": "focus",
+                        "text": f"Active window → {win}"[:120],
+                        "src": "macos",
+                    })
+                w = data.get("weather")
+                if w:
+                    sigs.append({
+                        "t": str(data.get("ts", ""))[-8:],
+                        "kind": "weather",
+                        "text": str(w)[:120],
+                        "src": "openweather",
+                    })
+        except Exception:
+            pass
+    return jsonify({"signals": sigs[:10]})
+
+
+@app.route("/api/v1/soul")
+def api_soul():
+    """Two-layer soul content."""
+    import os as _os
+    base_path = "/home/rohit/maez/config/soul.base.md"
+    local_path = "/home/rohit/maez/config/soul.local.md"
+    soul = {"base": "", "local": ""}
+    for key, p in (("base", base_path), ("local", local_path)):
+        try:
+            if _os.path.exists(p):
+                with open(p) as f:
+                    soul[key] = f.read()
+        except Exception:
+            pass
+    return jsonify(soul)
+
+
+@app.route("/api/v1/memory")
+def api_memory():
+    """ChromaDB tier counts + recent telegram exchanges as 'hits'."""
+    import sqlite3 as _sq
+    import os as _os
+    stats = {"raw": 0, "daily": 0, "core": 0}
+    for tier in stats:
+        p = f"/home/rohit/maez/memory/db/{tier}/chroma.sqlite3"
+        if not _os.path.exists(p):
+            continue
+        try:
+            c = _sq.connect(p, timeout=1.5)
+            row = c.execute(
+                "SELECT COUNT(*) FROM embeddings"
+            ).fetchone()
+            stats[tier] = int(row[0]) if row else 0
+            c.close()
+        except Exception:
+            pass
+    # Recent hits — read last few telegram exchanges from raw
+    hits = []
+    try:
+        from memory.memory_manager import MemoryManager
+        mem = MemoryManager()
+        for ex in (mem.get_telegram_exchanges(limit=8) or [])[-5:]:
+            content = (ex.get("content") or "")[:200]
+            ts_val = (ex.get("metadata") or {}).get("timestamp", "")
+            hits.append({
+                "tier": "raw",
+                "score": 0.5,
+                "date": str(ts_val)[:10],
+                "text": content,
+                "tokens": len(content) // 4,
+            })
+    except Exception:
+        pass
+    return jsonify({"stats": stats, "hits": hits})
+
+
+@app.route("/api/v1/dreams")
+def api_dreams():
+    """Merged view of evolution candidates + dream proposals."""
+    import sqlite3 as _sq
+    import time as _time
+    dreams = []
+    evo_path = "/home/rohit/maez/memory/evolution_track.db"
+    dream_path = "/home/rohit/maez/memory/dream_proposals.db"
+    # Evolution candidates
+    try:
+        c = _sq.connect(evo_path, timeout=2.0)
+        c.row_factory = _sq.Row
+        rows = c.execute(
+            "SELECT id, state, weakness_description, target_file, diff_text, "
+            "created_at FROM candidates ORDER BY id DESC LIMIT 10"
+        ).fetchall()
+        c.close()
+        for r in rows:
+            state_map = {
+                "validated": "pending", "applied": "approved",
+                "rejected": "rejected", "rolled_back": "rejected",
+            }
+            dreams.append({
+                "id": r["id"],
+                "at": str(r["created_at"] or "")[11:16],
+                "score": 0.75,
+                "status": state_map.get(r["state"], "pending"),
+                "title": (r["weakness_description"] or "")[:80],
+                "rationale": f"targets {r['target_file']}",
+                "diff": (r["diff_text"] or "")[:600],
+                "source": "evolution",
+            })
+    except Exception:
+        pass
+    # Dream proposals
+    try:
+        c = _sq.connect(dream_path, timeout=2.0)
+        c.row_factory = _sq.Row
+        rows = c.execute(
+            "SELECT id, status, insight, proposal_type, target_section, "
+            "created_at, unified_diff FROM dream_proposals "
+            "ORDER BY id DESC LIMIT 10"
+        ).fetchall()
+        c.close()
+        for r in rows:
+            dreams.append({
+                "id": 10000 + r["id"],
+                "at": str(r["created_at"] or "")[-8:-3] if r["created_at"] else "",
+                "score": 0.65,
+                "status": r["status"] or "pending",
+                "title": (r["insight"] or "")[:80],
+                "rationale": (r["insight"] or "")[:200],
+                "diff": (r["unified_diff"] or "")[:600],
+                "source": "dream",
+            })
+    except Exception:
+        pass
+    dreams.sort(key=lambda d: d.get("id", 0), reverse=True)
+    return jsonify({"dreams": dreams[:15]})
+
+
+@app.route("/api/v1/identity")
+def api_identity():
+    """Owner / machine / covenant / reddit subs."""
+    import os as _os
+    identity = {
+        "owner": {
+            "name": "rohit", "pronouns": "he/him",
+            "city": "", "lat": None, "lon": None,
+        },
+        "machine": {
+            "host": _os.uname().nodename,
+            "os": f"{_os.uname().sysname} {_os.uname().release}",
+            "gpu": "rtx 4090 (24gb)",
+            "cpu": "",
+        },
+        "policies": {
+            "jarvis_tier": "liberal",
+            "allowClaude": True,
+            "allowShell": True,
+            "allowSelfModify": "propose-only",
+        },
+        "redditSubs": [],
+    }
+    # Read identity.yaml if present
+    id_path = "/home/rohit/maez/config/identity.yaml"
+    if _os.path.exists(id_path):
+        try:
+            import yaml as _yaml
+            with open(id_path) as f:
+                y = _yaml.safe_load(f) or {}
+            if isinstance(y, dict):
+                for k in ("owner", "machine", "policies"):
+                    if k in y and isinstance(y[k], dict):
+                        identity[k].update(y[k])
+                if "redditSubs" in y:
+                    identity["redditSubs"] = list(y["redditSubs"])
+        except Exception:
+            pass
+    # Reddit subs fallback
+    if not identity["redditSubs"]:
+        identity["redditSubs"] = [
+            "LocalLLaMA", "MachineLearning", "selfhosted",
+        ]
+    return jsonify(identity)
+
+
+@app.route("/api/v1/router")
+def api_router():
+    """Router totals + recent decisions via Langfuse if creds present."""
+    import os as _os
+    totals = {"local": 0, "claude": 0, "bytesIn": 0, "bytesOut": 0, "costUsd": 0.0}
+    window = []
+    if (_os.environ.get("LANGFUSE_PUBLIC_KEY")
+            and _os.environ.get("LANGFUSE_SECRET_KEY")):
+        try:
+            from langfuse import Langfuse
+            client = Langfuse(
+                public_key=_os.environ["LANGFUSE_PUBLIC_KEY"],
+                secret_key=_os.environ["LANGFUSE_SECRET_KEY"],
+                host=(_os.environ.get("LANGFUSE_HOST")
+                      or _os.environ.get("LANGFUSE_BASE_URL")
+                      or "https://cloud.langfuse.com"),
+            )
+            # Langfuse v4 — fetch recent traces, summarize by model.
+            traces = client.api.trace.list(limit=50) if hasattr(
+                client, "api") else None
+            if traces:
+                items = getattr(traces, "data", [])
+                for t in items[:15]:
+                    name = getattr(t, "name", "") or ""
+                    meta = getattr(t, "metadata", {}) or {}
+                    model = (meta or {}).get("model", "") or ""
+                    is_claude = "claude" in model.lower()
+                    if is_claude:
+                        totals["claude"] += 1
+                    else:
+                        totals["local"] += 1
+                    ts_val = getattr(t, "timestamp", "") or ""
+                    window.append({
+                        "t": str(ts_val)[11:19],
+                        "msg": str((getattr(t, "input", {}) or {}).get(
+                            "text", ""))[:60],
+                        "route": "claude" if is_claude else "local",
+                        "conf": 0.9,
+                        "tag": name[:20] or "turn",
+                    })
+        except Exception:
+            pass
+    return jsonify({"totals": totals, "window": window[:10]})
+
+
+@app.route("/api/v1/logs/<name>")
+def api_logs(name: str):
+    """Tail of maez.log / cognition.log / evolution.log."""
+    import re as _re
+    allowed = {
+        "maez": "/home/rohit/maez/logs/maez.log",
+        "cognition": "/home/rohit/maez/logs/cognition.log",
+        "evolution": "/home/rohit/maez/logs/evolution.log",
+    }
+    path = allowed.get(name)
+    if not path:
+        return jsonify({"error": "unknown log"}), 404
+    lines = _tail_log_lines(path, 60)
+    parsed = []
+    for ln in lines:
+        m = _re.match(
+            r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+\[(\w+)\]\s*(\S+)?:?\s*(.*)$",
+            ln,
+        )
+        if m:
+            parsed.append({
+                "t": m.group(1),
+                "level": m.group(2),
+                "src": (m.group(3) or "").rstrip(":")[:20],
+                "msg": m.group(4)[:200],
+            })
+        else:
+            # Free-form continuation line
+            parsed.append({
+                "t": "", "level": "INFO", "src": "", "msg": ln[:200],
+            })
+    return jsonify({"lines": parsed})
+
+
+@app.route("/api/v1/chat/sessions")
+def api_chat_sessions():
+    """Read-only chat view: last 5 telegram exchanges as one session.
+    Cockpit 'Conversation' surface renders this as history. Real
+    send-message is a separate future endpoint (needs brain_loop in
+    the web process, which is a bigger question)."""
+    try:
+        from memory.memory_manager import MemoryManager
+        mem = MemoryManager()
+        exchanges = mem.get_telegram_exchanges(limit=6) or []
+    except Exception:
+        exchanges = []
+    history = []
+    for ex in exchanges:
+        content = ex.get("content") or ""
+        meta = ex.get("metadata") or {}
+        ts_val = str(meta.get("timestamp") or "")[-8:]
+        # Parse "rohit: X\nmaez: Y" shape if present
+        if "maez:" in content:
+            parts = content.split("maez:", 1)
+            user_part = parts[0].replace("rohit:", "").strip()[:500]
+            maez_part = parts[1].strip()[:500]
+            if user_part:
+                history.append({
+                    "role": "user", "t": ts_val, "content": user_part,
+                })
+            if maez_part:
+                history.append({
+                    "role": "assistant", "t": ts_val, "content": maez_part,
+                    "route": "local", "model": "qwen36-35b-sft",
+                    "trace": {"tools": [], "memory": 0, "tokens": len(maez_part) // 4},
+                })
+        else:
+            history.append({
+                "role": "user", "t": ts_val, "content": content[:500],
+            })
+    return jsonify({
+        "sessions": [{
+            "id": "live",
+            "title": "Recent Telegram",
+            "preview": history[-1]["content"][:60] if history else "(empty)",
+            "updated": history[-1]["t"] if history else "",
+            "color": "blue",
+            "unread": 0,
+            "history": history,
+        }],
+        "activeSessionId": "live",
+    })
+
+
 @app.route("/maez_bg_zen.html")
 def bg_zen_page():
     return send_file(os.path.join(UI_DIR, "maez_bg_zen.html"), mimetype="text/html")

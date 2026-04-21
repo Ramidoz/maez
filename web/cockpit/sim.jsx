@@ -423,10 +423,160 @@ const SIM = (() => {
     } catch (e) { /* keep fake values */ }
   };
 
-  // Kick off immediately, then poll.
-  _pollDaemon(); _pollCards();
+  const _pollServices = async () => {
+    try {
+      const r = await fetch('/api/v1/services');
+      if (!r.ok) return;
+      const d = await r.json();
+      if (!d.services) return;
+      // Overlay real status onto whatever's in state.health that matches
+      const rename = {
+        'maez': 'maez (daemon)',
+        'llama-server-vision': 'llama-server-vision',
+      };
+      const newHealth = { ...state.health };
+      for (const [name, info] of Object.entries(d.services)) {
+        const key = rename[name] || name;
+        if (newHealth[key]) {
+          newHealth[key].status = info.status === 'active' ? 'active' : 'inactive';
+        } else {
+          newHealth[key] = { port: null, status: info.status === 'active' ? 'active' : 'inactive', vram: 0, ms: null };
+        }
+      }
+      state.health = newHealth;
+      emit();
+    } catch (e) { /* keep fake */ }
+  };
+
+  const _pollGpu = async () => {
+    try {
+      const r = await fetch('/api/v1/gpu');
+      if (!r.ok) return;
+      const d = await r.json();
+      if (typeof d.vramUsed === 'number') state.gpu.vramUsed = d.vramUsed;
+      if (typeof d.vramTotal === 'number') state.gpu.vramTotal = d.vramTotal;
+      if (typeof d.temp === 'number') state.gpu.temp = d.temp;
+      if (typeof d.power === 'number') state.gpu.power = d.power;
+      if (typeof d.util === 'number') state.gpu.util = d.util;
+      emit();
+    } catch (e) { /* keep fake */ }
+  };
+
+  const _pollSignals = async () => {
+    try {
+      const r = await fetch('/api/v1/signals');
+      if (!r.ok) return;
+      const d = await r.json();
+      if (Array.isArray(d.signals) && d.signals.length) {
+        state.signals = d.signals;
+        emit();
+      }
+    } catch (e) { /* keep fake */ }
+  };
+
+  const _pollSoul = async () => {
+    try {
+      const r = await fetch('/api/v1/soul');
+      if (!r.ok) return;
+      const d = await r.json();
+      if (d.base) state.soul.base = d.base;
+      if (d.local) state.soul.local = d.local;
+      emit();
+    } catch (e) { /* keep fake */ }
+  };
+
+  const _pollMemory = async () => {
+    try {
+      const r = await fetch('/api/v1/memory');
+      if (!r.ok) return;
+      const d = await r.json();
+      if (d.stats) state.memory.stats = d.stats;
+      if (Array.isArray(d.hits) && d.hits.length) state.memory.hits = d.hits;
+      emit();
+    } catch (e) { /* keep fake */ }
+  };
+
+  const _pollDreams = async () => {
+    try {
+      const r = await fetch('/api/v1/dreams');
+      if (!r.ok) return;
+      const d = await r.json();
+      if (Array.isArray(d.dreams) && d.dreams.length) {
+        state.dreams = d.dreams;
+        emit();
+      }
+    } catch (e) { /* keep fake */ }
+  };
+
+  const _pollIdentity = async () => {
+    try {
+      const r = await fetch('/api/v1/identity');
+      if (!r.ok) return;
+      const d = await r.json();
+      if (d.owner) state.identity.owner = { ...state.identity.owner, ...d.owner };
+      if (d.machine) state.identity.machine = { ...state.identity.machine, ...d.machine };
+      if (d.policies) state.identity.policies = { ...state.identity.policies, ...d.policies };
+      if (Array.isArray(d.redditSubs)) state.identity.redditSubs = d.redditSubs;
+      emit();
+    } catch (e) { /* keep fake */ }
+  };
+
+  const _pollRouter = async () => {
+    try {
+      const r = await fetch('/api/v1/router');
+      if (!r.ok) return;
+      const d = await r.json();
+      if (d.totals) state.router.totals = { ...state.router.totals, ...d.totals };
+      if (Array.isArray(d.window) && d.window.length) state.router.window = d.window;
+      emit();
+    } catch (e) { /* keep fake */ }
+  };
+
+  const _pollLogs = async () => {
+    for (const name of ['maez', 'cognition', 'evolution']) {
+      try {
+        const r = await fetch(`/api/v1/logs/${name}`);
+        if (!r.ok) continue;
+        const d = await r.json();
+        if (Array.isArray(d.lines) && d.lines.length) {
+          state.logs[name] = d.lines;
+        }
+      } catch (e) { /* keep fake */ }
+    }
+    emit();
+  };
+
+  const _pollChatSessions = async () => {
+    try {
+      const r = await fetch('/api/v1/chat/sessions');
+      if (!r.ok) return;
+      const d = await r.json();
+      if (Array.isArray(d.sessions) && d.sessions.length) {
+        state.chat.sessions = d.sessions;
+        state.chat.activeSessionId = d.activeSessionId || d.sessions[0].id;
+        emit();
+      }
+    } catch (e) { /* keep fake */ }
+  };
+
+  // Kick off immediately, then poll each on its own cadence. Chose
+  // cadences by staleness tolerance: daemon/gpu/cards update often,
+  // soul/identity/logs rarely, memory/dreams in the middle.
+  _pollDaemon(); _pollCards(); _pollGpu(); _pollServices();
+  _pollSignals(); _pollMemory(); _pollDreams(); _pollSoul();
+  _pollIdentity(); _pollRouter(); _pollLogs(); _pollChatSessions();
   setInterval(_pollDaemon, 5000);
   setInterval(_pollCards, 10000);
+  setInterval(_pollGpu, 5000);
+  setInterval(_pollServices, 15000);
+  setInterval(_pollSignals, 10000);
+  setInterval(_pollMemory, 30000);
+  setInterval(_pollDreams, 20000);
+  setInterval(_pollSoul, 120000);
+  setInterval(_pollIdentity, 300000);
+  setInterval(_pollRouter, 20000);
+  setInterval(_pollLogs, 15000);
+  setInterval(_pollChatSessions, 20000);
 
   return api;
 })();
