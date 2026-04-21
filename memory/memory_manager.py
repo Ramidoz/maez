@@ -471,7 +471,20 @@ class MemoryManager:
         return tagged
 
     def _topic_rerank(self, query: str, results: list[dict], n: int) -> list[dict]:
-        """Re-rank results by boosting topic matches and penalizing fixated topics."""
+        """Re-rank results by boosting topic matches and penalizing fixated topics.
+
+        Three stages (2026-04-21 adds stage 3):
+          1. Topic boost: down-weight distance when content matches the
+             detected wing's keywords.
+          2. Anti-fixation: multiply distance by fixation penalty from
+             cognition_quality so over-represented TOPICS get pushed down.
+          3. MMR diversity: re-rank the top-K survivors with maximal
+             marginal relevance so multiple near-duplicate RESULTS on the
+             same topic don't clone each other across slots. This breaks
+             the disk-fixation drift where the topic router says "disk
+             is fine to recall" but the recall returns 5 lines of the
+             same reading.
+        """
         wing = _topic_router.detect_wing(query)
         logger.debug("[MEMORY] Wing: %s, query: %s", wing, query[:50])
         wing_keywords = WINGS.get(wing, [])
@@ -499,7 +512,19 @@ class MemoryManager:
             mem["distance"] = dist
 
         results.sort(key=lambda m: m.get("distance") or 1.0)
-        return results[:n]
+
+        # Stage 3: MMR diversity over the top-2n survivors, returning n.
+        # Running on a candidate pool larger than n gives MMR room to
+        # diversify; running on exactly n would just be "sort by MMR of
+        # a fixed set" which degrades to relevance in most cases.
+        if len(results) <= 1:
+            return results[:n]
+        try:
+            from memory.mmr import mmr_rerank
+        except ImportError:
+            return results[:n]
+        candidate_pool = results[: max(n * 2, n + 2)]
+        return mmr_rerank(candidate_pool, k=n, lambda_=0.7)
 
     def recall_for_cycle(self, context_query: str) -> dict:
         """Build context for a reasoning cycle with topic-aware retrieval."""
