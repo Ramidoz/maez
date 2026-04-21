@@ -1001,6 +1001,178 @@ def cockpit_static(filename: str):
     return send_from_directory(COCKPIT_DIR, filename)
 
 
+# ── Cockpit live-data API ────────────────────────────────────────────
+# Read-only endpoints the cockpit's sim.jsx polls to replace fake
+# daemon/cards data with real state. Write endpoints limited to
+# card deny — approve requires the decision_pipeline's execution
+# path which lives in the daemon process, not here, so the cockpit
+# punts approve back to Telegram for now.
+
+_MAEZ_LOG_PATH = "/home/rohit/maez/logs/maez.log"
+_COGNITION_LOG_PATH = "/home/rohit/maez/logs/cognition.log"
+_PENDING_CARDS_DB = "/home/rohit/maez/memory/pending_cards.db"
+
+
+def _tail_log_lines(path: str, n: int = 200) -> list:
+    """Return last n lines of a log file. Empty list on failure."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            chunk = min(size, n * 512)
+            f.seek(size - chunk)
+            data = f.read().decode("utf-8", errors="replace")
+        return data.splitlines()[-n:]
+    except Exception:
+        return []
+
+
+@app.route("/api/v1/daemon/state")
+def api_daemon_state():
+    """Snapshot of daemon state, reconstructed from log tail + SQLite
+    queries. Best-effort — fields default when a source is unreachable."""
+    import re as _re
+    import time as _time
+    lines = _tail_log_lines(_MAEZ_LOG_PATH, 400)
+    cycle = None
+    last_cycle_ts = None
+    mood = "attentive"
+    currentThought = ""
+    scratchpad = []
+    score = None
+    # Scan from end for the most recent "Cycle N response:"
+    for i in range(len(lines) - 1, -1, -1):
+        m = _re.search(r"\bCycle (\d+) response:", lines[i])
+        if m:
+            cycle = int(m.group(1))
+            tsm = _re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", lines[i])
+            if tsm:
+                last_cycle_ts = tsm.group(1)
+            # Next non-empty line(s) are the response body
+            body_lines = []
+            j = i + 1
+            while j < len(lines) and len(body_lines) < 3:
+                bl = lines[j].strip()
+                if bl and not _re.search(
+                    r"^\d{4}-\d{2}-\d{2}.*\[INFO\]", bl
+                ):
+                    body_lines.append(bl[:200])
+                j += 1
+                if _re.search(
+                    r"^\d{4}-\d{2}-\d{2}.*\[INFO\] cycle \| score=", lines[j - 1]
+                ) if j - 1 < len(lines) else False:
+                    break
+            currentThought = " ".join(body_lines)[:500]
+            break
+    # Score: most recent "cycle | score=NN"
+    for ln in reversed(lines):
+        m = _re.search(r"cycle \| score=(\d+)", ln)
+        if m:
+            score = int(m.group(1)) / 100.0
+            break
+    # Scratchpad: last 4 cycle bodies (shorter scan)
+    scratch_count = 0
+    for i in range(len(lines) - 1, -1, -1):
+        m = _re.search(r"\bCycle (\d+) response:", lines[i])
+        if m and scratch_count < 4:
+            tsm = _re.match(r"(\d{2}:\d{2}:\d{2})", lines[i][11:19]) \
+                  if len(lines[i]) > 19 else None
+            t = lines[i][11:19] if len(lines[i]) > 19 else ""
+            body = ""
+            if i + 1 < len(lines):
+                body = lines[i + 1].strip()[:160]
+            scratchpad.append({"t": t, "text": body})
+            scratch_count += 1
+    # Open card count (useful for badges)
+    open_cards = 0
+    try:
+        import sqlite3 as _sq
+        conn = _sq.connect(_PENDING_CARDS_DB, timeout=1.5)
+        row = conn.execute(
+            "SELECT COUNT(*) FROM pending_cards WHERE status IN (?, ?)",
+            ("open", "deferred"),
+        ).fetchone()
+        open_cards = int(row[0]) if row else 0
+        conn.close()
+    except Exception:
+        pass
+    return jsonify({
+        "cycle": cycle or 0,
+        "lastTick": last_cycle_ts or "",
+        "nextTickIn": 30,  # loose — daemon uses ~30s cycles
+        "score": score if score is not None else 0.0,
+        "mood": mood,
+        "currentThought": currentThought,
+        "scratchpad": scratchpad,
+        "openCards": open_cards,
+        "sampledAt": int(_time.time()),
+    })
+
+
+@app.route("/api/v1/cards")
+def api_cards_list():
+    """Recent pending cards — all non-terminal + last 24h terminal
+    so the cockpit can show context on what just got resolved."""
+    import sqlite3 as _sq
+    import time as _time
+    since = _time.time() - 86400
+    try:
+        conn = _sq.connect(_PENDING_CARDS_DB, timeout=2.0)
+        conn.row_factory = _sq.Row
+        rows = conn.execute(
+            "SELECT request_id, action, status, created_at, resolved_at, "
+            "resolved_via, params_json, reason, plain_english "
+            "FROM pending_cards "
+            "WHERE status IN ('open', 'deferred') OR created_at > ? "
+            "ORDER BY created_at DESC LIMIT 30",
+            (since,),
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        return jsonify({"error": str(e), "cards": []}), 500
+    import json as _json
+    cards = []
+    for r in rows:
+        params = {}
+        try:
+            params = _json.loads(r["params_json"] or "{}")
+        except Exception:
+            pass
+        cards.append({
+            "id": r["request_id"],
+            "action": r["action"],
+            "status": r["status"],
+            "cmd": params.get("cmd") or params.get("path") or "",
+            "reason": (r["plain_english"] or r["reason"]
+                       or params.get("reason", "")),
+            "created_at": r["created_at"],
+            "resolved_at": r["resolved_at"],
+            "resolved_via": r["resolved_via"],
+        })
+    return jsonify({"cards": cards})
+
+
+@app.route("/api/v1/cards/<request_id>/deny", methods=["POST"])
+def api_card_deny(request_id: str):
+    """Deny a card from the cockpit. Safe — no execution side effect,
+    just marks it resolved so the UI (and the daemon's state) both
+    see it as closed. Approve is intentionally NOT exposed here —
+    the execution path lives in the daemon process, so cockpit-side
+    approve would flip state but never run the command."""
+    try:
+        from core.pending_cards import CardStore
+        store = CardStore(_PENDING_CARDS_DB)
+        card = store.deny(
+            request_id,
+            user_id="rohit",
+            via="cockpit",
+            notes="denied from cockpit UI",
+        )
+        return jsonify({"ok": True, "status": card.status})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+
 @app.route("/maez_bg_zen.html")
 def bg_zen_page():
     return send_file(os.path.join(UI_DIR, "maez_bg_zen.html"), mimetype="text/html")

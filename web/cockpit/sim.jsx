@@ -352,6 +352,14 @@ const SIM = (() => {
       emit();
     },
     approveQueued: (id, approve) => {
+      // approve=false → deny via cockpit API (safe, no execution).
+      // approve=true → cockpit can't execute (lives in daemon process);
+      // advise the user to approve in Telegram. Either way we remove
+      // from the local list so it stops cluttering the UI.
+      if (approve === false) {
+        fetch(`/api/v1/cards/${encodeURIComponent(id)}/deny`, { method: 'POST' })
+          .catch(() => {});
+      }
       state.approvals = state.approvals.filter((a) => a.id !== id);
       emit();
     },
@@ -369,6 +377,56 @@ const SIM = (() => {
   };
 
   setInterval(tick, 800);
+
+  // ── Live-data polling — merges real Maez state into the sim ────
+  // The prototype's daemon + approvals fields default to fake values.
+  // Every few seconds we hit /api/v1/* and overlay real numbers on
+  // top. On fetch error we keep the fake data (silent fallback) so
+  // the cockpit never breaks when maez-web is offline.
+
+  const _pollDaemon = async () => {
+    try {
+      const r = await fetch('/api/v1/daemon/state');
+      if (!r.ok) return;
+      const d = await r.json();
+      if (typeof d.cycle === 'number' && d.cycle > 0) {
+        state.daemon.cycle = d.cycle;
+      }
+      if (d.lastTick) state.daemon.lastTick = d.lastTick;
+      if (typeof d.score === 'number') state.daemon.score = d.score;
+      if (d.currentThought) state.daemon.currentThought = d.currentThought;
+      if (Array.isArray(d.scratchpad) && d.scratchpad.length) {
+        state.daemon.scratchpad = d.scratchpad;
+      }
+      emit();
+    } catch (e) { /* keep fake values */ }
+  };
+
+  const _pollCards = async () => {
+    try {
+      const r = await fetch('/api/v1/cards');
+      if (!r.ok) return;
+      const d = await r.json();
+      if (!Array.isArray(d.cards)) return;
+      // Only surface still-open cards as "approvals" (the red-badged
+      // queue). Resolved cards stay in the API response for an
+      // eventual "recent activity" view but don't clutter the badge.
+      const open = d.cards.filter((c) => c.status === 'open' || c.status === 'deferred');
+      state.approvals = open.map((c) => ({
+        id: c.id,
+        cmd: c.cmd || c.action,
+        reason: c.reason || '',
+        risk: (c.cmd && (c.cmd.includes('rm ') || c.cmd.includes('checkout') || c.cmd.includes('sudo'))) ? 'high' : 'low',
+        ts: new Date((c.created_at || 0) * 1000).toTimeString().slice(0, 8),
+      }));
+      emit();
+    } catch (e) { /* keep fake values */ }
+  };
+
+  // Kick off immediately, then poll.
+  _pollDaemon(); _pollCards();
+  setInterval(_pollDaemon, 5000);
+  setInterval(_pollCards, 10000);
 
   return api;
 })();
