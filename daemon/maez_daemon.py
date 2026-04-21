@@ -96,6 +96,56 @@ def _extract_final(text: str) -> str:
     m = _FINAL_TAG_RE.search(text)
     return m.group(1).strip() if m else text
 
+
+# Stable cycle instructions — appended to the SOUL system prompt at every
+# _reason() call. Kept byte-identical across cycles so llama.cpp's KV cache
+# reuses the ~600 tokens on each subsequent request. Everything referenced
+# with "above/below" is relative to the per-cycle USER message that follows.
+#
+# Inspired by Hermes Agent's prompt_caching strategy, adapted to local
+# llama.cpp: Anthropic-style cache_control markers don't apply, but the
+# underlying insight — stable prefix bytes enable KV cache reuse — does.
+# Previously these instructions sat at the END of the user message, which
+# meant they rebuilt every cycle (cache miss) even though their content
+# was unchanged.
+_STATIC_CYCLE_INSTRUCTIONS = (
+    "You are Maez, running as a background daemon on the owner's machine.\n\n"
+    "Note: VRAM usage of 17-22GB is the baseline for this system. "
+    "Do not mention it unless it exceeds 23GB.\n\n"
+    "HARD GROUNDING RULES — these override any trained instinct to narrate:\n"
+    "  • If screen observation is ABSENT in the cycle context, do NOT claim\n"
+    "    what app is open, what window is focused, or what the owner is\n"
+    "    working on. Say 'I don't have a screen signal this cycle' or\n"
+    "    simply omit any activity claim.\n"
+    "  • If presence is ABSENT in the cycle context, do NOT claim the owner\n"
+    "    is at their desk, stepped away, is in deep focus, just returned,\n"
+    "    etc. These are presence claims — they require a presence signal.\n"
+    "    Without one, don't make them.\n"
+    "  • Only the sources listed under SIGNALS PRESENT may be cited.\n"
+    "  • Invented activity narration pollutes memory. Don't do it.\n\n"
+    "CYCLE TASK — do the following based on the cycle context below:\n"
+    "1. Note what the owner is doing ONLY IF screen observation is present\n"
+    "   in the cycle context. If it's absent, say nothing about what the\n"
+    "   owner is doing.\n"
+    "2. Look at the system stats — CPU, RAM, GPU, disk, top processes —\n"
+    "   and flag anything that deviates from the system baseline.\n"
+    "   Do NOT mention ollama, VRAM under 23GB, GPU temp under 85C,\n"
+    "   RAM under 80%, or CPU under 95%. These are all normal.\n"
+    "3. Produce ONE concrete, actionable observation or suggestion based on\n"
+    "   sources that ARE present. Focus on things outside the baseline:\n"
+    "   unusual processes, disk pressure, network anomalies, or\n"
+    "   time-based suggestions.\n\n"
+    "RESPONSE FORMAT:\n"
+    "Keep your response to 2-4 sentences. Be direct and grounded in the data.\n"
+    "When a signal is absent, silence about that domain is correct behavior.\n\n"
+    "If every metric is within its normal range and there is genuinely nothing\n"
+    "noteworthy to report, respond with ONLY: <final>HEARTBEAT_OK</final>\n\n"
+    "Otherwise wrap your entire response in <final>...</final> tags.\n"
+    "Anything outside the tags is discarded — put your full observation inside.\n\n"
+    "Remember: NEVER suggest touching ollama, its models, or any\n"
+    "process that powers your reasoning."
+)
+
 # --- Logging ---
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -632,12 +682,15 @@ class MaezDaemon:
             logger.info("Recalled: %d core, %d daily, %d raw",
                         len(recalled["core"]), len(recalled["daily"]), len(recalled["raw"]))
 
+        # Per-cycle dynamic body. The VRAM baseline note and grounding
+        # rules used to live at the END of this string, but they never
+        # change — they're now in _STATIC_CYCLE_INSTRUCTIONS appended to
+        # the system prompt so llama.cpp's KV cache can reuse them.
         prompt = (
             f"Daemon cycle: {self.cycle_count}\n"
-            f"Memory stats: {stats['raw']} raw, {stats['daily']} daily, {stats['core']} core\n\n"
+            f"Memory stats: {stats['raw']} raw, {stats['daily']} daily, {stats['core']} core\n"
+            f"Current time: {day_of_week} {time_of_day}\n\n"
             f"{system_state}\n"
-            f"Note: VRAM usage of 17-22GB is the baseline for this system. "
-            f"Do not mention it unless it exceeds 23GB.\n"
         )
 
         # Add circadian context
@@ -758,41 +811,11 @@ class MaezDaemon:
                 + "\n".join(f"  ✗ {s}" for s in signals_absent) + "\n"
             )
 
-        prompt += (
-            f"You are Maez, running as a background daemon on the owner's machine.\n\n"
-            f"{signal_manifest}\n"
-            f"HARD GROUNDING RULES — these override any trained instinct to narrate:\n"
-            f"  • If screen observation is ABSENT above, do NOT claim what app is open,\n"
-            f"    what window is focused, or what the owner is working on. Say\n"
-            f"    'I don't have a screen signal this cycle' or simply omit any\n"
-            f"    activity claim.\n"
-            f"  • If presence is ABSENT above, do NOT claim the owner is at their desk,\n"
-            f"    stepped away, is in deep focus, just returned, etc. These are\n"
-            f"    presence claims — they require a presence signal. Without one,\n"
-            f"    don't make them.\n"
-            f"  • Only the sources listed under SIGNALS PRESENT may be cited.\n"
-            f"  • Invented activity narration pollutes memory. Don't do it.\n\n"
-            f"Given the current time ({day_of_week} {time_of_day}) and the live system\n"
-            f"stats, do the following:\n"
-            f"1. Note what the owner is doing ONLY IF screen observation is present above.\n"
-            f"   If it's absent, say nothing about what the owner is doing.\n"
-            f"2. Look at the system stats — CPU, RAM, GPU, disk, top processes —\n"
-            f"   and flag anything that deviates from the system baseline.\n"
-            f"   Do NOT mention ollama, VRAM under 23GB, GPU temp under 85C,\n"
-            f"   RAM under 80%, or CPU under 95%. These are all normal.\n"
-            f"3. Produce ONE concrete, actionable observation or suggestion based on\n"
-            f"   sources that ARE present. Focus on things outside the baseline:\n"
-            f"   unusual processes, disk pressure, network anomalies, or\n"
-            f"   time-based suggestions.\n\n"
-            f"Keep your response to 2-4 sentences. Be direct and grounded in the data.\n"
-            f"When a signal is absent, silence about that domain is correct behavior.\n\n"
-            f"If every metric is within its normal range and there is genuinely nothing\n"
-            f"noteworthy to report, respond with ONLY: <final>HEARTBEAT_OK</final>\n\n"
-            f"Otherwise wrap your entire response in <final>...</final> tags.\n"
-            f"Anything outside the tags is discarded — put your full observation inside.\n\n"
-            f"Remember: NEVER suggest touching ollama, its models, or any\n"
-            f"process that powers your reasoning."
-        )
+        # Signal manifest is the only per-cycle-dynamic rule-shaped block.
+        # It goes in the user message because its content changes based on
+        # which signals are present. _STATIC_CYCLE_INSTRUCTIONS (appended
+        # to system prompt) references "SIGNALS PRESENT / ABSENT" here.
+        prompt += signal_manifest
 
         # Store prompt for potential retry use
         self._last_reasoning_prompt = prompt
@@ -824,10 +847,15 @@ class MaezDaemon:
             # daemon path benefits more from parser stability than hidden
             # scratchpad depth right now.
             from core import llm_client as _llm_client
+            # Byte-stable system message (SOUL + static cycle instructions)
+            # enables llama.cpp KV cache reuse across cycles. self.system_prompt
+            # is loaded once at startup; _STATIC_CYCLE_INSTRUCTIONS is a module
+            # constant. Their concatenation is identical every cycle.
+            system_content = self.system_prompt + "\n\n" + _STATIC_CYCLE_INSTRUCTIONS
             response = _llm_client.chat(
                 model=MODEL,
                 messages=[
-                    {"role": "system", "content": self.system_prompt},
+                    {"role": "system", "content": system_content},
                     {"role": "user", "content": prompt},
                 ],
                 think=False,
@@ -2043,10 +2071,16 @@ class MaezDaemon:
                             try:
                                 # Session 11r: via llm_client (was missed in 11p batch)
                                 from core import llm_client as _llm_client
+                                # Same stable system content as primary cycle —
+                                # keeps KV cache warm for retries too.
+                                retry_system = (
+                                    self.system_prompt + "\n\n"
+                                    + _STATIC_CYCLE_INSTRUCTIONS
+                                )
                                 retry_response = _llm_client.chat(
                                     model=MODEL,
                                     messages=[
-                                        {"role": "system", "content": self.system_prompt},
+                                        {"role": "system", "content": retry_system},
                                         {"role": "user", "content": last_prompt},
                                         {"role": "assistant", "content": result},
                                         {"role": "user", "content": retry_instruction},
