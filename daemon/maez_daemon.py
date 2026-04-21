@@ -931,6 +931,23 @@ class MaezDaemon:
                 logger.debug("Cycle %d thinking: %s", self.cycle_count, thinking.strip()[:500])
             return content if content else "(empty response)"
         except Exception as e:
+            # Observational classification — emits structured telemetry
+            # to cognition.log so operators / cockpit can see WHICH class
+            # of error occurred (backend_down, gpu_oom, context_overflow,
+            # etc.) without changing the current behavior. Behavior-level
+            # routing (retry on transient, compress on overflow) lands
+            # in a follow-up once baseline cycle stability is confirmed
+            # unaffected by the taxonomy. See core/error_classifier.py.
+            try:
+                from core.error_classifier import (
+                    classify as _classify,
+                    emit_telemetry as _emit_err,
+                )
+                _classified = _classify(e)
+                _emit_err(_classified, surface="daemon_cycle")
+            except Exception:
+                # Classifier itself should never block error handling.
+                pass
             logger.error("Reasoning cycle failed: %s", e)
             return None
         finally:
