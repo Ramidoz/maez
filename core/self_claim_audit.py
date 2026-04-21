@@ -74,6 +74,15 @@ class AuditResult:
 
 
 _REWRITE_SENTENCE = "I don't have a grounded answer for that part."
+_REWRITE_WHOLE = "I don't have a grounded answer for this right now."
+
+# If the flagged fraction of sentences rises above this AND at least
+# _SHORTCIRCUIT_MIN_FLAGS are flagged, the entire response is replaced with
+# _REWRITE_WHOLE rather than punctuating surviving fragments with sentinels.
+# Pathologically-fabricated responses are more honestly rendered as a single
+# refusal than a mosaic of rewrites.
+_SHORTCIRCUIT_RATIO = 0.5
+_SHORTCIRCUIT_MIN_FLAGS = 2
 
 
 # ── sentence boundary helpers ──────────────────────────────────────────
@@ -110,24 +119,66 @@ def _sentence_span(text: str, pos: int) -> tuple[int, int]:
     return (start, end)
 
 
+def _sentence_spans_covering(text: str, start: int, end: int) -> list[tuple[int, int]]:
+    """All sentence spans that overlap text[start:end]. When a flag's
+    claim straddles multiple sentences (judge occasionally returns a
+    2-sentence quote), we need every one so no fabricated half leaks
+    through after rewrite."""
+    spans: list[tuple[int, int]] = []
+    pos = start
+    safety = 0
+    while pos < end and safety < 32:
+        s_start, s_end = _sentence_span(text, pos)
+        spans.append((s_start, s_end))
+        if s_end <= pos:
+            break
+        pos = s_end
+        safety += 1
+    if not spans:
+        spans.append(_sentence_span(text, start))
+    return spans
+
+
+def _count_sentences(text: str) -> int:
+    """Rough count of sentence-terminator occurrences plus a trailing
+    fragment. Used to compute the flagged-ratio short-circuit threshold.
+    Not semantically perfect — good enough for a 50% guard."""
+    if not text or not text.strip():
+        return 0
+    count = 0
+    i = 0
+    while i < len(text):
+        if _is_real_sentence_terminator(text, i):
+            count += 1
+        i += 1
+    # Trailing non-terminated fragment counts as one sentence.
+    stripped = text.rstrip()
+    if stripped and not _is_real_sentence_terminator(text, len(stripped) - 1):
+        count += 1
+    return max(count, 1)
+
+
 # ── judge → Flag list ──────────────────────────────────────────────────
 
 def _find_flags(
     text: str,
     signals_present: Optional[list] = None,
     signals_absent: Optional[list] = None,
-) -> list[Flag]:
+) -> tuple[list[Flag], bool]:
     """Call the semantic grounding judge, convert its output to Flags.
 
-    Fails open: judge errors / import errors return [] (no flags). Live
-    behavior must never depend on judge availability.
+    Returns (flags, judge_available). `judge_available` is False if the
+    judge call raised or the judge module failed to import — lets the
+    caller emit distinct telemetry for "judge said clean" vs "judge
+    unavailable, no audit ran." Behavior stays fail-open either way:
+    an unavailable judge yields zero flags, same as a clean response.
     """
     try:
         from core import grounding_judge as _judge_mod
         from core import fabrication_memory as _fab_mem
     except Exception as e:
         logger.debug("judge import failed (no flags): %s", e)
-        return []
+        return [], False
 
     sp = list(signals_present or [])
     sa = list(signals_absent or [])
@@ -140,7 +191,7 @@ def _find_flags(
         )
     except Exception as e:
         logger.debug("judge call failed (no flags): %s", e)
-        return []
+        return [], False
 
     flags: list[Flag] = []
     for jf in judge_flags or []:
@@ -148,8 +199,6 @@ def _find_flags(
         reason = (jf.get("reason") or "").strip()
         if not claim:
             continue
-        # Locate the claim substring in the original text. If not found
-        # (e.g. judge paraphrased), skip — we can't safely rewrite.
         idx = text.find(claim)
         if idx < 0:
             continue
@@ -159,22 +208,43 @@ def _find_flags(
             text=claim,
             reason=reason,
         ))
-    return flags
+    return flags, True
 
 
 # ── rewrite ────────────────────────────────────────────────────────────
 
 def _rewrite(text: str, flags: list[Flag]) -> tuple[str, str]:
-    """Replace each flagged claim's containing sentence with the uncertainty
-    sentinel. Returns (new_text, mode). Mode is always 'sentence' when
-    flags are present (v2 has no surgical path)."""
+    """Replace flagged sentences with the uncertainty sentinel. Returns
+    (new_text, mode). Mode is one of:
+      'noop'          — no flags
+      'sentence'      — per-sentence replacement
+      'shortcircuit'  — whole-response replacement when the flagged
+                        fraction crosses _SHORTCIRCUIT_RATIO
+
+    Handles two hardening cases:
+      1. A single flag whose span straddles multiple sentences: every
+         overlapped sentence is replaced (not just the first).
+      2. Pathologically-fabricated response (≥ _SHORTCIRCUIT_RATIO of
+         sentences flagged and ≥ _SHORTCIRCUIT_MIN_FLAGS): whole text
+         replaced with _REWRITE_WHOLE for honesty over mosaic-output.
+    """
     if not flags:
         return text, "noop"
-    # Build replacement operations, de-duped by sentence span so two flags
-    # in the same sentence don't double-replace.
+
+    # Gather every sentence span any flag overlaps.
     spans: set[tuple[int, int]] = set()
     for f in flags:
-        spans.add(_sentence_span(text, f.span[0]))
+        for s in _sentence_spans_covering(text, f.span[0], f.span[1]):
+            spans.add(s)
+
+    # Short-circuit: if we'd be replacing a majority of the response,
+    # just refuse the whole thing once.
+    total_sentences = _count_sentences(text)
+    if (len(spans) >= _SHORTCIRCUIT_MIN_FLAGS
+            and total_sentences > 0
+            and len(spans) / total_sentences >= _SHORTCIRCUIT_RATIO):
+        return _REWRITE_WHOLE, "shortcircuit"
+
     ops = sorted(spans, key=lambda s: s[0])
     new_text = text
     for start, end in reversed(ops):
@@ -226,11 +296,19 @@ def audit(
             skipped_reason="env_disabled",
         )
 
-    flags = _find_flags(text, signals_present=signals_present,
-                        signals_absent=signals_absent)
+    flags, judge_available = _find_flags(
+        text, signals_present=signals_present, signals_absent=signals_absent,
+    )
     if not flags:
-        _emit(surface=surface, flags=[], mode="noop")
-        return AuditResult(text=text, rewritten=False, mode="noop")
+        # Distinguish "judge said clean" from "judge unavailable" so the
+        # cockpit can show a judge-down rate. Behavior is identical
+        # (fail-open) — only telemetry differs.
+        mode = "judge_unavailable" if not judge_available else "noop"
+        _emit(surface=surface, flags=[], mode=mode)
+        return AuditResult(
+            text=text, rewritten=False, mode="noop",
+            skipped_reason=None if judge_available else "judge_unavailable",
+        )
 
     new_text, mode = _rewrite(text, flags)
     _emit(surface=surface, flags=flags, mode=mode)
@@ -287,6 +365,9 @@ def _diag_find_flags(
     signals_present: Optional[list] = None,
     signals_absent: Optional[list] = None,
 ) -> list[Flag]:
-    """Test helper — exposes the judge-based detector for assertions."""
-    return _find_flags(text, signals_present=signals_present,
-                       signals_absent=signals_absent)
+    """Test helper — exposes just the flags list from the tuple-returning
+    internal detector."""
+    flags, _available = _find_flags(
+        text, signals_present=signals_present, signals_absent=signals_absent,
+    )
+    return flags

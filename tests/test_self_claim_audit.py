@@ -48,7 +48,7 @@ class AuditBoundary(unittest.TestCase):
 class AuditJudgeWiring(unittest.TestCase):
 
     def test_no_flags_returns_original(self):
-        with patch("core.self_claim_audit._find_flags", return_value=[]):
+        with patch("core.self_claim_audit._find_flags", return_value=([], True)):
             r = audit("the disk is at 70% and stable", surface="daemon_cycle")
         self.assertFalse(r.rewritten)
         self.assertEqual(r.mode, "noop")
@@ -64,7 +64,7 @@ class AuditJudgeWiring(unittest.TestCase):
             text=claim,
             reason="snapshot signal has no history",
         )
-        with patch("core.self_claim_audit._find_flags", return_value=[flag]):
+        with patch("core.self_claim_audit._find_flags", return_value=([flag], True)):
             r = audit(text, surface="daemon_cycle")
         self.assertTrue(r.rewritten)
         self.assertEqual(r.mode, "sentence")
@@ -72,13 +72,27 @@ class AuditJudgeWiring(unittest.TestCase):
         self.assertNotIn("upward trend suggests a leak", r.text)
 
     def test_judge_failure_fails_open(self):
-        """_find_flags must swallow judge exceptions (no flags, no crash)."""
+        """_find_flags must swallow judge exceptions. Returns ([], False)
+        so the caller can emit 'judge_unavailable' telemetry."""
         from core.self_claim_audit import _find_flags
         with patch("core.grounding_judge.judge",
                    side_effect=Exception("boom")):
-            flags = _find_flags("some text", signals_present=[],
-                                signals_absent=[])
+            flags, available = _find_flags(
+                "some text", signals_present=[], signals_absent=[],
+            )
         self.assertEqual(flags, [])
+        self.assertFalse(available)
+
+    def test_audit_emits_judge_unavailable_when_judge_down(self):
+        """When judge raises, audit must still return the original text
+        but tag mode=judge_unavailable via the AuditResult."""
+        with patch("core.grounding_judge.judge",
+                   side_effect=Exception("llama-server down")), \
+             patch("core.fabrication_memory.few_shots_for", return_value=[]):
+            r = audit("any text", surface="daemon_cycle")
+        self.assertFalse(r.rewritten)
+        self.assertEqual(r.text, "any text")
+        self.assertEqual(r.skipped_reason, "judge_unavailable")
 
     def test_multiple_flags_in_same_sentence_replace_once(self):
         text = "The upward trend is leaking disk."
@@ -86,7 +100,7 @@ class AuditJudgeWiring(unittest.TestCase):
                   reason="no history")
         f2 = Flag(kind="judge", span=(20, 32), text="leaking disk",
                   reason="no trend")
-        with patch("core.self_claim_audit._find_flags", return_value=[f1, f2]):
+        with patch("core.self_claim_audit._find_flags", return_value=([f1, f2], True)):
             r = audit(text, surface="daemon_cycle")
         self.assertTrue(r.rewritten)
         self.assertEqual(
@@ -130,6 +144,78 @@ class RewriteSentenceReplace(unittest.TestCase):
         s_start, s_end = _sentence_span(text, start)
         sentence = text[s_start:s_end]
         self.assertIn("~/.local/share.", sentence)
+
+
+class MultiSentenceFlagSpan(unittest.TestCase):
+    """A single flag whose span covers more than one sentence must
+    replace ALL overlapped sentences, not just the first."""
+
+    def test_two_sentence_claim_replaces_both(self):
+        # Five sentences total; one flag spans 2 of them. 2/5 = 40% stays
+        # under the short-circuit threshold so we exercise multi-sentence
+        # replace specifically.
+        text = (
+            "I'm scanning /var/log now. The trend is upward over 3 cycles. "
+            "CPU is fine. RAM looks okay. Disk at 70%."
+        )
+        claim = "I'm scanning /var/log now. The trend is upward over 3 cycles."
+        start = text.find(claim)
+        flag = Flag(
+            kind="judge",
+            span=(start, start + len(claim)),
+            text=claim,
+            reason="false action + snapshot-as-trend",
+        )
+        new, mode = _rewrite(text, [flag])
+        self.assertEqual(mode, "sentence")
+        # Both fabricated sentences gone
+        self.assertNotIn("I'm scanning /var/log", new)
+        self.assertNotIn("trend is upward", new)
+        # Control sentences preserved
+        self.assertIn("CPU is fine.", new)
+        self.assertIn("RAM looks okay.", new)
+        self.assertIn("Disk at 70%.", new)
+
+
+class ShortCircuitRewrite(unittest.TestCase):
+    """When ≥50% of sentences are flagged (and ≥2 flagged), the whole
+    response is replaced rather than punctuating fragments with sentinels."""
+
+    def test_short_circuits_when_majority_flagged(self):
+        text = "First bad claim. Second bad claim. Third sentence is fine."
+        f1 = Flag(kind="judge", span=(0, 16), text="First bad claim.", reason="r")
+        f2 = Flag(
+            kind="judge",
+            span=(text.find("Second"), text.find("Second") + len("Second bad claim.")),
+            text="Second bad claim.", reason="r",
+        )
+        new, mode = _rewrite(text, [f1, f2])
+        self.assertEqual(mode, "shortcircuit")
+        self.assertEqual(
+            new, "I don't have a grounded answer for this right now.",
+        )
+
+    def test_single_flag_below_threshold_uses_sentence_mode(self):
+        text = "First bad claim. Second is fine. Third is fine. Fourth is fine."
+        f1 = Flag(kind="judge", span=(0, 16), text="First bad claim.", reason="r")
+        new, mode = _rewrite(text, [f1])
+        self.assertEqual(mode, "sentence")
+        self.assertIn("Second is fine.", new)
+
+    def test_two_flags_below_ratio_uses_sentence_mode(self):
+        # 2 flagged out of 5 sentences = 40% < 50% threshold
+        text = ("Bad one. Bad two. Fine three. Fine four. Fine five.")
+        f1 = Flag(kind="judge", span=(0, 8), text="Bad one.", reason="r")
+        f2 = Flag(
+            kind="judge",
+            span=(text.find("Bad two."), text.find("Bad two.") + 8),
+            text="Bad two.", reason="r",
+        )
+        new, mode = _rewrite(text, [f1, f2])
+        self.assertEqual(mode, "sentence")
+        self.assertIn("Fine three.", new)
+        self.assertIn("Fine four.", new)
+        self.assertIn("Fine five.", new)
 
 
 # ── _find_flags via judge (stubbed LLM) ────────────────────────────────
