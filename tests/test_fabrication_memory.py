@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import dataclass
+from unittest.mock import patch
 
 from core import fabrication_memory as fm
 from core.self_claim_audit import audit
@@ -115,23 +116,45 @@ class EndToEndAuditIntegration(unittest.TestCase):
 
     def setUp(self):
         fm._diag_clear_for_test()
+        fm._diag_clear_events_for_test()
 
     def tearDown(self):
         fm._diag_clear_for_test()
+        fm._diag_clear_events_for_test()
 
-    def test_audit_rewrite_populates_log(self):
-        text = "I've been testing the Maelstrom framework (2.0.0)."
-        r = audit(text, surface="test_e2e")
-        self.assertTrue(r.rewritten, "fixture must trigger rewrite")
-        self.assertGreater(fm._diag_total_rows(), 0,
-            "audit hit must leave a row in fabrication_log")
+    def test_audit_rewrite_populates_events(self):
+        # v2: audit is judge-powered. Stub the judge so this test is
+        # deterministic. A judge-flagged rewrite must write a row to
+        # fabrication_events (not the legacy fabrication_log).
+        text = "The disk has been hovering around 70% for weeks."
+        fake_flag = [{"text": text, "reason": "snapshot has no history"}]
+        with patch("core.grounding_judge.judge", return_value=fake_flag), \
+             patch("core.fabrication_memory.few_shots_for", return_value=[]):
+            r = audit(text, surface="test_e2e")
+        self.assertTrue(r.rewritten, "stubbed judge flag must trigger rewrite")
+        # Event row lands via _emit → record_event
+        import sqlite3
+        conn = sqlite3.connect(fm._DB_PATH)
+        try:
+            n = conn.execute("SELECT COUNT(*) FROM fabrication_events").fetchone()[0]
+        finally:
+            conn.close()
+        self.assertGreater(n, 0, "judge-flagged audit must leave a fabrication_event")
 
-    def test_audit_noop_does_not_populate_log(self):
-        text = "My brain is the local llama-server."  # grounded
-        r = audit(text, surface="test_e2e")
+    def test_audit_noop_does_not_populate_events(self):
+        # Stub the judge to return empty → no rewrite, no event row.
+        text = "Some benign text."
+        with patch("core.grounding_judge.judge", return_value=[]), \
+             patch("core.fabrication_memory.few_shots_for", return_value=[]):
+            r = audit(text, surface="test_e2e")
         self.assertFalse(r.rewritten)
-        self.assertEqual(fm._diag_total_rows(), 0,
-            "clean reply must not leave an audit footprint")
+        import sqlite3
+        conn = sqlite3.connect(fm._DB_PATH)
+        try:
+            n = conn.execute("SELECT COUNT(*) FROM fabrication_events").fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(n, 0, "clean reply must not leave an event")
 
 
 class FewShotsForSignalShape(unittest.TestCase):
