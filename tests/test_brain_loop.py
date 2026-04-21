@@ -119,7 +119,8 @@ class ChatHistoryPrompting(unittest.TestCase):
 
         captured = {}
 
-        def fake_chat(*, model, messages, stream, think, options):
+        def fake_chat(*args, **kwargs):
+            messages = kwargs.get("messages", args[0] if args else [])
             if "user_content" not in captured:
                 for m in messages:
                     if m.get("role") == "user":
@@ -132,7 +133,7 @@ class ChatHistoryPrompting(unittest.TestCase):
         fake_action_engine = MagicMock()
         fake_get_pipeline = MagicMock()
 
-        with patch("core.llm_client.chat", side_effect=fake_chat):
+        with patch("core.brain_loop._llm_client.chat", side_effect=fake_chat):
             brain_loop.run_brain_loop(
                 user_text,
                 action_engine=fake_action_engine,
@@ -158,6 +159,18 @@ class ChatHistoryPrompting(unittest.TestCase):
                       f"expected 'superpowers' from history in prompt; got: {prompt[:400]!r}")
         self.assertIn("What did you find?", prompt,
                       f"expected current user text in prompt; got: {prompt[:400]!r}")
+        self.assertIn("--- end exchange", prompt,
+                      f"expected per-exchange closing delimiter in prompt; got: {prompt[:400]!r}")
+
+    def test_long_exchange_content_is_truncated(self):
+        tail_marker = "TAIL_SENTINEL_SHOULD_NOT_APPEAR"
+        long_content = ("x" * 5000) + tail_marker
+        history = [{"content": long_content, "metadata": {}}]
+        prompt = self._capture_first_prompt("What did you find?", history)
+        self.assertIn("…[truncated]", prompt,
+                      f"expected truncation marker; got: {prompt[:400]!r}")
+        self.assertNotIn(tail_marker, prompt,
+                         "original tail should have been truncated away")
 
     def test_none_history_preserves_legacy_shape(self):
         prompt = self._capture_first_prompt("What did you find?", None)

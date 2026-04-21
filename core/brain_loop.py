@@ -35,6 +35,8 @@ import logging
 import re as _re
 from typing import Any, Callable, Optional
 
+from core import llm_client as _llm_client
+
 # Alias to match original module's import style (`_jarvis_re` is the
 # original name for the re module import in telegram_voice.py).
 _jarvis_re = _re
@@ -57,6 +59,14 @@ _CONVERSATIONAL_RE = _jarvis_re.compile(
     r')[\s.!?,]*$',
     _jarvis_re.IGNORECASE,
 )
+
+
+# Defensive per-exchange content cap. The adapter that assembles
+# chat_history caps the COUNT of exchanges; this caps the SIZE of any
+# single exchange so one verbose `maez:` transcript can't blow out the
+# planning prompt. Applied inside run_brain_loop's RECENT CONVERSATION
+# renderer.
+_MAX_EXCHANGE_CHARS = 800
 
 
 def _summarize_shell_error(err: str) -> str:
@@ -519,7 +529,6 @@ def run_brain_loop(
     import json as _json
     import re as _re
     try:
-        from core import llm_client as _llm_client
         from core.action_engine import ACTION_TIERS, FORBIDDEN_ACTION_TYPES
     except Exception as e:
         logger.debug("jarvis loop unavailable: %s", e)
@@ -754,8 +763,11 @@ def run_brain_loop(
                     _content = str(_ex).strip()
                 if not _content:
                     continue
+                if len(_content) > _MAX_EXCHANGE_CHARS:
+                    _content = _content[:_MAX_EXCHANGE_CHARS].rstrip() + " …[truncated]"
                 _parts.append(f"--- exchange {_i} of {len(chat_history)} ---")
                 _parts.append(_content)
+                _parts.append(f"--- end exchange {_i} ---")
             if len(_parts) > 1:
                 _history_block = "\n".join(_parts) + "\n\n"
 
