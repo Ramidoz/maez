@@ -175,12 +175,33 @@ def _collect_top_processes(by: str, n: int = 10) -> list[dict]:
     ]
 
 
+_PERCEPTION_CACHE_PATH = "/home/rohit/maez/memory/perception_cache.json"
+
+
+def _persist_cache(snap: "PerceptionSnapshot") -> None:
+    """Write the most recent snapshot to memory/perception_cache.json
+    so external consumers (the cockpit, observability tools, future
+    skills) can read the current perceived state without needing to
+    call into the daemon. Atomic rename to avoid a reader seeing a
+    half-written file. Silent on any failure — perception must not
+    block on cache I/O."""
+    try:
+        tmp = _PERCEPTION_CACHE_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(snap, f, default=str)
+        import os as _os
+        _os.replace(tmp, _PERCEPTION_CACHE_PATH)
+    except Exception:
+        pass
+
+
 def snapshot() -> PerceptionSnapshot:
-    """Collect a full system state snapshot."""
+    """Collect a full system state snapshot. Side-effect: writes the
+    result to memory/perception_cache.json for external consumers."""
     now = datetime.now().astimezone()
     hour = now.hour
 
-    return {
+    snap: PerceptionSnapshot = {
         "timestamp": now.strftime("%Y-%m-%d %H:%M:%S %Z"),
         "day_of_week": now.strftime("%A"),
         "hour": hour,
@@ -193,6 +214,8 @@ def snapshot() -> PerceptionSnapshot:
         "top_processes_cpu": _collect_top_processes("cpu"),
         "top_processes_mem": _collect_top_processes("mem"),
     }
+    _persist_cache(snap)
+    return snap
 
 
 def format_snapshot(snap: PerceptionSnapshot) -> str:

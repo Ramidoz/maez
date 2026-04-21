@@ -1229,51 +1229,93 @@ def api_gpu():
 
 @app.route("/api/v1/signals")
 def api_signals():
-    """Best-effort recent ambient signals. Reads the perception cache
-    file + recent iphone ingest + recent active-window if present.
-    Falls back to an empty list when sources are missing."""
+    """Best-effort recent ambient signals. Reads perception_cache.json
+    (written by core.perception.snapshot each cycle) and surfaces
+    the interesting fields as discrete signals. Iphone ingest is
+    folded in if the json exists (it doesn't currently on this
+    box — aspirational per the iphone_signals plan)."""
     import json as _json
     import os as _os
     sigs = []
-    # iphone signals json if present
-    iphone_path = "/home/rohit/maez/memory/iphone_signals.json"
-    if _os.path.exists(iphone_path):
-        try:
-            with open(iphone_path) as f:
-                data = _json.load(f)
-            if isinstance(data, list):
-                for ev in data[-6:]:
-                    sigs.append({
-                        "t": str(ev.get("time") or ev.get("ts") or "")[-8:],
-                        "kind": "iphone",
-                        "text": str(ev.get("text") or ev.get("summary")
-                                    or str(ev))[:120],
-                        "src": "iphone",
-                    })
-        except Exception:
-            pass
-    # perception cache — written by the daemon each cycle
     perception_path = "/home/rohit/maez/memory/perception_cache.json"
     if _os.path.exists(perception_path):
         try:
             with open(perception_path) as f:
                 data = _json.load(f)
             if isinstance(data, dict):
-                win = data.get("active_window")
-                if win:
+                ts_val = str(data.get("timestamp", ""))[:19]
+                short_t = ts_val[-8:] if len(ts_val) >= 8 else ts_val
+                # CPU signal — always present
+                cpu = data.get("cpu", {})
+                if isinstance(cpu, dict) and "percent" in cpu:
                     sigs.append({
-                        "t": str(data.get("ts", ""))[-8:],
-                        "kind": "focus",
-                        "text": f"Active window → {win}"[:120],
-                        "src": "macos",
+                        "t": short_t, "kind": "system",
+                        "text": f"CPU {cpu.get('percent')}% across {cpu.get('core_count', '?')} cores",
+                        "src": "psutil",
                     })
-                w = data.get("weather")
-                if w:
+                ram = data.get("ram", {})
+                if isinstance(ram, dict) and "percent" in ram:
                     sigs.append({
-                        "t": str(data.get("ts", ""))[-8:],
-                        "kind": "weather",
-                        "text": str(w)[:120],
-                        "src": "openweather",
+                        "t": short_t, "kind": "system",
+                        "text": f"RAM {ram.get('percent')}% used ({ram.get('used_gb', '?')}G / {ram.get('total_gb', '?')}G)",
+                        "src": "psutil",
+                    })
+                gpu = data.get("gpu")
+                if isinstance(gpu, dict):
+                    sigs.append({
+                        "t": short_t, "kind": "system",
+                        "text": (
+                            f"GPU {gpu.get('utilization_pct', '?')}% · "
+                            f"{gpu.get('memory_used_mb', 0)/1024:.1f}G / "
+                            f"{gpu.get('memory_total_mb', 0)/1024:.1f}G · "
+                            f"{gpu.get('temperature_c', '?')}°C"
+                        ),
+                        "src": "nvidia-smi",
+                    })
+                disk = data.get("disk", {})
+                if isinstance(disk, dict):
+                    for mount, info in disk.items():
+                        if isinstance(info, dict) and "percent" in info:
+                            kind = "disk" if info["percent"] < 85 else "disk_warn"
+                            sigs.append({
+                                "t": short_t, "kind": kind,
+                                "text": (
+                                    f"{mount} {info['percent']}% "
+                                    f"({info.get('used_gb', '?')}G / {info.get('total_gb', '?')}G)"
+                                ),
+                                "src": "psutil",
+                            })
+                tops = data.get("top_processes_cpu") or []
+                if tops:
+                    top_names = ", ".join(
+                        f"{p.get('name', '?')}({p.get('cpu_percent', 0):.0f}%)"
+                        for p in tops[:3]
+                    )
+                    sigs.append({
+                        "t": short_t, "kind": "processes",
+                        "text": f"Top CPU: {top_names}",
+                        "src": "psutil",
+                    })
+        except Exception as e:
+            sigs.append({
+                "t": "", "kind": "error",
+                "text": f"perception_cache.json parse failed: {e}",
+                "src": "system",
+            })
+    # iPhone ingest (aspirational — file doesn't exist on this box yet)
+    iphone_path = "/home/rohit/maez/memory/iphone_signals.json"
+    if _os.path.exists(iphone_path):
+        try:
+            with open(iphone_path) as f:
+                data = _json.load(f)
+            if isinstance(data, list):
+                for ev in data[-4:]:
+                    sigs.append({
+                        "t": str(ev.get("time") or ev.get("ts") or "")[-8:],
+                        "kind": "iphone",
+                        "text": str(ev.get("text") or ev.get("summary")
+                                    or str(ev))[:120],
+                        "src": "iphone",
                     })
         except Exception:
             pass
