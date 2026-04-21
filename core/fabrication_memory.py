@@ -1,0 +1,285 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+"""
+fabrication_memory.py — immune memory for self-claim fabrications.
+
+Every time the self_claim_audit detector rewrites a reply, something
+real happened: the model reached for a fabricated name/path/schedule/
+postcondition that doesn't ground to this system. V1 audit silently
+caught and rewrote. Without memory of those catches, tomorrow's turn
+can still reach for the same invented tokens — the detector rebuffs
+the attempt but nothing is learned.
+
+This module closes that loop. It persists every flagged event to a
+small SQLite table and exposes a prompt snippet that surfaces the
+most-fabricated tokens of the last week. Injected into the system
+prompt (via capability_registry), this gives the model explicit
+negative training-from-its-own-mistakes at generation time.
+
+Not analytics: the goal is behavioral, not observability. The cockpit
+fabrication pane already reads cognition.log for observability; this
+table exists so the next turn's prompt can say "you tried to claim
+X last week, that wasn't real, don't reach for it again."
+
+Design choices:
+  - Separate db (memory/fabrication_log.db) so rotation / archive
+    policy can diverge from the operational dbs.
+  - Lowercase token for grouping so "Maelstrom" and "maelstrom"
+    count as the same attempt.
+  - No user_question capture yet — audit doesn't receive it, and
+    adding the plumbing is a separate follow-up.
+  - Silent-on-failure. A broken fabrication log must never crash
+    an audit call.
+"""
+from __future__ import annotations
+
+import json
+import sqlite3
+import threading
+import time
+from pathlib import Path
+from typing import Optional
+
+_DB_PATH = Path("/home/rohit/maez/memory/fabrication_log.db")
+_db_lock = threading.Lock()
+_initialized = False
+
+
+def _ensure_db() -> Optional[sqlite3.Connection]:
+    """Open / create the fabrication log db. Returns None on failure so
+    callers can no-op silently."""
+    global _initialized
+    try:
+        _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(_DB_PATH, timeout=2.0, check_same_thread=False)
+        if not _initialized:
+            db.executescript("""
+                CREATE TABLE IF NOT EXISTS fabrication_log (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts           REAL NOT NULL,
+                    surface      TEXT NOT NULL,
+                    kind         TEXT NOT NULL,
+                    token        TEXT NOT NULL,
+                    token_lower  TEXT NOT NULL,
+                    mode         TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS fabrication_token_idx
+                    ON fabrication_log(token_lower);
+                CREATE INDEX IF NOT EXISTS fabrication_ts_idx
+                    ON fabrication_log(ts);
+
+                CREATE TABLE IF NOT EXISTS fabrication_events (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts              REAL NOT NULL,
+                    surface         TEXT NOT NULL,
+                    text            TEXT NOT NULL,
+                    signals_absent  TEXT NOT NULL,
+                    reason          TEXT NOT NULL,
+                    mode            TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS fab_events_ts_idx
+                    ON fabrication_events(ts);
+            """)
+            db.commit()
+            _initialized = True
+        return db
+    except Exception:
+        return None
+
+
+def record(surface: str, flags: list, mode: str) -> None:
+    """Persist one row per flag. Called from self_claim_audit._emit()
+    after the cognition.log line is written. `flags` is a list of the
+    audit's Flag dataclass — we duck-type the fields we need."""
+    if not flags:
+        return
+    try:
+        with _db_lock:
+            db = _ensure_db()
+            if db is None:
+                return
+            ts = time.time()
+            rows = []
+            for f in flags:
+                kind = getattr(f, "kind", "unknown")
+                token = getattr(f, "ungrounded_token", "") or ""
+                if not token:
+                    continue
+                rows.append((ts, surface, kind, token, token.lower(), mode))
+            if rows:
+                db.executemany(
+                    "INSERT INTO fabrication_log "
+                    "(ts, surface, kind, token, token_lower, mode) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    rows,
+                )
+                db.commit()
+    except Exception:
+        # Never let memory-write failure break an audit call.
+        return
+
+
+def top_tokens(days: int = 7, limit: int = 8) -> list[tuple[str, str, int]]:
+    """Return [(token_display, kind, count), ...] for tokens fabricated
+    most often in the last N days. Grouped by token_lower + kind so
+    case-variants collapse.
+
+    Returns empty list on any failure — consumers must not rely on
+    this as a source-of-truth; it's advisory."""
+    try:
+        with _db_lock:
+            db = _ensure_db()
+            if db is None:
+                return []
+            since = time.time() - (days * 86400)
+            rows = db.execute(
+                "SELECT token, kind, COUNT(*) as n "
+                "FROM fabrication_log "
+                "WHERE ts >= ? "
+                "GROUP BY token_lower, kind "
+                "ORDER BY n DESC, MAX(ts) DESC "
+                "LIMIT ?",
+                (since, limit),
+            ).fetchall()
+            return [(r[0], r[1], r[2]) for r in rows]
+    except Exception:
+        return []
+
+
+def prompt_snippet(days: int = 7, limit: int = 6) -> str:
+    """Compact prompt-suitable block. Empty string when there's nothing
+    to report (first days of operation, fresh reset, etc.).
+
+    Kept short (~200-400 chars) — injected into every reply-building
+    prompt alongside the capability registry. The load-bearing part is
+    the explicit 'don't reach for these again' instruction."""
+    top = top_tokens(days=days, limit=limit)
+    if not top:
+        return ""
+    lines = ["# FABRICATION MEMORY (things you've tried to invent recently)"]
+    for token, kind, count in top:
+        # Never echo fabricated paths/slashes — they could re-seed
+        # a follow-on fabrication. Clip tokens with slashes to the
+        # leaf, and always truncate.
+        safe = token.replace("/", "·")[:50]
+        lines.append(f"- {safe} ({kind}, flagged {count}x)")
+    lines.append(
+        "INSTRUCTION: The items above are things you previously asserted as "
+        "real Maez internals but the structural audit had to rewrite because "
+        "they don't ground to any file, service, schedule, or tool output on "
+        "this system. Do NOT reach for them again — if asked about any of them, "
+        "respond with honest uncertainty."
+    )
+    return "\n".join(lines)
+
+
+def record_event(
+    surface: str,
+    text: str,
+    signals_absent: list[str],
+    reason: str,
+    mode: str,
+) -> None:
+    """Persist one per-response fabrication event with its signal context.
+    Used to build few-shot examples for the semantic grounding judge."""
+    if not text:
+        return
+    try:
+        with _db_lock:
+            db = _ensure_db()
+            if db is None:
+                return
+            db.execute(
+                "INSERT INTO fabrication_events "
+                "(ts, surface, text, signals_absent, reason, mode) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    time.time(), surface, text[:2000],
+                    json.dumps(signals_absent or []),
+                    reason[:500], mode,
+                ),
+            )
+            db.commit()
+    except Exception:
+        return
+
+
+def few_shots_for(signals_absent: list[str], k: int = 3) -> list[dict]:
+    """Return up to k few-shot examples from fabrication_events whose
+    signal-absent shape most closely matches the provided list.
+
+    Scoring: overlap count (how many signals_absent entries match), then
+    recency as tie-breaker. Falls back to most-recent events when no
+    shape overlap exists.
+    """
+    try:
+        with _db_lock:
+            db = _ensure_db()
+            if db is None:
+                return []
+            rows = db.execute(
+                "SELECT text, signals_absent, reason FROM fabrication_events "
+                "ORDER BY ts DESC LIMIT 200"
+            ).fetchall()
+    except Exception:
+        return []
+    if not rows:
+        return []
+
+    query_set = set(signals_absent or [])
+
+    def _score(row):
+        try:
+            stored = set(json.loads(row[1]))
+        except Exception:
+            stored = set()
+        return len(query_set & stored)
+
+    scored = sorted(rows, key=_score, reverse=True)
+    result = []
+    for text, sa_json, reason in scored[:k]:
+        try:
+            sa = json.loads(sa_json)
+        except Exception:
+            sa = []
+        result.append({"text": text, "signals_absent": sa, "reason": reason})
+    return result
+
+
+# ── diagnostic helpers (for tests + CLI) ──────────────────────────────
+
+def _diag_total_rows() -> int:
+    try:
+        with _db_lock:
+            db = _ensure_db()
+            if db is None:
+                return -1
+            return db.execute("SELECT COUNT(*) FROM fabrication_log").fetchone()[0]
+    except Exception:
+        return -1
+
+
+def _diag_clear_for_test() -> None:
+    """Test-only. Wipes fabrication_log for test isolation."""
+    try:
+        with _db_lock:
+            db = _ensure_db()
+            if db is None:
+                return
+            db.execute("DELETE FROM fabrication_log")
+            db.commit()
+    except Exception:
+        return
+
+
+def _diag_clear_events_for_test() -> None:
+    """Test-only. Wipes fabrication_events for test isolation."""
+    try:
+        with _db_lock:
+            db = _ensure_db()
+            if db is None:
+                return
+            db.execute("DELETE FROM fabrication_events")
+            db.commit()
+    except Exception:
+        return
