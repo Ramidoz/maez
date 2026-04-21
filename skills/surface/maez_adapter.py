@@ -39,6 +39,14 @@ logger = logging.getLogger(__name__)
 # "telegram" or "telegram_text" (the current legacy label).
 SURFACE_NAME = "telegram_surface"
 
+# How many prior telegram exchanges to inject into the brain_loop's
+# planning context. Kept small on purpose — the planning prompt is
+# ~512 tokens and each exchange is capped at 800 chars by
+# core.brain_loop, so 3 fits comfortably with headroom for the tool
+# manifest. Bump only if the model starts missing context from
+# further back; prefer retrieval changes over blind enlargement.
+_CHAT_HISTORY_TURNS = 3
+
 
 class MaezMessageHandler:
     """MessageHandler that plugs Maez's brain into the vendored
@@ -209,7 +217,12 @@ class MaezMessageHandler:
         try:
             _mem = getattr(self.daemon, "memory", None)
             if _mem is not None:
-                chat_history = _mem.get_telegram_exchanges(limit=3)
+                chat_history = await loop.run_in_executor(
+                    None,
+                    lambda: _mem.get_telegram_exchanges(
+                        limit=_CHAT_HISTORY_TURNS,
+                    ),
+                )
         except Exception as e:
             logger.debug("chat_history fetch failed on %s: %s",
                          SURFACE_NAME, e)

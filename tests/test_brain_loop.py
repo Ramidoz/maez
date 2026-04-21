@@ -253,6 +253,54 @@ class AdapterPassesChatHistory(unittest.TestCase):
         self.assertLessEqual(daemon.memory.last_limit, 10,
                              f"adapter used too-large limit: {daemon.memory.last_limit}")
 
+    def test_adapter_falls_open_when_memory_unavailable(self):
+        """If daemon.memory is None (startup race or non-daemon caller),
+        the adapter must still process the turn — chat_history is just
+        passed through as None."""
+        import asyncio
+        from skills.surface import maez_adapter
+
+        class FakeDaemon:
+            def __init__(self):
+                self.memory = None  # the condition under test
+                self.actions = MagicMock()
+                self.telegram = MagicMock()
+                self.telegram._get_pipeline = MagicMock(
+                    return_value=MagicMock()
+                )
+                self.handle_message = MagicMock(return_value="ok")
+                self._surface_v2_adapter = None
+                self._surface_v2_loop = None
+
+        captured_kwargs = {}
+
+        def fake_run_brain_loop(*args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return ""
+
+        daemon = FakeDaemon()
+        handler = maez_adapter.MaezMessageHandler(daemon)
+
+        event = MagicMock()
+        event.text = "anything"
+        event.source = MagicMock()
+        event.source.chat_id = "12345"
+        event.reply_to_message_id = None
+
+        pipe = daemon.telegram._get_pipeline.return_value
+        pipe.card_store = MagicMock()
+        pipe.card_store.get_open_for_channel = MagicMock(return_value=[])
+
+        with patch("core.brain_loop.run_brain_loop",
+                   side_effect=fake_run_brain_loop):
+            asyncio.run(handler(event))
+
+        self.assertIn("chat_history", captured_kwargs,
+                      "adapter must still pass chat_history kwarg")
+        self.assertIsNone(captured_kwargs["chat_history"],
+                          f"expected None when memory is absent, got: "
+                          f"{captured_kwargs['chat_history']!r}")
+
 
 if __name__ == "__main__":
     unittest.main()
