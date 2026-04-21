@@ -1122,6 +1122,8 @@ def audit(
     surface: str = "unknown",
     in_tool_continuation: bool = False,
     transcript: Optional[str] = None,
+    signals_present: Optional[list] = None,
+    signals_absent: Optional[list] = None,
 ) -> AuditResult:
     """Audit an assistant reply before showing it to the user.
 
@@ -1155,6 +1157,39 @@ def audit(
         )
 
     flags = _find_flags(text, transcript=transcript)
+
+    # Dual-run: when MAEZ_SEMANTIC_AUDIT=1, also invoke the semantic judge.
+    # Both outcomes are logged. Judge result is advisory only — regex verdict
+    # governs behavior until judge is validated (Task 4 of grounding plan).
+    import os
+    if os.environ.get("MAEZ_SEMANTIC_AUDIT") == "1":
+        try:
+            from core import grounding_judge as _judge_mod
+            from core import fabrication_memory as _fab_mem
+            judge_flags = _judge_mod.judge(
+                text=text,
+                signals_present=list(signals_present or []),
+                signals_absent=list(signals_absent or []),
+                few_shots=_fab_mem.few_shots_for(
+                    signals_absent=list(signals_absent or []), k=3
+                ),
+            )
+            if judge_flags:
+                for jf in judge_flags:
+                    _fab_mem.record_event(
+                        surface=surface,
+                        text=jf.get("text", ""),
+                        signals_absent=list(signals_absent or []),
+                        reason=jf.get("reason", ""),
+                        mode="judge",
+                    )
+                logger.debug(
+                    "judge flagged %d claims (surface=%s, regex_flags=%d)",
+                    len(judge_flags), surface, len(flags),
+                )
+        except Exception as _je:
+            logger.debug("semantic judge failed (continuing with regex): %s", _je)
+
     if not flags:
         _emit(surface=surface, flags=[], mode="noop")
         return AuditResult(text=text, rewritten=False, mode="noop")

@@ -656,5 +656,73 @@ class ActivityClaimDetector(unittest.TestCase):
         )
 
 
+class AuditDualRunMode(unittest.TestCase):
+    """Task 3: dual-run gated by MAEZ_SEMANTIC_AUDIT=1.
+
+    When the env var is set, audit() runs the regex layer AND the
+    semantic judge, logs both outcomes. When unset, judge is never called.
+    """
+
+    def setUp(self):
+        import os
+        os.environ.pop("MAEZ_SEMANTIC_AUDIT", None)
+
+    def tearDown(self):
+        import os
+        os.environ.pop("MAEZ_SEMANTIC_AUDIT", None)
+
+    def test_judge_skipped_when_env_unset(self):
+        from unittest.mock import patch
+        with patch("core.grounding_judge.judge") as mock_judge:
+            audit("I've been testing the Maelstrom framework.", surface="test")
+            mock_judge.assert_not_called()
+
+    def test_judge_called_when_env_set(self):
+        import os
+        from unittest.mock import patch, MagicMock
+        os.environ["MAEZ_SEMANTIC_AUDIT"] = "1"
+
+        def fake_judge(*, text, signals_present, signals_absent, few_shots, **kw):
+            return []
+
+        with patch("core.grounding_judge.judge", side_effect=fake_judge) as mock_judge:
+            audit(
+                "I've been testing the Maelstrom framework.",
+                surface="test",
+                signals_present=["system stats"],
+                signals_absent=["screen observation"],
+            )
+            mock_judge.assert_called_once()
+
+    def test_judge_failure_does_not_block_regex(self):
+        import os
+        from unittest.mock import patch
+        os.environ["MAEZ_SEMANTIC_AUDIT"] = "1"
+
+        with patch("core.grounding_judge.judge",
+                   side_effect=RuntimeError("llama-server down")):
+            # Regex should still catch Maelstrom even if judge explodes
+            r = audit(
+                "I've been testing the Maelstrom framework.",
+                surface="test",
+            )
+            self.assertTrue(r.rewritten)
+
+    def test_dual_run_audit_still_returns_valid_result(self):
+        import os
+        from unittest.mock import patch
+        os.environ["MAEZ_SEMANTIC_AUDIT"] = "1"
+
+        with patch("core.grounding_judge.judge", return_value=[]):
+            r = audit(
+                "I've been testing the Maelstrom framework.",
+                surface="test",
+                signals_present=[],
+                signals_absent=["screen observation"],
+            )
+            self.assertIsInstance(r, AuditResult)
+            self.assertTrue(r.rewritten)
+
+
 if __name__ == "__main__":
     unittest.main()
