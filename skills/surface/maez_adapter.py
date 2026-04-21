@@ -228,87 +228,96 @@ class MaezMessageHandler:
                          SURFACE_NAME, e)
             chat_history = None
 
-        # Brain-loop stage — runs the tool iteration synchronously
-        # with the pipeline for card-or-inline decisions.
-        jarvis_transcript = ""
-        try:
-            from core import brain_loop as _brain_loop
-            if action_engine is not None and get_pipeline is not None:
-                jarvis_transcript = await loop.run_in_executor(
-                    None,
-                    lambda: _brain_loop.run_brain_loop(
-                        text,
-                        action_engine=action_engine,
-                        get_pipeline=get_pipeline,
-                        user_id="rohit",
-                        chat_id=chat_id,
-                        send_intermediate=_send_intermediate,
-                        chat_history=chat_history,
-                    ),
-                )
-        except Exception as e:
-            logger.warning("brain_loop failed on %s: %s", SURFACE_NAME, e)
+        # Observability: wrap the whole turn in a Langfuse trace so
+        # every LLM call + tool dispatch lands in the UI. No-op when
+        # LANGFUSE_PUBLIC_KEY isn't set (default). See
+        # core.observability for the abstraction.
+        from core.observability import observe_turn
+        with observe_turn(
+            "telegram_turn",
+            input={"text": text, "chat_id": chat_id},
+            metadata={"user_id": "rohit", "surface": SURFACE_NAME},
+        ) as turn:
+            # Brain-loop stage — runs the tool iteration synchronously
+            # with the pipeline for card-or-inline decisions.
             jarvis_transcript = ""
+            try:
+                from core import brain_loop as _brain_loop
+                if action_engine is not None and get_pipeline is not None:
+                    jarvis_transcript = await loop.run_in_executor(
+                        None,
+                        lambda: _brain_loop.run_brain_loop(
+                            text,
+                            action_engine=action_engine,
+                            get_pipeline=get_pipeline,
+                            user_id="rohit",
+                            chat_id=chat_id,
+                            send_intermediate=_send_intermediate,
+                            chat_history=chat_history,
+                            turn=turn,
+                        ),
+                    )
+            except Exception as e:
+                logger.warning("brain_loop failed on %s: %s", SURFACE_NAME, e)
+                jarvis_transcript = ""
 
-        # Fold the brain-loop transcript into the user-text seen by
-        # the synthesis call. Without this, `daemon.handle_message`
-        # synthesizes against the bare user text and the model hedges
-        # ("let me check...") even when tools already ran — the exact
-        # bug observed 2026-04-20 on the first real v2 turns.
-        # `build_synthesis_user_text` adds the HARD INSTRUCTION /
-        # NO-TOOL block that legacy telegram_voice.py used before
-        # its synthesis LLM call.
-        try:
-            from core.brain_loop import build_synthesis_user_text
-            synthesis_text = build_synthesis_user_text(
-                text, jarvis_transcript,
-            )
-        except Exception:
-            synthesis_text = text
+            # Fold the brain-loop transcript into the user-text seen by
+            # the synthesis call.
+            try:
+                from core.brain_loop import build_synthesis_user_text
+                synthesis_text = build_synthesis_user_text(
+                    text, jarvis_transcript,
+                )
+            except Exception:
+                synthesis_text = text
 
-        # Synthesis stage — daemon.handle_message does the final text
-        # reply with registry + residue + self-model blocks injected.
-        try:
-            reply = await loop.run_in_executor(
-                None,
-                self.daemon.handle_message,
-                synthesis_text,
-                SURFACE_NAME,
-            )
-        except Exception as e:
-            logger.warning("daemon dispatch failed on %s: %s",
-                           SURFACE_NAME, e)
-            return f"(internal error: {e})"
+            # Synthesis stage — daemon.handle_message does the final text
+            # reply with registry + residue + self-model blocks injected.
+            try:
+                reply = await loop.run_in_executor(
+                    None,
+                    self.daemon.handle_message,
+                    synthesis_text,
+                    SURFACE_NAME,
+                )
+            except Exception as e:
+                logger.warning("daemon dispatch failed on %s: %s",
+                               SURFACE_NAME, e)
+                turn.update(output=f"(internal error: {e})")
+                return f"(internal error: {e})"
 
-        if not isinstance(reply, str) or not reply.strip():
-            return jarvis_transcript or None
+            if not isinstance(reply, str) or not reply.strip():
+                turn.update(output=jarvis_transcript or "(empty)")
+                return jarvis_transcript or None
 
-        # Strip tool-call JSON leaks before audit + send. These are
-        # LLM-emitted tool-dispatch payloads that shouldn't reach
-        # the user — see `core.brain_loop.strip_tool_call_leaks`.
-        try:
-            from core.brain_loop import strip_tool_call_leaks
-            reply = strip_tool_call_leaks(reply)
-        except Exception:
-            pass
+            # Strip tool-call JSON leaks before audit + send.
+            try:
+                from core.brain_loop import strip_tool_call_leaks
+                reply = strip_tool_call_leaks(reply)
+            except Exception:
+                pass
 
-        # Structural self-claim audit on the final reply. Pass the
-        # jarvis transcript so the transcript-aware detector can flag
-        # past-action claims ("I did check", "I cloned X") that don't
-        # correspond to any real tool run this turn. None-safe: legacy
-        # behavior if jarvis_transcript is empty-string (no tools ran).
-        try:
-            from core.self_claim_audit import audit as _sc_audit
-            r = _sc_audit(
-                reply,
-                surface=SURFACE_NAME,
-                transcript=jarvis_transcript,
-            )
-            if r.rewritten:
-                reply = r.text
-        except Exception as e:
-            logger.warning("self-claim audit failed on %s: %s",
-                           SURFACE_NAME, e)
+            # Structural self-claim audit on the final reply.
+            try:
+                from core.self_claim_audit import audit as _sc_audit
+                r = _sc_audit(
+                    reply,
+                    surface=SURFACE_NAME,
+                    transcript=jarvis_transcript,
+                )
+                if r.rewritten:
+                    reply = r.text
+            except Exception as e:
+                logger.warning("self-claim audit failed on %s: %s",
+                               SURFACE_NAME, e)
+
+            # Record the final reply into the trace before the with
+            # block exits and flushes. This is what the Langfuse UI
+            # shows as the turn's "output".
+            try:
+                turn.update(output=reply)
+            except Exception:
+                pass
 
         return reply
 

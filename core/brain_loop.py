@@ -510,6 +510,7 @@ def run_brain_loop(
     recovery_seed=None,
     send_intermediate=None,
     chat_history=None,
+    turn=None,
 ) -> str:
     """ReAct-style tool-use loop. Returns a transcript block to inject
     into the streaming reply prompt, or an empty string if no tools were
@@ -784,7 +785,47 @@ def run_brain_loop(
         history = [
             f"{_history_block}the owner just said: {user_text!r}{_retry_context}\n\n{_TOOL_MANIFEST}\n\nBegin."
         ]
-    transcript = []  # list of (action, params, output_or_error, ok)
+    # Fallback to a no-op turn if the caller didn't provide one, so
+    # every turn.* call below can dispatch unconditionally.
+    if turn is None:
+        try:
+            from core.observability import _NoopTurn
+            turn = _NoopTurn()
+        except Exception:
+            class _InlineNoop:
+                def llm_call(self, **_kw): return None
+                def tool_call(self, **_kw): return None
+                def event(self, *a, **k): return None
+                def update(self, **k): return None
+            turn = _InlineNoop()
+
+    # Observability-wired transcript list. Every append auto-emits a
+    # turn.tool_call so we don't have to instrument each of the ~8
+    # append sites individually. Append semantics are preserved —
+    # the transcript is still a list consumed by the formatter at
+    # the end of the loop.
+    class _TracingTranscript(list):
+        def append(self, item):
+            super().append(item)
+            try:
+                if isinstance(item, tuple) and len(item) == 4:
+                    _action, _params, _output, _ok = item
+                    turn.tool_call(
+                        name=str(_action or "?"),
+                        params=_params,
+                        output=_output,
+                        ok=(_ok is True),
+                        metadata={
+                            "step": self._current_step[0]
+                            if self._current_step else -1,
+                            "status": str(_ok),
+                        },
+                    )
+            except Exception:
+                pass
+
+    transcript = _TracingTranscript()
+    transcript._current_step = [0]  # mutable holder, updated per iter
     # Dedup guard — when the model re-proposes the same (action, cmd)
     # within a single brain-loop pass, don't re-execute. Each identical
     # re-proposal gets an "ALREADY_RAN" injection into history so the
@@ -794,16 +835,33 @@ def run_brain_loop(
     # because the model kept re-proposing it).
     _seen_keys: set[tuple[str, str]] = set()
 
+    def _emit_tool_trace(action, params, output, ok, step):
+        """Record one tool dispatch into the turn's trace. `ok` may be
+        True/False/'pending' mirroring transcript's tri-state. Silent
+        on any failure — observability never breaks brain_loop."""
+        try:
+            turn.tool_call(
+                name=str(action or "?"),
+                params=params,
+                output=output,
+                ok=(ok is True),
+                metadata={"step": step, "status": str(ok)},
+            )
+        except Exception:
+            pass
+
     for step in range(max_iters):
+        transcript._current_step[0] = step
         convo = "\n\n".join(history)
+        _planner_messages = [
+            {"role": "system",
+             "content": "You are Maez planning tool use. Emit ONE TOOL_CALL line per turn or write DONE."},
+            {"role": "user", "content": convo},
+        ]
         try:
             resp = _llm_client.chat(
                 model=model,
-                messages=[
-                    {"role": "system",
-                     "content": "You are Maez planning tool use. Emit ONE TOOL_CALL line per turn or write DONE."},
-                    {"role": "user", "content": convo},
-                ],
+                messages=_planner_messages,
                 stream=False, think=False,
                 options={"temperature": 0.15, "num_predict": 512},
             )
@@ -811,6 +869,19 @@ def run_brain_loop(
         except Exception as e:
             logger.warning("jarvis loop LLM call failed at step %d: %s", step, e)
             break
+
+        # Record the planning LLM call into the turn trace. Silent on
+        # failure — observability never breaks brain_loop.
+        try:
+            turn.llm_call(
+                name=f"planner_iter_{step}",
+                model=model,
+                input=_planner_messages,
+                output=text,
+                metadata={"step": step, "max_iters": max_iters},
+            )
+        except Exception:
+            pass
 
         # Recovery-pass terminal-state detection. The recovery seed
         # prompt forces the LoRA to emit either a concrete TOOL_CALL

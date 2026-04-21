@@ -161,5 +161,96 @@ class ObserveTurnSwallowsSdkErrors(unittest.TestCase):
                 turn.event("happened", {"k": "v"})
 
 
+class BrainLoopAcceptsTurnKwarg(unittest.TestCase):
+    """run_brain_loop must accept an optional `turn` kwarg and forward
+    llm + tool-call events into it. Without this wiring, Task 1's
+    abstraction is inert."""
+
+    def test_brain_loop_calls_llm_call_and_tool_call(self):
+        """Smoke: planner emits TOOL_CALL once, tool runs, planner
+        emits DONE. We expect:
+          - 1+ llm_call invocations on the turn
+          - 1+ tool_call invocations on the turn
+        """
+        from core import brain_loop
+
+        recorded = {"llm_calls": [], "tool_calls": []}
+
+        class FakeTurn:
+            def llm_call(self, **kwargs):
+                recorded["llm_calls"].append(kwargs)
+
+            def tool_call(self, **kwargs):
+                recorded["tool_calls"].append(kwargs)
+
+            def event(self, *a, **k):
+                pass
+
+            def update(self, **k):
+                pass
+
+        responses = iter([
+            'TOOL_CALL: {"action":"run_shell","params":'
+            '{"cmd":"echo hi","reason":"greet"}}',
+            "DONE",
+        ])
+
+        def fake_chat(*args, **kwargs):
+            resp = MagicMock()
+            resp.message.content = next(responses)
+            return resp
+
+        fake_engine = MagicMock()
+        fake_pipeline = MagicMock()
+        fake_pipeline.handle_action = MagicMock(
+            return_value=MagicMock(
+                status=MagicMock(value="executed"),
+                message="hi",
+                card=None,
+            )
+        )
+
+        with patch("core.brain_loop._llm_client.chat",
+                   side_effect=fake_chat):
+            brain_loop.run_brain_loop(
+                "say hi",
+                action_engine=fake_engine,
+                get_pipeline=lambda: fake_pipeline,
+                turn=FakeTurn(),
+            )
+
+        self.assertGreaterEqual(
+            len(recorded["llm_calls"]), 1,
+            f"expected at least one llm_call; got {recorded['llm_calls']!r}"
+        )
+        self.assertGreaterEqual(
+            len(recorded["tool_calls"]), 1,
+            f"expected at least one tool_call; got {recorded['tool_calls']!r}"
+        )
+
+    def test_brain_loop_turn_none_is_safe(self):
+        """Without a turn kwarg, brain_loop must default to a no-op
+        and NOT crash. This is the default path for callers that
+        haven't adopted observability yet."""
+        from core import brain_loop
+
+        def fake_chat(*args, **kwargs):
+            resp = MagicMock()
+            resp.message.content = "DONE"
+            return resp
+
+        fake_engine = MagicMock()
+        fake_pipeline = MagicMock()
+
+        with patch("core.brain_loop._llm_client.chat",
+                   side_effect=fake_chat):
+            # turn=None (default) must not raise.
+            brain_loop.run_brain_loop(
+                "say hi",
+                action_engine=fake_engine,
+                get_pipeline=lambda: fake_pipeline,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
