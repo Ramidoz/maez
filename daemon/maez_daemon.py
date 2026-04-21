@@ -398,14 +398,30 @@ class MaezDaemon:
         self.CPU_STREAK_REQUIRED = 2
 
     def _load_soul(self) -> str:
-        """Load the system prompt that defines Maez's identity. Scans the
-        content for prompt-injection patterns before returning it — a
-        compromised or tampered SOUL.md is one of the worst supply-chain
-        attacks a local agent could face (it would become the permanent
-        system prompt). See core/context_safety.py."""
+        """Load the system prompt that defines Maez's identity.
+
+        Two gates before the content becomes the live system prompt:
+
+          1. context_safety scan — detects attacker-injected patterns
+             (ignore-previous-instructions, html-comment smuggles,
+             invisible unicode, credential exfil shell commands, etc.)
+
+          2. soul_invariants check — semantic-preservation gate adapted
+             from hermes-agent-self-evolution's GEPA constraint layer.
+             Detects *erosion* — well-meaning edits that silently drop
+             the hard constraints, the trust covenant, or the identity
+             statement. Logs which invariants are missing or violated;
+             falls back to a minimal identity until SOUL is fixed.
+
+        Both gates fail-SAFE: if SOUL can't be trusted, the daemon runs
+        on a minimal fallback identity rather than an empty string or
+        a compromised prompt.
+        """
         try:
             raw = SOUL_PATH.read_text().strip()
             from core.context_safety import scan as _scan
+            from core.soul_invariants import check as _inv_check
+
             scanned = _scan(raw, source="soul.md")
             if scanned.blocked:
                 logger.error(
@@ -415,7 +431,16 @@ class MaezDaemon:
                 )
                 soul = "You are Maez, a system-level AI agent."
             else:
-                soul = raw
+                inv = _inv_check(raw)
+                if not inv.ok:
+                    logger.error(
+                        "SOUL.md %s Running on minimal fallback identity "
+                        "until invariants are restored.",
+                        inv.summary(),
+                    )
+                    soul = "You are Maez, a system-level AI agent."
+                else:
+                    soul = raw
             self._soul_hash = hashlib.md5(soul.encode()).hexdigest()
             logger.info("Soul loaded from %s (%d chars)", SOUL_PATH, len(soul))
             return soul
@@ -432,12 +457,22 @@ class MaezDaemon:
                 # soul.md while the daemon is running is the threat model
                 # here. Startup scan alone is insufficient.
                 from core.context_safety import scan as _scan
+                from core.soul_invariants import check as _inv_check
                 scanned = _scan(raw, source="soul.md (hot-reload)")
                 if scanned.blocked:
                     logger.error(
                         "soul.md hot-reload BLOCKED by context_safety: %s. "
                         "Retaining previous system prompt.",
                         scanned.findings,
+                    )
+                    time.sleep(10)
+                    continue
+                inv = _inv_check(raw)
+                if not inv.ok:
+                    logger.error(
+                        "soul.md hot-reload BLOCKED by soul_invariants: %s. "
+                        "Retaining previous system prompt.",
+                        inv.summary(),
                     )
                     time.sleep(10)
                     continue
