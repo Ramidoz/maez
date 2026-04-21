@@ -61,7 +61,7 @@ from core.cognition_quality import (
     should_retry as cog_should_retry,
     build_retry_prompt as cog_build_retry_prompt,
 )
-from skills.disk_cleanup import scan as disk_scan, format_telegram_message as disk_msg, execute_cleanup
+from skills.disk_cleanup import scan as disk_scan, format_telegram_message as disk_msg
 from skills.self_analysis import analyze as self_analyze, format_for_telegram as analysis_telegram
 from skills.wake_word import start as wake_word_start, stop as wake_word_stop
 from skills.voice_output import initialize as voice_output_init, speak, shutdown as voice_output_shutdown
@@ -85,6 +85,12 @@ LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 logger = logging.getLogger("maez")
 logger.setLevel(logging.DEBUG)
+# Don't propagate to root — the surface-v2 runner attaches a root
+# handler so non-"maez" loggers (httpx, telegram.ext, skills.surface.*)
+# surface in the daemon log. If we propagate, every "maez" line would
+# be logged twice: once by our maez-namespace handlers (below) and
+# once by root's handler.
+logger.propagate = False
 
 file_handler = logging.FileHandler(LOG_PATH)
 file_handler.setFormatter(logging.Formatter(
@@ -596,7 +602,6 @@ class MaezDaemon:
         system_state = format_snapshot(snap)
         day_of_week = snap["day_of_week"]
         time_of_day = snap["time_of_day"]
-        timestamp = snap["timestamp"]
 
         # Build context query from real content for topic-aware retrieval
         # Use last screen observation or perception summary — not timestamp labels
@@ -697,21 +702,75 @@ class MaezDaemon:
         if memory_block:
             prompt += memory_block + "\n\n"
 
+        # Build an honest "signals present this cycle" manifest. This is
+        # the difference between the LLM narrating invented activity
+        # ("rohit is at his desk", "working on X") and saying "I have no
+        # screen signal — can't claim what the owner is doing right
+        # now." Observed 2026-04-21: screen_perception has been
+        # silently failing for weeks, and every cycle response was
+        # inventing activity. Closes the confabulation-at-source gap.
+        screen_present = (
+            self._last_screen_obs is not None
+            and getattr(self._last_screen_obs, "success", False)
+        )
+        presence_present = self._last_presence_snap is not None
+        calendar_present = self._last_calendar_snap is not None
+        signals_present = []
+        signals_absent = []
+        if True:
+            signals_present.append("system stats (CPU/RAM/GPU/disk/processes) — live via psutil")
+        if screen_present:
+            signals_present.append("screen observation — live")
+        else:
+            signals_absent.append("screen observation — UNAVAILABLE this cycle (vision source down or capture failed)")
+        if presence_present:
+            signals_present.append("presence snapshot — live")
+        else:
+            signals_absent.append("presence snapshot — UNAVAILABLE this cycle")
+        if calendar_present:
+            signals_present.append("calendar — live")
+        else:
+            signals_absent.append("calendar — UNAVAILABLE this cycle (OAuth or API)")
+
+        signal_manifest = (
+            "SIGNALS PRESENT THIS CYCLE:\n"
+            + "\n".join(f"  ✓ {s}" for s in signals_present) + "\n"
+        )
+        if signals_absent:
+            signal_manifest += (
+                "SIGNALS ABSENT THIS CYCLE (do NOT fabricate content for these):\n"
+                + "\n".join(f"  ✗ {s}" for s in signals_absent) + "\n"
+            )
+
         prompt += (
-            f"You are Maez, running as a background daemon on the owner's machine.\n"
-            f"You have full visibility into the system state AND screen activity above.\n"
-            f"Given the current time ({day_of_week} {time_of_day}) and the live system stats, "
-            f"do the following:\n"
-            f"1. Note what the owner is actually doing based on the screen observation.\n"
-            f"2. Look at the system stats — CPU, RAM, GPU, disk, top processes — "
-            f"and flag anything that deviates from the system baseline. "
-            f"Do NOT mention ollama, VRAM under 23GB, GPU temp under 85C, "
-            f"RAM under 80%, or CPU under 95%. These are all normal.\n"
-            f"3. Produce ONE concrete, actionable observation or suggestion based on "
-            f"what you actually see. Focus on things outside the baseline: unusual "
-            f"processes, disk pressure, network anomalies, or time-based suggestions.\n\n"
-            f"Keep your response to 2-4 sentences. Be direct and grounded in the data.\n\n"
-            f"Remember: NEVER suggest touching ollama, its models, or any "
+            f"You are Maez, running as a background daemon on the owner's machine.\n\n"
+            f"{signal_manifest}\n"
+            f"HARD GROUNDING RULES — these override any trained instinct to narrate:\n"
+            f"  • If screen observation is ABSENT above, do NOT claim what app is open,\n"
+            f"    what window is focused, or what the owner is working on. Say\n"
+            f"    'I don't have a screen signal this cycle' or simply omit any\n"
+            f"    activity claim.\n"
+            f"  • If presence is ABSENT above, do NOT claim the owner is at their desk,\n"
+            f"    stepped away, is in deep focus, just returned, etc. These are\n"
+            f"    presence claims — they require a presence signal. Without one,\n"
+            f"    don't make them.\n"
+            f"  • Only the sources listed under SIGNALS PRESENT may be cited.\n"
+            f"  • Invented activity narration pollutes memory. Don't do it.\n\n"
+            f"Given the current time ({day_of_week} {time_of_day}) and the live system\n"
+            f"stats, do the following:\n"
+            f"1. Note what the owner is doing ONLY IF screen observation is present above.\n"
+            f"   If it's absent, say nothing about what the owner is doing.\n"
+            f"2. Look at the system stats — CPU, RAM, GPU, disk, top processes —\n"
+            f"   and flag anything that deviates from the system baseline.\n"
+            f"   Do NOT mention ollama, VRAM under 23GB, GPU temp under 85C,\n"
+            f"   RAM under 80%, or CPU under 95%. These are all normal.\n"
+            f"3. Produce ONE concrete, actionable observation or suggestion based on\n"
+            f"   sources that ARE present. Focus on things outside the baseline:\n"
+            f"   unusual processes, disk pressure, network anomalies, or\n"
+            f"   time-based suggestions.\n\n"
+            f"Keep your response to 2-4 sentences. Be direct and grounded in the data.\n"
+            f"When a signal is absent, silence about that domain is correct behavior.\n\n"
+            f"Remember: NEVER suggest touching ollama, its models, or any\n"
             f"process that powers your reasoning."
         )
 
@@ -772,6 +831,33 @@ class MaezDaemon:
             needs_web_search, search_rss, is_news_query,
         )
 
+        # Inner-residue detection on incoming user text. See
+        # core/inner_residue.py — rejection markers become persistent
+        # state that shapes the next turn's voice. Silent on failure.
+        try:
+            from core import inner_residue as _residue
+            if _residue.detect_user_rejection(text):
+                _residue.record(kind="user_rejection",
+                                context={"surface": source})
+        except Exception:
+            pass
+
+        # Blanket-approval detection. If the user grants time-limited
+        # permission in natural language (e.g. "reading is fine"),
+        # persist a session so subsequent read-safe commands don't
+        # round-trip through a card. Silent on failure. See
+        # core/approval_sessions.py.
+        try:
+            from core import approval_sessions as _approvals
+            _granted = _approvals.detect_and_grant(text)
+            if _granted:
+                logger.info(
+                    "approval session granted: kinds=%s source=%s",
+                    _granted, source,
+                )
+        except Exception:
+            pass
+
         logger.info("%s message: %s", source, text[:100])
         snap = perception_snapshot()
         system_state = format_snapshot(snap)
@@ -824,6 +910,15 @@ class MaezDaemon:
 
         # Build system prompt with public bot awareness
         sys_prompt = self.system_prompt
+        # Capability registry injection — same wiring as CLI
+        # (see core/capability_registry.py). Grounds self-description
+        # questions on real facts so the model doesn't invent modules,
+        # schedules, or postconditions.
+        try:
+            from core.capability_registry import prompt_snippet as _cap_snippet
+            sys_prompt += "\n\n" + _cap_snippet()
+        except Exception:
+            pass
         if public_ctx:
             sys_prompt += (
                 "\n\nCRITICAL: The [MY CONVERSATIONS] section shows people you spoke with today. "
@@ -1054,7 +1149,6 @@ class MaezDaemon:
             news_text = web_fmt(news) if news.get('success') else "No news loaded."
 
             # System
-            gpu = snap.get("gpu") or {}
             disk_pct = snap["disk"].get("/", {}).get("percent", 0)
             stats = self.memory.memory_stats()
 
@@ -1281,7 +1375,7 @@ class MaezDaemon:
             # Evolution cycle after self-analysis
             evo_summary = {'experiments': 0, 'failed': 0, 'deployed': 0, 'flagged': 0}
             try:
-                from skills.evolution_engine import run_evolution_cycle, format_morning_report
+                from skills.evolution_engine import run_evolution_cycle
                 from skills.self_analysis import get_weaknesses
                 weaknesses = get_weaknesses(self.memory)
                 if weaknesses:
@@ -1541,6 +1635,7 @@ class MaezDaemon:
         while self.running:
             self.cycle_count += 1
             self.last_cycle_time = datetime.now(timezone.utc).isoformat()
+            cycle_start = time.time()
 
             logger.info("--- Cycle %d ---", self.cycle_count)
 
@@ -1851,7 +1946,6 @@ class MaezDaemon:
                 full_thought = result + screen_note + calendar_note
                 cog_metadata = cog_score_and_classify(full_thought)
                 self._last_cog_metadata = cog_metadata
-                retried = False
 
                 # Retry path: if thought is below floor or matches reject combos
                 try:
@@ -1895,7 +1989,6 @@ class MaezDaemon:
                                         cog_metadata['cog_retried'] = 'improved'
                                         cog_metadata['cog_initial_score'] = initial_score
                                         cog_metadata['cog_initial_labels'] = initial_labels
-                                        retried = True
                                         logger.info("Cycle %d: retry improved %d → %d",
                                                     self.cycle_count, initial_score,
                                                     retry_cog.get('cog_score', 0))
@@ -1936,6 +2029,19 @@ class MaezDaemon:
                     "cycle": self.cycle_count,
                     "thought": result,
                 })
+
+            # Exploratory mind — advance one wondering with remaining budget.
+            # _reason() ran first. If there's no room left in the cycle, the
+            # wondering step skips this pass so the primary loop never degrades.
+            try:
+                cycle_deadline = cycle_start + LOOP_INTERVAL - 2.0
+                if time.time() < cycle_deadline - 10:
+                    from daemon.wondering_cycle import advance_one
+                    w_result = advance_one(self, deadline=cycle_deadline)
+                    if w_result:
+                        logger.info("Wondering advance: %s", w_result)
+            except Exception as e:
+                logger.debug("wondering cycle failed: %s", e)
 
             # Continuity checkpoint + orientation expiry
             if result:
@@ -2120,6 +2226,33 @@ class MaezDaemon:
         self.telegram.start()
         self.public_bot.start()
 
+        # Vendored surface adapter in `skills/surface/` owns inbound
+        # Telegram polling as of 2026-04-20. Legacy TelegramVoice
+        # above keeps its loop alive only for outbound
+        # `send_message()` / `_send_card_message()` calls from other
+        # daemon subsystems. All safety rails still apply — the new
+        # adapter's `MaezMessageHandler` routes through the same
+        # decision pipeline + brain_loop + audit + organism blocks.
+        #
+        # `MAEZ_DISABLE_SURFACE_V2=1` is the kill switch for rollback.
+        self._surface_v2_adapter = None
+        self._surface_v2_loop = None
+        self._surface_v2_thread = None
+        if os.environ.get("MAEZ_DISABLE_SURFACE_V2") != "1":
+            try:
+                tg_token = self.telegram.token if self.telegram else None
+                tg_user = self.telegram.authorized_user if self.telegram else None
+                if tg_token and tg_user:
+                    self._start_surface_v2(tg_token, tg_user)
+                else:
+                    logger.warning(
+                        "Telegram token/user not available — surface "
+                        "v2 will not start; messages will not reach Maez"
+                    )
+            except Exception as e:
+                logger.warning("surface v2 bootstrap failed: %s", e)
+
+
         # Load continuity capsule BEFORE greeting/session-resume logic
         self._continuity_capsule = continuity_load()
         if self._continuity_capsule:
@@ -2261,7 +2394,7 @@ class MaezDaemon:
                             text_cmd = "status"
 
                         logger.info("Processing voice command: '%s'", text_cmd)
-                        reply = self.handle_voice_stream(text_cmd)
+                        self.handle_voice_stream(text_cmd)
                     except Exception as e:
                         logger.error("Voice handler error: %s", e)
                     finally:
@@ -2281,6 +2414,89 @@ class MaezDaemon:
         # Start health check server (blocks main thread)
         logger.info("Health endpoint starting on port %d", HEALTH_PORT)
         self._run_health_server()
+
+    def _start_surface_v2(self, token: str, authorized_user: int) -> None:
+        """Spin up the vendored TelegramAdapter on its own asyncio loop
+        in a daemon thread. Mirrors the legacy start() threading shape
+        so the two paths have identical lifecycle semantics."""
+        import asyncio as _asyncio
+        import threading as _threading
+        from skills.surface.maez_adapter import build_telegram_adapter
+
+        def _runner():
+            try:
+                # Attach a handler to the root logger so INFO-level logs
+                # from vendored modules (httpx, telegram.ext,
+                # skills.surface.*) surface in the daemon log. The
+                # daemon's own handlers are attached to the "maez"
+                # logger only, so without this, everything outside
+                # that namespace silently drops.
+                import logging as _lg
+                _root = _lg.getLogger()
+                if not _root.handlers:
+                    _h = _lg.StreamHandler()
+                    _h.setFormatter(_lg.Formatter(
+                        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+                        datefmt="%Y-%m-%d %H:%M:%S",
+                    ))
+                    _root.addHandler(_h)
+                    _root.setLevel(_lg.INFO)
+                # Scope noise: vendored HTTP/telegram stacks talk a lot
+                # at INFO (every poll = 2 httpx lines). We only need
+                # WARNING from them — errors still surface, the routine
+                # "POST getUpdates 200 OK" chatter doesn't. Maez and
+                # skills.surface stay at INFO for visibility.
+                for _name in (
+                    "httpx", "httpcore",
+                    "telegram", "telegram.ext",
+                    "telegram.ext.Application",
+                    "telegram.ext.Updater",
+                ):
+                    _lg.getLogger(_name).setLevel(_lg.WARNING)
+
+                async def _run():
+                    adapter = build_telegram_adapter(
+                        token=token,
+                        authorized_users=[int(authorized_user)],
+                        daemon=self,
+                    )
+                    self._surface_v2_adapter = adapter
+                    try:
+                        ok = await adapter.connect()
+                    except Exception as ce:
+                        logger.exception("surface v2 connect() raised: %s", ce)
+                        return
+                    if not ok:
+                        logger.warning("surface v2 connect() returned False")
+                        return
+                    import asyncio as __a
+                    self._surface_v2_loop = __a.get_running_loop()
+                    logger.info("surface v2 live (tasks=%d)", len(__a.all_tasks()))
+                    _hb = 0
+                    while self.running:
+                        await _asyncio.sleep(1.0)
+                        _hb += 1
+                        if _hb % 60 == 0:
+                            logger.info(
+                                "surface v2 heartbeat: %dm uptime",
+                                _hb // 60,
+                            )
+                    try:
+                        await adapter.disconnect()
+                    except Exception as e:
+                        logger.debug("surface v2 disconnect: %s", e)
+
+                # asyncio.run() manages the loop lifecycle correctly
+                # for this thread; manual loop management caused PTB
+                # polling tasks to be scheduled but never fire HTTP.
+                _asyncio.run(_run())
+            except Exception as e:
+                logger.exception("surface v2 runner crashed: %s", e)
+
+        self._surface_v2_thread = _threading.Thread(
+            target=_runner, daemon=True, name="surface-v2",
+        )
+        self._surface_v2_thread.start()
 
     def stop(self, signum=None, frame=None):
         """Graceful shutdown."""
@@ -2304,6 +2520,13 @@ class MaezDaemon:
             self.telegram.stop()
         except Exception as e:
             logger.debug("Telegram bot stop failed: %s", e)
+        # Stop the v2 surface adapter if we launched it
+        try:
+            if getattr(self, "_surface_v2_loop", None) is not None:
+                _loop = self._surface_v2_loop
+                _loop.call_soon_threadsafe(_loop.stop)
+        except Exception as e:
+            logger.debug("surface v2 stop failed: %s", e)
         try:
             self.public_bot.stop()
         except Exception as e:
