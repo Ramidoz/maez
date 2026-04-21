@@ -267,11 +267,16 @@ class MemoryManager:
             include=["documents", "metadatas"],
         )
 
-        # Filter to memories since last consolidation
+        # Filter to memories since last consolidation. Ids tracked
+        # alongside so we can mark_consolidated() in the scorer sidecar
+        # once the LLM consolidation succeeds — closes the feedback
+        # loop between consolidation and memory_scoring.promotion_score.
         recent = []
+        recent_ids: list[str] = []
         for i, meta in enumerate(results["metadatas"]):
             ts = meta.get("timestamp", "")
             if ts >= cutoff:
+                recent_ids.append(results["ids"][i])
                 recent.append({
                     "content": results["documents"][i],
                     "cycle": meta.get("cycle", "?"),
@@ -283,9 +288,11 @@ class MemoryManager:
         if len(recent) < 10:
             expanded_cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
             recent = []
+            recent_ids = []
             for i, meta in enumerate(results["metadatas"]):
                 ts = meta.get("timestamp", "")
                 if ts >= expanded_cutoff:
+                    recent_ids.append(results["ids"][i])
                     recent.append({
                         "content": results["documents"][i],
                         "cycle": meta.get("cycle", "?"),
@@ -367,6 +374,33 @@ class MemoryManager:
         logger.info("Daily consolidation stored: %s (%d chars from %d raw memories)",
                      consolidation_id, len(summary), len(recent))
         self._save_last_consolidation()
+
+        # Close the scorer feedback loop: mark each raw memory that went
+        # into this consolidation as consolidated, and log the score
+        # distribution observed. Observational — no behavior change, but
+        # gives memory_scoring.promotion_score() real signal and lets
+        # the cockpit surface "consolidation health" (min/median/max).
+        try:
+            from core.memory_scoring import (
+                mark_consolidated as _mark,
+                get_stats as _get_stats,
+                promotion_score as _score,
+            )
+            scores: list[float] = []
+            for mid in recent_ids:
+                scores.append(_score(_get_stats(mid)))
+                _mark(mid)
+            if scores:
+                scores.sort()
+                median = scores[len(scores) // 2]
+                _min = scores[0]
+                _max = scores[-1]
+                logger.info(
+                    "consolidation_scores | n=%d min=%.3f median=%.3f max=%.3f",
+                    len(scores), _min, median, _max,
+                )
+        except Exception as _se:
+            logger.debug("promotion_score feedback loop failed: %s", _se)
         return summary
 
     # ------------------------------------------------------------------ #

@@ -916,40 +916,74 @@ class MaezDaemon:
             # is loaded once at startup; _STATIC_CYCLE_INSTRUCTIONS is a module
             # constant. Their concatenation is identical every cycle.
             system_content = self.system_prompt + "\n\n" + _STATIC_CYCLE_INSTRUCTIONS
-            response = _llm_client.chat(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": system_content},
-                    {"role": "user", "content": prompt},
-                ],
-                think=False,
-                options={"temperature": 0.7, "num_predict": 300},
-            )
+            chat_messages = [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": prompt},
+            ]
+            chat_options = {"temperature": 0.7, "num_predict": 300}
+
+            # error_classifier-driven retry: on a TRANSIENT backend error
+            # (timeout, connection refused), wait 2s and try once more.
+            # On a STRUCTURAL error (gpu_oom, model_missing), skip cleanly
+            # without retry — retrying won't help and would stretch the
+            # cycle while the operator investigates. Max one retry total,
+            # keeping cycle time bounded.
+            try:
+                response = _llm_client.chat(
+                    model=MODEL, messages=chat_messages,
+                    think=False, options=chat_options,
+                )
+            except Exception as first_err:
+                try:
+                    from core.error_classifier import (
+                        classify as _classify,
+                        emit_telemetry as _emit_err,
+                        ErrorClass as _ErrClass,
+                    )
+                    _cls = _classify(first_err)
+                    _emit_err(_cls, surface="daemon_cycle")
+                except Exception:
+                    _cls = None
+
+                # Transient → one retry after a short backoff.
+                transient = _cls is not None and _cls.likely_transient and _cls.retryable
+                if transient:
+                    logger.info(
+                        "Cycle %d: %s error, retrying once after 2s backoff",
+                        self.cycle_count, _cls.error_class.value,
+                    )
+                    time.sleep(2.0)
+                    try:
+                        response = _llm_client.chat(
+                            model=MODEL, messages=chat_messages,
+                            think=False, options=chat_options,
+                        )
+                    except Exception as retry_err:
+                        try:
+                            _emit_err(_classify(retry_err),
+                                      surface="daemon_cycle_retry")
+                        except Exception:
+                            pass
+                        logger.error(
+                            "Cycle %d: retry also failed: %s",
+                            self.cycle_count, retry_err,
+                        )
+                        return None
+                else:
+                    # Structural / unknown / non-retryable → skip cleanly.
+                    logger.error(
+                        "Cycle %d: reasoning failed (%s): %s",
+                        self.cycle_count,
+                        _cls.error_class.value if _cls else "unclassified",
+                        first_err,
+                    )
+                    return None
+
             content = _extract_final((response.message.content or "").strip())
             thinking = getattr(response.message, "thinking", None)
             if thinking:
                 logger.debug("Cycle %d thinking: %s", self.cycle_count, thinking.strip()[:500])
             return content if content else "(empty response)"
-        except Exception as e:
-            # Observational classification — emits structured telemetry
-            # to cognition.log so operators / cockpit can see WHICH class
-            # of error occurred (backend_down, gpu_oom, context_overflow,
-            # etc.) without changing the current behavior. Behavior-level
-            # routing (retry on transient, compress on overflow) lands
-            # in a follow-up once baseline cycle stability is confirmed
-            # unaffected by the taxonomy. See core/error_classifier.py.
-            try:
-                from core.error_classifier import (
-                    classify as _classify,
-                    emit_telemetry as _emit_err,
-                )
-                _classified = _classify(e)
-                _emit_err(_classified, surface="daemon_cycle")
-            except Exception:
-                # Classifier itself should never block error handling.
-                pass
-            logger.error("Reasoning cycle failed: %s", e)
-            return None
         finally:
             self._ollama_lock.release()
 

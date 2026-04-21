@@ -30,7 +30,6 @@ Keyboard:
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
@@ -40,10 +39,9 @@ import sys
 import threading
 import time
 import urllib.request
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Generator, Iterator, Optional
+from typing import Callable, Iterator, Optional
 
 # Bootstrap path
 _MAEZ_ROOT = Path(__file__).resolve().parent.parent
@@ -70,6 +68,11 @@ from core import identity, soul_loader
 from core.ambient_format import ambient_prompt_block
 from core.ambient import ambient_context, current_coords, latest_per_kind
 from core.action_engine import _covenant_violation as _covenant_check
+from core.tool_loop import (
+    BASH_FENCE_RE, TOOL_TIMEOUT_SEC, TOOL_OUTPUT_MAX,
+    ToolRun, extract_shell_commands, safety_check,
+    _run_shell, format_tool_results_for_model,
+)
 from skills import claude_router
 
 # ── config ─────────────────────────────────────────────────────────────
@@ -77,17 +80,10 @@ LOCAL_BRAIN_URL = os.environ.get("MAEZ_LLAMACPP_URL", "http://127.0.0.1:8080/v1"
 LOCAL_MODEL = os.environ.get("MAEZ_LLAMACPP_MODEL", "qwen36-35b-sft")
 HISTORY_PATH = _MAEZ_ROOT / "logs" / ".maez_chat_history"
 
-# Tool-loop limits
+# Tool-loop iteration limits (CLI-specific — tool_loop.py has no concept of
+# iteration count; that's a chat-surface policy, not a primitive).
 MAX_TOOL_ITERATIONS = int(os.environ.get("MAEZ_MAX_TOOL_ITERS", "10"))
 EXTEND_ITERATIONS_BY = int(os.environ.get("MAEZ_EXTEND_ITERS_BY", "10"))
-TOOL_TIMEOUT_SEC = 60    # per-command shell timeout
-TOOL_OUTPUT_MAX = 4000   # cap per-command output fed back to the model
-
-# Regex to pull ```bash ...``` / ```sh ...``` / ```shell ...``` fences
-BASH_FENCE_RE = re.compile(
-    r"```(?:bash|sh|zsh|shell)?\s*\n(.*?)```",
-    re.DOTALL,
-)
 
 console = Console()
 
@@ -196,132 +192,11 @@ def _thinking_status(thinking: str, done: bool) -> Text:
 # loop in the legacy cli.py. When Maez emits a ```bash``` fence, the loop
 # proposes it as an approval card, runs via subprocess on approve, and
 # feeds real output back to the model for synthesis.
-
-@dataclass
-class ToolRun:
-    cmd: str
-    stdout: str = ""
-    stderr: str = ""
-    returncode: int = 0
-    skipped: bool = False
-    refused_reason: str = ""
-
-
-def extract_shell_commands(text: str) -> list[str]:
-    """Pull ```bash/sh/shell``` blocks out of model output.
-    Returns deduplicated, stripped command strings in order of appearance.
-    """
-    out: list[str] = []
-    seen: set[str] = set()
-    for m in BASH_FENCE_RE.finditer(text):
-        block = m.group(1).strip()
-        if not block or block in seen:
-            continue
-        seen.add(block)
-        out.append(block)
-    return out
-
-
-def safety_check(cmd: str) -> Optional[str]:
-    """Extra defensive layer on top of core.action_engine's covenant regex.
-
-    Philosophy: Rohit's explicit `y` approval IS the permission for this
-    session. We only hard-refuse things that would bypass covenant or
-    destroy the Maez tree even with approval — those aren't one-off
-    mistakes, they're category failures.
-
-    sudo is intentionally NOT hard-refused here. When Maez proposes a
-    sudo command, it goes through the same [y/N/q] approval as any
-    other command. Rohit sees it, types y if he consents.
-
-    Returns a reason string if hard-blocked, None if OK (still needs
-    interactive approval downstream).
-    """
-    low = cmd.lower()
-    # Covenant regex first — verb+protected-surface combinations.
-    reason = _covenant_check(low)
-    if reason:
-        return f"covenant: {reason}"
-
-    # rm -rf: only hard-block when the target is catastrophic.
-    # Scratch dirs (/tmp/foo), project-local paths (./build), or
-    # user-owned dirs that aren't the Maez tree → flow to approval.
-    rm_danger = _rm_rf_danger(low)
-    if rm_danger:
-        return rm_danger
-
-    # Any mutation targeting the Maez tree via shell — block even with
-    # approval. Code changes go through edit_soul_section / evolution
-    # engine with proper diffs and rollback, not ad-hoc sed/tee.
-    maez_root = str(_MAEZ_ROOT).lower()
-    if maez_root in low and re.search(
-        r"\b(rm\s|mv\s|sed\s+-i|tee\s+|>\s*|>>\s*|truncate\s|chmod\s|chown\s)",
-        low,
-    ):
-        return (f"write/modify inside {maez_root} needs to go through the "
-                f"evolution engine, not an ad-hoc shell command")
-    return None
-
-
-# Absolute root-level directories where recursive deletion is catastrophic.
-# Paths starting with /<these>/ or exactly /<these> get hard-blocked.
-_DANGEROUS_ROOT_DIRS = {
-    "etc", "usr", "var", "boot", "lib", "lib64", "sys", "proc",
-    "dev", "root", "srv", "opt", "mnt", "bin", "sbin", "run", "home",
-}
-
-# Path prefixes where recursive deletion is explicitly OK (scratch/cache).
-_SAFE_RM_PREFIXES = ("/tmp/", "/var/tmp/", "/var/cache/")
-
-
-def _rm_rf_danger(cmd_low: str) -> Optional[str]:
-    """Inspect rm -rf targets. Return reason if catastrophic, else None.
-
-    Allow:  /tmp/*, /var/tmp/*, /var/cache/*, ./*, relative paths,
-            user-owned non-system absolute paths
-    Deny:   /, /* expansion, /home (root user dir), /etc, /usr, /boot,
-            /lib, /sys, /proc, /dev, /bin, /sbin, /opt, /mnt, /srv, /run,
-            and /home itself (but /home/<user>/something is allowed)
-    """
-    for m in re.finditer(r"\brm\s+(?:-[a-z]*[rRfF][a-z]*\s+)+([^\s;|&`$<>]+)",
-                          cmd_low):
-        target = m.group(1).strip().rstrip("/")
-        # Disaster: bare root or shell expansion against root
-        if target in ("/", "/*", "/.", ""):
-            return "rm -rf / forbidden"
-        # Safe scratch prefixes
-        if any(target.startswith(p) or target == p.rstrip("/")
-               for p in _SAFE_RM_PREFIXES):
-            continue
-        # Absolute paths into system directories
-        if target.startswith("/"):
-            first = target.lstrip("/").split("/")[0]
-            # /home by itself = all users' homes — deny
-            if target == "/home":
-                return "rm -rf /home forbidden"
-            if first in _DANGEROUS_ROOT_DIRS and first != "home":
-                return f"rm -rf inside /{first} forbidden"
-            # /home/<user>/... is OK — the "write inside maez tree" rule
-            # separately catches /home/rohit/maez
-        # Relative or user-owned absolute path → allow through approval
-    return None
-
-
-def _run_shell(cmd: str) -> tuple[str, str, int]:
-    """Run a shell command, capture output. Truncates to TOOL_OUTPUT_MAX."""
-    try:
-        r = subprocess.run(
-            ["bash", "-lc", cmd],
-            capture_output=True, text=True,
-            timeout=TOOL_TIMEOUT_SEC,
-        )
-        out = (r.stdout or "")[:TOOL_OUTPUT_MAX]
-        err = (r.stderr or "")[:TOOL_OUTPUT_MAX]
-        return out, err, r.returncode
-    except subprocess.TimeoutExpired:
-        return "", f"[timeout after {TOOL_TIMEOUT_SEC}s]", 124
-    except Exception as e:
-        return "", f"[runner error: {e}]", 1
+#
+# The primitives (ToolRun, extract_shell_commands, safety_check, _run_shell,
+# format_tool_results_for_model, BASH_FENCE_RE, TOOL_TIMEOUT_SEC,
+# TOOL_OUTPUT_MAX) live in core.tool_loop so the daemon's wondering-cycle
+# can share them. They're imported at the top of this file.
 
 
 def render_approval(cmd: str, refused: Optional[str]) -> None:
@@ -366,33 +241,6 @@ def render_tool_result(tr: ToolRun) -> None:
     ))
 
 
-def format_tool_results_for_model(runs: list[ToolRun]) -> str:
-    """Produce a single message the model can read as real tool output."""
-    lines = ["I ran these commands and these are the actual outputs:\n"]
-    for i, tr in enumerate(runs, 1):
-        lines.append(f"### command {i}")
-        lines.append("```bash")
-        lines.append(tr.cmd.strip())
-        lines.append("```")
-        if tr.skipped:
-            lines.append(f"_(skipped: {tr.refused_reason or 'user declined'})_")
-            lines.append("")
-            continue
-        lines.append(f"exit code: {tr.returncode}")
-        if tr.stdout.strip():
-            lines.append("stdout:")
-            lines.append("```")
-            lines.append(tr.stdout.rstrip())
-            lines.append("```")
-        if tr.stderr.strip():
-            lines.append("stderr:")
-            lines.append("```")
-            lines.append(tr.stderr.rstrip())
-            lines.append("```")
-        lines.append("")
-    return "\n".join(lines)
-
-
 # ── chat session ───────────────────────────────────────────────────────
 class ChatSession:
 
@@ -416,6 +264,8 @@ class ChatSession:
             "/sonnet": self.cmd_force_sonnet,
             "/opus": self.cmd_force_opus,
             "/route": self.cmd_show_route,
+            "/wonder": self.cmd_wonder,
+            "/wonderings": self.cmd_wonderings,
             "/clear": self.cmd_clear,
             "/quit": self.cmd_quit,
             "/q": self.cmd_quit,
@@ -484,6 +334,8 @@ class ChatSession:
             ("/sonnet",         "force next turn → Claude Sonnet 4.6"),
             ("/opus",           "force next turn → Claude Opus 4.7"),
             ("/deep",           "re-enable thinking mode for the next turn"),
+            ("/wonder <q>",     "seed a wondering for the daemon to explore"),
+            ("/wonderings",     "list open + recent wonderings and probes"),
             ("/clear",          "clear screen"),
             ("/quit, /q",       "exit"),
         ]
@@ -623,6 +475,60 @@ class ChatSession:
         else:
             console.print("[dim](no override — classifier decides next turn)[/dim]")
 
+    def cmd_wonder(self, arg: str):
+        question = (arg or "").strip()
+        if not question:
+            console.print("[yellow]usage: /wonder <question>[/yellow]")
+            return
+        from core.wonderings import get_store
+        wid = get_store().add(question, source="chat")
+        console.print(f"[green]wondering #{wid} seeded.[/green] "
+                      f"[dim]The daemon will advance it on upcoming cycles.[/dim]")
+
+    def cmd_wonderings(self, _: str):
+        from core.wonderings import get_store
+        store = get_store()
+        rows = store.list_all(limit=15)
+        if not rows:
+            console.print("[dim](no wonderings yet — /wonder <question> to seed one)[/dim]")
+            return
+        table = Table(show_header=True, header_style="bold", box=None, padding=(0, 1))
+        table.add_column("#", style="dim", width=4)
+        table.add_column("status", width=22)
+        table.add_column("adv", width=4)
+        table.add_column("defer", width=5)
+        table.add_column("question")
+        for w in rows:
+            table.add_row(
+                str(w["id"]), w["status"], str(w["advance_count"]),
+                str(w["deferral_count"]), (w["question"] or "")[:80],
+            )
+        console.print(Panel(table, title="wonderings", border_style="dim", expand=False))
+        # Show probes for the most recent open/active wondering
+        focus = next((w for w in rows if w["status"] in ("open", "active",
+                                                         "blocked_pending_approval")), None)
+        if focus:
+            probes = store.recent_probes(focus["id"], limit=5)
+            if probes:
+                ptable = Table(show_header=True, header_style="bold",
+                                box=None, padding=(0, 1))
+                ptable.add_column("rc", width=4)
+                ptable.add_column("tied", width=5)
+                ptable.add_column("cmd", max_width=40, overflow="fold")
+                ptable.add_column("learning", overflow="fold")
+                for p in reversed(probes):
+                    ptable.add_row(
+                        str(p.get("returncode")),
+                        "✓" if p.get("evidence_tied") else "·",
+                        (p.get("cmd") or "")[:60],
+                        (p.get("learning") or "")[:120],
+                    )
+                console.print(Panel(
+                    ptable,
+                    title=f"recent probes · wondering #{focus['id']}",
+                    border_style="dim", expand=False,
+                ))
+
     def cmd_clear(self, _: str):
         console.clear()
         self.banner()
@@ -635,12 +541,71 @@ class ChatSession:
     def _handle_chat(self, user_text: str):
         # Assemble messages
         self.turns.append(Turn("user", user_text))
+
+        # Inner-residue detection: if the user text carries clear
+        # rejection markers, record a residue event so the next turn's
+        # prompt reflects the weight. Silent on failure.
+        try:
+            from core import inner_residue as _residue
+            if _residue.detect_user_rejection(user_text):
+                _residue.record(kind="user_rejection",
+                                context={"surface": "cli"})
+        except Exception:
+            pass
+
+        # Blanket-approval detection. See core/approval_sessions.py.
+        try:
+            from core import approval_sessions as _approvals
+            _approvals.detect_and_grant(user_text)
+        except Exception:
+            pass
+
         soul = soul_loader.current_soul()
         try:
             ambient = ambient_prompt_block()
         except Exception:
             ambient = ""
         system_prompt = soul + ("\n\n" + ambient if ambient else "")
+
+        # Capability registry injection — gives the model grounded facts
+        # to consult for self-description before it generates. Added
+        # 2026-04-20 after the Maelstrom-class fabrications demonstrated
+        # that the model invents modules, schedules, and postconditions
+        # when asked "what do you have?" questions. Silent on failure.
+        try:
+            from core.capability_registry import prompt_snippet as _cap_snippet
+            system_prompt += "\n\n" + _cap_snippet()
+        except Exception:
+            pass
+
+        # Web search injection — mirrors daemon.handle_message so the model
+        # sees REAL search results instead of emitting `[WEB SEARCH] "..."`
+        # pseudo-markers and stopping. Silent on failure; a missing result
+        # just falls through to normal chat.
+        try:
+            from skills.web_search import (
+                search as _web_search, format_for_context as _web_format,
+                needs_web_search as _web_needs, search_rss as _web_rss,
+                is_news_query as _web_is_news,
+            )
+            if _web_needs(user_text):
+                console.print(Text.from_markup(
+                    f"[dim]— web search: {user_text[:80]} —[/dim]"
+                ))
+                _sr = (_web_rss(user_text, max_results=5)
+                       if _web_is_news(user_text)
+                       else _web_search(user_text, max_results=3))
+                if _sr.get("success"):
+                    system_prompt += (
+                        "\n\n" + _web_format(_sr)
+                        + "\n\nINSTRUCTION: Real search results above are "
+                        "the source of truth for any factual claim you make "
+                        "this turn. Synthesize into 3-5 sentences — do NOT "
+                        "list raw headlines and do NOT emit `[WEB SEARCH]` "
+                        "markers yourself."
+                    )
+        except Exception:
+            pass
 
         decision = claude_router.classify(user_text)
         # Apply /local /sonnet /opus override if armed
@@ -685,6 +650,20 @@ class ChatSession:
             history_pairs.append({"role": "user", "content": user_text})
             if iteration_suffix:
                 history_pairs.append({"role": "user", "content": iteration_suffix})
+
+            # Safety-net compression for runaway CLI sessions. Unlike
+            # Telegram this path has no hard truncation; a long-running
+            # chat would accumulate hundreds of turns and eventually
+            # bust the model's context window. When the thread exceeds
+            # 30 turns, summarize the dropped head via
+            # core.context_compressor (fail-safe to plain truncation).
+            if len(history_pairs) > 30:
+                try:
+                    from core.context_compressor import compress as _compress
+                    history_pairs = _compress(history_pairs, keep_tail_n=20)
+                except Exception:
+                    history_pairs = history_pairs[-20:]
+
             messages = ([{"role": "system", "content": system_prompt}]
                         + history_pairs)
 
@@ -739,6 +718,29 @@ class ChatSession:
             # Interrupted → exit the whole agent loop
             if self._stop_stream.is_set():
                 break
+
+            # Self-claim audit — rewrite ungrounded first-person internal
+            # claims to uncertainty before the turn completes. Skip for
+            # tool-loop continuation turns (iteration > 0 means the model
+            # is synthesizing over real tool stdout, which is grounded by
+            # construction).
+            try:
+                from core.self_claim_audit import audit as _sc_audit
+                _sc_result = _sc_audit(
+                    assistant.content,
+                    surface="cli",
+                    in_tool_continuation=(iteration > 0),
+                )
+                if _sc_result.rewritten:
+                    assistant.content = _sc_result.text
+                    console.print(Text.from_markup(
+                        f"[dim yellow]— self-claim audit rewrote "
+                        f"{len(_sc_result.flags)} ungrounded claim(s) "
+                        f"({_sc_result.mode}) —[/dim yellow]"
+                    ))
+                    console.print(Markdown(_sc_result.text))
+            except Exception as _e:
+                console.print(f"[dim red](audit failed: {_e})[/dim red]")
 
             # Look for proposed shell commands; if none, we're done
             commands = extract_shell_commands(assistant.content)
