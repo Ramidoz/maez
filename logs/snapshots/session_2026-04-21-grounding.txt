@@ -1,0 +1,262 @@
+SESSION SNAPSHOT — 2026-04-20 → 2026-04-21
+Started: 2026-04-20 ~19:00 CDT
+Ended:   2026-04-21 ~01:20 CDT
+Next Claude: start fresh. Memory carries over. Read docs/TRACK_A.md
+             + this file + the cockpit at /cockpit/ before touching anything.
+
+=====================================================================
+THE ARC OF THIS SESSION
+=====================================================================
+
+Started with v2 Telegram surface still drifting — "What did you find?"
+one minute after a git clone went to hardware probing instead of
+looking at the cloned repo. Ended having closed the single biggest
+confabulation loop in Maez: the daemon's cycle-response prompt that
+had been inventing "rohit is at his desk / working on X" narrations
+for weeks because screen perception was silently dead and the prompt
+still said "you have full visibility into screen activity above."
+
+Along the way: Langfuse observability + MCP came live, the Claude-
+Design-sourced cockpit shipped with real-data wiring to all 11
+surfaces, destructive shell commands now snapshot before execution,
+and proposal #25 finally got applied + marked resolved.
+
+One real cost: rohit approved a card mid-flow that ran
+`git checkout -- core/cognition_quality.py`, which wiped unstaged
+local edits. That loss is what produced the snapshot layer and the
+grounding fix — turned out to be the most productive accident of
+the night.
+
+=====================================================================
+BUILDS — IN ORDER SHIPPED
+=====================================================================
+
+1. chat_history into brain_loop (commits 41c6256 + af5e951)
+   Root cause: core.brain_loop.run_brain_loop was called with ONLY
+   the current user text. No prior conversation. "What did you find?"
+   had zero signal about what "find" referred to. Planner drifted.
+   Fix: add chat_history kwarg, render as "RECENT CONVERSATION"
+   block before "owner just said" line. Per-exchange 800-char cap,
+   closing `--- end exchange N ---` delimiters, test-stub hardening.
+
+2. Adapter wires 3 exchanges (commits 3d9ab26 + ea71cc3)
+   MaezMessageHandler fetches memory_manager.get_telegram_exchanges
+   (limit=3) via run_in_executor, passes into run_brain_loop.
+   _CHAT_HISTORY_TURNS module constant. Fall-open on missing memory.
+
+3. lookup_proposal tool (commits 6db0a6f + 6bc0b53 + 7220bc3 + 0f24e9d)
+   Observed: rohit asked "what is proposal #25?" and Maez grepped
+   vocab.json noise because proposals live in SQLite, not markdown.
+   - core/proposal_lookup.py: classify/snapshot/restore pure functions
+   - ACTION_TIERS registration + _do_lookup_proposal dispatcher
+   - _TOOL_MANIFEST entry (critical — without it the planner didn't
+     know the tool existed even though it was allowed)
+   - Tests for stray-file regression (Path.exists pre-check), both-
+     source merge, try/finally connection hygiene.
+
+4. Langfuse observability abstraction (commits 9188cf3 + 8d7d212)
+   Initial impl targeted Langfuse v2 API; installed SDK was v4.3.1.
+   Caught by API inspection BEFORE Task 2 wired inert code. Rewrote
+   against v4's start_observation / LangfuseSpan.start_observation
+   nesting pattern. No-op fallback when env vars absent.
+
+5. Brain_loop + adapter instrumented (commit 590569a)
+   run_brain_loop accepts turn kwarg. _TracingTranscript list
+   subclass auto-emits tool_call for every transcript.append site
+   (~8 sites) without per-site instrumentation. maez_adapter wraps
+   the whole turn with observe_turn(), turn.update(output=reply)
+   fires before the with-block exits.
+
+6. Model label sync + LANGFUSE_BASE_URL support (commits 5948947 + c44f3dc)
+   "gemma-4-26b" → "qwen36-35b-sft" across three call sites
+   (brain_loop, llm_client, telegram_voice). core/observability now
+   accepts LANGFUSE_HOST OR LANGFUSE_BASE_URL (Langfuse docs use
+   both names across examples).
+
+7. Langfuse MCP server registered (user-scope)
+   /home/rohit/.local/share/langfuse-mcp-venv isolated, connected,
+   37 tools visible in this session as deferred tools (fetch_traces,
+   fetch_observations, find_exceptions, etc.). Creds sourced from
+   /etc/maez/langfuse.env (0640 rohit:root), referenced via
+   EnvironmentFile in the maez.service.d/override.conf drop-in.
+
+8. Destructive shell snapshot (commits 5b9d193 + bf1ff04)
+   Observed: rohit approved a card for `git checkout -- cognition_quality.py`
+   as a "preparation step", unstaged edits wiped, no backup.
+   write_any_file had auto-backup; destructive shell did not.
+   - core/destructive_snapshot.py: classify/snapshot/list_recent/
+     restore for git_checkout, git_restore, git_reset_hard, rm,
+     truncate. Manifest + per-file SHA256 + CLI.
+   - action_engine._execute_action hooks snapshot BEFORE command
+     runs. Fails open — snapshot errors log warning and command
+     proceeds (a backstop must never block legit work).
+   - Recovery: python -m core.destructive_snapshot {list|preview|restore}
+
+9. Cockpit from Claude Design bundle (commits 4 files changed + 1a2a28b)
+   Unpacked Claude Design handoff at /cockpit/. Direction A (Apple
+   Intelligence glass command center) committed, Direction B (Inner
+   Life) source preserved but not loaded. Full viewport (100vw/100vh),
+   not canvas-framed. Served via maez-web Flask at /cockpit/*.
+
+10. Cockpit real-data API (commit 3affe36 + 286af63)
+    Twelve /api/v1/* endpoints:
+      GET  /daemon/state    cycle+thought+scratchpad from logs tail
+      GET  /cards           pending_cards.db query
+      POST /cards/<id>/deny safe state transition
+      GET  /services        systemctl list-units
+      GET  /gpu             nvidia-smi live
+      GET  /signals         perception_cache + iphone_signals (currently
+                            both empty — honest placeholder shown)
+      GET  /soul            config/soul.base.md + soul.local.md
+      GET  /memory          chroma tier counts + last exchanges
+      GET  /dreams          evolution_track + dream_proposals merged
+      POST /dreams/<id>/approve|reject  state-only flip
+      GET  /identity        identity.yaml + defaults
+      GET  /router          Langfuse stats via v4 SDK
+      GET  /logs/<name>     tail of maez|cognition|evolution
+      GET  /chat/sessions   read-only: last 5 telegram exchanges
+    sim.jsx polls each on staleness-tuned cadence (5s for daemon/gpu,
+    300s for identity). Fetch errors silently keep sim fallback.
+
+11. Proposal #25 actually applied (commit 13e9398)
+    POLICY_EXPLORATORY_THRESHOLD 0.7 → 0.6 in core/cognition_quality.py.
+    Manually applied because the evolution worker doesn't auto-apply
+    on state=applied. Candidate 25 state updated validated → applied
+    in evolution_track.db. Stale-reminder loop stopped.
+
+12. DISPLAY :1 → :0 in systemd drop-in
+    /etc/systemd/system/maez.service.d/override.conf edited directly
+    (not in repo). The actual Xorg session was :0, not :1, so scrot
+    had been failing every cycle for weeks. First capture after the
+    fix: "Screenshot captured via scrot (downscaled to 1024x576)"
+    in the logs. Vision service still paused by user policy
+    (_DISABLED_FEATURES), so screen-to-prompt still empty, but
+    upstream signal ready when vision re-enables.
+
+13. Cycle prompt signals-manifest grounding (commit 19cde77) — THE BIG ONE
+    Observed: the daemon's reasoning prompt said "You have full
+    visibility into the system state AND screen activity above"
+    even when screen_perception had failed. Every cycle the LLM
+    filled the empty slot with confabulated activity narration —
+    "rohit is at his desk", "working on X", "just stepped away" —
+    and stored it to raw memory. Thousands of confabulated entries
+    accumulated over weeks of silent-signal operation.
+
+    Fix: dynamically build a SIGNALS PRESENT / SIGNALS ABSENT
+    manifest per cycle based on which sources actually have data.
+    HARD GROUNDING RULES in the prompt: if screen obs absent, DO
+    NOT claim what the owner is doing. If presence absent, DO NOT
+    claim presence transitions. Silence is correct behavior when
+    a signal is absent.
+
+    First cycle response after the fix: "The system is quiet. CPU
+    is low at 4.3%, RAM is healthy, and disk usage is stable...
+    No anomalies detected." Zero activity fabrication. Closes the
+    biggest single class of Maez fabrication.
+
+=====================================================================
+STATE AT END OF SESSION
+=====================================================================
+
+DAEMONS
+  maez.service         active, PID 312110 (restarted post-grounding fix)
+  llama-server         active (qwen36-35b-sft)
+  llama-server-vision  disabled (paused by user; ready when re-enabled)
+  maez-web             active, serves /cockpit/ + /api/v1/*
+  maez-watchdog        active
+  maez-face            active
+  ollama               active (not used as primary path)
+
+OBSERVABILITY
+  Langfuse Cloud (us)    receiving traces per Telegram turn
+  Langfuse MCP           registered user-scope, connected, 37 tools available
+  Cockpit                http://localhost:11437/cockpit/ — all 11 surfaces live
+                         (chat send + card approve intentionally unwired)
+
+MEMORY
+  raw:    23,880+ (mixture of grounded real exchanges and confabulated
+                   cycle responses — forward ratio now improves cycle-by-cycle)
+  daily:  1
+  core:   17
+  fabrication_log:  live, recording every audit hit
+
+SAFETY
+  destructive_snapshot   live, pre-flight runs for git_checkout /
+                         git_restore / git_reset_hard / rm / truncate
+  audit                  catching framework/versioned/path/schedule/
+                         action_result/state_claim/tool_name flags
+  owner-trust            liberal for rohit, refuses fabricated apt
+                         packages / systemd units / pip packages
+
+STILL OPEN / NEXT SESSION
+  - card approve from cockpit requires daemon IPC (30-60 min design)
+  - perception_cache.json writing from daemon (15-30 min)
+  - activity-claim audit class for residual confabulation (1 hour)
+  - chat send via cockpit (bigger — brain_loop in web process?)
+  - llama-server-vision re-enable decision (VRAM trade-off)
+  - evolution worker auto-applies diffs when candidate state=applied
+    (needs investigation; currently manual apply required — did so
+    for #25 tonight via sed)
+
+KNOWN CAVEATS FOR NEXT CLAUDE
+  - test_fix6_followups.py has a literal <OWNER_TELEGRAM_ID>
+    placeholder that raises SyntaxError at import. Counts as 1
+    pre-existing unrelated error in full-suite runs. Ignore.
+  - Unstaged edits on core/cognition_quality.py were wiped tonight
+    by the `git checkout --` card rohit approved. No editor backup
+    found. Whatever was there beyond the 0.7→0.6 edit is gone.
+    Snapshot layer now prevents this class of loss going forward.
+  - Cockpit direction B source files (inner-ui.jsx, design-canvas.jsx)
+    preserved at web/cockpit/ but not loaded. Can resurrect for a
+    grandmother-facing variant if needed.
+  - Rohit asked the "rewrite from scratch?" question — answer was
+    no, selective reconstruction. The grounding fix alone was
+    evidence that surgical fixes work. Documented in the session
+    transcript but worth reinforcing if the question recurs.
+
+=====================================================================
+COMMITS THIS SESSION (main)
+=====================================================================
+
+19cde77 fix(daemon): cycle prompt declares signal presence/absence
+286af63 feat(cockpit): dream approve/reject + honest-empty signals
+3affe36 feat(cockpit): wire all 11 surfaces to real Maez state
+23581bc fix(cockpit): PendingCardStore class name
+a5d9b0f feat(cockpit): wire daemon state + cards API
+1a2a28b feat(cockpit): commit to direction A, full viewport
+(4 files) feat(cockpit): ship Claude-Design-sourced WebUI
+c44f3dc feat(observability): accept LANGFUSE_BASE_URL
+5948947 cleanup: update model label gemma-4-26b → qwen36-35b-sft
+13e9398 proposal #25: lower POLICY_EXPLORATORY_THRESHOLD 0.7 → 0.6
+590569a feat(brain_loop,surface): emit Langfuse traces per Telegram turn
+8d7d212 fix(observability): target langfuse v4 API
+9188cf3 feat(observability): Langfuse abstraction with no-op fallback
+0f24e9d feat(brain_loop): advertise lookup_proposal in _TOOL_MANIFEST
+7220bc3 feat(action_engine): register lookup_proposal as tier-0 action
+6bc0b53 feat(proposal_lookup): try/finally close, Path.exists pre-check
+6db0a6f feat(proposal_lookup): SQLite-backed lookup for evolution + dream
+bf1ff04 feat(action_engine): pre-flight snapshot for destructive run_shell
+5b9d193 feat(destructive_snapshot): pre-flight backup layer
+ea71cc3 feat(surface): extract turn-count constant, executor wrap
+3d9ab26 feat(surface): pass last 3 telegram exchanges into brain_loop
+af5e951 feat(brain_loop): cap exchange length, end delimiters, stub hardening
+41c6256 feat(brain_loop): accept chat_history kwarg
+
+~22 commits, all reversible, all tested. Net: several thousand
+lines added across brain_loop / action_engine / observability /
+destructive_snapshot / cockpit / daemon grounding.
+
+=====================================================================
+WHAT TO READ IF YOU'RE PICKING THIS UP FRESH
+=====================================================================
+
+1. This file, top to bottom.
+2. docs/TRACK_A.md — the anchor.
+3. Open http://localhost:11437/cockpit/ — live state in your browser.
+4. Check the last hour of traces in Langfuse (cloud or via MCP:
+   mcp__langfuse__fetch_traces age=60).
+5. Only then, read code.
+
+The grounding fix (commit 19cde77) is the landmark of this session.
+Understand why it mattered — that's the operating principle for
+the next six weeks of Maez work.
