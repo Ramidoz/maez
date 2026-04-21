@@ -398,9 +398,24 @@ class MaezDaemon:
         self.CPU_STREAK_REQUIRED = 2
 
     def _load_soul(self) -> str:
-        """Load the system prompt that defines Maez's identity."""
+        """Load the system prompt that defines Maez's identity. Scans the
+        content for prompt-injection patterns before returning it — a
+        compromised or tampered SOUL.md is one of the worst supply-chain
+        attacks a local agent could face (it would become the permanent
+        system prompt). See core/context_safety.py."""
         try:
-            soul = SOUL_PATH.read_text().strip()
+            raw = SOUL_PATH.read_text().strip()
+            from core.context_safety import scan as _scan
+            scanned = _scan(raw, source="soul.md")
+            if scanned.blocked:
+                logger.error(
+                    "SOUL.md blocked by context_safety: %s. "
+                    "Running on minimal fallback identity until it's fixed.",
+                    scanned.findings,
+                )
+                soul = "You are Maez, a system-level AI agent."
+            else:
+                soul = raw
             self._soul_hash = hashlib.md5(soul.encode()).hexdigest()
             logger.info("Soul loaded from %s (%d chars)", SOUL_PATH, len(soul))
             return soul
@@ -412,7 +427,21 @@ class MaezDaemon:
         """Watch soul.md for changes and hot-reload."""
         while self.running:
             try:
-                content = SOUL_PATH.read_text().strip()
+                raw = SOUL_PATH.read_text().strip()
+                # Re-scan on every hot-reload: an attacker who overwrites
+                # soul.md while the daemon is running is the threat model
+                # here. Startup scan alone is insufficient.
+                from core.context_safety import scan as _scan
+                scanned = _scan(raw, source="soul.md (hot-reload)")
+                if scanned.blocked:
+                    logger.error(
+                        "soul.md hot-reload BLOCKED by context_safety: %s. "
+                        "Retaining previous system prompt.",
+                        scanned.findings,
+                    )
+                    time.sleep(10)
+                    continue
+                content = raw
                 current_hash = hashlib.md5(content.encode()).hexdigest()
                 if self._soul_hash and current_hash != self._soul_hash:
                     old_hash = self._soul_hash
