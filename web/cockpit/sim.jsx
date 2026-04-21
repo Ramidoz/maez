@@ -383,7 +383,16 @@ const SIM = (() => {
     },
   };
 
-  setInterval(tick, 800);
+  // tick() is DISABLED — it was the prototype's fake-data pump that
+  // every 800ms prepended fake Berkeley/walking/weather signals,
+  // fake logs, and jittered fake GPU/daemon numbers. Now that the
+  // real /api/v1/* endpoints own daemon, signals, gpu, logs, cards,
+  // memory, dreams, soul, identity, router, services, chat — tick()
+  // is noise that drowns out real data between poll cycles.
+  //
+  // If you ever want offline demo mode back (e.g., showing the
+  // cockpit without a live daemon), un-comment the next line.
+  // setInterval(tick, 800);
 
   // ── Live-data polling — merges real Maez state into the sim ────
   // The prototype's daemon + approvals fields default to fake values.
