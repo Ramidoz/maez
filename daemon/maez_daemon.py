@@ -1925,6 +1925,46 @@ class MaezDaemon:
             if result is None:
                 logger.warning("Cycle %d: no response from model", self.cycle_count)
             else:
+                # Self-claim audit on the cycle response BEFORE anything
+                # else sees it. The cycle-prompt grounding fix (commit
+                # 19cde77) dropped activity fabrication from ~100% to
+                # ~20% of cycles; this detection net catches the
+                # remaining slippage at output time and rewrites
+                # before storage to raw memory. Transcript reflects
+                # which activity-sources actually had data this cycle —
+                # if screen/presence/calendar signals are present,
+                # narration is grounded and passes through; if absent,
+                # activity_claim fires and rewrites.
+                try:
+                    _audit_transcript_parts = []
+                    if (self._last_screen_obs is not None
+                            and getattr(self._last_screen_obs, "success", False)):
+                        _audit_transcript_parts.append("✓ screen_observation: present")
+                    if self._last_presence_snap is not None:
+                        _audit_transcript_parts.append("✓ presence_snapshot: present")
+                    if self._last_calendar_snap is not None:
+                        _audit_transcript_parts.append("✓ calendar_snapshot: present")
+                    _audit_transcript = "\n".join(_audit_transcript_parts)
+                    from core.self_claim_audit import audit as _sc_audit
+                    _audit_result = _sc_audit(
+                        result,
+                        surface="daemon_cycle",
+                        transcript=_audit_transcript,
+                    )
+                    if _audit_result.rewritten:
+                        logger.info(
+                            "Cycle %d: audit rewrote fabrication "
+                            "(kinds=%s)",
+                            self.cycle_count,
+                            ",".join(sorted({f.kind for f in _audit_result.flags})),
+                        )
+                        result = _audit_result.text
+                except Exception as _audit_err:
+                    logger.debug(
+                        "cycle-response audit failed (continuing): %s",
+                        _audit_err,
+                    )
+
                 logger.info("Cycle %d response:\n%s", self.cycle_count, result)
                 # Store response with full perception snapshot + screen context
                 screen_note = ""
