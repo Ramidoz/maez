@@ -185,5 +185,74 @@ class ChatHistoryPrompting(unittest.TestCase):
         self.assertIn("What did you find?", prompt)
 
 
+class AdapterPassesChatHistory(unittest.TestCase):
+    """The surface adapter must actually fetch recent exchanges from
+    the daemon's memory manager and pass them into run_brain_loop.
+    Without this wiring, Task 1's fix is inert."""
+
+    def test_adapter_fetches_exchanges_and_passes_to_brain_loop(self):
+        import asyncio
+        from skills.surface import maez_adapter
+
+        fake_exchanges = [
+            {"content": "rohit: clone X\nmaez: cloned",
+             "metadata": {"timestamp": "2026-04-20T20:11:00"}},
+            {"content": "rohit: what did you find?\nmaez: ...",
+             "metadata": {"timestamp": "2026-04-20T20:12:00"}},
+        ]
+
+        class FakeMemory:
+            def __init__(self):
+                self.last_limit = None
+
+            def get_telegram_exchanges(self, limit=None):
+                self.last_limit = limit
+                return fake_exchanges
+
+        class FakeDaemon:
+            def __init__(self):
+                self.memory = FakeMemory()
+                self.actions = MagicMock()
+                self.telegram = MagicMock()
+                self.telegram._get_pipeline = MagicMock(
+                    return_value=MagicMock()
+                )
+                self.handle_message = MagicMock(return_value="ok")
+                self._surface_v2_adapter = None
+                self._surface_v2_loop = None
+
+        captured_kwargs = {}
+
+        def fake_run_brain_loop(*args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return ""
+
+        daemon = FakeDaemon()
+        handler = maez_adapter.MaezMessageHandler(daemon)
+
+        event = MagicMock()
+        event.text = "What did you find?"
+        event.source = MagicMock()
+        event.source.chat_id = "12345"
+        event.reply_to_message_id = None
+
+        pipe = daemon.telegram._get_pipeline.return_value
+        pipe.card_store = MagicMock()
+        pipe.card_store.get_open_for_channel = MagicMock(return_value=[])
+
+        with patch("core.brain_loop.run_brain_loop",
+                   side_effect=fake_run_brain_loop):
+            asyncio.run(handler(event))
+
+        self.assertIn("chat_history", captured_kwargs,
+                      "adapter did not pass chat_history kwarg to run_brain_loop")
+        self.assertEqual(captured_kwargs["chat_history"], fake_exchanges,
+                         "adapter passed wrong value for chat_history")
+        self.assertIsNotNone(daemon.memory.last_limit,
+                             "adapter did not specify a limit on get_telegram_exchanges")
+        self.assertLessEqual(daemon.memory.last_limit, 10,
+                             f"adapter used too-large limit: {daemon.memory.last_limit}")
+
+
 if __name__ == "__main__":
     unittest.main()
