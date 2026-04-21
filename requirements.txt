@@ -1,0 +1,6 @@
+# Daemon runtime dependencies tracked here as they're introduced.
+# The daemon venv at /home/rohit/maez/.venv was historically managed
+# ad-hoc; this file is the starting point for a proper manifest.
+# Training-side deps live in training/requirements.txt.
+
+langfuse>=2.60.0
