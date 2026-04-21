@@ -207,5 +207,33 @@ class LookupValidatesInput(unittest.TestCase):
         self.assertIn("invalid", result["summary"].lower())
 
 
+class LookupDoesNotCreateStrayDbFiles(unittest.TestCase):
+    """Regression guard: sqlite3.connect() on a nonexistent path
+    silently creates an empty file. Fail-open must NOT leave stray
+    zero-byte DB files behind, because that makes subsequent runs
+    think the DBs exist when they don't (masks a real environment
+    problem)."""
+
+    def test_missing_db_paths_stay_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            evo_path = os.path.join(tmp, "nope-evo.db")
+            dream_path = os.path.join(tmp, "nope-dream.db")
+
+            from core import proposal_lookup
+            with patch.object(proposal_lookup, "_EVOLUTION_DB", evo_path), \
+                 patch.object(proposal_lookup, "_DREAM_DB", dream_path):
+                result = proposal_lookup.lookup(42)
+
+            self.assertFalse(result["found"])
+            self.assertFalse(
+                os.path.exists(evo_path),
+                f"lookup should not create stray DB at {evo_path}",
+            )
+            self.assertFalse(
+                os.path.exists(dream_path),
+                f"lookup should not create stray DB at {dream_path}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

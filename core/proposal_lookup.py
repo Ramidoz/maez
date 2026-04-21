@@ -39,6 +39,12 @@ _DREAM_DB = str(_MAEZ_HOME / "memory" / "dream_proposals.db")
 def _fetch_evolution_candidate(proposal_id: int) -> dict | None:
     """Query candidates table. Returns None on any failure — the caller
     treats that as 'not found in this source', not a crash."""
+    # Pre-check: sqlite3.connect() on a nonexistent path silently
+    # creates an empty file. Skip outright if the DB isn't there so
+    # we don't leave zero-byte stray files on a freshly-provisioned
+    # box (which would mask the missing-DB condition on later runs).
+    if not Path(_EVOLUTION_DB).exists():
+        return None
     try:
         conn = sqlite3.connect(_EVOLUTION_DB, timeout=1.5)
     except sqlite3.Error:
@@ -53,15 +59,17 @@ def _fetch_evolution_candidate(proposal_id: int) -> dict | None:
             (proposal_id,),
         ).fetchone()
     except sqlite3.Error:
-        conn.close()
         return None
-    conn.close()
+    finally:
+        conn.close()
     if row is None:
         return None
     return dict(row)
 
 
 def _fetch_dream_proposal(proposal_id: int) -> dict | None:
+    if not Path(_DREAM_DB).exists():
+        return None
     try:
         conn = sqlite3.connect(_DREAM_DB, timeout=1.5)
     except sqlite3.Error:
@@ -75,9 +83,9 @@ def _fetch_dream_proposal(proposal_id: int) -> dict | None:
             (proposal_id,),
         ).fetchone()
     except sqlite3.Error:
-        conn.close()
         return None
-    conn.close()
+    finally:
+        conn.close()
     if row is None:
         return None
     return dict(row)
