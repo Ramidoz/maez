@@ -63,11 +63,18 @@ def _get_client():
         _client_cache["client"] = None
         return None
     try:
+        # Accept LANGFUSE_BASE_URL OR LANGFUSE_HOST — Langfuse's docs
+        # use both names across different examples, and the regional
+        # endpoints (us.cloud.langfuse.com, eu.cloud.langfuse.com)
+        # must be passed whole. Default to the global hub only when
+        # neither is set.
         client = Langfuse(
             public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
             secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-            host=os.environ.get(
-                "LANGFUSE_HOST", "https://cloud.langfuse.com"
+            host=(
+                os.environ.get("LANGFUSE_HOST")
+                or os.environ.get("LANGFUSE_BASE_URL")
+                or "https://cloud.langfuse.com"
             ),
         )
     except Exception as e:
