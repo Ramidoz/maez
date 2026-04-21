@@ -1522,6 +1522,63 @@ def api_logs(name: str):
     return jsonify({"lines": parsed})
 
 
+@app.route("/api/v1/dreams/<int:dream_id>/<action>", methods=["POST"])
+def api_dream_action(dream_id: int, action: str):
+    """Approve or reject a dream/candidate from the cockpit.
+    State-only change — does NOT apply the diff. The daemon's
+    evolution worker handles actual file edits when it sees
+    state=applied; this endpoint just flips the state row.
+
+    IDs below 10000 are evolution candidates (evolution_track.db).
+    IDs 10000+ are dream proposals (dream_proposals.db) — we
+    subtract 10000 when querying to match the merged id scheme
+    used by /api/v1/dreams."""
+    import sqlite3 as _sq
+    import time as _time
+    if action not in ("approve", "reject"):
+        return jsonify({"ok": False, "error": "action must be approve or reject"}), 400
+    is_dream = dream_id >= 10000
+    real_id = dream_id - 10000 if is_dream else dream_id
+    if is_dream:
+        db_path = "/home/rohit/maez/memory/dream_proposals.db"
+        table = "dream_proposals"
+        applied_col = "applied_at"
+        status_col = "status"
+        new_status = "applied" if action == "approve" else "rejected"
+        sql = (f"UPDATE {table} SET {status_col}=?, {applied_col}=? "
+               "WHERE id=?")
+        args = (new_status, _time.time() if action == "approve" else None,
+                real_id)
+    else:
+        db_path = "/home/rohit/maez/memory/evolution_track.db"
+        table = "candidates"
+        status_col = "state"
+        new_status = "applied" if action == "approve" else "rejected"
+        applied_col = "applied_at" if action == "approve" else "rejected_at"
+        # evolution_track uses rejection_reason rather than rejected_at
+        if action == "reject":
+            sql = (f"UPDATE {table} SET {status_col}=?, "
+                   "rejection_reason=?, resolved_at=? WHERE id=?")
+            args = (new_status, "rejected from cockpit UI",
+                    _time.time(), real_id)
+        else:
+            sql = (f"UPDATE {table} SET {status_col}=?, {applied_col}=?, "
+                   "resolved_at=? WHERE id=?")
+            args = (new_status, _time.time(), _time.time(), real_id)
+    try:
+        c = _sq.connect(db_path, timeout=2.0)
+        cur = c.execute(sql, args)
+        changed = cur.rowcount
+        c.commit()
+        c.close()
+        if changed == 0:
+            return jsonify({"ok": False, "error": f"no row with id {real_id}"}), 404
+        return jsonify({"ok": True, "status": new_status, "note":
+                        "state flipped — applying diffs is the daemon's job, not the cockpit's"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/v1/chat/sessions")
 def api_chat_sessions():
     """Read-only chat view: last 5 telegram exchanges as one session.

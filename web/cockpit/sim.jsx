@@ -367,12 +367,19 @@ const SIM = (() => {
       if (name === 'forceDaemon') { state.daemon.nextTickIn = 1; emit(); }
     },
     approveDream: (id) => {
+      // Optimistic UI: flip local state, fire POST, refetch to confirm.
       const d = state.dreams.find((x) => x.id === id);
       if (d) { d.status = 'approved'; d.appliedAt = hms(); emit(); }
+      fetch(`/api/v1/dreams/${id}/approve`, { method: 'POST' })
+        .then(() => _pollDreams())
+        .catch(() => {});
     },
     rejectDream: (id) => {
       const d = state.dreams.find((x) => x.id === id);
       if (d) { d.status = 'rejected'; emit(); }
+      fetch(`/api/v1/dreams/${id}/reject`, { method: 'POST' })
+        .then(() => _pollDreams())
+        .catch(() => {});
     },
   };
 
@@ -467,8 +474,20 @@ const SIM = (() => {
       const r = await fetch('/api/v1/signals');
       if (!r.ok) return;
       const d = await r.json();
-      if (Array.isArray(d.signals) && d.signals.length) {
-        state.signals = d.signals;
+      if (Array.isArray(d.signals)) {
+        // Unconditional replace: showing empty is more honest than
+        // the seed "Berkeley weather" fake when no real source is
+        // configured. Signals falls back to a short "no sources"
+        // placeholder so the UI still has something to render.
+        if (d.signals.length) {
+          state.signals = d.signals;
+        } else {
+          state.signals = [{
+            t: '', kind: 'info',
+            text: '(no ambient sources configured — iphone / perception_cache not writing)',
+            src: 'system',
+          }];
+        }
         emit();
       }
     } catch (e) { /* keep fake */ }
