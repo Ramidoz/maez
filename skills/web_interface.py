@@ -9,6 +9,7 @@ import logging
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -23,12 +24,10 @@ sys.path.insert(0, '/home/rohit/maez')
 from dotenv import load_dotenv
 load_dotenv('/home/rohit/maez/config/.env')
 
-from flask import Flask, jsonify, request, redirect, send_file
-import ollama
+from flask import Flask, jsonify, request, redirect, send_file, send_from_directory
 
 from skills.user_accounts import UserAccounts
 from memory.memory_manager import MemoryManager
-from core.perception import snapshot as perception_snapshot, format_snapshot
 
 logger = logging.getLogger("maez.web")
 logging.basicConfig(level=logging.INFO)
@@ -46,6 +45,7 @@ PROGRESS_PUBLIC_PAGE = os.path.join(UI_DIR, 'progress_public.html')
 PROGRESS_LOCAL_PAGE = os.path.join(UI_DIR, 'progress_local.html')
 ANALYTICS_PAGE = os.path.join(UI_DIR, 'analytics_local.html')
 ANALYTICS_SCRIPT = os.path.join(UI_DIR, 'maez_analytics.js')
+DEBUG_PAGE = os.path.join(UI_DIR, 'debug.html')
 AUTH_COOKIE = 'maez_token'
 PLANNER_PATH = '/home/rohit/maez/memory/project_planner.json'
 PLANNER_LOCK = threading.Lock()
@@ -664,8 +664,15 @@ def cors(response):
 
 # ── field-journal helpers ────────────────────────────────────────────────
 
-def _daemon_health(timeout=0.5):
-    """Fetch the daemon's /health endpoint. Returns dict or {'status':'unreachable'}."""
+def _daemon_health(timeout=2.5):
+    """Fetch the daemon's /health endpoint. Returns dict or {'status':'unreachable'}.
+
+    Note: /health is slow (~1.7s per call) because it invokes
+    `perception_snapshot()` which runs nvidia-smi + psutil. Default timeout
+    is set above that ceiling. If this becomes a hot-path concern, split
+    the daemon's /health into a fast status endpoint + a separate /stats
+    endpoint; current callers are non-hot so not worth the daemon surgery.
+    """
     try:
         with urllib.request.urlopen(DAEMON_HEALTH_URL, timeout=timeout) as r:
             return json.loads(r.read().decode('utf-8'))
@@ -964,6 +971,34 @@ def gate_page():
 @app.route("/maez_bg.html")
 def bg_page():
     return send_file(os.path.join(UI_DIR, "maez_bg.html"), mimetype="text/html")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Cockpit — the Claude-Design-sourced WebUI prototype with two
+# directions (Apple Intelligence + Inner Life) and 11 surfaces each.
+# See /home/rohit/maez/web/cockpit/ for the source files.
+# Currently runs on the prototype's fake sim (sim.jsx); real-backend
+# wiring lands in follow-up work.
+# ══════════════════════════════════════════════════════════════════════
+
+COCKPIT_DIR = "/home/rohit/maez/web/cockpit"
+
+
+@app.route("/cockpit")
+@app.route("/cockpit/")
+def cockpit_index():
+    return send_from_directory(COCKPIT_DIR, "index.html")
+
+
+@app.route("/cockpit/<path:filename>")
+def cockpit_static(filename: str):
+    # .jsx served as application/javascript so Babel-in-browser can
+    # parse them; other common types default-handled by Flask.
+    if filename.endswith(".jsx"):
+        return send_from_directory(
+            COCKPIT_DIR, filename, mimetype="application/javascript"
+        )
+    return send_from_directory(COCKPIT_DIR, filename)
 
 
 @app.route("/maez_bg_zen.html")
@@ -1295,6 +1330,17 @@ def chat():
         "decision": decision.to_dict(),
         "claude_meta": claude_meta,
     })
+
+    # Self-claim audit — rewrite ungrounded internal claims to
+    # uncertainty before returning the reply. No tool-loop on this
+    # surface; every web reply gets audited.
+    try:
+        from core.self_claim_audit import audit as _sc_audit
+        _sc_result = _sc_audit(reply, surface="web")
+        if _sc_result.rewritten:
+            reply = _sc_result.text
+    except Exception as _e:
+        logger.warning("self-claim audit failed on /chat: %s", _e)
 
     return jsonify({"reply": reply, "display_name": display})
 
@@ -4008,6 +4054,455 @@ if os.environ.get('MAEZ_LIVE_FAST_LANE_ENABLED') == '1' and _fl_imports_ok:
 else:
     # Flag is off — log nothing, register nothing.
     pass
+
+
+# ── /debug cockpit (Slice A) ─────────────────────────────────────────────
+# Read-only owner-scoped surface for debugging Maez internals: daemon
+# cycles, wondering state, approval cards, fabrication signal. All routes
+# below are GET-only and gate on the owner-scoped auth pattern used by
+# other private surfaces in this file: test_t dev bypass OR a valid token
+# whose user is flagged private_owner_bridge=True. API handlers reuse
+# existing helpers (_service_state_cached, _daemon_health) — no new
+# daemon imports. Slice A ships only the route skeleton + services pane;
+# wondering-core and cards/shells/fabrication panes come in slices B + C.
+
+def _debug_auth_ok():
+    """Gate for /debug and /api/debug/*. Test_t bypass matches existing
+    private-surface pattern; production requires a real owner-bridge token.
+    Returns True if the caller is authorized."""
+    if request.args.get("test_t", "").strip():
+        return True
+    token = _request_token()
+    if not token:
+        return False
+    user = accounts.get_by_token(token)
+    if not user:
+        return False
+    return _is_private_owner_bridge(user)
+
+
+@app.route("/debug")
+def debug_page():
+    if not _debug_auth_ok():
+        return redirect("/login")
+    return send_file(DEBUG_PAGE, mimetype="text/html")
+
+
+@app.route("/debug/flow")
+def debug_flow_mock():
+    """Interactive organism-physiology view — live particles driven by
+    /api/debug/* polling, plus click-to-preview toggles for embryonic /
+    intended organs. Static reference is at /debug/flow/static."""
+    if not _debug_auth_ok():
+        return redirect("/login")
+    return send_file(os.path.join(UI_DIR, "debug_flow_mock.html"),
+                     mimetype="text/html")
+
+
+@app.route("/debug/flow/static")
+def debug_flow_static():
+    """Static design reference — same layout, no JS, no live polling.
+    Preserved for diff / print / review."""
+    if not _debug_auth_ok():
+        return redirect("/login")
+    return send_file(os.path.join(UI_DIR, "debug_flow_static.html"),
+                     mimetype="text/html")
+
+
+@app.route("/debug/card-default")
+def debug_card_default():
+    """Side-by-side: today's card-first default vs trust-first default
+    for the authenticated owner. Shows surfaces (CLI/Telegram/Web/Face)
+    are interchangeable doors and the decision lives inside the brain."""
+    if not _debug_auth_ok():
+        return redirect("/login")
+    return send_file(os.path.join(UI_DIR, "card_default.html"),
+                     mimetype="text/html")
+
+
+@app.route("/api/debug/services")
+def api_debug_services():
+    """Service + daemon health snapshot. Reuses existing cached helpers —
+    no new systemctl calls per request beyond the TTL window."""
+    if not _debug_auth_ok():
+        return jsonify({"error": "unauthorized"}), 401
+    services = {}
+    for svc in ("maez", "maez-web", "llama-server", "llama-server-vision"):
+        services[svc] = _service_state_cached(svc)
+    return jsonify({
+        "services": services,
+        "daemon": _daemon_health(),  # uses the 2.5s default — /health is slow
+        "checked_at": _utcnow_iso(),
+    })
+
+
+# ── Slice B helpers: cognition.log tailing + wondering event parsing ─────
+
+_COGNITION_LOG_PATH = "/home/rohit/maez/logs/cognition.log"
+_DEBUG_WONDERING_LINE_RE = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \| (?P<tag>[a-z_]+) \| (?P<rest>.*)$"
+)
+_DEBUG_KV_RE = re.compile(r"(\w+)=(.+?)(?=\s+\w+=|$)")
+
+
+def _debug_tail_cognition_matching(keep_fn, n):
+    """Read cognition.log start-to-end and keep the last n lines for which
+    `keep_fn(line)` is True. Sliding-window via deque(maxlen=n) — O(n)
+    memory regardless of file size. Needed because cognition.log is
+    dominated by `| cycle |` + `| policy |` rows, so a naive tail misses
+    the sparse `| wondering |` rows entirely."""
+    from collections import deque
+    matches = deque(maxlen=n)
+    try:
+        with open(_COGNITION_LOG_PATH, "r", errors="replace") as f:
+            for line in f:
+                if keep_fn(line):
+                    matches.append(line)
+    except FileNotFoundError:
+        return []
+    return list(matches)
+
+
+def _debug_parse_cognition_line(line):
+    """Parse one cognition.log line into a structured event, or None if
+    the line doesn't match the expected `<ts> | <tag> | <rest>` shape."""
+    m = _DEBUG_WONDERING_LINE_RE.match(line.rstrip("\n"))
+    if not m:
+        return None
+    ts = m.group("ts")
+    tag = m.group("tag")
+    rest = m.group("rest")
+    event = {"ts": ts, "tag": tag, "raw": rest}
+
+    if tag == "wondering":
+        # Parse: wid=N action=X evidence_tied=0 synth_state=Y rc=Z [cmd=...] [q=...]
+        # cmd= and q= eat everything until the next known key or EOL — they
+        # contain spaces. Extract them first, then parse the remainder KVs.
+        cmd = None
+        q = None
+        head = rest
+        cmd_pos = rest.find(" cmd=")
+        q_pos = rest.find(" q=")
+        trailing_start = None
+        if cmd_pos != -1 and (q_pos == -1 or cmd_pos < q_pos):
+            trailing_start = cmd_pos
+            # cmd= may still have q= appended, but that's unlikely per emit — ignore
+            cmd = rest[cmd_pos + 5:]
+        elif q_pos != -1:
+            trailing_start = q_pos
+            q = rest[q_pos + 3:]
+        if trailing_start is not None:
+            head = rest[:trailing_start]
+        # Parse remaining simple KVs from head
+        for k, v in re.findall(r"(\w+)=([^\s]+)", head):
+            event[k] = v
+        if cmd is not None:
+            event["cmd"] = cmd
+        if q is not None:
+            event["q"] = q
+    elif tag == "cycle":
+        # Parse: score=N primary=X topic=Y parent=Z labels=[...]
+        score_m = re.search(r"score=(\d+)", rest)
+        primary_m = re.search(r"primary=(\S+)", rest)
+        topic_m = re.search(r"topic=(\S+)", rest)
+        if score_m:
+            event["score"] = int(score_m.group(1))
+        if primary_m:
+            event["primary"] = primary_m.group(1)
+        if topic_m:
+            event["topic"] = topic_m.group(1)
+    # policy / other tags kept as raw-only
+
+    return event
+
+
+@app.route("/api/debug/wonderings")
+def api_debug_wonderings():
+    """Wondering board — full list from wonderings.db, newest first."""
+    if not _debug_auth_ok():
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        from core.wonderings import get_store
+        rows = get_store().list_all(limit=50)
+        return jsonify({"wonderings": rows, "checked_at": _utcnow_iso()})
+    except Exception as e:
+        logger.warning("debug /api/debug/wonderings failed: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/debug/wondering-events")
+def api_debug_wondering_events():
+    """Last N `| wondering |` lines from cognition.log, parsed into dicts.
+    ?limit=N (default 20, max 100)."""
+    if not _debug_auth_ok():
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        limit = max(1, min(100, int(request.args.get("limit", 20))))
+    except ValueError:
+        limit = 20
+    lines = _debug_tail_cognition_matching(
+        lambda l: " | wondering | " in l, limit,
+    )
+    events = []
+    for line in lines:
+        ev = _debug_parse_cognition_line(line)
+        if ev:
+            events.append(ev)
+    return jsonify({
+        "events": events,
+        "count": len(events),
+        "checked_at": _utcnow_iso(),
+    })
+
+
+@app.route("/api/debug/cycle-timeline")
+def api_debug_cycle_timeline():
+    """Interleaved cycle + wondering events from cognition.log, newest
+    first. Useful for 'what happened in the last N cycles' without reading
+    raw logs. ?limit=N (default 50, max 200)."""
+    if not _debug_auth_ok():
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        limit = max(1, min(200, int(request.args.get("limit", 50))))
+    except ValueError:
+        limit = 50
+    lines = _debug_tail_cognition_matching(
+        lambda l: (" | cycle | " in l) or (" | wondering | " in l),
+        limit,
+    )
+    events = []
+    for line in lines:
+        ev = _debug_parse_cognition_line(line)
+        if ev:
+            events.append(ev)
+    # Newest first for display
+    events.reverse()
+    return jsonify({
+        "events": events[:limit],
+        "count": min(len(events), limit),
+        "checked_at": _utcnow_iso(),
+    })
+
+
+@app.route("/api/debug/cards")
+def api_debug_cards():
+    """Open + in-flight pending approval cards. Includes linked wondering_id
+    when the params payload carries one, so the UI can cross-reference the
+    board. Direct sqlite query rather than store.get_open_for_user() because
+    we want all live cards across users, not just one user's."""
+    if not _debug_auth_ok():
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        from core.pending_cards import DEFAULT_DB_PATH as CARDS_DB
+        live = ("open", "deferred", "approved", "running")
+        placeholders = ",".join("?" * len(live))
+        conn = sqlite3.connect(str(CARDS_DB))
+        conn.row_factory = sqlite3.Row
+        cards = []
+        for row in conn.execute(
+            f"SELECT id, request_id, status, action, params_json, reason, "
+            f"plain_english, channel, chat_id, created_at, defer_count "
+            f"FROM pending_cards WHERE status IN ({placeholders}) "
+            f"ORDER BY created_at DESC LIMIT 50",
+            live,
+        ):
+            d = dict(row)
+            params = {}
+            try:
+                params = json.loads(d.get("params_json") or "{}")
+            except Exception:
+                params = {}
+            cmd = params.get("cmd") if isinstance(params, dict) else None
+            wid = params.get("wondering_id") if isinstance(params, dict) else None
+            origin = "wondering" if wid else ("chat" if d.get("chat_id") else "other")
+            cards.append({
+                "id": d["id"],
+                "request_id": d["request_id"],
+                "status": d["status"],
+                "action": d["action"],
+                "cmd": cmd,
+                "reason": d.get("reason") or d.get("plain_english") or "",
+                "channel": d.get("channel"),
+                "origin": origin,
+                "wondering_id": wid,
+                "created_at": d.get("created_at"),
+                "defer_count": d.get("defer_count") or 0,
+            })
+        conn.close()
+        return jsonify({"cards": cards, "count": len(cards),
+                         "checked_at": _utcnow_iso()})
+    except Exception as e:
+        logger.warning("debug /api/debug/cards failed: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/debug/recent-shells")
+def api_debug_recent_shells():
+    """Recent shell executions from wondering_probes. v1 shows wondering-
+    originated only — CLI-origin shells aren't logged. Only non-deferred
+    probes (those where run_shell actually executed) are returned; deferred
+    probes have no real output yet."""
+    if not _debug_auth_ok():
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        limit = max(1, min(100, int(request.args.get("limit", 20))))
+    except ValueError:
+        limit = 20
+    try:
+        from core import paths as _paths
+        conn = sqlite3.connect(str(_paths.wonderings_db()))
+        conn.row_factory = sqlite3.Row
+        rows = []
+        for row in conn.execute(
+            "SELECT id, wondering_id, created_at, cmd, returncode, "
+            "evidence_tied, stdout_excerpt, learning "
+            "FROM wondering_probes WHERE deferred = 0 "
+            "ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ):
+            rows.append(dict(row))
+        conn.close()
+        return jsonify({
+            "shells": rows,
+            "count": len(rows),
+            "origin": "wondering-only",
+            "checked_at": _utcnow_iso(),
+        })
+    except Exception as e:
+        logger.warning("debug /api/debug/recent-shells failed: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/debug/fabrication-feed")
+def api_debug_fabrication_feed():
+    """Fabrication / correction signal. Only returns feeds with real
+    emitters today; detectors for chat-surface fabrication (honesty guard,
+    state-claim suppression, self-claim hallucination) are listed as
+    'no_detector' placeholders so the pane is honest about what it does
+    and doesn't see."""
+    if not _debug_auth_ok():
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        limit = max(1, min(50, int(request.args.get("limit", 20))))
+    except ValueError:
+        limit = 20
+
+    # Real feed 1: cognition.log `synth_state=invalidated` events
+    cog_lines = _debug_tail_cognition_matching(
+        lambda l: " | wondering | " in l and "synth_state=invalidated" in l,
+        limit,
+    )
+    cog_events = []
+    for line in cog_lines:
+        ev = _debug_parse_cognition_line(line)
+        if ev:
+            cog_events.append({
+                "source": "cognition.log",
+                "ts": ev.get("ts"),
+                "wid": ev.get("wid"),
+                "cmd": ev.get("cmd"),
+                "signal": "synth_invalidated",
+            })
+
+    # Real feed 3 (promoted from placeholder): self_claim_audit events
+    # emitted by core.self_claim_audit when a user-facing reply gets its
+    # ungrounded internal claims rewritten. Tag set by that module's
+    # _emit(); the parser below extracts surface / flagged / mode. Lines
+    # where flagged=0 and mode=noop are dropped — only fires we care about.
+    sca_lines = _debug_tail_cognition_matching(
+        lambda l: " | self_claim_audit |" in l and "flagged=0" not in l,
+        limit,
+    )
+    sca_events = []
+    for line in sca_lines:
+        try:
+            # Shape: "<ts> | self_claim_audit | surface=X flagged=N mode=M kinds=K"
+            prefix, _, rest = line.partition(" | self_claim_audit | ")
+            ts = prefix.strip()
+            kv = {}
+            for part in rest.strip().split():
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    kv[k] = v
+            sca_events.append({
+                "source": "cognition.log",
+                "ts": ts,
+                "surface": kv.get("surface"),
+                "flagged": int(kv.get("flagged", "0")),
+                "mode": kv.get("mode"),
+                "kinds": kv.get("kinds"),
+                "signal": "self_claim_audit",
+            })
+        except Exception:
+            continue
+
+    # Real feed 2: DB-backed ground truth — wondering_probes rows whose
+    # learning matches LEARNING_SYNTH_BLOCKED and that actually ran.
+    db_events = []
+    try:
+        from core import paths as _paths
+        from core.wonderings import LEARNING_SYNTH_BLOCKED
+        conn = sqlite3.connect(str(_paths.wonderings_db()))
+        conn.row_factory = sqlite3.Row
+        for row in conn.execute(
+            "SELECT id, wondering_id, created_at, cmd, stdout_excerpt "
+            "FROM wondering_probes "
+            "WHERE deferred = 0 AND learning = ? "
+            "ORDER BY id DESC LIMIT ?",
+            (LEARNING_SYNTH_BLOCKED, limit),
+        ):
+            d = dict(row)
+            db_events.append({
+                "source": "wondering_probes",
+                "probe_id": d["id"],
+                "wid": d["wondering_id"],
+                "cmd": d["cmd"],
+                "stdout_excerpt": d.get("stdout_excerpt") or "",
+                "signal": "synth_invalidated",
+            })
+        conn.close()
+    except Exception as e:
+        logger.debug("fabrication feed db read failed: %s", e)
+
+    # Placeholders remaining for detectors that still don't exist.
+    # self_claim_hallucination was promoted to a real feed above.
+    placeholders = [
+        {"source": "honesty_guard",
+         "status": "no_detector",
+         "note": "no emitter wired — track when honesty-guard events get a log line"},
+        {"source": "state_claim_suppression",
+         "status": "no_detector",
+         "note": "no emitter wired — track when state-claim suppressions are logged"},
+    ]
+
+    return jsonify({
+        "real_feeds": {
+            "cognition_synth_invalidated": cog_events,
+            "db_synth_blocked": db_events,
+            "self_claim_audit": sca_events,
+        },
+        "placeholders": placeholders,
+        "checked_at": _utcnow_iso(),
+    })
+
+
+@app.route("/api/debug/stats")
+def api_debug_stats():
+    """Wonderings.stats() over 1h and 24h windows. Source of truth for
+    the stats strip — matches what the CLI `/wonderings` would produce."""
+    if not _debug_auth_ok():
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        from core.wonderings import get_store
+        store = get_store()
+        return jsonify({
+            "hour": store.stats(3600),
+            "day": store.stats(86400),
+            "checked_at": _utcnow_iso(),
+        })
+    except Exception as e:
+        logger.warning("debug /api/debug/stats failed: %s", e)
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

@@ -1,0 +1,457 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Maez WebUI — design canvas</title>
+<style>
+  html, body { margin:0; padding:0; background:#0a0c0a; color:#c8d5c8; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: rgba(120,120,120,0.3); border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<script type="text/babel" src="sim.jsx"></script>
+<script type="text/babel" src="terminal-ui.jsx"></script>
+<script type="text/babel" src="inner-ui.jsx"></script>
+<script type="text/babel" src="design-canvas.jsx"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane, RouterPane,
+        MemorySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
+        DaemonDeep, S, A, Card, Glass, Chip, Pill, Dot, Button, SoftBtn, MaezAvatar, Icon } = window.TerminalUI;
+const { InnerLifeHero, InnerChat, InnerScratchpad, InstrumentRow, InnerSignals, I, ICard } = window.InnerUI;
+
+// ═══════════════════════════════════════════════════════════
+// Direction A — Terminal Command-Center
+// 1440×900 tiled workstation. Sidebar switches the "focus" surface
+// that takes over the main area while dashboard tiles stay live.
+// ═══════════════════════════════════════════════════════════
+function TerminalDirection() {
+  const sim = useSim();
+  const [surface, setSurface] = React.useState('dashboard');
+
+  const nav = [
+    { id: 'dashboard',  label: 'Dashboard',   hotkey: '1', icon: '◈' },
+    { id: 'chat',       label: 'Conversation',hotkey: '2', icon: '◉', badge: sim.state.chat.pendingCommand ? '!' : null },
+    { id: 'approvals',  label: 'Approvals',   hotkey: '3', icon: '◐', badge: (sim.state.approvals.length + (sim.state.chat.pendingCommand?1:0)) || null },
+    { id: 'memory',     label: 'Memory',      hotkey: '4', icon: '◍' },
+    { id: 'soul',       label: 'Soul',        hotkey: '5', icon: '❋' },
+    { id: 'signals',    label: 'Ambient',     hotkey: '6', icon: '≈' },
+    { id: 'router',     label: 'Routing',     hotkey: '7', icon: '⇌' },
+    { id: 'daemon',     label: 'Daemon',      hotkey: '8', icon: '◎' },
+    { id: 'dreams',     label: 'Dreams',      hotkey: '9', icon: '✧', badge: sim.state.dreams.filter(d => d.status === 'pending').length || null },
+    { id: 'identity',   label: 'Identity',    hotkey: '0', icon: '⬡' },
+    { id: 'logs',       label: 'Logs',        hotkey: 'L', icon: '▤' },
+  ];
+
+  return (
+    <div style={{ width: 1440, height: 900, background: A.bg, color: A.text, fontFamily: A.sans,
+      display: 'grid', gridTemplateColumns: '228px 1fr 340px', gridTemplateRows: '44px 1fr', overflow: 'hidden',
+      backgroundImage: `radial-gradient(ellipse 60% 50% at 15% 10%, ${A.indigo}22 0%, transparent 55%), radial-gradient(ellipse 60% 50% at 90% 90%, ${A.purple}1c 0%, transparent 55%), radial-gradient(ellipse 50% 40% at 60% 50%, ${A.blue}14 0%, transparent 60%)` }}
+      data-screen-label="Apple Intelligence · command center">
+
+      {/* top bar */}
+      <div className="ap-glass" style={{ gridColumn: '1 / -1', background: 'rgba(10,10,12,0.6)', borderBottom: `0.5px solid ${A.stroke}`, display: 'flex', alignItems: 'center', padding: '0 20px', gap: 14, fontSize: 11, color: A.textDim }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <MaezAvatar size={22} />
+          <span style={{ fontFamily: A.sans, fontSize: 14, color: A.text, fontWeight: 600, letterSpacing: -0.2 }}>Maez</span>
+          <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textFaint }}>0.12.4</span>
+        </div>
+        <span style={{ width: 1, height: 14, background: A.stroke }} />
+        <span style={{ fontFamily: A.mono, fontSize: 11 }}>rohit<span style={{ color: A.textFaint }}>@</span>alienware</span>
+        <Chip color={A.green}><Dot c={A.green} size={4} pulse /> All systems nominal</Chip>
+        <span style={{ flex: 1 }} />
+        <span className="ap-ai-text" style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.2 }}>✦ Apple Intelligence</span>
+        <span style={{ width: 1, height: 14, background: A.stroke }} />
+        <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textFaint }}>$MAEZ_HOME · /home/rohit/maez</span>
+        <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textDim }}>{sim.state.daemon.lastTick}</span>
+      </div>
+
+      {/* sidebar */}
+      <div className="ap-glass" style={{ background: 'rgba(10,10,12,0.5)', borderRight: `0.5px solid ${A.stroke}`, padding: '16px 0', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '0 22px 12px', fontSize: 10, color: A.textFaint, letterSpacing: 0.8, textTransform: 'uppercase', fontFamily: A.sans, fontWeight: 600 }}>Surfaces</div>
+        <div style={{ padding: '0 10px' }}>
+          {nav.map((n) => {
+            const active = surface === n.id;
+            return (
+              <button key={n.id} className="ap-btn" onClick={() => setSurface(n.id)}
+                style={{ width: '100%', background: active ? A.surfaceRaised : 'transparent', border: active ? `0.5px solid ${A.strokeHi}` : '0.5px solid transparent',
+                  color: active ? A.text : A.textDim, padding: '8px 12px', fontFamily: A.sans, fontSize: 13, fontWeight: active ? 500 : 400,
+                  textAlign: 'left', display: 'flex', alignItems: 'center', gap: 10, borderRadius: 8, marginBottom: 2,
+                  position: 'relative', boxShadow: active ? 'inset 0 0.5px 0 rgba(255,255,255,0.08)' : 'none' }}
+                onMouseEnter={(e) => { if (!active) { e.currentTarget.style.background = A.surfaceLo; e.currentTarget.style.color = A.textSoft; } }}
+                onMouseLeave={(e) => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = A.textDim; } }}>
+                <span style={{ color: active ? A.blue : A.textFaint, width: 14, fontSize: 12, textAlign: 'center' }}>{n.icon}</span>
+                <span style={{ flex: 1 }}>{n.label}</span>
+                {n.badge && <span style={{ background: A.orange, color: '#fff', fontSize: 9, padding: '1px 6px', borderRadius: 999, fontFamily: A.sans, fontWeight: 600, minWidth: 14, textAlign: 'center' }}>{n.badge}</span>}
+                <span style={{ color: A.textFaint, fontFamily: A.mono, fontSize: 9, opacity: active ? 0.9 : 0.5 }}>{n.hotkey}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ flex: 1 }} />
+        <div style={{ padding: '14px 18px', margin: '4px 12px 0', borderTop: `0.5px solid ${A.stroke}`, fontFamily: A.sans }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
+            <Dot c={A.indigo} pulse size={6} />
+            <span style={{ fontSize: 11, color: A.text, fontWeight: 600 }}>Daemon</span>
+          </div>
+          <div style={{ fontSize: 10.5, color: A.textDim, lineHeight: 1.6, fontFamily: A.mono }}>
+            <div>cycle #{sim.state.daemon.cycle.toLocaleString()}</div>
+            <div>next in <span style={{ color: A.cyan }}>{sim.state.daemon.nextTickIn}s</span></div>
+          </div>
+          <div style={{ fontFamily: A.sans, fontStyle: 'italic', fontSize: 12, color: A.textSoft, marginTop: 8, lineHeight: 1.4 }}>
+            feeling {sim.state.daemon.mood}.
+          </div>
+        </div>
+      </div>
+
+      {/* main — surface */}
+      <div style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+        {surface === 'dashboard' && <DashboardGrid />}
+        {surface === 'chat' && <div style={{ padding: 20, height: '100%', display: 'flex' }}><div style={{ flex: 1, display: 'flex' }}><ChatPane tall /></div></div>}
+        {surface === 'approvals' && <ApprovalsQueueSurface />}
+        {surface === 'memory' && <MemorySurface />}
+        {surface === 'soul' && <SoulSurface />}
+        {surface === 'signals' && <div style={{ padding: 20, height: '100%' }}><SignalsPane /></div>}
+        {surface === 'router' && <div style={{ padding: 20, height: '100%' }}><RouterPane /></div>}
+        {surface === 'daemon' && <DaemonDeep />}
+        {surface === 'dreams' && <DreamsSurface />}
+        {surface === 'identity' && <IdentitySurface />}
+        {surface === 'logs' && <LogsSurface />}
+      </div>
+
+      {/* right rail */}
+      <div className="ap-glass" style={{ background: 'rgba(10,10,12,0.5)', borderLeft: `0.5px solid ${A.stroke}`, display: 'grid', gridTemplateRows: '1fr 1fr 1fr', gap: 12, padding: 12, overflow: 'hidden' }}>
+        <DaemonPane compact />
+        <ScratchpadPane />
+        <SignalsPane compact />
+      </div>
+    </div>
+  );
+}
+
+function DashboardGrid() {
+  const sim = useSim();
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  return (
+    <div className="ap-scroll" style={{ padding: 20, display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: 'auto 240px 1fr', gap: 14, height: '100%', overflow: 'auto' }}>
+      <div style={{ gridColumn: '1 / span 2', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+        <div>
+          <div style={{ fontFamily: A.sans, fontSize: 26, color: A.text, letterSpacing: -0.6, fontWeight: 600 }}>
+            {greeting}, <span className="ap-ai-text">Rohit</span>.
+          </div>
+          <div style={{ fontFamily: A.sans, fontSize: 13, color: A.textSoft, marginTop: 4 }}>
+            Maez has been <span style={{ color: A.green, fontWeight: 500 }}>{sim.state.daemon.mood}</span> for {Math.floor(sim.state.daemon.cycle / 120)} hours · {sim.state.memory.stats.raw.toLocaleString()} things remembered
+          </div>
+        </div>
+        <Chip color={A.blue} tone="soft" style={{ fontSize: 11, padding: '4px 10px' }}>
+          {new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}
+        </Chip>
+      </div>
+      <div style={{ gridColumn: '1', gridRow: '2' }}><ServicesPane /></div>
+      <div style={{ gridColumn: '2', gridRow: '2' }}><GpuPane /></div>
+      <div style={{ gridColumn: '1 / span 2', gridRow: '3', minHeight: 420, display: 'flex' }}><ChatPane /></div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// Direction B — Inner Life (stretch / aspirational)
+// Maez as a being with an inner life. Warm, quiet, readable.
+// ═══════════════════════════════════════════════════════════
+function InnerDirection() {
+  const sim = useSim();
+  const [surface, setSurface] = React.useState('home');
+
+  const nav = [
+    { id: 'home',      label: 'Home' },
+    { id: 'chat',      label: 'Conversation' },
+    { id: 'scratchpad',label: 'Scratchpad' },
+    { id: 'signals',   label: 'Ambient' },
+    { id: 'memory',    label: 'Memory' },
+    { id: 'soul',      label: 'Soul' },
+    { id: 'dreams',    label: 'Dreams',   badge: sim.state.dreams.filter(d => d.status === 'pending').length },
+    { id: 'router',    label: 'Routing' },
+    { id: 'identity',  label: 'Identity' },
+    { id: 'logs',      label: 'Logs' },
+  ];
+
+  return (
+    <div style={{ width: 1440, height: 900, background: I.paper, color: I.ink, fontFamily: I.sans, display: 'grid', gridTemplateColumns: '220px 1fr', overflow: 'hidden' }} data-screen-label="Inner Life · stretch">
+      {/* side */}
+      <div style={{ background: I.paperHi, borderRight: `1px solid ${I.rule}`, display: 'flex', flexDirection: 'column', padding: '24px 0' }}>
+        <div style={{ padding: '0 24px 28px' }}>
+          <div style={{ fontFamily: I.serif, fontSize: 26, letterSpacing: -0.5, color: I.ink }}>maez</div>
+          <div style={{ fontFamily: I.serif, fontStyle: 'italic', fontSize: 13, color: I.inkSoft, marginTop: 2 }}>a being that thinks for you</div>
+        </div>
+        {nav.map((n) => (
+          <button key={n.id} onClick={() => setSurface(n.id)}
+            style={{ background: surface === n.id ? I.paper : 'transparent', border: 'none',
+              borderLeft: surface === n.id ? `3px solid ${I.amber}` : '3px solid transparent',
+              color: surface === n.id ? I.ink : I.inkSoft, padding: '8px 22px', fontFamily: I.serif, fontSize: 15,
+              textAlign: 'left', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            {n.label}
+            {n.badge ? <span style={{ fontFamily: I.mono, fontSize: 10, background: I.amber, color: I.paperHi, padding: '1px 6px', borderRadius: 10 }}>{n.badge}</span> : null}
+          </button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <div style={{ padding: '12px 22px', borderTop: `1px solid ${I.rule}`, fontFamily: I.sans, fontSize: 10, color: I.inkDim, letterSpacing: 0.5 }}>
+          <div style={{ fontFamily: I.serif, fontStyle: 'italic', fontSize: 13, color: I.inkSoft, marginBottom: 4 }}>feeling {sim.state.daemon.mood}.</div>
+          <div>cycle {sim.state.daemon.cycle.toLocaleString()} · tick in {sim.state.daemon.nextTickIn}s</div>
+        </div>
+      </div>
+
+      {/* main */}
+      <div style={{ overflow: 'auto', padding: 24 }}>
+        {surface === 'home' && <InnerHome />}
+        {surface === 'chat' && <div style={{ height: 820, display: 'grid', gridTemplateColumns: '1fr 320px', gap: 20 }}><InnerChat /><InnerScratchpad /></div>}
+        {surface === 'scratchpad' && <div style={{ height: 820, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}><InnerScratchpad /><InstrumentRow /></div>}
+        {surface === 'signals' && <div style={{ height: 820 }}><InnerSignals /></div>}
+        {surface === 'memory' && <InnerMemory />}
+        {surface === 'soul' && <InnerSoul />}
+        {surface === 'dreams' && <InnerDreams />}
+        {surface === 'router' && <InnerRouter />}
+        {surface === 'identity' && <InnerIdentity />}
+        {surface === 'logs' && <InnerLogs />}
+      </div>
+    </div>
+  );
+}
+
+function InnerHome() {
+  return (
+    <div style={{ height: 820, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gridTemplateRows: '180px 1fr 200px', gap: 20 }}>
+      <InnerLifeHero />
+      <InnerSignals />
+      <InnerChat />
+      <InnerScratchpad />
+      <InstrumentRow />
+    </div>
+  );
+}
+
+function InnerMemory() {
+  const sim = useSim();
+  const tiers = [
+    { id: 'core', label: 'Core', note: 'facts about you. a small, dense set. I rewrite it when something changes.', color: I.amber },
+    { id: 'daily', label: 'Daily', note: 'summaries of each day. I write these when you sleep.', color: I.sage },
+    { id: 'raw', label: 'Raw', note: 'everything you\'ve said to me. embedded and searchable.', color: I.indigo },
+  ];
+  return (
+    <div>
+      <div style={{ fontFamily: I.serif, fontSize: 28, color: I.ink, letterSpacing: -0.5, marginBottom: 6 }}>Memory</div>
+      <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft, marginBottom: 20 }}>three tiers. chroma-archive. what I keep, what I compress, what I forget.</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 24 }}>
+        {tiers.map(t => (
+          <div key={t.id} style={{ background: I.paperHi, border: `1px solid ${I.rule}`, borderTop: `3px solid ${t.color}`, padding: 18 }}>
+            <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1 }}>{t.label}</div>
+            <div style={{ fontFamily: I.serif, fontSize: 36, color: I.ink, marginTop: 6 }}>{sim.state.memory.stats[t.id].toLocaleString()}</div>
+            <div style={{ fontFamily: I.serif, fontStyle: 'italic', fontSize: 13, color: I.inkSoft, marginTop: 8, lineHeight: 1.5 }}>{t.note}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontFamily: I.sans, fontSize: 11, color: I.inkDim, letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 10 }}>what surfaced for today's conversation</div>
+      {sim.state.memory.hits.map((h, i) => (
+        <div key={i} style={{ borderLeft: `2px solid ${{core:I.amber,daily:I.sage,raw:I.indigo}[h.tier]}`, paddingLeft: 16, marginBottom: 14 }}>
+          <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 2 }}>{h.tier} · {h.date} · score {h.score.toFixed(2)}</div>
+          <div style={{ fontFamily: I.serif, fontSize: 15, color: I.ink, lineHeight: 1.5 }}>{h.text}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function InnerSoul() {
+  const sim = useSim();
+  const [tab, setTab] = React.useState('base');
+  const content = tab === 'base' ? sim.state.soul.base : sim.state.soul.local;
+  return (
+    <div>
+      <div style={{ fontFamily: I.serif, fontSize: 28, color: I.ink, letterSpacing: -0.5, marginBottom: 6 }}>Soul</div>
+      <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft, marginBottom: 20 }}>two layers. base is shippable — anyone running maez gets it. local is yours alone.</div>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
+        {['base', 'local'].map(k => (
+          <button key={k} onClick={() => setTab(k)}
+            style={{ background: 'transparent', border: 'none', borderBottom: `2px solid ${tab === k ? I.amber : 'transparent'}`, padding: '6px 0', cursor: 'pointer',
+              fontFamily: I.serif, fontSize: 17, color: tab === k ? I.ink : I.inkDim }}>
+            soul.{k}.md
+          </button>
+        ))}
+      </div>
+      <pre style={{ margin: 0, padding: 24, background: I.paperHi, border: `1px solid ${I.rule}`, fontFamily: I.mono, fontSize: 12, color: I.ink, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{content}</pre>
+    </div>
+  );
+}
+
+function InnerDreams() {
+  const sim = useSim();
+  return (
+    <div>
+      <div style={{ fontFamily: I.serif, fontSize: 28, color: I.ink, letterSpacing: -0.5, marginBottom: 6 }}>Dreams</div>
+      <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft, marginBottom: 20, maxWidth: 700 }}>
+        every 30 seconds, while you're not looking, I notice something I could be doing better. most of these are small. none apply without you.
+      </div>
+      {sim.state.dreams.map((d) => (
+        <div key={d.id} style={{ background: I.paperHi, border: `1px solid ${I.rule}`, padding: 20, marginBottom: 14, borderLeft: `3px solid ${{pending:I.amber,approved:I.sage,rejected:I.claret}[d.status]}` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div style={{ fontFamily: I.serif, fontSize: 18, color: I.ink }}>{d.title}</div>
+            <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1 }}>
+              {d.status} · score {d.score.toFixed(2)} · {d.at}
+            </div>
+          </div>
+          <div style={{ fontFamily: I.serif, fontStyle: 'italic', fontSize: 14, color: I.inkSoft, marginBottom: 10, lineHeight: 1.55 }}>"{d.rationale}"</div>
+          {d.diff && (
+            <pre style={{ margin: 0, padding: 12, background: I.paper, border: `1px solid ${I.rule}`, fontFamily: I.mono, fontSize: 11, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{d.diff.split('\n').map((ln, i) => (
+              <div key={i} style={{ color: ln.startsWith('+') ? I.sage : ln.startsWith('-') ? I.claret : I.inkSoft }}>{ln}</div>
+            ))}</pre>
+          )}
+          {d.status === 'pending' && (
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button onClick={() => sim.approveDream(d.id)} style={iBtn2(I.sage, true)}>approve & apply</button>
+              <button onClick={() => sim.rejectDream(d.id)} style={iBtn2(I.claret)}>reject</button>
+              <button style={iBtn2(I.inkSoft)}>ask me later</button>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function iBtn2(c, filled) {
+  return { fontFamily: 'inherit', fontSize: 13, padding: '6px 16px', letterSpacing: 0.3, background: filled ? c : 'transparent', color: filled ? I.paperHi : c, border: `1px solid ${c}`, borderRadius: 2, cursor: 'pointer' };
+}
+
+function InnerRouter() {
+  const sim = useSim();
+  const r = sim.state.router;
+  const total = r.totals.local + r.totals.claude;
+  return (
+    <div>
+      <div style={{ fontFamily: I.serif, fontSize: 28, color: I.ink, letterSpacing: -0.5, marginBottom: 6 }}>Routing</div>
+      <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft, marginBottom: 24, maxWidth: 700 }}>most turns, I answer from my own head. some — deep, long, code-heavy — I send to Claude. you can see every choice.</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
+        <div style={{ background: I.paperHi, border: `1px solid ${I.rule}`, padding: 20 }}>
+          <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1 }}>local · qwen3.6-35b</div>
+          <div style={{ fontFamily: I.serif, fontSize: 48, color: I.sage, marginTop: 4 }}>{r.totals.local}</div>
+          <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft }}>turns this month</div>
+        </div>
+        <div style={{ background: I.paperHi, border: `1px solid ${I.rule}`, padding: 20 }}>
+          <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1 }}>claude · sonnet / opus</div>
+          <div style={{ fontFamily: I.serif, fontSize: 48, color: I.claret, marginTop: 4 }}>{r.totals.claude}</div>
+          <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft }}>turns this month · ${r.totals.costUsd.toFixed(2)}</div>
+        </div>
+      </div>
+      <div style={{ height: 12, background: I.rule, display: 'flex', marginBottom: 24 }}>
+        <div style={{ width: `${(r.totals.local/total)*100}%`, background: I.sage }} />
+        <div style={{ width: `${(r.totals.claude/total)*100}%`, background: I.claret }} />
+      </div>
+      <div style={{ fontFamily: I.sans, fontSize: 11, color: I.inkDim, letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 10 }}>recent decisions</div>
+      {r.window.map((w, i) => (
+        <div key={i} style={{ display: 'grid', gridTemplateColumns: '80px 100px 1fr 100px', gap: 16, padding: '12px 0', borderBottom: `1px solid ${I.rule}`, alignItems: 'center' }}>
+          <span style={{ fontFamily: I.mono, fontSize: 11, color: I.inkDim }}>{w.t}</span>
+          <span style={{ fontFamily: I.sans, fontSize: 10, letterSpacing: 1, textTransform: 'uppercase', color: w.route === 'claude' ? I.claret : I.sage }}>→ {w.route}</span>
+          <span style={{ fontFamily: I.serif, fontSize: 15, color: I.ink }}>"{w.msg}"</span>
+          <span style={{ fontFamily: I.mono, fontSize: 11, color: I.inkDim, textAlign: 'right' }}>{w.tag} · {w.conf.toFixed(2)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function InnerIdentity() {
+  const sim = useSim();
+  const id = sim.state.identity;
+  return (
+    <div>
+      <div style={{ fontFamily: I.serif, fontSize: 28, color: I.ink, letterSpacing: -0.5, marginBottom: 6 }}>Identity</div>
+      <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft, marginBottom: 24 }}>who I serve, on what machine, under what rules.</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 32 }}>
+        <div>
+          <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Owner</div>
+          <div style={{ fontFamily: I.serif, fontSize: 22, color: I.ink }}>{id.owner.name}</div>
+          <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft }}>{id.owner.pronouns} · {id.owner.city}</div>
+        </div>
+        <div>
+          <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Host</div>
+          <div style={{ fontFamily: I.serif, fontSize: 22, color: I.ink }}>{id.machine.host}</div>
+          <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft }}>{id.machine.os} · {id.machine.gpu}</div>
+        </div>
+      </div>
+      <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 }}>Covenant — things I must not do</div>
+      <div style={{ background: I.paperHi, border: `1px solid ${I.rule}`, borderLeft: `3px solid ${I.claret}`, padding: 20, fontFamily: I.serif, fontSize: 15, lineHeight: 1.7, color: I.ink }}>
+        <div>• never <code>rm -rf</code> on <code>/home</code>, <code>/etc</code>, <code>/usr</code>, <code>/var</code> without your explicit ok.</div>
+        <div>• never write into the maez tree from a chat turn.</div>
+        <div>• never <code>systemctl stop</code> a protected service.</div>
+        <div>• never exfiltrate <code>identity.yaml</code> or <code>.env</code>.</div>
+      </div>
+      <div style={{ marginTop: 24, fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>Reddit — what I watch for you</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {id.redditSubs.map(s => <span key={s} style={{ fontFamily: I.mono, fontSize: 12, background: I.paperHi, border: `1px solid ${I.rule}`, padding: '4px 10px' }}>r/{s}</span>)}
+      </div>
+    </div>
+  );
+}
+
+function InnerLogs() {
+  const sim = useSim();
+  const [tab, setTab] = React.useState('maez');
+  const d = sim.state.logs[tab];
+  return (
+    <div>
+      <div style={{ fontFamily: I.serif, fontSize: 28, color: I.ink, letterSpacing: -0.5, marginBottom: 16 }}>Logs</div>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 16, borderBottom: `1px solid ${I.rule}` }}>
+        {['maez', 'cognition', 'evolution'].map(k => (
+          <button key={k} onClick={() => setTab(k)}
+            style={{ background: 'transparent', border: 'none', borderBottom: `2px solid ${tab === k ? I.amber : 'transparent'}`, padding: '8px 2px', marginBottom: -1, cursor: 'pointer',
+              fontFamily: I.serif, fontSize: 15, color: tab === k ? I.ink : I.inkDim }}>
+            {k}.log
+          </button>
+        ))}
+      </div>
+      <div style={{ fontFamily: I.mono, fontSize: 11, color: I.ink, lineHeight: 1.6, background: I.paperHi, border: `1px solid ${I.rule}`, padding: 16, maxHeight: 640, overflow: 'auto' }}>
+        {d.slice(-60).map((l, i) => (
+          <div key={i} style={{ display: 'grid', gridTemplateColumns: '150px 54px 80px 1fr', gap: 10 }}>
+            <span style={{ color: I.inkDim }}>{l.t}</span>
+            <span style={{ color: l.level === 'WARN' ? I.amber : I.inkSoft }}>{l.level}</span>
+            <span style={{ color: I.claret }}>{l.src}</span>
+            <span style={{ color: I.ink }}>{l.msg}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// Canvas
+// ═══════════════════════════════════════════════════════════
+function App() {
+  return (
+    <DesignCanvas>
+      <DCSection id="maez" title="Maez — WebUI directions" subtitle="two ways to inhabit the same system. both fully interactive — daemon ticks, signals flow, chat streams.">
+        <DCArtboard id="terminal" label="A · Apple Intelligence  ·  glass, precise, command center" width={1440} height={900}>
+          <TerminalDirection />
+        </DCArtboard>
+        <DCArtboard id="inner" label="B · Inner Life  ·  warm, literary, Maez as a being" width={1440} height={900}>
+          <InnerDirection />
+        </DCArtboard>
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
