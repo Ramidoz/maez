@@ -18,6 +18,14 @@ Design goals:
      creds, etc.), we catch and continue. An observability failure
      must never break a Telegram turn.
 
+Targets langfuse v4+ SDK (observation-based API, not the v2 trace/span
+API). v4 dropped `client.trace()` in favor of `start_observation(...)`
+with an `as_type` discriminator ("agent", "generation", "tool", etc.)
+and child observations via the returned span's own `start_observation`
+method. That shape maps cleanly onto Maez's turn/llm/tool hierarchy
+and avoids OpenTelemetry context-var juggling across the executor
+thread that brain_loop runs in.
+
 Env vars consumed:
   LANGFUSE_PUBLIC_KEY  — required to activate (default off)
   LANGFUSE_SECRET_KEY  — required to activate
@@ -85,8 +93,14 @@ class _NoopTurn:
 
 
 class _ActiveTurn:
-    def __init__(self, trace) -> None:
-        self._trace = trace
+    """Real TurnContext backed by a Langfuse v4 root observation.
+    Child observations are created on the root via start_observation
+    (which returns concrete LangfuseSpan/LangfuseGeneration/etc.
+    objects depending on as_type). We end each child explicitly;
+    the root is ended in observe_turn's finally block."""
+
+    def __init__(self, root) -> None:
+        self._root = root
 
     def llm_call(
         self,
@@ -98,7 +112,8 @@ class _ActiveTurn:
         metadata: Optional[dict] = None,
     ) -> None:
         try:
-            gen = self._trace.generation(
+            gen = self._root.start_observation(
+                as_type="generation",
                 name=name,
                 model=model,
                 input=input,
@@ -119,18 +134,29 @@ class _ActiveTurn:
         metadata: Optional[dict] = None,
     ) -> None:
         try:
-            span = self._trace.span(
-                name=f"tool:{name}",
+            span = self._root.start_observation(
+                as_type="tool",
+                name=name,
                 input=params,
+                output=output,
                 metadata={"ok": ok, **(metadata or {})},
             )
-            span.end(output=output)
+            span.end()
         except Exception as e:
             logger.debug("langfuse tool_call failed: %s", e)
 
-    def event(self, name: str, payload: Optional[dict] = None) -> None:
+    def event(
+        self, name: str, payload: Optional[dict] = None
+    ) -> None:
+        """v4 has no distinct event primitive — record as a short span
+        with input=payload. Call sites treat it as fire-and-forget."""
         try:
-            self._trace.event(name=name, metadata=payload or {})
+            span = self._root.start_observation(
+                as_type="span",
+                name=f"event:{name}",
+                input=payload or {},
+            )
+            span.end()
         except Exception as e:
             logger.debug("langfuse event failed: %s", e)
 
@@ -138,7 +164,7 @@ class _ActiveTurn:
         self, *, output: Any = None, metadata: Optional[dict] = None
     ) -> None:
         try:
-            self._trace.update(
+            self._root.update(
                 output=output, metadata=metadata or {}
             )
         except Exception as e:
@@ -160,21 +186,26 @@ def observe_turn(
         yield _NoopTurn()
         return
 
-    trace = None
+    root = None
     try:
-        trace = client.trace(
+        root = client.start_observation(
+            as_type="agent",
             name=name,
             input=input,
             metadata=metadata or {},
         )
     except Exception as e:
-        logger.debug("langfuse trace creation failed: %s", e)
+        logger.debug("langfuse root observation creation failed: %s", e)
         yield _NoopTurn()
         return
 
     try:
-        yield _ActiveTurn(trace)
+        yield _ActiveTurn(root)
     finally:
+        try:
+            root.end()
+        except Exception as e:
+            logger.debug("langfuse root observation end failed: %s", e)
         try:
             client.flush()
         except Exception as e:
