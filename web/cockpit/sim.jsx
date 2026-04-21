@@ -352,14 +352,24 @@ const SIM = (() => {
       emit();
     },
     approveQueued: (id, approve) => {
-      // approve=false → deny via cockpit API (safe, no execution).
-      // approve=true → cockpit can't execute (lives in daemon process);
-      // advise the user to approve in Telegram. Either way we remove
-      // from the local list so it stops cluttering the UI.
-      if (approve === false) {
-        fetch(`/api/v1/cards/${encodeURIComponent(id)}/deny`, { method: 'POST' })
-          .catch(() => {});
+      // approve=true → hits the daemon's health server (port 11435) at
+      //   /internal/approve_card/<id>, which runs the full pipeline
+      //   approve path (covenant → will-I → execute → mark_done).
+      //   Equivalent to typing 'yes' in Telegram; lives in the daemon
+      //   process where ActionEngine is.
+      // approve=false → maez-web's safe deny (state transition only).
+      if (approve === true) {
+        fetch(`http://localhost:11435/internal/approve_card/${encodeURIComponent(id)}`, {
+          method: 'POST',
+        }).catch(() => {});
+      } else {
+        fetch(`/api/v1/cards/${encodeURIComponent(id)}/deny`, {
+          method: 'POST',
+        }).catch(() => {});
       }
+      // Optimistic removal — the next _pollCards tick will re-verify
+      // against the DB and restore the card if the server-side call
+      // didn't actually resolve it.
       state.approvals = state.approvals.filter((a) => a.id !== id);
       emit();
     },

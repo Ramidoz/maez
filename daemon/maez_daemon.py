@@ -2639,6 +2639,50 @@ class MaezDaemon:
             reply = self.handle_message(text, source="UI")
             return jsonify({"reply": reply})
 
+        @app.route("/internal/approve_card/<request_id>", methods=["POST", "OPTIONS"])
+        def approve_card(request_id: str):
+            """Cockpit approval surface. Runs the full decision_pipeline
+            approve path (_on_approve → will-I check → execute →
+            card_store.mark_done) in the daemon process where
+            ActionEngine lives. Safe equivalent of the Telegram
+            'yes' keyword — same auth model (localhost only), same
+            execution path."""
+            if request.method == "OPTIONS":
+                return ("", 204)
+            try:
+                telegram = getattr(self, "telegram", None)
+                pipe = telegram._get_pipeline() if telegram else None
+                if pipe is None:
+                    return jsonify({"ok": False, "error": "pipeline unavailable"}), 503
+                card = pipe.card_store.get(request_id)
+                if card is None:
+                    return jsonify({"ok": False, "error": f"no such card: {request_id}"}), 404
+                from core.pending_cards import CardStatus
+                if card.status not in {CardStatus.OPEN.value, CardStatus.DEFERRED.value}:
+                    return jsonify({
+                        "ok": False,
+                        "error": f"card status is {card.status!r}, not approvable",
+                    }), 409
+
+                class _CockpitCls:
+                    source = "cockpit"
+                    reasoning = "approved from cockpit UI"
+
+                result = pipe._on_approve(card, _CockpitCls(), "rohit")
+                # PipelineResult may be the executed card result or a
+                # refusal (e.g., covenant / will-I / stale state).
+                ok = bool(getattr(result, "execution_success", None))
+                return jsonify({
+                    "ok": ok,
+                    "status": getattr(getattr(result, "status", None), "value", str(getattr(result, "status", ""))),
+                    "message": getattr(result, "message", ""),
+                    "output": (getattr(result, "execution_output", "") or "")[:2000],
+                    "error": getattr(result, "execution_error", None),
+                })
+            except Exception as e:
+                logger.warning("cockpit approve_card %s failed: %s", request_id, e)
+                return jsonify({"ok": False, "error": str(e)}), 500
+
         @app.route("/dashboard")
         def dashboard():
             """Local-only interactive dashboard. Bound to 127.0.0.1, never nginx-proxied."""
