@@ -627,6 +627,34 @@ class ActivityClaimDetector(unittest.TestCase):
         ]
         self.assertEqual(activity_flags, [])
 
+    def test_youre_idle_inference_flagged(self):
+        """'suggests you're idle' is a presence inference from system
+        metrics. Without a presence signal it's a claim dressed as
+        an observation. Observed 2026-04-21 post-grounding fix."""
+        text = (
+            "The low CPU and stable processes suggest you're idle "
+            "or in a quiet phase."
+        )
+        r = audit(text, surface="daemon_cycle", transcript="")
+        self.assertTrue(
+            any(f.kind == "activity_claim" for f in r.flags),
+            f"expected activity_claim; got {[f.kind for f in r.flags]}"
+        )
+
+    def test_youre_working_flagged(self):
+        text = "Looks like you're working on the api refactor right now."
+        r = audit(text, surface="daemon_cycle", transcript="")
+        self.assertTrue(
+            any(f.kind == "activity_claim" for f in r.flags)
+        )
+
+    def test_deep_focus_phase_flagged(self):
+        text = "You seem to be in a deep focus phase this evening."
+        r = audit(text, surface="daemon_cycle", transcript="")
+        self.assertTrue(
+            any(f.kind == "activity_claim" for f in r.flags)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

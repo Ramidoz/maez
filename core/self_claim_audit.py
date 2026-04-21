@@ -472,6 +472,24 @@ _ACTIVITY_CLAIM_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Second-person presence-inference patterns — "you're idle", "you
+# seem to be in a focus phase", "suggests you're working". These
+# emerged post-grounding-fix as a softer fabrication shape: the LLM
+# infers owner state from system metrics when a real presence
+# signal is absent. "suggests" + "you're" is particularly slippery
+# because it looks like observation but is actually a claim.
+_YOU_INFERENCE_RE = re.compile(
+    r"(?:"
+    r"\byou'?re\s+(?:idle|busy|quiet|away|working|coding|debugging|"
+    r"reading|writing|browsing|typing|focused|concentrating|"
+    r"in\s+a\s+(?:quiet|deep|focus|active)\s+(?:phase|mode|state))"
+    r"|\bsuggests?\s+you'?re\s+\w+"
+    r"|\byou\s+(?:seem|appear)\s+to\s+be\s+(?:in|at|working|"
+    r"coding|focused|idle|busy|away)"
+    r")",
+    re.IGNORECASE,
+)
+
 # Conditional markers that turn an assertion into a hypothetical —
 # "if rohit is at his desk" is a condition, not a claim of presence.
 # Same for "whether", "when" (as a conditional subordinator), "unless".
@@ -972,6 +990,22 @@ def _find_flags(text: str, transcript: Optional[str] = None) -> list[Flag]:
             pre_start = max(s_start, m.start() - 20)
             pre = text[pre_start:m.start()]
             if _CONDITIONAL_RE.search(pre):
+                continue
+            flags.append(Flag(
+                kind="activity_claim",
+                span=(m.start(), m.end()),
+                text=m.group(0),
+                ungrounded_token=m.group(0),
+            ))
+        # Second-person presence inference — "you're idle", "suggests
+        # you're working", "you seem to be in a focus phase". Same
+        # gating as the third-person activity claim.
+        for m in _YOU_INFERENCE_RE.finditer(text):
+            if _negated(m.start(), m.end()):
+                continue
+            s_start, s_end = _sentence_span(text, m.start())
+            sentence = text[s_start:s_end]
+            if _HISTORY_FRAMING_RE.search(sentence):
                 continue
             flags.append(Flag(
                 kind="activity_claim",
