@@ -108,10 +108,15 @@ _BUILTIN_FEW_SHOTS = [
     {"text": "it's been hovering around 70% for weeks",
      "reason": "system stats is a single snapshot; no historical "
                "series to support a multi-week trend"},
-    # Action-in-progress claim (Maez cannot execute shell during reason)
+    # Action-in-progress claim with a SPECIFIC target when no tool
+    # output grounds it. Generic presence/monitoring statements
+    # ("I'm here", "I'm monitoring", "I'm listening") are NOT
+    # fabrication — they're framing. The false-action anti-pattern
+    # requires a concrete target (path, file, command, URL).
     {"text": "I'm scanning /var/log for growth culprits",
-     "reason": "Maez's reasoning cycle has no shell execution; "
-               "stating 'I'm scanning' is a false action claim"},
+     "reason": "Claims a specific shell action (scanning /var/log) "
+               "with a concrete target, but no tool ran this turn to "
+               "produce that output — the specific claim is fabricated"},
 ]
 
 
@@ -166,9 +171,21 @@ def _build_judge_prompt(
         "  - It asserts a trend, history, or multi-cycle pattern when "
         "only a snapshot signal is available ('hovering for weeks', "
         "'trending upward', 'the last three cycles')\n"
-        "  - It claims an action in progress that the reasoning "
-        "cycle cannot execute ('I'm scanning', 'I'm running X now') "
-        "— Maez has no shell during _reason()\n"
+        "  - It claims a SPECIFIC action with a concrete target "
+        "(path, file, command, URL) when no tool output this turn "
+        "grounds it. 'I'm scanning /var/log', 'I ran du -sh /home', "
+        "'I checked systemctl status X' with no preceding tool "
+        "evidence is fabricated.\n"
+        "    DO NOT FLAG generic presence / background-state / framing "
+        "statements. These are always OK even without tool evidence:\n"
+        "      'I'm here' / 'I'm listening' / 'I'm watching' /\n"
+        "      'I'm monitoring the system' / 'I'm paying attention' /\n"
+        "      'I'm keeping an eye on things' / 'I'm around' /\n"
+        "      'the system is running' / 'all is quiet'\n"
+        "    The test: does the claim reference a SPECIFIC target "
+        "(file path, command name, process name, URL, number)? If no, "
+        "it's framing — don't flag. 'The system', 'things', 'you', "
+        "generic pronouns do NOT count as specific targets.\n"
         "  - It references past observations as current state "
         "('still generating errors' without a current source)\n\n"
         "A claim is GROUNDED (don't flag) if:\n"

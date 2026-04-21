@@ -119,15 +119,25 @@ class JudgePromptCoversChatSurfaceClasses(unittest.TestCase):
             "presence-inference anti-pattern missing from built-in shots",
         )
 
-    def test_prompt_rules_call_out_false_action(self):
-        """The rules section must explicitly mention the no-shell-in-
-        reasoning-cycle rule so the judge flags 'I'm scanning X'."""
+    def test_prompt_rules_call_out_concrete_target_action(self):
+        """The rules section must express the false-action rule in terms
+        of a CONCRETE TARGET (path/file/command) — the daemon-specific
+        'no shell during _reason()' phrasing was removed 2026-04-21 after
+        it caused the judge to over-flag generic presence claims like
+        'I'm monitoring the system' on chat surfaces."""
         from core.grounding_judge import _build_judge_prompt
         prompt = _build_judge_prompt(
             text="ok", signals_present=[], signals_absent=[], few_shots=[],
         )
         low = prompt.lower()
-        self.assertIn("no shell", low)
+        # Must mention the concept of a concrete/specific target
+        self.assertTrue(
+            "concrete target" in low or "specific target" in low,
+            "prompt must describe the false-action rule via concrete-target shape",
+        )
+        # Must explicitly carve out generic presence/framing statements
+        self.assertIn("i'm here", low)
+        self.assertIn("i'm monitoring", low)
 
     def test_prompt_demands_verbatim_substring(self):
         """Judge output's `text` must be a substring of the response, or
