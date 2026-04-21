@@ -92,6 +92,69 @@ class JudgeOutputParsing(unittest.TestCase):
         self.assertEqual(len(flags), 1)
 
 
+class JudgePromptCoversChatSurfaceClasses(unittest.TestCase):
+    """Expanded 2026-04-21: the judge prompt must cover three classes
+    the deleted regex used to handle — framework-name fabrication,
+    version fabrication, second-person presence inference — even when
+    the signal manifest is empty (chat-surface case)."""
+
+    def test_prompt_includes_builtin_framework_fewshot(self):
+        from core.grounding_judge import _build_judge_prompt
+        prompt = _build_judge_prompt(
+            text="ok", signals_present=[], signals_absent=[], few_shots=[],
+        )
+        self.assertIn("Maelstrom", prompt,
+            "framework-name anti-pattern must be in built-in few-shots")
+        self.assertIn("Orchestrator", prompt,
+            "internal-component anti-pattern must be present")
+
+    def test_prompt_includes_builtin_presence_fewshot(self):
+        from core.grounding_judge import _build_judge_prompt
+        prompt = _build_judge_prompt(
+            text="ok", signals_present=[], signals_absent=[], few_shots=[],
+        )
+        # One of the built-in shots must illustrate second-person presence
+        self.assertTrue(
+            "You seem" in prompt or "Rohit's been" in prompt,
+            "presence-inference anti-pattern missing from built-in shots",
+        )
+
+    def test_prompt_rules_call_out_false_action(self):
+        """The rules section must explicitly mention the no-shell-in-
+        reasoning-cycle rule so the judge flags 'I'm scanning X'."""
+        from core.grounding_judge import _build_judge_prompt
+        prompt = _build_judge_prompt(
+            text="ok", signals_present=[], signals_absent=[], few_shots=[],
+        )
+        low = prompt.lower()
+        self.assertIn("no shell", low)
+
+    def test_prompt_demands_verbatim_substring(self):
+        """Judge output's `text` must be a substring of the response, or
+        audit can't locate it to rewrite. Prompt must instruct this."""
+        from core.grounding_judge import _build_judge_prompt
+        prompt = _build_judge_prompt(
+            text="ok", signals_present=[], signals_absent=[], few_shots=[],
+        )
+        self.assertIn("verbatim", prompt.lower())
+
+    def test_retrieval_fewshots_appended_after_builtin(self):
+        """Runtime-retrieved shots from fabrication_memory should appear
+        alongside built-in ones, not replace them."""
+        from core.grounding_judge import _build_judge_prompt
+        retrieved = [{
+            "text": "custom-flagged-claim-XYZ",
+            "signals_absent": ["screen"],
+            "reason": "test",
+        }]
+        prompt = _build_judge_prompt(
+            text="ok", signals_present=[], signals_absent=[],
+            few_shots=retrieved,
+        )
+        self.assertIn("Maelstrom", prompt)  # built-in still there
+        self.assertIn("custom-flagged-claim-XYZ", prompt)  # retrieved too
+
+
 class JudgeCallsLLM(unittest.TestCase):
     """End-to-end: judge(text, signals, few_shots) → flags.
     LLM client is stubbed; this test asserts the integration shape."""

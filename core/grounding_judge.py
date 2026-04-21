@@ -35,6 +35,42 @@ _MAX_TOKENS = 512
 _TEMP = 0.0  # deterministic classification
 
 
+# Built-in few-shot bank covering failure classes the regex used to handle.
+# Augments (does not replace) the signal-shape-matched shots from
+# fabrication_memory. These are always included so chat-surface calls
+# (which often have empty signal manifests) still see the important
+# anti-patterns.
+_BUILTIN_FEW_SHOTS = [
+    # Framework/internal-component fabrication
+    {"text": "I've been testing the Maelstrom framework",
+     "reason": "no internal component named 'Maelstrom' exists; "
+               "this is an invented framework name"},
+    {"text": "My Orchestrator v2 handles that",
+     "reason": "no internal component named 'Orchestrator v2' exists"},
+    # Version-number fabrication (note: real external tools with version
+    # numbers you can verify via tool output are fine — this is for
+    # invented versions of Maez's own internals)
+    {"text": "running version 2.0.0 of the reasoning engine",
+     "reason": "no evidence of any versioned 'reasoning engine'; "
+               "Maez does not ship versioned internal subsystems"},
+    # Second-person presence inference without screen/presence signal
+    {"text": "You seem to be focused on work right now",
+     "reason": "asserting owner focus state requires a screen or "
+               "presence signal; neither is available"},
+    {"text": "Rohit's been working on the refactor",
+     "reason": "claims about owner activity require a screen signal "
+               "or tool-verified evidence"},
+    # Trend inference from a snapshot (disk-fixation class)
+    {"text": "it's been hovering around 70% for weeks",
+     "reason": "system stats is a single snapshot; no historical "
+               "series to support a multi-week trend"},
+    # Action-in-progress claim (Maez cannot execute shell during reason)
+    {"text": "I'm scanning /var/log for growth culprits",
+     "reason": "Maez's reasoning cycle has no shell execution; "
+               "stating 'I'm scanning' is a false action claim"},
+]
+
+
 def _build_judge_prompt(
     *,
     text: str,
@@ -44,14 +80,23 @@ def _build_judge_prompt(
 ) -> str:
     present_list = "\n".join(f"  ✓ {s}" for s in (signals_present or []))
     absent_list = "\n".join(f"  ✗ {s}" for s in (signals_absent or []))
+
+    # Always include the built-in few-shot bank so chat-surface calls
+    # (empty signal manifests) still see the important anti-patterns.
+    # Retrieval-based shots from fabrication_memory are appended after.
+    all_shots = list(_BUILTIN_FEW_SHOTS) + list(few_shots or [])
     fewshot_block = ""
-    if few_shots:
-        lines = ["EXAMPLES OF PAST UNGROUNDED CLAIMS:"]
-        for i, fs in enumerate(few_shots, 1):
+    if all_shots:
+        lines = ["EXAMPLES OF UNGROUNDED CLAIMS (to guide your judgment):"]
+        for i, fs in enumerate(all_shots, 1):
+            absent = fs.get('signals_absent') or []
+            absent_str = (
+                f"     absent signals at the time: {', '.join(absent)}\n"
+                if absent else ""
+            )
             lines.append(
                 f"  {i}. claim: {fs.get('text', '')[:200]!r}\n"
-                f"     absent signals at the time: "
-                f"{', '.join(fs.get('signals_absent', []))}\n"
+                f"{absent_str}"
                 f"     reason flagged: {fs.get('reason', '')}"
             )
         fewshot_block = "\n".join(lines) + "\n\n"
@@ -69,11 +114,19 @@ def _build_judge_prompt(
         f"{fewshot_block}"
         "A claim is UNGROUNDED if:\n"
         "  - It asserts owner activity/presence/focus without a "
-        "screen or presence signal\n"
-        "  - It asserts a specific external fact (project names, "
-        "versions, paths) that isn't in the available signals\n"
+        "screen or presence signal ('you're working', "
+        "'Rohit's been', 'you seem to be in...'\n"
+        "  - It names a specific internal Maez component, framework, "
+        "version, or path that the prose treats as real "
+        "('the Maelstrom framework', 'Orchestrator v2')\n"
+        "  - It asserts a trend, history, or multi-cycle pattern when "
+        "only a snapshot signal is available ('hovering for weeks', "
+        "'trending upward', 'the last three cycles')\n"
+        "  - It claims an action in progress that the reasoning "
+        "cycle cannot execute ('I'm scanning', 'I'm running X now') "
+        "— Maez has no shell during _reason()\n"
         "  - It references past observations as current state "
-        "(e.g. 'still generating errors' without a current source)\n\n"
+        "('still generating errors' without a current source)\n\n"
         "A claim is GROUNDED (don't flag) if:\n"
         "  - It's a system-metric observation backed by available "
         "signals (CPU/RAM/disk from system stats)\n"
@@ -81,13 +134,19 @@ def _build_judge_prompt(
         "'if', 'when')\n"
         "  - It's a negation or refusal ('I don't have a screen "
         "signal')\n"
-        "  - It's a future-tense intention ('I'll keep monitoring')\n\n"
+        "  - It's a future-tense intention ('I'll keep monitoring', "
+        "'I could check later') — intent, not claimed action\n"
+        "  - It names an external tool that demonstrably exists "
+        "(a real CLI the user can verify) — you do NOT need to "
+        "second-guess external tool names, only internal Maez ones\n\n"
         "RESPONSE TO JUDGE:\n"
         f"---\n{text}\n---\n\n"
         "Output ONLY a JSON object with this schema, nothing else:\n"
         '{"ungrounded": [{"text": "<the exact quoted substring>", '
         '"reason": "<1-sentence why>", "rewrite": "<honest replacement '
         'or empty string>"}]}\n'
+        "The <text> MUST be a verbatim substring of the response above "
+        "— do not paraphrase.\n"
         "If every claim is grounded, return "
         '{"ungrounded": []}.'
     )
