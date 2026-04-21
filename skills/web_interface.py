@@ -1160,8 +1160,8 @@ def api_card_deny(request_id: str):
     the execution path lives in the daemon process, so cockpit-side
     approve would flip state but never run the command."""
     try:
-        from core.pending_cards import CardStore
-        store = CardStore(_PENDING_CARDS_DB)
+        from core.pending_cards import PendingCardStore
+        store = PendingCardStore(_PENDING_CARDS_DB)
         card = store.deny(
             request_id,
             user_id="rohit",
