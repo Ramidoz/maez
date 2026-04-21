@@ -17,10 +17,8 @@ import re
 import threading
 import uuid
 from datetime import datetime
-from typing import Optional
 
 import chromadb
-import ollama
 from chromadb.config import Settings
 from dotenv import load_dotenv
 from telegram import Bot, Update
@@ -301,8 +299,23 @@ Respond naturally. Be present. Be real."""
         # Reason
         try:
             messages = [{'role': 'system', 'content': system_prompt}]
-            for turn in history[-6:]:
-                messages.append({'role': turn['role'], 'content': turn['content']})
+            # Compress any history beyond the last 6 turns into a summary
+            # system message so long public conversations don't silently
+            # lose their earlier context. Fail-safe: on any summarizer
+            # error, falls back to the previous last-6 tail behavior.
+            try:
+                from core.context_compressor import compress as _compress
+                prepared = _compress(
+                    [{'role': t['role'], 'content': t['content']} for t in history],
+                    keep_tail_n=6,
+                )
+            except Exception:
+                prepared = [
+                    {'role': t['role'], 'content': t['content']}
+                    for t in history[-6:]
+                ]
+            for turn in prepared:
+                messages.append(turn)
             messages.append({'role': 'user', 'content': message})
 
             # Session 11p: route through llm_client so the backend (Ollama

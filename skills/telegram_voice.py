@@ -2826,10 +2826,24 @@ class TelegramVoice:
                 f"{web_context}\n\n"
                 f"INSTRUCTION: Real search results above. Synthesize, don't list.\n\n"
             )
-        # Add current message to conversation thread
+        # Add current message to conversation thread. When the thread
+        # exceeds 12 turns, compress the dropped head into a single
+        # system-role summary message via core.context_compressor (uses
+        # the judge llama-server as summarizer, fail-safe to plain
+        # tail-truncation). Prior behavior silently chopped everything
+        # before the last 12, losing any Active Task mentioned earlier.
         self._conversation_thread.append({"role": "user", "content": user_text})
         if len(self._conversation_thread) > 12:
-            self._conversation_thread = self._conversation_thread[-12:]
+            try:
+                from core.context_compressor import compress as _compress
+                self._conversation_thread = _compress(
+                    self._conversation_thread, keep_tail_n=12,
+                )
+            except Exception as _ce:
+                # Fail-safe: behave exactly as before on any unexpected error.
+                logger.debug("context_compressor failed, falling back to "
+                             "plain truncation: %s", _ce)
+                self._conversation_thread = self._conversation_thread[-12:]
 
         # Build the final user message. The Jarvis transcript MUST be
         # attached to the final user message (not buried in the first
