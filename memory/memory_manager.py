@@ -187,6 +187,19 @@ class MemoryManager:
         # Tag with topic wing
         doc_metadata["wing"] = _topic_router.detect_wing(content)
 
+        # Derive lightweight concept tags for later scoring / clustering.
+        # Observational — stored in metadata, not yet used to route
+        # promotion decisions. See core/memory_scoring.py.
+        try:
+            from core.memory_scoring import derive_concept_tags as _tags
+            tags = _tags(content)
+            if tags:
+                # Chroma metadata values must be primitives — join to a
+                # comma-separated string and re-split on read.
+                doc_metadata["concept_tags"] = ",".join(tags)
+        except Exception as _te:
+            logger.debug("concept tag derivation failed (ignored): %s", _te)
+
         # Embed snapshot summary into the document for richer semantic search
         doc_text = content
         if snapshot:
@@ -433,6 +446,28 @@ class MemoryManager:
             })
             if len(memories) >= n:
                 break
+
+        # Record each surfaced memory's recall in the sidecar stats DB.
+        # Observational — feeds promotion_score() but does not yet
+        # change promotion behavior. Silent on failure; the query path
+        # must never stall for a bookkeeping sidecar.
+        try:
+            from core.memory_scoring import record_recall as _record
+            for mem in memories:
+                dist = mem.get("distance")
+                relevance = 1.0 - float(dist) if isinstance(dist, (int, float)) else 0.0
+                # Pull cached concept tags if present on the metadata.
+                tags_str = mem.get("metadata", {}).get("concept_tags") or ""
+                tags = [t for t in tags_str.split(",") if t]
+                _record(
+                    mem["id"],
+                    query=query,
+                    relevance=max(0.0, min(1.0, relevance)),
+                    concept_tags=tags,
+                )
+        except Exception as _re:
+            logger.debug("record_recall batch failed (ignored): %s", _re)
+
         return memories
 
     def tag_integrity(
