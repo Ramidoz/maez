@@ -125,6 +125,128 @@ class FailureModes(unittest.TestCase):
             self.assertFalse(claude_tier.is_online())
 
 
+class ExceptionHierarchy(unittest.TestCase):
+    """After cf8eb40 follow-up: BadRequest was moved out of the
+    ClaudeTierError hierarchy on purpose so `except ClaudeTierError`
+    doesn't swallow caller bugs. Keep that invariant tested so a
+    future refactor can't silently reparent it."""
+
+    def test_badrequest_not_subclass_of_tier_error(self):
+        from core import claude_tier
+        self.assertFalse(
+            issubclass(claude_tier.ClaudeTierBadRequest,
+                        claude_tier.ClaudeTierError),
+            "BadRequest must NOT inherit from ClaudeTierError so "
+            "generic retry code doesn't loop on programming errors",
+        )
+        # And sanity: the transient classes still do
+        self.assertTrue(issubclass(claude_tier.ClaudeTierUnavailable,
+                                     claude_tier.ClaudeTierError))
+        self.assertTrue(issubclass(claude_tier.ClaudeTierCapped,
+                                     claude_tier.ClaudeTierError))
+        self.assertTrue(issubclass(claude_tier.ClaudeTierAdapterError,
+                                     claude_tier.ClaudeTierError))
+
+    def test_except_tier_error_does_not_catch_badrequest(self):
+        from core import claude_tier
+        caught_by_tier_error = False
+        caught_by_value_error = False
+        try:
+            raise claude_tier.ClaudeTierBadRequest("test")
+        except claude_tier.ClaudeTierError:
+            caught_by_tier_error = True
+        except ValueError:
+            caught_by_value_error = True
+        self.assertFalse(caught_by_tier_error)
+        self.assertTrue(caught_by_value_error)
+
+
+class NoneContentSurfacesAsAdapterError(unittest.TestCase):
+    """After cf8eb40 follow-up: a null content field (tool-call
+    response shape) must raise rather than silently return ""."""
+
+    def test_null_content_raises(self):
+        from core import claude_tier
+        response = _make_response({
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": None},
+                "finish_reason": "tool_calls",
+            }],
+            "model": "sonnet",
+            "usage": {},
+        })
+        with mock.patch("urllib.request.urlopen", return_value=response):
+            with self.assertRaises(claude_tier.ClaudeTierAdapterError) as cm:
+                claude_tier.call(prompt="hi", caller="test")
+            self.assertIn("null content", str(cm.exception).lower())
+
+    def test_empty_string_content_still_succeeds(self):
+        """'' content is a valid (if unusual) model reply. Only None
+        should raise."""
+        from core import claude_tier
+        response = _make_response({
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": ""},
+                "finish_reason": "stop",
+            }],
+            "model": "sonnet",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 0},
+        })
+        with mock.patch("urllib.request.urlopen", return_value=response):
+            r = claude_tier.call(prompt="hi", caller="test")
+            self.assertEqual(r.reply, "")
+
+
+class TimeoutZeroIsHonored(unittest.TestCase):
+    """After cf8eb40 follow-up: timeout_s=0.0 must NOT silently fall
+    back to CALL_TIMEOUT_S via a falsy `or`."""
+
+    def test_explicit_zero_timeout_is_passed_through(self):
+        from core import claude_tier
+        response = _make_response({
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }],
+            "model": "sonnet",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        })
+        captured: dict = {}
+
+        def _capture(req, timeout):
+            captured["timeout"] = timeout
+            return response
+
+        with mock.patch("urllib.request.urlopen", side_effect=_capture):
+            claude_tier.call(prompt="hi", caller="test", timeout_s=0.0)
+        # The effective timeout used by urlopen must be 0.0, not the default
+        self.assertEqual(captured["timeout"], 0.0)
+
+    def test_none_timeout_uses_default(self):
+        from core import claude_tier
+        response = _make_response({
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }],
+            "model": "sonnet",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        })
+        captured: dict = {}
+
+        def _capture(req, timeout):
+            captured["timeout"] = timeout
+            return response
+
+        with mock.patch("urllib.request.urlopen", side_effect=_capture):
+            claude_tier.call(prompt="hi", caller="test")  # no timeout_s
+        self.assertEqual(captured["timeout"], claude_tier.CALL_TIMEOUT_S)
+
+
 class CanAfford(unittest.TestCase):
     def test_returns_true_when_remaining_meets_need(self):
         from core import claude_tier

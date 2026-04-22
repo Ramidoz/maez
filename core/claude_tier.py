@@ -55,8 +55,24 @@ DEFAULT_CALLER = "maez-tier-unlabeled"
 # ── exceptions ────────────────────────────────────────────────────────
 
 class ClaudeTierError(RuntimeError):
-    """Base for all tier-call failures. Callers should treat the tier
-    as unavailable when they see any subclass of this."""
+    """Base for TRANSIENT tier-call failures — subclasses indicating
+    the tier itself is the problem and the call could reasonably be
+    retried or substituted. Specifically:
+      - ClaudeTierUnavailable  (proxy unreachable)
+      - ClaudeTierCapped       (budget exhausted — back off, don't retry)
+      - ClaudeTierAdapterError (upstream adapter blew up)
+
+    ClaudeTierBadRequest is NOT a subclass of this on purpose — a 400
+    from the proxy means the caller sent something structurally
+    invalid (empty messages, streaming on a non-streaming endpoint,
+    etc). That's a programming error; retrying identical input will
+    produce an identical 400 and burn budget. Catch it separately, or
+    don't catch it and fix the caller.
+
+    self-dev review on cf8eb40 (concern #2) flagged that the prior
+    docstring said "treat as unavailable" for ALL subclasses, which
+    invited a natural-looking `except ClaudeTierError: retry_or_
+    fallback()` pattern that would silently swallow caller bugs."""
 
 
 class ClaudeTierUnavailable(ClaudeTierError):
@@ -81,10 +97,13 @@ class ClaudeTierAdapterError(ClaudeTierError):
     Gemini CLI returned error, etc."""
 
 
-class ClaudeTierBadRequest(ClaudeTierError):
+class ClaudeTierBadRequest(ValueError):
     """Proxy rejected the request (400) — malformed payload, empty
     messages, streaming asked for. A bug in the caller, not a
-    transient failure."""
+    transient failure. Deliberately inherits from ValueError, not
+    ClaudeTierError, so `except ClaudeTierError` does not catch
+    programming errors. Retrying identical input will produce an
+    identical 400."""
 
 
 # ── result dataclass ──────────────────────────────────────────────────
@@ -152,9 +171,11 @@ def call(
                         / "opus" / "haiku" → Claude subscription.
                         "gpt-4o" → OpenAI API. "openai/gpt-4o" →
                         OpenRouter. etc.
-        caller        — stable label for the trajectory log. REQUIRED
-                        for accountability; defaults to a warning
-                        string so unlabeled callers are findable.
+        caller        — stable label for the trajectory log.
+                        Strongly recommended for accountability;
+                        defaults to a sentinel ("maez-tier-unlabeled")
+                        that makes unlabeled callers findable in the
+                        trajectory DB without refusing the call.
         timeout_s     — override the module-level default.
 
     Returns:
@@ -189,9 +210,15 @@ def call(
         method="POST",
     )
 
+    # self-dev review on cf8eb40 (concern #3) flagged `timeout_s or
+    # CALL_TIMEOUT_S` as a falsy trap — timeout_s=0.0 would silently
+    # fall back to the 180s default instead of being honored as a
+    # near-instant probe. Use identity check against None since
+    # that's the documented sentinel.
+    effective_timeout = timeout_s if timeout_s is not None else CALL_TIMEOUT_S
     try:
         with urllib.request.urlopen(
-            req, timeout=timeout_s or CALL_TIMEOUT_S,
+            req, timeout=effective_timeout,
         ) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
@@ -219,11 +246,24 @@ def call(
         raise ClaudeTierAdapterError(f"proxy returned unparseable JSON: {e}")
 
     try:
-        reply_text = data["choices"][0]["message"]["content"] or ""
+        raw_content = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as e:
         raise ClaudeTierAdapterError(
             f"proxy returned unexpected shape ({e}): {str(data)[:300]}"
         )
+    # self-dev review on cf8eb40 (concern #2) flagged that `content or
+    # ""` silently returned an empty string when content is JSON null
+    # (which happens on tool-call responses from models that emit a
+    # tool_calls array instead of text). That violated the stated
+    # "no silent degradation" guarantee. Raise explicitly so callers
+    # can distinguish "model responded with empty text" from
+    # "model responded with a structurally unexpected non-text turn".
+    if raw_content is None:
+        raise ClaudeTierAdapterError(
+            "proxy returned null content — possible tool-call response "
+            "on a single-turn endpoint, or model produced no output"
+        )
+    reply_text = raw_content
 
     usage = data.get("usage") or {}
     return TierReply(

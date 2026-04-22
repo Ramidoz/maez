@@ -131,7 +131,11 @@ class ReviewEndToEndMocked(unittest.TestCase):
                                 return_value="diff --git a/x b/x\n+foo\n"), \
              mock.patch("core.self_dev.claude_tier.call",
                          return_value=fake) as m_call:
-            r = self_dev.review(target_ref="HEAD~1..HEAD")
+            # persist=False so test fixtures don't bleed into the
+            # real self_dev.db. (Caught in the cf8eb40 concerns queue
+            # as "test artifact" concerns 2/7.)
+            r = self_dev.review(target_ref="HEAD~1..HEAD",
+                                  persist=False)
 
         self.assertEqual(len(r.concerns), 1)
         self.assertEqual(r.concerns[0].severity, "major")
@@ -167,7 +171,8 @@ class ReviewEndToEndMocked(unittest.TestCase):
         with mock.patch.object(self_dev, "_git_diff", return_value=big), \
              mock.patch("core.self_dev.claude_tier.call",
                          return_value=fake) as m_call:
-            r = self_dev.review(target_ref="HEAD", diff_char_cap=1000)
+            r = self_dev.review(target_ref="HEAD", diff_char_cap=1000,
+                                  persist=False)  # avoid real-DB bleed
         sent_prompt = m_call.call_args.kwargs["prompt"]
         # Should have the truncation note and be much shorter than `big`
         self.assertIn("truncated", sent_prompt)
