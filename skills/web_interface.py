@@ -1663,39 +1663,97 @@ def api_dream_action(dream_id: int, action: str):
 
 @app.route("/api/v1/chat/sessions")
 def api_chat_sessions():
-    """Read-only chat view: last 5 telegram exchanges as one session.
-    Cockpit 'Conversation' surface renders this as history. Real
-    send-message is a separate future endpoint (needs brain_loop in
-    the web process, which is a bigger question)."""
+    """Read-only chat view: last N telegram exchanges as one session.
+
+    Stored content has two shapes in the DB:
+      1. Clean (newer, cockpit+UI turns):
+           "the owner (UI): Hi Maez!\nMaez: Hey Rohit. ..."
+      2. Scaffolded (older, telegram-voice Jarvis turns):
+           "the owner (telegram_surface): <user msg>\n\n[JARVIS TRANSCRIPT — ...]
+            ...lots of prompt instructions...\n<Maez's actual reply>"
+
+    The scaffolded shape leaked raw prompt instructions into the chat
+    display before today's cleanup. This parser extracts just the user
+    message + Maez reply from either shape, stripping any prompt
+    scaffolding so the cockpit shows conversational content only.
+    """
+    import re as _re
     try:
         from memory.memory_manager import MemoryManager
         mem = MemoryManager()
         exchanges = mem.get_telegram_exchanges(limit=6) or []
     except Exception:
         exchanges = []
+
+    # Prompt-scaffolding blocks we've observed in stored telegram content.
+    # Everything between the opening marker and the next "real" line is
+    # internal plumbing — strip it so the cockpit doesn't leak prompts.
+    _SCAFFOLD_OPENERS = (
+        r"\[JARVIS TRANSCRIPT\b",
+        r"\[TURN STATE\b",
+        r"HARD INSTRUCTION — read this before writing",
+        r"HARD RULES for your reply:",
+        r"FORBIDDEN \(all tenses",
+        r"HONEST FRAMINGS \(use these\)",
+    )
+    _SCAFFOLD_RE = _re.compile(
+        r"(?:" + "|".join(_SCAFFOLD_OPENERS) + r")",
+        _re.IGNORECASE,
+    )
+    _OWNER_PREFIX_RE = _re.compile(
+        r"^(?:rohit|the owner)\s*(?:\([^)]*\))?\s*:\s*",
+        _re.IGNORECASE,
+    )
+
+    def _parse_exchange(content: str) -> tuple[str, str]:
+        """Return (user_msg, maez_reply) extracted from stored content.
+        Either may be '' if not present."""
+        if not content:
+            return "", ""
+        text = content.strip()
+
+        # Find the Maez reply marker. In practice it's either the line
+        # prefix "Maez:" or the final paragraph after all the scaffolding.
+        maez_match = _re.search(r"\n\s*Maez\s*:\s*", text)
+        if maez_match:
+            user_blob = text[:maez_match.start()]
+            maez_part = text[maez_match.end():].strip()
+        else:
+            user_blob = text
+            maez_part = ""
+
+        # Drop scaffolding from the user blob: cut at the first opener.
+        scaffold_match = _SCAFFOLD_RE.search(user_blob)
+        if scaffold_match:
+            user_blob = user_blob[:scaffold_match.start()]
+
+        # Strip the "the owner (surface): " / "rohit: " prefix.
+        user_blob = user_blob.strip()
+        user_blob = _OWNER_PREFIX_RE.sub("", user_blob).strip()
+
+        # Also strip scaffolding from the Maez reply (sometimes recycled).
+        if maez_part:
+            m2 = _SCAFFOLD_RE.search(maez_part)
+            if m2:
+                maez_part = maez_part[:m2.start()].strip()
+
+        return user_blob[:800], maez_part[:800]
+
     history = []
     for ex in exchanges:
         content = ex.get("content") or ""
         meta = ex.get("metadata") or {}
         ts_val = str(meta.get("timestamp") or "")[-8:]
-        # Parse "rohit: X\nmaez: Y" shape if present
-        if "maez:" in content:
-            parts = content.split("maez:", 1)
-            user_part = parts[0].replace("rohit:", "").strip()[:500]
-            maez_part = parts[1].strip()[:500]
-            if user_part:
-                history.append({
-                    "role": "user", "t": ts_val, "content": user_part,
-                })
-            if maez_part:
-                history.append({
-                    "role": "assistant", "t": ts_val, "content": maez_part,
-                    "route": "local", "model": MODEL,
-                    "trace": {"tools": [], "memory": 0, "tokens": len(maez_part) // 4},
-                })
-        else:
+        user_msg, maez_reply = _parse_exchange(content)
+        if user_msg:
             history.append({
-                "role": "user", "t": ts_val, "content": content[:500],
+                "role": "user", "t": ts_val, "content": user_msg,
+            })
+        if maez_reply:
+            history.append({
+                "role": "assistant", "t": ts_val, "content": maez_reply,
+                "route": "local", "model": MODEL,
+                "trace": {"tools": [], "memory": 0, "tokens": len(maez_reply) // 4},
             })
     return jsonify({
         "sessions": [{
