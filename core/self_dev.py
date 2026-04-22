@@ -399,6 +399,167 @@ def review(
     return result
 
 
+# ── test proposal — generates code, not feedback ─────────────────────
+
+_TEST_PROPOSAL_SYSTEM_PROMPT = """You are proposing pytest/unittest \
+test code for a Python module on behalf of Maez, an always-on local \
+AI daemon.
+
+Context you must respect:
+- Maez uses Python's stdlib unittest (not pytest). Target imports \
+  look like `import unittest`, `from unittest import mock`.
+- Tests live under tests/ with filenames test_<modulename>.py.
+- Tests are fully offline. Any filesystem, network, or subprocess \
+  call MUST be mocked. Any sqlite use MUST route through a temporary \
+  directory fixture (see tests/test_self_dev_persistence.py for the \
+  pattern — MAEZ_*_DB env patch + importlib.reload).
+- Tests must not require a running Claude proxy or a live daemon.
+
+Your deliverable is a single Python test file. Respond ONLY with \
+valid JSON in this shape, no prose before or after:
+
+{
+  "target_module": "path/relative/to/repo",
+  "test_path":     "tests/test_<modulename>.py",
+  "rationale":     "one-paragraph summary of what these tests cover \
+and what they deliberately skip",
+  "test_code":     "<complete Python source for the test file>"
+}
+
+The test_code field must be a self-contained file that runs under \
+`python -m unittest tests.test_<modulename>`. It should include the \
+license header, module docstring, imports, and `if __name__ == \
+'__main__': unittest.main()` tail matching other test files in this \
+repo. Reference tests/test_claude_tier.py or tests/test_self_dev.py \
+as style exemplars.
+
+Do NOT invent API that doesn't exist in the module. If the module \
+is too thin or too glue-heavy to test meaningfully, return \
+test_code: '' and rationale: 'module is not a useful unit-test \
+target because <reason>'. Empty test_code is a valid, honest \
+response.
+"""
+
+
+@dataclass
+class TestProposal:
+    """Output of propose_tests() — a complete test-file proposal ready
+    to be written to disk (once approved) or reviewed.
+
+    test_code may be empty — Claude refused because the module isn't
+    a meaningful unit-test target. rationale explains why.
+    """
+    target_module: str
+    test_path: str
+    rationale: str
+    test_code: str
+    model_used: str
+    input_tokens: int
+    output_tokens: int
+    raw_text: str = ""
+    parse_error: str = ""
+
+    def is_empty(self) -> bool:
+        return not self.test_code.strip()
+
+
+def _parse_test_proposal(raw: str) -> TestProposal:
+    """Extract the TestProposal JSON envelope from a Claude response.
+    Forgiving parser — same strategy as _parse_response."""
+    block = _extract_json_block(raw)
+    if not block:
+        return TestProposal(
+            target_module="", test_path="", rationale=raw.strip()[:400],
+            test_code="", model_used="", input_tokens=0, output_tokens=0,
+            raw_text=raw,
+            parse_error="no JSON object found in response",
+        )
+    try:
+        data = json.loads(block)
+    except json.JSONDecodeError as e:
+        return TestProposal(
+            target_module="", test_path="", rationale=raw.strip()[:400],
+            test_code="", model_used="", input_tokens=0, output_tokens=0,
+            raw_text=raw,
+            parse_error=f"JSON decode failed: {e}",
+        )
+    return TestProposal(
+        target_module=str(data.get("target_module") or "").strip(),
+        test_path=str(data.get("test_path") or "").strip(),
+        rationale=str(data.get("rationale") or "").strip(),
+        test_code=str(data.get("test_code") or ""),
+        model_used="",  # filled by caller from TierReply
+        input_tokens=0, output_tokens=0,
+        raw_text=raw,
+    )
+
+
+def propose_tests(
+    *,
+    path: str,
+    model: str = "sonnet",
+    max_module_chars: int = 40000,
+    caller: str = "self_dev/propose_tests",
+) -> TestProposal:
+    """Ask Claude to write unittest code for a module. Returns a
+    TestProposal; the caller decides whether to write the file to
+    disk (dry-run by default at the CLI layer).
+
+    Deliberately not persisted: the test file itself is the artifact,
+    and --write already puts it on disk. A future commit may add a
+    proposals table if/when we want queue-style triage.
+    """
+    import os as _os
+    from pathlib import Path as _Path
+
+    p = _Path(path)
+    if not p.is_absolute():
+        p = _Path(_REPO_ROOT) / p
+    if not p.exists() or not p.is_file():
+        raise RuntimeError(f"propose_tests: no such file: {p}")
+
+    try:
+        content = p.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        raise RuntimeError(f"propose_tests: read failed: {e}")
+
+    truncated_note = ""
+    if len(content) > max_module_chars:
+        truncated_note = (
+            f"\n\n[NOTE: module truncated from {len(content)} to "
+            f"{max_module_chars} chars; test coverage will be partial.]"
+        )
+        content = content[:max_module_chars]
+
+    rel = _os.path.relpath(str(p), _REPO_ROOT)
+    user_prompt = (
+        f"Propose unittest tests for this module: `{rel}`\n\n"
+        f"```python\n{content}\n```{truncated_note}"
+    )
+
+    try:
+        tr = claude_tier.call(
+            prompt=user_prompt,
+            system_prompt=_TEST_PROPOSAL_SYSTEM_PROMPT,
+            model=model,
+            caller=caller,
+            # Test generation emits more tokens than review. Give it
+            # extra time before timing out.
+            timeout_s=300.0,
+        )
+    except claude_tier.ClaudeTierError as e:
+        raise RuntimeError(f"propose_tests call failed: {e}")
+
+    proposal = _parse_test_proposal(tr.reply)
+    proposal.model_used = tr.model_used
+    proposal.input_tokens = tr.input_tokens
+    proposal.output_tokens = tr.output_tokens
+    # Auto-fill target_module if Claude left it blank but we know it
+    if not proposal.target_module:
+        proposal.target_module = rel
+    return proposal
+
+
 # ── module review (standing issues vs review's diff-time regressions) ─
 
 def review_module(
@@ -549,6 +710,64 @@ def _cli_review(args) -> int:
     return 0
 
 
+def _cli_propose_tests(args) -> int:
+    try:
+        p = propose_tests(path=args.path, model=args.model)
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(json.dumps(asdict(p), indent=2))
+        return 0
+
+    print(f"Test proposal: {p.target_module}")
+    print(f"Destination : {p.test_path}")
+    print(f"Model       : {p.model_used}  "
+          f"(tokens in/out: {p.input_tokens}/{p.output_tokens})")
+    if p.parse_error:
+        print(f"!! parse error: {p.parse_error}")
+        print("-- raw response (truncated) --")
+        print(p.raw_text[:1200])
+        return 1
+    print()
+    print("Rationale:")
+    print(f"  {p.rationale}")
+    print()
+    if p.is_empty():
+        print("(Claude declined to propose tests — see rationale)")
+        return 0
+
+    if args.write:
+        import os as _os
+        dest = p.test_path or f"tests/test_{_os.path.basename(p.target_module).replace('.py','')}.py"
+        dest_abs = dest if _os.path.isabs(dest) else _os.path.join(
+            "/home/rohit/maez", dest,
+        )
+        if _os.path.exists(dest_abs) and not args.force:
+            print(f"refuse: {dest_abs} already exists (--force to overwrite)",
+                  file=sys.stderr)
+            return 3
+        _os.makedirs(_os.path.dirname(dest_abs), exist_ok=True)
+        with open(dest_abs, "w") as f:
+            f.write(p.test_code)
+        print(f"written: {dest_abs} ({len(p.test_code)} chars)")
+        print("Next: run it before trusting it —")
+        print(f"  cd /home/rohit/maez && "
+              f".venv/bin/python3 -m unittest "
+              f"{dest.replace('/', '.').replace('.py', '')}")
+        return 0
+
+    # Dry-run: show first 80 lines of the proposed test code
+    print("-- proposed test code (dry-run; pass --write to save) --")
+    lines = p.test_code.splitlines()
+    for line in lines[:80]:
+        print(f"  {line}")
+    if len(lines) > 80:
+        print(f"  … ({len(lines) - 80} more lines)")
+    return 0
+
+
 def _cli_review_module(args) -> int:
     try:
         result = review_module(
@@ -678,6 +897,23 @@ def _build_argparser() -> argparse.ArgumentParser:
     rm.add_argument("--no-persist", action="store_true",
                      help="don't write this review to self_dev.db")
     rm.set_defaults(func=_cli_review_module)
+
+    pt = sub.add_parser(
+        "propose-tests",
+        help="Have Claude draft a unittest file for a module",
+    )
+    pt.add_argument("path", help="module to generate tests for")
+    pt.add_argument("--model", default="sonnet",
+                     help="model name (default: sonnet)")
+    pt.add_argument("--json", action="store_true",
+                     help="emit raw JSON result")
+    pt.add_argument("--write", action="store_true",
+                     help="write the proposed test file to disk "
+                          "(dry-run by default, prints preview)")
+    pt.add_argument("--force", action="store_true",
+                     help="overwrite destination if it exists "
+                          "(only relevant with --write)")
+    pt.set_defaults(func=_cli_propose_tests)
 
     h = sub.add_parser("history", help="List recent reviews")
     h.add_argument("--limit", type=int, default=10)

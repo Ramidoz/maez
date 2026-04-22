@@ -269,6 +269,113 @@ class ReviewModuleMocked(unittest.TestCase):
             os.unlink(big.name)
 
 
+class ProposeTestsMocked(unittest.TestCase):
+    """propose_tests() asks Claude for unittest code. Returns a
+    TestProposal dataclass; caller decides whether to write to disk."""
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False,
+        )
+        self._tmp.write("def greet(name):\n    return f'hi {name}'\n")
+        self._tmp.close()
+
+    def tearDown(self):
+        import os
+        try:
+            os.unlink(self._tmp.name)
+        except FileNotFoundError:
+            pass
+
+    def test_happy_path_returns_proposal(self):
+        from core import self_dev
+        from core.claude_tier import TierReply
+
+        fake = TierReply(
+            reply=json.dumps({
+                "target_module": "core/x.py",
+                "test_path": "tests/test_x.py",
+                "rationale": "covers greet() happy and edge",
+                "test_code": (
+                    "import unittest\n"
+                    "from core.x import greet\n"
+                    "class T(unittest.TestCase):\n"
+                    "    def test_basic(self):\n"
+                    "        self.assertEqual(greet('X'), 'hi X')\n"
+                ),
+            }),
+            model_used="sonnet",
+            input_tokens=200, output_tokens=400, raw={},
+        )
+        with mock.patch("core.self_dev.claude_tier.call",
+                         return_value=fake):
+            p = self_dev.propose_tests(path=self._tmp.name)
+        self.assertFalse(p.is_empty())
+        self.assertIn("import unittest", p.test_code)
+        self.assertEqual(p.input_tokens, 200)
+        self.assertEqual(p.target_module, "core/x.py")
+        self.assertEqual(p.test_path, "tests/test_x.py")
+
+    def test_empty_test_code_is_honest_refusal(self):
+        """Claude legitimately returns test_code='' when the target
+        isn't a meaningful unit test candidate (e.g. pure glue
+        module with no logic)."""
+        from core import self_dev
+        from core.claude_tier import TierReply
+
+        fake = TierReply(
+            reply=json.dumps({
+                "target_module": "core/x.py", "test_path": "",
+                "rationale": "glue-only module", "test_code": "",
+            }),
+            model_used="sonnet",
+            input_tokens=50, output_tokens=30, raw={},
+        )
+        with mock.patch("core.self_dev.claude_tier.call",
+                         return_value=fake):
+            p = self_dev.propose_tests(path=self._tmp.name)
+        self.assertTrue(p.is_empty())
+        self.assertIn("glue-only", p.rationale)
+
+    def test_parse_error_preserved(self):
+        from core import self_dev
+        from core.claude_tier import TierReply
+        fake = TierReply(
+            reply="not json at all — refusing",
+            model_used="sonnet",
+            input_tokens=1, output_tokens=1, raw={},
+        )
+        with mock.patch("core.self_dev.claude_tier.call",
+                         return_value=fake):
+            p = self_dev.propose_tests(path=self._tmp.name)
+        self.assertNotEqual(p.parse_error, "")
+        self.assertTrue(p.is_empty())
+        # rationale preserves the raw head so caller can see what
+        # Claude actually said
+        self.assertIn("refusing", p.rationale)
+
+    def test_missing_path_raises(self):
+        from core import self_dev
+        with self.assertRaises(RuntimeError) as cm:
+            self_dev.propose_tests(path="/nonexistent/xyz.py")
+        self.assertIn("no such file", str(cm.exception))
+
+    def test_caller_label_propagated(self):
+        from core import self_dev
+        from core.claude_tier import TierReply
+        fake = TierReply(
+            reply='{"target_module":"x","test_path":"t","rationale":"r","test_code":"import unittest\\n"}',
+            model_used="sonnet", input_tokens=1, output_tokens=1, raw={},
+        )
+        with mock.patch("core.self_dev.claude_tier.call",
+                         return_value=fake) as m_call:
+            self_dev.propose_tests(path=self._tmp.name)
+        self.assertEqual(
+            m_call.call_args.kwargs["caller"], "self_dev/propose_tests",
+        )
+
+
 class SeverityCounts(unittest.TestCase):
     def test_counts_severity_buckets(self):
         from core.self_dev import ReviewResult, Concern
