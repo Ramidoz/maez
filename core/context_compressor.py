@@ -45,8 +45,13 @@ from typing import Optional
 
 logger = logging.getLogger("maez.context_compressor")
 
-_JUDGE_BASE_URL = os.environ.get("MAEZ_JUDGE_BASE_URL", "").rstrip("/")
-_JUDGE_MODEL = os.environ.get("MAEZ_JUDGE_MODEL", "maez-judge")
+# Judge endpoint + model + template kwargs all flow from core.model_config
+# (/etc/maez/model.env). Zero hardcoded names or quirks.
+from core.model_config import (
+    JUDGE_BASE_URL as _JUDGE_BASE_URL,
+    JUDGE_MODEL as _JUDGE_MODEL,
+    JUDGE_CHAT_KWARGS as _JUDGE_CHAT_KWARGS,
+)
 _SUMMARIZER_TIMEOUT_S = float(os.environ.get("MAEZ_SUMMARIZER_TIMEOUT_S", "30"))
 _SUMMARY_MAX_TOKENS = int(os.environ.get("MAEZ_SUMMARY_MAX_TOKENS", "600"))
 
@@ -106,7 +111,7 @@ def _call_summarizer(prompt: str) -> Optional[str]:
     if not _JUDGE_BASE_URL:
         logger.debug("no MAEZ_JUDGE_BASE_URL — cannot summarize")
         return None
-    body = json.dumps({
+    payload: dict = {
         "model": _JUDGE_MODEL,
         "messages": [
             {"role": "system",
@@ -116,10 +121,13 @@ def _call_summarizer(prompt: str) -> Optional[str]:
         ],
         "temperature": 0.0,
         "max_tokens": _SUMMARY_MAX_TOKENS,
-        # Qwen3/3.5 reasoning mode would dump tokens into reasoning_content
-        # and leave the summary empty. Disable.
-        "chat_template_kwargs": {"enable_thinking": False},
-    }).encode()
+    }
+    # Model-specific template kwargs (e.g. disable reasoning mode) come
+    # from /etc/maez/model.env via MAEZ_JUDGE_CHAT_KWARGS. Any model that
+    # doesn't understand a given kwarg will ignore it — safe.
+    if _JUDGE_CHAT_KWARGS:
+        payload["chat_template_kwargs"] = dict(_JUDGE_CHAT_KWARGS)
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(
         f"{_JUDGE_BASE_URL}/v1/chat/completions",
         data=body,

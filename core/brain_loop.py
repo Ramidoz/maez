@@ -594,7 +594,7 @@ def run_brain_loop(
     get_pipeline,
     user_id: str = "rohit",
     chat_id: str = "",
-    model: str = "qwen36-35b-base",
+    model: str | None = None,  # None → use core.model_config.PRIMARY_MODEL
     max_iters: int = 4,
     recovery_seed=None,
     send_intermediate=None,
@@ -624,6 +624,13 @@ def run_brain_loop(
         return ""
     if recovery_seed is None and not _should_run_jarvis_loop(user_text):
         return ""
+
+    # Resolve model from model_config if caller didn't pin one. Keeps the
+    # loop model-agnostic — any alias configured in /etc/maez/model.env
+    # works; no hardcoded names anywhere in this module.
+    if model is None:
+        from core.model_config import PRIMARY_MODEL as _mc
+        model = _mc
 
     import json as _json
     import re as _re

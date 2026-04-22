@@ -269,8 +269,13 @@ def _advance_one_locked(daemon, store, wondering, effective_deadline):
     wid = wondering["id"]
     prior = store.recent_probes(wid, limit=5)
     system_prompt = getattr(daemon, "system_prompt", "") or ""
+    # Model alias flows from core.model_config (/etc/maez/model.env); no
+    # hardcoded names. daemon.maez_daemon.MODEL is itself an import of
+    # PRIMARY_MODEL from that module — kept as a stable attribute for
+    # legacy callers but resolves to the same value.
+    from core.model_config import PRIMARY_MODEL as _default_model
     model = getattr(__import__("daemon.maez_daemon", fromlist=["MODEL"]),
-                    "MODEL", "qwen36-35b-base")
+                    "MODEL", _default_model)
 
     # 1) Ask for a probe (or resolve/abandon)
     probe_prompt = _probe_prompt(wondering, prior)

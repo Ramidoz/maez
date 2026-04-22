@@ -37,7 +37,7 @@ accounts = UserAccounts()
 memory = MemoryManager()
 
 SOUL_PATH = '/home/rohit/maez/config/soul.md'
-MODEL = 'qwen36-35b-base'
+from core.model_config import PRIMARY_MODEL as MODEL  # /etc/maez/model.env
 UI_DIR = '/home/rohit/maez/ui'
 HERO_PAGE = os.path.join(UI_DIR, 'maez_hero.html')
 GATE_PAGE = os.path.join(UI_DIR, 'maez_gate.html')
@@ -1690,7 +1690,7 @@ def api_chat_sessions():
             if maez_part:
                 history.append({
                     "role": "assistant", "t": ts_val, "content": maez_part,
-                    "route": "local", "model": "qwen36-35b-sft",
+                    "route": "local", "model": MODEL,
                     "trace": {"tools": [], "memory": 0, "tokens": len(maez_part) // 4},
                 })
         else:

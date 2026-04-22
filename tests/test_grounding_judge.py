@@ -169,16 +169,17 @@ class JudgeCallsLLM(unittest.TestCase):
     """End-to-end: judge(text, signals, few_shots) → flags.
     LLM client is stubbed; this test asserts the integration shape."""
 
-    def test_judge_calls_llm_client(self):
+    def test_judge_calls_dedicated_endpoint(self):
+        """Default path: judge calls the dedicated endpoint configured in
+        core.model_config (MAEZ_JUDGE_BASE_URL). Stub the HTTP helper
+        and verify the parsed output flows back."""
         from core import grounding_judge
 
-        def fake_chat(*, model, messages, **kwargs):
-            resp = MagicMock()
-            resp.message.content = '{"ungrounded": [{"text": "x", "reason": "y"}]}'
-            return resp
+        def fake_call(prompt: str) -> str:
+            return '{"ungrounded": [{"text": "x", "reason": "y"}]}'
 
-        with patch("core.grounding_judge._llm_client.chat",
-                   side_effect=fake_chat):
+        with patch("core.grounding_judge._call_dedicated_judge",
+                   side_effect=fake_call):
             flags = grounding_judge.judge(
                 text="owner at desk",
                 signals_present=["system stats"],
@@ -188,14 +189,11 @@ class JudgeCallsLLM(unittest.TestCase):
             self.assertEqual(len(flags), 1)
 
     def test_judge_returns_empty_on_llm_failure(self):
-        """LLM call raises → judge returns [] (fail-open)."""
+        """Endpoint call raises → judge returns [] (fail-open)."""
         from core import grounding_judge
 
-        def fake_chat(**kwargs):
-            raise RuntimeError("llama-server down")
-
-        with patch("core.grounding_judge._llm_client.chat",
-                   side_effect=fake_chat):
+        with patch("core.grounding_judge._call_dedicated_judge",
+                   side_effect=RuntimeError("judge-endpoint down")):
             flags = grounding_judge.judge(
                 text="anything",
                 signals_present=[],

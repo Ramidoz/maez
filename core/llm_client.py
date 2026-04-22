@@ -54,7 +54,9 @@ LLAMACPP_BASE_URL = os.environ.get('MAEZ_LLAMACPP_URL', 'http://127.0.0.1:8080/v
 # with continuous batching + prompt cache. This alias must match the --alias
 # flag passed to llama-server at launch, or be ignored (llama-server accepts
 # any string when only one model is loaded).
-LLAMACPP_MODEL    = os.environ.get('MAEZ_LLAMACPP_MODEL', 'qwen36-35b-base')
+from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
+# MAEZ_LLAMACPP_MODEL is a legacy override; prefer MAEZ_PRIMARY_MODEL via model_config.
+LLAMACPP_MODEL    = os.environ.get('MAEZ_LLAMACPP_MODEL', _PRIMARY_MODEL)
 
 # Gemma-4 / llama.cpp special tokens that should never be forwarded as
 # literal user/system content to the OpenAI-compatible chat endpoint.
@@ -235,14 +237,23 @@ def _chat_llamacpp(
     # loaded, but OpenAI spec requires it. Use the configured default.
     effective_model = LLAMACPP_MODEL
 
-    # Session 11p: translate ollama-style think=False into llama.cpp's
-    # chat_template_kwargs.enable_thinking=False. gemma4's chat template
-    # honors this flag. When None, we pass nothing (model default).
+    # Chat-template kwargs are model-specific quirks (enable_thinking,
+    # tool-format toggles, etc.). They live in /etc/maez/model.env as
+    # MAEZ_PRIMARY_CHAT_KWARGS JSON, so swapping to any model is a
+    # config change, not a code change. When think is not None, we
+    # merge in an enable_thinking override; otherwise we pass the
+    # configured defaults verbatim. Any model that doesn't understand
+    # a given kwarg will simply ignore it.
+    from core.model_config import PRIMARY_CHAT_KWARGS as _cfg_kwargs
     extra_body: dict = {}
-    if think is False:
-        extra_body['chat_template_kwargs'] = {'enable_thinking': False}
-    elif think is True:
-        extra_body['chat_template_kwargs'] = {'enable_thinking': True}
+    if _cfg_kwargs or think is not None:
+        merged = dict(_cfg_kwargs)
+        if think is False:
+            merged['enable_thinking'] = False
+        elif think is True:
+            merged['enable_thinking'] = True
+        if merged:
+            extra_body['chat_template_kwargs'] = merged
 
     try:
         if stream:

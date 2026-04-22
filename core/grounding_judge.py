@@ -9,9 +9,11 @@ the signal manifest, the judge flags sentences that make claims
 unsupported by available signals.
 
 Policy:
-  - Runs the SAME local model as the planner (qwen36-35b-sft via
-    core/llm_client.py). Not circular — judge prompt is different
-    shape (classification) than generation prompt (creation).
+  - Routes to the configured judge endpoint (see core/model_config.py,
+    /etc/maez/model.env). Typically a smaller dedicated model; can be
+    the same endpoint as the primary if no separate judge is deployed.
+    Not circular — judge prompt is a different shape (classification)
+    than the generation prompt (creation).
   - Few-shot examples pulled from fabrication_memory.db at call
     site and passed in.
   - Fails open on any error: LLM unavailable, JSON parse failure,
@@ -32,7 +34,7 @@ from core import llm_client as _llm_client
 
 logger = logging.getLogger("maez.grounding_judge")
 
-_MODEL_DEFAULT = "qwen36-35b-base"
+from core.model_config import PRIMARY_MODEL as _MODEL_DEFAULT  # /etc/maez/model.env
 _MAX_TOKENS = 512
 _TEMP = 0.0  # deterministic classification
 
@@ -42,20 +44,21 @@ _TEMP = 0.0  # deterministic classification
 # ~300ms without meaningfully hurting recall (86% vs 35B's ~90%+ in our
 # 10-case bench).
 #
-# Env vars let the primary and judge endpoints differ. When MAEZ_JUDGE_BASE_URL
-# is set, judge() calls that endpoint directly via HTTP (OpenAI-compatible)
-# instead of routing through _llm_client.chat (which hits the primary). When
-# unset, falls back to _llm_client — preserves old behavior for anyone who
-# doesn't want to run a second llama-server.
-_JUDGE_BASE_URL = os.environ.get("MAEZ_JUDGE_BASE_URL", "").rstrip("/")
-_JUDGE_MODEL = os.environ.get("MAEZ_JUDGE_MODEL", "maez-judge")
+# Judge endpoint + model + template kwargs all live in core.model_config,
+# which reads /etc/maez/model.env. Zero hardcoded model names or kwargs
+# here — any OpenAI-compatible endpoint serving any model works.
+from core.model_config import (
+    JUDGE_BASE_URL as _JUDGE_BASE_URL,
+    JUDGE_MODEL as _JUDGE_MODEL,
+    JUDGE_CHAT_KWARGS as _JUDGE_CHAT_KWARGS,
+)
 _JUDGE_TIMEOUT_S = float(os.environ.get("MAEZ_JUDGE_TIMEOUT_S", "30"))
 
 
 def _call_dedicated_judge(prompt: str) -> str:
     """HTTP call to the dedicated judge llama-server. Returns raw content
     string. Raises on network/HTTP failure — caller handles fail-open."""
-    body = json.dumps({
+    payload: dict = {
         "model": _JUDGE_MODEL,
         "messages": [
             {"role": "system",
@@ -65,10 +68,13 @@ def _call_dedicated_judge(prompt: str) -> str:
         ],
         "temperature": _TEMP,
         "max_tokens": _MAX_TOKENS,
-        # Qwen3/3.5 default to reasoning mode which floods reasoning_content
-        # and leaves message.content empty. Disable for classification.
-        "chat_template_kwargs": {"enable_thinking": False},
-    }).encode()
+    }
+    # Model-specific quirks (e.g. enable_thinking=false for Qwen3.x) come
+    # from MAEZ_JUDGE_CHAT_KWARGS JSON. A model that doesn't understand
+    # a given kwarg will simply ignore it — safe across model families.
+    if _JUDGE_CHAT_KWARGS:
+        payload["chat_template_kwargs"] = dict(_JUDGE_CHAT_KWARGS)
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(
         f"{_JUDGE_BASE_URL}/v1/chat/completions",
         data=body,

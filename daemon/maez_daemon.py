@@ -75,7 +75,7 @@ PID_FILE = BASE_DIR / "daemon" / "maez.pid"
 SHUTDOWN_FILE = BASE_DIR / "daemon" / "last_shutdown"
 
 # --- Constants ---
-MODEL = "qwen36-35b-base"
+from core.model_config import PRIMARY_MODEL as MODEL  # single source of truth — /etc/maez/model.env
 LOOP_INTERVAL = 30  # seconds
 HEALTH_PORT = 11435
 WS_PORT = 11436
