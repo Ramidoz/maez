@@ -174,6 +174,123 @@ class TurnOrchestration(_Base):
         self.assertEqual(s.model, "sonnet")
 
 
+class MentionExpansion(_Base):
+    """@path mentions in user_message get resolved to file contents."""
+
+    def _mock_repo(self, files: dict[str, str]):
+        """Create a temp 'repo' with the given files. Patch the
+        workshop module's _REPO_ROOT to point at it."""
+        import tempfile
+        self._repo_tmp = tempfile.TemporaryDirectory()
+        root = Path(self._repo_tmp.name)
+        for rel, content in files.items():
+            p = root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content)
+        self._root_patch = mock.patch.object(
+            self.ws, "_REPO_ROOT", root,
+        )
+        self._root_patch.start()
+        return root
+
+    def tearDown(self):
+        if hasattr(self, "_root_patch"):
+            self._root_patch.stop()
+        if hasattr(self, "_repo_tmp"):
+            self._repo_tmp.cleanup()
+        super().tearDown()
+
+    def test_simple_mention_resolves_and_appends(self):
+        self._mock_repo({"core/foo.py": "def hello():\n    return 1\n"})
+        expanded, notes = self.ws.expand_mentions(
+            "review @core/foo.py for leaks",
+        )
+        self.assertIn("[ATTACHED FILES]", expanded)
+        self.assertIn("def hello()", expanded)
+        self.assertIn("```python", expanded)
+        # Original @mention preserved in the prose part
+        self.assertIn("@core/foo.py", expanded)
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0]["status"], "attached")
+
+    def test_no_mentions_passes_through_unchanged(self):
+        self._mock_repo({})
+        expanded, notes = self.ws.expand_mentions(
+            "what's the weather like today?",
+        )
+        self.assertEqual(expanded, "what's the weather like today?")
+        self.assertEqual(notes, [])
+
+    def test_unresolved_path_reported_but_prose_intact(self):
+        self._mock_repo({"core/exists.py": "x"})
+        expanded, notes = self.ws.expand_mentions(
+            "look at @core/doesnt_exist.py",
+        )
+        # Prose preserved, no attachment block since nothing resolved
+        self.assertEqual(
+            expanded, "look at @core/doesnt_exist.py",
+        )
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0]["status"], "unresolved")
+
+    def test_absolute_paths_not_recognized_as_mentions(self):
+        """@/etc/shadow does not match the mention regex at all —
+        the regex requires a leading path-segment token. Prose passes
+        through unchanged and no notes are produced. This is the
+        first line of defense against filesystem escape."""
+        self._mock_repo({"x.py": "ok"})
+        expanded, notes = self.ws.expand_mentions(
+            "show me @/etc/passwd contents",
+        )
+        self.assertNotIn("[ATTACHED FILES]", expanded)
+        self.assertEqual(notes, [])
+
+    def test_relative_escape_attempt_is_refused_at_resolution(self):
+        """@../../something DOES parse as a mention (regex allows dots)
+        but _resolve_path_safely refuses it because the resolved path
+        falls outside _REPO_ROOT. This is the second line of defense."""
+        self._mock_repo({"x.py": "ok"})
+        expanded, notes = self.ws.expand_mentions(
+            "please look at @../../../etc/hosts now",
+        )
+        # No attachment block because resolution failed
+        self.assertNotIn("[ATTACHED FILES]", expanded)
+        # And notes record the unresolved status
+        self.assertTrue(
+            any(n["status"] == "unresolved" for n in notes),
+            f"expected unresolved status, got notes={notes}",
+        )
+
+    def test_duplicate_mention_deduped(self):
+        self._mock_repo({"core/foo.py": "x = 1\n"})
+        expanded, notes = self.ws.expand_mentions(
+            "first look at @core/foo.py then look at @core/foo.py again",
+        )
+        # Only one attachment block, not two
+        self.assertEqual(expanded.count("--- core/foo.py ---"), 1)
+        self.assertEqual(len(notes), 1)
+
+    def test_large_file_truncated_with_note(self):
+        big = "line\n" * 20000  # ~100k chars
+        self._mock_repo({"big.py": big})
+        # Override the cap to a tiny value so we don't need a real big file
+        with mock.patch.object(self.ws, "_MENTION_MAX_BYTES", 500):
+            expanded, notes = self.ws.expand_mentions("look at @big.py")
+        # The fenced content must be ≤ cap (roughly)
+        self.assertIn("[ATTACHED FILES]", expanded)
+        self.assertEqual(notes[0]["status"], "attached_truncated")
+
+    def test_mention_regex_doesnt_catch_email(self):
+        self._mock_repo({"core/foo.py": "x"})
+        # @user in an email or handle shouldn't trigger resolution
+        expanded, notes = self.ws.expand_mentions(
+            "ping me at rohit@example.com or ask @user later",
+        )
+        # No attachments, no notes
+        self.assertEqual(notes, [])
+        self.assertNotIn("[ATTACHED FILES]", expanded)
+
+
 class Rollup(_Base):
     def test_rollup_includes_turn_count(self):
         from core.claude_tier import TierReply

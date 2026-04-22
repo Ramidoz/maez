@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -61,6 +62,41 @@ DEFAULT_CONTEXT_TURNS = int(
 
 
 # ── system prompt ─────────────────────────────────────────────────────
+
+# Where @-mentioned paths are resolved from. Anything trying to escape
+# this root (via .. or an absolute path outside it) is refused — we
+# don't want a user message with "@/etc/shadow" to leak anything.
+_REPO_ROOT = Path(os.environ.get(
+    "MAEZ_WORKSHOP_REPO_ROOT", "/home/rohit/maez",
+))
+
+# Maximum size of a single @-expanded file. Larger files are
+# truncated with a visible note rather than blowing the context
+# budget. Caller can still paste the full file manually if they
+# really need it.
+_MENTION_MAX_BYTES = int(os.environ.get(
+    "MAEZ_WORKSHOP_MENTION_MAX_BYTES", "40000",
+))
+
+# Extensions that get language-hinted code fences. Anything else
+# gets an unhinted ``` fence so the model still recognizes the
+# boundary.
+_EXT_LANG = {
+    ".py": "python", ".js": "javascript", ".jsx": "jsx",
+    ".ts": "typescript", ".tsx": "tsx",
+    ".md": "markdown", ".html": "html", ".css": "css",
+    ".sh": "bash", ".toml": "toml", ".yaml": "yaml", ".yml": "yaml",
+    ".json": "json", ".sql": "sql", ".rs": "rust", ".go": "go",
+}
+
+# Regex for @-mentions: @ followed by a path-like token. Kept narrow
+# so it doesn't match email addresses in prose, @user handles, etc.
+# Accepts: letters, digits, ./_-, plus slashes. Requires at least
+# one / OR a . + extension — plain @hello doesn't match.
+_MENTION_RE = re.compile(
+    r"(?<![\w@])@((?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+|[A-Za-z0-9_-]+\.[A-Za-z0-9]+)"
+)
+
 
 _WORKSHOP_SYSTEM_PROMPT = """You are Maez's Workshop assistant — a \
 coding peer for Rohit, who built Maez. You are being invoked via \
@@ -299,6 +335,108 @@ def _persist_turn(
         return None
 
 
+def _resolve_path_safely(rel_or_abs: str) -> Optional[Path]:
+    """Return the absolute Path of an @-mention IFF it resolves inside
+    _REPO_ROOT. Returns None on any path that escapes, doesn't exist,
+    or isn't a regular file. Never raises."""
+    try:
+        p = Path(rel_or_abs)
+        if not p.is_absolute():
+            p = _REPO_ROOT / p
+        # Resolve follows symlinks and canonicalizes .. — anything
+        # that lands outside the repo root is refused.
+        resolved = p.resolve()
+        if not str(resolved).startswith(str(_REPO_ROOT.resolve()) + os.sep) \
+                and resolved != _REPO_ROOT.resolve():
+            return None
+        if not resolved.is_file():
+            return None
+        return resolved
+    except Exception:
+        return None
+
+
+def expand_mentions(user_message: str) -> tuple[str, list[dict]]:
+    """Expand @path mentions in `user_message` into a message with
+    the file contents appended as fenced code blocks. Returns
+    (expanded_message, notes) where notes describes what was
+    resolved/skipped for UI feedback if the caller wants it.
+
+    Mentions are APPENDED rather than inline-substituted: the
+    original `@path` token stays in the user's text (so their
+    intent is preserved) and the expanded bodies land in an
+    "attached files" block after. This keeps prose reading natural
+    and makes Claude's context unambiguous.
+
+    Deliberately quiet on failure: unresolvable mentions (outside
+    repo, not a file, too big, permission denied) are reported in
+    `notes` but the original @mention is left intact in the message.
+    """
+    notes: list[dict] = []
+    if not user_message or "@" not in user_message:
+        return user_message, notes
+
+    matches = list(_MENTION_RE.finditer(user_message))
+    if not matches:
+        return user_message, notes
+
+    # Dedupe paths while preserving order of first appearance
+    seen: set[str] = set()
+    attachments: list[tuple[str, str]] = []  # (rel_path, content)
+    for m in matches:
+        raw = m.group(1)
+        if raw in seen:
+            continue
+        seen.add(raw)
+        resolved = _resolve_path_safely(raw)
+        if resolved is None:
+            notes.append({"mention": raw, "status": "unresolved"})
+            continue
+        try:
+            size = resolved.stat().st_size
+        except OSError:
+            notes.append({"mention": raw, "status": "stat_failed"})
+            continue
+        truncated = False
+        try:
+            if size > _MENTION_MAX_BYTES:
+                text = resolved.read_text(
+                    encoding="utf-8", errors="replace",
+                )[:_MENTION_MAX_BYTES]
+                truncated = True
+            else:
+                text = resolved.read_text(
+                    encoding="utf-8", errors="replace",
+                )
+        except Exception as e:
+            notes.append({"mention": raw, "status": f"read_failed: {e}"})
+            continue
+        attachments.append((raw, text))
+        notes.append({
+            "mention": raw,
+            "status": "attached_truncated" if truncated else "attached",
+            "bytes": size,
+        })
+
+    if not attachments:
+        return user_message, notes
+
+    # Build the appended block
+    parts = [user_message, "", "[ATTACHED FILES]"]
+    for rel, content in attachments:
+        ext = os.path.splitext(rel)[1].lower()
+        lang = _EXT_LANG.get(ext, "")
+        fence = f"```{lang}" if lang else "```"
+        parts.extend([
+            f"",
+            f"--- {rel} ---",
+            fence,
+            content,
+            "```",
+        ])
+    return "\n".join(parts), notes
+
+
 def turn(
     *,
     session_id: str,
@@ -319,10 +457,16 @@ def turn(
     if not user_message or not user_message.strip():
         raise RuntimeError("empty user_message")
 
+    # Expand @path mentions BEFORE persisting — we want the file
+    # bodies in the persisted turn so conversation history can be
+    # replayed without re-reading files (which may have changed).
+    expanded_message, mention_notes = expand_mentions(user_message)
+
     # Persist user turn first so it's in history even if the assistant
-    # call fails below.
+    # call fails below. Use the expanded form so replay sees what
+    # Claude saw.
     user_turn_id = _persist_turn(
-        session_id=session_id, role="user", content=user_message,
+        session_id=session_id, role="user", content=expanded_message,
     )
 
     # Build message list: system prompt + last N turns (user+assistant)
@@ -342,7 +486,7 @@ def turn(
     for h in history:
         if h.role in ("user", "assistant"):
             messages.append({"role": h.role, "content": h.content})
-    messages.append({"role": "user", "content": user_message})
+    messages.append({"role": "user", "content": expanded_message})
 
     model = override_model or session.model
     # Call the tier client. Any error propagates to the Flask layer.
@@ -362,11 +506,11 @@ def turn(
             )
             composed_user = (
                 f"Conversation so far:\n\n{history_text}\n\n"
-                f"[USER, current]\n{user_message}"
+                f"[USER, current]\n{expanded_message}"
             )
             system_prompt = messages[0]["content"] if messages[0]["role"] == "system" else None
         else:
-            composed_user = user_message
+            composed_user = expanded_message
             system_prompt = session.system_prompt or None
 
         reply = claude_tier.call(
@@ -392,6 +536,7 @@ def turn(
         "model_used": reply.model_used,
         "input_tokens": reply.input_tokens,
         "output_tokens": reply.output_tokens,
+        "mentions": mention_notes,  # [] when no @paths in input
     }
 
 
