@@ -25,7 +25,7 @@
 <script type="text/babel" data-presets="react">
 const { ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane, RouterPane,
         MemorySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
-        JudgmentSurface, SelfDevSurface,
+        JudgmentSurface, SelfDevSurface, WorkshopSurface,
         DaemonDeep, S, A, Card, Glass, Chip, Pill, Dot, Button, SoftBtn, MaezAvatar, Icon } = window.TerminalUI;
 
 // ═══════════════════════════════════════════════════════════
@@ -50,6 +50,7 @@ function TerminalDirection() {
     { id: 'identity',   label: 'Identity',    hotkey: '0', icon: '⬡' },
     { id: 'judgment',   label: 'Judgment',    hotkey: 'J', icon: '⚖' },
     { id: 'selfdev',    label: 'Self-Dev',    hotkey: 'S', icon: '◈' },
+    { id: 'workshop',   label: 'Workshop',    hotkey: 'W', icon: '◇' },
     { id: 'logs',       label: 'Logs',        hotkey: 'L', icon: '▤' },
   ];
 
@@ -57,7 +58,7 @@ function TerminalDirection() {
     <div style={{ width: '100vw', height: '100vh', background: A.bg, color: A.text, fontFamily: A.sans,
       display: 'grid', gridTemplateColumns: '228px 1fr 340px', gridTemplateRows: '44px 1fr', overflow: 'hidden',
       backgroundImage: `radial-gradient(ellipse 60% 50% at 15% 10%, ${A.indigo}22 0%, transparent 55%), radial-gradient(ellipse 60% 50% at 90% 90%, ${A.purple}1c 0%, transparent 55%), radial-gradient(ellipse 50% 40% at 60% 50%, ${A.blue}14 0%, transparent 60%)` }}
-      data-screen-label="Apple Intelligence · command center">
+      data-screen-label="maez · command center">
 
       {/* top bar */}
       <div className="ap-glass" style={{ gridColumn: '1 / -1', background: 'rgba(10,10,12,0.6)', borderBottom: `0.5px solid ${A.stroke}`, display: 'flex', alignItems: 'center', padding: '0 20px', gap: 14, fontSize: 11, color: A.textDim }}>
@@ -70,7 +71,6 @@ function TerminalDirection() {
         <span style={{ fontFamily: A.mono, fontSize: 11 }}>rohit<span style={{ color: A.textFaint }}>@</span>alienware</span>
         <Chip color={A.green}><Dot c={A.green} size={4} pulse /> All systems nominal</Chip>
         <span style={{ flex: 1 }} />
-        <span className="ap-ai-text" style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.2 }}>✦ Apple Intelligence</span>
         <span style={{ width: 1, height: 14, background: A.stroke }} />
         <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textFaint }}>$MAEZ_HOME · /home/rohit/maez</span>
         <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textDim }}>{sim.state.daemon.lastTick}</span>
@@ -128,6 +128,7 @@ function TerminalDirection() {
         {surface === 'identity' && <IdentitySurface />}
         {surface === 'judgment' && <JudgmentSurface />}
         {surface === 'selfdev' && <SelfDevSurface />}
+        {surface === 'workshop' && <WorkshopSurface />}
         {surface === 'logs' && <LogsSurface />}
       </div>
 
@@ -440,7 +441,7 @@ function InnerLogs() {
 // Canvas
 // ═══════════════════════════════════════════════════════════
 function App() {
-  // Direction A committed — Apple Intelligence glass command center,
+  // Direction A committed — glass command center,
   // full viewport. Direction B source preserved at web/cockpit/inner-ui.jsx
   // for possible future use (e.g. a grandmother-facing variant).
   return <TerminalDirection />;

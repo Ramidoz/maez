@@ -1479,6 +1479,95 @@ def api_quality():
         return jsonify({"error": str(e)}), 500
 
 
+# ── Workshop — in-cockpit coding session (Phase 1: chat only) ─────────
+
+@app.route("/api/v1/workshop/sessions", methods=["GET"])
+def api_workshop_list():
+    try:
+        from core.workshop import rollup
+        return jsonify(rollup(limit_sessions=50))
+    except Exception as e:
+        return jsonify({"error": f"workshop list failed: {e}"}), 500
+
+
+@app.route("/api/v1/workshop/sessions", methods=["POST"])
+def api_workshop_create():
+    try:
+        body = request.get_json(silent=True) or {}
+        title = (body.get("title") or "(untitled)").strip()[:200]
+        model = (body.get("model") or "").strip() or None
+        from core.workshop import create_session
+        sid = create_session(
+            title=title, model=model or "sonnet",
+        )
+        return jsonify({"id": sid, "title": title})
+    except Exception as e:
+        return jsonify({"error": f"workshop create failed: {e}"}), 500
+
+
+@app.route("/api/v1/workshop/session/<session_id>", methods=["GET"])
+def api_workshop_get(session_id: str):
+    try:
+        from core.workshop import get_session, get_turns
+        s = get_session(session_id)
+        if not s:
+            return jsonify({"error": "session not found"}), 404
+        turns = get_turns(session_id)
+        return jsonify({
+            "session": {
+                "id": s.id, "title": s.title, "model": s.model,
+                "created_at": s.created_at, "updated_at": s.updated_at,
+            },
+            "turns": [
+                {
+                    "id": t.id, "ts": t.ts, "role": t.role,
+                    "content": t.content, "model_used": t.model_used,
+                    "input_tokens": t.input_tokens,
+                    "output_tokens": t.output_tokens,
+                }
+                for t in turns
+            ],
+        })
+    except Exception as e:
+        return jsonify({"error": f"workshop get failed: {e}"}), 500
+
+
+@app.route("/api/v1/workshop/session/<session_id>/turn", methods=["POST"])
+def api_workshop_turn(session_id: str):
+    """Send a user message; returns the assistant reply (synchronous)."""
+    try:
+        body = request.get_json(silent=True) or {}
+        user_message = (body.get("message") or "").strip()
+        override_model = body.get("model") or None
+        if not user_message:
+            return jsonify({"error": "message required"}), 400
+        from core.workshop import turn
+        result = turn(
+            session_id=session_id,
+            user_message=user_message,
+            override_model=override_model,
+        )
+        return jsonify(result)
+    except RuntimeError as e:
+        # tier / session errors — 502 since the proxy / DB is the
+        # thing that failed, not the caller's request shape.
+        return jsonify({"error": str(e)}), 502
+    except Exception as e:
+        return jsonify({"error": f"workshop turn failed: {e}"}), 500
+
+
+@app.route("/api/v1/workshop/session/<session_id>", methods=["DELETE"])
+def api_workshop_delete(session_id: str):
+    try:
+        from core.workshop import delete_session
+        ok = delete_session(session_id)
+        if not ok:
+            return jsonify({"error": "session not found"}), 404
+        return jsonify({"id": session_id, "deleted": True})
+    except Exception as e:
+        return jsonify({"error": f"workshop delete failed: {e}"}), 500
+
+
 @app.route("/api/v1/self_dev/concern/<int:concern_id>/resolve", methods=["POST"])
 def api_self_dev_resolve(concern_id: int):
     """Transition a concern to a new status.

@@ -1,5 +1,5 @@
 // Direction A — Apple Inc. redesign
-// Aesthetic: Apple Intelligence / visionOS / macOS Sonoma.
+// Aesthetic: glass / soft gradients / muted palette.
 // Glass morphism, SF-style type (Inter fallback), precise motion, tight density.
 // Rich interactive chat: model picker, thinking toggle, tool menu, attachments,
 // inline approval, tool-call cards, streaming with thinking trace.
@@ -48,7 +48,7 @@ const A = {
   teal:        '#40c8e0',
   cyan:        '#64d2ff',
 
-  // Apple Intelligence gradient
+  // accent gradient (used by `.ap-ai-text` class for title-bar accents)
   aiGrad:      'linear-gradient(135deg, #ff375f 0%, #bf5af2 35%, #5e5ce6 70%, #0a84ff 100%)',
 
   // type
@@ -1813,11 +1813,284 @@ function SelfDevSurface() {
 }
 
 
+// ═══════════════════════════════════════════════════════════
+// Workshop — in-cockpit coding session, Claude (or any routed
+// model) via the subscription proxy. Native to Maez's aesthetic;
+// does NOT embed Qwen Code or Claude Code. Phase 1: chat only.
+// Phase 2 will add diff output + apply flow.
+// ═══════════════════════════════════════════════════════════
+function WorkshopSurface() {
+  const [sessions, setSessions] = React.useState([]);
+  const [activeId, setActiveId] = React.useState(null);
+  const [activeSession, setActiveSession] = React.useState(null);
+  const [turns, setTurns] = React.useState([]);
+  const [input, setInput] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState(null);
+  const turnsEndRef = React.useRef(null);
+
+  const loadSessions = React.useCallback(() => {
+    fetch('/api/v1/workshop/sessions')
+      .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
+      .then(d => setSessions(d.sessions || []))
+      .catch(e => setErr(String(e)));
+  }, []);
+
+  const loadActive = React.useCallback((sid) => {
+    if (!sid) { setActiveSession(null); setTurns([]); return; }
+    fetch(`/api/v1/workshop/session/${sid}`)
+      .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
+      .then(d => { setActiveSession(d.session); setTurns(d.turns || []); })
+      .catch(e => setErr(String(e)));
+  }, []);
+
+  React.useEffect(() => { loadSessions(); }, [loadSessions]);
+  React.useEffect(() => { loadActive(activeId); }, [activeId, loadActive]);
+  React.useEffect(() => {
+    if (turnsEndRef.current) {
+      turnsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [turns]);
+
+  const createSession = () => {
+    const title = prompt('Session title?', 'new session') || '(untitled)';
+    fetch('/api/v1/workshop/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, model: 'sonnet' }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
+      .then(d => { loadSessions(); setActiveId(d.id); })
+      .catch(e => setErr(String(e)));
+  };
+
+  const sendTurn = () => {
+    const msg = input.trim();
+    if (!msg || !activeId || busy) return;
+    setBusy(true);
+    setErr(null);
+    // Optimistic user turn (so the UI is responsive while Claude thinks)
+    setTurns(prev => [
+      ...prev,
+      { id: Date.now(), role: 'user', content: msg, ts: Date.now() / 1000 },
+    ]);
+    setInput('');
+    fetch(`/api/v1/workshop/session/${activeId}/turn`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg }),
+    })
+      .then(r => r.ok ? r.json() : r.json().then(j => Promise.reject(j.error || 'HTTP ' + r.status)))
+      .then(() => { setBusy(false); loadActive(activeId); loadSessions(); })
+      .catch(e => {
+        setBusy(false);
+        setErr(String(e));
+        // Rollback optimistic turn on failure (user can retry)
+        loadActive(activeId);
+      });
+  };
+
+  const deleteSession = (sid) => {
+    if (!confirm('Delete this session? This cannot be undone.')) return;
+    fetch(`/api/v1/workshop/session/${sid}`, { method: 'DELETE' })
+      .then(() => {
+        if (sid === activeId) setActiveId(null);
+        loadSessions();
+      });
+  };
+
+  const roleColor = {
+    user:      A.blue,
+    assistant: A.mint,
+    system:    A.textDim,
+  };
+
+  return (
+    <div style={{ height: '100%', display: 'grid',
+                   gridTemplateColumns: '260px 1fr', gap: 0,
+                   overflow: 'hidden' }}>
+      {/* left rail: sessions */}
+      <div className="ap-glass" style={{
+        background: 'rgba(10,10,12,0.4)',
+        borderRight: `0.5px solid ${A.stroke}`,
+        padding: '18px 14px', display: 'flex', flexDirection: 'column',
+        overflow: 'hidden',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8,
+                        marginBottom: 12 }}>
+          <span style={{ fontSize: 14, color: A.text, fontWeight: 600,
+                           letterSpacing: -0.2 }}>Workshop</span>
+          <span style={{ flex: 1 }} />
+          <Button size="sm" onClick={createSession}>+ new</Button>
+        </div>
+        <div style={{ fontSize: 11, color: A.textFaint, marginBottom: 10,
+                        letterSpacing: 0.5, textTransform: 'uppercase',
+                        fontFamily: A.sans }}>
+          sessions
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto',
+                        display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {sessions.length === 0 ? (
+            <div style={{ fontSize: 12, color: A.textDim, fontStyle: 'italic',
+                           padding: '12px 4px' }}>
+              no sessions yet — click "+ new" to start
+            </div>
+          ) : sessions.map(s => (
+            <button key={s.id} onClick={() => setActiveId(s.id)}
+              className="ap-btn"
+              style={{
+                background: activeId === s.id ? A.surfaceRaised : 'transparent',
+                border: activeId === s.id
+                  ? `0.5px solid ${A.strokeHi}`
+                  : '0.5px solid transparent',
+                color: activeId === s.id ? A.text : A.textDim,
+                padding: '8px 10px', fontFamily: A.sans, fontSize: 12.5,
+                textAlign: 'left', display: 'flex', flexDirection: 'column',
+                gap: 3, borderRadius: 8, position: 'relative',
+              }}
+            >
+              <span style={{ fontWeight: 500 }}>{s.title}</span>
+              <span style={{ fontSize: 10, color: A.textFaint,
+                               fontFamily: A.mono }}>
+                {s.turn_count} turn{s.turn_count === 1 ? '' : 's'} · {s.model}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* main: chat */}
+      <div style={{ display: 'flex', flexDirection: 'column',
+                      overflow: 'hidden' }}>
+        <div style={{ padding: '14px 22px',
+                         borderBottom: `0.5px solid ${A.stroke}`,
+                         display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ color: A.mint, fontSize: 18 }}>◇</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 14, color: A.text, fontWeight: 600 }}>
+              {activeSession ? activeSession.title : 'Workshop'}
+            </div>
+            <div style={{ fontSize: 11, color: A.textDim,
+                            fontFamily: A.mono, marginTop: 2 }}>
+              {activeSession
+                ? `${activeSession.model} · ${turns.length} turns`
+                : 'pick a session or create one'}
+            </div>
+          </div>
+          {activeSession && (
+            <Button size="sm" onClick={() => deleteSession(activeSession.id)}>
+              delete
+            </Button>
+          )}
+        </div>
+
+        <div className="ap-scroll" style={{ flex: 1, overflowY: 'auto',
+                                              padding: '20px 22px' }}>
+          {err && (
+            <div style={{ marginBottom: 14, padding: '10px 14px',
+                            border: `0.5px solid ${A.red}`,
+                            borderRadius: 8, color: A.red,
+                            background: `${A.red}11`, fontSize: 12 }}>
+              error: {err}
+            </div>
+          )}
+          {!activeSession && !err && (
+            <div style={{ padding: '40px 0', color: A.textDim,
+                            fontSize: 13, fontStyle: 'italic',
+                            textAlign: 'center' }}>
+              select a session from the left, or create a new one.
+            </div>
+          )}
+          {activeSession && turns.length === 0 && (
+            <div style={{ padding: '40px 0', color: A.textDim,
+                            fontSize: 13, fontStyle: 'italic',
+                            textAlign: 'center' }}>
+              no messages yet. start the conversation below.
+            </div>
+          )}
+          {turns.map(t => (
+            <div key={t.id} style={{ marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline',
+                              gap: 8, marginBottom: 4 }}>
+                <span style={{
+                  fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase',
+                  color: roleColor[t.role] || A.textDim,
+                  fontWeight: 600, fontFamily: A.sans,
+                }}>
+                  {t.role}
+                </span>
+                {t.model_used && (
+                  <span style={{ fontSize: 10, color: A.textFaint,
+                                   fontFamily: A.mono }}>
+                    {t.model_used}
+                  </span>
+                )}
+                {(t.input_tokens || t.output_tokens) ? (
+                  <span style={{ fontSize: 10, color: A.textFaint,
+                                   fontFamily: A.mono }}>
+                    {t.input_tokens}→{t.output_tokens}
+                  </span>
+                ) : null}
+              </div>
+              <div style={{
+                whiteSpace: 'pre-wrap', fontFamily: A.sans,
+                fontSize: 13.5, lineHeight: 1.55, color: A.text,
+                borderLeft: `2px solid ${roleColor[t.role] || A.textDim}`,
+                paddingLeft: 12,
+              }}>
+                {t.content}
+              </div>
+            </div>
+          ))}
+          {busy && (
+            <div style={{ padding: '8px 0', fontSize: 12,
+                            color: A.textDim, fontStyle: 'italic' }}>
+              thinking…
+            </div>
+          )}
+          <div ref={turnsEndRef} />
+        </div>
+
+        {activeSession && (
+          <div style={{ borderTop: `0.5px solid ${A.stroke}`,
+                           padding: '14px 22px', display: 'flex', gap: 10 }}>
+            <textarea
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault(); sendTurn();
+                }
+              }}
+              disabled={busy}
+              placeholder={busy
+                ? 'waiting for reply…'
+                : 'type a message · ⌘/Ctrl+Enter to send'}
+              style={{
+                flex: 1, minHeight: 60, maxHeight: 160,
+                background: A.surfaceLo,
+                border: `0.5px solid ${A.stroke}`,
+                borderRadius: 8, padding: '10px 12px',
+                color: A.text, fontFamily: A.sans, fontSize: 13,
+                resize: 'vertical', outline: 'none',
+              }}
+            />
+            <Button onClick={sendTurn} disabled={busy || !input.trim()}>
+              send
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 window.TerminalUI = {
   S, A, Card, Glass, Chip, Dot, Button, MaezAvatar, Icon, SegmentedControl,
   ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane, RouterPane,
   MemorySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
-  JudgmentSurface, SelfDevSurface, DaemonDeep,
+  JudgmentSurface, SelfDevSurface, WorkshopSurface, DaemonDeep,
   // back-compat aliases (in case shell uses these)
   SoftBtn: Button, Pill: Chip,
 };
