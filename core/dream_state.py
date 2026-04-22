@@ -285,12 +285,21 @@ class DreamState:
         self._last_dream_at = now
         logger.info("dream: proposal #%d stored — %s", prop_id, insight[:120])
 
-        # 7. Send to private Telegram bot
+        # 7. Send to private Telegram bot.
+        # Wrap command hints in backticks so Telegram MarkdownV2
+        # renders the underscores literally instead of converting
+        # `_dream_` into italic text. The italic form caused the
+        # command to arrive at the bot as "/apply dream 49" (space
+        # instead of underscore), fell through the CommandHandler
+        # match, and got routed to chat — the _process_message
+        # variant-tolerant dispatch now catches that shape too, but
+        # emitting proper code-formatted commands is the right fix
+        # at the source.
         if self.telegram is not None:
             try:
                 msg = (
                     f"💭 [DREAM #{prop_id}]\n\n{insight}\n\n"
-                    f"/apply_dream {prop_id}  ·  /reject_dream {prop_id}"
+                    f"`/apply_dream {prop_id}`  ·  `/reject_dream {prop_id}`"
                 )
                 self.telegram.send_message(msg)
             except Exception as e:

@@ -2718,6 +2718,29 @@ class TelegramVoice:
         import re as _re
         import time as _time
 
+        # Tolerant command dispatch. Telegram MarkdownV2 renders `_` as
+        # italic, so when Maez emits `/apply_dream 49` the user's copy/
+        # retype often arrives as `/apply dream 49` (space) or
+        # `/applydream 49` (underscore stripped). CommandHandler only
+        # fires on the exact underscored form, so these fell through to
+        # chat routing and ran irrelevant shell queries. Intercept
+        # known-command variants here and dispatch manually.
+        _CMD_VARIANT_RE = _re.compile(
+            r"^/\s*(apply|reject)[\s_\-]*dream\s+(\d+)\s*$",
+            _re.IGNORECASE,
+        )
+        _cmd_match = _CMD_VARIANT_RE.match(user_text.strip())
+        if _cmd_match:
+            verb = _cmd_match.group(1).lower()
+            prop_id_str = _cmd_match.group(2)
+            # Rebuild context.args so the existing handler works unchanged.
+            context.args = [prop_id_str]
+            if verb == "apply":
+                await self._handle_apply_dream(update, context)
+            else:
+                await self._handle_reject_dream(update, context)
+            return ""
+
         # Check for machine intent first
         intent = _match_intent(user_text)
         if intent:
@@ -3473,7 +3496,9 @@ class TelegramVoice:
             snippet = insight[:160].replace("\n", " ")
             lines.append(f"#{pid} ({created_iso})")
             lines.append(f"  {snippet}")
-            lines.append(f"  /apply_dream {pid}  ·  /reject_dream {pid}")
+            # Backticks keep MarkdownV2 from italicizing `_dream_` so
+            # the command arrives at the bot with underscores intact.
+            lines.append(f"  `/apply_dream {pid}`  ·  `/reject_dream {pid}`")
             lines.append("")
         await update.message.reply_text("\n".join(lines))
 
