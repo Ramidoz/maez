@@ -265,6 +265,8 @@ def review(
     target_ref: str = "HEAD",
     model: str = "sonnet",
     diff_char_cap: int = 60000,
+    persist: bool = True,
+    caller: str = "self_dev/review",
 ) -> ReviewResult:
     """Ask Claude to review a git ref.
 
@@ -314,13 +316,13 @@ def review(
             prompt=user_prompt,
             system_prompt=_REVIEW_SYSTEM_PROMPT,
             model=model,
-            caller="self_dev/review",
+            caller=caller,
         )
     except claude_tier.ClaudeTierError as e:
         raise RuntimeError(f"review call failed: {e}")
 
     overall, concerns, parse_err = _parse_response(tr.reply)
-    return ReviewResult(
+    result = ReviewResult(
         target_ref=target_ref,
         diff_size_chars=diff_size,
         overall=overall,
@@ -332,12 +334,27 @@ def review(
         parse_error=parse_err,
     )
 
+    # Persist is advisory — a failed write logs a warning but never
+    # propagates. The in-memory ReviewResult is always what's returned.
+    if persist:
+        try:
+            from core.self_dev_persistence import store_review
+            store_review(result, caller=caller)
+        except Exception as _pe:
+            logger.warning("self_dev: persist failed (continuing): %s", _pe)
+
+    return result
+
 
 # ── CLI ───────────────────────────────────────────────────────────────
 
 def _cli_review(args) -> int:
     try:
-        result = review(target_ref=args.ref, model=args.model)
+        result = review(
+            target_ref=args.ref,
+            model=args.model,
+            persist=not args.no_persist,
+        )
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -378,12 +395,70 @@ def _cli_review(args) -> int:
     return 0
 
 
+def _cli_history(args) -> int:
+    """Print the most recent N reviews (header only, no concerns)."""
+    from core.self_dev_persistence import list_reviews
+    import datetime as _dt
+    rows = list_reviews(limit=args.limit)
+    if not rows:
+        print("(no reviews recorded)")
+        return 0
+    print(f"{'id':>4}  {'when':19s}  {'ref':24s}  "
+          f"{'model':28s}  toks  overall")
+    for r in rows:
+        ts = _dt.datetime.fromtimestamp(r.ts).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"{r.id:>4}  {ts:19s}  {r.target_ref[:24]:24s}  "
+              f"{r.model_used[:28]:28s}  {r.input_tokens:>4}  "
+              f"{r.overall[:80]}")
+    return 0
+
+
+def _cli_concerns(args) -> int:
+    """List concerns with filters."""
+    from core.self_dev_persistence import list_concerns
+    status = None if args.status == "any" else args.status
+    sev = None if args.severity == "any" else args.severity
+    rows = list_concerns(status=status, severity_at_least=sev,
+                          limit=args.limit)
+    if not rows:
+        print("(no matching concerns)")
+        return 0
+    print(f"{'id':>5}  {'sev':8s}  {'status':9s}  {'file:line':40s}  text")
+    for c in rows:
+        loc = f"{c.file}:{c.line}" if c.line else c.file
+        print(f"{c.id:>5}  {c.severity:8s}  {c.status:9s}  "
+              f"{loc[:40]:40s}  {c.text[:100]}")
+    return 0
+
+
+def _cli_resolve(args) -> int:
+    """Transition a concern to a terminal state."""
+    from core.self_dev_persistence import set_concern_status
+    ok = set_concern_status(args.id, args.state, notes=args.notes)
+    if not ok:
+        print(f"concern #{args.id} not found or DB error", file=sys.stderr)
+        return 2
+    print(f"concern #{args.id} → {args.state}")
+    if args.notes:
+        print(f"  notes: {args.notes}")
+    return 0
+
+
+def _cli_stats(args) -> int:
+    from core.self_dev_persistence import stats
+    import json as _json
+    s = stats(window_hours=args.window_hours)
+    print(_json.dumps(s, indent=2))
+    return 0
+
+
 def _build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m core.self_dev",
         description="Maez self-development primitives (Claude-backed).",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
+
     r = sub.add_parser("review", help="Review a git ref with Claude")
     r.add_argument("ref", nargs="?", default="HEAD",
                     help="git ref or range (default: HEAD)")
@@ -391,7 +466,43 @@ def _build_argparser() -> argparse.ArgumentParser:
                     help="model name (default: sonnet)")
     r.add_argument("--json", action="store_true",
                     help="emit raw JSON result instead of human-readable")
+    r.add_argument("--no-persist", action="store_true",
+                    help="don't write this review to self_dev.db")
     r.set_defaults(func=_cli_review)
+
+    h = sub.add_parser("history", help="List recent reviews")
+    h.add_argument("--limit", type=int, default=10)
+    h.set_defaults(func=_cli_history)
+
+    c = sub.add_parser("concerns", help="List concerns with filters")
+    c.add_argument(
+        "--status", default="open",
+        choices=["any", "open", "resolved", "wont_fix", "rejected"],
+        help="filter by concern status (default: open)",
+    )
+    c.add_argument(
+        "--severity", default="any",
+        choices=["any", "blocker", "major", "minor", "nit"],
+        help="include concerns of this severity or higher",
+    )
+    c.add_argument("--limit", type=int, default=20)
+    c.set_defaults(func=_cli_concerns)
+
+    res = sub.add_parser("resolve", help="Transition a concern's state")
+    res.add_argument("id", type=int, help="concern id")
+    res.add_argument(
+        "state", choices=["open", "resolved", "wont_fix", "rejected"],
+        help="new state",
+    )
+    res.add_argument("--notes", default=None,
+                      help="optional notes attached to the transition")
+    res.set_defaults(func=_cli_resolve)
+
+    st = sub.add_parser("stats", help="Usage + concern-bucket stats")
+    st.add_argument("--window-hours", type=int, default=None,
+                     help="restrict to trailing N hours (default: all time)")
+    st.set_defaults(func=_cli_stats)
+
     return p
 
 
