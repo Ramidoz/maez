@@ -1283,8 +1283,26 @@ class MaezDaemon:
         return full_reply
 
     def _send_morning_briefing(self, snap: dict):
-        """Send morning briefing when the owner first sits down. Once per day."""
+        """Send morning briefing when the owner first sits down. Once per day.
+
+        State is persisted to /home/rohit/maez/memory/last_briefing.txt
+        so daemon restarts don't reset the once-per-day guarantee.
+        Before the persistence fix (observed 2026-04-22: 3 briefings in
+        34 minutes after several restarts), _last_briefing_date was
+        in-memory only and every restart re-enabled the briefing.
+        """
         today = time.strftime('%Y-%m-%d')
+        briefing_stamp = Path("/home/rohit/maez/memory/last_briefing.txt")
+        try:
+            if briefing_stamp.exists():
+                persisted = briefing_stamp.read_text().strip()
+                if persisted == today:
+                    # Already sent today; cache in-memory too so we don't
+                    # re-read the file on every presence-arrival check.
+                    self._last_briefing_date = today
+                    return
+        except Exception:
+            pass
         if self._last_briefing_date == today:
             return
         hour = int(time.strftime('%H'))
@@ -1292,6 +1310,11 @@ class MaezDaemon:
             return
 
         self._last_briefing_date = today
+        try:
+            briefing_stamp.parent.mkdir(parents=True, exist_ok=True)
+            briefing_stamp.write_text(today)
+        except Exception as e:
+            logger.debug("couldn't persist briefing stamp: %s", e)
         logger.info("Preparing morning briefing")
 
         try:

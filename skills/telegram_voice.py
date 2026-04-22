@@ -1572,23 +1572,43 @@ class TelegramVoice:
     # message is an approval; "yes, and another thing..." is regular chat.
     # Ambiguity always defaults to chat, not action.
 
+    # Trailing vocative/politeness tail tolerated at the end of any
+    # approval/rejection phrase — "approve 26 maez", "yes please",
+    # "no thanks mate". Kept as a named fragment so both pattern lists
+    # stay readable and we don't duplicate the allowlist.
+    # (Regex non-capturing group; leading whitespace optional.)
+    _TAIL = r"(?:[\s,]+(?:maez|please|pls|thanks|thx|ty|mate|dude|bud|buddy))?"
+    _END = r"[\s!.?]*$"
+
     _NL_APPROVE_PATTERNS = [
-        r'^(yes|yep|yeah|yup|yuh|ok|okay|sure|alright|alright then|sounds good)[\s!.?]*$',
-        r'^(approve[d]?|approved|do it|go ahead|ship it|try it|let it try|let it run|let\'?s do it|let\'?s try it)[\s!.?]*$',
-        r'^(absolutely|please do|go for it|green light)[\s!.?]*$',
-        r'^(approve|yes|yeah|do)\s+#?(\d+)[\s!.?]*$',
-        r'^yes\s+to\s+#?(\d+)[\s!.?]*$',
+        # Bare affirmatives (no id — resolves to last-discussed candidate)
+        r'^(yes|yep|yeah|yup|yuh|ok|okay|sure|alright|alright then|sounds good)'
+            + _TAIL + _END,
+        r'^(approve[d]?|approved|do it|go ahead|ship it|try it|let it try|'
+            r'let it run|let\'?s do it|let\'?s try it|'
+            # 2026-04-22: added proceed / continue / apply / commit /
+            # send it — the owner naturally reached for these and they
+            # fell through to chat, hallucinating about a different id.
+            r'proceed|proceed\s+with\s+it|continue|apply|apply\s+it|'
+            r'commit|commit\s+it|send\s+it|make\s+it\s+happen)'
+            + _TAIL + _END,
+        r'^(absolutely|please do|go for it|green light|you\'?re\s+good)'
+            + _TAIL + _END,
+        # Affirmative + explicit id
+        r'^(approve|yes|yeah|do|proceed|apply|commit)\s+(?:with\s+|on\s+)?#?(\d+)'
+            + _TAIL + _END,
+        r'^yes\s+to\s+#?(\d+)' + _TAIL + _END,
     ]
 
     _NL_REJECT_PATTERNS = [
-        r'^(no|nope|nah|naw|nuh)[\s!.?]*$',
-        r'^(reject[ed]?|decline[d]?|skip|cancel|pass)[\s!.?]*$',
-        r'^(don\'?t|do not)\s*(do it|apply|bother)?[\s!.?]*$',
-        r'^not\s+(that|this)(\s+one)?[\s!.?]*$',
-        r'^not\s+(now|it|right now)[\s!.?]*$',
-        r'^(never ?mind|forget it|leave it)[\s!.?]*$',
-        r'^(reject|no|nope|skip|cancel)\s+#?(\d+)[\s!.?]*$',
-        r'^no\s+to\s+#?(\d+)[\s!.?]*$',
+        r'^(no|nope|nah|naw|nuh)' + _TAIL + _END,
+        r'^(reject[ed]?|decline[d]?|skip|cancel|pass|abort)' + _TAIL + _END,
+        r'^(don\'?t|do not)\s*(do it|apply|bother)?' + _TAIL + _END,
+        r'^not\s+(that|this)(\s+one)?' + _TAIL + _END,
+        r'^not\s+(now|it|right now)' + _TAIL + _END,
+        r'^(never ?mind|forget it|leave it|hold off|stand down)' + _TAIL + _END,
+        r'^(reject|no|nope|skip|cancel|abort)\s+#?(\d+)' + _TAIL + _END,
+        r'^no\s+to\s+#?(\d+)' + _TAIL + _END,
     ]
 
     _NL_SHOW_PATTERN = r'^(tell me more|show me|details?|more info|explain|what(\'?s)? (in|that)|show)\s*(about\s+)?#?(\d+)?[\s!.?]*$'
