@@ -332,7 +332,9 @@ class ApplyDiff(_Base):
             "@@ -1 +1 @@\n"
             "-x\n+y\n"
         )
-        self.assertEqual(self.ws._extract_target_path(d), "foo/bar.py")
+        path, had_prefix = self.ws._extract_target_path(d)
+        self.assertEqual(path, "foo/bar.py")
+        self.assertFalse(had_prefix)
 
     def test_target_extraction_strips_git_prefix(self):
         d = (
@@ -341,11 +343,14 @@ class ApplyDiff(_Base):
             "@@ -1 +1 @@\n"
             "-x\n+y\n"
         )
-        self.assertEqual(self.ws._extract_target_path(d), "foo/bar.py")
+        path, had_prefix = self.ws._extract_target_path(d)
+        self.assertEqual(path, "foo/bar.py")
+        self.assertTrue(had_prefix)
 
     def test_target_extraction_refuses_dev_null(self):
         d = "--- foo/bar.py\n+++ /dev/null\n"
-        self.assertIsNone(self.ws._extract_target_path(d))
+        path, _ = self.ws._extract_target_path(d)
+        self.assertIsNone(path)
 
     def test_missing_session_fails(self):
         self._mock_repo({"x.py": "a\n"})
@@ -373,6 +378,54 @@ class ApplyDiff(_Base):
         )
         self.assertFalse(result["applied"])
         self.assertIn("not a file under the repo", result["error"])
+
+    def test_git_prefix_diff_uses_p1_strip(self):
+        """self-dev review on 07ab21b (concern #1): git-format diffs
+        with 'a/' 'b/' prefixes must be applied with patch -p1, not
+        -p0. This test verifies a git-style diff applies cleanly."""
+        import shutil
+        if not shutil.which("patch"):
+            self.skipTest("patch binary not available")
+        root = self._mock_repo({"foo.py": "a\nb\nc\n"})
+        sid = self.ws.create_session(title="git-prefix test")
+        diff = (
+            "--- a/foo.py\n"
+            "+++ b/foo.py\n"
+            "@@ -1,3 +1,3 @@\n"
+            " a\n"
+            "-b\n"
+            "+B\n"
+            " c\n"
+        )
+        result = self.ws.apply_diff(session_id=sid, diff_text=diff)
+        self.assertTrue(result["applied"],
+                         f"git-style diff should apply with -p1; got {result}")
+        self.assertEqual((root / "foo.py").read_text(), "a\nB\nc\n")
+
+    def test_apply_logs_as_assistant_not_system(self):
+        """self-dev review on 07ab21b (concern #4): the apply event
+        must be persisted as role='assistant' (with a bracketed
+        marker) so future turn() calls see it — system-role turns
+        are filtered out of the history rebuild."""
+        import shutil
+        if not shutil.which("patch"):
+            self.skipTest("patch binary not available")
+        root = self._mock_repo({"foo.py": "a\nb\nc\n"})
+        sid = self.ws.create_session(title="visibility test")
+        diff = (
+            "--- foo.py\n"
+            "+++ foo.py\n"
+            "@@ -1,3 +1,3 @@\n"
+            " a\n"
+            "-b\n"
+            "+B\n"
+            " c\n"
+        )
+        self.ws.apply_diff(session_id=sid, diff_text=diff)
+        turns = self.ws.get_turns(sid)
+        apply_turns = [t for t in turns if "Workshop applied" in t.content]
+        self.assertEqual(len(apply_turns), 1)
+        self.assertEqual(apply_turns[0].role, "assistant")
 
     def test_happy_path_applies_when_patch_available(self):
         import shutil
@@ -406,6 +459,32 @@ class ApplyDiff(_Base):
             any("applied diff" in t.content for t in turns),
             "expected the apply to log a system turn",
         )
+
+
+class GetTurnsTail(_Base):
+    """self-dev review on 07ab21b (concern #3): get_turns's old
+    `limit` kwarg returned the OLDEST N, not newest. Renamed to
+    `tail` with correct semantics."""
+
+    def test_tail_returns_most_recent_still_oldest_first(self):
+        sid = self.ws.create_session(title="tail test")
+        for i in range(10):
+            self.ws._persist_turn(sid, "user", f"msg-{i}")
+        tail_3 = self.ws.get_turns(sid, tail=3)
+        self.assertEqual(len(tail_3), 3)
+        # Tail = most recent 3; internal order = oldest-first
+        self.assertEqual(tail_3[0].content, "msg-7")
+        self.assertEqual(tail_3[1].content, "msg-8")
+        self.assertEqual(tail_3[2].content, "msg-9")
+
+    def test_no_tail_returns_everything_oldest_first(self):
+        sid = self.ws.create_session(title="full test")
+        for i in range(5):
+            self.ws._persist_turn(sid, "user", f"msg-{i}")
+        all_turns = self.ws.get_turns(sid)
+        self.assertEqual(len(all_turns), 5)
+        self.assertEqual(all_turns[0].content, "msg-0")
+        self.assertEqual(all_turns[-1].content, "msg-4")
 
 
 class Rollup(_Base):

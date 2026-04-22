@@ -31,7 +31,12 @@ logger = logging.getLogger("maez.subscription_proxy.claude")
 CLAUDE_BIN = os.environ.get(
     "MAEZ_CLAUDE_BIN", "/home/rohit/.local/bin/claude",
 )
-CALL_TIMEOUT_S = float(os.environ.get("MAEZ_CLAUDE_TIMEOUT_S", "180"))
+# 2026-04-22: bumped default from 180 to 300 after multiple timeouts
+# on module-review requests (workshop.py @ 750 LoC, cognition_quality.py
+# @ 956 LoC). Claude Sonnet's response time on long-form structured
+# JSON varies with load — 180s is too aggressive for review-class
+# work. Still honors MAEZ_CLAUDE_TIMEOUT_S override.
+CALL_TIMEOUT_S = float(os.environ.get("MAEZ_CLAUDE_TIMEOUT_S", "300"))
 DEFAULT_MODEL = os.environ.get("MAEZ_CLAUDE_DEFAULT_MODEL", "sonnet")
 
 

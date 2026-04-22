@@ -278,21 +278,38 @@ def list_sessions(limit: int = 50) -> list[Session]:
 
 
 def get_turns(
-    session_id: str, *, limit: Optional[int] = None,
+    session_id: str, *, tail: Optional[int] = None,
 ) -> list[Turn]:
-    """All turns for a session, oldest-first."""
+    """Turns for a session in chronological order (oldest first).
+
+    `tail`: when set, returns only the MOST RECENT N turns (still
+    oldest-first ordered). This is what callers want when they say
+    "give me the last 10 messages" — a pagination/context-window
+    semantic, not a head slice.
+
+    self-dev review on 07ab21b (concern #3) flagged that the prior
+    `limit` parameter did the opposite (SQL LIMIT on an ORDER BY
+    ASC query = oldest N, not newest N). Renamed to `tail` so the
+    API is honest about what it returns.
+    """
     try:
         with _connect() as con:
-            q = (
-                "SELECT id, session_id, ts, role, content, model_used, "
-                "input_tokens, output_tokens FROM turns "
-                "WHERE session_id = ? ORDER BY ts ASC"
-            )
-            params: tuple = (session_id,)
-            if limit is not None:
-                q += " LIMIT ?"
-                params = (session_id, limit)
-            rows = con.execute(q, params).fetchall()
+            if tail is not None:
+                # Grab newest N via DESC, then reverse for return.
+                rows = con.execute(
+                    "SELECT id, session_id, ts, role, content, "
+                    "model_used, input_tokens, output_tokens FROM turns "
+                    "WHERE session_id = ? ORDER BY ts DESC LIMIT ?",
+                    (session_id, tail),
+                ).fetchall()
+                rows = list(reversed(rows))
+            else:
+                rows = con.execute(
+                    "SELECT id, session_id, ts, role, content, "
+                    "model_used, input_tokens, output_tokens FROM turns "
+                    "WHERE session_id = ? ORDER BY ts ASC",
+                    (session_id,),
+                ).fetchall()
         return [_row_to_turn(r) for r in rows]
     except Exception as e:
         logger.warning("workshop: get_turns failed: %s", e)
@@ -467,27 +484,28 @@ _APPLY_BACKUP_DIR = Path(os.environ.get(
     "/home/rohit/maez/workshop/backups",
 ))
 
-# Per-diff file-header line looks like "--- path/to/foo.py" or
-# "+++ path/to/foo.py" (maybe with \t and timestamp after).
-_DIFF_HEADER_RE = re.compile(
-    r"^(?:---|\+\+\+)\s+(\S+)", re.MULTILINE,
-)
-
-
-def _extract_target_path(diff_text: str) -> Optional[str]:
+def _extract_target_path(diff_text: str) -> tuple[Optional[str], bool]:
     """Parse the b-side ('+++') target from a unified diff. Returns
-    the repo-relative path, or None if the header is missing or
-    obviously invalid ('/dev/null' for deletion isn't supported yet).
+    (repo-relative-path, had_git_prefix). had_git_prefix is True if
+    the original header used 'a/' or 'b/' — callers that pass the
+    diff to `patch` must use -p1 instead of -p0 in that case.
+
+    self-dev review on 07ab21b (concerns #1, #5) flagged: the
+    stripped-prefix path was only used for validation while the raw
+    diff was passed to patch -p0, silently failing for git-style
+    diffs. Signal the strip to the caller so they can match strip
+    level on the patch side. Also removed the unused module-level
+    _DIFF_HEADER_RE that reinvented this pattern.
     """
     for m in re.finditer(r"^\+\+\+\s+(\S+)", diff_text, re.MULTILINE):
         path = m.group(1)
-        # Strip a/ or b/ git prefix if present
-        if path.startswith("a/") or path.startswith("b/"):
+        had_git_prefix = path.startswith("a/") or path.startswith("b/")
+        if had_git_prefix:
             path = path[2:]
         if path == "/dev/null":
-            return None
-        return path
-    return None
+            return None, had_git_prefix
+        return path, had_git_prefix
+    return None, False
 
 
 def _backup_file(path: Path) -> Path:
@@ -505,7 +523,6 @@ def apply_diff(
     *,
     session_id: str,
     diff_text: str,
-    caller: str = "workshop/apply",
 ) -> dict:
     """Apply a unified-diff block to the repo. Resolves the target
     from '+++' header, backs up the file, shells out to `patch` to
@@ -537,7 +554,7 @@ def apply_diff(
         return {"applied": False, "error": f"no session {session_id!r}",
                 "target": None, "backup": None, "stdout": "", "stderr": ""}
 
-    target_rel = _extract_target_path(diff_text)
+    target_rel, had_git_prefix = _extract_target_path(diff_text)
     if not target_rel:
         return {"applied": False,
                 "error": "could not extract target path from diff '+++' header",
@@ -566,11 +583,16 @@ def apply_diff(
                 "target": target_rel, "backup": None,
                 "stdout": "", "stderr": ""}
 
-    # Shell out to `patch`. Use -p0 so the paths in the diff are
-    # treated as-is (no strip). Feed diff via stdin.
+    # Shell out to `patch`. Strip level matches whatever the diff
+    # uses: -p1 for git-style a/ b/ prefixes, -p0 otherwise. Without
+    # this, git-format diffs (the most common shape Claude emits
+    # when asked to propose a change) silently fail because patch
+    # tries to write to b/core/foo.py relative to the repo root.
+    # self-dev review on 07ab21b caught this (concern #1).
+    strip_flag = "-p1" if had_git_prefix else "-p0"
     try:
         proc = subprocess.run(
-            ["patch", "-p0", "--forward", "--fuzz=0",
+            ["patch", strip_flag, "--forward", "--fuzz=0",
              "--no-backup-if-mismatch"],
             input=diff_text, text=True, capture_output=True,
             cwd=str(_REPO_ROOT), timeout=10,
@@ -601,10 +623,17 @@ def apply_diff(
                 "stdout": proc.stdout, "stderr": proc.stderr}
 
     # Record the apply as an assistant-role note in the session so
-    # history replay sees it happened. Keep it terse.
+    # future turn() calls see it in the message list built from
+    # history. system-role turns were filtered out by the
+    # role-in-{user,assistant} guard in turn() — self-dev review on
+    # 07ab21b flagged (concern #4) that the docstring promise of
+    # "records what was committed" was effectively false. Using
+    # 'assistant' with a bracketed prefix makes the apply visible
+    # to subsequent turns and honest as a conversation artifact.
     _persist_turn(
-        session_id=session_id, role="system",
-        content=f"[applied diff] target={target_rel} backup={backup.name}",
+        session_id=session_id, role="assistant",
+        content=f"[Workshop applied diff] target={target_rel} "
+                f"backup={backup.name}",
     )
 
     return {
@@ -645,6 +674,14 @@ def turn(
     user_turn_id = _persist_turn(
         session_id=session_id, role="user", content=expanded_message,
     )
+    # self-dev review on 07ab21b (concern #2) flagged: _persist_turn
+    # returns None on DB failure, which silently left the session
+    # inconsistent (assistant reply persisted without a user turn).
+    # Fail loud here so the caller knows the write was lost.
+    if user_turn_id is None:
+        raise RuntimeError(
+            "failed to persist user turn — session log would be corrupted",
+        )
 
     # Build message list: system prompt + last N turns (user+assistant)
     # + current user message.
@@ -706,6 +743,11 @@ def turn(
         input_tokens=reply.input_tokens, output_tokens=reply.output_tokens,
     )
 
+    # Return shape (all present, no extra keys):
+    #   user_turn_id, assistant_turn_id, assistant, model_used,
+    #   input_tokens, output_tokens, mentions
+    # self-dev review on 07ab21b (concern #8) flagged an earlier
+    # docstring referenced a 'turn_id' key that doesn't exist.
     return {
         "user_turn_id": user_turn_id,
         "assistant_turn_id": asst_turn_id,
@@ -719,11 +761,14 @@ def turn(
 
 # ── rollup for cockpit ────────────────────────────────────────────────
 
-def rollup(*, limit_sessions: int = 20,
-           turns_per_session: Optional[int] = None) -> dict:
+def rollup(*, limit_sessions: int = 20) -> dict:
     """Shape the cockpit needs: list of sessions (id/title/model/ts/
     turn_count). Turns are NOT embedded — cockpit fetches specific
     session turns on demand.
+
+    self-dev review on 07ab21b (concern #7) flagged an unused
+    `turns_per_session` param that implied callers could control
+    turn embedding; removed so the signature is honest.
     """
     try:
         sessions = list_sessions(limit=limit_sessions)
