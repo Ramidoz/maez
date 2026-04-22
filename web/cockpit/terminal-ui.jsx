@@ -362,10 +362,32 @@ function ChatPane({ tall, showSidebar = true }) {
     ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
   }, [input]);
 
-  const submit = () => {
-    if (!input.trim()) return;
-    sim.sendMessage(input.trim());
+  // Real chat: post to the daemon's /message endpoint (port 11435).
+  // sim.sendMessage previously simulated a reply — now we push the user
+  // turn into sim state, hit the daemon, and push the real reply back
+  // into sim state when it arrives. No streaming yet (the daemon
+  // endpoint returns the complete reply once); we just flip a pending
+  // flag so the UI shows "Thinking…".
+  const submit = async () => {
+    const text = input.trim();
+    if (!text) return;
     setInput('');
+    // Optimistically show the user turn + a "thinking" placeholder
+    sim.pushUserTurn ? sim.pushUserTurn(text) : sim.sendMessage(text);
+    try {
+      const res = await fetch('http://127.0.0.1:11435/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, source: 'cockpit' }),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const reply = (data && data.reply) || '(empty reply)';
+      sim.pushAssistantTurn ? sim.pushAssistantTurn(reply) : sim.finishSimReply(reply);
+    } catch (e) {
+      const msg = "(cockpit couldn't reach daemon on :11435 — " + String(e) + ")";
+      sim.pushAssistantTurn ? sim.pushAssistantTurn(msg) : sim.finishSimReply(msg);
+    }
   };
 
   const chatBody = (
@@ -398,6 +420,15 @@ function ChatPane({ tall, showSidebar = true }) {
       <div ref={scrollRef} className="ap-scroll" style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '20px 20px 4px' }}>
         {(session?.history || []).map((m, i) => <ChatMessage key={i} m={m} />)}
         {sim.state.chat.streaming && <StreamingMessage text={sim.state.chat.streamBuf} route={sim.state.chat._route} model={sim.state.chat._model} showThinking={thinking} />}
+        {sim.state.chat._awaitingReply && !sim.state.chat.streaming && (
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '12px 6px', fontSize: 12, color: A.textDim }}>
+            <MaezAvatar size={28} />
+            <span style={{ fontFamily: A.sans }}>Thinking</span>
+            <span className="ap-dot" style={{ width: 6, height: 6, borderRadius: '50%', background: A.blue, display: 'inline-block' }} />
+            <span className="ap-dot" style={{ width: 6, height: 6, borderRadius: '50%', background: A.blue, display: 'inline-block', animationDelay: '0.15s' }} />
+            <span className="ap-dot" style={{ width: 6, height: 6, borderRadius: '50%', background: A.blue, display: 'inline-block', animationDelay: '0.3s' }} />
+          </div>
+        )}
         {sim.state.chat.pendingCommand && <PendingCommand p={sim.state.chat.pendingCommand} />}
       </div>
 
@@ -828,7 +859,7 @@ function ServicesPane() {
     <Card title="Services" subtitle={`${entries.length} running · 0 errors`}
       icon={<Dot c={A.green} size={6} pulse />} iconColor={A.green}
       right={<Chip color={A.green}>Nominal</Chip>}>
-      <div style={{ margin: '-4px -4px' }}>
+      <div className="ap-scroll" style={{ margin: '-4px -4px', overflow: 'auto', maxHeight: '100%', paddingRight: 4 }}>
         {entries.map(([name, v]) => (
           <div key={name} className="ap-hover-lift" style={{
             display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 8,

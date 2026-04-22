@@ -327,6 +327,47 @@ const SIM = (() => {
       state.chat.streamBuf = '';
       emit();
     },
+    // Real-chat helpers (used when the cockpit talks to the live daemon
+    // via /message on port 11435). Push the user turn immediately and
+    // flip the pending flag so the UI shows "Thinking…" while the
+    // daemon reply is in flight. pushAssistantTurn drops that flag
+    // and appends the real reply.
+    pushUserTurn: (text) => {
+      const sess = state.chat.sessions.find(s => s.id === state.chat.activeSessionId);
+      if (!sess) return;
+      sess.history.push({ role: 'user', t: ts(), content: text });
+      sess.preview = text.slice(0, 80);
+      sess.updated = ts().slice(0, 5);
+      state.chat._awaitingReply = true;
+      state.chat._tools = [];
+      emit();
+    },
+    pushAssistantTurn: (reply) => {
+      const sess = state.chat.sessions.find(s => s.id === state.chat.activeSessionId);
+      if (!sess) return;
+      sess.history.push({
+        role: 'assistant', t: ts(),
+        route: 'local',
+        model: 'daemon',
+        content: reply,
+        trace: { tools: state.chat._tools || [], memory: 0, tokens: Math.floor((reply||'').length / 4) },
+      });
+      state.chat._awaitingReply = false;
+      state.chat.streaming = false;
+      state.chat.streamBuf = '';
+      emit();
+    },
+    finishSimReply: (reply) => {
+      // Compatibility hook for ChatPane paths that still go through the
+      // simulated flow — treat finish as a push-assistant.
+      const sess = state.chat.sessions.find(s => s.id === state.chat.activeSessionId);
+      if (!sess) return;
+      sess.history.push({ role: 'assistant', t: ts(), route: 'local', model: 'daemon', content: reply, trace: { tools: [], memory: 0, tokens: Math.floor((reply||'').length/4) } });
+      state.chat.streaming = false;
+      state.chat.streamBuf = '';
+      state.chat._awaitingReply = false;
+      emit();
+    },
     selectSession: (id) => { state.chat.activeSessionId = id; emit(); },
     newSession: () => {
       const colors = ['blue','purple','green','orange','pink','cyan','indigo','mint'];
