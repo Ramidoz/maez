@@ -250,10 +250,18 @@ class StaleNumberClaim(unittest.TestCase):
             "the grandmother case is the origin story",
             "cycle 1234 completed",  # cycle counter, not live state
             "",
-            None or "",
         ]:
             self.assertFalse(ms.has_stale_number_claim(s),
                              f"should NOT have matched: {s!r}")
+
+    def test_none_input_is_safe(self):
+        # self-dev review on 5d27884 flagged that `None or ""` in the
+        # loop above evaluates to `""` at list-construction time, so
+        # the None branch of has_stale_number_claim was never
+        # exercised. Test it explicitly so a future refactor can't
+        # silently break the None guard.
+        self.assertFalse(ms.has_stale_number_claim(None))  # type: ignore[arg-type]
+        self.assertEqual(ms.stale_number_weight(None, age_hours=24), 1.0)  # type: ignore[arg-type]
 
     def test_weight_at_zero_age_is_one(self):
         self.assertEqual(

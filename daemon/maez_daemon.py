@@ -2476,7 +2476,14 @@ class MaezDaemon:
                     _pm, _pb,
                 )
             except Exception as _mc_e:
-                logger.info("Runtime brain confirmed: <model_config unavailable: %s>", _mc_e)
+                # self-dev review on 5d27884 flagged: import failure
+                # here means model identity is unknown at startup —
+                # a genuine anomaly. Warn so it surfaces in normal
+                # log filtering without requiring debug level.
+                logger.warning(
+                    "Runtime brain confirmed: <model_config unavailable: %s>",
+                    _mc_e,
+                )
         else:
             logger.info("Model %s confirmed available.", MODEL)
 

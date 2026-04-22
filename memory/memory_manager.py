@@ -111,10 +111,24 @@ def _consolidate_with_chunking(*, memory_texts: list[str], soul: str,
         return _do_summary(raw_block, f"{len(memory_texts)} entries")
 
     # Map: split into char-budget-sized chunks at memory boundaries.
+    # self-dev review on 5d27884 flagged: a single entry larger than
+    # the budget (e.g. a big stack trace pasted into a note) would
+    # fall through to _do_summary unchunked — reproducing the same
+    # 400/ctx-overflow this function exists to prevent. Pre-truncate
+    # any such monster entry to the budget minus separator overhead,
+    # with a visible warning so the truncation is auditable.
     chunks: list[list[str]] = []
     current: list[str] = []
     current_len = 0
+    oversize_cap = _CONSOLIDATE_CHAR_BUDGET - 2  # leave room for "\n\n"
     for entry in memory_texts:
+        if len(entry) > oversize_cap:
+            logger_.warning(
+                "Daily consolidation: single memory exceeds chunk budget "
+                "(%d > %d chars) — truncating to fit. Head: %r",
+                len(entry), oversize_cap, entry[:120],
+            )
+            entry = entry[:oversize_cap] + "\n...[truncated by chunker]"
         entry_len = len(entry) + 2  # "\n\n" separator
         if current and current_len + entry_len > _CONSOLIDATE_CHAR_BUDGET:
             chunks.append(current)
@@ -625,8 +639,14 @@ class MemoryManager:
                 stale_number_weight as _stale_w,
             )
             now_s = _now_seconds()
+            # self-dev review on 5d27884 flagged a blocker here:
+            # bare m["content"] raised KeyError on memories without a
+            # content key, and the outer bare except swallowed it at
+            # debug level — silently disabling the entire reorder for
+            # the whole query. Use .get so one malformed record can't
+            # defeat the feature.
             need_reorder = any(
-                _has_stale(m["content"]) for m in memories
+                _has_stale(m.get("content", "")) for m in memories
             )
             if need_reorder:
                 def _score(m: dict) -> float:
@@ -634,7 +654,7 @@ class MemoryManager:
                     base = float(d) if isinstance(d, (int, float)) else 1.0
                     ts = (m.get("metadata") or {}).get("timestamp", "")
                     age_h = _age_hours_from_iso(ts, now_s)
-                    w = _stale_w(m["content"], age_hours=age_h)
+                    w = _stale_w(m.get("content", ""), age_hours=age_h)
                     # Lower distance = better. Dividing by w (≤1) *increases*
                     # the effective distance for stale-number memories,
                     # pushing them down without removing them.
