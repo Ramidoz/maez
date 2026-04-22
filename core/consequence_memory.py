@@ -51,6 +51,7 @@ breaking the caller's happy path.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -116,9 +117,12 @@ def _connect() -> sqlite3.Connection:
 
 @dataclass
 class ConsequenceEvent:
-    """One row from the events table. `tags` is a comma-separated
-    list for cheap sqlite full-text-adjacent search. `extra_json`
-    carries structured context that doesn't fit the standard fields."""
+    """One row from the events table. `tags` is a list[str] in the
+    Python object (stored comma-separated in SQLite for cheap
+    full-text-adjacent search). `extra` is a dict in the Python
+    object (stored as JSON in SQLite). self-dev review on 261a8db
+    (concern #3) corrected an earlier docstring that claimed the
+    Python side was the comma-separated string."""
     id: int
     ts: float
     kind: str      # column is called `class` but that's a python keyword
@@ -170,7 +174,11 @@ def record_event(
             kind, sorted(_KNOWN_CLASSES),
         )
     try:
-        with _connect() as con:
+        # self-dev review on 261a8db (concern #1): sqlite3 context
+        # manager only commits/rolls back — it does NOT close the
+        # connection. Wrap in contextlib.closing so file descriptors
+        # are deterministically released.
+        with contextlib.closing(_connect()) as con:
             cur = con.execute(
                 "INSERT INTO events (ts, class, surface, context, "
                 "outcome, feedback, tags, extra_json) "
@@ -197,7 +205,11 @@ def mark_heeded(event_id: int) -> bool:
     events can report "Maez is ignoring its own past mistakes."
     """
     try:
-        with _connect() as con:
+        # self-dev review on 261a8db (concern #1): sqlite3 context
+        # manager only commits/rolls back — it does NOT close the
+        # connection. Wrap in contextlib.closing so file descriptors
+        # are deterministically released.
+        with contextlib.closing(_connect()) as con:
             cur = con.execute(
                 "UPDATE events SET heeded = 1 WHERE id = ?",
                 (event_id,),
@@ -220,7 +232,11 @@ def recent(
     """Most recent events, optionally filtered by class and time
     window. Returns [] on any error."""
     try:
-        with _connect() as con:
+        # self-dev review on 261a8db (concern #1): sqlite3 context
+        # manager only commits/rolls back — it does NOT close the
+        # connection. Wrap in contextlib.closing so file descriptors
+        # are deterministically released.
+        with contextlib.closing(_connect()) as con:
             q = (
                 "SELECT id, ts, class, surface, context, outcome, "
                 "feedback, tags, extra_json, heeded FROM events WHERE 1=1"
@@ -229,7 +245,12 @@ def recent(
             if kind:
                 q += " AND class = ?"
                 params.append(kind)
-            if window_hours:
+            # self-dev review on 261a8db (concern #4): `if
+            # window_hours:` treated 0 as "no filter", so a caller
+            # passing 0 (meaning "events from the last zero hours"
+            # → empty) silently got all events. Use `is not None`
+            # so 0 is honored as a legitimate (if unusual) filter.
+            if window_hours is not None:
                 q += " AND ts >= ?"
                 params.append(time.time() - window_hours * 3600)
             q += " ORDER BY ts DESC LIMIT ?"
@@ -255,30 +276,42 @@ def relevant(
     Deliberately token-based rather than substring so a query like
     "git commit" matches stored events about "git" or "commit"
     without requiring the exact phrase.
-    """
-    if not context_snippet or not context_snippet.strip():
-        return []
-    query_tokens = {
-        t.lower() for t in context_snippet.split()
-        if len(t) > 2 and t.isalnum()
-    }
-    if not query_tokens:
-        return []
 
-    # Pull a reasonable pool then filter in python — the DB doesn't
-    # need to be clever here. Small corpora for a long time.
-    pool = recent(window_hours=window_hours, limit=max(limit * 20, 100))
-    scored: list[tuple[int, ConsequenceEvent]] = []
-    for e in pool:
-        haystack = " ".join([e.context, e.outcome, e.feedback,
-                              " ".join(e.tags)]).lower()
-        tokens = {t for t in haystack.split() if len(t) > 2}
-        overlap = len(query_tokens & tokens)
-        if overlap > 0:
-            scored.append((overlap, e))
-    # Higher overlap first; tie-break by recency
-    scored.sort(key=lambda x: (-x[0], -x[1].ts))
-    return [e for _, e in scored[:limit]]
+    self-dev review on 261a8db (concern #2): entire body is now
+    wrapped in try/except to honor the module-level "never
+    propagate" invariant. Prior version could propagate from the
+    scoring/sort loop if a row had unexpected shape.
+    """
+    try:
+        if not context_snippet or not context_snippet.strip():
+            return []
+        query_tokens = {
+            t.lower() for t in context_snippet.split()
+            if len(t) > 2 and t.isalnum()
+        }
+        if not query_tokens:
+            return []
+
+        # Pull a reasonable pool then filter in python — the DB doesn't
+        # need to be clever here. Small corpora for a long time.
+        pool = recent(
+            window_hours=window_hours,
+            limit=max(limit * 20, 100),
+        )
+        scored: list[tuple[int, ConsequenceEvent]] = []
+        for e in pool:
+            haystack = " ".join([e.context, e.outcome, e.feedback,
+                                  " ".join(e.tags)]).lower()
+            tokens = {t for t in haystack.split() if len(t) > 2}
+            overlap = len(query_tokens & tokens)
+            if overlap > 0:
+                scored.append((overlap, e))
+        # Higher overlap first; tie-break by recency
+        scored.sort(key=lambda x: (-x[0], -x[1].ts))
+        return [e for _, e in scored[:limit]]
+    except Exception as e:
+        logger.warning("consequence_memory: relevant failed: %s", e)
+        return []
 
 
 # ── stats (for cockpit / rollup) ──────────────────────────────────────
@@ -287,10 +320,19 @@ def stats(*, window_hours: Optional[int] = None) -> dict:
     """Summary for dashboards. Always returns a dict; empty on error
     so callers can dumbly render."""
     try:
-        with _connect() as con:
+        # self-dev review on 261a8db (concern #1): sqlite3 context
+        # manager only commits/rolls back — it does NOT close the
+        # connection. Wrap in contextlib.closing so file descriptors
+        # are deterministically released.
+        with contextlib.closing(_connect()) as con:
             where = ""
             params: tuple = ()
-            if window_hours:
+            # self-dev review on 261a8db (concern #4): `if
+            # window_hours:` treated 0 as "no filter", so a caller
+            # passing 0 (meaning "events from the last zero hours"
+            # → empty) silently got all events. Use `is not None`
+            # so 0 is honored as a legitimate (if unusual) filter.
+            if window_hours is not None:
                 where = " WHERE ts >= ?"
                 params = (time.time() - window_hours * 3600,)
             total = con.execute(
