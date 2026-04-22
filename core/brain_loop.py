@@ -484,6 +484,34 @@ a terminal DONE is acceptable AFTER the probe — not before.
 
 # ── synthesis-prompt builder ───────────────────────────────────────────
 
+# Shared guard injected into both the tool-transcript and no-tool
+# synthesis paths. Addresses a real failure mode observed 2026-04-22:
+# user asked "what does it mean?" about 4 card-expired notifications
+# visible in Telegram; Maez confidently answered about evolution
+# proposals #24 and #25 (which were also in memory but NOT what the
+# user was pointing at). The answer was grounded in real values but
+# fundamentally non-responsive because it picked the wrong referent
+# without checking. This rule forces Maez to pin the referent before
+# answering OR ask for clarification.
+_AMBIGUITY_GUARD = (
+    "\n"
+    "AMBIGUOUS REFERENT RULE: if the user's message leans on a vague "
+    "pronoun ('it', 'that', 'this', 'them', 'what does it mean') AND "
+    "there is more than one plausible recent referent in your context "
+    "(e.g. a message visible in the chat vs. something in memory "
+    "recall), you MUST do ONE of:\n"
+    "  a) quote the candidate you're interpreting verbatim as the "
+    "     first line of your reply ('About \"Card expired — state "
+    "     hash changed...\": ...'), or\n"
+    "  b) ask a single clarifying question ('Do you mean the "
+    "     card-expired messages just above, or the evolution "
+    "     proposals I mentioned earlier?').\n"
+    "Do NOT silently pick one and answer as if it's the only option. "
+    "Grounded-but-non-responsive beats ungrounded, but both are "
+    "failures of being actually helpful.\n"
+)
+
+
 _JARVIS_INSTRUCTION_BLOCK = (
     "HARD INSTRUCTION — read this before writing a single word of your reply:\n"
     "\n"
@@ -512,6 +540,7 @@ _JARVIS_INSTRUCTION_BLOCK = (
     "\n"
     "5. Memory recall (earlier in this prompt) is HISTORY. Do not "
     "attribute it to this turn. Frame past findings as past.\n"
+    + _AMBIGUITY_GUARD
 )
 
 _NO_TOOL_INSTRUCTION_BLOCK = (
@@ -532,6 +561,7 @@ _NO_TOOL_INSTRUCTION_BLOCK = (
     " 2. Current internal state — 'I think...', 'I'm not sure...'.\n"
     " 3. Future offer — 'want me to check?', 'I can look if you want'. "
     "Puts the decision in the owner's hands.\n"
+    + _AMBIGUITY_GUARD
 )
 
 
