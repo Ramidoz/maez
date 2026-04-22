@@ -68,7 +68,7 @@ class Flag:
 class AuditResult:
     text: str
     rewritten: bool = False
-    mode: str = "noop"        # "noop" | "sentence"
+    mode: str = "noop"        # "noop" | "sentence" | "shortcircuit" | "judge_unavailable"
     flags: list[Flag] = field(default_factory=list)
     skipped_reason: Optional[str] = None
 
@@ -76,7 +76,7 @@ class AuditResult:
 _REWRITE_SENTENCE = "I don't have a grounded answer for that part."
 _REWRITE_WHOLE = "I don't have a grounded answer for this right now."
 
-# If the flagged fraction of sentences rises above this AND at least
+# If the flagged fraction of sentences meets or exceeds this AND at least
 # _SHORTCIRCUIT_MIN_FLAGS are flagged, the entire response is replaced with
 # _REWRITE_WHOLE rather than punctuating surviving fragments with sentinels.
 # Pathologically-fabricated responses are more honestly rendered as a single
@@ -259,15 +259,23 @@ def _find_flags(
         reason = (jf.get("reason") or "").strip()
         if not claim:
             continue
-        idx = text.find(claim)
-        if idx < 0:
-            continue
-        flags.append(Flag(
-            kind="judge",
-            span=(idx, idx + len(claim)),
-            text=claim,
-            reason=reason,
-        ))
+        # self-dev review on f940191 (concern #13) flagged that only
+        # the first occurrence got a Flag — repeated fabrications
+        # (e.g. the same invented proper noun twice) would survive the
+        # rewrite untouched. Emit a Flag for each occurrence so the
+        # rewrite visits all of them.
+        pos = 0
+        while True:
+            idx = text.find(claim, pos)
+            if idx < 0:
+                break
+            flags.append(Flag(
+                kind="judge",
+                span=(idx, idx + len(claim)),
+                text=claim,
+                reason=reason,
+            ))
+            pos = idx + 1  # allow overlapping claims (rare but valid)
     return flags, True
 
 
@@ -371,21 +379,35 @@ def audit(
         # cockpit can show a judge-down rate. Behavior is identical
         # (fail-open) — only telemetry differs.
         mode = "judge_unavailable" if not judge_available else "noop"
-        _emit(surface=surface, flags=[], mode=mode)
+        _emit(surface=surface, flags=[], mode=mode,
+              signals_absent=signals_absent)
+        # self-dev review on f940191 (concern #12) flagged that `mode`
+        # was computed above but the AuditResult was constructed with
+        # a hardcoded "noop", silently dropping the judge_unavailable
+        # distinction that callers rely on. Pass the computed mode.
         return AuditResult(
-            text=text, rewritten=False, mode="noop",
+            text=text, rewritten=False, mode=mode,
             skipped_reason=None if judge_available else "judge_unavailable",
         )
 
     new_text, mode = _rewrite(text, flags)
-    _emit(surface=surface, flags=flags, mode=mode)
+    _emit(surface=surface, flags=flags, mode=mode,
+          signals_absent=signals_absent)
     return AuditResult(text=new_text, rewritten=True, mode=mode, flags=flags)
 
 
 def _emit(surface: str, flags: list[Flag], mode: str,
-          skipped_reason: Optional[str] = None) -> None:
+          skipped_reason: Optional[str] = None,
+          signals_absent: Optional[list] = None) -> None:
     """One line per audit call to cognition.log (cockpit fabrication pane
-    parses this). Does NOT include the fabricated text itself."""
+    parses this). Does NOT include the fabricated text itself.
+
+    self-dev review on f940191 (concern #11) flagged that signals_absent
+    was hardcoded to [] on every fabrication_events record, making
+    few_shots_for retrieval effectively a no-op. The parameter is now
+    passed through from audit() so the immune-memory lookup actually
+    finds semantically-relevant past examples.
+    """
     kinds = ",".join(sorted({f.kind for f in flags})) if flags else "-"
     parts = [
         "self_claim_audit |",
@@ -404,11 +426,12 @@ def _emit(surface: str, flags: list[Flag], mode: str,
     if flags:
         try:
             from core import fabrication_memory as _fab_mem
+            sa = list(signals_absent or [])
             for f in flags:
                 _fab_mem.record_event(
                     surface=surface,
                     text=f.text,
-                    signals_absent=[],
+                    signals_absent=sa,
                     reason=f.reason,
                     mode="judge",
                 )
