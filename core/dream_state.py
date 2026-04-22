@@ -85,7 +85,19 @@ MIN_INSIGHT_CHARS = 30
 # known note, reject as redundant.
 # 11u fix: 0.4 was too lenient — paraphrases of "disk at 65%, Claude
 # process" scored ~0.30-0.35 and slipped through. 0.25 catches them.
-NOVELTY_JACCARD_MAX = 0.25
+# 2026-04-22 fix: after 5 hourly dreams all about disk-oscillation
+# and firefox/claude process rhythm slipped through at Jaccard 0.18-0.22,
+# tightened further. Long-text Jaccard dilutes overlap on shared
+# vocabulary; a stricter cap catches near-paraphrases that share
+# topic but vary phrasing.
+NOVELTY_JACCARD_MAX = 0.15
+
+# Second-tier novelty: if the candidate's primary topic matches any
+# of the last N dreams' primary topic, reject even when Jaccard is
+# borderline. Prevents the same topic from being dreamed about over
+# and over with different wording.
+NOVELTY_TOPIC_LOOKBACK = 5
+NOVELTY_TOPIC_JACCARD_MIN = 0.10
 
 # How many prior dreams to compare against when checking novelty.
 NOVELTY_DREAM_LOOKBACK = 20
@@ -434,7 +446,45 @@ class DreamState:
 
         logger.debug("dream novelty: max_jaccard=%.3f threshold=%.3f",
                      max_overlap, NOVELTY_JACCARD_MAX)
-        return max_overlap <= NOVELTY_JACCARD_MAX
+        if max_overlap > NOVELTY_JACCARD_MAX:
+            return False
+
+        # Second-tier novelty: even when Jaccard is under threshold,
+        # reject if the candidate's primary topic matches any of the
+        # last NOVELTY_TOPIC_LOOKBACK dreams' primary topic AND the
+        # Jaccard is still above the topic-level floor. Catches
+        # "same topic rephrased" loops (e.g. five dreams about
+        # disk-oscillation that each use different filler vocabulary).
+        try:
+            from core.cognition_quality import primary_topic as _primary_topic
+        except Exception:
+            return True  # topic module unavailable — pass on first-tier
+        cand_topic = _primary_topic(candidate.lower())
+        if not cand_topic or cand_topic == "unknown":
+            return True
+        try:
+            with self._lock, self._conn() as c:
+                cur = c.execute(
+                    "SELECT insight FROM dream_proposals "
+                    "ORDER BY id DESC LIMIT ?",
+                    (NOVELTY_TOPIC_LOOKBACK,),
+                )
+                recent_topics = [
+                    _primary_topic((row[0] or "").lower())
+                    for row in cur.fetchall()
+                ]
+        except Exception as e:
+            logger.debug("dream novelty: topic-lookback fetch failed: %s", e)
+            return True
+        if (cand_topic in recent_topics
+                and max_overlap >= NOVELTY_TOPIC_JACCARD_MIN):
+            logger.info(
+                "dream novelty: rejected on topic='%s' jaccard=%.3f "
+                "(recent topics=%s)",
+                cand_topic, max_overlap, recent_topics,
+            )
+            return False
+        return True
 
     # ── proposal storage + lifecycle ────────────────────────────────
     def _store_proposal(self, insight: str) -> int:
