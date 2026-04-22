@@ -176,6 +176,94 @@ class ReviewEndToEndMocked(unittest.TestCase):
         self.assertEqual(r.diff_size_chars, len(big))
 
 
+class ReviewModuleMocked(unittest.TestCase):
+    """review_module() is a sibling of review() — same infra, different
+    target. Verify it loads from disk, passes content to Claude, and
+    propagates the caller label so the trajectory log is sliceable."""
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False,
+        )
+        self._tmp.write("# fake module\ndef x():\n    return 1\n")
+        self._tmp.close()
+
+    def tearDown(self):
+        import os
+        try:
+            os.unlink(self._tmp.name)
+        except FileNotFoundError:
+            pass
+
+    def test_happy_path(self):
+        from core import self_dev
+        from core.claude_tier import TierReply
+
+        fake = TierReply(
+            reply=json.dumps({
+                "overall": "clean", "concerns": [
+                    {"file": "", "line": 2, "severity": "minor",
+                     "text": "x is unused", "suggestion": "delete"},
+                ],
+            }),
+            model_used="claude-sonnet-4-6",
+            input_tokens=50, output_tokens=25, raw={},
+        )
+        with mock.patch("core.self_dev.claude_tier.call",
+                         return_value=fake) as m_call, \
+             mock.patch("core.self_dev.self_dev_persistence",
+                         create=True):
+            result = self_dev.review_module(
+                path=self._tmp.name, persist=False,
+            )
+
+        self.assertEqual(len(result.concerns), 1)
+        # Empty file fields auto-filled with relative path
+        self.assertTrue(result.concerns[0].file)
+        # Caller label propagated
+        kwargs = m_call.call_args.kwargs
+        self.assertEqual(kwargs["caller"], "self_dev/review_module")
+        # target_ref prefixed with module: so it's distinguishable
+        # from a git-ref review in the concerns DB
+        self.assertTrue(result.target_ref.startswith("module:"))
+
+    def test_missing_path_raises(self):
+        from core import self_dev
+        with self.assertRaises(RuntimeError) as cm:
+            self_dev.review_module(path="/nonexistent/xyz.py")
+        self.assertIn("no such file", str(cm.exception))
+
+    def test_large_module_is_truncated(self):
+        from core import self_dev
+        from core.claude_tier import TierReply
+        import os, tempfile
+
+        big = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False,
+        )
+        big.write("# big module\n" + ("x = 1\n" * 20000))
+        big.close()
+        try:
+            fake = TierReply(
+                reply='{"overall":"ok","concerns":[]}',
+                model_used="sonnet",
+                input_tokens=1, output_tokens=1, raw={},
+            )
+            with mock.patch("core.self_dev.claude_tier.call",
+                             return_value=fake) as m_call:
+                result = self_dev.review_module(
+                    path=big.name, max_chars=1000, persist=False,
+                )
+            sent = m_call.call_args.kwargs["prompt"]
+            self.assertIn("truncated", sent)
+            self.assertLess(len(sent), 3000)
+            # Recorded size is the ORIGINAL (pre-truncation) file size
+            self.assertGreater(result.diff_size_chars, 50000)
+        finally:
+            os.unlink(big.name)
+
+
 class SeverityCounts(unittest.TestCase):
     def test_counts_severity_buckets(self):
         from core.self_dev import ReviewResult, Concern

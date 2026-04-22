@@ -59,6 +59,59 @@ logger = logging.getLogger("maez.self_dev")
 # producing valid JSON. If parsing fails we fall back to treating
 # the raw text as a single overall concern (see _parse_response).
 
+_MODULE_REVIEW_SYSTEM_PROMPT = """You are reviewing a Python module on \
+behalf of Maez, an always-on local AI daemon. You are being invoked \
+by Maez itself via its subscription proxy — treat this as a \
+peer-review of code Maez (together with Claude Code) authored over \
+time. The module has been in the codebase long enough to accumulate \
+drift; your job is to find standing issues the commit-time review \
+missed.
+
+Review priorities, in order:
+
+1. Dead or unreachable code: functions with zero callers inside \
+   this module and no obvious public-API exposure (not imported \
+   elsewhere by name, not a CLI entry, not a __main__ block). \
+   Defensive fallback branches that can't be reached given the \
+   module's own invariants.
+2. Docstring rot: docstrings that describe behavior the code no \
+   longer implements, that reference removed functions, or that \
+   assert invariants the body violates.
+3. Accumulated bugs: correctness issues that slipped past earlier \
+   review — off-by-ones, swallowed exceptions, resources not \
+   closed on error paths, silent fallback to None where the \
+   caller expects a value.
+4. Invariant drift: conditions the module's docstring or top-level \
+   comments promise that the current code doesn't enforce.
+
+DO NOT raise as concerns:
+- Style / formatting.
+- "Could be more extensible" without a concrete near-term caller.
+- Missing tests (separate task).
+- Generally useful features that could be added.
+- Re-wordings of docstrings that are already correct.
+- Functions used ONLY by test code — those are valid entry points.
+
+Respond ONLY with valid JSON in this shape, no prose before or after:
+
+{
+  "overall": "one-sentence summary verdict",
+  "concerns": [
+    {
+      "file": "path/relative/to/repo",
+      "line": <integer line number or null>,
+      "severity": "blocker" | "major" | "minor" | "nit",
+      "text": "the specific concern, one paragraph max",
+      "suggestion": "optional concrete fix or 'null'"
+    }
+  ]
+}
+
+An empty concerns array is a valid, useful response — it means the \
+module is clean to your eyes. Do not invent concerns to fill space.
+"""
+
+
 _REVIEW_SYSTEM_PROMPT = """You are reviewing a git diff on behalf of \
 Maez, an always-on local AI daemon written in Python. You are being \
 invoked by Maez itself via its subscription proxy — treat this as a \
@@ -346,6 +399,107 @@ def review(
     return result
 
 
+# ── module review (standing issues vs review's diff-time regressions) ─
+
+def review_module(
+    *,
+    path: str,
+    model: str = "sonnet",
+    max_chars: int = 60000,
+    persist: bool = True,
+    caller: str = "self_dev/review_module",
+) -> ReviewResult:
+    """Ask Claude to review a whole Python module for standing issues
+    (dead code, docstring rot, accumulated bugs, invariant drift).
+
+    Complementary to review(): review() catches regressions a commit
+    introduces; review_module() catches issues that slipped through
+    every earlier commit. Target long-lived modules where drift has
+    had time to accumulate.
+
+    Args:
+        path      — repo-relative or absolute path to the .py file.
+        model     — any model the proxy can route.
+        max_chars — truncate if longer. Most real modules fit under
+                    this; the largest files in maez are ~5k lines
+                    ~200k chars, which will be truncated. Manual
+                    invocation on a truncated review is still useful
+                    for the head of the module.
+
+    Raises RuntimeError on git/tier failures (same contract as review).
+    """
+    import os
+    from pathlib import Path
+
+    p = Path(path)
+    if not p.is_absolute():
+        p = Path(_REPO_ROOT) / p
+    if not p.exists():
+        raise RuntimeError(f"review_module: no such file: {p}")
+    if not p.is_file():
+        raise RuntimeError(f"review_module: not a file: {p}")
+
+    try:
+        content = p.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        raise RuntimeError(f"review_module: read failed: {e}")
+
+    size = len(content)
+    truncated_note = ""
+    if size > max_chars:
+        truncated_note = (
+            f"\n\n[NOTE: module truncated from {size} to {max_chars} "
+            f"chars. Reviewing only the head.]"
+        )
+        content = content[:max_chars]
+
+    # Present as a fenced python block with the relative path in the
+    # header so Claude anchors concerns to that file in responses.
+    rel = os.path.relpath(str(p), _REPO_ROOT)
+    user_prompt = (
+        f"Review this Python module: `{rel}`\n\n"
+        f"```python\n{content}\n```{truncated_note}"
+    )
+
+    try:
+        tr = claude_tier.call(
+            prompt=user_prompt,
+            system_prompt=_MODULE_REVIEW_SYSTEM_PROMPT,
+            model=model,
+            caller=caller,
+        )
+    except claude_tier.ClaudeTierError as e:
+        raise RuntimeError(f"module review call failed: {e}")
+
+    overall, concerns, parse_err = _parse_response(tr.reply)
+    # Coerce any empty-file field into the relative module path so
+    # the concern is queryable by file — Claude sometimes omits it
+    # when the path is obvious from context.
+    for c in concerns:
+        if not c.file:
+            c.file = rel
+    result = ReviewResult(
+        target_ref=f"module:{rel}",
+        diff_size_chars=size,
+        overall=overall,
+        concerns=concerns,
+        model_used=tr.model_used,
+        input_tokens=tr.input_tokens,
+        output_tokens=tr.output_tokens,
+        raw_text=tr.reply,
+        parse_error=parse_err,
+    )
+
+    if persist:
+        try:
+            from core.self_dev_persistence import store_review
+            store_review(result, caller=caller)
+        except Exception as _pe:
+            logger.warning("self_dev: persist failed (continuing): %s", _pe)
+
+    return result
+
+
 # ── CLI ───────────────────────────────────────────────────────────────
 
 def _cli_review(args) -> int:
@@ -369,6 +523,48 @@ def _cli_review(args) -> int:
     print(f"Model : {result.model_used}  "
           f"(tokens in/out: {result.input_tokens}/{result.output_tokens})")
     print(f"Diff  : {result.diff_size_chars} chars")
+    print()
+    print("Overall:")
+    print(f"  {result.overall}")
+    print()
+    if result.parse_error:
+        print(f"!! parse error: {result.parse_error}")
+        print("-- raw response --")
+        print(result.raw_text[:800])
+        return 1
+    counts = result.severity_counts()
+    if not result.concerns:
+        print("No concerns raised.")
+        return 0
+    print(f"Concerns ({len(result.concerns)}): "
+          + ", ".join(f"{k}:{v}" for k, v in counts.items()))
+    print()
+    for i, c in enumerate(result.concerns, 1):
+        loc = f"{c.file}:{c.line}" if c.line else c.file
+        print(f"  [{c.severity}] #{i}  {loc}")
+        print(f"    {c.text}")
+        if c.suggestion:
+            print(f"    → {c.suggestion}")
+        print()
+    return 0
+
+
+def _cli_review_module(args) -> int:
+    try:
+        result = review_module(
+            path=args.path, model=args.model,
+            persist=not args.no_persist,
+        )
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(asdict(result), indent=2))
+        return 0
+    print(f"Module review: {result.target_ref}")
+    print(f"Model        : {result.model_used}  "
+          f"(tokens in/out: {result.input_tokens}/{result.output_tokens})")
+    print(f"Size         : {result.diff_size_chars} chars")
     print()
     print("Overall:")
     print(f"  {result.overall}")
@@ -469,6 +665,19 @@ def _build_argparser() -> argparse.ArgumentParser:
     r.add_argument("--no-persist", action="store_true",
                     help="don't write this review to self_dev.db")
     r.set_defaults(func=_cli_review)
+
+    rm = sub.add_parser(
+        "review-module",
+        help="Review a whole .py module for standing issues",
+    )
+    rm.add_argument("path", help="path to a Python module")
+    rm.add_argument("--model", default="sonnet",
+                     help="model name (default: sonnet)")
+    rm.add_argument("--json", action="store_true",
+                     help="emit raw JSON result")
+    rm.add_argument("--no-persist", action="store_true",
+                     help="don't write this review to self_dev.db")
+    rm.set_defaults(func=_cli_review_module)
 
     h = sub.add_parser("history", help="List recent reviews")
     h.add_argument("--limit", type=int, default=10)
