@@ -1355,13 +1355,236 @@ function DaemonDeep() {
   );
 }
 
+// ═══════════════════════════════════════════════════════════
+// Judgment — live telemetry from /api/v1/quality
+// First surface that binds to real backend data: self_claim_audit
+// mode histogram, error_classifier taxonomy, fabrication events
+// feed, consolidation scores, recall stats. Polls every 10s.
+// Fail-safe: shows a muted state if the endpoint is unreachable.
+// ═══════════════════════════════════════════════════════════
+function JudgmentSurface() {
+  const [data, setData] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  const [lastAt, setLastAt] = React.useState(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetch('/api/v1/quality')
+        .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
+        .then(d => { if (!cancelled) { setData(d); setErr(null); setLastAt(new Date()); } })
+        .catch(e => { if (!cancelled) setErr(String(e)); });
+    };
+    load();
+    const id = setInterval(load, 10000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  // Color mapping for audit modes (what the judge/pipeline did).
+  const modeColor = {
+    noop:               A.green,        // clean passthrough
+    sentence:           A.orange,       // single-sentence rewrite
+    shortcircuit:       A.red,          // whole-response refused
+    prefilter_clean:    A.mint,         // skipped via cheap pre-filter
+    judge_unavailable:  A.yellow,       // judge endpoint down
+    skipped:            A.textDim,      // tool-continuation / env off
+  };
+  const errorColor = {
+    gpu_oom:              A.red,
+    backend_down:         A.orange,
+    backend_timeout:      A.orange,
+    context_overflow:     A.yellow,
+    model_missing:        A.pink,
+    response_malformed:   A.purple,
+    unknown:              A.textDim,
+  };
+
+  if (err && !data) {
+    return (
+      <div className="ap-scroll" style={{ height: '100%', overflow: 'auto', padding: 28 }}>
+        <SurfaceHeader title="Judgment" subtitle={`Can't reach /api/v1/quality — ${err}`}
+          icon="⚖" color={A.red} />
+        <Glass pad={18}>
+          <div style={{ fontSize: 13, color: A.textDim, lineHeight: 1.6 }}>
+            The quality API is either down or the web service hasn't picked up the latest build.
+            Start or restart <code style={{ fontFamily: A.mono, color: A.textSoft }}>maez-web.service</code>.
+          </div>
+        </Glass>
+      </div>
+    );
+  }
+  if (!data) {
+    return (
+      <div className="ap-scroll" style={{ height: '100%', overflow: 'auto', padding: 28 }}>
+        <SurfaceHeader title="Judgment" subtitle="Loading telemetry…" icon="⚖" color={A.indigo} />
+      </div>
+    );
+  }
+
+  const { audit, errors, consolidation, fabrication, recall } = data;
+  const lastLabel = lastAt ? `updated ${lastAt.toLocaleTimeString()}` : '';
+
+  const totalAudits = audit.total || 0;
+  const totalFlags = audit.total_flags || 0;
+  const flagRate = audit.flag_rate || 0;
+
+  // Order modes by frequency for the histogram.
+  const modes = Object.entries(audit.by_mode || {}).sort((a, b) => b[1] - a[1]);
+  const maxModeCount = modes.reduce((m, [, v]) => Math.max(m, v), 1);
+
+  const surfaces = Object.entries(audit.by_surface || {}).sort((a, b) => b[1] - a[1]);
+  const errClasses = Object.entries(errors.by_class || {}).sort((a, b) => b[1] - a[1]);
+  const maxErrCount = errClasses.reduce((m, [, v]) => Math.max(m, v), 1);
+
+  return (
+    <div className="ap-scroll" style={{ height: '100%', overflow: 'auto', padding: 28 }}>
+      <SurfaceHeader title="Judgment" subtitle={`Grounding audit · errors · consolidation · ${lastLabel}`}
+        icon="⚖" color={A.indigo}
+        right={<Chip color={A.indigo}>{totalAudits.toLocaleString()} events observed</Chip>} />
+
+      {/* ── Key tiles ───────────────────────────────────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+        <Glass pad={16} style={{ borderTop: `2px solid ${A.indigo}` }}>
+          <div style={{ fontSize: 10, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>Flag rate</div>
+          <div style={{ fontSize: 32, color: A.indigo, fontWeight: 600, lineHeight: 1, marginTop: 6 }}>
+            {(flagRate * 100).toFixed(0)}<span style={{ fontSize: 18, color: A.textDim }}>%</span>
+          </div>
+          <div style={{ fontSize: 11, color: A.textFaint, marginTop: 4 }}>
+            of {totalAudits} audits had ≥1 flag
+          </div>
+        </Glass>
+        <Glass pad={16} style={{ borderTop: `2px solid ${A.orange}` }}>
+          <div style={{ fontSize: 10, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>Total flags</div>
+          <div style={{ fontSize: 32, color: A.orange, fontWeight: 600, lineHeight: 1, marginTop: 6 }}>
+            {totalFlags.toLocaleString()}
+          </div>
+          <div style={{ fontSize: 11, color: A.textFaint, marginTop: 4 }}>
+            claims caught and rewritten
+          </div>
+        </Glass>
+        <Glass pad={16} style={{ borderTop: `2px solid ${A.mint}` }}>
+          <div style={{ fontSize: 10, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>Memories tracked</div>
+          <div style={{ fontSize: 32, color: A.mint, fontWeight: 600, lineHeight: 1, marginTop: 6 }}>
+            {(recall.total_memories_tracked || 0).toLocaleString()}
+          </div>
+          <div style={{ fontSize: 11, color: A.textFaint, marginTop: 4 }}>
+            {(recall.total_recalls || 0).toLocaleString()} recalls · {(recall.consolidated_count || 0).toLocaleString()} consolidated
+          </div>
+        </Glass>
+        <Glass pad={16} style={{ borderTop: `2px solid ${A.purple}` }}>
+          <div style={{ fontSize: 10, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>Consolidation</div>
+          <div style={{ fontSize: 32, color: A.purple, fontWeight: 600, lineHeight: 1, marginTop: 6 }}>
+            {(consolidation.last_median || 0).toFixed(2)}
+          </div>
+          <div style={{ fontSize: 11, color: A.textFaint, marginTop: 4 }}>
+            median score · n={consolidation.last_n || 0} · {consolidation.observations || 0} dreams
+          </div>
+        </Glass>
+      </div>
+
+      {/* ── Audit mode histogram ────────────────────────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
+        <Glass pad={18}>
+          <div style={{ fontSize: 12, color: A.textDim, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600, marginBottom: 14 }}>
+            Audit outcomes
+          </div>
+          {modes.length === 0 && <div style={{ fontSize: 12, color: A.textFaint }}>No data yet.</div>}
+          {modes.map(([mode, count]) => (
+            <div key={mode} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+              <Dot c={modeColor[mode] || A.textDim} />
+              <div style={{ fontSize: 12, color: A.text, fontFamily: A.mono, minWidth: 140 }}>{mode}</div>
+              <div style={{ flex: 1, height: 6, background: A.bgElev, borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{
+                  width: `${(count / maxModeCount) * 100}%`,
+                  height: '100%',
+                  background: modeColor[mode] || A.textDim,
+                  transition: 'width 400ms ' + A.easeOut,
+                }} />
+              </div>
+              <div style={{ fontSize: 12, color: A.textSoft, fontFamily: A.mono, minWidth: 40, textAlign: 'right' }}>{count}</div>
+            </div>
+          ))}
+        </Glass>
+
+        <Glass pad={18}>
+          <div style={{ fontSize: 12, color: A.textDim, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600, marginBottom: 14 }}>
+            Error classes {errors.total > 0 && <span style={{ color: A.textFaint, fontWeight: 400 }}>({errors.total} total · {errors.transient_count} transient · {errors.structural_count} structural)</span>}
+          </div>
+          {errClasses.length === 0 && <div style={{ fontSize: 12, color: A.textFaint }}>No errors observed. Clean stack.</div>}
+          {errClasses.map(([cls, count]) => (
+            <div key={cls} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+              <Dot c={errorColor[cls] || A.textDim} />
+              <div style={{ fontSize: 12, color: A.text, fontFamily: A.mono, minWidth: 160 }}>{cls}</div>
+              <div style={{ flex: 1, height: 6, background: A.bgElev, borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{
+                  width: `${(count / maxErrCount) * 100}%`,
+                  height: '100%',
+                  background: errorColor[cls] || A.textDim,
+                  transition: 'width 400ms ' + A.easeOut,
+                }} />
+              </div>
+              <div style={{ fontSize: 12, color: A.textSoft, fontFamily: A.mono, minWidth: 40, textAlign: 'right' }}>{count}</div>
+            </div>
+          ))}
+        </Glass>
+      </div>
+
+      {/* ── Activity by surface ─────────────────────────────── */}
+      <Glass pad={18} style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 12, color: A.textDim, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600, marginBottom: 14 }}>
+          Activity by surface
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {surfaces.map(([s, n]) => (
+            <Chip key={s} color={A.blue}>
+              <span style={{ fontFamily: A.mono }}>{s}</span>
+              <span style={{ marginLeft: 6, color: A.textDim }}>{n}</span>
+            </Chip>
+          ))}
+          {surfaces.length === 0 && <span style={{ fontSize: 12, color: A.textFaint }}>No traffic yet.</span>}
+        </div>
+      </Glass>
+
+      {/* ── Fabrication feed ────────────────────────────────── */}
+      <Glass pad={18}>
+        <div style={{ fontSize: 12, color: A.textDim, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600, marginBottom: 14, display: 'flex', gap: 10, alignItems: 'center' }}>
+          Fabrications caught
+          <Chip color={A.pink}>{fabrication.total_events || 0} total events</Chip>
+        </div>
+        {(fabrication.recent || []).length === 0 && (
+          <div style={{ fontSize: 12, color: A.textFaint }}>
+            No flagged claims recorded yet. Either Maez hasn't speculated, or the judge hasn't flagged.
+          </div>
+        )}
+        {(fabrication.recent || []).map((evt, i) => (
+          <div key={i} style={{ marginBottom: 14, paddingBottom: 14, borderBottom: i < (fabrication.recent.length - 1) ? `0.5px solid ${A.strokeSoft}` : 'none' }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6, fontSize: 10, color: A.textFaint }}>
+              <Chip color={A.pink} tone="soft">{evt.surface}</Chip>
+              <span style={{ fontFamily: A.mono }}>{new Date(evt.ts * 1000).toLocaleTimeString()}</span>
+              <span>·</span>
+              <span style={{ fontFamily: A.mono }}>{evt.mode}</span>
+            </div>
+            <div style={{ fontFamily: A.mono, fontSize: 13, color: A.text, lineHeight: 1.55, marginBottom: 4 }}>
+              "{evt.text}"
+            </div>
+            <div style={{ fontSize: 11, color: A.textDim, lineHeight: 1.5, fontStyle: 'italic' }}>
+              {evt.reason}
+            </div>
+          </div>
+        ))}
+      </Glass>
+    </div>
+  );
+}
+
 // Export as the legacy "S" var for compatibility with HTML shell
 const S = A;
 
 window.TerminalUI = {
   S, A, Card, Glass, Chip, Dot, Button, MaezAvatar, Icon, SegmentedControl,
   ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane, RouterPane,
-  MemorySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface, DaemonDeep,
+  MemorySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
+  JudgmentSurface, DaemonDeep,
   // back-compat aliases (in case shell uses these)
   SoftBtn: Button, Pill: Chip,
 };

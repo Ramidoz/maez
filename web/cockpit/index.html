@@ -25,6 +25,7 @@
 <script type="text/babel" data-presets="react">
 const { ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane, RouterPane,
         MemorySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
+        JudgmentSurface,
         DaemonDeep, S, A, Card, Glass, Chip, Pill, Dot, Button, SoftBtn, MaezAvatar, Icon } = window.TerminalUI;
 
 // ═══════════════════════════════════════════════════════════
@@ -47,6 +48,7 @@ function TerminalDirection() {
     { id: 'daemon',     label: 'Daemon',      hotkey: '8', icon: '◎' },
     { id: 'dreams',     label: 'Dreams',      hotkey: '9', icon: '✧', badge: sim.state.dreams.filter(d => d.status === 'pending').length || null },
     { id: 'identity',   label: 'Identity',    hotkey: '0', icon: '⬡' },
+    { id: 'judgment',   label: 'Judgment',    hotkey: 'J', icon: '⚖' },
     { id: 'logs',       label: 'Logs',        hotkey: 'L', icon: '▤' },
   ];
 
@@ -123,6 +125,7 @@ function TerminalDirection() {
         {surface === 'daemon' && <DaemonDeep />}
         {surface === 'dreams' && <DreamsSurface />}
         {surface === 'identity' && <IdentitySurface />}
+        {surface === 'judgment' && <JudgmentSurface />}
         {surface === 'logs' && <LogsSurface />}
       </div>
 
