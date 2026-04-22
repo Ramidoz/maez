@@ -1479,6 +1479,46 @@ def api_quality():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/v1/self_dev")
+def api_self_dev():
+    """Self-dev rollup — reviews + concerns for the cockpit.
+
+    Combines:
+      - stats (total reviews, token usage, severity/status buckets)
+      - recent reviews (headers only, no concern bodies)
+      - open concerns (ids + file:line + severity + text + suggestion)
+
+    All reads are best-effort; individual fields fall back to empty
+    rather than 500-ing the response.
+
+    Query params:
+        recent_reviews  — default 10   (max 100)
+        recent_concerns — default 25   (max 200)
+        window_hours    — default 168  (7 days)
+    """
+    try:
+        from core.self_dev_persistence import rollup
+    except Exception as e:
+        return jsonify({"error": f"self_dev unavailable: {e}"}), 500
+
+    def _int_arg(name: str, default: int, hi: int) -> int:
+        try:
+            v = int(request.args.get(name, default))
+            return max(1, min(v, hi))
+        except Exception:
+            return default
+
+    try:
+        data = rollup(
+            recent_reviews=_int_arg("recent_reviews", 10, 100),
+            recent_concerns=_int_arg("recent_concerns", 25, 200),
+            window_hours=_int_arg("window_hours", 168, 10000),
+        )
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": f"self_dev rollup failed: {e}"}), 500
+
+
 @app.route("/api/v1/identity")
 def api_identity():
     """Owner / machine / covenant / reddit subs."""

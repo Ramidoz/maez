@@ -312,6 +312,62 @@ def set_concern_status(
 
 # ── summary helpers (for dashboards / cockpit) ────────────────────────
 
+def rollup(
+    *,
+    recent_reviews: int = 10,
+    recent_concerns: int = 25,
+    window_hours: Optional[int] = 168,
+) -> dict:
+    """Dashboard-shaped snapshot for the cockpit.
+
+    Combines stats(), list_reviews(), and list_concerns(status='open')
+    into a single dict the web surface can consume without three
+    separate round-trips. Each component fails independently — a
+    broken DB read on one field returns [] / {} for that field and
+    does not break the rest of the payload.
+    """
+    out: dict = {
+        "generated_at": time.time(),
+        "window_hours": window_hours,
+    }
+    try:
+        out["stats"] = stats(window_hours=window_hours)
+    except Exception as e:
+        out["stats"] = {"error": str(e)}
+    try:
+        reviews = list_reviews(limit=recent_reviews)
+        out["recent_reviews"] = [
+            {
+                "id": r.id, "ts": r.ts,
+                "target_ref": r.target_ref,
+                "overall": r.overall,
+                "model_used": r.model_used,
+                "input_tokens": r.input_tokens,
+                "output_tokens": r.output_tokens,
+                "caller": r.caller,
+            }
+            for r in reviews
+        ]
+    except Exception as e:
+        out["recent_reviews"] = []
+        out["recent_reviews_error"] = str(e)
+    try:
+        concerns = list_concerns(status="open", limit=recent_concerns)
+        out["open_concerns"] = [
+            {
+                "id": c.id, "review_id": c.review_id,
+                "file": c.file, "line": c.line,
+                "severity": c.severity, "text": c.text,
+                "suggestion": c.suggestion,
+            }
+            for c in concerns
+        ]
+    except Exception as e:
+        out["open_concerns"] = []
+        out["open_concerns_error"] = str(e)
+    return out
+
+
 def stats(*, window_hours: Optional[int] = None) -> dict:
     """High-level usage stats.
 
