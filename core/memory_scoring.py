@@ -367,6 +367,88 @@ def promotion_score(
     return max(0.0, min(1.0, total))
 
 
+# ── stale-specific-number penalty ─────────────────────────────────────
+#
+# 2026-04-22 (recall-loop break): specific numeric claims like
+# "66 uncommitted changes", "69.8% CPU", "three tabs open" go stale
+# within hours because they describe live system state the daemon no
+# longer has evidence for. Without a brake, these memories get pulled
+# back into future cycle contexts via semantic recall, the LLM restates
+# them as current fact, the restatement gets stored, and the loop
+# self-propagates. Observed live: 523 memories mentioning "66" starting
+# from a single one on 2026-04-12, growing for ten days.
+#
+# The brake is a retrieval-time PENALTY (never deletion — Maez's memory
+# is sacred per user memory rule). Memories flagged by the pattern
+# below lose recall weight exponentially with age, so fresh numeric
+# claims still surface normally while days-old ones sink.
+#
+# This is a staleness penalty, not a truth check — a memory that says
+# "the partition is 65%" may still be accurate, but if it was last
+# recalled 8 days ago the daemon shouldn't quote that number as if it
+# just looked at disk. It should go re-observe.
+
+# Patterns that indicate a specific live-state numeric claim.
+# Deliberately narrow: we want false-negatives (miss some stale claims)
+# over false-positives (downweight legitimate stable facts like
+# "Rohit has 2 repos" or "Maez uses 32k ctx" which are configuration,
+# not live state).
+_STALE_NUMBER_PATTERNS = [
+    # "66 uncommitted", "66 uncommitted files", "66 uncommitted changes"
+    re.compile(r"\b\d+\s+uncommitted\b", re.IGNORECASE),
+    # "66 changes in", "3 staged changes"
+    re.compile(r"\b\d+\s+(?:staged\s+)?changes?\s+(?:in|to|pending)\b", re.IGNORECASE),
+    # "69.8% CPU", "85% memory", "65.6% capacity", "root at 70%"
+    re.compile(r"\b\d{1,3}(?:\.\d+)?%\s+(?:cpu|memory|ram|disk|capacity|full|utilization|usage)\b", re.IGNORECASE),
+    re.compile(r"\b(?:cpu|memory|ram|disk|partition|root)\s+(?:at|is|remains?\s+at|sits?\s+at)\s+\d{1,3}(?:\.\d+)?%", re.IGNORECASE),
+    # "138% CPU spike", "400ms latency"
+    re.compile(r"\b\d+(?:\.\d+)?%\s+(?:cpu|memory|ram)\s+spike\b", re.IGNORECASE),
+    # "load average of 2.5", "load of 2.5"
+    re.compile(r"\bload\s+(?:average\s+)?of\s+\d+(?:\.\d+)?\b", re.IGNORECASE),
+    # "running for 3h 14m", "uptime of 7 days"
+    re.compile(r"\buptime\s+of\s+\d+\s+(?:day|hour|minute)s?\b", re.IGNORECASE),
+]
+
+# Staleness half-life for a stale-number memory. After this many hours,
+# the penalty has taken half the remaining weight. Chosen to match the
+# observation-window cadence: 24h is the longest a system-state numeric
+# claim stays remotely plausible before it needs re-grounding.
+_STALE_NUMBER_HALF_LIFE_HOURS = 24.0
+
+# Floor — a very old stale-number memory still gets a tiny weight, not
+# zero, so it can surface if it's the only match. Keeps memory sacred.
+_STALE_NUMBER_MIN_WEIGHT = 0.05
+
+
+def has_stale_number_claim(content: str) -> bool:
+    """True if the content matches any pattern that indicates a specific
+    live-state numeric claim (CPU %, uncommitted count, etc)."""
+    if not content or not isinstance(content, str):
+        return False
+    return any(p.search(content) for p in _STALE_NUMBER_PATTERNS)
+
+
+def stale_number_weight(content: str, *, age_hours: float) -> float:
+    """Return a recall-weight multiplier in [_MIN, 1.0] for a memory.
+
+    - Non-matching content → 1.0 (no penalty).
+    - Matching content, fresh (age ≤ 0) → 1.0.
+    - Matching content decays exponentially with age; half-life configured
+      above. Never falls below _STALE_NUMBER_MIN_WEIGHT.
+
+    The scaling is intentionally independent of promotion_score's recency
+    factor: promotion is about long-term consolidation; this is about
+    breaking a specific recall-loop failure mode and operates on a
+    faster timescale.
+    """
+    if not has_stale_number_claim(content):
+        return 1.0
+    if age_hours <= 0:
+        return 1.0
+    decay = math.exp(-age_hours * math.log(2.0) / _STALE_NUMBER_HALF_LIFE_HOURS)
+    return max(_STALE_NUMBER_MIN_WEIGHT, decay)
+
+
 # ── diagnostics ───────────────────────────────────────────────────────
 
 def _diag_db_path() -> Path:

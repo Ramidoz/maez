@@ -2458,15 +2458,25 @@ class MaezDaemon:
             logger.error("Cannot reach LLM backend or model %s — aborting.", MODEL)
             self._remove_pid()
             sys.exit(1)
-        # Session 11x: MAEZ_LLM_BACKEND has been 'llamacpp' since 11p. The
-        # legacy "Model gemma4:26b confirmed available" log string was
-        # factually wrong for llama.cpp runs. llm_client ignores the model
-        # identifier for llamacpp (it uses the model the server was started
-        # with — gemma-4-26B-A4B Q4_K_M with merged LoRA as of 2026-04-12)
-        # so this log message is cosmetic only. Keep it honest.
+        # 2026-04-22: brain identity now comes from core.model_config
+        # (/etc/maez/model.env), not a hardcoded string. Keeps this log
+        # line honest as the primary model rotates. llm_client ignores
+        # the model identifier for llamacpp — it uses the model the
+        # server was started with — so this is cosmetic only, but a
+        # wrong cosmetic is worse than no cosmetic.
         _backend = os.environ.get('MAEZ_LLM_BACKEND', 'ollama').lower()
         if _backend == 'llamacpp':
-            logger.info("Runtime brain confirmed: gemma-4-26B-A4B (Q4_K_M, merged LoRA) via llama.cpp")
+            try:
+                from core.model_config import (
+                    PRIMARY_MODEL as _pm,
+                    PRIMARY_BASE_URL as _pb,
+                )
+                logger.info(
+                    "Runtime brain confirmed: %s via llama.cpp (%s)",
+                    _pm, _pb,
+                )
+            except Exception as _mc_e:
+                logger.info("Runtime brain confirmed: <model_config unavailable: %s>", _mc_e)
         else:
             logger.info("Model %s confirmed available.", MODEL)
 

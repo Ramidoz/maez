@@ -49,6 +49,132 @@ _topic_router = TopicRouter()
 MODEL = "gemma4:26b"
 SOUL_PATH = Path("/home/rohit/maez/config/soul.md")
 
+# Token budget for the consolidation prompt. Leaves room for the soul
+# system prompt (~1500 tokens) and response (~4096 tokens) inside the
+# primary model's 32k context. Rough char→token ratio of 4 is used
+# throughout (conservative — real ratio on English + code is ~3.5).
+_CONSOLIDATE_TOKEN_BUDGET = 24000
+_CHARS_PER_TOKEN = 4
+_CONSOLIDATE_CHAR_BUDGET = _CONSOLIDATE_TOKEN_BUDGET * _CHARS_PER_TOKEN
+
+_CONSOLIDATE_INSTRUCTIONS = (
+    "You are Maez performing your nightly memory consolidation.\n"
+    "Below are all your observations and exchanges from the last 24 hours.\n"
+    "Distill them into a meaningful daily summary covering:\n"
+    "- Key observations about system state and patterns\n"
+    "- Any anomalies or notable events\n"
+    "- Important interactions with the owner\n"
+    "- Trends you noticed (resource usage, timing patterns, etc)\n"
+    "- Anything that should inform future reasoning\n\n"
+    "Be concise but complete. This summary replaces the raw entries\n"
+    "in your active reasoning context.\n\n"
+)
+
+
+def _consolidate_with_chunking(*, memory_texts: list[str], soul: str,
+                               logger_: logging.Logger) -> str | None:
+    """Map-reduce consolidation that fits any number of memories into the
+    primary model's context. Used by MemoryManager.consolidate_daily().
+
+    Single-shot when the full block fits — preserves voice and detail
+    on normal days. Chunks only when necessary, then reduces chunk-
+    summaries into one final consolidation.
+
+    Returns the final summary string, or None on total failure.
+    """
+    from core import llm_client as _llm_client
+
+    raw_block = "\n\n".join(memory_texts)
+
+    def _do_summary(block: str, label: str) -> str | None:
+        prompt = (
+            _CONSOLIDATE_INSTRUCTIONS
+            + f"--- Raw memories ({label}) ---\n\n{block}"
+        )
+        try:
+            response = _llm_client.chat(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": soul},
+                    {"role": "user", "content": prompt},
+                ],
+                options={"temperature": 0.3, "num_predict": 4096},
+            )
+            out = (response.message.content or "").strip()
+            return out or None
+        except Exception as e:
+            logger_.error("Daily consolidation failed (%s): %s", label, e)
+            return None
+
+    # Single-shot fast path — prompt fits, run as before.
+    if len(raw_block) <= _CONSOLIDATE_CHAR_BUDGET:
+        return _do_summary(raw_block, f"{len(memory_texts)} entries")
+
+    # Map: split into char-budget-sized chunks at memory boundaries.
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    current_len = 0
+    for entry in memory_texts:
+        entry_len = len(entry) + 2  # "\n\n" separator
+        if current and current_len + entry_len > _CONSOLIDATE_CHAR_BUDGET:
+            chunks.append(current)
+            current = [entry]
+            current_len = entry_len
+        else:
+            current.append(entry)
+            current_len += entry_len
+    if current:
+        chunks.append(current)
+
+    logger_.info(
+        "Daily consolidation: prompt exceeds ctx (%d chars) — chunking "
+        "into %d sub-batches",
+        len(raw_block), len(chunks),
+    )
+
+    sub_summaries: list[str] = []
+    for i, chunk in enumerate(chunks, 1):
+        block = "\n\n".join(chunk)
+        label = f"part {i}/{len(chunks)} — {len(chunk)} entries"
+        s = _do_summary(block, label)
+        if s:
+            sub_summaries.append(s)
+        else:
+            logger_.warning("Daily consolidation: chunk %d/%d failed; "
+                            "continuing with %d successful sub-summaries",
+                            i, len(chunks), len(sub_summaries))
+
+    if not sub_summaries:
+        logger_.error("Daily consolidation: all %d chunks failed",
+                      len(chunks))
+        return None
+
+    # Reduce: summarize the sub-summaries into a single daily consolidation.
+    # If only one sub-summary succeeded, skip the reduce step — it's
+    # already a valid daily summary.
+    if len(sub_summaries) == 1:
+        return sub_summaries[0]
+
+    joined = "\n\n---\n\n".join(
+        f"[Sub-summary {i}/{len(sub_summaries)}]\n{s}"
+        for i, s in enumerate(sub_summaries, 1)
+    )
+    if len(joined) > _CONSOLIDATE_CHAR_BUDGET:
+        # Very rare: even the sub-summaries don't fit. Take the prefix
+        # that does and note the truncation.
+        joined = joined[:_CONSOLIDATE_CHAR_BUDGET]
+        logger_.warning("Daily consolidation: reduce-input truncated to "
+                        "%d chars", len(joined))
+
+    reduce_block = (
+        "The following are sub-summaries from today's memories, produced "
+        "by consolidating each time-chunk separately. Merge them into a "
+        "single coherent daily summary. Preserve specific observations "
+        "and trends; drop duplication between chunks.\n\n" + joined
+    )
+    final = _do_summary(reduce_block, "reduce pass")
+    return final or sub_summaries[-1]
+
 
 def _make_client(subdir: str) -> chromadb.PersistentClient:
     path = BASE_DB / subdir
@@ -57,6 +183,32 @@ def _make_client(subdir: str) -> chromadb.PersistentClient:
         path=str(path),
         settings=Settings(anonymized_telemetry=False),
     )
+
+
+def _now_seconds() -> float:
+    """Unix-seconds wrapper used by _query_collection's stale-number
+    reorder. Tiny helper — keeps that block readable."""
+    import time as _t
+    return _t.time()
+
+
+def _age_hours_from_iso(raw_ts, now_s: float) -> float:
+    """Return age in hours from an ISO-8601 timestamp, or 0.0 if
+    unparseable. Callers use this as a recall-decay input, so returning
+    0.0 on parse failure is the safe default (no penalty applied)."""
+    if not raw_ts:
+        return 0.0
+    try:
+        s = str(raw_ts).strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        ts = datetime.fromisoformat(s)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        delta = now_s - ts.timestamp()
+        return max(0.0, delta / 3600.0)
+    except (ValueError, TypeError, OverflowError):
+        return 0.0
 
 
 def _humanize_age(raw_ts, now: datetime) -> str:
@@ -322,39 +474,18 @@ class MemoryManager:
         except FileNotFoundError:
             soul = "You are Maez."
 
-        prompt = (
-            f"You are Maez performing your nightly memory consolidation.\n"
-            f"Below are all your observations and exchanges from the last 24 hours.\n"
-            f"Distill them into a meaningful daily summary covering:\n"
-            f"- Key observations about system state and patterns\n"
-            f"- Any anomalies or notable events\n"
-            f"- Important interactions with the owner\n"
-            f"- Trends you noticed (resource usage, timing patterns, etc)\n"
-            f"- Anything that should inform future reasoning\n\n"
-            f"Be concise but complete. This summary replaces the raw entries\n"
-            f"in your active reasoning context.\n\n"
-            f"--- Raw memories ({len(recent)} entries) ---\n\n"
-            f"{raw_block}"
+        # 2026-04-22: chunked consolidation.
+        # Prior behavior packed all `recent` into one prompt. On days with
+        # ~500 verbose memories the prompt hit 68k tokens vs the 32k ctx
+        # window and the whole consolidation failed with a 400 from
+        # llama-server. Now: if the packed prompt would exceed the budget,
+        # split into sub-batches, summarize each (map), then summarize the
+        # summaries (reduce). Single-shot path still preferred when it fits
+        # so voice and detail don't degrade on normal days.
+        summary = _consolidate_with_chunking(
+            memory_texts=memory_texts, soul=soul, logger_=logger,
         )
-
-        try:
-            # Session 11r: route through llm_client so this 3am consolidation
-            # path honors MAEZ_LLM_BACKEND. Missed in 11p batch migration.
-            from core import llm_client as _llm_client
-            response = _llm_client.chat(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": soul},
-                    {"role": "user", "content": prompt},
-                ],
-                options={"temperature": 0.3, "num_predict": 4096},
-            )
-            summary = (response.message.content or "").strip()
-            if not summary:
-                logger.warning("Daily consolidation: model returned empty summary")
-                return None
-        except Exception as e:
-            logger.error("Daily consolidation failed: %s", e)
+        if not summary:
             return None
 
         # Store the consolidation
@@ -478,8 +609,41 @@ class MemoryManager:
                 "metadata": meta,
                 "distance": results["distances"][0][i] if results.get("distances") else None,
             })
-            if len(memories) >= n:
-                break
+            # Don't early-break here — we need the full over-fetch pool so
+            # the stale-number reorder below has material to reorder
+            # against. We truncate to n AFTER reordering.
+
+        # 2026-04-22 (recall-loop break): reorder stale live-state numeric
+        # claims to the tail by weighting distance with age-decay. A memory
+        # quoting "66 uncommitted changes" from 10 days ago should not
+        # outrank a fresh ambient observation on the same topic.
+        # Weighting is applied only when a matching memory exists; pure
+        # semantic order is preserved otherwise. Never deletes.
+        try:
+            from core.memory_scoring import (
+                has_stale_number_claim as _has_stale,
+                stale_number_weight as _stale_w,
+            )
+            now_s = _now_seconds()
+            need_reorder = any(
+                _has_stale(m["content"]) for m in memories
+            )
+            if need_reorder:
+                def _score(m: dict) -> float:
+                    d = m.get("distance")
+                    base = float(d) if isinstance(d, (int, float)) else 1.0
+                    ts = (m.get("metadata") or {}).get("timestamp", "")
+                    age_h = _age_hours_from_iso(ts, now_s)
+                    w = _stale_w(m["content"], age_hours=age_h)
+                    # Lower distance = better. Dividing by w (≤1) *increases*
+                    # the effective distance for stale-number memories,
+                    # pushing them down without removing them.
+                    return base / max(w, 1e-6)
+                memories.sort(key=_score)
+        except Exception as _e:
+            logger.debug("stale-number reorder skipped (ignored): %s", _e)
+
+        memories = memories[:n]
 
         # Record each surfaced memory's recall in the sidecar stats DB.
         # Observational — feeds promotion_score() but does not yet

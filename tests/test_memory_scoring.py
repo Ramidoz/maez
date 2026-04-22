@@ -222,5 +222,63 @@ class EndToEnd(unittest.TestCase):
                            f"score didn't accumulate: {initial:.3f} → {final:.3f}")
 
 
+class StaleNumberClaim(unittest.TestCase):
+    """Stale specific-number recall penalty. Added 2026-04-22 to break
+    the recall loop where memories quoting live-state numbers (CPU %,
+    uncommitted count) get repeatedly surfaced and restated."""
+
+    def test_patterns_match_real_fabrications(self):
+        # These are actual strings seen in the raw memory store as of
+        # 2026-04-22 — all caught at some point as ungrounded claims.
+        for s in [
+            "you have 66 uncommitted changes in the `maez` repo",
+            "66 uncommitted files in maez",
+            "The partition remains at 65.6% capacity, a persistent trend",
+            "Root disk at 69.8% and climbing",
+            "138% CPU spike from a python3 process",
+            "memory is at 72% utilization right now",
+            "load average of 2.5 over the last 5 minutes",
+        ]:
+            self.assertTrue(ms.has_stale_number_claim(s),
+                            f"should have matched: {s!r}")
+
+    def test_patterns_do_not_match_legit_numbers(self):
+        for s in [
+            "Rohit has 2 repos open on his desk",
+            "Maez runs with 32k ctx",
+            "I noticed you stepped away for 30 minutes",  # presence gap
+            "the grandmother case is the origin story",
+            "cycle 1234 completed",  # cycle counter, not live state
+            "",
+            None or "",
+        ]:
+            self.assertFalse(ms.has_stale_number_claim(s),
+                             f"should NOT have matched: {s!r}")
+
+    def test_weight_at_zero_age_is_one(self):
+        self.assertEqual(
+            ms.stale_number_weight("66 uncommitted changes", age_hours=0),
+            1.0,
+        )
+
+    def test_weight_halves_at_half_life(self):
+        w = ms.stale_number_weight(
+            "66 uncommitted changes",
+            age_hours=ms._STALE_NUMBER_HALF_LIFE_HOURS,
+        )
+        self.assertAlmostEqual(w, 0.5, places=3)
+
+    def test_weight_floors_for_very_old(self):
+        w = ms.stale_number_weight("66 uncommitted", age_hours=10000)
+        self.assertEqual(w, ms._STALE_NUMBER_MIN_WEIGHT)
+
+    def test_clean_content_always_weight_one(self):
+        for age in [0, 1, 24, 1000]:
+            self.assertEqual(
+                ms.stale_number_weight("the grandmother case", age_hours=age),
+                1.0,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
