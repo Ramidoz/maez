@@ -120,7 +120,14 @@ def _consolidate_with_chunking(*, memory_texts: list[str], soul: str,
     chunks: list[list[str]] = []
     current: list[str] = []
     current_len = 0
-    oversize_cap = _CONSOLIDATE_CHAR_BUDGET - 2  # leave room for "\n\n"
+    # self-dev review on db71e87 (concern #1) flagged: the truncation
+    # suffix is itself 26 chars, so `entry[:budget-2] + suffix` ends up
+    # 24 chars OVER the budget ceiling. 24/96000 is harmless in
+    # practice but the comment claimed "clipped to budget-minus-
+    # separator" and the code did not. Pre-subtract the suffix length
+    # so the invariant actually holds.
+    _TRUNC_SUFFIX = "\n...[truncated by chunker]"
+    oversize_cap = _CONSOLIDATE_CHAR_BUDGET - 2 - len(_TRUNC_SUFFIX)
     for entry in memory_texts:
         if len(entry) > oversize_cap:
             logger_.warning(
@@ -128,7 +135,7 @@ def _consolidate_with_chunking(*, memory_texts: list[str], soul: str,
                 "(%d > %d chars) — truncating to fit. Head: %r",
                 len(entry), oversize_cap, entry[:120],
             )
-            entry = entry[:oversize_cap] + "\n...[truncated by chunker]"
+            entry = entry[:oversize_cap] + _TRUNC_SUFFIX
         entry_len = len(entry) + 2  # "\n\n" separator
         if current and current_len + entry_len > _CONSOLIDATE_CHAR_BUDGET:
             chunks.append(current)
