@@ -96,6 +96,44 @@ class RetrievalWiring(_Base):
         )
 
 
+class CardRejectedProducer(_Base):
+    """Rejecting a card via decision_pipeline._on_deny should produce
+    a card_rejected row in consequence_memory."""
+
+    def test_deny_records_rejection(self):
+        """Direct producer smoke — call consequence_memory.record_event
+        the way decision_pipeline does, verify retrieval."""
+        from core import consequence_memory as cm
+        cm.record_event(
+            kind=cm.CLASS_CARD_REJECTED,
+            context="action=run_shell cmd='sudo apt install telegram-cli'",
+            outcome="rohit said: I don't want telegram-cli installed",
+            surface="decision_pipeline",
+            tags=["run_shell", "sudo"],
+            extra={"request_id": "test-req-abc123"},
+        )
+        rows = self.cm.recent(kind=self.cm.CLASS_CARD_REJECTED)
+        self.assertEqual(len(rows), 1)
+        self.assertIn("sudo apt install", rows[0].context)
+        self.assertIn("telegram-cli", rows[0].outcome)
+
+    def test_rejected_surfaces_for_similar_future_request(self):
+        """The whole point: later, when planner considers a similar
+        proposal, retrieval should find the rejection."""
+        from core import consequence_memory as cm
+        cm.record_event(
+            kind=cm.CLASS_CARD_REJECTED,
+            context="action=run_shell cmd='sudo apt install telegram-cli'",
+            outcome="rohit said: I don't want telegram-cli installed",
+            surface="decision_pipeline",
+        )
+        hits = cm.relevant(
+            context_snippet="install telegram-cli for me please",
+        )
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].kind, "card_rejected")
+
+
 class MarkHeededRoundtrip(_Base):
     def test_heeded_flips_and_persists(self):
         from core.brain_loop import _record_tool_failure

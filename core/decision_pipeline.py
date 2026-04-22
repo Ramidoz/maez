@@ -43,16 +43,14 @@ Async model:
 
 from __future__ import annotations
 
-import json
 import os
-import subprocess
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from core.action_classifier import classify_action, ClassificationResult, IntentCategory
+from core.action_classifier import classify_action, ClassificationResult
 from core.audit import audit_action, AuditVerdict, Decision
 from core.audit_log import AuditLog
 from core.injection_patterns import scan as scan_injection, InjectionMatch, highest_severity
@@ -61,7 +59,6 @@ from core.pending_cards import (
     CardStoreError,
     PendingCardStore,
     CardStatus,
-    compute_state_hash,
 )
 
 
@@ -284,6 +281,27 @@ class DecisionPipeline:
                 injection_matches=[],
             )
 
+        # Fabricated-target pre-check — catches systemctl write verbs
+        # against unit names that don't exist on this system. Added
+        # 2026-04-20 after `maez-llm.service` was fabricated and the
+        # card pipeline queued `systemctl start maez-llm.service`
+        # with no way to know the unit was invented. See
+        # core/owner_trust.cmd_validity_error.
+        if action == "run_shell":
+            try:
+                from core.owner_trust import cmd_validity_error
+                _cmd_str = params.get("cmd", "") if isinstance(params, dict) else ""
+                _err = cmd_validity_error(_cmd_str)
+                if _err:
+                    return PipelineResult(
+                        status=PipelineStatus.REFUSED_INVALID,
+                        message=_err,
+                        classification=None,
+                        injection_matches=[],
+                    )
+            except Exception:
+                pass
+
         # ---- Step 1: classification ----
         classification = classify_action(action, params)
 
@@ -386,6 +404,56 @@ class DecisionPipeline:
         is_lane_0 = (
             classification is not None and classification.lane == 0
         ) or action in self._LANE_0_ACTIONS
+
+        # Approval-session shortcut: if the user has granted a blanket
+        # session (e.g. "reading is fine") and this is a read-safe
+        # run_shell, promote it to Lane 0 so the user doesn't see the
+        # per-command card that they just explicitly waived.
+        # See core/approval_sessions.py.
+        if (
+            not is_lane_0
+            and action == "run_shell"
+            and verdict.decision == Decision.APPROVE
+        ):
+            try:
+                from core import approval_sessions as _approvals
+                cmd = (params or {}).get("cmd", "") if isinstance(params, dict) else ""
+                if (_approvals.is_active("read_safe")
+                        and _approvals.is_read_safe_cmd(cmd)):
+                    is_lane_0 = True
+            except Exception:
+                pass
+
+        # Owner-trust lane-flip: per `project_bond_styles_dimension.md`,
+        # Rohit's Maez is liberal — friend-with-keys, inline-default for
+        # non-risky acts. Any destructive / sudo / package-mgmt /
+        # network-write / self-mod command is still routed to a card.
+        # Covenant / audit / will-I all already ran and don't change;
+        # this is purely the UX policy layer. See core/owner_trust.py.
+        if (
+            not is_lane_0
+            and verdict.decision == Decision.APPROVE
+        ):
+            try:
+                from core import owner_trust as _owner_trust
+                should_inline, reason = _owner_trust.should_run_inline(
+                    user_id, action, params,
+                )
+                if should_inline:
+                    is_lane_0 = True
+                    # Log the flip for auditability — the lane decision
+                    # was overridden by trust policy, not by the classifier.
+                    try:
+                        import logging as _logging
+                        _logging.getLogger(__name__).info(
+                            "owner_trust lane-flip: user=%s action=%s reason=%s",
+                            user_id, action, reason,
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
         if verdict.decision == Decision.APPROVE and is_lane_0:
             # A-core #8: will-I check before Lane 0 inline execution.
             will_refuse = self._will_i_check(
@@ -451,7 +519,6 @@ class DecisionPipeline:
         if verdict.decision == Decision.ESCALATE:
             try:
                 from skills.self_mod_dialog import (
-                    SelfModDialogStore,
                     open_dialog_for_card,
                 )
                 dialog_store = self._get_dialog_store()
@@ -648,42 +715,35 @@ class DecisionPipeline:
         if not open_cards:
             return None
 
-        # A-core #4b: if any open card is in PENDING_DIALOG state
-        # (Lane 3 self-mod), route the reply through the self-mod
-        # dialog handler BEFORE the normal card-reply classifier.
-        # Self-mod dialogs are free-text conversations, not yes/no
-        # card approvals — a "yes, but..." reply must flow to the
-        # dialog engine's whole-reply terminal matcher, not to the
-        # card reply classifier's APPROVE match.
+        # A-core #4b: route to self-mod dialog ONLY IF the newest open
+        # card is PENDING_DIALOG. If a regular APPROVE card was queued
+        # AFTER the dialog opened, "Yes" approves the newer card —
+        # matches user expectation ("the thing I just proposed").
         #
-        # We pick the most recent PENDING_DIALOG card. If multiple
-        # are open (rare), newest wins.
-        if text:
-            # Filter to PENDING_DIALOG cards only. A PENDING_DIALOG
-            # card is one whose audit verdict was ESCALATE (Lane 3)
-            # — at creation time the audit_decision was stored on
-            # the card as "ESCALATE" and lane as "3". Check both
-            # to survive any future drift in one field or the other.
-            pending_dialog_cards = [
-                c for c in open_cards
-                if (getattr(c, "audit_decision", None) == "ESCALATE")
-                or (str(getattr(c, "lane", "")) == "3")
-            ]
-            if pending_dialog_cards:
-                pending_dialog_cards.sort(
-                    key=lambda c: getattr(c, "created_at", 0.0), reverse=True
-                )
-                dialog_card = pending_dialog_cards[0]
+        # Previous version always won for PENDING_DIALOG regardless of
+        # age, which caused the cap_reached silent-pause episode:
+        # a stale dialog ate every "Yes" meant for newer cards.
+        if text and open_cards:
+            sorted_cards = sorted(
+                open_cards,
+                key=lambda c: getattr(c, "created_at", 0.0),
+                reverse=True,
+            )
+            newest = sorted_cards[0]
+            newest_is_dialog = (
+                getattr(newest, "audit_decision", None) == "ESCALATE"
+                or str(getattr(newest, "lane", "")) == "3"
+            )
+            if newest_is_dialog:
                 dialog_result = self._handle_dialog_reply_for_card(
-                    card=dialog_card,
+                    card=newest,
                     text=text,
                     user_id=user_id,
                 )
                 if dialog_result is not None:
                     return dialog_result
-                # If the dialog reply was 'unrelated' (dialog is
-                # already terminal or has no linked dialog), fall
-                # through to the normal card reply classifier.
+                # If 'unrelated' (dialog terminal or no linked dialog),
+                # fall through to the normal card reply classifier.
 
         # If the reply is threaded to a specific card message, use that
         explicit_target = None
@@ -877,6 +937,37 @@ class DecisionPipeline:
             if card.audit_request_id:
                 self.audit_log.record_outcome(card.audit_request_id, outcome="approved_and_failed", notes=err[:400])
 
+        # If this card was attached to a wondering, fill the deferred probe
+        # with real output and return the wondering to active state. Failure
+        # here must never break card resolution.
+        try:
+            wid = (card.params or {}).get("wondering_id") if card.params else None
+            if wid:
+                from core.wonderings import (
+                    get_store as _w_store, validate_learning,
+                    LEARNING_SYNTH_BLOCKED,
+                )
+                # No second LLM synthesis in the pipeline — store the raw
+                # outcome as the learning if it can be evidence-tied;
+                # otherwise the synthesis-blocked sentinel. The next daemon
+                # cycle can propose a follow-up probe.
+                rc = 0 if ok else 1
+                candidate = (out or err or "").strip().splitlines()
+                candidate = candidate[0].strip()[:200] if candidate else ""
+                tied = bool(candidate) and validate_learning(
+                    candidate, out, err, rc,
+                )
+                learning = candidate if tied else LEARNING_SYNTH_BLOCKED
+                _w_store().unblock_from_card(
+                    int(wid), stdout=out, stderr=err, rc=rc,
+                    learning=learning, evidence_tied=tied,
+                )
+        except Exception as _e:
+            import logging
+            logging.getLogger("maez.wonderings").debug(
+                "unblock_from_card on approval failed: %s", _e,
+            )
+
         if self.renderer:
             self.renderer.send_resolution(card)
 
@@ -898,6 +989,45 @@ class DecisionPipeline:
         )
         if card.audit_request_id:
             self.audit_log.record_outcome(card.audit_request_id, outcome="rohit_rejected", notes=cls.reasoning or "")
+        # Card rejection is a real residue event — Maez proposed
+        # something and the user declined. Functional state, not
+        # performance; feeds into the next turn's tone. Silent on
+        # failure. See core/inner_residue.py.
+        try:
+            from core import inner_residue as _residue
+            _residue.record(
+                kind="card_rejected",
+                context={"action": getattr(card, "action", None),
+                         "request_id": card.request_id},
+            )
+        except Exception:
+            pass
+
+        # Also record to consequence_memory so future planner calls
+        # can retrieve similar past rejections via token-overlap and
+        # avoid re-proposing the same pattern. inner_residue is
+        # transient (30-min half-life); consequence_memory persists.
+        # The two complement rather than duplicate.
+        try:
+            from core import consequence_memory as _cm
+            import json as _json
+            _action = getattr(card, "action", "unknown")
+            _params = getattr(card, "params", {}) or {}
+            _cmd = _params.get("cmd") if isinstance(_params, dict) else ""
+            _context = f"action={_action} cmd={_cmd!r}" if _cmd else f"action={_action}"
+            _cm.record_event(
+                kind=_cm.CLASS_CARD_REJECTED,
+                context=_context[:400],
+                outcome=cls.reasoning[:300] if cls.reasoning else "denied",
+                feedback="",  # open for future enrichment
+                surface="decision_pipeline",
+                tags=[_action] + ([_cmd.strip().split()[0]]
+                                    if _cmd and _cmd.strip().split()
+                                    else []),
+                extra={"request_id": card.request_id},
+            )
+        except Exception:
+            pass
         if self.renderer:
             self.renderer.send_resolution(card)
         return PipelineResult(
@@ -982,7 +1112,6 @@ class DecisionPipeline:
 if __name__ == "__main__":
     import tempfile
     from dataclasses import dataclass as _dc
-    from unittest import mock
 
     print("=== decision_pipeline self-test ===\n")
 
