@@ -880,6 +880,33 @@ def run_brain_loop(
             except Exception as _re_exc:
                 logger.debug("retry-context lookup failed: %s", _re_exc)
 
+        # Pull relevant past mistakes from consequence_memory so the
+        # planning model sees "we've tried something like this and it
+        # broke" BEFORE it proposes a tool call. Complements
+        # _retry_context (which is scoped to the immediate last
+        # failure on retry): this block widens to anything similar
+        # within the 7-day window.
+        _consequences_block = ""
+        try:
+            from core import consequence_memory as _cm
+            # Use the user's current message as the retrieval query.
+            # Fast, offline — token-overlap against stored contexts.
+            _similar = _cm.relevant(
+                context_snippet=user_text,
+                limit=3,
+                window_hours=168,
+            )
+            if _similar:
+                _block = _cm.format_for_prompt(_similar, max_events=3)
+                if _block:
+                    # Mark heeded — we're about to surface these to
+                    # the planner, which is the whole point.
+                    for _e in _similar:
+                        _cm.mark_heeded(_e.id)
+                    _consequences_block = "\n" + _block + "\n"
+        except Exception as _cm_exc:
+            logger.debug("consequence_memory lookup failed: %s", _cm_exc)
+
         # Build RECENT CONVERSATION block from chat_history so the
         # planning model sees what "it", "that", "what did you find"
         # refer to. Without this block the planner operates on the
@@ -909,7 +936,8 @@ def run_brain_loop(
                 _history_block = "\n".join(_parts) + "\n\n"
 
         history = [
-            f"{_history_block}the owner just said: {user_text!r}{_retry_context}\n\n{_TOOL_MANIFEST}\n\nBegin."
+            f"{_history_block}the owner just said: {user_text!r}"
+            f"{_retry_context}{_consequences_block}\n\n{_TOOL_MANIFEST}\n\nBegin."
         ]
     # Fallback to a no-op turn if the caller didn't provide one, so
     # every turn.* call below can dispatch unconditionally.
