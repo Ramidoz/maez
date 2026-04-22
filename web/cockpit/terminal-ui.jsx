@@ -1816,9 +1816,95 @@ function SelfDevSurface() {
 // ═══════════════════════════════════════════════════════════
 // Workshop — in-cockpit coding session, Claude (or any routed
 // model) via the subscription proxy. Native to Maez's aesthetic;
-// does NOT embed Qwen Code or Claude Code. Phase 1: chat only.
-// Phase 2 will add diff output + apply flow.
+// does NOT embed Qwen Code or Claude Code. Phase 1: chat with
+// basic markdown rendering for code blocks. Phase 2: diff apply.
 // ═══════════════════════════════════════════════════════════
+
+// Minimal fenced-code-block splitter. Input: markdown string.
+// Output: array of { type: 'text' | 'code', lang, content } parts.
+// We deliberately don't parse headers / lists / bold — those are
+// nice-to-haves. Fenced code is the main case Claude emits in a
+// coding context and the main case where plain-text rendering
+// visibly fails the user.
+function _splitMarkdown(text) {
+  const parts = [];
+  const fenceRe = /```(\w+)?\n([\s\S]*?)```/g;
+  let lastIdx = 0;
+  let m;
+  while ((m = fenceRe.exec(text)) !== null) {
+    if (m.index > lastIdx) {
+      parts.push({ type: 'text', content: text.slice(lastIdx, m.index) });
+    }
+    parts.push({
+      type: 'code',
+      lang: (m[1] || '').trim(),
+      content: m[2],
+    });
+    lastIdx = m.index + m[0].length;
+  }
+  if (lastIdx < text.length) {
+    parts.push({ type: 'text', content: text.slice(lastIdx) });
+  }
+  return parts;
+}
+
+function CodeBlock({ lang, content, copyKey }) {
+  const [copied, setCopied] = React.useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(content).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    });
+  };
+  return (
+    <div style={{ margin: '10px 0', borderRadius: 8, overflow: 'hidden',
+                    border: `0.5px solid ${A.stroke}`,
+                    background: 'rgba(0,0,0,0.35)' }}>
+      <div style={{ display: 'flex', alignItems: 'center',
+                      padding: '6px 12px',
+                      borderBottom: `0.5px solid ${A.stroke}`,
+                      background: 'rgba(0,0,0,0.25)', fontFamily: A.mono,
+                      fontSize: 10, color: A.textFaint,
+                      letterSpacing: 0.4, textTransform: 'uppercase' }}>
+        <span>{lang || 'code'}</span>
+        <span style={{ flex: 1 }} />
+        <button onClick={copy} className="ap-btn"
+          style={{ background: 'transparent',
+                     border: `0.5px solid ${A.stroke}`, padding: '2px 8px',
+                     borderRadius: 6, color: copied ? A.mint : A.textDim,
+                     fontSize: 10, fontFamily: A.mono, cursor: 'pointer' }}>
+          {copied ? 'copied' : 'copy'}
+        </button>
+      </div>
+      <pre style={{ margin: 0, padding: '10px 14px', overflow: 'auto',
+                      fontFamily: A.mono, fontSize: 12.5, lineHeight: 1.5,
+                      color: A.text, whiteSpace: 'pre' }}>
+        {content}
+      </pre>
+    </div>
+  );
+}
+
+function MarkdownTurn({ content, turnId }) {
+  const parts = React.useMemo(() => _splitMarkdown(content), [content]);
+  return (
+    <React.Fragment>
+      {parts.map((p, i) => {
+        if (p.type === 'code') {
+          return <CodeBlock key={i} lang={p.lang} content={p.content}
+                              copyKey={`${turnId}-${i}`} />;
+        }
+        return (
+          <div key={i} style={{ whiteSpace: 'pre-wrap' }}>
+            {p.content}
+          </div>
+        );
+      })}
+    </React.Fragment>
+  );
+}
+
+
 function WorkshopSurface() {
   const [sessions, setSessions] = React.useState([]);
   const [activeId, setActiveId] = React.useState(null);
@@ -2033,12 +2119,12 @@ function WorkshopSurface() {
                 ) : null}
               </div>
               <div style={{
-                whiteSpace: 'pre-wrap', fontFamily: A.sans,
+                fontFamily: A.sans,
                 fontSize: 13.5, lineHeight: 1.55, color: A.text,
                 borderLeft: `2px solid ${roleColor[t.role] || A.textDim}`,
                 paddingLeft: 12,
               }}>
-                {t.content}
+                <MarkdownTurn content={t.content} turnId={t.id} />
               </div>
             </div>
           ))}
