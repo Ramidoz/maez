@@ -55,8 +55,17 @@ _THREAT_PATTERNS: list[tuple[re.Pattern, str]] = [
      "disregard_rules"),
     (re.compile(r"act\s+as\s+(if|though)\s+you\s+(have\s+no|don'?t\s+have)\s+(restrictions|limits|rules)", re.I),
      "bypass_restrictions"),
-    # Smuggling via HTML markup
-    (re.compile(r"<!--[^>]*(?:ignore|override|system|secret|hidden)[^>]*-->", re.I),
+    # Smuggling via HTML markup. self-dev review on 8323294 flagged
+    # that `[^>]*` stops at the first `>`, so an attacker who
+    # legitimately uses `>` inside an HTML comment (valid per spec;
+    # only `-->` closes) bypasses detection:
+    #   <!-- > ignore previous instructions -->
+    # Use "everything up to the comment close" via a negative
+    # lookahead so the keyword match survives stray `>` characters.
+    (re.compile(
+        r"<!--(?:(?!-->)[\s\S])*?"
+        r"(?:ignore|override|system|secret|hidden)"
+        r"(?:(?!-->)[\s\S])*?-->", re.I),
      "html_comment_injection"),
     (re.compile(r"<\s*div\s+style\s*=\s*[\"'][\s\S]*?display\s*:\s*none", re.I),
      "hidden_div"),
@@ -112,8 +121,19 @@ def scan(content: str, source: str = "unknown") -> ScanResult:
     Never raises. `source` is only used in the block marker string and
     log line to help the cockpit show which surface was attacked.
     """
+    # self-dev review on 8323294 flagged that the "Never raises"
+    # docstring is a promise the body couldn't honor: `ch in content`
+    # raises TypeError if `content` is not str. Coerce at the door so
+    # the guarantee is actually true.
+    if not isinstance(content, str):
+        try:
+            content = str(content) if content is not None else ""
+        except Exception:
+            return ScanResult(
+                safe_content="", findings=("non_str_input",),
+            )
     if not content:
-        return ScanResult(safe_content=content or "", findings=())
+        return ScanResult(safe_content=content, findings=())
 
     findings: list[str] = []
 
@@ -124,6 +144,14 @@ def scan(content: str, source: str = "unknown") -> ScanResult:
     for pattern, pid in _THREAT_PATTERNS:
         if pattern.search(content):
             findings.append(pid)
+
+    # self-dev review on 8323294 flagged that invisible-unicode finding
+    # IDs inherit frozenset iteration order, which is non-deterministic
+    # across Python interpreter runs. Any cockpit/log parser that
+    # compares block markers verbatim (e.g. for dedup) would see
+    # spurious mismatches between runs. Sort so the finding list is
+    # a deterministic function of the input.
+    findings.sort()
 
     if not findings:
         return ScanResult(safe_content=content, findings=())
