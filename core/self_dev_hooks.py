@@ -223,6 +223,60 @@ def decide(sha: str) -> PolicyDecision:
 
 # ── orchestrator ──────────────────────────────────────────────────────
 
+# Severities that warrant a proactive dev-bot notification. Nits and
+# minors accumulate silently in the concerns queue (queryable on
+# demand); blockers and majors get pushed to Telegram so they reach
+# Rohit's phone within seconds of a commit. Tunable via env.
+_NOTIFY_SEVERITIES = set(
+    os.environ.get(
+        "MAEZ_SELF_DEV_NOTIFY_SEVERITIES", "blocker,major",
+    ).lower().split(",")
+)
+
+
+def _maybe_notify(sha: str, result) -> None:
+    """Send a dev-bot alert if the review surfaced any concern of
+    notify-worthy severity. Fail-closed: any failure logs and
+    returns; does not propagate."""
+    worthy = [
+        c for c in result.concerns
+        if c.severity.lower() in _NOTIFY_SEVERITIES
+    ]
+    if not worthy:
+        return
+    try:
+        from skills.dev_notifier import send_dev
+    except Exception as e:
+        logger.debug("dev_notifier unavailable: %s", e)
+        return
+
+    counts: dict[str, int] = {}
+    for c in worthy:
+        counts[c.severity] = counts.get(c.severity, 0) + 1
+    header = (
+        f"self-dev: {len(worthy)} concern(s) on {sha[:12]} — "
+        + ", ".join(f"{n} {s}" for s, n in counts.items())
+    )
+    # Show up to 3 concerns verbatim; more than that = link to
+    # concerns CLI query so the message doesn't become a wall of text.
+    lines = [header, ""]
+    for c in worthy[:3]:
+        loc = f"{c.file}:{c.line}" if c.line else c.file
+        lines.append(f"[{c.severity}] {loc}")
+        lines.append(f"  {c.text[:300]}")
+        if c.suggestion:
+            lines.append(f"  → {c.suggestion[:200]}")
+        lines.append("")
+    if len(worthy) > 3:
+        lines.append(f"…and {len(worthy) - 3} more. Run:")
+        lines.append("  python -m core.self_dev concerns --status open")
+
+    try:
+        send_dev("\n".join(lines))
+    except Exception as e:
+        logger.warning("dev notify failed: %s", e)
+
+
 def run_post_commit(sha: str, *, caller: str = "self_dev/post-commit") -> int:
     """Called by the git post-commit hook (via `python -m
     core.self_dev_hooks run <sha>`). Returns an exit code; 0 means
@@ -263,6 +317,10 @@ def run_post_commit(sha: str, *, caller: str = "self_dev/post-commit") -> int:
         sha[:12], len(result.concerns), counts,
         result.input_tokens, result.output_tokens,
     )
+    # Proactive alert on notify-worthy concerns. Fires AFTER the
+    # review is persisted, so even if the notification fails the
+    # concerns are still in the queue for later triage.
+    _maybe_notify(sha, result)
     return 0
 
 

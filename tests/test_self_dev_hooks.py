@@ -215,6 +215,92 @@ class RunPostCommitOrchestrator(_PolicyFixture):
         self.assertEqual(rc, 0)  # exits clean
 
 
+class ProactiveNotification(_PolicyFixture):
+    """_maybe_notify fires send_dev when a review produces
+    notify-worthy concerns, stays silent otherwise."""
+
+    def _result(self, concerns):
+        from core.self_dev import ReviewResult
+        return ReviewResult(
+            target_ref="abc123",
+            diff_size_chars=100,
+            overall="test",
+            concerns=concerns,
+            model_used="sonnet",
+            input_tokens=1, output_tokens=1,
+        )
+
+    def test_no_worthy_concerns_does_not_notify(self):
+        from core import self_dev_hooks
+        from core.self_dev import Concern
+        with mock.patch("skills.dev_notifier.send_dev") as m_send:
+            self_dev_hooks._maybe_notify(
+                self.VALID_SHA,
+                self._result([
+                    Concern(file="a", line=1, severity="nit", text="n"),
+                    Concern(file="a", line=2, severity="minor", text="m"),
+                ]),
+            )
+        m_send.assert_not_called()
+
+    def test_blocker_triggers_notification(self):
+        from core import self_dev_hooks
+        from core.self_dev import Concern
+        with mock.patch("skills.dev_notifier.send_dev") as m_send:
+            self_dev_hooks._maybe_notify(
+                self.VALID_SHA,
+                self._result([
+                    Concern(file="core/a.py", line=42, severity="blocker",
+                             text="null pointer",
+                             suggestion="add a guard"),
+                ]),
+            )
+        m_send.assert_called_once()
+        msg = m_send.call_args.args[0]
+        self.assertIn("1 concern(s)", msg)
+        self.assertIn("blocker", msg)
+        self.assertIn(self.VALID_SHA[:12], msg)
+        self.assertIn("core/a.py:42", msg)
+        self.assertIn("null pointer", msg)
+        self.assertIn("add a guard", msg)
+
+    def test_many_concerns_truncated_with_hint(self):
+        from core import self_dev_hooks
+        from core.self_dev import Concern
+        many = [
+            Concern(file=f"x{i}.py", line=i, severity="major",
+                     text=f"issue {i}")
+            for i in range(7)
+        ]
+        with mock.patch("skills.dev_notifier.send_dev") as m_send:
+            self_dev_hooks._maybe_notify(
+                self.VALID_SHA, self._result(many),
+            )
+        msg = m_send.call_args.args[0]
+        self.assertIn("7 concern(s)", msg)
+        # Only first 3 concerns shown verbatim
+        self.assertIn("x0.py", msg)
+        self.assertIn("x1.py", msg)
+        self.assertIn("x2.py", msg)
+        self.assertNotIn("x3.py", msg)  # not in the excerpt
+        self.assertIn("and 4 more", msg)
+
+    def test_notify_failure_is_swallowed(self):
+        """send_dev exceptions must not propagate — the hook is
+        already backgrounded and must exit clean."""
+        from core import self_dev_hooks
+        from core.self_dev import Concern
+        with mock.patch("skills.dev_notifier.send_dev",
+                         side_effect=RuntimeError("bot down")):
+            # Must not raise
+            self_dev_hooks._maybe_notify(
+                self.VALID_SHA,
+                self._result([
+                    Concern(file="a", line=1, severity="blocker", text="t"),
+                ]),
+            )
+
+
 class HookScriptRendering(unittest.TestCase):
     def test_render_hook_contains_expected_invocation(self):
         from core.self_dev_hooks import render_hook_script
