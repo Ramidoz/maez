@@ -1611,11 +1611,185 @@ function JudgmentSurface() {
 // Export as the legacy "S" var for compatibility with HTML shell
 const S = A;
 
+// ═══════════════════════════════════════════════════════════
+// Self-Dev — live view of the self-review pipeline
+// Reads /api/v1/self_dev: recent reviews + open concerns + stats.
+// Polls every 30s. Phone-reachable; read-only (use the CLI
+// `python -m core.self_dev resolve ...` to transition concerns).
+// ═══════════════════════════════════════════════════════════
+function SelfDevSurface() {
+  const [data, setData] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  const [lastAt, setLastAt] = React.useState(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetch('/api/v1/self_dev')
+        .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
+        .then(d => { if (!cancelled) { setData(d); setErr(null); setLastAt(new Date()); } })
+        .catch(e => { if (!cancelled) setErr(String(e)); });
+    };
+    load();
+    const id = setInterval(load, 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  const sevColor = {
+    blocker: A.red,
+    major:   A.orange,
+    minor:   A.yellow,
+    nit:     A.textDim,
+  };
+
+  if (err && !data) {
+    return (
+      <div className="ap-scroll" style={{ height: '100%', overflow: 'auto', padding: 28 }}>
+        <SurfaceHeader title="Self-Dev" subtitle={`Can't reach /api/v1/self_dev — ${err}`}
+          icon="◈" color={A.red} />
+      </div>
+    );
+  }
+  if (!data) {
+    return (
+      <div className="ap-scroll" style={{ height: '100%', overflow: 'auto', padding: 28 }}>
+        <SurfaceHeader title="Self-Dev" subtitle="Loading…" icon="◈" color={A.indigo} />
+      </div>
+    );
+  }
+
+  const stats = data.stats || {};
+  const reviews = data.recent_reviews || [];
+  const concerns = data.open_concerns || [];
+  const buckets = stats.concerns_by_severity_and_status || {};
+  const lastLabel = lastAt ? `updated ${lastAt.toLocaleTimeString()}` : '';
+
+  // Severity counts across ALL states, for the headline strip
+  const totalBySev = {};
+  for (const [sev, byStatus] of Object.entries(buckets)) {
+    totalBySev[sev] = Object.values(byStatus).reduce((a, b) => a + b, 0);
+  }
+
+  return (
+    <div className="ap-scroll" style={{ height: '100%', overflow: 'auto', padding: 28 }}>
+      <SurfaceHeader
+        title="Self-Dev"
+        subtitle="Claude-backed review of Maez's own code · read-only · resolve via CLI"
+        icon="◈" color={A.mint}
+        right={<span style={{ fontSize: 12, color: A.textDim }}>{lastLabel}</span>}
+      />
+
+      <Glass pad={18}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginBottom: 4 }}>
+          <div>
+            <div style={{ fontSize: 11, color: A.textDim, textTransform: 'uppercase', letterSpacing: 0.6 }}>Reviews</div>
+            <div style={{ fontSize: 28, color: A.text, fontFamily: A.mono }}>{stats.total_reviews || 0}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: A.textDim, textTransform: 'uppercase', letterSpacing: 0.6 }}>Tokens in/out</div>
+            <div style={{ fontSize: 20, color: A.text, fontFamily: A.mono }}>
+              {stats.total_input_tokens || 0} / {stats.total_output_tokens || 0}
+            </div>
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 11, color: A.textDim, textTransform: 'uppercase', letterSpacing: 0.6 }}>Open concerns</div>
+            <div style={{ fontSize: 20, color: A.text, fontFamily: A.mono }}>
+              {concerns.length === 0
+                ? <span style={{ color: A.green }}>all clear</span>
+                : concerns.length}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            {['blocker', 'major', 'minor', 'nit'].map(sev => (
+              totalBySev[sev] ? (
+                <Chip key={sev} color={sevColor[sev]}>
+                  {sev}: {totalBySev[sev]}
+                </Chip>
+              ) : null
+            ))}
+          </div>
+        </div>
+      </Glass>
+
+      <div style={{ height: 18 }} />
+
+      <Glass pad={18}>
+        <div style={{ fontSize: 13, color: A.textSoft, marginBottom: 10, fontWeight: 600 }}>
+          Open concerns
+        </div>
+        {concerns.length === 0 ? (
+          <div style={{ fontSize: 13, color: A.textDim, fontStyle: 'italic' }}>
+            No concerns in the queue. Either everything's been triaged or no
+            reviews have fired in the observation window.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {concerns.map(c => (
+              <div key={c.id} style={{
+                borderLeft: `3px solid ${sevColor[c.severity] || A.textDim}`,
+                paddingLeft: 12, fontSize: 13, lineHeight: 1.5,
+              }}>
+                <div>
+                  <Chip color={sevColor[c.severity] || A.textDim}>{c.severity}</Chip>
+                  &nbsp;
+                  <span style={{ color: A.textSoft, fontFamily: A.mono }}>
+                    #{c.id}
+                  </span>
+                  &nbsp;
+                  <span style={{ color: A.textSoft, fontFamily: A.mono }}>
+                    {c.file}{c.line ? `:${c.line}` : ''}
+                  </span>
+                </div>
+                <div style={{ color: A.text, marginTop: 4 }}>{c.text}</div>
+                {c.suggestion ? (
+                  <div style={{ color: A.mint, marginTop: 4, fontStyle: 'italic' }}>
+                    → {c.suggestion}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </Glass>
+
+      <div style={{ height: 18 }} />
+
+      <Glass pad={18}>
+        <div style={{ fontSize: 13, color: A.textSoft, marginBottom: 10, fontWeight: 600 }}>
+          Recent reviews
+        </div>
+        {reviews.length === 0 ? (
+          <div style={{ fontSize: 13, color: A.textDim, fontStyle: 'italic' }}>
+            No reviews recorded yet.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {reviews.map(r => (
+              <div key={r.id} style={{ fontSize: 12, lineHeight: 1.5, color: A.textDim }}>
+                <div>
+                  <span style={{ color: A.textSoft, fontFamily: A.mono }}>#{r.id}</span>
+                  &nbsp;<span style={{ fontFamily: A.mono }}>{r.target_ref}</span>
+                  &nbsp;&middot;&nbsp;
+                  <span style={{ fontSize: 11, color: A.textDim }}>
+                    {r.model_used} &middot; {r.caller}
+                  </span>
+                </div>
+                <div style={{ color: A.text, marginTop: 2 }}>{r.overall}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Glass>
+    </div>
+  );
+}
+
+
 window.TerminalUI = {
   S, A, Card, Glass, Chip, Dot, Button, MaezAvatar, Icon, SegmentedControl,
   ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane, RouterPane,
   MemorySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
-  JudgmentSurface, DaemonDeep,
+  JudgmentSurface, SelfDevSurface, DaemonDeep,
   // back-compat aliases (in case shell uses these)
   SoftBtn: Button, Pill: Chip,
 };
