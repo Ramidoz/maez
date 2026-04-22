@@ -1479,6 +1479,40 @@ def api_quality():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/v1/self_dev/concern/<int:concern_id>/resolve", methods=["POST"])
+def api_self_dev_resolve(concern_id: int):
+    """Transition a concern to a new status.
+
+    Body: {"state": "resolved" | "wont_fix" | "rejected" | "open",
+           "notes": "optional explanation"}
+
+    Same privilege boundary as the CLI `python -m core.self_dev
+    resolve` — anyone on 127.0.0.1 can call, no auth layer.
+    Reversible: setting state='open' clears resolved_at and
+    resolution_notes, so a mistakenly-resolved concern can be
+    reopened cleanly from the same UI.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        state = (body.get("state") or "").strip().lower()
+        notes = body.get("notes") or None
+        if state not in ("open", "resolved", "wont_fix", "rejected"):
+            return jsonify({
+                "error": f"state must be one of open/resolved/wont_fix/rejected; got {state!r}"
+            }), 400
+        from core.self_dev_persistence import set_concern_status
+        ok = set_concern_status(concern_id, state, notes=notes)
+        if not ok:
+            return jsonify({
+                "error": f"concern #{concern_id} not found or DB write failed"
+            }), 404
+        return jsonify({
+            "id": concern_id, "state": state, "notes": notes,
+        })
+    except Exception as e:
+        return jsonify({"error": f"resolve failed: {e}"}), 500
+
+
 @app.route("/api/v1/self_dev")
 def api_self_dev():
     """Self-dev rollup — reviews + concerns for the cockpit.

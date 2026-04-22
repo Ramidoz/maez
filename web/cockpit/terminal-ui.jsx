@@ -1621,19 +1621,32 @@ function SelfDevSurface() {
   const [data, setData] = React.useState(null);
   const [err, setErr] = React.useState(null);
   const [lastAt, setLastAt] = React.useState(null);
+  const [busy, setBusy] = React.useState(null); // id of concern mid-transition
+
+  const load = React.useCallback(() => {
+    fetch('/api/v1/self_dev')
+      .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
+      .then(d => { setData(d); setErr(null); setLastAt(new Date()); })
+      .catch(e => setErr(String(e)));
+  }, []);
 
   React.useEffect(() => {
-    let cancelled = false;
-    const load = () => {
-      fetch('/api/v1/self_dev')
-        .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
-        .then(d => { if (!cancelled) { setData(d); setErr(null); setLastAt(new Date()); } })
-        .catch(e => { if (!cancelled) setErr(String(e)); });
-    };
     load();
     const id = setInterval(load, 30000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, []);
+    return () => clearInterval(id);
+  }, [load]);
+
+  const transition = React.useCallback((concernId, state) => {
+    setBusy(concernId);
+    fetch(`/api/v1/self_dev/concern/${concernId}/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ state, notes: `resolved via cockpit` }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject('HTTP ' + r.status))
+      .then(() => { setBusy(null); load(); })
+      .catch(e => { setBusy(null); alert(`transition failed: ${e}`); });
+  }, [load]);
 
   const sevColor = {
     blocker: A.red,
@@ -1746,6 +1759,21 @@ function SelfDevSurface() {
                     → {c.suggestion}
                   </div>
                 ) : null}
+                <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                  {['resolved', 'wont_fix', 'rejected'].map(state => (
+                    <Button key={state} size="sm"
+                      disabled={busy === c.id}
+                      onClick={() => transition(c.id, state)}>
+                      {state.replace('_', ' ')}
+                    </Button>
+                  ))}
+                  {busy === c.id && (
+                    <span style={{ color: A.textDim, fontSize: 11,
+                                    alignSelf: 'center' }}>
+                      …
+                    </span>
+                  )}
+                </div>
               </div>
             ))}
           </div>
