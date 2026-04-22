@@ -16,7 +16,6 @@ Safeguards:
 """
 
 import ast
-import hashlib
 import json
 import logging
 import os
@@ -26,7 +25,6 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("maez")
@@ -315,7 +313,6 @@ class EvolutionTracker:
     """Tracks deployed improvements and auto-reverts if quality drops."""
 
     def __init__(self, db_path: str = '/home/rohit/maez/memory/evolution_track.db'):
-        import sqlite3
         self.db_path = db_path
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         with self._conn() as conn:
@@ -697,7 +694,6 @@ def _check_policy(weakness: str, target_file: str, diff_text: str = "") -> str |
 
     # Cooldown
     cooldown_key = _normalize_cooldown_key(weakness, target_file)
-    cutoff = _dt.now(_tz.utc).isoformat()
     with _rail_conn() as conn:
         recent = conn.execute(
             "SELECT id, resolved_at FROM candidates WHERE cooldown_key=? AND resolved_at IS NOT NULL ORDER BY resolved_at DESC LIMIT 1",
@@ -774,7 +770,6 @@ def generate_diff(weakness_description: str, evidence: dict = None) -> dict:
 
     # Generate diff via gemma4
     try:
-        import requests
         prompt = (
             f"You are improving Maez's cognition quality system.\n\n"
             f"FILE: {target}\n"
@@ -1283,35 +1278,77 @@ def list_candidates() -> list[dict]:
 _original_check_and_revert = check_and_revert
 
 
-_STALE_PROPOSAL_HOURS = 12  # re-notify if validated candidate sits unactioned this long
+_STALE_PROPOSAL_HOURS = 12    # start nagging after the candidate has sat this long
+_REMINDER_COOLDOWN_HOURS = 24  # between-reminder floor — don't re-nag for this long
+
+
+def _ensure_reminder_column():
+    """Add last_reminded_at column to the candidates table if missing.
+    Idempotent — safe to call every time. Before this column existed,
+    check_stale_proposals was re-sending on every check_and_revert
+    tick (~every 10 min) so the owner got a reminder every 10-13 min
+    for 30+ hours. Observed 2026-04-22."""
+    try:
+        with _rail_conn() as conn:
+            cols = [r[1] for r in conn.execute(
+                "PRAGMA table_info(candidates)").fetchall()]
+            if "last_reminded_at" not in cols:
+                conn.execute(
+                    "ALTER TABLE candidates ADD COLUMN last_reminded_at TEXT"
+                )
+                conn.commit()
+    except Exception as e:
+        logger.debug("ensure_reminder_column failed: %s", e)
 
 
 def check_stale_proposals():
-    """Re-notify the owner about any validated candidate that hasn't been actioned in >12h.
-    Prevents the silent-death pattern where a notification failure blocks the engine forever.
-    Called from check_and_revert so it fires on the existing morning + watchdog cadence.
-    """
+    """Re-notify the owner about any validated candidate that hasn't
+    been actioned in >_STALE_PROPOSAL_HOURS hours. Throttled to at
+    most one reminder per candidate per _REMINDER_COOLDOWN_HOURS so
+    the owner doesn't get spammed every check_and_revert tick.
+    Called from check_and_revert on the daemon cycle cadence."""
+    _ensure_reminder_column()
     try:
         import datetime as _sdt
-        cutoff = (_sdt.datetime.now(_tz.utc) -
-                  _sdt.timedelta(hours=_STALE_PROPOSAL_HOURS)).isoformat()
+        now = _sdt.datetime.now(_tz.utc)
+        stale_cutoff = (now - _sdt.timedelta(hours=_STALE_PROPOSAL_HOURS)).isoformat()
+        reminder_cutoff = (now - _sdt.timedelta(hours=_REMINDER_COOLDOWN_HOURS)).isoformat()
         with _rail_conn() as conn:
             rows = conn.execute(
-                "SELECT id, target_file, weakness_description, validated_at "
-                "FROM candidates WHERE state='validated' AND validated_at < ?",
-                (cutoff,),
+                "SELECT id, target_file, weakness_description, validated_at, "
+                "last_reminded_at FROM candidates "
+                "WHERE state='validated' AND validated_at < ? "
+                "AND (last_reminded_at IS NULL OR last_reminded_at < ?)",
+                (stale_cutoff, reminder_cutoff),
             ).fetchall()
         if not rows:
             return
         from skills.dev_notifier import send_dev
-        for cand_id, target, weakness, validated_at in rows:
-            age_h = (_sdt.datetime.now(_tz.utc) -
-                     _sdt.datetime.fromisoformat(validated_at)).total_seconds() / 3600
+        for cand_id, target, weakness, validated_at, _last in rows:
+            age_h = (now - _sdt.datetime.fromisoformat(validated_at)).total_seconds() / 3600
+            # Tell the owner HOW to act — reminders go out via the Maez
+            # Dev bot (one-way notifier) but the approval handler lives
+            # on the main Maez bot. Replying in the Dev bot thread does
+            # nothing. Be explicit so the owner knows to switch bots.
             msg = (f"⏰ Reminder: self-edit proposal #{cand_id} has been waiting "
                    f"{age_h:.0f}h for your review.\n"
-                   f"File: {target}\n"
-                   f"Reply \"yes\" or \"no\" to #{cand_id} to unblock evolution.")
+                   f"File: {target}\n\n"
+                   f"To act, message your main Maez bot:\n"
+                   f"  approve {cand_id}   — to apply\n"
+                   f"  reject {cand_id}    — to dismiss\n"
+                   f"(This Dev bot is one-way — replies here don't go anywhere.)")
             send_dev(msg)
+            # Record the reminder so this candidate isn't re-nagged for
+            # another _REMINDER_COOLDOWN_HOURS hours.
+            try:
+                with _rail_conn() as conn:
+                    conn.execute(
+                        "UPDATE candidates SET last_reminded_at=? WHERE id=?",
+                        (now.isoformat(), cand_id),
+                    )
+                    conn.commit()
+            except Exception as e:
+                logger.debug("mark last_reminded_at failed: %s", e)
             _log_evolution({'action': 'STALE_PROPOSAL_REMINDER', 'target': target,
                             'result': f'id={cand_id} age={age_h:.0f}h'})
             logger.info("Stale proposal reminder sent for candidate %d (%.0fh old)", cand_id, age_h)
@@ -2283,8 +2320,6 @@ def _synthesize_edit(filepath: str, target_name: str, proposed_value, editable_t
             value_part = rest[:comment_start]
             comment_part = rest[comment_start:]
             # Replace the value, keep the spacing pattern
-            spaces_before_val = len(value_part) - len(value_part.lstrip())
-            spaces_after_val = len(value_part) - len(value_part.rstrip())
             new_val_str = f" {proposed_value!r}"
             # Pad to keep comment at roughly the same column
             orig_total = len(prefix) + len(value_part)
