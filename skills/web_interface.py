@@ -1556,6 +1556,30 @@ def api_workshop_turn(session_id: str):
         return jsonify({"error": f"workshop turn failed: {e}"}), 500
 
 
+@app.route("/api/v1/workshop/session/<session_id>/apply", methods=["POST"])
+def api_workshop_apply(session_id: str):
+    """Apply a unified-diff block to a file in the repo.
+
+    Body: {"diff": "<unified diff text>"}
+    Returns: {applied, target, backup, stdout, stderr, error?}
+
+    Same privilege boundary as the rest of /api/v1/workshop — 127.0.0.1
+    only, no auth layer. Destructive: writes to disk. Reversible via
+    the returned backup path. The UI should confirm before firing.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        diff_text = (body.get("diff") or "").strip()
+        if not diff_text:
+            return jsonify({"error": "diff required"}), 400
+        from core.workshop import apply_diff
+        result = apply_diff(session_id=session_id, diff_text=diff_text)
+        status = 200 if result.get("applied") else 400
+        return jsonify(result), status
+    except Exception as e:
+        return jsonify({"error": f"apply failed: {e}"}), 500
+
+
 @app.route("/api/v1/workshop/session/<session_id>", methods=["DELETE"])
 def api_workshop_delete(session_id: str):
     try:

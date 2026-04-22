@@ -456,6 +456,164 @@ def expand_mentions(user_message: str) -> tuple[str, list[dict]]:
     return "\n".join(parts), notes
 
 
+# ── apply diff ────────────────────────────────────────────────────────
+
+# Where we keep backups of files before applying Workshop diffs.
+# Separate from evolution_engine's backup dir so a Workshop apply
+# can't collide with an evolution-engine deploy happening at the
+# same moment. Timestamped filenames inside ensure no overwrite.
+_APPLY_BACKUP_DIR = Path(os.environ.get(
+    "MAEZ_WORKSHOP_BACKUP_DIR",
+    "/home/rohit/maez/workshop/backups",
+))
+
+# Per-diff file-header line looks like "--- path/to/foo.py" or
+# "+++ path/to/foo.py" (maybe with \t and timestamp after).
+_DIFF_HEADER_RE = re.compile(
+    r"^(?:---|\+\+\+)\s+(\S+)", re.MULTILINE,
+)
+
+
+def _extract_target_path(diff_text: str) -> Optional[str]:
+    """Parse the b-side ('+++') target from a unified diff. Returns
+    the repo-relative path, or None if the header is missing or
+    obviously invalid ('/dev/null' for deletion isn't supported yet).
+    """
+    for m in re.finditer(r"^\+\+\+\s+(\S+)", diff_text, re.MULTILINE):
+        path = m.group(1)
+        # Strip a/ or b/ git prefix if present
+        if path.startswith("a/") or path.startswith("b/"):
+            path = path[2:]
+        if path == "/dev/null":
+            return None
+        return path
+    return None
+
+
+def _backup_file(path: Path) -> Path:
+    """Copy `path` to a timestamped backup under _APPLY_BACKUP_DIR.
+    Returns the backup path."""
+    import shutil
+    _APPLY_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    ts = time.strftime("%Y%m%dT%H%M%S")
+    backup = _APPLY_BACKUP_DIR / f"{path.name}.{ts}.bak"
+    shutil.copy2(path, backup)
+    return backup
+
+
+def apply_diff(
+    *,
+    session_id: str,
+    diff_text: str,
+    caller: str = "workshop/apply",
+) -> dict:
+    """Apply a unified-diff block to the repo. Resolves the target
+    from '+++' header, backs up the file, shells out to `patch` to
+    apply, rolls back on failure.
+
+    Returns a dict: {
+      "applied": bool,
+      "target": <rel path or None>,
+      "backup": <backup path or None>,
+      "stdout": <patch stdout>,
+      "stderr": <patch stderr>,
+      "error": <string or None>,
+    }
+
+    Constraints:
+      - Target path must resolve inside _REPO_ROOT. Escape = refuse.
+      - `patch` binary must be available on PATH.
+      - Only single-file diffs in this step; multi-file support is a
+        follow-up once we see the pattern of Claude's outputs.
+      - Session must exist (we log the applied diff as a turn so the
+        conversation history records what was committed).
+    """
+    import subprocess
+    import shutil as _shutil
+
+    # Session must exist so we can record the apply event
+    session = get_session(session_id)
+    if not session:
+        return {"applied": False, "error": f"no session {session_id!r}",
+                "target": None, "backup": None, "stdout": "", "stderr": ""}
+
+    target_rel = _extract_target_path(diff_text)
+    if not target_rel:
+        return {"applied": False,
+                "error": "could not extract target path from diff '+++' header",
+                "target": None, "backup": None, "stdout": "", "stderr": ""}
+
+    # Path safety: same guard as @mentions
+    target_abs = _resolve_path_safely(target_rel)
+    if target_abs is None:
+        return {"applied": False,
+                "error": f"target path {target_rel!r} is not a file under the repo",
+                "target": target_rel, "backup": None,
+                "stdout": "", "stderr": ""}
+
+    if not _shutil.which("patch"):
+        return {"applied": False,
+                "error": "`patch` binary not found on PATH — install it or "
+                          "apply manually by copying the diff",
+                "target": target_rel, "backup": None,
+                "stdout": "", "stderr": ""}
+
+    # Back up before touching
+    try:
+        backup = _backup_file(target_abs)
+    except Exception as e:
+        return {"applied": False, "error": f"backup failed: {e}",
+                "target": target_rel, "backup": None,
+                "stdout": "", "stderr": ""}
+
+    # Shell out to `patch`. Use -p0 so the paths in the diff are
+    # treated as-is (no strip). Feed diff via stdin.
+    try:
+        proc = subprocess.run(
+            ["patch", "-p0", "--forward", "--fuzz=0",
+             "--no-backup-if-mismatch"],
+            input=diff_text, text=True, capture_output=True,
+            cwd=str(_REPO_ROOT), timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        # Unlikely but treat the same as an apply failure
+        return {"applied": False, "error": "patch timed out",
+                "target": target_rel, "backup": str(backup),
+                "stdout": "", "stderr": ""}
+    except Exception as e:
+        return {"applied": False, "error": f"patch exec failed: {e}",
+                "target": target_rel, "backup": str(backup),
+                "stdout": "", "stderr": ""}
+
+    if proc.returncode != 0:
+        # patch failed — nothing should have been modified if --forward
+        # was set and hunks didn't apply, but be paranoid: restore
+        # from backup anyway if the file now differs from the backup.
+        try:
+            if target_abs.read_bytes() != backup.read_bytes():
+                import shutil
+                shutil.copy2(backup, target_abs)
+        except Exception as e:
+            logger.warning("workshop apply rollback read/write failed: %s", e)
+        return {"applied": False,
+                "error": f"patch exited {proc.returncode}",
+                "target": target_rel, "backup": str(backup),
+                "stdout": proc.stdout, "stderr": proc.stderr}
+
+    # Record the apply as an assistant-role note in the session so
+    # history replay sees it happened. Keep it terse.
+    _persist_turn(
+        session_id=session_id, role="system",
+        content=f"[applied diff] target={target_rel} backup={backup.name}",
+    )
+
+    return {
+        "applied": True, "error": None,
+        "target": target_rel, "backup": str(backup),
+        "stdout": proc.stdout, "stderr": proc.stderr,
+    }
+
+
 def turn(
     *,
     session_id: str,

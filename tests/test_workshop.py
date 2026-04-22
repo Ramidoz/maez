@@ -291,6 +291,123 @@ class MentionExpansion(_Base):
         self.assertNotIn("[ATTACHED FILES]", expanded)
 
 
+class ApplyDiff(_Base):
+    """apply_diff() parses a unified diff, backs up the target, and
+    applies via `patch`. These tests exercise the path-safety guard
+    and error handling paths without requiring a real `patch` install
+    for every code path — the happy-path test is gated on patch
+    being available on PATH (most Linux systems)."""
+
+    def _mock_repo(self, files: dict[str, str]):
+        import tempfile
+        self._repo_tmp = tempfile.TemporaryDirectory()
+        root = Path(self._repo_tmp.name)
+        for rel, content in files.items():
+            p = root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content)
+        # Backups go next to repo so cleanup is trivial
+        backup_dir = root / "workshop_backups"
+        self._root_patch = mock.patch.object(self.ws, "_REPO_ROOT", root)
+        self._backup_patch = mock.patch.object(
+            self.ws, "_APPLY_BACKUP_DIR", backup_dir,
+        )
+        self._root_patch.start()
+        self._backup_patch.start()
+        return root
+
+    def tearDown(self):
+        if hasattr(self, "_root_patch"):
+            self._root_patch.stop()
+        if hasattr(self, "_backup_patch"):
+            self._backup_patch.stop()
+        if hasattr(self, "_repo_tmp"):
+            self._repo_tmp.cleanup()
+        super().tearDown()
+
+    def test_target_extraction_from_plus_header(self):
+        d = (
+            "--- foo/bar.py\n"
+            "+++ foo/bar.py\n"
+            "@@ -1 +1 @@\n"
+            "-x\n+y\n"
+        )
+        self.assertEqual(self.ws._extract_target_path(d), "foo/bar.py")
+
+    def test_target_extraction_strips_git_prefix(self):
+        d = (
+            "--- a/foo/bar.py\n"
+            "+++ b/foo/bar.py\n"
+            "@@ -1 +1 @@\n"
+            "-x\n+y\n"
+        )
+        self.assertEqual(self.ws._extract_target_path(d), "foo/bar.py")
+
+    def test_target_extraction_refuses_dev_null(self):
+        d = "--- foo/bar.py\n+++ /dev/null\n"
+        self.assertIsNone(self.ws._extract_target_path(d))
+
+    def test_missing_session_fails(self):
+        self._mock_repo({"x.py": "a\n"})
+        result = self.ws.apply_diff(
+            session_id="bogus", diff_text="+++ x.py\n",
+        )
+        self.assertFalse(result["applied"])
+        self.assertIn("no session", result["error"])
+
+    def test_no_target_fails_cleanly(self):
+        self._mock_repo({})
+        sid = self.ws.create_session(title="t")
+        result = self.ws.apply_diff(
+            session_id=sid, diff_text="not a real diff",
+        )
+        self.assertFalse(result["applied"])
+        self.assertIn("target path", result["error"].lower())
+
+    def test_escape_target_is_refused(self):
+        self._mock_repo({"x.py": "a\n"})
+        sid = self.ws.create_session(title="t")
+        result = self.ws.apply_diff(
+            session_id=sid,
+            diff_text="--- a/../../../etc/hosts\n+++ b/../../../etc/hosts\n",
+        )
+        self.assertFalse(result["applied"])
+        self.assertIn("not a file under the repo", result["error"])
+
+    def test_happy_path_applies_when_patch_available(self):
+        import shutil
+        if not shutil.which("patch"):
+            self.skipTest("patch binary not available")
+        root = self._mock_repo({"foo.py": "a\nb\nc\n"})
+        sid = self.ws.create_session(title="t")
+        # diff that changes line 2 from 'b' → 'B'
+        diff = (
+            "--- foo.py\n"
+            "+++ foo.py\n"
+            "@@ -1,3 +1,3 @@\n"
+            " a\n"
+            "-b\n"
+            "+B\n"
+            " c\n"
+        )
+        result = self.ws.apply_diff(session_id=sid, diff_text=diff)
+        self.assertTrue(result["applied"],
+                         f"expected applied=True; got {result}")
+        self.assertEqual(result["target"], "foo.py")
+        self.assertTrue(result["backup"])
+        # File should now have the change
+        self.assertEqual((root / "foo.py").read_text(), "a\nB\nc\n")
+        # Backup should have the original
+        self.assertEqual(Path(result["backup"]).read_text(),
+                          "a\nb\nc\n")
+        # A system-role turn should have been recorded
+        turns = self.ws.get_turns(sid)
+        self.assertTrue(
+            any("applied diff" in t.content for t in turns),
+            "expected the apply to log a system turn",
+        )
+
+
 class Rollup(_Base):
     def test_rollup_includes_turn_count(self):
         from core.claude_tier import TierReply

@@ -1885,8 +1885,9 @@ function DiffBody({ content }) {
 }
 
 
-function CodeBlock({ lang, content, copyKey }) {
+function CodeBlock({ lang, content, copyKey, sessionId }) {
   const [copied, setCopied] = React.useState(false);
+  const [applyState, setApplyState] = React.useState(null); // null | 'pending' | 'ok' | {err}
   const copy = () => {
     navigator.clipboard.writeText(content).then(() => {
       setCopied(true);
@@ -1894,12 +1895,56 @@ function CodeBlock({ lang, content, copyKey }) {
     });
   };
   const isDiff = (lang || '').toLowerCase() === 'diff';
+
+  // Extract target path from a +++ header line for the confirm prompt
+  const diffTarget = React.useMemo(() => {
+    if (!isDiff) return null;
+    const m = content.match(/^\+\+\+\s+(\S+)/m);
+    if (!m) return null;
+    let p = m[1];
+    if (p.startsWith('a/') || p.startsWith('b/')) p = p.slice(2);
+    return p;
+  }, [content, isDiff]);
+
+  const apply = () => {
+    if (!sessionId) {
+      setApplyState({ err: 'no session id' });
+      return;
+    }
+    if (!diffTarget) {
+      setApplyState({ err: 'no target in diff header' });
+      return;
+    }
+    const msg = `Apply this diff to ${diffTarget}? A timestamped backup will be saved under workshop/backups/.`;
+    if (!confirm(msg)) return;
+    setApplyState('pending');
+    fetch(`/api/v1/workshop/session/${sessionId}/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ diff: content }),
+    })
+      .then(async r => {
+        const j = await r.json().catch(() => ({}));
+        if (r.ok && j.applied) {
+          setApplyState('ok');
+          setTimeout(() => setApplyState(null), 3000);
+        } else {
+          setApplyState({
+            err: j.error || `HTTP ${r.status}`,
+            stderr: j.stderr || '',
+            backup: j.backup || null,
+          });
+        }
+      })
+      .catch(e => setApplyState({ err: String(e) }));
+  };
+
   return (
     <div style={{ margin: '10px 0', borderRadius: 8, overflow: 'hidden',
                     border: `0.5px solid ${A.stroke}`,
                     background: 'rgba(0,0,0,0.35)' }}>
       <div style={{ display: 'flex', alignItems: 'center',
-                      padding: '6px 12px',
+                      padding: '6px 12px', gap: 6,
                       borderBottom: `0.5px solid ${A.stroke}`,
                       background: 'rgba(0,0,0,0.25)', fontFamily: A.mono,
                       fontSize: 10, color: A.textFaint,
@@ -1907,7 +1952,30 @@ function CodeBlock({ lang, content, copyKey }) {
         <span style={{ color: isDiff ? A.purple : A.textFaint }}>
           {lang || 'code'}
         </span>
+        {isDiff && diffTarget && (
+          <span style={{ color: A.textDim, textTransform: 'none',
+                           letterSpacing: 0 }}>
+            → {diffTarget}
+          </span>
+        )}
         <span style={{ flex: 1 }} />
+        {isDiff && diffTarget && (
+          <button onClick={apply} className="ap-btn"
+            disabled={applyState === 'pending'}
+            style={{
+              background: applyState === 'ok' ? `${A.green}22` : 'transparent',
+              border: `0.5px solid ${applyState === 'ok' ? A.green : (applyState && applyState.err ? A.red : A.stroke)}`,
+              padding: '2px 10px', borderRadius: 6,
+              color: applyState === 'ok' ? A.green
+                      : (applyState && applyState.err ? A.red : A.textDim),
+              fontSize: 10, fontFamily: A.mono, cursor: 'pointer',
+            }}>
+            {applyState === 'pending' ? 'applying…'
+              : applyState === 'ok' ? 'applied ✓'
+              : (applyState && applyState.err) ? 'failed'
+              : 'apply'}
+          </button>
+        )}
         <button onClick={copy} className="ap-btn"
           style={{ background: 'transparent',
                      border: `0.5px solid ${A.stroke}`, padding: '2px 8px',
@@ -1916,6 +1984,18 @@ function CodeBlock({ lang, content, copyKey }) {
           {copied ? 'copied' : 'copy'}
         </button>
       </div>
+      {applyState && typeof applyState === 'object' && applyState.err && (
+        <div style={{ padding: '6px 12px', background: `${A.red}11`,
+                        borderBottom: `0.5px solid ${A.stroke}`,
+                        fontFamily: A.mono, fontSize: 11, color: A.red }}>
+          apply failed: {applyState.err}
+          {applyState.backup && (
+            <div style={{ color: A.textDim, fontSize: 10, marginTop: 2 }}>
+              backup kept at {applyState.backup}
+            </div>
+          )}
+        </div>
+      )}
       {isDiff ? (
         <div style={{ padding: '8px 0' }}>
           <DiffBody content={content} />
@@ -1931,14 +2011,15 @@ function CodeBlock({ lang, content, copyKey }) {
   );
 }
 
-function MarkdownTurn({ content, turnId }) {
+function MarkdownTurn({ content, turnId, sessionId }) {
   const parts = React.useMemo(() => _splitMarkdown(content), [content]);
   return (
     <React.Fragment>
       {parts.map((p, i) => {
         if (p.type === 'code') {
           return <CodeBlock key={i} lang={p.lang} content={p.content}
-                              copyKey={`${turnId}-${i}`} />;
+                              copyKey={`${turnId}-${i}`}
+                              sessionId={sessionId} />;
         }
         return (
           <div key={i} style={{ whiteSpace: 'pre-wrap' }}>
@@ -2170,7 +2251,8 @@ function WorkshopSurface() {
                 borderLeft: `2px solid ${roleColor[t.role] || A.textDim}`,
                 paddingLeft: 12,
               }}>
-                <MarkdownTurn content={t.content} turnId={t.id} />
+                <MarkdownTurn content={t.content} turnId={t.id}
+                                sessionId={activeSession?.id} />
               </div>
             </div>
           ))}
