@@ -1848,6 +1848,43 @@ function _splitMarkdown(text) {
   return parts;
 }
 
+function DiffBody({ content }) {
+  // Render a unified diff with +/- line coloring. Hunk headers
+  // (@@ ...) and file headers (---, +++) get their own styling so
+  // the eye can separate structure from content.
+  const lines = content.split('\n');
+  const lineColor = (line) => {
+    if (line.startsWith('+++') || line.startsWith('---')) return A.textFaint;
+    if (line.startsWith('@@')) return A.purple;
+    if (line.startsWith('+')) return A.green;
+    if (line.startsWith('-')) return A.red;
+    return A.text;
+  };
+  const lineBg = (line) => {
+    if (line.startsWith('+++') || line.startsWith('---')) return 'transparent';
+    if (line.startsWith('@@')) return 'rgba(168, 139, 250, 0.10)';
+    if (line.startsWith('+')) return 'rgba(52, 211, 153, 0.08)';
+    if (line.startsWith('-')) return 'rgba(248, 113, 113, 0.08)';
+    return 'transparent';
+  };
+  return (
+    <pre style={{ margin: 0, padding: 0, overflow: 'auto',
+                    fontFamily: A.mono, fontSize: 12.5, lineHeight: 1.5 }}>
+      {lines.map((line, i) => (
+        <div key={i} style={{
+          padding: '0 14px',
+          color: lineColor(line),
+          background: lineBg(line),
+          whiteSpace: 'pre',
+        }}>
+          {line || ' '}
+        </div>
+      ))}
+    </pre>
+  );
+}
+
+
 function CodeBlock({ lang, content, copyKey }) {
   const [copied, setCopied] = React.useState(false);
   const copy = () => {
@@ -1856,6 +1893,7 @@ function CodeBlock({ lang, content, copyKey }) {
       setTimeout(() => setCopied(false), 1200);
     });
   };
+  const isDiff = (lang || '').toLowerCase() === 'diff';
   return (
     <div style={{ margin: '10px 0', borderRadius: 8, overflow: 'hidden',
                     border: `0.5px solid ${A.stroke}`,
@@ -1866,7 +1904,9 @@ function CodeBlock({ lang, content, copyKey }) {
                       background: 'rgba(0,0,0,0.25)', fontFamily: A.mono,
                       fontSize: 10, color: A.textFaint,
                       letterSpacing: 0.4, textTransform: 'uppercase' }}>
-        <span>{lang || 'code'}</span>
+        <span style={{ color: isDiff ? A.purple : A.textFaint }}>
+          {lang || 'code'}
+        </span>
         <span style={{ flex: 1 }} />
         <button onClick={copy} className="ap-btn"
           style={{ background: 'transparent',
@@ -1876,11 +1916,17 @@ function CodeBlock({ lang, content, copyKey }) {
           {copied ? 'copied' : 'copy'}
         </button>
       </div>
-      <pre style={{ margin: 0, padding: '10px 14px', overflow: 'auto',
-                      fontFamily: A.mono, fontSize: 12.5, lineHeight: 1.5,
-                      color: A.text, whiteSpace: 'pre' }}>
-        {content}
-      </pre>
+      {isDiff ? (
+        <div style={{ padding: '8px 0' }}>
+          <DiffBody content={content} />
+        </div>
+      ) : (
+        <pre style={{ margin: 0, padding: '10px 14px', overflow: 'auto',
+                        fontFamily: A.mono, fontSize: 12.5, lineHeight: 1.5,
+                        color: A.text, whiteSpace: 'pre' }}>
+          {content}
+        </pre>
+      )}
     </div>
   );
 }
