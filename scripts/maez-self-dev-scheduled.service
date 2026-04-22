@@ -1,0 +1,26 @@
+[Unit]
+Description=Maez self-dev scheduled review — one module per tick
+Documentation=file:///home/rohit/maez/core/self_dev_scheduler.py
+After=maez-subscription-proxy.service
+Wants=maez-subscription-proxy.service
+
+[Service]
+Type=oneshot
+User=rohit
+Group=rohit
+WorkingDirectory=/home/rohit/maez
+EnvironmentFile=/home/rohit/maez/config/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/rohit/maez/.venv/bin/python3 -m core.self_dev_scheduler run
+
+# Paired with maez-self-dev-scheduled.timer (separate file) which
+# fires this unit daily. Keep runtime limits generous — a single
+# review_module call can take 4-5 minutes on large modules.
+TimeoutStartSec=15min
+
+# Scheduler is idempotent and fail-safe by design; don't retry.
+# If one day's run hits a transient proxy issue, the next day picks
+# up where this one left off (oldest unreviewed module).
+
+StandardOutput=append:/home/rohit/maez/logs/self_dev_scheduler.log
+StandardError=append:/home/rohit/maez/logs/self_dev_scheduler.log

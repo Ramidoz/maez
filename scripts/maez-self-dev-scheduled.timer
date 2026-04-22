@@ -1,0 +1,17 @@
+[Unit]
+Description=Fire maez-self-dev-scheduled.service daily during low-use hours
+
+[Timer]
+# 04:30 local every day — deliberately NOT :00 so we don't collide
+# with cron hour-boundary spikes or the 03:00 nightly consolidation.
+OnCalendar=*-*-* 04:30:00
+
+# If the machine was off / sleeping at 04:30, catch up on boot.
+# Scheduler is idempotent; at most one review per invocation.
+Persistent=true
+
+# Unit to activate
+Unit=maez-self-dev-scheduled.service
+
+[Install]
+WantedBy=timers.target
