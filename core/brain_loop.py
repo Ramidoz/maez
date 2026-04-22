@@ -145,6 +145,36 @@ def _is_conversational_intent(text: str) -> bool:
 _MAX_EXCHANGE_CHARS = 800
 
 
+def _record_tool_failure(action: str, params: dict, error: str,
+                          *, surface: str = "brain_loop") -> None:
+    """Persist a tool_failure to consequence_memory so future Maez
+    can retrieve similar past failures when proposing similar
+    actions. Fail-safe: any exception in the recorder is swallowed —
+    logging is the primary signal, consequence_memory is the
+    enrichment."""
+    try:
+        from core import consequence_memory as _cm
+        # Context = what Maez tried. Keep short and greppable.
+        cmd = (params or {}).get("cmd") if isinstance(params, dict) else ""
+        context = f"action={action} cmd={cmd!r}" if cmd else f"action={action}"
+        # Tags = the first token of cmd + action, for cheap lookup.
+        tags = [action]
+        if cmd:
+            first = str(cmd).strip().split()[:1]
+            if first:
+                tags.append(first[0])
+        _cm.record_event(
+            kind=_cm.CLASS_TOOL_FAILURE,
+            context=context[:400],
+            outcome=(error or "").strip()[:400],
+            feedback="",  # future Maez fills this on retrieval via LLM if needed
+            surface=surface,
+            tags=tags,
+        )
+    except Exception:
+        pass  # intentionally silent; logging already happened
+
+
 def _summarize_shell_error(err: str) -> str:
     """Extract a useful one-line summary from a ShellCommandError-style
     error string. Input typically looks like:
@@ -1196,6 +1226,10 @@ def run_brain_loop(
             msg = f"ERROR: {e}"
             transcript.append((action, params, msg, False))
             history.append(f"TOOL_CALL: {_json.dumps(call)}\nRESULT: {msg}")
+            # Record to consequence_memory so future Maez can retrieve
+            # past failures for similar actions. Fail-safe — the log
+            # line above is still the primary signal.
+            _record_tool_failure(action, params, str(e), surface="brain_loop/dispatch")
             continue
 
         if result.success:
@@ -1206,6 +1240,12 @@ def run_brain_loop(
             msg = f"ERROR: {result.error}"
             transcript.append((action, params, msg, False))
             history.append(f"TOOL_CALL: {_json.dumps(call)}\nRESULT: {msg}")
+            # Record failures from the action engine layer too —
+            # these are the "ran but returned non-zero" class.
+            _record_tool_failure(
+                action, params, result.error or "(no error text)",
+                surface="brain_loop/action",
+            )
 
     if not transcript:
         return ""
