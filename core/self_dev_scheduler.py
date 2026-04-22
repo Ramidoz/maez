@@ -98,8 +98,10 @@ def _matches_any(rel: str, patterns: tuple[str, ...]) -> bool:
 
 def enumerate_candidates() -> list[str]:
     """Return repo-relative paths of .py files eligible for scheduled
-    review — under one of the scan roots, under the size cap, not
-    matching any skip pattern."""
+    review — under one of the scan roots, between 200 bytes and
+    MAX_BYTES (default 40k), not matching any skip pattern. The
+    200-byte floor is a stub/empty-file guard; self-dev review on
+    d7c4bd8 (concern #4) flagged that it was undocumented."""
     cap = _max_bytes()
     skips = _skip_globs()
     out: list[str] = []
@@ -123,16 +125,37 @@ def enumerate_candidates() -> list[str]:
 
 # ── age lookup (when was this path last reviewed?) ────────────────────
 
-def _age_of_last_review(rel_path: str) -> Optional[float]:
+# self-dev review on d7c4bd8 (concern #1): distinguishing "never
+# reviewed" (legitimate None) from "persistence unavailable" matters
+# for the scheduler's pick policy. If every candidate looked like
+# "never reviewed" because persistence was down, we'd bypass the
+# cooldown filter and waste Claude budget every tick. Use a sentinel
+# and have pick_next() bail out entirely on the unavailable case.
+_PERSISTENCE_UNAVAILABLE = object()
+# Cache the persistence module after the first successful import so
+# we don't re-import N times per tick (was spamming the journal on
+# persistent failure).
+_cached_persistence = None
+
+
+def _age_of_last_review(rel_path: str):
     """Return seconds since the most recent review of `rel_path`, or
-    None if never reviewed. Uses self_dev_persistence directly."""
+    None if never reviewed, or the _PERSISTENCE_UNAVAILABLE sentinel
+    if self_dev_persistence can't be reached. Callers must
+    distinguish these cases.
+    """
+    global _cached_persistence
+    if _cached_persistence is None:
+        try:
+            from core import self_dev_persistence as _sdp
+            _cached_persistence = _sdp
+        except Exception as e:
+            logger.warning("scheduler: can't load persistence: %s", e)
+            return _PERSISTENCE_UNAVAILABLE
+
     try:
-        from core.self_dev_persistence import _connect
-    except Exception as e:
-        logger.warning("scheduler: can't load persistence: %s", e)
-        return None
-    try:
-        with _connect() as con:
+        import contextlib
+        with contextlib.closing(_cached_persistence._connect()) as con:
             # target_ref is "module:<rel>" for review_module and
             # "<git-ref>" for review. Match the module form directly.
             row = con.execute(
@@ -141,7 +164,7 @@ def _age_of_last_review(rel_path: str) -> Optional[float]:
             ).fetchone()
     except Exception as e:
         logger.warning("scheduler: age lookup failed: %s", e)
-        return None
+        return _PERSISTENCE_UNAVAILABLE
     if not row or row[0] is None:
         return None
     return time.time() - float(row[0])
@@ -151,8 +174,10 @@ def _age_of_last_review(rel_path: str) -> Optional[float]:
 
 def pick_next(candidates: Optional[list[str]] = None) -> Optional[str]:
     """Return the repo-relative path of the next module to review, or
-    None if every candidate was reviewed recently enough. Preference:
-    never-reviewed modules first; otherwise, oldest.
+    None if every candidate was reviewed recently enough (or if
+    persistence is unavailable — we bail rather than treat every
+    module as never-reviewed and pay for a review on every tick).
+    Preference: never-reviewed modules first; otherwise, oldest.
     """
     if candidates is None:
         candidates = enumerate_candidates()
@@ -161,8 +186,16 @@ def pick_next(candidates: Optional[list[str]] = None) -> Optional[str]:
     min_age = _min_age_seconds()
     # (path, age_or_inf) tuples; inf = never reviewed
     ranked = []
+    persistence_failed = False
     for p in candidates:
         age = _age_of_last_review(p)
+        if age is _PERSISTENCE_UNAVAILABLE:
+            # self-dev review on d7c4bd8 (concern #1): if persistence
+            # is down we must NOT pick anyone. Bail out entirely so
+            # we don't burn budget every tick on the alphabetically-
+            # first module.
+            persistence_failed = True
+            break
         if age is None:
             age_val = float("inf")
         elif age < min_age:
@@ -170,6 +203,13 @@ def pick_next(candidates: Optional[list[str]] = None) -> Optional[str]:
         else:
             age_val = age
         ranked.append((age_val, p))
+    if persistence_failed:
+        logger.warning(
+            "scheduler: persistence unreachable — skipping tick so the "
+            "cooldown isn't bypassed. %d candidates seen before bail.",
+            len(ranked),
+        )
+        return None
     if not ranked:
         return None
     # Highest age (inf wins, i.e. never-reviewed) first. Deterministic
@@ -179,10 +219,11 @@ def pick_next(candidates: Optional[list[str]] = None) -> Optional[str]:
 
 
 def run_once(caller: str = "self_dev/scheduled") -> int:
-    """Run one review cycle. Returns an exit code; never raises.
-
-    0 = ran (whether or not review found anything)
-    0 = also returned if nothing to review (successful idle)
+    """Run one review cycle. Always returns 0 — errors are logged and
+    swallowed per the module's fail-safe policy (self-dev review on
+    d7c4bd8 corrected the earlier docstring that implied
+    distinguishable exit codes). systemd's default success/failure
+    status is tied to the underlying process, not this int.
     """
     try:
         candidates = enumerate_candidates()
@@ -253,7 +294,14 @@ def run_once(caller: str = "self_dev/scheduled") -> int:
             # is honest about its source.
             _maybe_notify(f"scheduled:{picked}", result)
         except Exception as e:
-            logger.debug("scheduled: notify wiring failed: %s", e)
+            # self-dev review on d7c4bd8 (concern #2): elevated from
+            # DEBUG to WARNING because this runs as a systemd
+            # timer at INFO level, and silently swallowing the
+            # notify failure defeats the whole point of the
+            # notification step.
+            logger.warning(
+                "scheduled: notify failed for %s: %s", picked, e,
+            )
         return 0
     except Exception as e:
         logger.warning("scheduled: unexpected error (swallowed): %s", e)
@@ -262,7 +310,10 @@ def run_once(caller: str = "self_dev/scheduled") -> int:
 
 # ── CLI ───────────────────────────────────────────────────────────────
 
-def _cli_run(args) -> int:
+def _cli_run(_args) -> int:
+    # `run` subparser has no arguments; _args is intentionally unused
+    # (prefixed to signal this to readers). self-dev review on
+    # d7c4bd8 (concern #5) flagged the unprefixed form.
     return run_once()
 
 
