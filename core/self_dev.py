@@ -3,7 +3,7 @@
 """self_dev.py — Maez proposes improvements to its own code via the
 Claude subscription.
 
-Initial primitive: `review(git_ref)`. Given a git range (single commit
+Initial primitive: `review(target_ref)`. Given a git range (single commit
 or commit range), asks Claude to critique the diff and return a
 structured list of concerns. No autonomous triggers yet — the caller
 decides when to invoke. No persistence yet — results print to stdout
@@ -210,17 +210,31 @@ def _git_diff(target_ref: str) -> str:
     else:
         cmd = ["git", "-C", _REPO_ROOT, "show", "--no-color",
                "--no-ext-diff", target_ref]
+    # self-dev meta-review on e41a2db (concern #2): use Popen so we
+    # can actively kill the child on timeout. subprocess.run leaves
+    # the process orphaned on TimeoutExpired, which can hold git
+    # index locks for subsequent calls in the same session.
     try:
-        out = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=30, check=True,
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True,
         )
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(
-            f"git failed for ref {target_ref!r}: {e.stderr[:400]}"
-        )
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"git timed out resolving {target_ref!r}")
-    return out.stdout
+        try:
+            stdout, stderr = proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                proc.communicate(timeout=2)
+            except Exception:
+                pass
+            raise RuntimeError(f"git timed out resolving {target_ref!r}")
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"git failed for ref {target_ref!r}: {(stderr or '')[:400]}"
+            )
+    except FileNotFoundError:
+        raise RuntimeError("git binary not found on PATH")
+    return stdout
 
 
 # ── JSON response parsing ─────────────────────────────────────────────
@@ -331,6 +345,11 @@ def review(
         diff_char_cap  — truncate the diff to this many chars before
                          sending. Prevents a large merge commit from
                          blowing the prompt context.
+        persist        — if False, skip writing to self_dev.db (useful
+                         for dry-run / testing).
+        caller         — attribution string stored with the review
+                         record; flows into the subscription_proxy
+                         trajectory log for per-consumer slicing.
 
     Returns:
         ReviewResult with structured concerns. Never raises on a
@@ -586,6 +605,10 @@ def review_module(
                     ~200k chars, which will be truncated. Manual
                     invocation on a truncated review is still useful
                     for the head of the module.
+        persist   — if False, skip writing to self_dev.db (useful
+                    for dry-run / testing).
+        caller    — attribution string stored with the review record;
+                    flows into the subscription_proxy trajectory log.
 
     Raises RuntimeError on git/tier failures (same contract as review).
     """
@@ -747,8 +770,11 @@ def _cli_propose_tests(args) -> int:
     if args.write:
         import os as _os
         dest = p.test_path or f"tests/test_{_os.path.basename(p.target_module).replace('.py','')}.py"
+        # self-dev meta-review on e41a2db (concern #1): use the
+        # module-level _REPO_ROOT constant rather than a hardcoded
+        # literal so test fixtures / repo relocations are honored.
         dest_abs = dest if _os.path.isabs(dest) else _os.path.join(
-            "/home/rohit/maez", dest,
+            _REPO_ROOT, dest,
         )
         if _os.path.exists(dest_abs) and not args.force:
             print(f"refuse: {dest_abs} already exists (--force to overwrite)",
