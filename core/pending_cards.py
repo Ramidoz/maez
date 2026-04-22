@@ -330,6 +330,37 @@ class PendingCardStore:
         now = time.time()
         state_hash = compute_state_hash(state_fields)
 
+        # Supersede any existing open/deferred card in this chat. Without
+        # this, a Telegram conversation can accumulate multiple pending
+        # proposals — each new turn generates a new card, the old one
+        # lingers until the 5-minute stale-binding window expires, and
+        # the user sees repeated "I proposed X — waiting for your
+        # go-ahead" templates for cards that are already obsolete.
+        # One active card per chat is the cleaner contract.
+        # Observed 2026-04-20: 3 stale-card expirations inside a 90s
+        # window during an active Telegram conversation (cards
+        # f472165d, e3a1ebf2, d9a328d5 expired at 15:33:51–15:34:08).
+        if chat_id:
+            try:
+                with self._conn() as _conn:
+                    _superseded = _conn.execute(
+                        "SELECT request_id FROM pending_cards "
+                        "WHERE chat_id = ? AND status IN (?, ?)",
+                        (chat_id, CardStatus.OPEN.value,
+                         CardStatus.DEFERRED.value),
+                    ).fetchall()
+                for _row in _superseded:
+                    try:
+                        self.expire(
+                            _row["request_id"],
+                            reason="superseded by new proposal in same chat",
+                        )
+                    except CardStoreError:
+                        pass
+            except Exception:
+                # Never let supersession failure block card creation.
+                pass
+
         # Pull classification
         if classification is None:
             intent_category = None
@@ -605,12 +636,23 @@ class PendingCardStore:
     ) -> CardRecord:
         """Approve a card. If current_state_fields is provided and its
         hash differs from the card's original state_hash, the card is
-        EXPIRED instead of approved — this is the stale-world guard."""
+        EXPIRED instead of approved — this is the stale-world guard.
+
+        Cards with state_hash == "empty" (the sentinel default from
+        CardRecord's dataclass field) were never bound to a state
+        manifest at creation — wondering-cycle probes and some
+        cockpit-queued actions fall in this bucket. Treating them as
+        state-sensitive produces noisy "was empty, now <hash>" user
+        messages on every approval even though nothing actually
+        changed. Skip the guard for this case: the creator declined
+        to bind state, so the approval shouldn't be invalidated by
+        state drift.
+        """
         card = self.get(request_id)
         if card is None:
             raise CardStoreError(f"no such card: {request_id}")
 
-        if current_state_fields is not None:
+        if current_state_fields is not None and card.state_hash != "empty":
             now_hash = compute_state_hash(current_state_fields)
             if now_hash != card.state_hash:
                 return self._transition(
