@@ -628,6 +628,12 @@ def review_module(
             system_prompt=_MODULE_REVIEW_SYSTEM_PROMPT,
             model=model,
             caller=caller,
+            # Module reviews can emit long structured responses —
+            # multiple concerns with rationales. 180s (tier default)
+            # has timed out on ~40k-char modules. 300s matches the
+            # propose_tests override and comfortably fits Sonnet's
+            # observed response time on long-form prompts.
+            timeout_s=300.0,
         )
     except claude_tier.ClaudeTierError as e:
         raise RuntimeError(f"module review call failed: {e}")
