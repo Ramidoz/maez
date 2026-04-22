@@ -102,6 +102,38 @@ def _write_soul_insight(analysis: dict, action_engine):
             f"{analysis['repetition_rate']:.0f}%). Unique rate: {unique:.0f}%.\n"
             f"Recommendation: {rec}\n")
 
+    # Skip if an identical (or essentially identical) Self-Analysis
+    # already exists in soul.md. This writer is a nightly cron — over
+    # 10 days it silently accumulated 14 near-identical blocks all
+    # saying "Most repeated: disk (196 times, 98%). Stop mentioning
+    # disk...". The block itself says "repetition wastes attention"
+    # while literally being pasted 14 times.
+    #
+    # Duplicate = same topic AND same repetition_rate (rounded to int)
+    # appears anywhere in the existing soul. Cheap substring check; no
+    # need for fuzzy scoring. If the topic or rate actually changed,
+    # the new note goes in and captures the delta.
+    try:
+        from pathlib import Path
+        soul_path = Path('/home/rohit/maez/config/soul.md')
+        if soul_path.exists():
+            existing = soul_path.read_text()
+            fingerprint = (
+                f"Most repeated: {topic} ({count} times, "
+                f"{analysis['repetition_rate']:.0f}%)"
+            )
+            if fingerprint in existing:
+                logger.info(
+                    "Self-analysis: identical fingerprint already in "
+                    "soul.md (topic=%s rate=%.0f%%); skipping write.",
+                    topic, analysis['repetition_rate'],
+                )
+                return
+    except Exception as e:
+        # Never block the write on a duplicate-check failure. Fail-safe
+        # to the legacy behavior.
+        logger.debug("Self-analysis duplicate-check failed: %s", e)
+
     try:
         action_engine.write_soul_note(note)
         logger.info("Self-analysis written to soul.md")

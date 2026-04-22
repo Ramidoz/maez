@@ -432,6 +432,25 @@ class DreamState:
                     soul_text,
                 )
                 priors.extend(note_lines[-10:])
+                # Also compare against the full non-HARD-CONSTRAINT body
+                # of soul.md. Dreams that echo content already pinned in
+                # soul (e.g. applied #13 which put "65.6% frozen" into
+                # identity) were slipping through because the note-line
+                # regex misses prose-style additions. This prevents the
+                # feedback loop: dream observation → applied to soul →
+                # recalled next cycle → dream again about it.
+                # Sliced into ~800-char windows so Jaccard isn't
+                # dominated by unrelated soul material.
+                body = soul_text
+                for marker in ("HARD CONSTRAINTS", "TRUST COVENANT"):
+                    idx = body.find(marker)
+                    if idx > 0:
+                        body = body[idx:]
+                        break
+                for i in range(0, len(body), 800):
+                    chunk = body[i:i + 1600]  # 800-step with overlap
+                    if chunk.strip():
+                        priors.append(chunk)
         except Exception as e:
             logger.debug("dream novelty: soul-parse failed: %s", e)
 
