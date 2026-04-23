@@ -1,0 +1,42 @@
+[Unit]
+Description=Maez AI Agent Daemon
+Documentation=file://__MAEZ_HOME__/docs/ARCHITECTURE.md
+After=network-online.target ollama.service
+Wants=network-online.target
+# `ollama.service` is optional — if your local inference backend is
+# llama-server instead of Ollama, you can drop it from Wants without
+# affecting the daemon.
+
+[Service]
+Type=simple
+User=__MAEZ_USER__
+Group=__MAEZ_USER__
+WorkingDirectory=__MAEZ_HOME__
+EnvironmentFile=__MAEZ_HOME__/config/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=MAEZ_HOME=__MAEZ_HOME__
+
+# X11 env — only needed by the perception stack's active-window lookup
+# (xdotool). Safe to leave set on headless installs; the daemon
+# degrades gracefully when the X socket isn't reachable.
+Environment=DISPLAY=:1
+Environment=XAUTHORITY=/run/user/__MAEZ_UID__/gdm/Xauthority
+
+ExecStart=__MAEZ_HOME__/.venv/bin/python3 __MAEZ_HOME__/daemon/maez_daemon.py
+Restart=on-failure
+RestartSec=10
+
+# Conservative hardening — the daemon needs the repo writable (logs,
+# memory/*.db) and the /tmp scratchpad. Everything else is read-only
+# or off-limits.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=__MAEZ_HOME__/memory __MAEZ_HOME__/logs __MAEZ_HOME__/config
+# Mark config writable because soul.local.md is appended to at runtime.
+
+StandardOutput=append:__MAEZ_HOME__/logs/maez.log
+StandardError=append:__MAEZ_HOME__/logs/maez.log
+
+[Install]
+WantedBy=multi-user.target

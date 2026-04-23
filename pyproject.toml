@@ -1,0 +1,178 @@
+# Maez — project manifest.
+#
+# Ships the Python runtime dependencies the daemon + web surface +
+# subscription proxy need. Training deps are intentionally separate
+# (see training/requirements.txt); heavy vision deps are an extra.
+#
+# Usage:
+#   python3.12 -m venv .venv
+#   . .venv/bin/activate
+#   pip install -e .                 # core runtime
+#   pip install -e .[vision]         # + face_recognition / dlib
+#   pip install -e .[google]         # + calendar / drive APIs
+#   pip install -e .[dev]            # + linter + test tools
+#   pip install -e .[all]            # everything
+#
+# Entry points (Phase 4 — will expand in follow-ups):
+#   maez daemon          — run the daemon (legacy: python -m daemon.maez_daemon)
+#   maez web             — run the web surface
+#   maez proxy           — run the subscription proxy
+#   maez self-dev ...    — self-dev CLI (passthrough to core.self_dev)
+
+[build-system]
+requires = ["hatchling>=1.20.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "maez"
+version = "0.1.0a0"
+description = "Always-on local AI companion with persistent memory, evolving soul, and sovereign reasoning."
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "AGPL-3.0-or-later"}
+authors = [
+    {name = "Rohit Ananthan"},
+]
+keywords = ["ai", "agent", "local-llm", "daemon", "jarvis", "companion"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Minimum runtime deps for the daemon + web + proxy to boot. Version
+# floors reflect what's currently installed and verified green;
+# loose ceilings because this is alpha and pins-as-you-go has not
+# yet become a release-engineering concern.
+dependencies = [
+    # HTTP + web
+    "flask>=3.0",
+    "fastapi>=0.100",
+    "uvicorn>=0.25",
+    "requests>=2.30",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+    # Config + serialization
+    "pyyaml>=6.0",
+    # Vector memory + numerics
+    "chromadb>=1.0",
+    "numpy>=1.26",
+    "scipy>=1.10",
+    # Host introspection
+    "psutil>=5.9",
+    # LLM clients (both local and subscription-proxied)
+    "ollama>=0.5",
+    "anthropic>=0.70",
+    "openai>=2.0",
+    # Observability
+    "langfuse>=2.60",
+    # CLI framework (used by core.self_dev CLI + future `maez` entry point)
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+# Face recognition + vision perception. Heavy native deps (dlib,
+# opencv). Not required for core daemon; skip on headless servers.
+vision = [
+    "opencv-python>=4.10",
+    "face_recognition>=1.3",
+]
+
+# Telegram surface. If unset, the daemon simply runs without the
+# Telegram push channel.
+telegram = [
+    "python-telegram-bot>=22",
+]
+
+# Google API surfaces (Calendar, Drive). Off by default.
+google = [
+    "google-api-python-client>=2.100",
+    "requests-oauthlib>=2.0",
+]
+
+# Development and CI.
+dev = [
+    "ruff>=0.6",
+    "pytest>=8.0",
+    "build>=1.0",
+]
+
+# Everything — convenience for contributors who want the full surface.
+all = [
+    "maez[vision,telegram,google,dev]",
+]
+
+[project.urls]
+Homepage = "https://github.com/Ramidoz/maez"
+Documentation = "https://github.com/Ramidoz/maez/tree/main/docs"
+Issues = "https://github.com/Ramidoz/maez/issues"
+
+[project.scripts]
+# Console-script entry points are drafted for Phase 4. The actual
+# CLI dispatcher (cli/maez.py) is wired up in a follow-up commit;
+# until then these refer to the existing module-level CLIs.
+"maez-self-dev" = "core.self_dev.__main__:__main__"
+"maez-proxy" = "core.subscription_proxy.__main__:__main__"
+
+# ── Hatchling packaging configuration ──────────────────────────────────
+[tool.hatch.build.targets.wheel]
+# Ship just the importable Python packages — leave models, memory
+# databases, logs, training artifacts, docs out of the wheel.
+packages = ["core", "memory", "daemon", "skills"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/core",
+    "/memory",
+    "/daemon",
+    "/skills",
+    "/cli",
+    "/scripts",
+    "/config/identity.template.yaml",
+    "/config/soul.base.md",
+    "/config/soul.local.template.md",
+    "/.env.example",
+    "/pyproject.toml",
+    "/README.md",
+    "/LICENSE",
+    "/NOTICE",
+]
+
+
+# ── Ruff (lint + format) ───────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [
+    ".venv",
+    "training/.venv",
+    "models",
+    "memory/db",
+    "logs",
+    "backups",
+    "web/node_modules",
+    "web/.next",
+]
+
+[tool.ruff.lint]
+# Conservative starter set. Broaden after Phase 5 test-coverage fill
+# lands and the codebase is more uniformly shaped.
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # bugbear (subset)
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line length — we respect the 100 ceiling but the
+             # existing codebase has thousands of edge cases; flip
+             # on when we're ready for a formatting sweep.
+    "E402",  # module-level imports after top: used deliberately by
+             # the Phase 3 shim pattern (`import sys; ...`).
+    "B008",  # mutable default — some of our dataclasses rely on it.
+]

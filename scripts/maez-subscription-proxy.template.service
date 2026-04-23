@@ -1,0 +1,41 @@
+[Unit]
+Description=Maez subscription proxy — localhost OpenAI-compatible endpoint → Claude/OpenRouter/etc adapters
+Documentation=file://__MAEZ_HOME__/core/subscription_proxy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__MAEZ_USER__
+Group=__MAEZ_USER__
+WorkingDirectory=__MAEZ_HOME__
+# Loads OPENROUTER_API_KEY / OPENAI_API_KEY / etc. from the same env file
+# the daemon uses. Keep the perms on this file at 600 — it holds tokens.
+EnvironmentFile=__MAEZ_HOME__/config/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=MAEZ_SUBSCRIPTION_PROXY_PORT=11438
+Environment=MAEZ_HOME=__MAEZ_HOME__
+ExecStart=__MAEZ_HOME__/.venv/bin/python3 -m core.subscription_proxy
+Restart=always
+RestartSec=5
+
+# Localhost-only binding is enforced in code (uvicorn host=127.0.0.1).
+# These hardening bits reinforce that the proxy can't be trivially
+# repurposed as a local-privilege-escalation vector if misconfigured.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=__MAEZ_HOME__/memory __MAEZ_HOME__/logs
+ProtectHome=read-only
+PrivateTmp=true
+LockPersonality=true
+
+# Limit ourselves — one user, one proxy, no sub-process bombs.
+# Claude / Gemini CLIs will fork, so leave headroom.
+LimitNOFILE=4096
+TasksMax=128
+
+StandardOutput=append:__MAEZ_HOME__/logs/subscription_proxy.log
+StandardError=append:__MAEZ_HOME__/logs/subscription_proxy.log
+
+[Install]
+WantedBy=multi-user.target
