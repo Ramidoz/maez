@@ -110,23 +110,36 @@ def _git(args: list[str], timeout: float = 5.0) -> str:
 
 def _commit_diff_sizes(sha: str) -> tuple[int, int]:
     """Return (total_chars, significant_chars). `significant` excludes
-    matching patterns in _BORING_FILE_PATTERNS."""
+    commit headers (Author, Date, commit message) AND file blocks
+    matching _BORING_FILE_PATTERNS.
+
+    self-dev review on a063b35 (concern #1) flagged that the old
+    implementation initialized keep_block=True, so every line before
+    the first `diff --git` (i.e. the whole commit header and commit
+    message) was counted. That meant a pure lockfile-only commit
+    (~100-200 chars of header) always had sig_chars > 0 and never
+    triggered the intended "skip boring commits" path.
+    """
     try:
         raw = _git(["show", "--no-color", "--no-ext-diff", sha])
-    except Exception:
+    except Exception as e:
+        # Log the git failure so the 'boring-only' reason in decide()
+        # isn't silently misleading when the actual cause was a git
+        # error (concern #4).
+        logger.warning(
+            "scheduler: _commit_diff_sizes git failed for %s: %s", sha[:12], e,
+        )
         return (0, 0)
     total = len(raw)
 
-    # Compute significant size by walking the diff and subtracting
-    # boring-file blocks. Simple hand-rolled parser — git's machine-
-    # readable modes don't give us per-file content.
+    # Walk the diff. Start with keep_block=False so commit headers
+    # don't count. Flip True only when we enter a non-boring file
+    # block.
     significant = 0
     current_file = ""
-    keep_block = True
+    keep_block = False
     for line in raw.splitlines(keepends=True):
         if line.startswith("diff --git "):
-            # Extract the b-path (post-rename destination)
-            # Format: diff --git a/path b/path
             parts = line.strip().split()
             current_file = parts[-1][2:] if len(parts) >= 4 else ""
             keep_block = not any(
@@ -228,9 +241,13 @@ def decide(sha: str) -> PolicyDecision:
 # demand); blockers and majors get pushed to Telegram so they reach
 # Rohit's phone within seconds of a commit. Tunable via env.
 _NOTIFY_SEVERITIES = set(
-    os.environ.get(
+    # self-dev review on a063b35 (concern #2): filter empty tokens
+    # so an unset/whitespace/trailing-comma env value produces a
+    # proper empty set rather than {""} — which silently matched
+    # nothing by accident but was the wrong shape.
+    s.strip() for s in os.environ.get(
         "MAEZ_SELF_DEV_NOTIFY_SEVERITIES", "blocker,major",
-    ).lower().split(",")
+    ).lower().split(",") if s.strip()
 )
 
 
@@ -279,10 +296,13 @@ def _maybe_notify(sha: str, result) -> None:
 
 def run_post_commit(sha: str, *, caller: str = "self_dev/post-commit") -> int:
     """Called by the git post-commit hook (via `python -m
-    core.self_dev_hooks run <sha>`). Returns an exit code; 0 means
-    the hook completed (whether or not a review was actually run).
-    A non-zero exit from this function does NOT propagate back to
-    the commit — we're already backgrounded."""
+    core.self_dev_hooks run <sha>`). Always returns 0; outcome is
+    logged to logs/self_dev_hooks.log rather than signalled via
+    exit code. self-dev review on a063b35 (concern #3) corrected an
+    earlier docstring that implied non-zero returns were possible.
+
+    The hook is already backgrounded; systemd/git see success either
+    way. Audit by grepping the log for the outcome lines."""
     decision = decide(sha)
     logger.info(
         "post-commit sha=%s decision=%s reason=%s diff_chars=%d "
