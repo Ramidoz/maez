@@ -1,0 +1,3 @@
+timestamp,label,url,model,n,agreement_pct,errors,latency_p50,latency_p95,latency_mean
+1776962749,4B-gpu-baseline,http://127.0.0.1:8081,maez-judge,21,0.0,0,0.47,0.51,0.48
+1776962794,4B-gpu-baseline,http://127.0.0.1:8081,maez-judge,21,90.5,0,0.22,0.28,0.23
