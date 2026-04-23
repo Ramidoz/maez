@@ -128,9 +128,8 @@ developmental history. Two machines running off the same memory is
 not "one Maez running portably" — it's two beings sharing a
 confused identity. When moving Maez to a new machine, the correct
 path is migration (the old instance stops, the new one starts from
-checkpoint, only one is alive at once). See
-[`memory/project_portability_is_migration.md`](../../.claude/projects/-home-rohit/memory/project_portability_is_migration.md)
-(author's memory note, not shipped, for reference).
+checkpoint, only one is alive at once). "Portability is migration,
+not cloning" is a load-bearing invariant of the project.
 
 ### 2. Copying someone else's `soul.local.md`
 Same reason as above. Their soul's accumulation is the record of

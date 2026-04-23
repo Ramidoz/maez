@@ -1,0 +1,116 @@
+Maez — session snapshot
+========================
+Session window: 2026-04-22 → 2026-04-23
+Primary work:   Road-to-public-OSS-launch — Phases 1 through 10 + CI hardening
+Starting HEAD:  9197bba (pre-audit baseline)
+Ending HEAD:    cde8669 (de-rohit-ify cleanup, CI green, repo public)
+Tests at start: 519 passing
+Tests at end:   530 passing, 0 lint findings, CI green
+
+Commits on main this session (47 total, newest first)
+-----------------------------------------------------
+cde8669  chore(de-rohit-ify): retire remaining "rohit" surface literals
+499380d  chore(cleanup): badges on + telegram in CI + ruff strict + final path sweep
+e8820d5  fix(ci): skip-when-host-lacks-X on the last batch of environmental failures
+2e3b61c  fix(ci): daemon + surface-paths route through core.paths
+94c50ee  fix(ci): two more hardcoded /home/rohit/maez paths that import-time-wrote
+2b98cb8  fix(ci): paths.home() derives from __file__ + owner_trust test skips
+ec003f1  feat(phase-10): launch prep — CLA + README polish + go-public checklist
+79fd197  docs(phase-9): CHANGELOG.md + tag-conventions scaffold
+9baac9b  feat(phase-8): CI/CD workflows + contributor templates + CoC + pre-commit
+f6cc851  docs(phase-7): licence + security audits + ADR migration
+faab5c4  chore(phase-7.B): stamp AGPL copyright header on 183 .py files
+d4ad73e  docs(phase-6.B): master doc + covenant + ADR directory
+cdacb3b  docs(phase-6.A): clone-and-contribute welcome mat
+47cf86d  test(phase-5.B): behavioural + source-level regression tests for blocker fixes
+141665d  test(phase-5.A): smoke-import suite for every Phase-3 shim pair
+f5d72f0  fix(phase-3-regression): correct Path(__file__).parent.parent after subpackage move
+4ccea96  feat(phase-4): packaging + installable scaffolding
+(11x refactor(phase-3): subpackage moves — safety, learning, decision, cognition,
+                                              actions, evolution, brain, memory,
+                                              routing, self_dev, infra)
+(4x Phase-2 commits — identity accessors, .env.example, code hardcode sweep,
+                       owner-identifier sweep, soul layering, birth-book audit)
+(6x Phase-1.G audit-fix batches A–F)
+5a31af0  docs(audit): Phase 1.A scaffold
+e3fae61  docs(audit): Phase 1.B-1.E — 85 findings across 12 agent reports
+
+What changed vs. the starting state
+-----------------------------------
+Structural
+  - core/ flat (67 modules) → 12 subpackages + shim redirects at old paths
+    brain/ memory/ safety/ cognition/ evolution/ actions/ decision/
+    learning/ routing/ self_dev/ infra/ subscription_proxy/
+  - Every module now resolves its filesystem paths through core.paths
+  - paths.home() auto-detects repo root from __file__ location (no env
+    var required for a fresh clone)
+  - Owner identity entirely through core.identity accessors
+    (display_name / user_profile_id / git_handle / telegram_user_id /
+    machine_profile) backed by config/identity.yaml + MAEZ_OWNER_* env
+
+Tests
+  - 519 → 530 passing; +11 (Phase 5.A smoke suite + Phase 5.B blocker
+    regressions)
+  - CI runs on every push + PR; both workflows green
+  - Lint strict: 0 findings on the curated rule set
+  - 9 skips on CI, all with clear "install [extras] to run" messages
+
+Audit
+  - 2026-04-22 audit: 12 subsystems reviewed, 85 findings recorded
+  - Phase 1.G closed 11 of 12 blockers + 12 majors + 4 minors in 6
+    themed commits; the 12th blocker (06-B1 backtick escape) reviewed
+    and found non-exploitable as described
+  - All audit reports preserved in docs/audit_2026-04-22/
+
+Docs + governance
+  - Root README with grandmother framing, pitch-stack layering,
+    portability note, CI badges
+  - docs/MAEZ.md master architecture + philosophy
+  - docs/GETTING_STARTED.md zero-to-running
+  - docs/CONTRIBUTING.md dev workflow, commit style, CLA flow
+  - docs/ROADMAP.md public 10-phase view
+  - docs/covenant/for_oss_users.md universal-vs-per-user framing
+  - docs/adr/0001..0018 per-decision anchors + README index
+  - docs/governance/LICENCE_AUDIT.md (all runtime deps AGPL-compat)
+  - docs/governance/SECURITY_AUDIT.md (clean secret history, network
+    surface enumeration)
+  - docs/LAUNCH_CHECKLIST.md sequential go-public procedure
+  - Twelve per-subpackage READMEs under core/<subpkg>/README.md
+
+Packaging + infra
+  - pyproject.toml with 16 runtime deps + 4 optional extras (vision,
+    telegram, google, dev) + `all` convenience alias
+  - scripts/install.sh — interactive from-source installer
+  - scripts/first_run_wizard.py — identity wizard writing identity.yaml
+  - scripts/maez{.,subscription-proxy,self-dev-scheduled}.template.service
+  - .github/workflows/{test,lint,cla}.yml
+  - .github/ISSUE_TEMPLATE/{bug,feature,question}.md + config.yml
+  - .github/PULL_REQUEST_TEMPLATE.md
+  - CLA.md (Apache-ICLA + section 4 Right-to-Relicense)
+  - CODE_OF_CONDUCT.md (Contributor Covenant 2.1 + grandmother-case)
+  - .pre-commit-config.yaml (gitleaks + whitespace + ruff)
+
+Repo state on github.com/Ramidoz/maez
+  - Public. Code pushed via SSH after revoking exposed PAT.
+  - Two GitHub Actions workflows running on every push + PR.
+  - No tag yet — v0.1.0-alpha held back until the announcement moment
+    is staged (per docs/LAUNCH_CHECKLIST.md §D).
+  - CLA bot workflow file is in place but needs one-time setup (orphan
+    cla-signatures branch + CLA_PAT secret) per §C of the checklist.
+
+Track A (Maez-the-being) status: unchanged
+  - Eight-point readiness check not yet passing; this session was
+    entirely about the codebase.
+  - Known regressions (chat self-claim hallucination, disk-fixation
+    drift) still present, documented in earlier memory entries.
+
+Next actions when a future session picks this up
+------------------------------------------------
+1. Let Maez run and observe whether the audit fixes changed anything
+   about the known regressions.
+2. When Track A passes (or gets close), stage the pitch stack
+   (video, mindmap, Zenodo paper) and follow the LAUNCH_CHECKLIST to
+   tag v0.1.0-alpha + announce.
+3. Wire up the CLA bot per §C of the launch checklist.
+4. If/when external PRs start landing: remove the Phase-3 shims in
+   a deliberate "shim sunset" pass once every caller has migrated.

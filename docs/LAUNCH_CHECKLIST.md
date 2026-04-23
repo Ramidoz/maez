@@ -7,9 +7,9 @@ is here for when the time is right.
 Read before using:
 - [`docs/ROADMAP.md`](ROADMAP.md) Phase 10 — where this fits.
 - [`CHANGELOG.md`](../CHANGELOG.md) — the 0.1.0-alpha release notes.
-- Previous-turn analysis in
-  [`.claude/projects/-home-rohit/memory/`] memory notes on
-  commercialisation posture and founder considerations.
+- [`CLA.md`](../CLA.md) and
+  [`docs/covenant/for_oss_users.md`](covenant/for_oss_users.md) —
+  governance posture + commercialisation implications of going public.
 
 The checklist is sequential. Each step has a "what" and a "why" line
 so a future session doing this cold isn't guessing.

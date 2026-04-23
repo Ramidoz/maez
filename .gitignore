@@ -65,6 +65,8 @@ memory/fast_reply_audit.jsonl
 memory/site_analytics.jsonl
 memory/last_briefing.txt
 memory/perception_cache.json
+memory/last_consolidation.txt
+memory/*.tmp
 
 # External vendored tooling checked out as a sibling repo; not ours.
 /superpowers/
