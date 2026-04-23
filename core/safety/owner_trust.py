@@ -34,11 +34,25 @@ from typing import Any, Optional
 # ── trust tiers ────────────────────────────────────────────────────────
 
 # Liberal tier: owner-level trust, inline-default for non-risky ops.
-# Per `project_bond_styles_dimension.md`. Kept as an explicit allowlist
-# so other users don't accidentally inherit this stance.
-_LIBERAL_USERS = frozenset({"rohit"})
+# Per `project_bond_styles_dimension.md`. Kept as an static allowlist
+# of historical owner-scope labels. The *canonical* owner identity
+# resolves through core.identity.user_profile_id() at runtime in
+# trust_tier() below, so this frozenset exists only as a safety net
+# for installs where identity.yaml is unavailable at import time.
+_LIBERAL_USERS = frozenset({"rohit", "owner", "private_owner"})
 
 # Future: _STANDARD_USERS, _RESTRICTED_USERS with tighter defaults.
+
+
+def _resolve_owner_id() -> Optional[str]:
+    """Read the owner's configured user_id at call time. Falls back
+    to None if identity hasn't loaded yet (very early bootstrap);
+    callers then rely on the _LIBERAL_USERS static fallback."""
+    try:
+        from core.identity import user_profile_id
+        return user_profile_id()
+    except Exception:
+        return None
 
 
 def trust_tier(user_id: Optional[str]) -> str:
@@ -46,9 +60,18 @@ def trust_tier(user_id: Optional[str]) -> str:
 
     Unknown is the conservative fallback — anything that doesn't match
     a known tier gets the strictest default (card-first, today's
-    behavior)."""
+    behavior).
+
+    Liberal tier matches:
+      1. The owner's configured user_id (from config/identity.yaml).
+      2. Any legacy scope label in _LIBERAL_USERS (for installs where
+         the yaml isn't yet populated).
+    """
     if not user_id:
         return "unknown"
+    owner_id = _resolve_owner_id()
+    if owner_id and user_id == owner_id:
+        return "liberal"
     if user_id in _LIBERAL_USERS:
         return "liberal"
     # Future tiers land here.

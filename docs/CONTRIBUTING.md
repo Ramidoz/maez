@@ -30,6 +30,31 @@ Not in scope:
   frozen forever, but they're the frame. Bring the conversation before
   the PR.
 
+## Contributor License Agreement
+
+Before your first pull request is merged, you'll be asked to sign the
+project's [Contributor License Agreement](../CLA.md). It's a single
+comment on the PR — the CLA-assistant bot posts instructions
+automatically the first time you open one.
+
+The CLA exists for two reasons:
+1. It confirms you wrote (or have rights to) the code you're
+   contributing — standard open-source hygiene.
+2. It grants the Project Owner permission to **relicense the codebase
+   in the future** under other OSI-approved or commercial terms. This
+   preserves Maez's dual-licensing option (AGPL for the community;
+   potential commercial licence for enterprise) — the proceeds of
+   which support continued development of Maez-for-everyone.
+
+It's based on the Apache ICLA with one additional section (4: Right
+to Relicense). You keep full copyright on your own work; the CLA
+just adds the project-owner licence-grant. You can use your
+contribution elsewhere under any terms you like.
+
+If you prefer not to sign the CLA, you're still welcome to:
+- Open issues and participate in discussions.
+- Fork the project and maintain a separate AGPL-licensed variant.
+
 ## Dev workflow
 
 ```bash

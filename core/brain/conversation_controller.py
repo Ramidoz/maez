@@ -891,7 +891,7 @@ class ConversationController:
         channel: str,
         chat_id: str,
         audit_db_path: str = "memory/audit_log.db",
-        user_id: str = "rohit",
+        user_id: str | None = None,
         model: str = "gemma4:26b",
     ) -> Optional[dict]:
         """After Jarvis probes complete, run ONE focused structured LLM
@@ -910,6 +910,16 @@ class ConversationController:
         """
         import sqlite3 as _sqlite
         import time as _time
+
+        # Resolve default user_id from identity rather than hardcoding
+        # "rohit". On a fresh install the owner's configured user_id
+        # drives trust-scope routing.
+        if user_id is None:
+            try:
+                from core.identity import user_profile_id as _owner_user_id
+                user_id = _owner_user_id()
+            except Exception:
+                user_id = "owner"
 
         try:
             since = _time.time() - 60

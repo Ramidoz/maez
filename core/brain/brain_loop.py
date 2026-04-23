@@ -654,7 +654,7 @@ def run_brain_loop(
     *,
     action_engine,
     get_pipeline,
-    user_id: str = "rohit",
+    user_id: str | None = None,
     chat_id: str = "",
     model: str | None = None,  # None → use core.model_config.PRIMARY_MODEL
     max_iters: int = 4,
@@ -686,6 +686,17 @@ def run_brain_loop(
         return ""
     if recovery_seed is None and not _should_run_jarvis_loop(user_text):
         return ""
+
+    # Resolve default user_id from identity (owner.user_id in the yaml)
+    # when the caller passed None. Keeps the scope-label "rohit" out of
+    # function signatures — on a fresh install the owner's configured
+    # user_id drives trust-scope routing.
+    if user_id is None:
+        try:
+            from core.identity import user_profile_id as _owner_user_id
+            user_id = _owner_user_id()
+        except Exception:
+            user_id = "owner"
 
     # Resolve model from model_config if caller didn't pin one. Keeps the
     # loop model-agnostic — any alias configured in /etc/maez/model.env

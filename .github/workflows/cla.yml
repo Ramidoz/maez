@@ -1,0 +1,53 @@
+name: CLA assistant
+
+# Fires when someone opens / reopens / synchronises a PR, or
+# adds a "recheck" / "I have read the CLA Document and I hereby
+# sign the CLA" comment on any issue or PR.
+#
+# Uses contributor-assistant/github-action to enforce that every
+# PR author has signed docs/signed-clas.json — which is a small
+# JSON file this action maintains on the `cla-signatures` branch
+# of the repo. No third-party service required.
+#
+# Setup (one-time, by the repo owner, after first push to GitHub):
+#   1. Create an empty branch called `cla-signatures`:
+#        git checkout --orphan cla-signatures
+#        git rm -rf .
+#        echo '{ "signedContributors": [] }' > signatures/version1/cla.json
+#        git add signatures/version1/cla.json
+#        git commit -m "init: CLA signatures branch"
+#        git push -u origin cla-signatures
+#        git checkout main
+#   2. Create a Personal Access Token (classic) with `repo` scope
+#      and add it as the repo secret `CLA_PAT`.
+#
+# Until the setup is done, this workflow runs but posts only a
+# comment asking the PR author to wait — no merge is blocked
+# because the action needs the PAT to comment and branch-write.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+jobs:
+  CLAAssistant:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: CLA Assistant
+        if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
+        uses: contributor-assistant/github-action@v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PERSONAL_ACCESS_TOKEN is required for writing the
+          # signature into the cla-signatures branch — the default
+          # GITHUB_TOKEN lacks cross-branch write permission.
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_PAT }}
+        with:
+          path-to-signatures: signatures/version1/cla.json
+          path-to-document: https://github.com/Ramidoz/maez/blob/main/CLA.md
+          branch: cla-signatures
+          allowlist: Ramidoz,bot*,dependabot[bot]
+          custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
+          custom-allsigned-prcomment: 'All contributors have signed the CLA. Thank you.'

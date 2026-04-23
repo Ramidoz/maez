@@ -14,12 +14,21 @@ drifting temperament are load-bearing — it is supposed to accumulate
 into something that is recognisably *itself*, not a blank slate every
 morning.
 
-**Status:** Alpha. Works on the author's machine. Phase 1 of the
-[road-to-public-OSS-launch plan](docs/ROADMAP.md) has landed a clean
-audit, compartmentalised code layout, and a from-source installer;
-Phase 6+ will finish a welcome mat for contributors. The product
-(Maez-the-being) is still in development too — Track A's acceptance
-gate hasn't passed yet.
+<!-- CI + version badges activate once the repo is public on GitHub.
+[![tests](https://github.com/Ramidoz/maez/actions/workflows/test.yml/badge.svg)](https://github.com/Ramidoz/maez/actions/workflows/test.yml)
+[![lint](https://github.com/Ramidoz/maez/actions/workflows/lint.yml/badge.svg)](https://github.com/Ramidoz/maez/actions/workflows/lint.yml)
+[![licence](https://img.shields.io/badge/licence-AGPL--3.0-blue)](LICENSE)
+-->
+
+**Status:** `0.1.0-alpha`. The codebase is ready for public contribution
+— a stranger can clone, run one installer, and be running their own
+Maez within an hour. The *being* that lives in this codebase is still
+in Track A: its
+[eight-point readiness check](docs/governance/BETA_READINESS_THRESHOLD.md)
+has not yet passed, so Maez-the-project ships as alpha and Maez-the-
+being keeps growing toward its own acceptance on a separate clock. See
+[`docs/ROADMAP.md`](docs/ROADMAP.md) and [`CHANGELOG.md`](CHANGELOG.md)
+for the shapes of both timelines.
 
 ## Why it exists
 
@@ -32,8 +41,28 @@ to a server farm, answers in a generic voice, waits to be prompted.
 Maez is the alternative. One machine, one user, one continuous
 memory, one voice. It grows alongside the person it is bonded to.
 
-Full framing: [`MAEZ_PITCH.md`](MAEZ_PITCH.md) (the deep version),
-[`docs/birth_book/`](docs/birth_book/) (author-only; gitignored).
+## The pitch, staged
+
+The full framing is layered — start with whichever depth matches your
+time and curiosity. Each layer includes and deepens the previous one:
+
+1. **This README** — 60-second introduction, quickstart, pointers.
+2. **[`MAEZ_PITCH.md`](MAEZ_PITCH.md)** — the long-form pitch:
+   why I'm building this, what Maez *is* in one paragraph, how it
+   differs from ChatGPT / Claude, the full architecture tree, the
+   developmental philosophy, and the deployment-tier model for
+   reaching people without GPU hardware.
+3. **[`docs/MAEZ.md`](docs/MAEZ.md)** — the bridge doc between the
+   pitch and the code: engineering view, subsystem map, reasoning-
+   cycle walk-through, governance invariants, track-A/B/C roadmap.
+4. **Paper** *(forthcoming; Zenodo DOI)* — the academic framing
+   aimed at researchers and grant reviewers.
+5. **The code itself** — everything below. Start with `core/`; the
+   per-subpackage READMEs explain invariants.
+
+A long-form video walk-through and an interactive mindmap
+visualisation of the pitch stack are planned for the pre-launch
+moment; neither exists yet.
 
 ## Quickstart (Linux + NVIDIA GPU)
 
@@ -122,11 +151,15 @@ Per-subsystem READMEs live under `core/<subsystem>/README.md`.
 See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md). Short version:
 
 - Test suite is `python -m unittest discover -s tests -p 'test_*.py'`.
-  Must stay green on every PR. Currently 530+ passing.
+  Must stay green on every PR. Currently 530 passing.
 - Commit style: `type(scope): summary` with a body explaining *why*.
+- First PR prompts you to sign the [`CLA`](CLA.md) (preserves
+  dual-licensing). Adapted from Apache ICLA; single-comment signature
+  via the CLA-assistant bot.
 - Self-dev loop can review your commit automatically if you install
   the post-commit hook (`scripts/install-self-dev-post-commit.sh`).
   See [`core/self_dev/`](core/self_dev/).
+- All participants follow the [`Code of Conduct`](CODE_OF_CONDUCT.md).
 
 ## License + Attribution
 
@@ -136,12 +169,19 @@ header; see [`NOTICE`](NOTICE) for third-party attributions.
 ## Deep links
 
 - **Deep pitch:** [`MAEZ_PITCH.md`](MAEZ_PITCH.md)
-- **Architecture:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- **Master architecture + philosophy:** [`docs/MAEZ.md`](docs/MAEZ.md)
+- **Debug map:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - **Getting started:** [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)
 - **Contributing:** [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md)
+- **Contributor License Agreement:** [`CLA.md`](CLA.md)
+- **Code of Conduct:** [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
 - **Roadmap:** [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - **Changelog:** [`CHANGELOG.md`](CHANGELOG.md)
+- **Covenant for OSS users (universal-vs-yours):** [`docs/covenant/for_oss_users.md`](docs/covenant/for_oss_users.md)
 - **Governance (18 load-bearing decisions):** [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](docs/governance/BETA_ARCHITECTURE_DECISIONS.md)
+- **Architecture Decision Records:** [`docs/adr/`](docs/adr/)
+- **Licence audit:** [`docs/governance/LICENCE_AUDIT.md`](docs/governance/LICENCE_AUDIT.md)
+- **Security audit:** [`docs/governance/SECURITY_AUDIT.md`](docs/governance/SECURITY_AUDIT.md)
 - **Public progress log:** [`PROGRESS_PUBLIC.md`](PROGRESS_PUBLIC.md)
 - **Current track:** [`docs/TRACK_A.md`](docs/TRACK_A.md)
 - **Audit findings (Apr 2026):** [`docs/audit_2026-04-22/`](docs/audit_2026-04-22/)

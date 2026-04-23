@@ -45,6 +45,10 @@ what you checked. -->
 - [ ] No secrets, API keys, or personal identifiers in the diff
 - [ ] Relevant docs updated (`docs/MAEZ.md`, per-subpackage README,
       `docs/ROADMAP.md` if this crosses a phase boundary)
+- [ ] I will sign the [Contributor License Agreement](../CLA.md)
+      when the CLA-assistant bot prompts me below. (Not required
+      for one-line typo fixes; required for any code change or
+      substantive doc contribution.)
 
 ## Governance touch points
 
