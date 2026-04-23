@@ -55,10 +55,28 @@ class _FakeDaemon:
         self.last_source: Optional[str] = None
         self.last_text: Optional[str] = None
 
-    def handle_message(self, text: str, source: str = "unknown") -> str:
+    def handle_message(self, text: str, source: str = "unknown",
+                       **kwargs) -> str:
+        # 2026-04-23 Commit 1: the daemon now owns the final-reply
+        # audit. A faithful stand-in applies the same helper so tests
+        # that check "did the fabrication get rewritten end-to-end"
+        # still pass without needing a real daemon.
         self.last_text = text
         self.last_source = source
-        return self._reply
+        self.last_kwargs = kwargs
+        reply = self._reply
+        try:
+            from core.safety.audited_output import audit_assistant_text
+            reply = audit_assistant_text(
+                reply,
+                surface=source,
+                transcript=kwargs.get("transcript", "") or "",
+                signals_present=kwargs.get("signals_present"),
+                signals_absent=kwargs.get("signals_absent"),
+            )
+        except Exception:
+            pass
+        return reply
 
 
 class HandlerRouting(unittest.TestCase):
@@ -91,7 +109,7 @@ class HandlerRouting(unittest.TestCase):
 
     def test_daemon_raising_returns_error_string(self):
         class Raiser:
-            def handle_message(self, text, source="unknown"):
+            def handle_message(self, text, source="unknown", **kwargs):
                 raise RuntimeError("brain offline")
 
         handler = MaezMessageHandler(Raiser())

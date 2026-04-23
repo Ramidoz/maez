@@ -605,13 +605,26 @@ class MaezDaemon:
             logger.error("Curiosity check-in error: %s", e)
 
     def _check_proactive_opinion(self):
-        """Every 50 cycles, check if there's something worth telling the owner unprompted."""
+        """Every 50 cycles, check if there's something worth telling the owner unprompted.
+
+        2026-04-23 memory-integrity contract (Commit 1):
+          - Input is a memory WINDOW, not live signals. The grounding
+            manifest marks screen/presence/calendar as "stale" (drawn
+            from memory) rather than "present" (live this turn) so the
+            audit applies the right invariant.
+          - The sent text is audited before `telegram.send_message()`.
+          - The audited text is stored with distinct provenance
+            (`type="proactive_opinion"`) so future recall/reranking
+            can distinguish "I said this unprompted" from "I replied
+            to a direct message."
+        """
         try:
-            results = self.memory.raw.get(limit=20, include=["documents"])
+            window_size = 20
+            results = self.memory.raw.get(limit=window_size, include=["documents"])
             thoughts = results.get("documents", [])
             if len(thoughts) < 10:
                 return
-            thoughts_text = '\n'.join(thoughts[-20:])
+            thoughts_text = '\n'.join(thoughts[-window_size:])
             prompt = (
                 f"You are reviewing your last 20 observations about the owner and his system.\n\n"
                 f"{thoughts_text}\n\n"
@@ -630,12 +643,68 @@ class MaezDaemon:
                 options={"temperature": 0.8, "num_predict": 100},
             )
             result = (response.message.content or "").strip()
-            if result and result != "NOTHING" and len(result) > 10 and "NOTHING" not in result.upper():
-                # Temporal grounding: strip stale weekday phrases from
-                # model output before sending to the owner.
-                result = self._strip_temporal_phrases(result)
-                self.telegram.send_message(result)
-                logger.info("[OPINION] Unprompted: %s", result[:80])
+            if not (
+                result
+                and result != "NOTHING"
+                and len(result) > 10
+                and "NOTHING" not in result.upper()
+            ):
+                return
+
+            # Temporal grounding: strip stale weekday phrases from
+            # model output before sending to the owner.
+            result = self._strip_temporal_phrases(result)
+
+            # Aggregated-window manifest. The input to the proactive
+            # LLM call was RAW MEMORY, not live perception — so the
+            # audit should know screen/presence/calendar are derived
+            # from the reviewed window, not observable right now.
+            proactive_signals_absent = [
+                "live screen observation (input was memory window)",
+                "live presence snapshot (input was memory window)",
+                "live calendar (input was memory window)",
+            ]
+            proactive_signals_present = [
+                f"memory window of last {window_size} raw entries",
+            ]
+
+            try:
+                from core.safety.audited_output import audit_assistant_text
+                result = audit_assistant_text(
+                    result,
+                    surface="daemon_proactive",
+                    signals_present=proactive_signals_present,
+                    signals_absent=proactive_signals_absent,
+                )
+            except Exception as _aud_exc:
+                logger.warning("proactive audit fail-open: %s", _aud_exc)
+
+            # Send the audited text, not the raw generation.
+            self.telegram.send_message(result)
+            logger.info("[OPINION] Unprompted: %s", result[:80])
+
+            # Provenance-tagged storage so later recall can distinguish
+            # owner-initiated exchanges from Maez-initiated messages.
+            # Note: lives in the same `raw` collection as cycle thoughts
+            # + telegram exchanges; the `type` metadata is what future
+            # filters/rerankers key on.
+            try:
+                import uuid as _uuid
+                from datetime import datetime as _dt, timezone as _tz
+                self.memory.raw.add(
+                    ids=[_uuid.uuid4().hex],
+                    documents=[result],
+                    metadatas=[{
+                        "type": "proactive_opinion",
+                        "surface": "daemon_proactive",
+                        "source_window_count": window_size,
+                        "sent_to_owner": True,
+                        "timestamp": _dt.now(_tz.utc).isoformat(),
+                        "cycle": self.cycle_count,
+                    }],
+                )
+            except Exception as _store_exc:
+                logger.debug("proactive provenance store failed: %s", _store_exc)
         except Exception as e:
             logger.error("Proactive opinion error: %s", e)
 
@@ -1036,8 +1105,36 @@ class MaezDaemon:
         finally:
             self._ollama_lock.release()
 
-    def handle_message(self, text: str, source: str = "unknown") -> str:
-        """Process an incoming message through full reasoning context. Returns reply string."""
+    def handle_message(
+        self,
+        text: str,
+        source: str = "unknown",
+        *,
+        transcript: str = "",
+        signals_present: "list | None" = None,
+        signals_absent: "list | None" = None,
+    ) -> str:
+        """Process an incoming message through full reasoning context. Returns reply string.
+
+        The returned reply is the AUDITED reply (see
+        `core.safety.audited_output.audit_assistant_text`). The stored
+        memory record is the same audited text. Callers (e.g. the
+        surface adapter) must not re-audit; this is the single source
+        of truth for the final reply on the daemon-synthesis path.
+
+        Args:
+            text: user's message as received from the surface.
+            source: surface label ("telegram_surface", "voice", "UI",
+                "web", etc.) — forwarded to audit telemetry.
+            transcript: Jarvis tool-use transcript, if a tool loop ran
+                before this synthesis. When non-empty, the audit skips
+                the judge (real stdout grounds the claim by
+                construction). Default "" for direct LLM-only replies.
+            signals_present / signals_absent: grounding manifest for
+                the audit. Defaults to None (the audit falls back to
+                its legacy "infer from surface" behavior) when the
+                caller does not know.
+        """
         from skills.web_search import (
             search as web_search, format_for_context as web_format,
             needs_web_search, search_rss, is_news_query,
@@ -1153,6 +1250,22 @@ class MaezDaemon:
             reply = (response.message.content or "").strip() or "(no response)"
         except Exception as e:
             reply = f"Error: {e}"
+
+        # 2026-04-23 memory-integrity contract: audit BEFORE store + return.
+        # See core/safety/audited_output.py for the full invariant.
+        # `transcript` is the caller's Jarvis tool-use transcript if a
+        # tool loop ran; `in_tool_continuation` is derived from it.
+        try:
+            from core.safety.audited_output import audit_assistant_text
+            reply = audit_assistant_text(
+                reply,
+                surface=source,
+                transcript=transcript,
+                signals_present=signals_present,
+                signals_absent=signals_absent,
+            )
+        except Exception as _aud_exc:
+            logger.warning("handle_message audit fail-open: %s", _aud_exc)
 
         self.memory.store_telegram(f"the owner ({source}): {text}\nMaez: {reply}")
         self._ws_broadcast({"type": "message_reply", "text": reply})
@@ -2277,7 +2390,34 @@ class MaezDaemon:
                                 )
                                 retry_content = (retry_response.message.content or "").strip()
                                 if retry_content and retry_content != "(empty response)":
-                                    # Re-score the retry
+                                    # 2026-04-23 memory-integrity contract:
+                                    # audit the retry with the SAME cycle
+                                    # signal manifest that gated the first
+                                    # audit. The retry is a fresh assistant
+                                    # text — it needs the same grounding
+                                    # check, otherwise an improved-on-score
+                                    # retry could still be fabricated and
+                                    # land in raw memory unaudited. Rescore
+                                    # the AUDITED retry, not the raw retry,
+                                    # so the score reflects the actual text
+                                    # that will be stored.
+                                    try:
+                                        from core.safety.audited_output import (
+                                            audit_assistant_text as _aud_txt,
+                                        )
+                                        retry_content = _aud_txt(
+                                            retry_content,
+                                            surface="daemon_cycle_retry",
+                                            signals_present=_cycle_signals_present,
+                                            signals_absent=_cycle_signals_absent,
+                                        )
+                                    except Exception as _retry_aud_exc:
+                                        logger.warning(
+                                            "retry audit fail-open: %s",
+                                            _retry_aud_exc,
+                                        )
+
+                                    # Re-score the (audited) retry
                                     retry_thought = retry_content + screen_note + calendar_note
                                     retry_cog = cog_score_and_classify(retry_thought)
 

@@ -341,12 +341,20 @@ class MaezMessageHandler:
 
             # Synthesis stage — daemon.handle_message does the final text
             # reply with registry + residue + self-model blocks injected.
+            # 2026-04-23 memory-integrity contract (Commit 1): the audit
+            # is now owned by handle_message. The adapter passes the
+            # Jarvis transcript into handle_message so the audit sees
+            # the tool-loop context and correctly sets
+            # in_tool_continuation. Adapter no longer double-audits the
+            # returned reply.
             try:
                 reply = await loop.run_in_executor(
                     None,
-                    self.daemon.handle_message,
-                    synthesis_text,
-                    SURFACE_NAME,
+                    lambda: self.daemon.handle_message(
+                        synthesis_text,
+                        SURFACE_NAME,
+                        transcript=jarvis_transcript or "",
+                    ),
                 )
             except Exception as e:
                 logger.warning("daemon dispatch failed on %s: %s",
@@ -358,41 +366,16 @@ class MaezMessageHandler:
                 turn.update(output=jarvis_transcript or "(empty)")
                 return jarvis_transcript or None
 
-            # Strip tool-call JSON leaks before audit + send.
+            # Strip tool-call JSON leaks from the audited reply before
+            # sending to the surface. This is post-audit because leaked
+            # tool-call JSON is a rendering concern, not a grounding
+            # concern — the audit already decided the semantic content
+            # is OK; we just clean the wire format.
             try:
                 from core.brain_loop import strip_tool_call_leaks
                 reply = strip_tool_call_leaks(reply)
             except Exception:
                 pass
-
-            # Structural self-claim audit on the final reply.
-            # When a jarvis_transcript exists, the reply is a synthesis
-            # of REAL tool output (shell commands that actually ran on
-            # the owner's machine). The judge doesn't see the transcript
-            # — it only sees the prose reply, so "disk at 70.7%, CPU at
-            # 45%" reads as an invented trend claim and triggers the
-            # shortcircuit. Observed 2026-04-21 after a simple
-            # "heartbeat" turn produced a whole-response "I don't have
-            # a grounded answer" reply.
-            #
-            # Fix: when a non-empty Jarvis transcript is present, pass
-            # in_tool_continuation=True so the audit skips the judge
-            # entirely — the real stdout is what grounds the claim by
-            # construction. This matches the v1 regex-era policy.
-            try:
-                from core.self_claim_audit import audit as _sc_audit
-                _has_real_tools = bool(jarvis_transcript and jarvis_transcript.strip())
-                r = _sc_audit(
-                    reply,
-                    surface=SURFACE_NAME,
-                    in_tool_continuation=_has_real_tools,
-                    transcript=jarvis_transcript,
-                )
-                if r.rewritten:
-                    reply = r.text
-            except Exception as e:
-                logger.warning("self-claim audit failed on %s: %s",
-                               SURFACE_NAME, e)
 
             # Record the final reply into the trace before the with
             # block exits and flushes. This is what the Langfuse UI

@@ -2321,6 +2321,17 @@ def chat():
         logger.error("Web chat error: %s", e)
         reply = "I'm here. Give me just a moment."
 
+    # 2026-04-23 memory-integrity contract (Commit 1): audit BEFORE
+    # memory writes and trajectory logging. Previously audit ran AFTER
+    # both, so raw memory + SFT trajectory captured the unaudited
+    # reply even when the user saw the corrected one. See
+    # core/safety/audited_output.py for the full invariant.
+    try:
+        from core.safety.audited_output import audit_assistant_text
+        reply = audit_assistant_text(reply, surface="web")
+    except Exception as _e:
+        logger.warning("self-claim audit failed on /chat: %s", _e)
+
     try:
         if owner_bridge:
             memory.store_telegram(f"the owner asked: {message}\nMaez replied: {reply}")
@@ -2340,17 +2351,6 @@ def chat():
         "decision": decision.to_dict(),
         "claude_meta": claude_meta,
     })
-
-    # Self-claim audit — rewrite ungrounded internal claims to
-    # uncertainty before returning the reply. No tool-loop on this
-    # surface; every web reply gets audited.
-    try:
-        from core.self_claim_audit import audit as _sc_audit
-        _sc_result = _sc_audit(reply, surface="web")
-        if _sc_result.rewritten:
-            reply = _sc_result.text
-    except Exception as _e:
-        logger.warning("self-claim audit failed on /chat: %s", _e)
 
     return jsonify({"reply": reply, "display_name": display})
 
