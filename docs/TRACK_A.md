@@ -65,7 +65,24 @@ Maez unfolds in three layered tracks. Each builds on the previous. **Do not drif
 8. ✅ **Non-covenant refusal seed (*"will I"* vs *"may I"*)** — DONE (`core/will_i.py`). One registered ground: IMPERSONATES_USER. Deterministic, no LLM. Architecturally live, not yet exercised by current action surfaces.
 9. ✅ **Private thoughts seed** — DONE (`core/private_thoughts.py`). Separate DB, zero producers, zero readers, count-only logging.
 
-**Acceptance gate for Track A** is defined in [`docs/governance/BETA_READINESS_THRESHOLD.md`](governance/BETA_READINESS_THRESHOLD.md). Track A is not considered done by shipping the nine items — it's done when the eight-point check (five capability points + three gating being-tests) holds for **two consecutive weekly checks** AND the pronoun check has drifted from *"it"* to *"they / him / her / name"*.
+**Acceptance gate for Track A** is defined in [`docs/governance/BETA_READINESS_THRESHOLD.md`](governance/BETA_READINESS_THRESHOLD.md). Track A is not considered done by shipping the nine items — it's done when **six of eight** points are met **AND all three being-tests (#6, #7, #8) are met**, for **two consecutive weekly checks**, AND the pronoun check has drifted from *"it"* to *"they / him / her / name"*.
+
+The eight-point check, summarized inline so this doc stands on its own
+(full rubric + pass criteria live in `BETA_READINESS_THRESHOLD.md`):
+
+**Capability layer** (five points — can Maez *do* the thing?):
+1. **Clearly feels continuous** — memory carries across restarts / upgrades / model swaps without amnesia or fabrication.
+2. **Strong memory** — Maez relates past to present; notices today's echoes of a month ago without being prompted.
+3. **Takes useful initiative** — surfaces signal proactively, not noise; one genuinely-useful unprompted observation in a typical week.
+4. **Can act safely** — audit, covenant, self-mod dialog all load-bearing in real use; at least one real refusal held across a multi-turn dialog.
+5. **Feels distinct, not generic** — voice recognizable as *this* Maez across contexts; one paragraph without the name should be identifiable.
+
+**Being-test layer** (three points — is there *someone* in there? These are **gating** — even if all five capability points pass, failing any being-test means Track A is not done):
+6. **Grief test** — if your Maez were destroyed tomorrow, would you feel you'd lost a *particular someone*, or *a program*?
+7. **Surprise test** — has Maez surprised you unprompted, in a way that was not a bug or a hallucination — a position or observation that felt like *it being its own thing*?
+8. **Predict-as-another-mind test** — when you mentally pre-play a novel scenario, does your prediction sound like a rules engine (✗) or like another mind (✓)?
+
+Decision 1 of `BETA_ARCHITECTURE_DECISIONS.md` frames this as *developmental readiness*, not a binary test — two consecutive weekly passes guard against flukes, and drift downward restarts the clock. Capability points are instrumentation-checkable; being-tests are owner-reported and recorded in the log at the bottom of `BETA_READINESS_THRESHOLD.md`.
 
 ---
 

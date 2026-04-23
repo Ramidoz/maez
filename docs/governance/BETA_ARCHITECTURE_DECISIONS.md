@@ -77,7 +77,7 @@ Third parties who appear in Maez's observations (people Maez learns about throug
 - Consent is recorded via a signed digital form: typed name + checkbox + timestamp + HMAC over form content with a server-side key. Optional stronger evidence: video statement, voice recording, ID photo.
 - Scope is narrower than Tier 1: **relational knowledge only** (see Decision 4). The consent record states exactly what Maez is allowed to remember.
 - Duration is set by the third party: indefinite / until revoked / specific end date.
-- Revocation is honored instantly via a unique revocation URL. Revocation triggers a memory-scrub pass with a 24-hour SLA.
+- Revocation is honored instantly via a unique revocation URL. Revocation triggers a memory-scrub pass with a 24-hour SLA. **Implementation status (2026-04-22): not yet shipped.** The revocation URL, HMAC-signed consent form, and memory-scrub job are design-approved but unbuilt. Until Track B starts on-boarding third parties, the architectural surface is described here for forward reference only — no running code depends on it today, and any third-party consent during Track A is handled out-of-band.
 - When the third party eventually gets their own Maez (moves to Tier 1), their Tier 2 consent auto-upgrades.
 - **Available now.** This is the beta-enabling tier.
 

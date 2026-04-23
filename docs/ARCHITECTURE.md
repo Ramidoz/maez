@@ -18,6 +18,15 @@ even when no one is talking, so Maez has continuity.
 Everything personal is gitignored; only shippable code + templates live
 in the git repo.
 
+> **Portability note.** Older versions of this doc and a handful of modules
+> still reference `/home/rohit/maez` as the install root. Path resolution
+> goes through `core/paths.py`, which honors `$MAEZ_ROOT` when set. Phase 2
+> of the road-to-OSS plan (`.claude/plans/harmonic-tumbling-wozniak.md`)
+> finishes the de-Rohit-ify migration across all modules and makes
+> `MAEZ_ROOT` the single source of truth. Until then, any absolute path
+> you see in this doc or inline examples is the author's install; adjust
+> to yours via env or by setting `$MAEZ_ROOT`.
+
 ---
 
 ## The stack, top to bottom
@@ -70,7 +79,7 @@ in the git repo.
 └─────────────────────────────────┬────────────────────────────────────┘
                                   │ reads/writes
 ┌─────────────────────────────────▼────────────────────────────────────┐
-│  PERSISTENT STATE — all under /home/rohit/maez/ (gitignored)         │
+│  PERSISTENT STATE — all under $MAEZ_ROOT (default: repo root; gitignored) │
 │                                                                      │
 │   memory/db/chroma-archive          ChromaDB vector store (raw/daily/core) │
 │   memory/dream_proposals.db         sqlite — evolution proposals           │
