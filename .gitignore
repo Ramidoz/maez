@@ -84,3 +84,6 @@ training/proposals/*.md
 
 # Stray session status logs (runtime artifact)
 logs/iphone_shortcuts_status.md
+
+# Runtime evolution candidates DB — schema regenerates on startup
+evolution/*.db

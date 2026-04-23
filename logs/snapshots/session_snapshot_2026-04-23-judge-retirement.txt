@@ -1,0 +1,131 @@
+Maez — session snapshot
+========================
+Session window: 2026-04-23 (continuous, ~5 hours)
+Primary work:   Grounding-judge retirement + Qwen3.6-27B-Q4 brain adoption
+                + stale-SOUL cleanup + cognition false-positive fix
+Starting HEAD:  7f70cb2 (grounding-judge bench harness shipped)
+Ending HEAD:    (3 commits this session — see git log)
+Tests at start: 530 passing
+Tests at end:   530 passing + 3 new inline cognition assertions
+
+What changed
+-----------------------------------------------------
+
+Infrastructure
+  - Grounding judge RETIRED. llama-judge.service stopped, systemd
+    symlink removed; 2.4 GB VRAM freed. Judge was a workaround for
+    35B-Q3's compulsive over-speaking, not a general LLM filter.
+  - Primary brain swapped: Qwen3.5-35B-Q3_K_XL → Qwen3.6-27B-UD-Q4_K_XL.
+    27B with Q4 fits comfortably at 19 GB VRAM (5 GB headroom).
+    35B-Q3 was aggressive quant on a 35B; 27B at Q4 is objectively
+    higher fidelity in the same ballpark footprint.
+  - Q5 (20 GB) was briefly tried, panicked the kernel at 91% VRAM
+    (NULL-pointer deref in NVIDIA 570.x driver under sustained load).
+    Q4 has been stable for ~2.5 hours.
+  - /etc/maez/model.env updated to Qwen3.6-27B entries.
+  - llama-judge unit file kept on disk for now (mask failed: file
+    exists). disabled + inactive + symlink removed → won't auto-start.
+
+Code changes (this session's commits)
+  - config/soul.base.md: removed stale `llama-server-vision.service`
+    from the systemd-unit list (that service never existed). Added
+    guidance: "when asked which services/model, do NOT recite from
+    identity memory; say 'let me check' and look at live systemctl
+    + curl :8080/v1/models."
+  - config/model_state.json: refreshed from 11-day-old Gemma-4-26B-A4B
+    snapshot to current Qwen3.6-27B-UD-Q4_K_XL reality.
+  - core/cognition/cognition_quality.py:
+      - extract_topics(): rohit_activity subtopics (browser_usage,
+        development_tools, system_monitoring, general_presence) now
+        require >=2 distinct keyword hits before tagging. Suppresses
+        the "firefox-in-every-process-list" false positive that was
+        tagging 47% of Q4 spoken cycles as browser_usage.
+      - classify(): added optional recent_texts parameter. Fixation
+        now requires BOTH topic repetition AND content similarity
+        (Jaccard >= 0.45) to a same-topic recent text. Backward-
+        compatible: legacy callers (no recent_texts) still work on
+        topic-only signal.
+      - score_and_classify(): added _recent_texts ring buffer in
+        parallel with _recent_topics/_recent_scores/_recent_labels;
+        rollback path extended to handle it.
+      - 3 new inline tests: varied-content same-topic NOT fixation,
+        verbatim-repeat fixation, single-keyword suppression.
+  - scripts/judge_bench/results.{csv,md}: 5 new candidate runs:
+    qwen2.5-1.5b (47.6%, rubber-stamps GROUNDED - reject),
+    qwen2.5-3b (57.1%, rubber-stamps FABRICATED - reject),
+    4B on CPU (90.5%, identical to GPU baseline - keep pattern),
+    llama-3.2-3b (76.2%, balanced but low - reject),
+    gemma-3-4b (81.0%, all disagreements were false-negatives - reject).
+    Conclusion: 4B Qwen3.5 is the floor; no sub-4B passed.
+
+Memory changes
+  - Corrective core memory stored via MemoryManager.store_core():
+    infrastructure ground-truth for 2026-04-23 naming the
+    llama-server-vision fabrication explicitly so future recall
+    surfaces the correction. Model validated this by citing it as
+    "the 2026-04-23 correction" in cycle 95 unprompted.
+  - Dream proposal #26 rejected (stale observational insight, 5 days
+    pending).
+  - Evolution candidate #26 resolved out-of-band. Its cooldown key
+    was literally `fixation|topic|core/cognition_quality.py` - the
+    evolution engine had correctly targeted the exact problem 2
+    days ago; manual fix superseded it. 0 active candidates now.
+
+Experimental validation
+  - Chat-surface probe (7 questions, replicating /chat owner-bridge
+    prompt in-process):
+      round 1 (pre-fix):    4/7 clean, 2 hard fabrications
+                            (invented llama-server-vision w/ mmproj
+                             story; named gemma4:26b as loaded model)
+      round 2 (SOUL fix):   5/7 clean, 1 still fabricated vision
+                            service (source traced: memory recall)
+      round 3 (post-memory): 7/7 clean, model cited its own past
+                             fabrication by name
+  - Daemon cycle metrics on 27B-Q4 (before/after browser_usage fix):
+      35B-Q3 + judge: 5% silence, 95% speaking, 82% judge-flag rate,
+                      4 fixation events / 50 min, 10% corrective compliance
+      27B-Q4 no judge: 81-92% silence, 0 spoken-cycle fabrications
+                      of retired services, 2 "fixation" events
+                      (both false positives from the browser_usage
+                      keyword trigger - now fixed)
+
+Known non-regressions / open items
+  - Memory recall still contains the "persistent 65.8% disk" refrain
+    from prior weeks; ChromaDB semantic search keeps surfacing it.
+    Not wrong (it's a real observation from real cycles), just
+    repetitive over a long window. Corrective-memory pattern only
+    addresses items where the underlying fact is now false.
+  - Chat surface still leaks "data scientist" / "pennystocks" user-
+    profile details that may be mildly inaccurate. Memory accuracy
+    issue, not fabrication. Deferred to future memory-curation pass.
+  - Daemon cycle DOES NOT have a tool loop. When Maez emits
+    ```bash fences or <tool_call> tags during a cycle, nothing
+    parses or executes them. Only cli/maez_chat.py has the tool
+    loop wired. Web /chat and daemon cycle both lack it. Scope for
+    a dedicated session: wire core.tool_loop into /chat (medium
+    risk), then daemon (higher risk).
+  - llama-judge.service unit file still on disk. disabled but not
+    masked. If a future install/update restores the symlink, judge
+    would come back. Cosmetic: safe to remove the unit file entirely
+    once confidence is settled.
+
+Track A status: unchanged
+  - Track A readiness check not touched this session; all work was
+    brain-and-plumbing quality, not gestation progress.
+
+Next actions when a future session picks this up
+------------------------------------------------
+1. Let 27B-Q4-no-judge soak for a few days; watch silence rate,
+   fixation rate, and kernel stability. If stable for a week, the
+   judge can be fully removed (unit file deletion).
+2. Wire core.tool_loop into web /chat surface. Template:
+   cli/maez_chat.py lines 749/788. Needs: system-prompt block
+   describing tool-call format, parser on assistant response,
+   execution via _run_shell, follow-up turn with results. Keep
+   safety_check gate. This closes "Maez can't execute commands."
+3. Memory-curation pass: re-index or mark-stale the older raw
+   memories still referencing llama-server-vision or gemma.
+   Corrective memory outranks them but they still take up recall
+   slots. Non-urgent.
+4. Track A work remains the main line; this session was a detour
+   into quality-of-tooling.
