@@ -47,6 +47,24 @@ MIN_ACTIONABLE_LENGTH = 30  # chars — below this, thought is too vague to be a
 FIXATION_WINDOW = 10        # how many recent topics to track for fixation detection
 FIXATION_THRESHOLD = 0.5    # fraction of recent topics that must match to flag fixation (tightened from 0.6)
 
+# 2026-04-23: content-similarity gate on fixation.
+# A topic-repetition signal alone generates false positives when a topic
+# is keyword-driven by always-on context (e.g. Firefox is always a running
+# process → `browser_usage` tag on every cycle even when content varies).
+# Fire `fixation` only if the current text is also semantically close to
+# recent same-topic texts. Jaccard over lowercased word tokens.
+CONTENT_FIXATION_SIMILARITY = 0.45  # min Jaccard to count as content fixation
+
+# 2026-04-23: topic-tagging threshold for the rohit_activity subtopics.
+# These subtopics have short, common keywords (`firefox`, `chrome`, `tab`,
+# `python`, `logs`, `active`) that appear in ambient context — process
+# lists, active-window captures — regardless of whether the cycle's
+# reasoning is actually about that topic. Require ≥2 distinct keyword
+# hits before tagging one of these subtopics. System-hardware and
+# external-context topics stay at ≥1 since they have more specific
+# keyword signatures (`vram`, `cuda`, `reddit`, `meeting`).
+SUBTOPIC_MIN_HITS = 2
+
 # Scoring weights (0-100 scale)
 SCORE_WEIGHT_LENGTH = 10        # bonus for adequate length
 SCORE_WEIGHT_SPECIFICITY = 35   # bonus for concrete data references
@@ -141,7 +159,12 @@ def extract_topics(text: str) -> list[str]:
     matches: dict[str, int] = {}
     for topic, keywords in TOPIC_TAXONOMY.items():
         count = sum(1 for kw in keywords if kw in text_lower)
-        if count > 0:
+        # rohit_activity subtopics (browser_usage, development_tools, etc.)
+        # use short, generic keywords that appear in ambient context —
+        # require ≥2 distinct hits before tagging to suppress single-keyword
+        # false positives (e.g. "firefox" in every process list).
+        threshold = SUBTOPIC_MIN_HITS if topic in _ROHIT_ACTIVITY_SUBTOPICS else 1
+        if count >= threshold:
             matches[topic] = count
 
     if not matches:
@@ -220,7 +243,40 @@ SPECIFICITY_PATTERNS = [
 ]
 
 
-def classify(text: str, recent_topics: list[str] = None) -> dict:
+def _token_set(text: str) -> set[str]:
+    """Token set used for content-similarity checks. Lowercased alphanumeric words only,
+    stripped of high-frequency stopwords so similarity reflects content rather than
+    filler overlap."""
+    stop = {'is', 'the', 'a', 'an', 'and', 'or', 'but', 'to', 'of', 'in', 'on', 'at',
+            'for', 'with', 'from', 'by', 'your', 'you', 'i', 'are', 'be', 'been',
+            'this', 'that', 'it', 'its', 'system', 'cycle', 'now', 'nothing', 'no'}
+    return {w for w in re.findall(r'\b[a-z0-9]{3,}\b', text.lower()) if w not in stop}
+
+
+def _max_jaccard(text: str, recent_texts: list[str]) -> float:
+    """Max Jaccard similarity between text's token-set and any of the recent texts'.
+    Returns 0.0 if inputs empty."""
+    if not recent_texts:
+        return 0.0
+    cur = _token_set(text)
+    if not cur:
+        return 0.0
+    best = 0.0
+    for rt in recent_texts:
+        prev = _token_set(rt)
+        if not prev:
+            continue
+        union = len(cur | prev)
+        if union == 0:
+            continue
+        sim = len(cur & prev) / union
+        if sim > best:
+            best = sim
+    return best
+
+
+def classify(text: str, recent_topics: list[str] = None,
+             recent_texts: list[str] = None) -> dict:
     """Classify a thought into multi-label categories.
 
     Returns dict with:
@@ -228,19 +284,46 @@ def classify(text: str, recent_topics: list[str] = None) -> dict:
         primary: str            — single dominant label
         topic: str              — primary topic from taxonomy
         topics: list[str]       — all matched topics
+
+    `recent_texts` is optional; when provided, fixation requires both
+    topic-repetition AND content-similarity to a recent same-topic text.
+    Without it, falls back to the legacy topic-only rule (backward-
+    compatible for callers that don't track text history).
     """
     text_lower = text.lower()
     labels = []
     recent_topics = recent_topics or []
+    recent_texts = recent_texts or []
 
     topics = extract_topics(text)
     topic = topics[0] if topics else 'unknown'
 
-    # Check fixation — does primary topic dominate recent history?
+    # Check fixation — topic dominates recent history AND content is similar.
+    # The content gate prevents keyword-driven false positives (e.g. a topic
+    # that auto-triggers from ambient context like Firefox-in-process-list).
     if recent_topics and topic != 'unknown':
         topic_freq = sum(1 for t in recent_topics[-FIXATION_WINDOW:] if t == topic)
         if len(recent_topics) >= 3 and topic_freq / min(len(recent_topics), FIXATION_WINDOW) >= FIXATION_THRESHOLD:
-            labels.append('fixation')
+            # Topic repeats. Require content overlap with at least one recent
+            # text of the same topic before labeling fixation. If no recent
+            # texts supplied (legacy caller), fall back to topic-only signal.
+            if recent_texts:
+                # Pair recent_topics with recent_texts by position; take the
+                # tail window same as topic check
+                same_topic_texts = []
+                window = max(0, len(recent_topics) - FIXATION_WINDOW)
+                paired = list(zip(recent_topics[window:], recent_texts[window:]))
+                for rt_topic, rt_text in paired:
+                    if rt_topic == topic and rt_text:
+                        same_topic_texts.append(rt_text)
+                if same_topic_texts:
+                    sim = _max_jaccard(text, same_topic_texts)
+                    if sim >= CONTENT_FIXATION_SIMILARITY:
+                        labels.append('fixation')
+                # no matching-topic texts → topic match was by-name-only, don't fixate
+            else:
+                # Legacy mode: topic-repetition alone triggers fixation.
+                labels.append('fixation')
 
     # Check vague
     if len(text.strip()) < MIN_ACTIONABLE_LENGTH:
@@ -346,8 +429,11 @@ def score(text: str, classification: dict, recent_topics: list[str] = None) -> i
 #  SCORE AND CLASSIFY — single entry point for daemon
 # ══════════════════════════════════════════════════════════════════════
 
-# In-memory ring buffer of recent topics for fixation detection
+# In-memory ring buffer of recent topics for fixation detection.
+# 2026-04-23: added _recent_texts in parallel so fixation detection can
+# also check content similarity, not just topic repetition.
 _recent_topics: list[str] = []
+_recent_texts: list[str] = []
 _recent_scores: list[int] = []
 _low_critique_streak = 0  # consecutive critique windows below threshold
 
@@ -365,16 +451,20 @@ def score_and_classify(text: str) -> dict:
     # matching-score) state that corrupts fixation detection + behavior
     # policy on every subsequent turn.
     _topics_len = len(_recent_topics)
+    _texts_len = len(_recent_texts)
     _scores_len = len(_recent_scores)
     _labels_len = len(_recent_labels)
     try:
-        classification = classify(text, _recent_topics)
+        classification = classify(text, _recent_topics, _recent_texts)
         quality = score(text, classification, _recent_topics)
 
         # Update ring buffers
         _recent_topics.append(classification['topic'])
         if len(_recent_topics) > 50:
             _recent_topics[:] = _recent_topics[-50:]
+        _recent_texts.append(text)
+        if len(_recent_texts) > 50:
+            _recent_texts[:] = _recent_texts[-50:]
         _recent_scores.append(quality)
         if len(_recent_scores) > 50:
             _recent_scores[:] = _recent_scores[-50:]
@@ -408,6 +498,8 @@ def score_and_classify(text: str) -> dict:
         try:
             if len(_recent_topics) > _topics_len:
                 _recent_topics[:] = _recent_topics[:_topics_len]
+            if len(_recent_texts) > _texts_len:
+                _recent_texts[:] = _recent_texts[:_texts_len]
             if len(_recent_scores) > _scores_len:
                 _recent_scores[:] = _recent_scores[:_scores_len]
             if len(_recent_labels) > _labels_len:
@@ -910,21 +1002,73 @@ def _test():
 
     print("=== Fixation on fine-grained topic ===")
     _recent_topics.clear()
+    _recent_texts.clear()
     _recent_scores.clear()
     _recent_labels.clear()
     # Simulate: git_workflow repeated 8 times — should fixate on git_workflow, not rohit_activity
     for _ in range(8):
         score_and_classify("You should git commit your uncommitted staged changes now")
-    c_fix = classify("Run git commit to push your staged changes", _recent_topics)
-    assert 'fixation' in c_fix['labels'], "Expected fixation on git_workflow streak"
+    # Use the same text → content similarity is 1.0, so fixation triggers
+    c_fix = classify("You should git commit your uncommitted staged changes now",
+                      _recent_topics, _recent_texts)
+    assert 'fixation' in c_fix['labels'], f"Expected fixation on git_workflow streak: {c_fix['labels']}"
     assert c_fix['topic'] == 'git_workflow', f"Expected git_workflow, got {c_fix['topic']}"
-    print(f"  git_workflow fixation: OK (topic={c_fix['topic']})")
+    print(f"  git_workflow fixation (topic+content): OK (topic={c_fix['topic']})")
 
     # Now a browser thought should NOT be fixation
-    c_browser = classify("Firefox pulling 23% CPU from YouTube tabs", _recent_topics)
+    c_browser = classify("Firefox pulling 23% CPU from YouTube tabs",
+                          _recent_topics, _recent_texts)
     assert 'fixation' not in c_browser['labels'], f"Browser should not be fixation after git streak: {c_browser['labels']}"
     assert c_browser['topic'] == 'browser_usage', f"Expected browser_usage, got {c_browser['topic']}"
     print(f"  browser after git streak: NOT fixation (topic={c_browser['topic']}): OK")
+
+    # 2026-04-23 new: same topic but DIFFERENT content → should NOT fixate
+    _recent_topics.clear()
+    _recent_texts.clear()
+    _recent_scores.clear()
+    _recent_labels.clear()
+    varied_browser_texts = [
+        "Firefox tab consuming 178% CPU, YouTube video buffering on a 4K stream",
+        "Chrome open with 14 tabs, mostly documentation — webpage load times normal",
+        "Firefox at 6% CPU browsing Reddit's r/LocalLLaMA, webpage static",
+        "YouTube tab in Chrome paused, browser mostly idle",
+        "Firefox tab switched to Hacker News, webpage content loaded clean",
+        "Firefox 23% CPU on a single webpage, likely heavy JS",
+        "Chrome tab on a research paper webpage, browsing steadily",
+        "Firefox tabs pruned to three, browser memory down 400MB",
+    ]
+    for t in varied_browser_texts:
+        score_and_classify(t)
+    # A new browser thought on different content — topic repeats but content varied
+    c_varied = classify("Chrome tab on arXiv loading slowly, webpage stuck",
+                         _recent_topics, _recent_texts)
+    assert c_varied['topic'] == 'browser_usage', f"Expected browser_usage, got {c_varied['topic']}"
+    assert 'fixation' not in c_varied['labels'], (
+        f"Varied content on same topic must NOT fixate: {c_varied['labels']}"
+    )
+    print(f"  varied-content same-topic: NOT fixation: OK")
+
+    # And verbatim repetition SHOULD still fixate
+    _recent_topics.clear()
+    _recent_texts.clear()
+    _recent_scores.clear()
+    _recent_labels.clear()
+    for _ in range(8):
+        score_and_classify("Firefox pulling 23% CPU from YouTube tabs, browser heavy")
+    c_repeat = classify("Firefox pulling 23% CPU from YouTube tabs, browser heavy",
+                         _recent_topics, _recent_texts)
+    assert 'fixation' in c_repeat['labels'], f"Verbatim repeat must fixate: {c_repeat['labels']}"
+    print(f"  verbatim-repeat same-topic: fixation: OK")
+
+    # Single-keyword tag suppression: "I noticed a firefox process" alone
+    # should NOT tag as browser_usage (only 1 keyword hit, needs ≥2)
+    _recent_topics.clear()
+    _recent_texts.clear()
+    c_single = extract_topics("Process list shows a firefox entry active")
+    assert 'browser_usage' not in c_single, (
+        f"Single 'firefox' keyword must not tag browser_usage: {c_single}"
+    )
+    print(f"  single-keyword suppression on rohit_activity subtopic: OK")
 
     print("=== Behavior Policy ===")
     _recent_topics.clear()
