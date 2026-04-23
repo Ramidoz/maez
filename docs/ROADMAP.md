@@ -83,13 +83,31 @@ explicitly *not* doing.
 - Formal `CODE_OF_CONDUCT.md` (Contributor Covenant) with a
   reporting surface.
 
-## Phase 9 — Versioning + release
+## Phase 9 — Versioning + release (changelog landed)
 
-- `CHANGELOG.md` synthesised from git log, curated to user-visible
-  highlights.
-- First semver tag: `v0.1.0-alpha`. Alpha because the project is new
-  in public and expect churn; beta once a non-author contributor has
-  shipped a PR; 1.0 is further out.
+- [`CHANGELOG.md`](../CHANGELOG.md) landed. Keeps a Changelog format,
+  the first entry covers the full road-to-OSS work (Phases 1–8) as
+  the `0.1.0-alpha` release notes.
+- `pyproject.toml` already declares `version = "0.1.0a0"` (PEP 440
+  shorthand for `0.1.0-alpha`).
+- The actual semver git tag (`v0.1.0-alpha`) is **not** cut in this
+  phase. Creating it is an explicit user action — tags are durable
+  public anchors and deserve a deliberate moment to verify the
+  state of the tree, push the branch, and post the release on
+  GitHub. See [Tag conventions](#tag-conventions) below.
+- Beta transition: at least one non-author contributor ships a merged
+  PR. Criterion documented in the CHANGELOG.
+- 1.0 transition: Track A acceptance gate + two non-author
+  contributors regularly shipping + shim sunset landed. Not imminent.
+
+### Tag conventions
+
+Format is `vMAJOR.MINOR.PATCH[-prerelease]`, matching
+[SemVer 2.0](https://semver.org/spec/v2.0.0.html) and PEP 440. Use
+annotated tags (`git tag -a`) with a short release-note body —
+never lightweight tags for released versions.
+
+Full detail: [`CHANGELOG.md#versioning-conventions`](../CHANGELOG.md#versioning-conventions).
 
 ## Phase 10 — Launch prep
 

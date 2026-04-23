@@ -140,6 +140,7 @@ header; see [`NOTICE`](NOTICE) for third-party attributions.
 - **Getting started:** [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)
 - **Contributing:** [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md)
 - **Roadmap:** [`docs/ROADMAP.md`](docs/ROADMAP.md)
+- **Changelog:** [`CHANGELOG.md`](CHANGELOG.md)
 - **Governance (18 load-bearing decisions):** [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](docs/governance/BETA_ARCHITECTURE_DECISIONS.md)
 - **Public progress log:** [`PROGRESS_PUBLIC.md`](PROGRESS_PUBLIC.md)
 - **Current track:** [`docs/TRACK_A.md`](docs/TRACK_A.md)
