@@ -12,34 +12,48 @@ Status of every agent report. Updated after each wave. A resumer starts here.
 
 | # | Agent | Output file | Status | Summary | Findings (B/M/m/n) |
 |---|---|---|---|---|---|
-| 1 | Brain loop + conversation controller | `01_brain_loop.md` | ⏸ pending | — | — |
-| 2 | Decision pipeline + approvals | `02_decision_pipeline.md` | ⏸ pending | — | — |
-| 3 | Safety layer | `03_safety.md` | ⏸ pending | — | — |
-| 8 | New stack: self-dev + subscription proxy + workshop | `08_new_stack.md` | ⏸ pending | — | — |
-| 9 | Consequence + fabrication + residue + errors | `09_learning.md` | ⏸ pending | — | — |
+| 1 | Brain loop + conversation controller | `01_brain_loop.md` | ✓ complete | Module sound; 1 blocker (bare `self` in retry path), 2 major (short-token filter + sqlite relative-path in executor) | 1/2/2/3 |
+| 2 | Decision pipeline + approvals | `02_decision_pipeline.md` | ✓ complete | 1 blocker (will-I + execution race leaves card inconsistent), consequence_memory silent-fail on deny | 1/2/3/2 |
+| 3 | Safety layer | `03_safety.md` | ✓ complete | Clean — 0 blocker / 0 major. 2 minor (owner_trust whitespace bypass, injection base64 threshold) | 0/0/2/2 |
+| 8 | New stack: self-dev + subscription proxy + workshop | `08_new_stack.md` | ✓ complete | Clean bill of health — 0 findings all severities. 5+ prior self-reviews already caught the bugs | 0/0/0/0 |
+| 9 | Consequence + fabrication + residue + errors | `09_learning.md` | ✓ complete | 1 blocker (token-filter asymmetry silently hides hyphen/underscore retrieval), 2 major (fabrication_memory + inner_residue missing contextlib.closing) | 1/2/0/2 |
+
+**Wave 1 totals:** 3 blocker, 6 major, 7 minor, 9 nit = 25 findings
 
 ## Wave 2 — high-priority larger-scope subsystems
 
 | # | Agent | Output file | Status | Summary | Findings (B/M/m/n) |
 |---|---|---|---|---|---|
-| 4 | Memory & recall | `04_memory.md` | ⏸ pending | — | — |
-| 5 | Cognition quality + audit + grounding | `05_cognition.md` | ⏸ pending | — | — |
-| 6 | Action engine + tool loop | `06_actions.md` | ⏸ pending | — | — |
-| 7 | Evolution subsystem | `07_evolution.md` | ⏸ pending | — | — |
-| 10 | Model config + fast-path + support | `10_model_and_support.md` | ⏸ pending | — | — |
+| 4 | Memory & recall | `04_memory.md` | ✓ complete | Clean — 0 blocker / 0 major. 2 minor (mmr_rerank call unguarded, timestamp tzinfo assumption) | 0/0/2/2 |
+| 5 | Cognition quality + audit + grounding | `05_cognition.md` | ✓ complete | 1 blocker (cognition_quality silently loses ring-buffer state on raise, corrupts fixation detection), 2 major (quality_telemetry close-on-bad-connect masks root cause; audit_log INSERT silent-fail → fake request_id) | 1/2/2/1 |
+| 6 | Action engine + tool loop | `06_actions.md` | ✓ complete | 1 blocker (command_decomposer backtick-escape bypass: `echo \`id\`` escapes classification), 2 major (destructive_snapshot return ignored; is_read_only ↔ action_classifier Lane-0 semantic drift) | 1/2/2/1 |
+| 7 | Evolution subsystem | `07_evolution.md` | ✓ complete | 1 blocker (soul_loader append_to_local race: read outside lock = lost dream proposals), 2 major (temperament NaN log; dream_state schema migration missing commit). **Test-gap severity: CRITICAL** — 5/9 modules untested | 1/2/2/1 |
+| 10 | Model config + fast-path + support | `10_model_and_support.md` | ✓ complete | 2 blocker (fast_backend_router silent fallback loses policy differentiation for guests; private_thoughts hardcoded-path fallback breaks on relocation), 3 major (legacy alias docs in llm_client; fast_backend_local probe without re-check; capability_registry paths), **7 files contain hardcoded `/home/rohit/maez` — Phase 2 migrate via paths.py** | 2/3/3/2 |
+
+**Wave 2 totals:** 5 blocker, 9 major, 11 minor, 7 nit = 32 findings
+
+## Grand total across Wave 1 + Wave 2 (10 subsystems)
+
+**8 blocker, 15 major, 18 minor, 16 nit = 57 findings.**
+
+## Grand total including cross-cutting (12 agents)
+
+**12 blocker, 23 major, 28 minor, 22 nit = 85 findings.**
 
 ## Cross-cutting
 
 | # | Agent | Output file | Status | Summary | Findings (B/M/m/n) |
 |---|---|---|---|---|---|
-| X1 | Test coverage + quality | `X1_tests.md` | ⏸ pending | — | — |
-| X2 | Documentation state + drift | `X2_documentation.md` | ⏸ pending | — | — |
+| X1 | Test coverage + quality | `X1_tests.md` | ✓ complete | 2 blocker (brain_loop real-DB pollution, decision_pipeline audit path collision under parallel). Evolution subsystem test gap is CRITICAL — 6/9 modules untested including soul_loader with a race-condition blocker. Actions + Model/Support both high gap. | 2/5/6/4 |
+| X2 | Documentation state + drift | `X2_documentation.md` | ✓ complete | 2 blocker (hardcoded path in user-facing doc; undefined acceptance-gate definition). 9 subsystems have NO design doc — critical OSS-launch onboarding blocker. TRACK_A.md + birth_book strongest; governance fresh and current. | 2/3/4/2 |
+
+**Cross-cutting totals:** 4 blocker, 8 major, 10 minor, 6 nit = 28 findings
 
 ## Consolidation
 
 | File | Status |
 |---|---|
-| `_MASTER_FINDINGS.md` | ⏸ pending — generated after all 12 agent reports land |
+| `_MASTER_FINDINGS.md` | ✓ complete — 85 findings indexed, top-20 ranked, 6 commit batches proposed for Phase 1.G |
 
 ## Legend
 
@@ -51,8 +65,9 @@ Status of every agent report. Updated after each wave. A resumer starts here.
 
 ## Next action for a resuming session
 
-1. Read this file. Find the first `⏸ pending` row.
-2. If in Wave 1 — dispatch Wave 1 agents in parallel (single message, 5 Task calls).
-3. When all Wave 1 rows are ✓ — dispatch Wave 2.
-4. When all subsystem + cross-cutting rows are ✓ — write `_MASTER_FINDINGS.md` by reading each report and consolidating.
-5. Surface master findings to user for triage (Phase 1.F).
+Phase 1.A–1.E are complete as of 2026-04-22. Remaining Phase 1 work:
+
+1. **Phase 1.F — User triage.** Read `_MASTER_FINDINGS.md` with the user. For each finding they assign: `fix-now` / `fix-soon` / `later` / `reject`. Most blockers + top-20 items should be `fix-now`.
+2. **Phase 1.G — Apply fix-now items.** Commit in batches per the proposals at the bottom of `_MASTER_FINDINGS.md`. Test suite must stay at 519+ green between batches.
+
+Then Phase 2 begins (de-Rohit-ify). See `.claude/plans/harmonic-tumbling-wozniak.md`.
