@@ -11,9 +11,18 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-_MAEZ_SURFACE_ROOT = Path(
-    os.environ.get("MAEZ_SURFACE_CACHE_ROOT", "/home/rohit/maez/memory/surface")
-)
+def _default_surface_root() -> Path:
+    override = os.environ.get("MAEZ_SURFACE_CACHE_ROOT")
+    if override:
+        return Path(override)
+    try:
+        from core.paths import memory_dir as _memory_dir
+        return _memory_dir() / "surface"
+    except Exception:
+        return Path("/home/rohit/maez/memory/surface")
+
+
+_MAEZ_SURFACE_ROOT = _default_surface_root()
 
 
 def get_surface_cache_dir(subpath: str, legacy_name: str = "") -> Path:

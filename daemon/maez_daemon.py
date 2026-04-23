@@ -22,8 +22,14 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load environment from .env before any other imports that need it
-load_dotenv(Path("/home/rohit/maez/config/.env"))
+# Load environment from .env before any other imports that need it.
+# Route via core.paths so this works on any install (dev box, CI,
+# fresh contributor). Legacy hardcode kept as a last-resort fallback.
+try:
+    from core.paths import env_file as _env_file
+    load_dotenv(_env_file())
+except Exception:
+    load_dotenv(Path("/home/rohit/maez/config/.env"))
 
 import asyncio
 
@@ -31,7 +37,11 @@ import ollama
 import websockets
 from flask import Flask, jsonify, request, send_file
 
-sys.path.insert(0, str(Path("/home/rohit/maez")))
+try:
+    from core.paths import home as _maez_home
+    sys.path.insert(0, str(_maez_home()))
+except Exception:
+    sys.path.insert(0, str(Path("/home/rohit/maez")))
 from memory.memory_manager import MemoryManager
 from core.perception import snapshot as perception_snapshot, format_snapshot
 from skills.telegram_voice import TelegramVoice
@@ -70,7 +80,11 @@ from skills.wake_word import start as wake_word_start, stop as wake_word_stop
 from skills.voice_output import initialize as voice_output_init, speak, shutdown as voice_output_shutdown
 
 # --- Paths ---
-BASE_DIR = Path("/home/rohit/maez")
+try:
+    from core.paths import home as _paths_home
+    BASE_DIR = _paths_home()
+except Exception:
+    BASE_DIR = Path("/home/rohit/maez")
 SOUL_PATH = BASE_DIR / "config" / "soul.md"
 LOG_PATH = BASE_DIR / "logs" / "maez.log"
 MEMORY_DIR = BASE_DIR / "memory"
