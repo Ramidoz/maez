@@ -219,21 +219,56 @@ def _build_judge_prompt(
     )
 
 
-_JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
-
-
 def _parse_judge_output(output: Any) -> list[dict]:
-    """Extract the `ungrounded` list from judge output. Tolerates
-    preamble prose by finding the first top-level JSON object. Returns
-    [] on any failure (fail-open)."""
+    """Extract the `ungrounded` list from judge output. Returns [] on
+    any failure (fail-open by module policy).
+
+    Extraction strategy (self-dev review on 418e6a8, concern #1
+    corrected the earlier greedy-regex approach):
+      1. Try json.loads on the stripped output as-is. Covers models
+         that emit clean JSON.
+      2. If that fails, walk every '{' position and try to decode
+         using json.JSONDecoder's raw_decode, which greedily parses
+         the longest valid JSON object starting at that index. First
+         successful decode wins.
+
+    This tolerates preambles (`<think>...</think>` blocks, quoted
+    examples with braces, reasoning prose) WITHOUT being fooled by
+    a stray '{' character into spanning to the wrong terminator.
+    If parsing still fails after all '{' positions, logs at WARNING
+    so parse-failure rate is observable in production (was silent
+    under the old implementation)."""
     if not output or not isinstance(output, str):
         return []
-    m = _JSON_OBJ_RE.search(output)
-    if not m:
+    stripped = output.strip()
+    if not stripped:
         return []
+
+    obj = None
+    # Strategy 1: parse the whole string as-is
     try:
-        obj = json.loads(m.group(0))
+        obj = json.loads(stripped)
     except Exception:
+        pass
+
+    # Strategy 2: iterative raw_decode from each '{' position
+    if obj is None:
+        decoder = json.JSONDecoder()
+        for i, ch in enumerate(stripped):
+            if ch != "{":
+                continue
+            try:
+                candidate, _end = decoder.raw_decode(stripped, i)
+                obj = candidate
+                break
+            except json.JSONDecodeError:
+                continue
+
+    if obj is None:
+        logger.warning(
+            "grounding_judge: could not parse judge output (head=%r)",
+            stripped[:200],
+        )
         return []
     if not isinstance(obj, dict):
         return []
@@ -253,16 +288,29 @@ def judge(
 ) -> list[dict]:
     """Run the grounding judge. Returns a list of flag dicts
     {text, reason, rewrite}. Never raises — all failures return [].
+
+    Note: when _JUDGE_BASE_URL is configured (dedicated judge
+    endpoint, the default since 2026-04-21), the `model` parameter
+    is ignored — the dedicated llama-server was started with a
+    specific model alias and routes everything there. `model`
+    takes effect only in the fallback path where no dedicated
+    endpoint is set. self-dev review on 418e6a8 (concern #2)
+    flagged this silent drop; kept the parameter for the fallback
+    path but documented the behavior.
     """
     if not text or not text.strip():
         return []
-    prompt = _build_judge_prompt(
-        text=text,
-        signals_present=signals_present or [],
-        signals_absent=signals_absent or [],
-        few_shots=few_shots or [],
-    )
     try:
+        # self-dev review on 418e6a8 (concern #3): _build_judge_prompt
+        # was outside the try block; any future exception in it (large
+        # few_shots list, unusual text encoding) would propagate and
+        # violate the module's "never raises / fails open" invariant.
+        prompt = _build_judge_prompt(
+            text=text,
+            signals_present=signals_present or [],
+            signals_absent=signals_absent or [],
+            few_shots=few_shots or [],
+        )
         if _JUDGE_BASE_URL:
             # Dedicated judge llama-server — fast path, small model.
             output = _call_dedicated_judge(prompt)
