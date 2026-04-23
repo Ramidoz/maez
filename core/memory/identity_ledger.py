@@ -128,12 +128,29 @@ logger = logging.getLogger("maez")
 #  CONSTANTS
 # ══════════════════════════════════════════════════════════════════════
 
-DEFAULT_DB_PATH = Path(os.environ.get(
-    "MAEZ_IDENTITY_LEDGER_PATH",
-    str(Path(__file__).resolve().parent.parent / "memory" / "identity_ledger.db"),
-))
+def _default_identity_ledger_path() -> Path:
+    override = os.environ.get("MAEZ_IDENTITY_LEDGER_PATH")
+    if override:
+        return Path(override)
+    try:
+        from core.paths import memory_dir as _memory_dir
+        return _memory_dir() / "identity_ledger.db"
+    except Exception:
+        return Path(__file__).resolve().parent.parent.parent / "memory" / "identity_ledger.db"
 
-_DEFAULT_SOUL_PATH = Path(__file__).resolve().parent.parent / "config" / "soul.md"
+
+DEFAULT_DB_PATH = _default_identity_ledger_path()
+
+
+def _default_soul_path() -> Path:
+    try:
+        from core.paths import soul_combined_path as _soul
+        return _soul()
+    except Exception:
+        return Path(__file__).resolve().parent.parent.parent / "config" / "soul.md"
+
+
+_DEFAULT_SOUL_PATH = _default_soul_path()
 
 # Allowed event_type values. Kept as a set for O(1) validation.
 EVENT_TYPES = frozenset({

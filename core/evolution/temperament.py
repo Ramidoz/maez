@@ -92,10 +92,21 @@ logger = logging.getLogger("maez")
 #  CONSTANTS
 # ══════════════════════════════════════════════════════════════════════
 
-DEFAULT_DB_PATH = Path(os.environ.get(
-    "MAEZ_TEMPERAMENT_PATH",
-    str(Path(__file__).resolve().parent.parent / "memory" / "temperament.db"),
-))
+# Resolve via core.paths so the Phase-3 subpackage move (core/temperament.py
+# → core/evolution/temperament.py) doesn't silently drop the db in the
+# wrong place. MAEZ_TEMPERAMENT_PATH still wins when set.
+def _default_temperament_path() -> Path:
+    override = os.environ.get("MAEZ_TEMPERAMENT_PATH")
+    if override:
+        return Path(override)
+    try:
+        from core.paths import memory_dir as _memory_dir
+        return _memory_dir() / "temperament.db"
+    except Exception:
+        return Path(__file__).resolve().parent.parent.parent / "memory" / "temperament.db"
+
+
+DEFAULT_DB_PATH = _default_temperament_path()
 
 # The 11 canonical parameter names in their canonical order. This
 # tuple is frozen. Renaming any entry is a data migration. Adding a

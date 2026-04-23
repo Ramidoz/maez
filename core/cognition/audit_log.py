@@ -63,10 +63,18 @@ except Exception:
     InjectionMatch = Any  # type: ignore
 
 
-DEFAULT_DB_PATH = Path(os.environ.get(
-    "MAEZ_AUDIT_LOG_PATH",
-    str(Path(__file__).resolve().parent.parent / "memory" / "audit_log.db"),
-))
+def _default_audit_log_path() -> Path:
+    override = os.environ.get("MAEZ_AUDIT_LOG_PATH")
+    if override:
+        return Path(override)
+    try:
+        from core.paths import memory_dir as _memory_dir
+        return _memory_dir() / "audit_log.db"
+    except Exception:
+        return Path(__file__).resolve().parent.parent.parent / "memory" / "audit_log.db"
+
+
+DEFAULT_DB_PATH = _default_audit_log_path()
 
 
 # ------------------------------------------------------------------ #

@@ -25,7 +25,11 @@ from typing import Optional
 
 from core.action_engine import _covenant_violation as _covenant_check
 
-_MAEZ_ROOT = Path(__file__).resolve().parent.parent
+try:
+    from core.paths import home as _home
+    _MAEZ_ROOT = _home()
+except Exception:
+    _MAEZ_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # ── runtime caps (overridable via env) ─────────────────────────────────
 TOOL_TIMEOUT_SEC = int(os.environ.get("MAEZ_TOOL_TIMEOUT_SEC", "60"))

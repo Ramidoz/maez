@@ -114,10 +114,18 @@ logger = logging.getLogger("maez")
 #  CONSTANTS
 # ══════════════════════════════════════════════════════════════════════
 
-DEFAULT_DB_PATH = Path(os.environ.get(
-    "MAEZ_WANTS_PATH",
-    str(Path(__file__).resolve().parent.parent / "memory" / "wants.db"),
-))
+def _default_wants_path() -> Path:
+    override = os.environ.get("MAEZ_WANTS_PATH")
+    if override:
+        return Path(override)
+    try:
+        from core.paths import memory_dir as _memory_dir
+        return _memory_dir() / "wants.db"
+    except Exception:
+        return Path(__file__).resolve().parent.parent.parent / "memory" / "wants.db"
+
+
+DEFAULT_DB_PATH = _default_wants_path()
 
 # Track A event types. The column is TEXT — future tracks can add
 # lifecycle types (refined, satisfied, abandoned, etc.) without

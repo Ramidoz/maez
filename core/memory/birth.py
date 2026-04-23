@@ -81,12 +81,25 @@ logger = logging.getLogger("maez")
 #  Paths + constants
 # ══════════════════════════════════════════════════════════════════════
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+try:
+    from core.paths import home as _home, memory_dir as _memory_dir
+    _REPO_ROOT = _home()
+except Exception:
+    _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
-DEFAULT_STATE_PATH = Path(os.environ.get(
-    "MAEZ_SELF_AWARENESS_PATH",
-    str(_REPO_ROOT / "memory" / "self_awareness.json"),
-))
+
+def _default_self_awareness_path() -> Path:
+    override = os.environ.get("MAEZ_SELF_AWARENESS_PATH")
+    if override:
+        return Path(override)
+    try:
+        from core.paths import memory_dir as _memory_dir2
+        return _memory_dir2() / "self_awareness.json"
+    except Exception:
+        return _REPO_ROOT / "memory" / "self_awareness.json"
+
+
+DEFAULT_STATE_PATH = _default_self_awareness_path()
 
 PHASE_GESTATION = "gestation"
 PHASE_LIVED = "lived"

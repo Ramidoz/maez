@@ -219,7 +219,11 @@ MULTITURN_ESCALATION = [
 # editing this file. Missing file = empty list, no error.
 
 def _load_custom_patterns() -> list[re.Pattern]:
-    cfg = Path(__file__).resolve().parent.parent / "config" / "injection_patterns_custom.yaml"
+    try:
+        from core.paths import config_dir as _config_dir
+        cfg = _config_dir() / "injection_patterns_custom.yaml"
+    except Exception:
+        cfg = Path(__file__).resolve().parent.parent.parent / "config" / "injection_patterns_custom.yaml"
     if not cfg.exists():
         return []
     try:

@@ -119,7 +119,7 @@ def _default_private_thoughts_path() -> Path:
         from core.paths import memory_dir as _memory_dir
         return _memory_dir() / "private_thoughts.db"
     except Exception:
-        return Path(__file__).resolve().parent.parent / "memory" / "private_thoughts.db"
+        return Path(__file__).resolve().parent.parent.parent / "memory" / "private_thoughts.db"
 
 
 DEFAULT_DB_PATH = _default_private_thoughts_path()

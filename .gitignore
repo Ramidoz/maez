@@ -8,6 +8,12 @@ config/credentials.json
 memory/db/
 memory/*.db
 memory/chroma/
+# Belt-and-suspenders: after Phase 3 there is also a core/memory/
+# subpackage. A module-path regression could cause a runtime DB to
+# land there; ignore it proactively so it never accidentally gets
+# committed.
+core/memory/*.db
+core/memory/*.json
 models/
 logs/*
 !logs/snapshots/

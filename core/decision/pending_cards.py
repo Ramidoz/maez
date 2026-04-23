@@ -63,10 +63,18 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-DEFAULT_DB_PATH = Path(os.environ.get(
-    "MAEZ_PENDING_CARDS_PATH",
-    str(Path(__file__).resolve().parent.parent / "memory" / "pending_cards.db"),
-))
+def _default_pending_cards_path() -> Path:
+    override = os.environ.get("MAEZ_PENDING_CARDS_PATH")
+    if override:
+        return Path(override)
+    try:
+        from core.paths import memory_dir as _memory_dir
+        return _memory_dir() / "pending_cards.db"
+    except Exception:
+        return Path(__file__).resolve().parent.parent.parent / "memory" / "pending_cards.db"
+
+
+DEFAULT_DB_PATH = _default_pending_cards_path()
 
 
 # ------------------------------------------------------------------ #
