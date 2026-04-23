@@ -171,17 +171,26 @@ covenant:
     - "/home/rohit/maez/memory/db"
     - "/home/rohit/maez/memory/chroma"
 
-  # Processes Maez must never kill or stop
+  # Processes Maez must never kill or stop.
+  # 2026-04-23 Commit 6: kept "llama-server-vision" as a LEGACY-LABEL
+  # entry even though no such process currently runs. Rationale: the
+  # covenant gate checks this list defensively — if a future vision
+  # endpoint revives under that name, accidental `kill llama-server-
+  # vision` or similar must still be rejected. The label here is
+  # forward-compatible protection, not a claim that the process is
+  # currently alive.
   protected_processes:
     - "llama-server"
-    - "llama-server-vision"
+    - "llama-server-vision"   # legacy label; process not currently running
     - "maez_daemon"
     - "maez-watchdog"
 
-  # Services Maez must never stop/disable/mask
+  # Services Maez must never stop/disable/mask. Same rationale as
+  # protected_processes above — legacy labels retained for forward-
+  # compatible protection.
   protected_services:
     - "llama-server.service"
-    - "llama-server-vision.service"
+    - "llama-server-vision.service"   # legacy; unit file not installed
     - "maez.service"
     - "maez-web.service"
     - "maez-watchdog.service"
@@ -378,7 +387,12 @@ injection_response:
 # ─────────────────────────────────────────────────────────────────────
 
 judge:
-  model: "gemma-4-26b"
+  # 2026-04-23 Commit 6: was hardcoded "gemma-4-26b"; the real judge
+  # model is configured via MAEZ_JUDGE_MODEL in /etc/maez/model.env.
+  # Consumers of this block should read that env var first and fall
+  # back to this default only when the env isn't set. Keeping a
+  # stale literal here invites another reviewer-finds-it cycle.
+  model: "${MAEZ_JUDGE_MODEL}"
   temperature: 0.0
   max_tokens_summary: 350
   max_tokens_verdict: 700

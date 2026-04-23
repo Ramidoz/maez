@@ -87,6 +87,13 @@ import re
 import secrets
 import sqlite3
 import time
+
+# 2026-04-23 Commit 6: default model for self-mod classifier/opener/
+# responder now tracks the current primary brain (via
+# core.routing.model_config → /etc/maez/model.env) instead of a
+# hardcoded "gemma-4-26b" string. The MAEZ_SELF_MOD_*_MODEL env vars
+# still override.
+from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -735,7 +742,8 @@ def classify_reply(
         else:
             from core import llm_client  # lazy; avoids import at module load
             resp = llm_client.chat(
-                model=os.environ.get("MAEZ_SELF_MOD_CLASSIFIER_MODEL", "gemma-4-26b"),
+                model=os.environ.get("MAEZ_SELF_MOD_CLASSIFIER_MODEL")
+                      or _PRIMARY_MODEL,
                 messages=[
                     {"role": "system", "content": _CLASSIFIER_SYSTEM},
                     {"role": "user", "content": prompt},
@@ -900,7 +908,8 @@ def generate_opening_turn(
         else:
             from core import llm_client
             resp = llm_client.chat(
-                model=os.environ.get("MAEZ_SELF_MOD_OPENER_MODEL", "gemma-4-26b"),
+                model=os.environ.get("MAEZ_SELF_MOD_OPENER_MODEL")
+                      or _PRIMARY_MODEL,
                 messages=[
                     {"role": "system", "content": _OPENING_SYSTEM},
                     {"role": "user", "content": context},
@@ -1022,7 +1031,8 @@ def generate_response_turn(
         else:
             from core import llm_client
             resp = llm_client.chat(
-                model=os.environ.get("MAEZ_SELF_MOD_RESPONDER_MODEL", "gemma-4-26b"),
+                model=os.environ.get("MAEZ_SELF_MOD_RESPONDER_MODEL")
+                      or _PRIMARY_MODEL,
                 messages=[
                     {"role": "system", "content": _RESPONSE_SYSTEM},
                     {"role": "user", "content": context},

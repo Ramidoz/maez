@@ -32,7 +32,7 @@ FINGERPRINT (Track A narrow shape)
 Only three fields are load-bearing in Track A:
 
     {
-        "base_model": <MAEZ_LLAMACPP_MODEL env or 'gemma-4-26b'>,
+        "base_model": <MAEZ_LLAMACPP_MODEL env, else current primary>,
         "lora_hash":  <sha256 of current LoRA file, or None>,
         "soul_hash":  <sha256 of config/soul.md>,
     }
@@ -123,6 +123,16 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Any
+
+# 2026-04-23 Commit 6: base_model for new ledger rows now derives from
+# the live primary-model config (via /etc/maez/model.env through
+# core.routing.model_config), not a hardcoded string. A fresh Maez
+# instance's identity ledger must record the ACTUAL base it was
+# instantiated on, not a stale fallback. MAEZ_LLAMACPP_MODEL env
+# remains the top-priority override for anyone wanting to force a
+# specific label (e.g. SFT training scripts pinning the pre-SFT
+# base model for comparison).
+from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
 
 logger = logging.getLogger("maez")
 
@@ -226,7 +236,10 @@ def compute_identity_fingerprint(
     """Compute the Track A identity fingerprint.
 
     Three fields:
-      - base_model: from MAEZ_LLAMACPP_MODEL env (default 'gemma-4-26b')
+      - base_model: MAEZ_LLAMACPP_MODEL env if set, else the live
+                    primary model from core.model_config (sourced from
+                    /etc/maez/model.env). Previously hardcoded
+                    'gemma-4-26b' as a stale fallback — see Commit 6.
       - lora_hash:  SHA-256 of the file at lora_path, or MAEZ_LORA_PATH
                     env, or None if neither is set / file missing.
       - soul_hash:  SHA-256 of config/soul.md (or provided path),
@@ -234,7 +247,7 @@ def compute_identity_fingerprint(
 
     Returns a dict suitable for JSON serialization. Never raises.
     """
-    base_model = os.environ.get("MAEZ_LLAMACPP_MODEL", "gemma-4-26b")
+    base_model = os.environ.get("MAEZ_LLAMACPP_MODEL") or _PRIMARY_MODEL
 
     soul = Path(soul_path) if soul_path else _DEFAULT_SOUL_PATH
     soul_hash = _sha256_file(soul)

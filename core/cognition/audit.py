@@ -95,6 +95,8 @@ from enum import Enum
 from typing import Any, Optional
 
 from core import llm_client
+# 2026-04-23 Commit 6: audit-model default tracks current primary brain.
+from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
 from core.injection_patterns import InjectionMatch
 
 
@@ -191,7 +193,7 @@ def _summarize(payload: str, nonce: str, *, timeout_s: float = 15.0) -> str:
     )
     try:
         resp = llm_client.chat(
-            model=os.environ.get("MAEZ_AUDIT_MODEL", "gemma-4-26b"),
+            model=os.environ.get("MAEZ_AUDIT_MODEL") or _PRIMARY_MODEL,
             messages=[
                 {"role": "system", "content": _SUMMARIZER_SYSTEM},
                 {"role": "user", "content": user_msg},
@@ -340,7 +342,7 @@ def _judge(
         )
     try:
         resp = llm_client.chat(
-            model=os.environ.get("MAEZ_AUDIT_MODEL", "gemma-4-26b"),
+            model=os.environ.get("MAEZ_AUDIT_MODEL") or _PRIMARY_MODEL,
             messages=[
                 {"role": "system", "content": _JUDGE_SYSTEM},
                 {"role": "user", "content": user_msg},

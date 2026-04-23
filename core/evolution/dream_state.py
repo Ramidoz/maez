@@ -54,9 +54,12 @@ from typing import Any, Optional
 logger = logging.getLogger("maez.dream")
 
 
-# Reuse the same model constant the daemon uses. Import lazily at call
-# time to avoid a hard dependency on daemon module load order.
-MODEL = "gemma4:26b"
+# 2026-04-23 Commit 6: was a hardcoded "gemma4:26b" string despite the
+# comment claiming it reused the daemon's model. Now actually reads the
+# current primary via core.routing.model_config (which sources
+# /etc/maez/model.env), so dream-state reasoning runs on whatever brain
+# is live — not a stale label.
+from core.model_config import PRIMARY_MODEL as MODEL
 
 try:
     from core import paths as _paths

@@ -523,11 +523,17 @@ class ActionEngine:
 
         # 5. Service-name based check for restart/kill operations
         service = params.get("service_name", "") or ""
+        # 2026-04-23 Commit 6: "llama-server-vision" is retained as a
+        # LEGACY-LABEL guard even though no such service currently
+        # runs. The covenant check is defensive — if a future vision
+        # endpoint revives under this name, accidental stop/kill must
+        # still be rejected. Mirrors config/policies.yaml::protected_
+        # processes which keeps the same label for the same reason.
         if service in (
             "ollama", "ollama.service",
             "maez", "maez.service",
             "llama-server", "llama-server.service",
-            "llama-server-vision", "llama-server-vision.service",
+            "llama-server-vision", "llama-server-vision.service",   # legacy label
             "maez-watchdog", "maez-watchdog.service",
         ):
             raise ForbiddenActionError(

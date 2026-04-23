@@ -32,6 +32,13 @@ import re as _re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+# 2026-04-23 Commit 6: default model for synthesis now tracks the
+# current primary brain. Callers can still override via model=.
+try:
+    from core.model_config import PRIMARY_MODEL as _DEFAULT_MODEL
+except Exception:
+    _DEFAULT_MODEL = "primary-model"
+
 logger = logging.getLogger("maez")
 
 
@@ -892,7 +899,7 @@ class ConversationController:
         chat_id: str,
         audit_db_path: str = "memory/audit_log.db",
         user_id: str | None = None,
-        model: str = "gemma4:26b",
+        model: str = _DEFAULT_MODEL,
     ) -> Optional[dict]:
         """After Jarvis probes complete, run ONE focused structured LLM
         call to propose a single concrete next-step action based on the

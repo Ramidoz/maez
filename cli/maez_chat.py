@@ -350,9 +350,12 @@ class ChatSession:
                 return r.stdout.strip()
             except Exception:
                 return "?"
+        # 2026-04-23 Commit 6: removed stale "llama-server-vision.service"
+        # from the /status list — no such unit exists on the machine.
+        # Vision is retired per ADR 0009; re-add this label when a
+        # multimodal endpoint is re-provisioned as its own systemd unit.
         svcs = [
             "llama-server.service",
-            "llama-server-vision.service",
             "maez.service",
             "maez-web.service",
         ]

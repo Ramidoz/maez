@@ -72,11 +72,13 @@ MODEL_STATE_PATH = '/home/rohit/maez/config/model_state.json'
 THUNDER_STATE_PATH = '/home/rohit/maez/config/thunder_state.json'
 TRAINING_RUNS_DIR = '/home/rohit/maez/training/runs'
 DAEMON_HEALTH_URL = 'http://127.0.0.1:11435/health'
+# 2026-04-23 Commit 6: removed stale 'llama-server-vision' from the
+# journal surface — no such service runs. Re-add when a multimodal
+# endpoint is re-provisioned.
 JOURNAL_SERVICES = (
     'maez',
     'maez-web',
     'llama-server',
-    'llama-server-vision',
     'maez-watchdog',
 )
 _SERVICE_STATE_CACHE = {}  # service_name -> (state, timestamp)

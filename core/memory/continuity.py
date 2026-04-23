@@ -48,6 +48,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.llm_client import sanitize_prompt_text
+# 2026-04-23 Commit 6: continuity reasoning runs on the current primary
+# brain (previously hardcoded 'gemma4:26b').
+from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
 
 logger = logging.getLogger("maez")
 
@@ -330,7 +333,7 @@ def _generate_resume_instructions(mode: str, concerns: list, last_thought: dict,
             f"Address yourself directly. Be specific, not generic."
         )
         resp = _llm_client.chat(
-            model='gemma4:26b',
+            model=_PRIMARY_MODEL,
             messages=[{'role': 'user', 'content': prompt}],
             options={'temperature': 0.3, 'num_predict': 4096},
         )

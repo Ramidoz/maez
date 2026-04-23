@@ -348,7 +348,7 @@ def chat(
 # ── prompt-completion entry point (for /api/generate callers) ──────
 def generate(
     prompt: str,
-    model: str = 'gemma4:26b',
+    model: Optional[str] = None,
     temperature: float = 0.7,
     max_tokens: int = 512,
     timeout_s: float = 120.0,
@@ -375,7 +375,14 @@ def generate(
     where a scratchpad isn't needed.
 
     Raises BackendError on failure.
+
+    2026-04-23 Commit 6: default model parameter now falls back to
+    `core.model_config.PRIMARY_MODEL` when None is passed, instead
+    of a hardcoded 'gemma4:26b'. Callers that want a specific model
+    still pass model= explicitly.
     """
+    if model is None:
+        model = _PRIMARY_MODEL
     backend = active_backend()
 
     if backend == BACKEND_OLLAMA:
