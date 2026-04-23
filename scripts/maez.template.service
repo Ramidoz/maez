@@ -1,11 +1,16 @@
 [Unit]
 Description=Maez AI Agent Daemon
 Documentation=file://__MAEZ_HOME__/docs/ARCHITECTURE.md
-After=network-online.target ollama.service
+After=network-online.target llama-server.service ollama.service
 Wants=network-online.target
-# `ollama.service` is optional — if your local inference backend is
-# llama-server instead of Ollama, you can drop it from Wants without
-# affecting the daemon.
+# Maez probes the LLM backend at startup and aborts if it can't reach
+# it. The in-code probe retries with backoff (~14s window) so a brief
+# llama-server restart or 503 blip self-heals. `llama-server.service`
+# and `ollama.service` are both optional — if neither is installed as
+# a systemd unit, Maez just waits until whichever backend is up at
+# localhost. Having them in `After=` just orders startup when they
+# exist, which prevents the "both start at the same second, Maez
+# probes before llama-server has finished loading the model" race.
 
 [Service]
 Type=simple

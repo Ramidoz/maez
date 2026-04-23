@@ -717,28 +717,61 @@ class MaezDaemon:
             pass
 
     def _check_ollama(self) -> bool:
-        """Verify LLM backend is reachable. Routes by MAEZ_LLM_BACKEND."""
+        """Verify LLM backend is reachable. Routes by MAEZ_LLM_BACKEND.
+
+        Retries on transient failure. Observed 2026-04-22/23: a bare
+        single-shot probe caused Maez to abort-on-boot when llama-server
+        was briefly returning 503 (mid-load, mid-request backpressure,
+        or a VRAM pressure hiccup). Four crashes in 24h, each self-
+        healing on the systemd restart 10s later. A brief retry loop
+        (total ~14s window) absorbs those blips without further action.
+        """
         backend = os.environ.get('MAEZ_LLM_BACKEND', 'ollama').lower()
-        if backend == 'llamacpp':
+        total_attempts = 4
+        delays = (0, 2, 4, 8)  # cumulative ~14s of patience
+        last_err: str = ""
+        for attempt, delay in enumerate(delays[:total_attempts]):
+            if delay:
+                time.sleep(delay)
+            if backend == 'llamacpp':
+                try:
+                    import urllib.request
+                    base = os.environ.get('MAEZ_LLAMACPP_URL',
+                                          'http://127.0.0.1:8080/v1')
+                    req = urllib.request.Request(f"{base}/models")
+                    with urllib.request.urlopen(req, timeout=5) as r:
+                        if r.status == 200:
+                            if attempt:
+                                logger.info(
+                                    "llama-server reachable after "
+                                    "attempt %d/%d", attempt + 1, total_attempts,
+                                )
+                            return True
+                        last_err = f"HTTP {r.status}"
+                except Exception as e:
+                    last_err = str(e)
+                if attempt < total_attempts - 1:
+                    logger.info(
+                        "llama-server not yet ready (attempt %d/%d: %s); "
+                        "retrying after backoff",
+                        attempt + 1, total_attempts, last_err,
+                    )
+                continue
+            # Ollama branch — single-shot is still fine here; Ollama
+            # rarely 503s mid-request the way llama-server can.
             try:
-                import urllib.request
-                base = os.environ.get('MAEZ_LLAMACPP_URL', 'http://127.0.0.1:8080/v1')
-                req = urllib.request.Request(f"{base}/models")
-                with urllib.request.urlopen(req, timeout=5) as r:
-                    return r.status == 200
-            except Exception as e:
-                logger.error("llama-server connection failed: %s", e)
+                models = ollama.list()
+                available = [m.model for m in models.models]
+                if any(MODEL in name for name in available):
+                    return True
+                logger.warning("Model %s not found. Available: %s", MODEL, available)
                 return False
-        try:
-            models = ollama.list()
-            available = [m.model for m in models.models]
-            if any(MODEL in name for name in available):
-                return True
-            logger.warning("Model %s not found. Available: %s", MODEL, available)
-            return False
-        except Exception as e:
-            logger.error("Ollama connection failed: %s", e)
-            return False
+            except Exception as e:
+                logger.error("Ollama connection failed: %s", e)
+                return False
+        logger.error("llama-server connection failed after %d attempts: %s",
+                     total_attempts, last_err)
+        return False
 
     def _get_local_time(self) -> datetime:
         """Get current local time."""
