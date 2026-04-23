@@ -35,7 +35,6 @@ import statistics
 import sys
 import time
 from pathlib import Path
-from typing import Any
 
 try:
     import httpx
