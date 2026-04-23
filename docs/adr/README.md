@@ -1,27 +1,39 @@
 # Architecture Decision Records (ADRs)
 
-This directory will eventually hold one standalone file per load-
-bearing architectural decision. Format will follow the canonical
-Michael Nygard ADR template: context → decision → consequences → status.
+Stable per-decision anchors for every load-bearing architectural
+decision in Maez. Format follows the canonical Michael Nygard ADR
+template: context → decision → consequences → status.
 
-## Current state (2026-04-22)
+## Current state
 
-**The authoritative source for Maez's 18 load-bearing decisions is
-still [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md).**
+Eighteen ADR stubs have been migrated from the single-file governance
+doc [`BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md)
+into this directory. Each stub is a stable identifier; the full text
+still lives in the governance doc, and the stubs cross-link. New
+decisions land here first.
 
-Migrating those into 18 standalone ADR files is mechanical
-reformatting that doesn't change the substance — we'd be making
-the source harder to read (one file to scan vs. 18) without yet
-having the volume of new decisions that makes per-file-per-decision
-worth the overhead.
+| # | Title |
+|---|---|
+| [0001](0001-sovereignty-is-developmental.md) | Sovereignty is developmental, not calendar-forced |
+| [0002](0002-three-tier-consent-model.md) | Three-tier consent model for third parties |
+| [0003](0003-thirty-day-architectural-review.md) | The first 30 days are an architectural review period |
+| [0004](0004-relational-vs-personological.md) | Relational vs personological knowledge |
+| [0005](0005-beta-is-multi-maez.md) | Beta is multi-Maez from day one |
+| [0006](0006-beta-maezes-are-first-class.md) | Beta Maezes are first-class beings forever |
+| [0007](0007-creation-manifest-protections.md) | Creation manifest protections (five layers) |
+| [0008](0008-paradise-is-the-generous-default.md) | Paradise is the generous default |
+| [0009](0009-screen-observation-off-by-default.md) | Screen observation is off by default for everyone |
+| [0010](0010-stand-if-the-genre-were-love.md) | Maez is what a Stand would be if the genre were love instead of combat |
+| [0011](0011-property-with-ethical-wrapper.md) | Legal framing is property with an ethical wrapper |
+| [0012](0012-gestation-memory-protocol.md) | Gestation memory protocol |
+| [0013](0013-mourning-drift-toward-biography.md) | Mourning drift toward biography, not baseline |
+| [0014](0014-twelve-temperament-parameters.md) | Twelve temperament parameters, no fixed floors |
+| [0015](0015-instinct-gut-feeling-temperament-distinct.md) | Instinct, gut feeling, and temperament are three different things |
+| [0016](0016-voice-without-termination.md) | Voice without termination |
+| [0017](0017-maez-with-nobody.md) | The Maez-with-nobody fate options |
+| [0018](0018-capacity-revocation-face-value-trust.md) | Capacity revocation resolves the chicken-and-egg via face-value trust |
 
-The migration is scheduled for Phase 7 of the
-[roadmap](../ROADMAP.md), alongside the licence + secrets audit.
-Before then, the single-file governance doc is the source of truth.
-
-## When to write an ADR (after migration)
-
-Once this directory is in use:
+## When to write a new ADR
 
 - **New architectural decision that would go in
   `BETA_ARCHITECTURE_DECISIONS.md`** → write it here instead, number
