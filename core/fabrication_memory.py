@@ -33,6 +33,7 @@ Design choices:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import threading
@@ -98,22 +99,23 @@ def record(surface: str, flags: list, mode: str) -> None:
             db = _ensure_db()
             if db is None:
                 return
-            ts = time.time()
-            rows = []
-            for f in flags:
-                kind = getattr(f, "kind", "unknown")
-                token = getattr(f, "ungrounded_token", "") or ""
-                if not token:
-                    continue
-                rows.append((ts, surface, kind, token, token.lower(), mode))
-            if rows:
-                db.executemany(
-                    "INSERT INTO fabrication_log "
-                    "(ts, surface, kind, token, token_lower, mode) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    rows,
-                )
-                db.commit()
+            with contextlib.closing(db):
+                ts = time.time()
+                rows = []
+                for f in flags:
+                    kind = getattr(f, "kind", "unknown")
+                    token = getattr(f, "ungrounded_token", "") or ""
+                    if not token:
+                        continue
+                    rows.append((ts, surface, kind, token, token.lower(), mode))
+                if rows:
+                    db.executemany(
+                        "INSERT INTO fabrication_log "
+                        "(ts, surface, kind, token, token_lower, mode) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        rows,
+                    )
+                    db.commit()
     except Exception:
         # Never let memory-write failure break an audit call.
         return
@@ -131,17 +133,18 @@ def top_tokens(days: int = 7, limit: int = 8) -> list[tuple[str, str, int]]:
             db = _ensure_db()
             if db is None:
                 return []
-            since = time.time() - (days * 86400)
-            rows = db.execute(
-                "SELECT token, kind, COUNT(*) as n "
-                "FROM fabrication_log "
-                "WHERE ts >= ? "
-                "GROUP BY token_lower, kind "
-                "ORDER BY n DESC, MAX(ts) DESC "
-                "LIMIT ?",
-                (since, limit),
-            ).fetchall()
-            return [(r[0], r[1], r[2]) for r in rows]
+            with contextlib.closing(db):
+                since = time.time() - (days * 86400)
+                rows = db.execute(
+                    "SELECT token, kind, COUNT(*) as n "
+                    "FROM fabrication_log "
+                    "WHERE ts >= ? "
+                    "GROUP BY token_lower, kind "
+                    "ORDER BY n DESC, MAX(ts) DESC "
+                    "LIMIT ?",
+                    (since, limit),
+                ).fetchall()
+                return [(r[0], r[1], r[2]) for r in rows]
     except Exception:
         return []
 
@@ -189,17 +192,18 @@ def record_event(
             db = _ensure_db()
             if db is None:
                 return
-            db.execute(
-                "INSERT INTO fabrication_events "
-                "(ts, surface, text, signals_absent, reason, mode) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    time.time(), surface, text[:2000],
-                    json.dumps(signals_absent or []),
-                    reason[:500], mode,
-                ),
-            )
-            db.commit()
+            with contextlib.closing(db):
+                db.execute(
+                    "INSERT INTO fabrication_events "
+                    "(ts, surface, text, signals_absent, reason, mode) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        time.time(), surface, text[:2000],
+                        json.dumps(signals_absent or []),
+                        reason[:500], mode,
+                    ),
+                )
+                db.commit()
     except Exception:
         return
 
@@ -217,10 +221,11 @@ def few_shots_for(signals_absent: list[str], k: int = 3) -> list[dict]:
             db = _ensure_db()
             if db is None:
                 return []
-            rows = db.execute(
-                "SELECT text, signals_absent, reason FROM fabrication_events "
-                "ORDER BY ts DESC LIMIT 200"
-            ).fetchall()
+            with contextlib.closing(db):
+                rows = db.execute(
+                    "SELECT text, signals_absent, reason FROM fabrication_events "
+                    "ORDER BY ts DESC LIMIT 200"
+                ).fetchall()
     except Exception:
         return []
     if not rows:
@@ -254,7 +259,8 @@ def _diag_total_rows() -> int:
             db = _ensure_db()
             if db is None:
                 return -1
-            return db.execute("SELECT COUNT(*) FROM fabrication_log").fetchone()[0]
+            with contextlib.closing(db):
+                return db.execute("SELECT COUNT(*) FROM fabrication_log").fetchone()[0]
     except Exception:
         return -1
 
@@ -266,8 +272,9 @@ def _diag_clear_for_test() -> None:
             db = _ensure_db()
             if db is None:
                 return
-            db.execute("DELETE FROM fabrication_log")
-            db.commit()
+            with contextlib.closing(db):
+                db.execute("DELETE FROM fabrication_log")
+                db.commit()
     except Exception:
         return
 
@@ -279,7 +286,8 @@ def _diag_clear_events_for_test() -> None:
             db = _ensure_db()
             if db is None:
                 return
-            db.execute("DELETE FROM fabrication_events")
-            db.commit()
+            with contextlib.closing(db):
+                db.execute("DELETE FROM fabrication_events")
+                db.commit()
     except Exception:
         return

@@ -35,6 +35,7 @@ grows huge.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import threading
@@ -102,12 +103,13 @@ def record(kind: str, intensity: Optional[float] = None,
             db = _ensure_db()
             if db is None:
                 return
-            db.execute(
-                "INSERT INTO residue_events (ts, kind, intensity, context) "
-                "VALUES (?, ?, ?, ?)",
-                (time.time(), kind, i, ctx_json),
-            )
-            db.commit()
+            with contextlib.closing(db):
+                db.execute(
+                    "INSERT INTO residue_events (ts, kind, intensity, context) "
+                    "VALUES (?, ?, ?, ?)",
+                    (time.time(), kind, i, ctx_json),
+                )
+                db.commit()
     except Exception:
         return
 
@@ -131,17 +133,18 @@ def current_level(now: Optional[float] = None) -> float:
             db = _ensure_db()
             if db is None:
                 return 0.0
-            since = now - (4 * 3600)
-            rows = db.execute(
-                "SELECT ts, intensity FROM residue_events WHERE ts >= ?",
-                (since,),
-            ).fetchall()
-            total = 0.0
-            for ts, intensity in rows:
-                c = _decayed_contribution(intensity, now - ts)
-                if c >= _NOISE_FLOOR:
-                    total += c
-            return min(total, 1.0)
+            with contextlib.closing(db):
+                since = now - (4 * 3600)
+                rows = db.execute(
+                    "SELECT ts, intensity FROM residue_events WHERE ts >= ?",
+                    (since,),
+                ).fetchall()
+                total = 0.0
+                for ts, intensity in rows:
+                    c = _decayed_contribution(intensity, now - ts)
+                    if c >= _NOISE_FLOOR:
+                        total += c
+                return min(total, 1.0)
     except Exception:
         return 0.0
 
@@ -156,14 +159,15 @@ def recent_events(limit: int = 5, now: Optional[float] = None) -> list[dict]:
             db = _ensure_db()
             if db is None:
                 return []
-            since = now - (4 * 3600)
-            rows = db.execute(
-                "SELECT ts, kind, intensity, context "
-                "FROM residue_events "
-                "WHERE ts >= ? "
-                "ORDER BY ts DESC",
-                (since,),
-            ).fetchall()
+            with contextlib.closing(db):
+                since = now - (4 * 3600)
+                rows = db.execute(
+                    "SELECT ts, kind, intensity, context "
+                    "FROM residue_events "
+                    "WHERE ts >= ? "
+                    "ORDER BY ts DESC",
+                    (since,),
+                ).fetchall()
     except Exception:
         return []
     out = []
@@ -260,7 +264,8 @@ def _diag_total_rows() -> int:
             db = _ensure_db()
             if db is None:
                 return -1
-            return db.execute("SELECT COUNT(*) FROM residue_events").fetchone()[0]
+            with contextlib.closing(db):
+                return db.execute("SELECT COUNT(*) FROM residue_events").fetchone()[0]
     except Exception:
         return -1
 
@@ -271,7 +276,8 @@ def _diag_clear_for_test() -> None:
             db = _ensure_db()
             if db is None:
                 return
-            db.execute("DELETE FROM residue_events")
-            db.commit()
+            with contextlib.closing(db):
+                db.execute("DELETE FROM residue_events")
+                db.commit()
     except Exception:
         return

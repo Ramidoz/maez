@@ -184,6 +184,14 @@ class DreamState:
                 ON dream_proposals (status, created_at)
                 """
             )
+            # Explicit commit: ALTER TABLE inside a `with conn:` block is
+            # implicitly auto-committed in SQLite3 (DDL commits the
+            # current transaction), but relying on that means the final
+            # CREATE INDEX sits in a new transaction whose implicit commit
+            # is not guaranteed across all sqlite3 builds / Python
+            # versions. Commit explicitly so schema migration lands
+            # atomically on every caller path.
+            c.commit()
 
     # ── idle + cadence gates ────────────────────────────────────────
     def is_idle(self, presence_snap: Any, absence_secs: float) -> bool:

@@ -244,6 +244,7 @@ def _fabrication_snapshot(limit: int = 10) -> FabricationSnapshot:
     snap = FabricationSnapshot()
     if not _FAB_DB.exists():
         return snap
+    db = None
     try:
         db = sqlite3.connect(_FAB_DB, timeout=1.5)
         snap.total_events = db.execute(
@@ -265,10 +266,11 @@ def _fabrication_snapshot(limit: int = 10) -> FabricationSnapshot:
     except Exception as e:
         logger.debug("fabrication_snapshot failed: %s", e)
     finally:
-        try:
-            db.close()
-        except Exception:
-            pass
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                pass
     return snap
 
 
@@ -277,6 +279,7 @@ def _recall_snapshot() -> RecallSnapshot:
     snap = RecallSnapshot()
     if not _RECALL_DB.exists():
         return snap
+    db = None
     try:
         db = sqlite3.connect(_RECALL_DB, timeout=1.5)
         row = db.execute(
@@ -290,10 +293,11 @@ def _recall_snapshot() -> RecallSnapshot:
     except Exception as e:
         logger.debug("recall_snapshot failed: %s", e)
     finally:
-        try:
-            db.close()
-        except Exception:
-            pass
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                pass
     return snap
 
 

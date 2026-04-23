@@ -280,8 +280,14 @@ class AuditLog:
             latency_ms = int(getattr(verdict, "latency_ms", 0) or 0)
             nonce = str(getattr(verdict, "nonce", "") or "")
 
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
+        # Explicit commit + rowcount verification. Without this, an INSERT
+        # that silently rolls back (e.g. disk full, locked db) could return
+        # a request_id that was never written — a later record_outcome()
+        # UPDATE against a non-existent row would rowcount=0 and fail closed
+        # but the caller would never learn the original write was lost.
+        conn = sqlite3.connect(self.db_path, timeout=5.0)
+        try:
+            cur = conn.execute(
                 """
                 INSERT INTO audit_log (
                     request_id, ts, action, params_json,
@@ -307,6 +313,17 @@ class AuditLog:
                     judge_raw, parse_error, latency_ms, nonce, policy_rule_id,
                 ),
             )
+            if cur.rowcount != 1:
+                raise RuntimeError(
+                    f"audit_log INSERT for {request_id} reported rowcount="
+                    f"{cur.rowcount}; refusing to return an unwritten request_id"
+                )
+            conn.commit()
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
         return request_id
 
     def record_outcome(
@@ -325,7 +342,8 @@ class AuditLog:
 
         Returns True if a row was updated.
         """
-        with sqlite3.connect(self.db_path) as conn:
+        conn = sqlite3.connect(self.db_path, timeout=5.0)
+        try:
             cur = conn.execute(
                 """
                 UPDATE audit_log
@@ -334,7 +352,13 @@ class AuditLog:
                 """,
                 (outcome, time.time(), notes, request_id),
             )
+            conn.commit()
             return cur.rowcount > 0
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     # -------------------------------------------------------------- #
     #  Direct-edit event writers (A-core #3: Developer Mode)          #
