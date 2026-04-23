@@ -90,7 +90,7 @@ Decision 1 of `BETA_ARCHITECTURE_DECISIONS.md` frames this as *developmental rea
 
 As of the 2026-04-15 pre-documentation snapshot:
 
-- **Local inference:** Gemma-4-26B merged LoRA via `llama.cpp` on the owner's RTX 4090. Plus `llama-server-vision` as a separate vision brain.
+- **Local inference:** Qwen3.6-27B-UD-Q4_K_XL via `llama.cpp` on the owner's RTX 4090 (swapped from Qwen3.5-35B-Q3_K_XL on 2026-04-23 — 27B at Q4 gives higher fidelity than 35B at Q3 in the same VRAM budget, and its silence discipline made the grounding judge redundant). Dedicated vision brain retired; screen observation is paused until a multimodal endpoint is re-provisioned.
 - **Covenant gate:** deterministic pattern refusal for commands touching Maez's own brain, body, core files, HARD CONSTRAINTS section of soul.md, and the obfuscation hard-deny patterns.
 - **Action classifier:** AGT-aligned intent taxonomy with compound command decomposition. Lane 0 (read) / Lane 2 (write + install) / Lane 3 (self-mod + interactive root). Nuanced sudo handling — `sudo apt-get install X` stays Lane 2, not bumped to Lane 3.
 - **Two-pass audit (CaMeL-inspired):** Pass 1 = quarantined summarizer, nonce-fenced, verdict language banned. Pass 2 = judge, six questions, rigid JSON, fails closed.
