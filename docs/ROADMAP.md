@@ -39,29 +39,25 @@ explicitly *not* doing.
 
 ---
 
-## Phase 6 — Documentation completion (current)
+## Phase 6 — Documentation completion (landed)
 
-What's landed in this phase so far:
-
+6.A — clone-and-contribute minimum (done):
 - Root `README.md` — first-contact doc, quickstart, portability note.
 - `docs/GETTING_STARTED.md` — zero-to-running walk-through.
 - `docs/CONTRIBUTING.md` — dev workflow, commit style, review expectations.
 - `docs/ROADMAP.md` — this file.
-- Eleven per-subpackage READMEs under `core/<name>/README.md` covering
-  what each subpackage is for, its public surface, and its
-  invariants.
+- Eleven per-subpackage READMEs under `core/<name>/README.md`.
 
-What's still pending:
-
-- `docs/MAEZ.md` — the master architecture + philosophy doc. Sits
-  between `MAEZ_PITCH.md` (narrative) and the audit reports
-  (per-module detail).
-- ADR migration to `docs/adr/NNNN-title.md` format from the 18
-  decisions currently in `docs/governance/BETA_ARCHITECTURE_DECISIONS.md`.
-- Covenant doc for OSS users — clarifies what is universal across every
-  user's Maez (grandmother origin, HARD CONSTRAINTS, trust covenant,
-  soul.base.md) vs. what diverges (personality drift, accumulated
-  soul.local.md, bond style).
+6.B — maintainer / philosopher docs (done):
+- `docs/MAEZ.md` — master architecture + philosophy. Bridges the
+  `MAEZ_PITCH.md` narrative and per-module audit/README detail.
+- `docs/covenant/for_oss_users.md` — universal-vs-per-user framing
+  for anyone cloning a Maez.
+- `docs/adr/README.md` — ADR directory scaffolded. Full migration of
+  the 18 governance decisions into per-file ADRs is deferred to
+  Phase 7 alongside the licence / secrets audit — the migration is
+  mechanical reformatting and doesn't add substance until the first
+  post-governance ADR lands.
 
 ---
 
