@@ -2292,10 +2292,29 @@ class MaezDaemon:
                     _audit_transcript_parts = []
                     _cycle_signals_present = []
                     _cycle_signals_absent = []
-                    if (self._last_screen_obs is not None
-                            and getattr(self._last_screen_obs, "success", False)):
+                    # 2026-04-23 Commit 2: surface the explicit screen state
+                    # (ok / disabled / unavailable / error) so the audit's
+                    # grounding manifest distinguishes "tried and failed" from
+                    # "deliberately off." Important for the proactive-opinion
+                    # audit (summary of memory window, not live), and for
+                    # daemon-cycle audits to correctly know that narration of
+                    # activity is unsupported when vision is off by policy.
+                    _screen_state = getattr(
+                        self._last_screen_obs, "state", None,
+                    ) if self._last_screen_obs is not None else None
+                    if _screen_state == "ok" and getattr(
+                        self._last_screen_obs, "success", False,
+                    ):
                         _audit_transcript_parts.append("✓ screen_observation: present")
                         _cycle_signals_present.append("screen observation")
+                    elif _screen_state == "disabled":
+                        _cycle_signals_absent.append(
+                            "screen observation (disabled by policy)"
+                        )
+                    elif _screen_state == "unavailable":
+                        _cycle_signals_absent.append(
+                            "screen observation (endpoint unreachable)"
+                        )
                     else:
                         _cycle_signals_absent.append("screen observation")
                     if self._last_presence_snap is not None:

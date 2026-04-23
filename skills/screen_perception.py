@@ -44,6 +44,19 @@ VISION_MAX_DIM = 1024     # downscale screenshots to max side = 1024 px
 SCREENSHOT_TIMEOUT = 10   # seconds for screenshot capture
 VISION_TIMEOUT = 45       # seconds for vision call
 
+# 2026-04-23 Commit 2: vision-server availability probe.
+# Port 8081 has been dead for weeks (used to host a multimodal endpoint,
+# was later reassigned to the retired grounding judge, now has nothing
+# bound). `observe()` must not call requests.post() there when:
+#   - MAEZ_SCREEN_PERCEPTION is unset or "0" (hard default: vision off)
+#   - the host:port probe fails (fast-fail before screenshot capture)
+# Probe result is cached with backoff so we don't hammer the port.
+_VISION_PROBE_HOST = "127.0.0.1"
+_VISION_PROBE_PORT = 8081
+_VISION_PROBE_TIMEOUT_S = 1.0      # fast: 1-second TCP connect
+_VISION_PROBE_COOLDOWN_S = 300.0   # 5 minutes of "unavailable" before re-probing
+_vision_probe_cache: dict = {"last_result": None, "last_check": 0.0}
+
 # Display environment — needed because maez.service has no DISPLAY by default
 DISPLAY_ENV = {
     **os.environ,
@@ -74,11 +87,27 @@ class ScreenObservation:
     timestamp: float
     success: bool
     error: Optional[str] = None
+    # 2026-04-23 Commit 2: explicit state classification so the daemon's
+    # grounding manifest can distinguish "temporarily broken" from
+    # "deliberately off." Values:
+    #   "ok"           — success=True, observation is real
+    #   "disabled"     — MAEZ_SCREEN_PERCEPTION is unset/0, by owner policy
+    #   "unavailable"  — vision endpoint probe failed, backing off
+    #   "error"        — screenshot or vision call failed at runtime
+    state: str = "error"
 
     def format_for_context(self) -> str:
         """Format for injection into Maez reasoning prompt."""
+        if self.state == "disabled":
+            return (
+                "[SCREEN] disabled by policy "
+                "(set MAEZ_SCREEN_PERCEPTION=1 and run a vision server "
+                "on 127.0.0.1:8081 to enable)"
+            )
+        if self.state == "unavailable":
+            return "[SCREEN] unavailable — vision endpoint not reachable"
         if not self.success:
-            return f"[SCREEN] Observation unavailable: {self.error}"
+            return f"[SCREEN] Observation failed: {self.error}"
         age_seconds = int(time.time() - self.timestamp)
         return (
             f"[SCREEN — {age_seconds}s ago]\n"
@@ -90,6 +119,10 @@ class ScreenObservation:
 
     def format_for_memory(self) -> str:
         """Format for storage in raw memory archive."""
+        if self.state == "disabled":
+            return "Screen observation: disabled by policy."
+        if self.state == "unavailable":
+            return "Screen observation: vision endpoint unavailable."
         if not self.success:
             return f"Screen observation failed: {self.error}"
         return (
@@ -98,6 +131,48 @@ class ScreenObservation:
             f"Detail: {self.detail}. "
             f"Focus level: {self.focus_level}."
         )
+
+
+def _is_enabled() -> bool:
+    """Return True iff the owner has explicitly enabled screen perception.
+
+    Default OFF. The only way to turn it on is set MAEZ_SCREEN_PERCEPTION=1
+    (or any non-"0", non-empty value) in the environment. Matches ADR 0009
+    and the current config/model_state.json (vision_model=null)."""
+    val = os.environ.get("MAEZ_SCREEN_PERCEPTION", "").strip().lower()
+    return val not in ("", "0", "false", "no", "off")
+
+
+def _vision_endpoint_probe() -> bool:
+    """Fast TCP-connect probe for the vision endpoint.
+
+    Returns True iff the host:port accepts a TCP connection within
+    _VISION_PROBE_TIMEOUT_S. Caches the negative result for
+    _VISION_PROBE_COOLDOWN_S so the daemon doesn't re-probe every
+    cycle when the server is known-dead.
+    """
+    import socket
+    now = time.time()
+    cached = _vision_probe_cache.get("last_result")
+    last = _vision_probe_cache.get("last_check", 0.0)
+    # Only honor the cached NEGATIVE result (cached == False). A cached
+    # positive is stale immediately — probe fresh so we don't fire a
+    # 45-second HTTP timeout into a port that went down since last check.
+    if cached is False and (now - last) < _VISION_PROBE_COOLDOWN_S:
+        return False
+    try:
+        with socket.create_connection(
+            (_VISION_PROBE_HOST, _VISION_PROBE_PORT),
+            timeout=_VISION_PROBE_TIMEOUT_S,
+        ):
+            pass
+        _vision_probe_cache["last_result"] = True
+        _vision_probe_cache["last_check"] = now
+        return True
+    except OSError:
+        _vision_probe_cache["last_result"] = False
+        _vision_probe_cache["last_check"] = now
+        return False
 
 
 def _capture_screenshot() -> Optional[str]:
@@ -189,10 +264,45 @@ def _parse_vision_response(text: str) -> dict:
 
 def observe() -> ScreenObservation:
     """
-    Main entry point. Capture screen and analyze with gemma4:26b vision.
+    Main entry point. Capture screen and analyze with a vision LLM.
     Always returns a ScreenObservation — never raises.
+
+    2026-04-23 Commit 2: two-stage gate before the expensive work:
+      1. Feature flag `MAEZ_SCREEN_PERCEPTION` must be truthy. Default
+         is OFF — vision is deliberately paused per ADR 0009 until a
+         multimodal endpoint is re-provisioned.
+      2. Fast TCP probe to the vision endpoint. If the port is dead,
+         back off with cached result so we don't waste a screenshot
+         capture + 45-second HTTP timeout on every cycle.
     """
     timestamp = time.time()
+
+    # Stage 1: explicit opt-in. Default off — no screenshot, no probe,
+    # no network call. Matches the owner's current body state (no
+    # vision endpoint running) and prevents the per-cycle 45-second
+    # timeout loop observed 2026-04-23.
+    if not _is_enabled():
+        return ScreenObservation(
+            activity="", application="", detail="", focus_level="",
+            raw_response="", timestamp=timestamp, success=False,
+            state="disabled",
+            error="screen perception disabled (MAEZ_SCREEN_PERCEPTION unset)",
+        )
+
+    # Stage 2: fast availability probe. If the vision endpoint isn't
+    # accepting connections, don't bother capturing a screenshot.
+    # Caches a negative result for _VISION_PROBE_COOLDOWN_S so we
+    # aren't re-probing every 60 seconds when the port is known dead.
+    if not _vision_endpoint_probe():
+        return ScreenObservation(
+            activity="", application="", detail="", focus_level="",
+            raw_response="", timestamp=timestamp, success=False,
+            state="unavailable",
+            error=(
+                f"vision endpoint {_VISION_PROBE_HOST}:"
+                f"{_VISION_PROBE_PORT} not reachable"
+            ),
+        )
 
     # Capture screenshot
     img_b64 = _capture_screenshot()
@@ -200,6 +310,7 @@ def observe() -> ScreenObservation:
         return ScreenObservation(
             activity="", application="", detail="", focus_level="",
             raw_response="", timestamp=timestamp, success=False,
+            state="error",
             error="Screenshot capture failed — no display method succeeded"
         )
 
@@ -229,6 +340,7 @@ def observe() -> ScreenObservation:
             return ScreenObservation(
                 activity="", application="", detail="", focus_level="",
                 raw_response="", timestamp=timestamp, success=False,
+                state="error",
                 error=f"Vision server returned {resp.status_code}: {resp.text[:200]}",
             )
 
@@ -242,19 +354,22 @@ def observe() -> ScreenObservation:
             focus_level=parsed['focus_level'],
             raw_response=raw,
             timestamp=timestamp,
-            success=True
+            success=True,
+            state="ok",
         )
 
     except requests.Timeout:
         return ScreenObservation(
             activity="", application="", detail="", focus_level="",
             raw_response="", timestamp=timestamp, success=False,
+            state="error",
             error="Vision call timed out after 45s"
         )
     except Exception as e:
         return ScreenObservation(
             activity="", application="", detail="", focus_level="",
             raw_response="", timestamp=timestamp, success=False,
+            state="error",
             error=str(e)
         )
 

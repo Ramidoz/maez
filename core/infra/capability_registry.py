@@ -57,8 +57,10 @@ _STATIC_SCHEDULES = {
 # list — not introspected — so re-enables require a deliberate edit.
 _DISABLED_FEATURES = {
     "llama-server-vision": (
-        "paused 2026-04 by user; vision inputs unavailable until explicit "
-        "re-enable."
+        "paused 2026-04; vision endpoint retired (port 8081 no longer "
+        "hosts a multimodal LLM). Re-enable by starting a vision server "
+        "on 127.0.0.1:8081 and setting MAEZ_SCREEN_PERCEPTION=1 in the "
+        "daemon env. See skills/screen_perception.py."
     ),
 }
 
