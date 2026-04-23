@@ -43,12 +43,15 @@ Async model:
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
+
+logger = logging.getLogger(__name__)
 
 from core.action_classifier import classify_action, ClassificationResult
 from core.audit import audit_action, AuditVerdict, Decision
@@ -845,9 +848,16 @@ class DecisionPipeline:
             # existing card approve/execute path. We synthesize a
             # minimal classification-shaped object so _on_approve's
             # contract (cls.source, cls.reasoning) is satisfied.
+            # 02-M2: _on_approve historically reads audit_request_id
+            # from `card`, not from cls — we propagate it onto cls
+            # anyway so any future refactor that reaches for
+            # cls.audit_request_id sees the correct value rather
+            # than routing the outcome to a different audit row.
+            _card_aid = getattr(card, "audit_request_id", None)
             class _SyntheticCls:
                 source = "self_mod_dialog"
                 reasoning = f"ratified via dialog {dialog.dialog_id[:12]}"
+                audit_request_id = _card_aid
             result = self._on_approve(card, _SyntheticCls(), user_id)
             # Carry the dialog's terminal reply back so the caller can
             # surface it alongside whatever _on_approve produced
@@ -858,9 +868,11 @@ class DecisionPipeline:
         if turn.kind in ("denied", "cancelled", "cap_reached"):
             # Explicit no, cancel, or hard-cap termination → deny the
             # card and close it. Same shape as _on_deny.
+            _card_aid = getattr(card, "audit_request_id", None)
             class _SyntheticCls:
                 source = "self_mod_dialog"
                 reasoning = f"{turn.kind} via dialog {dialog.dialog_id[:12]}"
+                audit_request_id = _card_aid
             result = self._on_deny(card, _SyntheticCls(), user_id)
             if result and turn.reply_text:
                 result.dialog_reply_text = turn.reply_text
@@ -915,7 +927,26 @@ class DecisionPipeline:
         # tier=0 here means "run immediately" — the card already served
         # as the approval step, so we don't want the tier system to
         # re-queue the action for a second approval.
-        self.card_store.mark_running(card.request_id)
+        #
+        # 02-B1: if `mark_running` itself raises CardStoreError the card
+        # has already moved to a terminal state between the will-I check
+        # above and here (concurrent deny, manual expiry, second
+        # approval path). Treat that as "card already resolved" and
+        # return the current state rather than crashing with an
+        # unhandled CardStoreError up to the caller.
+        try:
+            self.card_store.mark_running(card.request_id)
+        except CardStoreError as e:
+            logger.warning(
+                "card %s already terminal at mark_running (%s); "
+                "skipping execution", card.request_id, e,
+            )
+            fresh = self.card_store.get(card.request_id) or card
+            return PipelineResult(
+                status=PipelineStatus.REFUSED_AUDIT,
+                message="Card was already resolved before execution could start.",
+                card=fresh,
+            )
         try:
             result = self.action_engine._execute_action(
                 card.action, card.params, f"card:{card.request_id}", tier=0
@@ -928,12 +959,29 @@ class DecisionPipeline:
             out = ""
             err = f"execution exception: {e!r}"
 
+        # 02-B1: mark_done / mark_failed can raise CardStoreError if the
+        # card was terminally resolved by a racing path (will-I deny,
+        # second approver). Log and continue — the outcome is still
+        # written to audit_log; the card state just reflects whichever
+        # path terminated first.
         if ok:
-            card = self.card_store.mark_done(card.request_id, output=out)
+            try:
+                card = self.card_store.mark_done(card.request_id, output=out)
+            except CardStoreError as e:
+                logger.warning(
+                    "card %s already terminal at mark_done (%s); "
+                    "outcome recorded to audit only", card.request_id, e,
+                )
             if card.audit_request_id:
                 self.audit_log.record_outcome(card.audit_request_id, outcome="approved_and_ran", notes=out[:400])
         else:
-            card = self.card_store.mark_failed(card.request_id, error=err)
+            try:
+                card = self.card_store.mark_failed(card.request_id, error=err)
+            except CardStoreError as e:
+                logger.warning(
+                    "card %s already terminal at mark_failed (%s); "
+                    "outcome recorded to audit only", card.request_id, e,
+                )
             if card.audit_request_id:
                 self.audit_log.record_outcome(card.audit_request_id, outcome="approved_and_failed", notes=err[:400])
 
@@ -1008,9 +1056,13 @@ class DecisionPipeline:
         # avoid re-proposing the same pattern. inner_residue is
         # transient (30-min half-life); consequence_memory persists.
         # The two complement rather than duplicate.
+        # 02-M1: wrap consequence_memory recording with explicit logging
+        # on failure. Previously the outer try/except swallowed every
+        # exception silently, so a card rejection that failed to reach
+        # consequence_memory would re-surface on the next planner cycle
+        # as a proposal Maez never learned was already rejected.
         try:
             from core import consequence_memory as _cm
-            import json as _json
             _action = getattr(card, "action", "unknown")
             _params = getattr(card, "params", {}) or {}
             _cmd = _params.get("cmd") if isinstance(_params, dict) else ""
@@ -1026,8 +1078,12 @@ class DecisionPipeline:
                                     else []),
                 extra={"request_id": card.request_id},
             )
-        except Exception:
-            pass
+        except Exception as _cm_exc:
+            logger.warning(
+                "consequence_memory record_event failed on card %s: %s — "
+                "rejection not persisted; planner may re-propose this action",
+                card.request_id, _cm_exc,
+            )
         if self.renderer:
             self.renderer.send_resolution(card)
         return PipelineResult(

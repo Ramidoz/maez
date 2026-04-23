@@ -351,6 +351,15 @@ def score_and_classify(text: str) -> dict:
     Called by daemon BEFORE memory.store() so metadata is written once.
     Returns dict with keys: cog_score, cog_primary, cog_labels, cog_topic, cog_topics
     """
+    # 05-B1: snapshot buffer lengths before the compute so a mid-function
+    # raise can roll back any partial append. Without this, a classify()
+    # that succeeded and appended to _recent_topics but a score() that
+    # raised would leave the buffers in an inconsistent (topic-without-
+    # matching-score) state that corrupts fixation detection + behavior
+    # policy on every subsequent turn.
+    _topics_len = len(_recent_topics)
+    _scores_len = len(_recent_scores)
+    _labels_len = len(_recent_labels)
     try:
         classification = classify(text, _recent_topics)
         quality = score(text, classification, _recent_topics)
@@ -387,6 +396,17 @@ def score_and_classify(text: str) -> dict:
         return result
 
     except Exception as e:
+        # Roll each buffer back to its pre-call length so a partial
+        # append doesn't leave the trio desynced for future callers.
+        try:
+            if len(_recent_topics) > _topics_len:
+                _recent_topics[:] = _recent_topics[:_topics_len]
+            if len(_recent_scores) > _scores_len:
+                _recent_scores[:] = _recent_scores[:_scores_len]
+            if len(_recent_labels) > _labels_len:
+                _recent_labels[:] = _recent_labels[:_labels_len]
+        except Exception:
+            pass
         logger.error("Cognition scoring failed (safe fallback): %s", e)
         return {
             'cog_score': 50,
