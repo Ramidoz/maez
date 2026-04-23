@@ -1,3 +1,6 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """
 voice_input.py — Command transcription for Maez via faster-whisper
 OBSBOT Meet 2 at hw:1,0, 32000Hz stereo. Resamples to 16kHz mono for Whisper.

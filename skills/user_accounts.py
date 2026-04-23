@@ -1,3 +1,6 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """
 user_accounts.py — Universal identity system for Maez.
 One account, multiple channels. Username + password auth.

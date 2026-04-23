@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """Claude Code eval against Gemma4-26B on llama-server (fair infra comparison)."""
 import json, time, urllib.request, pathlib
 

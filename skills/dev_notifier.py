@@ -1,3 +1,6 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """
 dev_notifier.py — Sends operational notifications to Maez Dev bot.
 Keeps Maez private bot clean for conversation only.

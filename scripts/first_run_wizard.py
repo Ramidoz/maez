@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """first_run_wizard.py — interactive setup for a fresh Maez install.
 
 Run once, after `scripts/install.sh` has seeded the config directory.

@@ -1,3 +1,6 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """Phase 3 shim — delegates to core.safety.owner_trust.
 
 The real module lives at core/safety/owner_trust.py. New code should

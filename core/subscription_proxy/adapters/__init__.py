@@ -1,3 +1,6 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """Backend adapters for the Maez subscription proxy.
 
 Each adapter wraps one backend (subscription CLI or API-key service)

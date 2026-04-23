@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """
 scripts/maez_cli.py — Builder-mode CLI for Maez (A-core #3, Step 2).
 

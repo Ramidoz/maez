@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """Run the 5 Claude Code-style tests against stock-SFT brain (parity with Ornstein run)."""
 import json, time, urllib.request, sys, pathlib
 

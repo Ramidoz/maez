@@ -1,3 +1,6 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """
 claude_watcher.py — Monitors Claude Code and notifies via Maez Dev bot.
 Notifications only. Use HQSSH for terminal access and input.

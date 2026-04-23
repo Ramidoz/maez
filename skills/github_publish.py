@@ -1,3 +1,6 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """
 github_publish.py — Maez publishes its own life to GitHub.
 Runs nightly after journal entry. Commits only technical content.

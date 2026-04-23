@@ -1,3 +1,6 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """Phase 5.A — smoke-import every core module, both legacy and
 subpackage paths. Fast regression net for the Phase 3 shim strategy
 and future refactors.

@@ -1,3 +1,6 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """Phase 5.B — behavioral regression tests for the audit's blocker
 and major findings that were fixed in Batches A–E (Phase 1.G).
 

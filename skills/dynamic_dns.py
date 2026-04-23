@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """
 dynamic_dns.py — Keep maez.live pointed at this machine's public IP.
 Runs every 5 minutes via cron. Uses Cloudflare API.

@@ -1,3 +1,6 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 r"""
 Maez Two-Pass Audit LLM — Session 11z Part 1, Step 6.
 

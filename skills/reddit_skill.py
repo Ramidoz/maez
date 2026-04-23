@@ -1,3 +1,6 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """
 Reddit awareness for Maez. Each user's subreddit list is per-user config.
 No API key — uses public JSON endpoints. Injected as [REDDIT] every 15 cycles.

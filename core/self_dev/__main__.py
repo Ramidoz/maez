@@ -1,3 +1,6 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """CLI entry point for `python -m core.self_dev`.
 
 Delegates to the package's argparser defined in __init__.py, preserving

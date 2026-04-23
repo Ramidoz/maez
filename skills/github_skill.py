@@ -1,3 +1,6 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """
 GitHub awareness skill for Maez.
 the owner's repos + trending AI repos. Injected as [GITHUB] every 10 cycles.

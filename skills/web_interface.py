@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """
 web_interface.py — Maez web chat interface.
 Standalone Flask app on port 11437. Registration, login, chat.

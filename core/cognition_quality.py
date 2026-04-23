@@ -1,3 +1,6 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """Phase 3 shim — delegates to core.cognition.cognition_quality."""
 import sys
 from core.cognition import cognition_quality as _real

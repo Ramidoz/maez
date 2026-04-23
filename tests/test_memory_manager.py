@@ -1,3 +1,6 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+# See LICENSE for full text.
 """Tests for memory.memory_manager.format_for_prompt — age-relative framing.
 
 Contract (2026-04-21): on top of the retrieval-truth attribution contract,
