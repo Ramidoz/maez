@@ -23,7 +23,13 @@ from pathlib import Path
 logger = logging.getLogger("maez")
 
 # --- Logging ---
-COG_LOG = Path("/home/rohit/maez/logs/cognition.log")
+# Resolve via core.paths so the default works on any install. Legacy
+# hardcode kept as a last-resort fallback.
+try:
+    from core.paths import logs_dir as _logs_dir
+    COG_LOG = _logs_dir() / "cognition.log"
+except Exception:
+    COG_LOG = Path("/home/rohit/maez/logs/cognition.log")
 COG_LOG.parent.mkdir(parents=True, exist_ok=True)
 _cog_handler = logging.FileHandler(COG_LOG)
 _cog_handler.setFormatter(logging.Formatter(

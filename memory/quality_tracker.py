@@ -28,7 +28,20 @@ from typing import Optional
 
 logger = logging.getLogger("maez")
 
-DB_PATH = '/home/rohit/maez/memory/quality.db'
+def _default_quality_db_path() -> str:
+    """Resolve the quality DB default at call time. Phase-2 hygiene:
+    core.paths.home() auto-detects the repo root on any install (dev
+    box, CI runner, fresh clone). Fallback to the legacy hardcode is
+    only reached if core.paths is unimportable for some exotic reason.
+    """
+    try:
+        from core.paths import memory_dir as _memory_dir
+        return str(_memory_dir() / "quality.db")
+    except Exception:
+        return '/home/rohit/maez/memory/quality.db'
+
+
+DB_PATH = _default_quality_db_path()
 
 
 class QualityTracker:
