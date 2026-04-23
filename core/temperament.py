@@ -249,9 +249,9 @@ class Temperament:
             conn.commit()
 
         logger.info(
-            "Temperament: %s %.3f -> %.3f (source=%s, event_id=%d, reason=%s)",
+            "Temperament: %s %s -> %.3f (source=%s, event_id=%d, reason=%s)",
             parameter,
-            prior if prior is not None else float("nan"),
+            f"{prior:.3f}" if prior is not None else "NULL",
             value_f,
             source,
             event_id,

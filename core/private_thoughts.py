@@ -107,10 +107,22 @@ logger = logging.getLogger("maez")
 #  CONSTANTS
 # ══════════════════════════════════════════════════════════════════════
 
-DEFAULT_DB_PATH = Path(os.environ.get(
-    "MAEZ_PRIVATE_THOUGHTS_PATH",
-    str(Path(__file__).resolve().parent.parent / "memory" / "private_thoughts.db"),
-))
+# 10-B2: route through core.paths.memory_dir so a relocation of
+# core/ (e.g. Phase 3 reorganization) or a non-default MAEZ_ROOT does
+# not silently break the fallback. MAEZ_PRIVATE_THOUGHTS_PATH still
+# wins if set — the env override keeps per-user overrides working.
+def _default_private_thoughts_path() -> Path:
+    override = os.environ.get("MAEZ_PRIVATE_THOUGHTS_PATH")
+    if override:
+        return Path(override)
+    try:
+        from core.paths import memory_dir as _memory_dir
+        return _memory_dir() / "private_thoughts.db"
+    except Exception:
+        return Path(__file__).resolve().parent.parent / "memory" / "private_thoughts.db"
+
+
+DEFAULT_DB_PATH = _default_private_thoughts_path()
 
 # Provenance allowlist for Track A.
 ALLOWED_PROVENANCES: frozenset[str] = frozenset({"explicit_api"})

@@ -121,6 +121,12 @@ class BackendSelection:
     # Session 11g — populated only when the cloud branch ran the redactor.
     # None means the redactor did not run (e.g. local backend was selected).
     redaction_telemetry: dict = None  # type: ignore[assignment]
+    # 10-B1 — distinguish "policy forbade this backend" from "service
+    # was unavailable" when backend is None. The router previously
+    # reported both as the same opaque failure; a guest requesting
+    # cloud under external_guests_local_only was indistinguishable
+    # from a transient local outage in the logs.
+    policy_denied: bool = False
 
 
 def _local() -> LocalGemmaBackend:
@@ -236,11 +242,20 @@ def select_backend(decision: PolicyDecision) -> BackendSelection:
         if not decision.allow_cloud:
             # Defense-in-depth: should not happen because decide_policy
             # would have downgraded; refuse explicitly anyway.
+            # 10-B1: policy_denied=True so a cloud-forbidden guest
+            # whose local probe happens to be intermittent cannot be
+            # confused with a plain availability failure.
+            logger.warning(
+                "fast_backend_router: policy forbids cloud [%s]; refusing "
+                "(rule_fired=%s)",
+                decision.effective_policy, decision.rule_fired,
+            )
             return BackendSelection(
                 backend=None, name='none',
                 reason=(
                     f'effective=cloud but policy disallows cloud [{decision.rule_fired}]'
                 ),
+                policy_denied=True,
             )
         if cloud.is_available():
             return BackendSelection(
@@ -267,6 +282,7 @@ def select_backend(decision: PolicyDecision) -> BackendSelection:
             backend=cloud, name=cloud.name,
             reason=f'effective=auto; local unavailable, cloud fallback [{decision.rule_fired}]',
         )
+    _policy_denied = (not decision.allow_cloud) and not local.is_available()
     return BackendSelection(
         backend=None, name='none',
         reason=(
@@ -274,6 +290,7 @@ def select_backend(decision: PolicyDecision) -> BackendSelection:
             f'(local down{"; cloud disallowed by policy" if not decision.allow_cloud else "; cloud also unavailable"}) '
             f'[{decision.rule_fired}]'
         ),
+        policy_denied=_policy_denied,
     )
 
 

@@ -76,21 +76,40 @@ def is_available() -> bool:
     uses this to decide "is local available?" and used to only know about
     Ollama; with llama.cpp as the new substrate, Ollama may be stopped
     entirely while llama-server is serving requests.
+
+    10-M2: the active-backend decision is resolved once at the top and
+    drives the probe target. Previously, an exception importing or
+    calling active_backend() silently fell through to Ollama — so a
+    llamacpp deployment whose llm_client module briefly failed would
+    return "local available" based on a stale Ollama install that the
+    caller would then try to use. If the backend is llamacpp we only
+    probe llama-server; fallback to Ollama only when the backend is
+    explicitly Ollama (or when active_backend is unresolvable, which
+    remains the Ollama-default behavior for bootstrap).
     """
+    backend: Optional[str] = None
+    llamacpp_probe_url: Optional[str] = None
     try:
-        from core.llm_client import active_backend as _lc_active_backend
-        from core.llm_client import LLAMACPP_BASE_URL, BACKEND_LLAMACPP
-        if _lc_active_backend() == BACKEND_LLAMACPP:
-            # Ping llama-server's /models endpoint (OpenAI-compat)
-            probe_url = LLAMACPP_BASE_URL.rstrip('/') + '/models'
-            try:
-                r = requests.get(probe_url, timeout=1.5)
-                return r.status_code == 200
-            except Exception:
-                return False
+        from core.llm_client import (
+            active_backend as _lc_active_backend,
+            BACKEND_LLAMACPP,
+            LLAMACPP_BASE_URL,
+        )
+        backend = _lc_active_backend()
+        if backend == BACKEND_LLAMACPP:
+            llamacpp_probe_url = LLAMACPP_BASE_URL.rstrip('/') + '/models'
     except Exception:
-        # llm_client unavailable for any reason — fall through to Ollama
-        pass
+        # llm_client unavailable — treat as bootstrap / Ollama-default.
+        backend = None
+
+    if llamacpp_probe_url is not None:
+        try:
+            r = requests.get(llamacpp_probe_url, timeout=1.5)
+            return r.status_code == 200
+        except Exception:
+            return False
+
+    # Ollama (explicit or bootstrap default).
     try:
         r = requests.get('http://localhost:11434/api/tags', timeout=1.5)
         return r.status_code == 200

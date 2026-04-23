@@ -111,16 +111,24 @@ def current_soul() -> str:
 
 
 def append_to_local(text: str, *, separator: str = "\n\n") -> None:
-    """Append new content to soul.local.md. Used by dream-proposal apply."""
+    """Append new content to soul.local.md. Used by dream-proposal apply.
+
+    07-B1: read + write must both happen inside the lock. Previously the
+    read was outside, so two concurrent dream-apply paths could both
+    read the same `existing`, then clobber each other's writes — losing
+    one proposal silently. Cache invalidation is kept in the same
+    critical section so the next current_soul() re-reads the merged
+    file, not whichever thread's copy ran last.
+    """
     if not text:
         return
     local_path = paths.soul_local_path()
-    try:
-        existing = local_path.read_text() if local_path.exists() else ""
-    except Exception:
-        existing = ""
-    suffix = separator if existing and not existing.endswith(separator) else ""
     with _lock:
+        try:
+            existing = local_path.read_text() if local_path.exists() else ""
+        except Exception:
+            existing = ""
+        suffix = separator if existing and not existing.endswith(separator) else ""
         local_path.write_text(existing + suffix + text)
         global _cache_text, _cache_signature
         _cache_text = None
