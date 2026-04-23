@@ -150,6 +150,12 @@ target-version = "py312"
 extend-exclude = [
     ".venv",
     "training/.venv",
+    # Unsloth emits compiled trainer wrappers into a per-repo cache
+    # directory that is gitignored but present on disk. It's not our
+    # code — excluding prevents ~1000 false-positive lint hits in
+    # generated tensor-program scaffolds. Added 2026-04-23 Commit 7
+    # alongside widening the CI lint surface to include training/.
+    "training/unsloth_compiled_cache",
     "models",
     "memory/db",
     "logs",

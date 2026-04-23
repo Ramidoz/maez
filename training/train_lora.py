@@ -102,7 +102,8 @@ def _preflight_gpu() -> bool:
 
 def _build_fake_dataset(tokenizer, out_dir: Path):
     """3 trivial pairs for sanity-check mode."""
-    from datasets import Dataset
+    # 2026-04-23 Commit 7: dropped unused `Dataset` import (F401) —
+    # this helper builds the jsonl directly, no Dataset object needed.
     pairs = [
         {"conversations": [
             {"role": "user", "content": "Say hi."},
@@ -222,7 +223,7 @@ def main() -> int:
     # Chat template
     try:
         tokenizer = get_chat_template(tokenizer, chat_template=args.chat_template)
-    except Exception as e:
+    except Exception:
         _log(f"chat template {args.chat_template!r} unknown, falling back to 'gemma'")
         try:
             tokenizer = get_chat_template(tokenizer, chat_template="gemma")

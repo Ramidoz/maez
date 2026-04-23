@@ -209,9 +209,9 @@ def describe_mode():
     mode = status.get("mode", "QUIET")
     ok = bool(status.get("ok"))
     message = status.get("message", "No message")
-    cpu = float(status.get("cpu_percent", 0.0))
+    # 2026-04-23 Commit 7: dropped unused cpu/gpu locals (F841) — only
+    # `ram` and `cycle` are consulted below. Re-add if needed.
     ram = float(status.get("ram_percent", 0.0))
-    gpu = float(status.get("gpu_percent", 0.0))
     cycle = int(status.get("cycle_count", 0))
 
     if not ok:

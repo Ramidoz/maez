@@ -490,7 +490,9 @@ class MemoryManager:
             prefix = f"[Cycle {m['cycle']}, {m['timestamp']}, {m['type']}]"
             memory_texts.append(f"{prefix}\n{m['content']}")
 
-        raw_block = "\n\n".join(memory_texts)
+        # 2026-04-23 Commit 7: dropped unused `raw_block` local (F841).
+        # The join was never consumed below — the subsequent SOUL
+        # block is independent.
 
         # Load soul for context
         try:
@@ -721,7 +723,9 @@ class MemoryManager:
             return 0
         tagged = 0
         import time as _time
-        for entry_id, meta in zip(existing["ids"], existing["metadatas"]):
+        for entry_id, meta in zip(
+            existing["ids"], existing["metadatas"], strict=False,
+        ):
             new_meta = dict(meta or {})
             new_meta["integrity"] = integrity
             new_meta["integrity_reason"] = reason[:200]
@@ -964,7 +968,10 @@ class MemoryManager:
         )
 
         memories = []
-        for mem_id, doc, meta in zip(results["ids"], results["documents"], results["metadatas"]):
+        for mem_id, doc, meta in zip(
+            results["ids"], results["documents"], results["metadatas"],
+            strict=False,
+        ):
             memories.append({
                 "id": mem_id,
                 "content": doc,
@@ -980,7 +987,9 @@ class MemoryManager:
         """Tag untagged raw memories with topic wings. Run nightly, non-blocking."""
         results = self.raw.get(limit=batch_size, include=["documents", "metadatas"])
         tagged = 0
-        for i, (doc, meta) in enumerate(zip(results["documents"], results["metadatas"])):
+        for i, (doc, meta) in enumerate(zip(
+            results["documents"], results["metadatas"], strict=False,
+        )):
             if meta.get("wing"):
                 continue
             wing = _topic_router.detect_wing(doc)

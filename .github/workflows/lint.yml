@@ -32,11 +32,20 @@ jobs:
         # mutable-arg defaults, closure-over-loop pitfalls, strict-zip).
         # Modernisation + format rules (UP, I, E7, full B) are deferred
         # to a later sweep; see pyproject.toml comment for the plan.
-        run: ruff check core/ skills/ daemon/ tests/ cli/ scripts/
+        #
+        # 2026-04-23 Commit 7: widened from
+        #   core/ skills/ daemon/ tests/ cli/ scripts/
+        # to ALSO cover memory/ hardware/ training/. Those three paths
+        # hold birth-critical code (memory_manager, identity_ledger,
+        # source_awareness) that had been outside the CI gate. The
+        # Unsloth auto-generated cache under training/unsloth_compiled_
+        # cache/ is excluded via pyproject.toml::extend-exclude because
+        # it's emitted code, not hand-written.
+        run: ruff check core/ skills/ daemon/ tests/ cli/ scripts/ memory/ hardware/ training/
 
       - name: Format check (informational only)
         # Format check stays informational until the modernisation
         # sweep lands — a one-shot reformat would bury real diffs for
         # no immediate reader benefit.
         continue-on-error: true
-        run: ruff format --check core/ skills/ daemon/ tests/ cli/ scripts/
+        run: ruff format --check core/ skills/ daemon/ tests/ cli/ scripts/ memory/ hardware/ training/

@@ -51,7 +51,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sqlite3
 import sys
@@ -213,7 +212,7 @@ def iter_reasoning_pairs() -> Iterator[tuple[str, str, str, str]]:
 
     docs = results.get("documents") or []
     metas = results.get("metadatas") or []
-    for doc, meta in zip(docs, metas):
+    for doc, meta in zip(docs, metas, strict=False):
         doc = (doc or "").strip()
         if len(doc) < 50:
             continue
