@@ -23,9 +23,24 @@ from __future__ import annotations
 import hashlib
 import unittest
 
-from daemon.maez_daemon import _STATIC_CYCLE_INSTRUCTIONS
+# daemon/maez_daemon.py pulls in ollama, telegram, flask, websockets,
+# and other optional extras at import time. On a bare [dev] install
+# (e.g. CI) any one missing dep blocks the import entirely. Skip the
+# suite cleanly rather than generating an opaque ImportError.
+try:
+    from daemon.maez_daemon import _STATIC_CYCLE_INSTRUCTIONS
+    _HAS_DAEMON_DEPS = True
+except ImportError as e:
+    _STATIC_CYCLE_INSTRUCTIONS = ""
+    _IMPORT_ERROR = str(e)
+    _HAS_DAEMON_DEPS = False
 
 
+@unittest.skipUnless(
+    _HAS_DAEMON_DEPS,
+    "daemon.maez_daemon requires surface extras (ollama, telegram, flask, "
+    "websockets). Install with `pip install -e .[all]` to run these tests."
+)
 class StaticInstructionsStability(unittest.TestCase):
 
     def test_no_dynamic_interpolation_markers(self):

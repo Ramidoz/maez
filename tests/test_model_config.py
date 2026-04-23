@@ -29,11 +29,15 @@ class ImportSafety(unittest.TestCase):
     def test_module_imports_without_env(self):
         # Fresh import in a subprocess with minimal env. Must not raise.
         env = {k: v for k, v in os.environ.items() if not k.startswith("MAEZ_")}
+        # Resolve repo root from this test file's location rather than
+        # hardcoding /home/rohit/maez so the test runs on any host
+        # (dev box, CI runner, contributor's clone).
+        repo_root = Path(__file__).resolve().parent.parent
         result = subprocess.run(
             ["python3", "-c", "from core import model_config as mc; "
              "print(mc.PRIMARY_MODEL, mc.PRIMARY_BASE_URL, "
              "len(mc.PRIMARY_CHAT_KWARGS))"],
-            capture_output=True, text=True, env=env, cwd="/home/rohit/maez",
+            capture_output=True, text=True, env=env, cwd=str(repo_root),
             timeout=10,
         )
         self.assertEqual(

@@ -82,9 +82,30 @@ class GroundedVocab(unittest.TestCase):
         v = grounded_vocab()
         self.assertIsInstance(v, frozenset)
 
+    def _has_maez_systemd_units(self):
+        """True if this host has at least one systemd unit starting
+        with 'maez' — the registry reads live units via systemctl."""
+        import shutil
+        import subprocess
+        if not shutil.which("systemctl"):
+            return False
+        try:
+            r = subprocess.run(
+                ["systemctl", "list-unit-files", "maez*"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return "maez" in (r.stdout or "")
+        except Exception:
+            return False
+
     def test_vocab_contains_live_services(self):
+        if not self._has_maez_systemd_units():
+            self.skipTest(
+                "No maez-prefixed systemd units on this host — "
+                "expected on CI or a fresh clone. Install the daemon "
+                "via scripts/install.sh to exercise this check."
+            )
         v = grounded_vocab()
-        # At least one maez* service is live on this box at all times.
         self.assertTrue(
             any(t.startswith("maez") for t in v),
             f"no maez-prefixed token in registry vocab: {sorted(v)}"
@@ -94,9 +115,11 @@ class GroundedVocab(unittest.TestCase):
         """Services like 'maez-web' are split into 'maez' + 'web' so the
         audit detector grounds bare-token references without needing the
         full hyphenated form."""
+        if not self._has_maez_systemd_units():
+            self.skipTest("No maez-prefixed systemd units on this host")
         v = grounded_vocab()
         self.assertIn("maez", v)
-        # web service is always present
+        # web service is always present when daemon is installed
         self.assertIn("web", v)
 
 

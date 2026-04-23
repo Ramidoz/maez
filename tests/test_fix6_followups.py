@@ -35,6 +35,24 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _OWNER_TELEGRAM_ID = int(os.environ.get("OWNER_TELEGRAM_ID", "1"))
 
 
+# skills.telegram_voice imports `python-telegram-bot` at module scope.
+# On a fresh install without the [telegram] extra (e.g. CI running
+# pip install -e .[dev] only), those imports fail. Skip the whole
+# module cleanly when the extra isn't present, rather than generating
+# 18 cryptic-looking errors in CI output.
+try:
+    from skills import telegram_voice  # noqa: F401
+    _HAS_TELEGRAM = True
+except ImportError:
+    _HAS_TELEGRAM = False
+
+
+@unittest.skipUnless(
+    _HAS_TELEGRAM,
+    "skills.telegram_voice requires the [telegram] extra "
+    "(python-telegram-bot); install with `pip install -e .[telegram]` "
+    "to run these tests.",
+)
 class Fix1LogsIntentTightening(unittest.TestCase):
 
     def test_what_happened_does_not_match_logs_intent(self):
@@ -60,6 +78,10 @@ class Fix1LogsIntentTightening(unittest.TestCase):
             )
 
 
+@unittest.skipUnless(
+    _HAS_TELEGRAM,
+    "skills.telegram_voice requires the [telegram] extra",
+)
 class Fix2And3RecoveryCardDiscipline(unittest.TestCase):
     """One end-to-end exercise of _run_jarvis_loop with a recovery_seed
     observes both Fix 2 (reason propagation) and Fix 3 (single-card-
