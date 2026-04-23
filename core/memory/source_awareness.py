@@ -806,21 +806,113 @@ def is_stale() -> bool:
     return map_status().get("stale", True)
 
 
+def _refresh_strategy() -> str:
+    """Decide whether the next refresh should be a FULL rebuild
+    (``build_map``) or an incremental hash-diff (``refresh_map``).
+
+    Full rebuild is required when the cached map is structurally
+    wrong — not just out-of-date on file contents. Incremental
+    refresh re-hashes the files it already knows about; it never
+    walks disk to discover NEW files. A stale 60-file map stays 60
+    files after incremental refresh, which was the actual regression
+    observed 2026-04-23 (live machine had 516+ tracked files, cached
+    map still claimed 60).
+
+    Returns:
+        "full"         — map missing, schema mismatch, age > 7 days,
+                         or live file count materially exceeds cached
+                         total_files. In any of these cases,
+                         incremental refresh cannot converge on the
+                         truth; a full rebuild is the only honest fix.
+        "incremental"  — cached map is present, fresh, and schema-
+                         matched. Use refresh_map() to re-hash
+                         touched files cheaply.
+    """
+    m = _read_map_raw()
+    if m is None:
+        return "full"
+    if m.get("schema_version") != SCHEMA_VERSION:
+        return "full"
+    built_at = _parse_built_at(m)
+    if built_at is None:
+        return "full"
+    if (datetime.now(timezone.utc) - built_at) > _STALE_MAX_AGE:
+        return "full"
+    # File-count drift check: if the cached total_files is more than
+    # 10 off the current tracked count, incremental cannot catch up
+    # (refresh_map iterates `files.items()` — it never discovers
+    # disk-new files). The threshold is loose (10) because on a busy
+    # day a few new files shouldn't force a full rebuild — that's
+    # what incremental is for — but an order-of-magnitude gap
+    # obviously warrants a full one.
+    try:
+        cached_total = int(m.get("total_files", 0) or 0)
+        live_total = _count_tracked_files()
+        if abs(live_total - cached_total) > 10:
+            return "full"
+    except Exception as e:
+        _logger.debug("file-count drift check failed (non-fatal): %s", e)
+    return "incremental"
+
+
+def _count_tracked_files() -> int:
+    """Cheap live count of Python + config files under the active
+    code dirs. Used by _refresh_strategy to decide full vs
+    incremental rebuild. O(directory scan), no parsing."""
+    n = 0
+    for sub in ("core", "daemon", "skills", "cli", "memory",
+                "tests", "scripts", "training"):
+        root = MAEZ_ROOT / sub
+        if not root.exists():
+            continue
+        for p in root.rglob("*"):
+            if not p.is_file():
+                continue
+            # Skip the same dirs build_map skips — compiled caches,
+            # hidden dirs, vendored venvs. Quick check via parts.
+            if any(skip in p.parts for skip in
+                   (".venv", "__pycache__", ".git", "node_modules",
+                    "unsloth_compiled_cache")):
+                continue
+            if p.suffix in (".py", ".yaml", ".yml", ".json", ".md", ".sh"):
+                n += 1
+    return n
+
+
 def _refresh_worker() -> None:
-    """Background thread body. Runs refresh_map() and clears the
+    """Background thread body. Dispatches to build_map() or
+    refresh_map() based on _refresh_strategy() and clears the
     running flag when done. Logs outcome at INFO; failures do NOT
-    raise — the callers continue to see the previous map."""
+    raise — the callers continue to see the previous map.
+
+    2026-04-23 Commit 7b fix: previously this always called
+    refresh_map(), which can't discover disk-new files and
+    therefore never converges when the cached map is catastrophically
+    stale (by count or schema). Now delegates the decision to
+    _refresh_strategy()."""
     global _refresh_running
     try:
-        _logger.info("source_awareness: async refresh starting")
-        stats = refresh_map()
-        _logger.info(
-            "source_awareness: async refresh complete "
-            "(updated=%d, unchanged=%d, errors=%d)",
-            stats.get("updated", 0),
-            stats.get("unchanged", 0),
-            stats.get("errors", 0),
-        )
+        strategy = _refresh_strategy()
+        _logger.info("source_awareness: async %s refresh starting", strategy)
+        if strategy == "full":
+            stats = build_map()
+            _logger.info(
+                "source_awareness: full rebuild complete "
+                "(total=%d, indexed=%d, parsed=%d, parse_errors=%d)",
+                stats.get("total_files", 0),
+                stats.get("indexed_files", 0),
+                stats.get("parsed_files", 0),
+                stats.get("parse_errors", 0),
+            )
+        else:
+            stats = refresh_map()
+            _logger.info(
+                "source_awareness: incremental refresh complete "
+                "(updated=%d, unchanged=%d, errors=%d)",
+                stats.get("updated", 0),
+                stats.get("unchanged", 0),
+                stats.get("errors", 0),
+            )
     except Exception as e:
         _logger.warning("source_awareness: async refresh failed: %s", e)
     finally:

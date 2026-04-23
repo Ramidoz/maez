@@ -1287,6 +1287,22 @@ class MaezDaemon:
         except Exception as e:
             reply = f"Error: {e}"
 
+        # 2026-04-23 Commit 7b: strip tool-call JSON leaks from the raw
+        # model output BEFORE audit and BEFORE store. Models occasionally
+        # leak <tool_call>...</tool_call> or inline JSON into the final
+        # reply text even when the tool-use loop has already run. These
+        # leaks are wire-format noise; the owner shouldn't see them and
+        # memory shouldn't store them. Previously this cleanup ran in the
+        # adapter AFTER handle_message had already returned — meaning
+        # stored memory contained the raw JSON even though the owner
+        # saw cleaned text. Moving it here makes
+        #     stored text == audited text == text returned to caller.
+        try:
+            from core.brain_loop import strip_tool_call_leaks
+            reply = strip_tool_call_leaks(reply)
+        except Exception as _strip_exc:
+            logger.debug("tool-call-leak strip skipped: %s", _strip_exc)
+
         # 2026-04-23 memory-integrity contract: audit BEFORE store + return.
         # See core/safety/audited_output.py for the full invariant.
         # `transcript` is the caller's Jarvis tool-use transcript if a

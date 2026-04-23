@@ -156,6 +156,11 @@ extend-exclude = [
     # generated tensor-program scaffolds. Added 2026-04-23 Commit 7
     # alongside widening the CI lint surface to include training/.
     "training/unsloth_compiled_cache",
+    # SFT run artifacts (merge_and_convert.py is an auto-generated
+    # helper per run). Gitignored but left on disk across runs;
+    # excluding from lint matches the gitignore's intent. Added
+    # 2026-04-23 Commit 7b.
+    "training/runs",
     "models",
     "memory/db",
     "logs",

@@ -15,6 +15,10 @@ import subprocess
 import requests
 from dotenv import load_dotenv
 
+# 2026-04-23 Commit 7b: commit-message generation now tracks the
+# current primary brain, not hardcoded "gemma4:26b".
+from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
+
 load_dotenv('/home/rohit/maez/config/.env')
 logger = logging.getLogger("maez")
 
@@ -122,12 +126,13 @@ class GitHubPublisher:
         return '\n'.join(sanitized)
 
     def _generate_commit_message(self) -> str:
-        """Ask gemma4 for a commit message. Session 11r: via llm_client
-        (was missed in 11p batch migration)."""
+        """Ask the primary brain for a commit message. Session 11r:
+        via llm_client (was missed in 11p batch migration).
+        2026-04-23 Commit 7b: model now tracks current primary."""
         try:
             from core import llm_client as _llm_client
             r = _llm_client.chat(
-                model='gemma4:26b',
+                model=_PRIMARY_MODEL,
                 messages=[{
                     'role': 'user',
                     'content': (

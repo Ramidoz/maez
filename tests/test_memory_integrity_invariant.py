@@ -191,19 +191,67 @@ class DaemonHandleMessageContract(unittest.TestCase):
                 and node.name == "handle_message"
             ):
                 body_src = ast.get_source_segment(src, node) or ""
-                self.assertIn("audit_assistant_text", body_src,
+                self.assertIn("audit_assistant_text(", body_src,
                               "handle_message body must call "
-                              "audit_assistant_text before store_telegram.")
-                # Ordering assertion: audit_assistant_text mention must
-                # appear BEFORE store_telegram in the source.
-                a = body_src.find("audit_assistant_text")
-                s = body_src.find("store_telegram")
+                              "audit_assistant_text() before store_telegram().")
+                # Ordering assertion on function-call patterns (opening
+                # paren included) so comments mentioning the name don't
+                # move the index. audit_assistant_text() call must
+                # appear BEFORE store_telegram() call.
+                a = body_src.find("audit_assistant_text(")
+                s = body_src.find("store_telegram(")
                 self.assertLess(a, s,
-                                "audit_assistant_text must appear BEFORE "
-                                "store_telegram in handle_message.")
+                                "audit_assistant_text() must be called "
+                                "BEFORE store_telegram() in handle_message.")
                 found = True
                 break
         self.assertTrue(found, "handle_message not found in maez_daemon.py")
+
+    def test_handle_message_ordering_strip_then_audit_then_store(self):
+        """2026-04-23 Commit 7b invariant: stored == audited == displayed.
+
+        The daemon's final-text pipeline inside handle_message must be:
+          1. strip_tool_call_leaks (wire-format cleanup)
+          2. audit_assistant_text (semantic grounding)
+          3. store_telegram (persistent record)
+
+        If strip runs AFTER store, memory captures wire-format noise
+        the owner never saw. If audit runs AFTER store, memory captures
+        fabrications that got rewritten for the user.
+
+        Ordering is asserted on function-CALL patterns (with opening
+        paren) so explanatory comments that mention one of the
+        function names don't fool the test into reporting a false
+        ordering violation.
+        """
+        src = (_REPO / "daemon" / "maez_daemon.py").read_text()
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ClassDef)
+                and node.name == "MaezDaemon"
+            ):
+                for sub in node.body:
+                    if (isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef))
+                            and sub.name == "handle_message"):
+                        body = ast.get_source_segment(src, sub) or ""
+                        i_strip = body.find("strip_tool_call_leaks(")
+                        i_audit = body.find("audit_assistant_text(")
+                        i_store = body.find("store_telegram(")
+                        self.assertGreater(i_strip, 0,
+                            "handle_message must CALL "
+                            "strip_tool_call_leaks() on the raw reply.")
+                        self.assertGreater(i_audit, 0)
+                        self.assertGreater(i_store, 0)
+                        self.assertLess(i_strip, i_audit,
+                            "strip_tool_call_leaks() must be called "
+                            "BEFORE audit_assistant_text() so the "
+                            "audit sees clean wire format.")
+                        self.assertLess(i_audit, i_store,
+                            "audit_assistant_text() must be called "
+                            "BEFORE store_telegram() so stored == audited.")
+                        return
+        self.fail("MaezDaemon.handle_message not found")
 
 
 class AdapterNoLongerDoubleAudits(unittest.TestCase):
@@ -220,6 +268,38 @@ class AdapterNoLongerDoubleAudits(unittest.TestCase):
                          src)
         self.assertNotIn("core.self_claim_audit import audit as",
                          src)
+
+    def test_adapter_does_not_post_strip_tool_call_leaks(self):
+        """2026-04-23 Commit 7b: strip_tool_call_leaks moved into
+        handle_message (before audit). The adapter no longer calls it
+        on the returned reply — doing so would be a no-op (already
+        stripped) but would signal the contract is still ambiguous.
+        Scope: the __call__ handler block, NOT the other adapter call
+        sites that use strip on different surfaces (e.g. self-mod-
+        dialog openers, which have their own separate flow)."""
+        src = (_REPO / "skills" / "surface" / "maez_adapter.py").read_text()
+        # Find the __call__ method and check its body.
+        import ast as _ast
+        tree = _ast.parse(src)
+        for node in _ast.walk(tree):
+            if (
+                isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+                and node.name == "__call__"
+            ):
+                body = _ast.get_source_segment(src, node) or ""
+                # Look for `reply = strip_tool_call_leaks(reply)`
+                # specifically — that was the duplicate post-return
+                # cleanup this commit removed. Other uses of
+                # strip_tool_call_leaks elsewhere in the adapter
+                # (e.g. on an intermediate dialog opener) are fine.
+                self.assertNotIn(
+                    "reply = strip_tool_call_leaks(reply)", body,
+                    "adapter __call__ must not re-strip the reply "
+                    "after handle_message returns — strip runs "
+                    "inside handle_message before audit.",
+                )
+                return
+        self.fail("MaezMessageHandler.__call__ not found in maez_adapter")
 
     def test_adapter_passes_transcript_to_handle_message(self):
         src = (_REPO / "skills" / "surface" / "maez_adapter.py").read_text()

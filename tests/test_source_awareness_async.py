@@ -96,6 +96,93 @@ class MapStatusStaleness(unittest.TestCase):
         self.assertTrue(st["stale"])
 
 
+class RefreshStrategySelection(unittest.TestCase):
+    """_refresh_strategy() must pick `full` when the cached map is
+    structurally wrong (missing, schema-mismatched, age > 7d, or
+    file count drifted by >10). Incremental refresh cannot converge
+    on disk-new files — only build_map() walks the tree."""
+
+    def _with_map(self, map_dict: dict | None):
+        from core.memory import source_awareness as sa
+        return patch.object(sa, "_read_map_raw", return_value=map_dict)
+
+    def test_missing_map_selects_full(self):
+        from core.memory.source_awareness import _refresh_strategy
+        with self._with_map(None):
+            self.assertEqual(_refresh_strategy(), "full")
+
+    def test_schema_mismatch_selects_full(self):
+        from core.memory.source_awareness import _refresh_strategy
+        fresh_ts = datetime.now(timezone.utc).isoformat()
+        with self._with_map(_fake_map(fresh_ts, schema_version="0.9")):
+            self.assertEqual(_refresh_strategy(), "full")
+
+    def test_old_map_selects_full(self):
+        from core.memory.source_awareness import _refresh_strategy
+        stale_ts = (
+            datetime.now(timezone.utc) - timedelta(days=10)
+        ).isoformat()
+        with self._with_map(_fake_map(stale_ts)):
+            self.assertEqual(_refresh_strategy(), "full")
+
+    def test_file_count_drift_selects_full(self):
+        """A fresh, schema-matched map with a badly-out-of-date
+        `total_files` count must trigger full rebuild — the
+        regression observed 2026-04-23 (cached 60, live 516)."""
+        from core.memory import source_awareness as sa
+        fresh_ts = datetime.now(timezone.utc).isoformat()
+        with self._with_map(_fake_map(fresh_ts, total_files=60)), \
+             patch.object(sa, "_count_tracked_files", return_value=516):
+            self.assertEqual(sa._refresh_strategy(), "full")
+
+    def test_fresh_in_sync_map_selects_incremental(self):
+        from core.memory import source_awareness as sa
+        fresh_ts = datetime.now(timezone.utc).isoformat()
+        with self._with_map(_fake_map(fresh_ts, total_files=500)), \
+             patch.object(sa, "_count_tracked_files", return_value=502):
+            self.assertEqual(sa._refresh_strategy(), "incremental")
+
+
+class RefreshWorkerDispatches(unittest.TestCase):
+    """The async worker must call build_map() when strategy=full and
+    refresh_map() when strategy=incremental — with the exact opposite
+    being the pre-fix behavior that never converged."""
+
+    def setUp(self):
+        from core.memory import source_awareness as sa
+        with sa._refresh_lock:
+            sa._refresh_running = False
+
+    def tearDown(self):
+        from core.memory import source_awareness as sa
+        with sa._refresh_lock:
+            sa._refresh_running = False
+
+    def test_full_strategy_calls_build_map(self):
+        from core.memory import source_awareness as sa
+        with patch.object(sa, "_refresh_strategy", return_value="full"), \
+             patch.object(sa, "build_map",
+                          return_value={"total_files": 516,
+                                         "indexed_files": 516,
+                                         "parsed_files": 500,
+                                         "parse_errors": 0}) as m_build, \
+             patch.object(sa, "refresh_map") as m_refresh:
+            sa._refresh_worker()
+        m_build.assert_called_once()
+        m_refresh.assert_not_called()
+
+    def test_incremental_strategy_calls_refresh_map(self):
+        from core.memory import source_awareness as sa
+        with patch.object(sa, "_refresh_strategy", return_value="incremental"), \
+             patch.object(sa, "build_map") as m_build, \
+             patch.object(sa, "refresh_map",
+                          return_value={"updated": 3, "unchanged": 497,
+                                         "errors": 0}) as m_refresh:
+            sa._refresh_worker()
+        m_refresh.assert_called_once()
+        m_build.assert_not_called()
+
+
 class AsyncRefreshBehavior(unittest.TestCase):
     """trigger_async_refresh runs off the main thread and doesn't double-fire."""
 
@@ -113,10 +200,17 @@ class AsyncRefreshBehavior(unittest.TestCase):
     def test_trigger_returns_true_once_then_false(self):
         """First call starts a thread, second call (while running)
         does NOT double-fire — returns False so the caller knows
-        a refresh is already in flight."""
+        a refresh is already in flight.
+
+        2026-04-23 Commit 7b: pin strategy=incremental so the worker
+        calls refresh_map (which we mock); otherwise the real
+        _refresh_strategy() might pick "full" in test env and hit
+        build_map instead, which walks the filesystem and takes a
+        noticeable pause."""
         from core.memory import source_awareness as sa
 
-        with patch.object(sa, "refresh_map",
+        with patch.object(sa, "_refresh_strategy", return_value="incremental"), \
+             patch.object(sa, "refresh_map",
                           side_effect=lambda: time.sleep(0.3) or {
                               "updated": 1, "unchanged": 0, "errors": 0,
                           }):

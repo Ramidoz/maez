@@ -5201,8 +5201,11 @@ def api_debug_services():
     no new systemctl calls per request beyond the TTL window."""
     if not _debug_auth_ok():
         return jsonify({"error": "unauthorized"}), 401
+    # 2026-04-23 Commit 7b: removed stale "llama-server-vision" from the
+    # debug/services enumeration — no such unit exists on the machine.
+    # Re-add when a multimodal endpoint is re-provisioned.
     services = {}
-    for svc in ("maez", "maez-web", "llama-server", "llama-server-vision"):
+    for svc in ("maez", "maez-web", "llama-server"):
         services[svc] = _service_state_cached(svc)
     return jsonify({
         "services": services,

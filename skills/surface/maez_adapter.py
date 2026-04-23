@@ -366,16 +366,11 @@ class MaezMessageHandler:
                 turn.update(output=jarvis_transcript or "(empty)")
                 return jarvis_transcript or None
 
-            # Strip tool-call JSON leaks from the audited reply before
-            # sending to the surface. This is post-audit because leaked
-            # tool-call JSON is a rendering concern, not a grounding
-            # concern — the audit already decided the semantic content
-            # is OK; we just clean the wire format.
-            try:
-                from core.brain_loop import strip_tool_call_leaks
-                reply = strip_tool_call_leaks(reply)
-            except Exception:
-                pass
+            # 2026-04-23 Commit 7b: strip_tool_call_leaks was moved INTO
+            # daemon.handle_message (before audit, before store) so the
+            # stored / audited / displayed text are all the same string.
+            # Adapter no longer re-strips — the reply returned here is
+            # already clean wire-format.
 
             # Record the final reply into the trace before the with
             # block exits and flushes. This is what the Langfuse UI

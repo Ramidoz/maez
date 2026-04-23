@@ -22,6 +22,10 @@ import uuid
 from datetime import datetime
 
 import chromadb
+
+# 2026-04-23 Commit 7b: public-bot reply model now tracks the current
+# primary brain via /etc/maez/model.env, not a hardcoded "gemma4:26b".
+from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
 from chromadb.config import Settings
 from dotenv import load_dotenv
 from telegram import Bot, Update
@@ -325,7 +329,7 @@ Respond naturally. Be present. Be real."""
             # or llama.cpp CUDA) is env-selectable at MAEZ_LLM_BACKEND.
             from core import llm_client as _llm_client
             response = _llm_client.chat(
-                model='gemma4:26b', messages=messages,
+                model=_PRIMARY_MODEL, messages=messages,
                 think=False,  # 11m parity — no thinking on conversational paths
                 options={'temperature': 0.85, 'num_predict': 4096},
             )
