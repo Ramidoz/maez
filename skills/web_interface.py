@@ -1690,21 +1690,46 @@ def api_self_dev():
         return jsonify({"error": f"self_dev rollup failed: {e}"}), 500
 
 
+def _build_machine_info(_os_mod) -> dict:
+    """Machine info dict for the /api/v1/identity endpoint.
+
+    Phase 2.D: previously hardcoded \"rtx 4090 (24gb)\". Now reads the
+    machine_profile string from identity.yaml (optional), falling back
+    to the host's os/release which is always available.
+    """
+    profile = ""
+    try:
+        from core import identity as _identity_mod
+        profile = _identity_mod.machine_profile() or ""
+    except Exception:
+        pass
+    return {
+        "host": _os_mod.uname().nodename,
+        "os": f"{_os_mod.uname().sysname} {_os_mod.uname().release}",
+        "gpu": "",
+        "cpu": "",
+        "profile": profile,
+    }
+
+
+def _default_owner_name() -> str:
+    try:
+        from core import identity as _identity_mod
+        return _identity_mod.display_name() or "owner"
+    except Exception:
+        return "owner"
+
+
 @app.route("/api/v1/identity")
 def api_identity():
     """Owner / machine / covenant / reddit subs."""
     import os as _os
     identity = {
         "owner": {
-            "name": "rohit", "pronouns": "he/him",
+            "name": _default_owner_name(), "pronouns": "",
             "city": "", "lat": None, "lon": None,
         },
-        "machine": {
-            "host": _os.uname().nodename,
-            "os": f"{_os.uname().sysname} {_os.uname().release}",
-            "gpu": "rtx 4090 (24gb)",
-            "cpu": "",
-        },
+        "machine": _build_machine_info(_os),
         "policies": {
             "jarvis_tier": "liberal",
             "allowClaude": True,
@@ -1714,7 +1739,11 @@ def api_identity():
         "redditSubs": [],
     }
     # Read identity.yaml if present
-    id_path = "/home/rohit/maez/config/identity.yaml"
+    try:
+        from core.paths import identity_file as _identity_file
+        id_path = str(_identity_file())
+    except Exception:
+        id_path = "/home/rohit/maez/config/identity.yaml"
     if _os.path.exists(id_path):
         try:
             import yaml as _yaml

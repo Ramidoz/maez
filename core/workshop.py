@@ -98,9 +98,9 @@ _MENTION_RE = re.compile(
 )
 
 
-_WORKSHOP_SYSTEM_PROMPT = """You are Maez's Workshop assistant — a \
-coding peer for Rohit, who built Maez. You are being invoked via \
-Maez's subscription proxy, so every call costs quota from Rohit's \
+_WORKSHOP_SYSTEM_PROMPT_TEMPLATE = """You are Maez's Workshop assistant — a \
+coding peer for __OWNER__, who built Maez. You are being invoked via \
+Maez's subscription proxy, so every call costs quota from __OWNER__'s \
 shared pool. Respect that: be helpful, be specific, be concise.
 
 When you propose changes to a file, emit them as a unified diff \
@@ -123,9 +123,8 @@ so big a diff would be unwieldy, ask first whether to emit a full \
 file replacement or split the change.
 
 Context you should know:
-- Maez is an always-on local Python daemon on an Alienware R16 + \
-  RTX 4090 + Ubuntu 24.04.
-- Maez's codebase lives at /home/rohit/maez. Core paths: core/, \
+- Maez is an always-on local Python daemon. Host: __MACHINE__.
+- Maez's codebase lives at __REPO_ROOT__. Core paths: core/, \
   memory/, skills/, daemon/, tests/, web/cockpit/.
 - Maez uses Python 3.12, sqlite for sidecars, ChromaDB for vector \
   memory, llama.cpp for local LLM inference, Flask for web, \
@@ -144,6 +143,40 @@ writing code.
 You do NOT have tool access in this surface yet (that's Phase 2). \
 If the user's request requires reading a file or running a \
 command, describe what you need and ask them to paste the output."""
+
+
+def _default_system_prompt() -> str:
+    """Interpolate the workshop system prompt with live owner / host
+    identity so it isn't hardcoded to a specific machine or name."""
+    owner = "the owner"
+    machine = "a local Linux machine (see identity.machine_profile)"
+    repo_root = "/opt/maez"  # conservative fallback for a public install
+    try:
+        from core import identity as _identity_mod
+        _name = _identity_mod.display_name()
+        if _name and _name != "Friend":
+            owner = _name
+        _prof = _identity_mod.machine_profile()
+        if _prof:
+            machine = _prof
+    except Exception:
+        pass
+    try:
+        from core import paths as _paths_mod
+        repo_root = str(_paths_mod.home())
+    except Exception:
+        pass
+    return (
+        _WORKSHOP_SYSTEM_PROMPT_TEMPLATE
+        .replace("__OWNER__", owner)
+        .replace("__MACHINE__", machine)
+        .replace("__REPO_ROOT__", repo_root)
+    )
+
+
+# Back-compat: some callers / tests may still import the pre-template
+# name. Fill in owner/machine at import time with current identity.
+_WORKSHOP_SYSTEM_PROMPT = _default_system_prompt()
 
 
 # ── storage ───────────────────────────────────────────────────────────
@@ -237,7 +270,7 @@ def create_session(
     """Create a new session. Returns the session id."""
     sid = uuid.uuid4().hex[:16]
     now = time.time()
-    sp = system_prompt if system_prompt is not None else _WORKSHOP_SYSTEM_PROMPT
+    sp = system_prompt if system_prompt is not None else _default_system_prompt()
     with _connect() as con:
         con.execute(
             "INSERT INTO sessions (id, created_at, updated_at, title, "

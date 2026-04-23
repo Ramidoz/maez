@@ -21,7 +21,13 @@ class GitHubSkill:
 
     def __init__(self):
         self.token = os.environ.get('MAEZ_GITHUB_TOKEN', '')
-        self.username = os.environ.get('MAEZ_GITHUB_USERNAME', 'Ramidoz')
+        _default_user = ""
+        try:
+            from core import identity as _identity
+            _default_user = _identity.git_handle()
+        except Exception:
+            pass
+        self.username = os.environ.get('MAEZ_GITHUB_USERNAME') or _default_user
         self.enabled = bool(self.token)
         self._cache = {}
         self._cache_time = {}

@@ -23,7 +23,13 @@ class GitHubPublisher:
 
     def __init__(self):
         self.token = os.environ.get('MAEZ_GITHUB_TOKEN', '')
-        self.username = os.environ.get('MAEZ_GITHUB_USERNAME', 'Ramidoz')
+        _default_user = ""
+        try:
+            from core import identity as _identity
+            _default_user = _identity.git_handle()
+        except Exception:
+            pass
+        self.username = os.environ.get('MAEZ_GITHUB_USERNAME') or _default_user
         self.repo = REPO_NAME
         self.remote_url = f'https://{self.token}@github.com/{self.username}/{self.repo}.git'
 
@@ -137,7 +143,8 @@ class GitHubPublisher:
 
     def _write_readme(self):
         """Write the public README.md."""
-        readme = """# Maez
+        _handle = self.username or "the-owner"
+        readme = f"""# Maez
 
 A persistent, always-on AI agent inspired by Jarvis from Iron Man.
 
@@ -170,7 +177,7 @@ See [soul.md](config/soul.md) for Maez's identity and principles.
 
 ## Built By
 
-the owner — [@Ramidoz](https://github.com/Ramidoz)
+the owner — [@{_handle}](https://github.com/{_handle})
 
 *This repo is updated nightly by Maez itself.*
 """
