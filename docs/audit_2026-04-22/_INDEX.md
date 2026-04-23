@@ -65,9 +65,20 @@ Status of every agent report. Updated after each wave. A resumer starts here.
 
 ## Next action for a resuming session
 
-Phase 1.A–1.E are complete as of 2026-04-22. Remaining Phase 1 work:
+**Phase 1 is complete as of 2026-04-22.** Phase 1.G applied fix-now items
+in six themed commits on `main`:
 
-1. **Phase 1.F — User triage.** Read `_MASTER_FINDINGS.md` with the user. For each finding they assign: `fix-now` / `fix-soon` / `later` / `reject`. Most blockers + top-20 items should be `fix-now`.
-2. **Phase 1.G — Apply fix-now items.** Commit in batches per the proposals at the bottom of `_MASTER_FINDINGS.md`. Test suite must stay at 519+ green between batches.
+- `b0ef099` — Batch A: sqlite hygiene (09-M1, 09-M2, 05-M1, 05-M3, 07-M2)
+- `dcb37a0` — Batch B: card state + will-I race + ring buffer (02-B1, 02-M1, 02-M2, 02-m2, 05-B1)
+- `9e3dae7` — Batch C: brain-loop retry + retrieval symmetry (01-B1, 01-M2, 01-M1 / 09-B1, 01-m1)
+- `b8f178a` — Batch D: action + command-parser safety (03-m1, 06-M1, 06-M2, 06-m1; 06-B1 reviewed, non-bug)
+- `c255733` — Batch E: routing + soul-loader + private_thoughts (07-B1, 07-M1, 10-B1, 10-B2, 10-M2)
+- `53dcf6d` — Batch F: docs fix-now (X2-B1, X2-B2, X2-M2)
 
-Then Phase 2 begins (de-Rohit-ify). See `.claude/plans/harmonic-tumbling-wozniak.md`.
+Totals closed: 11 of 12 blockers, 12 majors, 4 minors. Test count stayed at
+519 green between every batch.
+
+**Next:** Phase 2 — De-Rohit-ify. See `.claude/plans/harmonic-tumbling-wozniak.md`
+for scope. The deferred findings (hardcoded `/home/rohit/maez` paths across
+seven modules, Rohit-specific docs, the `rohit`/`Ramidoz`/`Alienware` grep
+sweep) are absorbed into Phase 2.
