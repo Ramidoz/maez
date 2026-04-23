@@ -34,7 +34,7 @@ from typing import Any, Optional
 from core.perception_cache import (
     PerceptionCache,
     CacheEntry,
-    FRESH, STALE, MISSING, ERROR,
+    MISSING,
 )
 
 

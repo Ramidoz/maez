@@ -226,5 +226,4 @@ def ambient_context() -> dict[str, Any]:
 
 # ── CLI ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    import sys
     print(json.dumps(ambient_context(), indent=2, ensure_ascii=False))

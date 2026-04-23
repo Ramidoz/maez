@@ -50,9 +50,9 @@ from __future__ import annotations
 import os
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional
+from typing import Optional
 
 from core.pending_cards import CardRecord
 
@@ -660,7 +660,6 @@ def classify_reply(
 # ------------------------------------------------------------------ #
 
 if __name__ == "__main__":
-    from dataclasses import dataclass as _dc
 
     print("=== card_reply_classifier self-test ===\n")
 

@@ -68,7 +68,6 @@ from typing import Optional, Any
 from core.audit_log import (
     AuditLog,
     DIRECT_EDIT,
-    DIRECT_EDIT_ACTIONS,
     DIRECT_EDIT_SESSION_END,
     DIRECT_EDIT_SESSION_START,
 )
@@ -351,8 +350,6 @@ def format_recent_builder_events(
         now: override for the current time (used in tests). Defaults
             to time.time().
     """
-    now_ts = now if now is not None else time.time()
-
     # 1. Gather events from the since_ts window
     window_events = audit_log.recent_direct_edits(since_ts=since_ts, limit=10000)
 

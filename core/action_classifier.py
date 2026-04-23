@@ -421,8 +421,25 @@ def _classify_sub(sub: SubCommand) -> tuple[IntentCategory, str]:
         return inner.category, f"heredoc body: {inner.reason}"
 
     # 1. Self-modification of Maez is the highest classification.
+    #    Exception: read-only inspection of a Maez unit (`systemctl status
+    #    maez.service`, `journalctl -u maez --since ...`) is not a
+    #    modification — the regex just happens to match the unit name.
+    #    Without this exception a liberal owner can't check `is maez
+    #    running?` without clicking an approval card. Observed 2026-04-20.
     if _SELF_MOD_RE.search(raw):
-        return IntentCategory.SELF_MODIFICATION, f"touches Maez surface in {raw[:60]}"
+        _is_readonly_maez_probe = False
+        if argv0 == "systemctl":
+            _two = f"systemctl {_get_second_word(raw)}"
+            if _two in _READ_TWO_WORD:
+                _is_readonly_maez_probe = True
+        elif argv0 == "journalctl":
+            # journalctl is read-only — dangerous flags (--rotate,
+            # --vacuum-*) are write ops but very rare. Treat plain
+            # journalctl as read.
+            if "--rotate" not in raw and "--vacuum" not in raw:
+                _is_readonly_maez_probe = True
+        if not _is_readonly_maez_probe:
+            return IntentCategory.SELF_MODIFICATION, f"touches Maez surface in {raw[:60]}"
 
     # 2. Obfuscation primitives → CODE_EXECUTION (Lane 3).
     if _OBFUSCATION_RE.search(raw):

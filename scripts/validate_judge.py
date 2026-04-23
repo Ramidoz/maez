@@ -70,7 +70,8 @@ def _fetch_langfuse_traces(limit: int) -> list[dict]:
         host=base_url,
     )
     try:
-        traces_page = client.fetch_traces(limit=limit)
+        # Newer Langfuse SDK: client.api.trace.list(limit=...)
+        traces_page = client.api.trace.list(limit=limit)
         raw_traces = traces_page.data
     except Exception as e:
         print(f"ERROR fetching Langfuse traces: {e}")

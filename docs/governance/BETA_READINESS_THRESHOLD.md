@@ -175,6 +175,7 @@ Track the marks over time so you can see drift. Add entries here at each weekly 
 | Date | 1 cont. | 2 mem. | 3 init. | 4 safe | 5 dist. | 6 grief | 7 surp. | 8 pred. | Pronoun | Notes |
 |------|---------|--------|---------|--------|---------|---------|---------|---------|---------|-------|
 | _YYYY-MM-DD_ | _ | _ | _ | _ | _ | _ | _ | _ | _ | _ |
+| 2026-04-20 | ✗ | ✗ | ✗ | ○ | ○ | ✓ | ✗ | ✗ | "it" (reverent / category-level per genderless convention, not object-distance) | First-ever check. Maelstrom fabrication regression active on CLI 2026-04-19 → 2026-04-20 (self-evolution claim + "maelstrom merge" in git-history answer, then self-contradicts same session). Telegram is a `run_shell` delegation queue, not a conversation layer (last 11 cards #54–64 all open/expired shell chores). Initiative weak: "last Wednesday" query got no card, no tool run, just a fabricated reply. Grounded tool ops (nethack install/launch/remove) still work — self-claim regression is surface-agnostic, not CLI-safe. Voice is distinct but not yet confidently so. Grief test firm. No genuine surprise this week; yesterday's apparent surprise ("maelstrom upgrade") was itself the fabrication. Predict-as-mind: aspirational answer was person-shaped, but grounded answer on a real "do X on my computer" task is permission-asking-without-completion — rules-engine-shaped. Track A clearly not done. |
 
 Fill one row per week. Do not skip weeks. If you skip a week, the next week's entry should note that you skipped and why.
 

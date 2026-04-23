@@ -46,7 +46,6 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from core.perception_envelope import PerceptionEnvelope, EnvelopeSource
-from core.perception_cache import FRESH, STALE, MISSING, ERROR
 
 
 # Hard caps — see PROMPT BUDGET in module docstring

@@ -8,7 +8,7 @@ changes a good response into a better-grounded one.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from core.ambient import ambient_context

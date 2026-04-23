@@ -339,8 +339,6 @@ def capture_session_end_diff(
 
 if __name__ == "__main__":
     import tempfile
-    import os
-    import shutil
 
     print("=== builder_mode_capture self-test ===\n")
 

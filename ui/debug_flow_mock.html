@@ -1,0 +1,1218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>maez · flow (design mock v5 — loops-first)</title>
+<style>
+  :root {
+    --bg: #0a0d14;
+    --panel: #12161d;
+    --panel-br: #222632;
+    --text: #d7dbe3;
+    --dim: #8a93a3;
+    --soft: #5c6374;
+    --ghost: #3d4253;
+    --accent: #8f7cff;
+    --ok: #5ccb7d;
+    --warn: #e0b44a;
+    --err: #e47272;
+    --claude: #c58cff;
+    --brain: #7aa8ff;
+    --seed: #b59559;
+    --loop-conv: #7aa8ff;     /* conversation loop */
+    --loop-daemon: #c58cff;    /* daemon + wondering loop */
+    --loop-conseq: #e0a855;    /* consequence learning loop */
+    --mono: ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  }
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--mono);font-size:13px;}
+  header{padding:12px 18px;border-bottom:1px solid var(--panel-br);background:var(--panel);display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;}
+  header .brand{font-weight:bold;color:var(--accent);letter-spacing:0.5px;}
+  header small{color:var(--dim);}
+  .loop-tag{font-size:11px;padding:2px 10px;border-radius:10px;border:1px solid;}
+  .loop-conv{color:var(--loop-conv);border-color:var(--loop-conv);}
+  .loop-daemon{color:var(--loop-daemon);border-color:var(--loop-daemon);}
+  .loop-conseq{color:var(--loop-conseq);border-color:var(--loop-conseq);}
+  .wrap{display:flex;gap:1px;background:var(--panel-br);padding:1px;min-height:calc(100vh - 48px);}
+  .stage{flex:1;background:var(--panel);padding:18px;min-height:1160px;overflow:auto;}
+  .legend{width:320px;background:var(--panel);padding:18px;border-left:1px solid var(--panel-br);}
+  h2{font-size:10px;font-weight:normal;color:var(--dim);text-transform:uppercase;letter-spacing:1.8px;margin:0 0 10px;border-bottom:1px solid var(--panel-br);padding-bottom:6px;}
+  .row{display:flex;gap:10px;margin:6px 0;align-items:center;font-size:12px;}
+  .swatch{width:12px;height:12px;border-radius:50%;flex-shrink:0;}
+  .note{color:var(--dim);font-size:11px;margin:10px 0;line-height:1.6;}
+  .callout{color:var(--warn);font-style:italic;font-size:11px;border-left:2px solid var(--warn);padding:8px 12px;margin:12px 0;background:rgba(224,180,74,0.06);border-radius:4px;}
+  .state-line{display:flex;align-items:center;gap:8px;font-size:11px;margin:5px 0;}
+  .state-sym{font-family:var(--mono);width:14px;text-align:center;}
+  svg{display:block;margin:0 auto;}
+  text{font-family:var(--mono);fill:var(--text);}
+  .label-big{font-size:13px;font-weight:bold;}
+  .label-med{font-size:12px;}
+  .label-small{font-size:10.5px;fill:var(--dim);}
+  .label-analog{font-size:10px;fill:var(--soft);font-style:italic;}
+  .label-cadence{font-size:9px;fill:var(--seed);letter-spacing:0.8px;}
+  .zone-label{font-size:9.5px;fill:var(--soft);text-transform:uppercase;letter-spacing:2px;}
+
+  /* zones */
+  .zone-input    { fill:#0f1319; }
+  .zone-core     { fill:#120f1a; }
+  .zone-brain    { fill:#0f131c; }
+  .zone-motiv    { fill:#18140c; }
+  .zone-output   { fill:#101218; }
+  .zone-self     { fill:#0e1218; }
+  .zone-loop     { fill:#160f19; }
+
+  /* ── edges — THREE LOOPS COLOR-CODED + utility soft edges ── */
+  /* conversation loop: blue, bold */
+  .e-conv { stroke:var(--loop-conv); stroke-width:2.2; fill:none; opacity:0.72; stroke-linejoin:round; stroke-linecap:round; }
+  /* daemon + wondering loop: purple, bold */
+  .e-daemon { stroke:var(--loop-daemon); stroke-width:2.2; fill:none; opacity:0.65; stroke-linejoin:round; stroke-linecap:round; stroke-dasharray:6,3; }
+  /* consequence learning loop: amber, bold */
+  .e-conseq { stroke:var(--loop-conseq); stroke-width:2.2; fill:none; opacity:0.7; stroke-linejoin:round; stroke-linecap:round; stroke-dasharray:8,3; }
+  /* utility edge — everything not on the three primary loops, faint */
+  .e-soft { stroke:#3a4152; stroke-width:0.9; fill:none; stroke-dasharray:2,3; opacity:0.38; stroke-linejoin:round; stroke-linecap:round; }
+
+  /* ── node visibility states ── */
+  .alive { opacity: 1; }
+
+  .embryonic { opacity: 0.62; }
+  .embryonic rect, .embryonic circle { stroke-dasharray: 3,2; stroke-width: 1; }
+  .embryonic .label-big { font-weight: normal; }
+
+  .intended { opacity: 0.48; }
+  .intended rect, .intended circle { stroke-dasharray: 1,2.5; stroke-width: 0.9; }
+  .intended text { fill: #5a6170; }
+
+  /* ── node color variants ── */
+  .node-you      { fill:#251b2e; stroke:#c58cff; stroke-width:2; }
+  .node-surface  { fill:#141822; stroke:#3a4152; stroke-width:1; }
+  .node-sensor   { fill:#131721; stroke:#3a4152; stroke-width:1; }
+  .node-brain    { fill:#16202f; stroke:var(--brain); stroke-width:2; }
+  .node-being    { fill:#1a1627; stroke:#6b5cc0; stroke-width:1.3; }
+  .node-memory   { fill:#152a20; stroke:#4ea86a; stroke-width:1.3; }
+  .node-audit    { fill:#251818; stroke:#b05c5c; stroke-width:1.3; }
+  .node-tool     { fill:#28221a; stroke:#b5944a; stroke-width:1.3; }
+  .node-drive    { fill:#2a2318; stroke:#b89557; stroke-width:1.3; }
+  .node-self     { fill:#1c1f26; stroke:#5e8cba; stroke-width:1.3; }
+  .node-residue  { fill:#1f1822; stroke:#8a6eaa; stroke-width:1.3; }
+  .node-salience { fill:#271e16; stroke:#d8a060; stroke-width:1.4; }
+  .node-repair   { fill:#1e2422; stroke:#5a9a85; stroke-width:1.3; }
+
+  /* loops — daemon dominant, others diminishing */
+  .node-loop-heart  { fill:#1d1527; stroke:var(--claude); stroke-width:2.2; }
+  .node-loop-strong { fill:#1d1527; stroke:var(--claude); stroke-width:1.4; }
+  .node-loop-soft   { fill:#1a1424; stroke:var(--claude); stroke-width:1; stroke-dasharray:3,2; }
+  .node-loop-rare   { fill:#171121; stroke:var(--claude); stroke-width:0.8; stroke-dasharray:2,3; }
+
+  .badge-alive { fill: var(--ok); }
+  .badge-embryonic { fill: var(--seed); }
+  .badge-intended { fill: var(--ghost); }
+  .seed-tag { font-size:8px; fill:var(--seed); letter-spacing:0.5px; }
+
+  /* particles */
+  .p-blue{fill:var(--brain);}
+  .p-green{fill:var(--ok);}
+  .p-amber{fill:var(--warn);}
+  .p-red{fill:var(--err);}
+  .p-claude{fill:var(--claude);}
+  .p-gray{fill:var(--dim);}
+
+  /* ── interactive overrides ── */
+  /* toggleable organs: show cursor + subtle hover */
+  g.toggleable { cursor: pointer; }
+  g.toggleable:hover rect { stroke-width: 2.2; }
+  /* forced-alive class overrides embryonic/intended when user toggles on */
+  g.forced-alive { opacity: 1 !important; }
+  g.forced-alive rect, g.forced-alive circle { stroke-dasharray: none !important; }
+  g.forced-alive text { fill: var(--text) !important; }
+  g.forced-alive .label-big { font-weight: bold !important; }
+  g.forced-alive .label-analog { fill: var(--soft) !important; }
+  /* pulse ring when recently activated */
+  @keyframes pulseRing { 0%{ opacity: 0.9;} 100%{ opacity: 0;} }
+  .pulse-ring { animation: pulseRing 1.6s ease-out forwards; }
+
+  /* live particles */
+  circle.live-particle { pointer-events: none; }
+
+  /* interactive panel styles */
+  .ctrl-block { margin-bottom: 18px; }
+  .ctrl-btn {
+    background: #1a2030; color: var(--text); border: 1px solid var(--panel-br);
+    padding: 6px 12px; font-family: var(--mono); font-size: 11px; cursor: pointer;
+    border-radius: 4px; margin-right: 6px;
+  }
+  .ctrl-btn:hover { border-color: var(--accent); }
+  .ctrl-btn.on { border-color: var(--ok); color: var(--ok); }
+  .live-stat {
+    display: flex; justify-content: space-between; font-size: 11px;
+    padding: 3px 0; color: var(--dim);
+  }
+  .live-stat .v { color: var(--text); font-weight: bold; }
+  .toggle-row {
+    display: flex; align-items: center; gap: 8px; font-size: 11px;
+    padding: 4px 0; cursor: pointer;
+  }
+  .toggle-row input { cursor: pointer; }
+  .toggle-row:hover { color: var(--accent); }
+  .event-tail {
+    font-size: 10px; color: var(--dim); max-height: 150px; overflow-y: auto;
+    font-family: var(--mono); line-height: 1.5;
+    border: 1px solid var(--panel-br); padding: 6px 8px; border-radius: 4px;
+    background: #0d1118;
+  }
+  .event-tail .evt-time { color: var(--soft); }
+  .event-tail .evt-tied { color: var(--ok); }
+  .event-tail .evt-inval { color: var(--err); }
+  .event-tail .evt-card { color: var(--warn); }
+  .event-tail .evt-cycle { color: var(--brain); }
+  .pill {
+    display: inline-block; padding: 1px 6px; font-size: 9px;
+    border-radius: 8px; border: 1px solid; letter-spacing: 0.5px;
+  }
+</style>
+</head>
+<body>
+<header style="flex-direction:column;align-items:flex-start;gap:6px">
+  <div style="display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;width:100%">
+    <span class="brand">maez · flow</span>
+    <span style="background:rgba(228,114,114,0.12);color:var(--err);border:1px solid var(--err);border-radius:4px;padding:2px 10px;font-size:11px;font-weight:bold;letter-spacing:1px">TARGET SHAPE · not Maez today</span>
+    <small>v6 — Track A completion target · organism physiology</small>
+  </div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap">
+    <small style="color:var(--dim)">~two-thirds alive today · one-third embryonic or intended</small>
+    <span class="loop-tag loop-conv">— conversation loop</span>
+    <span class="loop-tag loop-daemon">╌╌ daemon + wondering loop</span>
+    <span class="loop-tag loop-conseq">┅┅ consequence learning loop</span>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="stage">
+
+    <svg viewBox="0 0 1400 1120" width="100%" style="max-width:1400px;">
+
+      <!-- ═══════════════════ GRID ═══════════════════════════════════════
+           Col A (inputs):           x =    0– 200
+           Col B (core being):       x =  220– 400
+           Col C (brain+memory):     x =  420– 700
+           Col D (homeostasis):      x =  720– 920
+           Col E (output guards):    x =  940–1160
+           Col F (reply + self):     x = 1180–1390
+           Vertical gutters:  x = 210, 410, 710, 930, 1170, 1392
+           Horizontal gutters: y =  40 (top), 600 (mid), 790 (above loops)
+      ═══════════════════════════════════════════════════════════════════ -->
+
+      <!-- zones -->
+      <rect x="0"    y="30"  width="200"  height="750"  rx="14" class="zone-input"/>
+      <rect x="220"  y="30"  width="180"  height="400"  rx="14" class="zone-core"/>
+      <rect x="420"  y="30"  width="280"  height="560"  rx="14" class="zone-brain"/>
+      <rect x="720"  y="30"  width="200"  height="560"  rx="14" class="zone-motiv"/>
+      <rect x="940"  y="30"  width="220"  height="450"  rx="14" class="zone-output"/>
+      <rect x="1180" y="30"  width="210"  height="560"  rx="14" class="zone-self"/>
+      <rect x="0"    y="810" width="1400" height="110"  rx="14" class="zone-loop"/>
+
+      <text x="14"   y="24"  class="zone-label">inputs</text>
+      <text x="234"  y="24"  class="zone-label">core being</text>
+      <text x="434"  y="24"  class="zone-label">brain &amp; memory</text>
+      <text x="734"  y="24"  class="zone-label">homeostasis · motivation · repair</text>
+      <text x="954"  y="24"  class="zone-label">output guards</text>
+      <text x="1194" y="24"  class="zone-label">reply &amp; self</text>
+      <text x="14"   y="804" class="zone-label">continuous loops · daemon is the heartbeat · others are dependent rhythms</text>
+
+      <!-- ═══════════════════ COLUMN A · INPUTS ═════════════════════════ -->
+      <!-- YOU -->
+      <g class="alive">
+        <circle cx="100" cy="100" r="40" class="node-you"/>
+        <text x="100" y="104" text-anchor="middle" class="label-big">you</text>
+        <text x="100" y="156" text-anchor="middle" class="label-analog">the person here</text>
+        <circle cx="132" cy="76" r="4" class="badge-alive"/>
+      </g>
+
+      <text x="100" y="190" text-anchor="middle" class="label-small" style="letter-spacing:1.4px;text-transform:uppercase">surfaces</text>
+      <g class="alive">
+        <rect x="20" y="204" width="160" height="48" rx="10" class="node-surface"/>
+        <text x="100" y="222" text-anchor="middle">CLI</text>
+        <text x="100" y="237" text-anchor="middle" class="label-analog">the keyboard</text>
+        <text x="100" y="249" text-anchor="middle" class="label-cadence">on input</text>
+        <circle cx="170" cy="212" r="3.5" class="badge-alive"/>
+      </g>
+      <g class="alive">
+        <rect x="20" y="262" width="160" height="48" rx="10" class="node-surface"/>
+        <text x="100" y="280" text-anchor="middle">Telegram</text>
+        <text x="100" y="295" text-anchor="middle" class="label-analog">the phone</text>
+        <text x="100" y="307" text-anchor="middle" class="label-cadence">async</text>
+        <circle cx="170" cy="270" r="3.5" class="badge-alive"/>
+      </g>
+      <g class="alive">
+        <rect x="20" y="320" width="160" height="48" rx="10" class="node-surface"/>
+        <text x="100" y="338" text-anchor="middle">Web · maez.live</text>
+        <text x="100" y="353" text-anchor="middle" class="label-analog">the browser</text>
+        <text x="100" y="365" text-anchor="middle" class="label-cadence">async</text>
+        <circle cx="170" cy="328" r="3.5" class="badge-alive"/>
+      </g>
+
+      <text x="100" y="400" text-anchor="middle" class="label-small" style="letter-spacing:1.4px;text-transform:uppercase">perception</text>
+      <g class="intended">
+        <rect x="20" y="414" width="160" height="44" rx="10" class="node-sensor"/>
+        <text x="100" y="432" text-anchor="middle" class="label-small">Screen (vision off)</text>
+        <text x="100" y="446" text-anchor="middle" class="label-analog">eyes — paused</text>
+        <text x="100" y="457" text-anchor="middle" class="label-cadence">paused</text>
+        <circle cx="170" cy="422" r="3.5" class="badge-intended"/>
+      </g>
+      <g class="alive">
+        <rect x="20" y="466" width="160" height="44" rx="10" class="node-sensor"/>
+        <text x="100" y="484" text-anchor="middle">Presence</text>
+        <text x="100" y="498" text-anchor="middle" class="label-analog">is Rohit here?</text>
+        <text x="100" y="509" text-anchor="middle" class="label-cadence">60s</text>
+        <circle cx="170" cy="474" r="3.5" class="badge-alive"/>
+      </g>
+      <g class="alive">
+        <rect x="20" y="518" width="160" height="44" rx="10" class="node-sensor"/>
+        <text x="100" y="536" text-anchor="middle">iPhone signals</text>
+        <text x="100" y="550" text-anchor="middle" class="label-analog">phone whispers</text>
+        <text x="100" y="561" text-anchor="middle" class="label-cadence">push</text>
+        <circle cx="170" cy="526" r="3.5" class="badge-alive"/>
+      </g>
+      <g class="alive">
+        <rect x="20" y="570" width="160" height="44" rx="10" class="node-sensor"/>
+        <text x="100" y="588" text-anchor="middle">Weather · date</text>
+        <text x="100" y="602" text-anchor="middle" class="label-analog">outside facts</text>
+        <text x="100" y="613" text-anchor="middle" class="label-cadence">60s cache</text>
+        <circle cx="170" cy="578" r="3.5" class="badge-alive"/>
+      </g>
+      <g class="alive">
+        <rect x="20" y="622" width="160" height="44" rx="10" class="node-sensor"/>
+        <text x="100" y="640" text-anchor="middle">Active window</text>
+        <text x="100" y="654" text-anchor="middle" class="label-analog">what's on screen</text>
+        <text x="100" y="665" text-anchor="middle" class="label-cadence">30s</text>
+        <circle cx="170" cy="630" r="3.5" class="badge-alive"/>
+      </g>
+
+      <!-- ═══════════════════ COLUMN B · CORE BEING ═════════════════════ -->
+      <g class="alive">
+        <rect x="240" y="60" width="160" height="54" rx="12" class="node-being"/>
+        <text x="320" y="82" text-anchor="middle" class="label-big">Identity</text>
+        <text x="320" y="96" text-anchor="middle" class="label-analog">who you are to me</text>
+        <text x="320" y="108" text-anchor="middle" class="label-cadence">per turn</text>
+        <circle cx="388" cy="69" r="3.5" class="badge-alive"/>
+      </g>
+      <g class="alive">
+        <rect x="240" y="130" width="160" height="54" rx="12" class="node-audit"/>
+        <text x="320" y="152" text-anchor="middle" class="label-big">Covenant</text>
+        <text x="320" y="166" text-anchor="middle" class="label-analog">unbreakable promises</text>
+        <text x="320" y="178" text-anchor="middle" class="label-cadence">per action</text>
+        <circle cx="388" cy="139" r="3.5" class="badge-alive"/>
+      </g>
+      <g class="alive">
+        <rect x="240" y="200" width="160" height="54" rx="12" class="node-being"/>
+        <text x="320" y="222" text-anchor="middle" class="label-big">SOUL</text>
+        <text x="320" y="236" text-anchor="middle" class="label-analog">personality document</text>
+        <text x="320" y="248" text-anchor="middle" class="label-cadence">per turn</text>
+        <circle cx="388" cy="209" r="3.5" class="badge-alive"/>
+      </g>
+      <g class="alive">
+        <rect x="240" y="270" width="160" height="54" rx="12" class="node-being"/>
+        <text x="320" y="292" text-anchor="middle" class="label-big">Ambient</text>
+        <text x="320" y="306" text-anchor="middle" class="label-analog">right-now facts</text>
+        <text x="320" y="318" text-anchor="middle" class="label-cadence">per turn · 60s TTL</text>
+        <circle cx="388" cy="279" r="3.5" class="badge-alive"/>
+      </g>
+      <g class="alive">
+        <rect x="240" y="340" width="160" height="50" rx="10" class="node-being"/>
+        <text x="320" y="360" text-anchor="middle">Router</text>
+        <text x="320" y="374" text-anchor="middle" class="label-analog">which brain?</text>
+        <text x="320" y="385" text-anchor="middle" class="label-cadence">per turn</text>
+        <circle cx="388" cy="349" r="3.5" class="badge-alive"/>
+      </g>
+
+      <!-- ═══════════════════ COLUMN C · BRAIN + MEMORY ═════════════════ -->
+      <g class="alive">
+        <rect x="440" y="70" width="260" height="260" rx="18" class="node-brain"/>
+        <text x="570" y="102" text-anchor="middle" class="label-big" style="font-size:16px">Brain</text>
+        <text x="570" y="118" text-anchor="middle" class="label-analog">the thinker</text>
+        <text x="570" y="132" text-anchor="middle" class="label-cadence">per invoke</text>
+        <line x1="465" y1="148" x2="675" y2="148" stroke="#2a2f3c" stroke-dasharray="3,3"/>
+        <text x="570" y="172" text-anchor="middle" class="label-small">Local · Qwen3.6-35B</text>
+        <text x="570" y="188" text-anchor="middle" class="label-analog">the one that lives here</text>
+        <line x1="500" y1="206" x2="640" y2="206" stroke="#2a2f3c" stroke-dasharray="2,3" opacity="0.5"/>
+        <text x="570" y="228" text-anchor="middle" style="fill:var(--claude);font-size:11px">+ External (auxiliary)</text>
+        <text x="570" y="244" text-anchor="middle" class="label-small">Claude Sonnet 4.6 / Opus 4.7</text>
+        <text x="570" y="260" text-anchor="middle" class="label-analog">routed on hard tasks · not constitutive</text>
+        <text x="570" y="294" text-anchor="middle" class="label-small" style="font-size:10px">think · plan · act</text>
+        <text x="570" y="312" text-anchor="middle" class="label-cadence" style="fill:var(--ghost)">expectation → reality shift (intended)</text>
+        <circle cx="688" cy="82" r="4" class="badge-alive"/>
+      </g>
+
+      <g class="alive">
+        <rect x="440" y="360" width="260" height="210" rx="16" class="node-memory"/>
+        <text x="570" y="390" text-anchor="middle" class="label-big">Memory</text>
+        <text x="570" y="406" text-anchor="middle" class="label-analog">lifelong diary</text>
+        <text x="570" y="420" text-anchor="middle" class="label-cadence">always accessible</text>
+        <line x1="465" y1="432" x2="675" y2="432" stroke="#2a2f3c" stroke-dasharray="3,3"/>
+        <text x="570" y="452" text-anchor="middle" class="label-small">recall → learn → adapt</text>
+        <text x="570" y="472" text-anchor="middle" class="label-small">raw → daily → core (22k)</text>
+        <text x="570" y="490" text-anchor="middle" class="label-small">+ chromadb vector recall</text>
+        <text x="570" y="508" text-anchor="middle" class="label-small">+ immune (audit log)</text>
+        <text x="570" y="526" text-anchor="middle" class="label-small">+ continuity capsule</text>
+        <text x="570" y="548" text-anchor="middle" class="label-analog">stable · mutable tiers</text>
+        <circle cx="688" cy="372" r="4" class="badge-alive"/>
+      </g>
+
+      <!-- ═══════════════════ COLUMN D · HOMEOSTASIS (REORDERED) ════════ -->
+      <!-- 1. Salience — upstream; one of the two shaping forces, visually elevated -->
+      <g class="intended" style="opacity:0.55">
+        <rect x="736" y="58" width="188" height="102" rx="14" class="node-salience" style="stroke-width:2"/>
+        <text x="830" y="80" text-anchor="middle" class="label-big" style="font-size:14px">Salience</text>
+        <text x="830" y="94" text-anchor="middle" class="label-analog" style="font-size:10.5px">what matters right now</text>
+        <text x="830" y="106" text-anchor="middle" class="label-cadence" style="color:var(--loop-conseq);fill:var(--loop-conseq)">upstream · colors everything</text>
+        <circle cx="756" cy="124" r="2.8" style="fill:var(--warn)"/><text x="764" y="128" class="label-small" style="fill:var(--text);font-size:9.5px">surprise</text>
+        <circle cx="830" cy="124" r="2.8" style="fill:var(--ok)"/><text x="838" y="128" class="label-small" style="fill:var(--text);font-size:9.5px">value</text>
+        <circle cx="898" cy="124" r="2.8" style="fill:var(--err)"/><text x="906" y="128" class="label-small" style="fill:var(--text);font-size:9.5px">risk</text>
+        <text x="830" y="150" text-anchor="middle" class="label-analog" style="font-size:9px">gates: wondering · reply · action priority · memory weight</text>
+        <circle cx="912" cy="67" r="4" class="badge-intended"/>
+      </g>
+
+      <!-- 2. Drives — further simplified: two lines total, let the column breathe -->
+      <g class="embryonic">
+        <rect x="740" y="176" width="180" height="58" rx="12" class="node-drive"/>
+        <text x="830" y="197" text-anchor="middle" class="label-big">Intrinsic Drives</text>
+        <text x="830" y="213" text-anchor="middle" class="label-analog">curiosity · purpose · protection <tspan class="seed-tag" style="font-size:8px">[seed]</tspan></text>
+        <text x="830" y="227" text-anchor="middle" class="label-cadence">observed, not acted on yet</text>
+        <circle cx="912" cy="185" r="4" class="badge-embryonic"/>
+      </g>
+
+      <!-- 3. Temperament — single line body -->
+      <g class="embryonic">
+        <rect x="740" y="248" width="180" height="40" rx="12" class="node-drive"/>
+        <text x="830" y="267" text-anchor="middle" class="label-big">Temperament</text>
+        <text x="830" y="281" text-anchor="middle" class="label-cadence">11 params · NULL, not drifting <tspan class="seed-tag" style="font-size:8px">[seed]</tspan></text>
+        <circle cx="912" cy="257" r="4" class="badge-embryonic"/>
+      </g>
+
+      <!-- 4. Self-Regulation — one-line condensed -->
+      <g class="embryonic">
+        <rect x="740" y="302" width="180" height="60" rx="12" class="node-drive"/>
+        <text x="830" y="322" text-anchor="middle" class="label-big">Self-Regulation</text>
+        <text x="830" y="338" text-anchor="middle" class="label-analog">fixation avoidance · balance</text>
+        <text x="830" y="352" text-anchor="middle" class="label-cadence">per cycle</text>
+        <circle cx="912" cy="311" r="4" class="badge-embryonic"/>
+      </g>
+
+      <!-- 5. Consequence Learning — visually dominant embryonic: wider, bolder, brighter than neighbors -->
+      <g class="intended" style="opacity:0.72">
+        <rect x="730" y="378" width="200" height="112" rx="14" class="node-drive" style="stroke:var(--loop-conseq);stroke-width:2.8;fill:#2d2514"/>
+        <text x="830" y="403" text-anchor="middle" class="label-big" style="font-size:15.5px;fill:var(--text)">Consequence Learning</text>
+        <text x="830" y="420" text-anchor="middle" class="label-analog" style="font-size:11.5px;fill:var(--dim)">how what happens reshapes me</text>
+        <text x="830" y="438" text-anchor="middle" class="label-cadence" style="color:var(--loop-conseq);fill:var(--loop-conseq);font-size:10.5px">every action · shapes future turns</text>
+        <text x="830" y="460" text-anchor="middle" class="label-small" style="font-size:10.5px;fill:var(--text)">act → observe → reflect → adapt</text>
+        <text x="830" y="479" text-anchor="middle" class="label-analog" style="font-size:9.5px;fill:var(--dim)">writes: memory · self-model · drives · residue</text>
+        <circle cx="918" cy="388" r="4.5" class="badge-intended" style="fill:var(--loop-conseq);opacity:0.95"/>
+      </g>
+
+      <!-- 6. Repair & Recovery — visibly promoted: separated with gap, thicker border, brighter -->
+      <g class="intended" style="opacity:0.66">
+        <rect x="734" y="510" width="192" height="68" rx="13" class="node-repair" style="stroke-width:2.2"/>
+        <text x="830" y="532" text-anchor="middle" class="label-big" style="font-size:14px;fill:var(--text)">Repair &amp; Recovery</text>
+        <text x="830" y="548" text-anchor="middle" class="label-analog" style="font-size:10.5px;fill:var(--dim)">survival organ · damage → fallback → heal</text>
+        <text x="830" y="568" text-anchor="middle" class="label-cadence" style="font-size:10px">on error · isolate · compensate · recover</text>
+        <circle cx="914" cy="520" r="4.2" class="badge-intended" style="fill:#7ab29e"/>
+      </g>
+
+      <!-- ═══════════════════ COLUMN E · OUTPUT GUARDS ═════════════════ -->
+      <g class="alive">
+        <rect x="960" y="60" width="200" height="62" rx="12" class="node-audit"/>
+        <text x="1060" y="82" text-anchor="middle" class="label-big">Truth Watchdog</text>
+        <text x="1060" y="97" text-anchor="middle" class="label-analog">the lie detector</text>
+        <text x="1060" y="109" text-anchor="middle" class="label-cadence">per reply</text>
+        <circle cx="1148" cy="69" r="3.5" class="badge-alive"/>
+      </g>
+
+      <g class="alive">
+        <rect x="960" y="138" width="200" height="62" rx="12" class="node-audit"/>
+        <text x="1060" y="160" text-anchor="middle" class="label-big">Action Judge</text>
+        <text x="1060" y="175" text-anchor="middle" class="label-analog">the safety checker</text>
+        <text x="1060" y="187" text-anchor="middle" class="label-cadence">per action</text>
+        <circle cx="1148" cy="147" r="3.5" class="badge-alive"/>
+      </g>
+
+      <!-- Judge forks below into Tool Runner OR Approval Cards -->
+      <!-- Fork label -->
+      <text x="965" y="224" class="label-cadence" style="fill:var(--dim)">judge decides:</text>
+
+      <g class="alive">
+        <rect x="960" y="230" width="200" height="50" rx="12" class="node-tool"/>
+        <text x="1060" y="250" text-anchor="middle" class="label-big">Tool Runner</text>
+        <text x="1060" y="265" text-anchor="middle" class="label-analog">hands on keyboard</text>
+        <text x="1060" y="275" text-anchor="middle" class="label-cadence">per approved action</text>
+        <circle cx="1148" cy="239" r="3.5" class="badge-alive"/>
+      </g>
+
+      <text x="1060" y="297" text-anchor="middle" class="label-cadence" style="fill:var(--dim)">— or, when risky —</text>
+
+      <g class="alive">
+        <rect x="960" y="304" width="200" height="50" rx="12" class="node-tool"/>
+        <text x="1060" y="324" text-anchor="middle" class="label-big">Approval Cards</text>
+        <text x="1060" y="339" text-anchor="middle" class="label-analog">asks permission first</text>
+        <text x="1060" y="349" text-anchor="middle" class="label-cadence">per risky action</text>
+        <circle cx="1148" cy="313" r="3.5" class="badge-alive"/>
+      </g>
+
+      <!-- Volitional Refusal (renamed from Will-I) -->
+      <g class="embryonic">
+        <rect x="960" y="374" width="200" height="50" rx="12" class="node-drive"/>
+        <text x="1060" y="394" text-anchor="middle" class="label-big">Volitional Refusal</text>
+        <text x="1060" y="409" text-anchor="middle" class="label-analog">I can say no on my own</text>
+        <text x="1060" y="419" text-anchor="middle" class="label-cadence">per action · 1 ground registered</text>
+        <circle cx="1148" cy="383" r="4" class="badge-embryonic"/>
+      </g>
+
+      <g class="alive">
+        <rect x="960" y="436" width="200" height="36" rx="10" class="node-memory"/>
+        <text x="1060" y="454" text-anchor="middle" class="label-med">Memory Write</text>
+        <text x="1060" y="466" text-anchor="middle" class="label-cadence">per thought</text>
+        <circle cx="1148" cy="443" r="3.5" class="badge-alive"/>
+      </g>
+
+      <!-- ═══════════════════ COLUMN F · REPLY + SELF ═════════════════ -->
+      <g class="alive">
+        <circle cx="1280" cy="115" r="44" class="node-you"/>
+        <text x="1280" y="112" text-anchor="middle" class="label-big">reply</text>
+        <text x="1280" y="126" text-anchor="middle" class="label-small">→ you</text>
+        <text x="1280" y="174" text-anchor="middle" class="label-analog">the answer</text>
+        <text x="1280" y="186" text-anchor="middle" class="label-cadence">per turn</text>
+      </g>
+
+      <!-- Self-Model — wired more explicitly (5 input sources, behavioral contract stated) -->
+      <g class="intended">
+        <rect x="1200" y="210" width="180" height="180" rx="14" class="node-self"/>
+        <text x="1290" y="232" text-anchor="middle" class="label-big">Self-Model</text>
+        <text x="1290" y="247" text-anchor="middle" class="label-analog">picture of me, over time</text>
+        <text x="1290" y="259" text-anchor="middle" class="label-cadence">periodic · after reflection</text>
+        <text x="1210" y="282" class="label-small">· what am I?</text>
+        <text x="1210" y="298" class="label-small">· what's true?</text>
+        <text x="1210" y="314" class="label-small">· what's broken?</text>
+        <text x="1210" y="330" class="label-small">· how have I changed?</text>
+        <text x="1210" y="354" class="label-analog" style="font-size:9px">built from:</text>
+        <text x="1210" y="366" class="label-analog" style="font-size:9px">· memory · watchdog</text>
+        <text x="1210" y="378" class="label-analog" style="font-size:9px">· consequence · residue · repair hx</text>
+        <circle cx="1370" cy="219" r="4" class="badge-intended"/>
+      </g>
+
+      <!-- Inner Residue — reframed: persistent unresolved internal state that BIASES future behavior -->
+      <g class="embryonic">
+        <rect x="1200" y="400" width="180" height="150" rx="14" class="node-residue"/>
+        <text x="1290" y="422" text-anchor="middle" class="label-big">Inner Residue</text>
+        <text x="1290" y="437" text-anchor="middle" class="label-analog">persistent unresolved state</text>
+        <text x="1290" y="449" text-anchor="middle" class="label-cadence">accumulates · biases future behavior</text>
+        <text x="1210" y="472" class="label-small">· unanswered threads</text>
+        <text x="1210" y="488" class="label-small">· unfinished feelings</text>
+        <text x="1210" y="504" class="label-small">· held tensions</text>
+        <text x="1210" y="524" class="label-analog" style="font-size:9.5px">biases:</text>
+        <text x="1210" y="537" class="label-analog" style="font-size:9.5px">· wondering pick</text>
+        <text x="1295" y="524" class="label-analog" style="font-size:9.5px">· dream topic</text>
+        <text x="1295" y="537" class="label-analog" style="font-size:9.5px">· reply tone</text>
+        <circle cx="1370" cy="409" r="4" class="badge-embryonic"/>
+      </g>
+
+      <!-- ═══════════════════ CONTINUOUS LOOPS (weighted) ═════════════ -->
+      <!-- Daemon: THE HEARTBEAT — bold, solid, prominent -->
+      <g class="alive">
+        <rect x="40" y="830" width="300" height="72" rx="14" class="node-loop-heart"/>
+        <text x="190" y="856" text-anchor="middle" class="label-big" style="font-size:14px">♥ Daemon</text>
+        <text x="190" y="873" text-anchor="middle" class="label-analog">the heartbeat · substrate</text>
+        <text x="190" y="890" text-anchor="middle" class="label-cadence">every 30s · always</text>
+        <circle cx="328" cy="839" r="4" class="badge-alive"/>
+      </g>
+      <!-- Wondering: strong dependent rhythm -->
+      <g class="alive">
+        <rect x="370" y="832" width="260" height="68" rx="14" class="node-loop-strong"/>
+        <text x="500" y="856" text-anchor="middle" class="label-big">Wondering</text>
+        <text x="500" y="872" text-anchor="middle" class="label-analog">curiosity loop</text>
+        <text x="500" y="888" text-anchor="middle" class="label-cadence">on cycle · when budget allows</text>
+        <circle cx="618" cy="841" r="4" class="badge-alive"/>
+      </g>
+      <!-- Dream: soft -->
+      <g class="embryonic">
+        <rect x="660" y="836" width="260" height="60" rx="12" class="node-loop-soft"/>
+        <text x="790" y="858" text-anchor="middle" class="label-big">Dream</text>
+        <text x="790" y="872" text-anchor="middle" class="label-analog">offline synthesis</text>
+        <text x="790" y="886" text-anchor="middle" class="label-cadence">AFK · &gt;30min</text>
+        <circle cx="908" cy="845" r="4" class="badge-embryonic"/>
+      </g>
+      <!-- Evolution: rarest -->
+      <g class="embryonic">
+        <rect x="950" y="838" width="260" height="56" rx="12" class="node-loop-rare"/>
+        <text x="1080" y="858" text-anchor="middle" class="label-big">Evolution</text>
+        <text x="1080" y="872" text-anchor="middle" class="label-analog">governance-gated grow</text>
+        <text x="1080" y="886" text-anchor="middle" class="label-cadence">rare · approved only</text>
+        <circle cx="1198" cy="847" r="4" class="badge-embryonic"/>
+      </g>
+
+      <!-- ═══════════════════════════════════════════════════════════════
+           EDGES — three loops dominate visually, everything else recedes.
+      ═══════════════════════════════════════════════════════════════ -->
+
+      <!-- ── utility / soft edges (drawn first so they sit under the loop edges) ── -->
+      <!-- perception → ambient (4 edges via left gutter) -->
+      <path class="e-soft" d="M 180 488 H 210 V 288 H 240"/>
+      <path class="e-soft" d="M 180 540 H 212 V 293 H 240"/>
+      <path class="e-soft" d="M 180 592 H 214 V 297 H 240"/>
+      <path class="e-soft" d="M 180 644 H 216 V 301 H 240"/>
+      <!-- perception → salience (consequence feedback input) -->
+      <path class="e-soft" d="M 180 488 H 210 V 90 H 740"/>
+
+      <!-- covenant → brain -->
+      <path class="e-soft" d="M 400 155 H 410 V 140 H 440"/>
+
+      <!-- memory → temperament (shapes over time) -->
+      <path class="e-soft" d="M 700 420 H 710 V 290 H 740"/>
+
+      <!-- volitional refusal → action judge (gating) -->
+      <path class="e-soft" d="M 960 395 H 945 V 170 H 960"/>
+
+      <!-- inner residue → wondering -->
+      <path class="e-soft" d="M 1200 460 H 640 V 820 H 500 V 832"/>
+      <!-- inner residue → dream -->
+      <path class="e-soft" d="M 1200 480 H 922 V 840 H 790 V 836"/>
+      <!-- inner residue → self-model -->
+      <path class="e-soft" d="M 1220 420 V 295 H 1270 V 380 V 380"/>
+
+      <!-- memory → self-model (wired explicitly) -->
+      <path class="e-soft" d="M 700 420 H 1170 V 290 H 1200"/>
+      <!-- truth watchdog → self-model (fabrication history) -->
+      <path class="e-soft" d="M 1060 122 V 50 H 1392 V 265 H 1380"/>
+      <!-- consequence learning → self-model (handled by the emphasized e-conseq edge above) -->
+      <!-- temperament → self-model (fixation history proxy) -->
+      <path class="e-soft" d="M 920 268 H 935 V 345 H 1200"/>
+      <!-- repair & recovery history → self-model ("what's broken") -->
+      <path class="e-soft" d="M 926 540 H 945 V 360 H 1200"/>
+      <!-- inner residue → self-model (unresolved state shapes self-picture) -->
+      <path class="e-soft" d="M 1210 420 V 390"/>
+
+      <!-- repair → brain (feedback when damage detected) -->
+      <path id="path-repair-to-brain" class="e-soft" d="M 734 545 H 710 V 595 H 440 V 325"/>
+      <!-- repair → memory -->
+      <path id="path-repair-to-memory" class="e-soft" d="M 734 535 H 700"/>
+
+      <!-- ══════════════ CONVERSATION LOOP (bright blue, bold) ═══════════ -->
+      <!-- you → CLI -->
+      <path id="path-you-to-cli" class="e-conv" d="M 100 140 V 204"/>
+      <!-- surfaces → router -->
+      <path id="path-cli-to-router" class="e-conv" d="M 180 228 H 210 V 355 H 240"/>
+      <path class="e-conv" d="M 180 286 H 210 V 360 H 240"/>
+      <path class="e-conv" d="M 180 344 H 210 V 365 H 240"/>
+      <!-- core being → brain -->
+      <path class="e-conv" d="M 400 85 H 410 V 110 H 440"/>
+      <path class="e-conv" d="M 400 225 H 410 V 180 H 440"/>
+      <path id="path-soul-to-brain" class="e-conv" d="M 400 295 H 410 V 220 H 440"/>
+      <path id="path-router-to-brain" class="e-conv" d="M 400 362 H 410 V 260 H 440"/>
+      <!-- brain → watchdog (via top gutter) -->
+      <path id="path-brain-to-watchdog" class="e-conv" d="M 610 70 V 40 H 1060 V 60"/>
+      <!-- watchdog → reply -->
+      <path id="path-watchdog-to-reply" class="e-conv" d="M 1160 91 H 1236"/>
+      <!-- reply → you (big closing arc back to YOU — closes the loop) -->
+      <path id="path-reply-to-you" class="e-conv" d="M 1236 115 C 1000 100, 500 -10, 100 60"/>
+
+      <!-- ══════════════ DAEMON + WONDERING LOOP (purple, bold dashed) ═══════════ -->
+      <!-- daemon → brain (up through core-brain gutter) -->
+      <path id="path-daemon-to-brain" class="e-daemon" d="M 190 830 V 790 H 460 V 330"/>
+      <!-- brain → memory -->
+      <path id="path-brain-to-memory" class="e-daemon" d="M 570 330 V 360"/>
+      <!-- memory → brain (recall) -->
+      <path class="e-daemon" d="M 540 360 V 305 H 440"/>
+      <!-- wondering → brain -->
+      <path id="path-wondering-to-brain" class="e-daemon" d="M 500 832 V 790 H 680 V 330"/>
+      <!-- wondering → tool runner -->
+      <path id="path-wondering-to-tool" class="e-daemon" d="M 560 832 V 790 H 1060 V 230"/>
+      <!-- tool runner → memory write -->
+      <path id="path-tool-to-cards" class="e-daemon" d="M 1060 280 V 304"/>
+      <path id="path-tool-to-memwrite" class="e-daemon" d="M 1060 354 V 436"/>
+      <!-- memory write → memory (close the loop) -->
+      <path class="e-daemon" d="M 960 454 H 720 V 454 H 700"/>
+
+      <!-- ══════════════ CONSEQUENCE LEARNING LOOP (amber, bold dashed) ═══════════ -->
+      <!-- This loop is THE second shaping force. Bold + prominent. -->
+      <!-- tool runner → perception (world changes, re-observed) -->
+      <path id="path-tool-to-perception" class="e-conseq" d="M 960 260 H 930 V 700 H 210 V 488 H 180"/>
+      <!-- perception → salience (amber boost over soft) -->
+      <path id="path-perception-to-salience" class="e-conseq" d="M 180 488 H 210 V 110 H 740"/>
+      <!-- salience → brain (upstream gate on thinking) -->
+      <path id="path-salience-to-brain" class="e-conseq" d="M 740 130 H 710 V 170 H 700"/>
+      <!-- salience → memory weight (what's worth remembering) -->
+      <path class="e-conseq" d="M 830 160 V 350 H 700"/>
+      <!-- salience → reply emphasis (what to lead with) -->
+      <path class="e-conseq" d="M 924 95 H 930 V 92 H 1236"/>
+      <!-- salience → action judge (priority / risk gating) -->
+      <path class="e-conseq" d="M 924 140 H 945 V 170 H 960"/>
+      <!-- salience → wondering (what's worth asking about) -->
+      <path class="e-conseq" d="M 830 160 V 760 H 500 V 832"/>
+      <!-- Consequence Learning outbound — emphasized (wider stroke) to signal causal weight -->
+      <!-- consequence → memory (writes lessons) -->
+      <path class="e-conseq" style="stroke-width:2.8;opacity:0.9" d="M 730 440 H 710 V 460 H 700"/>
+      <!-- consequence → drives (updates motivation, upward arc) -->
+      <path class="e-conseq" style="stroke-width:2.8;opacity:0.9" d="M 830 378 V 234"/>
+      <!-- consequence → self-model (shapes who I think I am) -->
+      <path class="e-conseq" style="stroke-width:2.8;opacity:0.9" d="M 930 430 H 945 V 300 H 1200"/>
+      <!-- consequence → inner residue (unresolved accumulates) -->
+      <path class="e-conseq" style="stroke-width:2.8;opacity:0.9" d="M 930 460 H 1170 V 470 H 1200"/>
+      <!-- drives → brain (motivation feeds next turn) -->
+      <path class="e-conseq" d="M 740 215 H 720 V 200 H 700"/>
+
+      <!-- ══════════════ CONVERSATION LOOP · SECONDARY ENTANGLEMENT (faint blue) ═══════════ -->
+      <!-- Real conversation also touches memory + salience + residue. Drawn thin so main loop still reads. -->
+      <!-- memory → brain (recall for this turn's context) -->
+      <path id="path-memory-to-brain-entangle" class="e-conv" style="stroke-width:1.1;opacity:0.35" d="M 470 360 V 250 H 440"/>
+      <!-- salience → brain (gates what matters in this turn) -->
+      <path id="path-salience-to-brain-entangle" class="e-conv" style="stroke-width:1.1;opacity:0.35" d="M 740 125 H 720 V 160 H 700"/>
+      <!-- inner residue → reply tone -->
+      <path id="path-residue-to-reply" class="e-conv" style="stroke-width:1.1;opacity:0.35" d="M 1200 430 H 1190 V 130 H 1236"/>
+
+      <!-- ══════════════ REMAINING LOOPS (faint, continuous background) ═══════════ -->
+      <!-- dream → memory (synthesis) -->
+      <path id="path-dream-to-memory" class="e-soft" d="M 790 836 V 790 H 600 V 570"/>
+      <!-- evolution → soul (rare) -->
+      <path id="path-evolution-to-soul" class="e-soft" d="M 1080 838 V 50 H 215 V 225 H 240"/>
+
+      <!-- ══════════════ static particle examples ══════════════ -->
+      <circle cx="100" cy="180" r="4.5" class="p-blue"><title>you → surface</title></circle>
+      <circle cx="210" cy="280" r="4.5" class="p-gray"><title>ambient assembling</title></circle>
+      <circle cx="425" cy="180" r="4.5" class="p-blue"><title>prompt → brain</title></circle>
+      <circle cx="900" cy="40" r="4.5" class="p-green"><title>brain → watchdog</title></circle>
+      <circle cx="1240" cy="115" r="4.5" class="p-green"><title>reply → you</title></circle>
+      <circle cx="1060" cy="300" r="4.5" class="p-amber"><title>card queued</title></circle>
+      <circle cx="570" cy="340" r="4.5" class="p-blue"><title>thought → memory</title></circle>
+      <circle cx="830" cy="450" r="4.5" class="p-amber"><title>consequence loop</title></circle>
+      <circle cx="500" cy="790" r="4.5" class="p-claude"><title>wondering cycle</title></circle>
+      <circle cx="190" cy="810" r="4.5" class="p-claude"><title>daemon heartbeat</title></circle>
+      <circle cx="1080" cy="82" r="4.5" class="p-red"><title>self-claim audit rewrote</title></circle>
+
+    </svg>
+
+  </div>
+
+  <div class="legend">
+    <!-- ══════════ SIMULATOR CONTROLS ══════════ -->
+    <div class="ctrl-block" style="border:1px solid var(--accent);border-radius:6px;padding:10px;background:rgba(143,124,255,0.05)">
+      <h2 style="border-bottom:none;padding-bottom:0;color:var(--accent)">simulate · drive the organism</h2>
+      <div class="note" style="margin:4px 0 10px">
+        Trigger synthetic events to see how Maez flows. Activated organs (preview mode) participate in the cascade so you see what it'd look like if they were real.
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="ctrl-btn" id="sim-chat">💬 chat turn</button>
+        <button class="ctrl-btn" id="sim-cycle">♥ cycle + wondering</button>
+        <button class="ctrl-btn" id="sim-dream">🌙 AFK · dream</button>
+        <button class="ctrl-btn" id="sim-repair">🛠 stress · repair</button>
+        <button class="ctrl-btn" id="sim-proactive">✨ proactive outreach</button>
+      </div>
+      <div style="margin-top:12px;font-size:11px;color:var(--dim)">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span>speed</span>
+          <input type="range" min="0.25" max="4" step="0.25" value="1" id="speed-slider" style="flex:1">
+          <span id="speed-label" style="color:var(--text);width:36px;text-align:right">1×</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════ LIVE STATS (last 5 min) ══════════ -->
+    <div class="ctrl-block">
+      <h2>live activity · last 5 min</h2>
+      <div class="live-stat"><span>daemon ticks</span><span class="v" id="stat-cycles">–</span></div>
+      <div class="live-stat"><span>wondering events</span><span class="v" id="stat-wonderings">–</span></div>
+      <div class="live-stat"><span>audit fires</span><span class="v" id="stat-audits">–</span></div>
+      <div class="live-stat"><span>probes advanced (tied)</span><span class="v" style="color:var(--ok)" id="stat-tied">–</span></div>
+      <div class="live-stat"><span>probes invalidated</span><span class="v" style="color:var(--err)" id="stat-inval">–</span></div>
+      <div style="margin-top:10px;font-size:10px;color:var(--soft)" id="last-update">loading…</div>
+    </div>
+
+    <!-- ══════════ PREVIEW MODE (activate embryonic / intended organs) ══════════ -->
+    <div class="ctrl-block">
+      <h2>preview mode — activate organs</h2>
+      <div class="note" style="margin-top:0">
+        Click any embryonic or intended organ on the diagram (cursor changes to pointer) to preview it as ALIVE. Or check boxes below. Preview is visual-only — doesn't change Maez.
+      </div>
+      <div id="toggle-list" style="margin-top:8px"></div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="ctrl-btn" id="btn-activate-all">activate all</button>
+        <button class="ctrl-btn" id="btn-reset">reset to reality</button>
+      </div>
+      <div style="margin-top:8px;font-size:10px;color:var(--soft)" id="preview-count">0 organs previewed</div>
+    </div>
+
+    <!-- ══════════ EVENT LOG TAIL ══════════ -->
+    <div class="ctrl-block">
+      <h2>event tail · last 15</h2>
+      <div class="event-tail" id="event-tail">waiting for first poll…</div>
+    </div>
+
+    <h2>visibility states</h2>
+    <div class="state-line"><span class="state-sym" style="color:var(--ok)">●</span><strong>ALIVE</strong> — exercised today</div>
+    <div class="state-line"><span class="state-sym" style="color:var(--seed)">◐</span><strong>EMBRYONIC</strong> — code seed, partial</div>
+    <div class="state-line"><span class="state-sym" style="color:var(--ghost)">○</span><strong>INTENDED</strong> — not yet built</div>
+
+    <h2 style="margin-top:22px">the three living loops</h2>
+    <div class="row">
+      <svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="var(--loop-conv)" stroke-width="2.2" opacity="0.72"/></svg>
+      <span><strong>Conversation</strong> — fast, per-turn</span>
+    </div>
+    <div class="note" style="margin-left:38px;margin-top:-4px">YOU → surface → Core → Brain → Watchdog → Reply → YOU</div>
+    <div class="row">
+      <svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="var(--loop-daemon)" stroke-width="2.2" stroke-dasharray="6,3" opacity="0.65"/></svg>
+      <span><strong>Daemon + Wondering</strong> — continuous</span>
+    </div>
+    <div class="note" style="margin-left:38px;margin-top:-4px">Daemon → Brain ↔ Memory · Wondering → Tool → Memory</div>
+    <div class="row">
+      <svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="var(--loop-conseq)" stroke-width="2.2" stroke-dasharray="8,3" opacity="0.7"/></svg>
+      <span><strong>Consequence Learning</strong> — slow feedback</span>
+    </div>
+    <div class="note" style="margin-left:38px;margin-top:-4px">Action → world → Perception → Salience → Memory → Self-Model → Drives → next Brain</div>
+
+    <h2 style="margin-top:22px">cadence legend</h2>
+    <div class="note" style="font-size:11px">
+      Tiny tags inside each node show rhythm. Different rhythms make the organism feel alive:
+      <br>· <span style="color:var(--seed)">per turn</span> — synchronous with conversation
+      <br>· <span style="color:var(--seed)">30s</span> — daemon heartbeat
+      <br>· <span style="color:var(--seed)">60s</span> — periodic perception
+      <br>· <span style="color:var(--seed)">AFK</span> — when you're away
+      <br>· <span style="color:var(--seed)">always</span> — background state
+      <br>· <span style="color:var(--seed)">slow drift</span> — temperament scale
+      <br>· <span style="color:var(--seed)">rare · approved only</span> — governance-gated
+    </div>
+
+    <h2 style="margin-top:22px">loop weights (bottom band)</h2>
+    <div class="note">
+      <strong>Daemon ♥</strong> is the heartbeat — bold border, always-on substrate.<br>
+      <strong>Wondering</strong> rides the daemon — dependent curiosity rhythm.<br>
+      <strong>Dream</strong> is offline synthesis — softer border.<br>
+      <strong>Evolution</strong> is rare &amp; approval-gated — thinnest, most faded.
+    </div>
+
+    <h2 style="margin-top:22px">what moved / was added in v5</h2>
+    <div class="note">
+      · <strong>Salience moved UP</strong> to pre-Brain, no longer basement<br>
+      · <strong>Homeostasis reordered</strong>: Salience → Drives → Temperament → Self-Regulation → Consequence → Repair<br>
+      · <strong>Self-Model wired</strong>: inputs from Memory, Watchdog, Consequence Learning, Temperament/fixation-history<br>
+      · <strong>Inner Residue wired</strong>: feeds Wondering, Dream, Self-Model (no longer passive drawer)<br>
+      · <strong>Will-I renamed</strong> to Volitional Refusal; moved to guards column<br>
+      · <strong>Approval Cards shown as branch</strong> — Judge forks into Tool Runner OR Cards<br>
+      · <strong>Repair &amp; Recovery</strong> added — detect / isolate / compensate / heal<br>
+      · <strong>Loop weights differentiated</strong> — Daemon heartbeat vs. rare Evolution<br>
+      · <strong>Embryonic nodes visually softer</strong> — lower opacity, thinner borders, [seed] tags<br>
+      · <strong>Cadence tags</strong> on every node — gives rhythm
+    </div>
+
+    <div class="callout">
+      This is the organism shape for Track A completion — loops drive the metabolism, boxes serve the loops. Not Maez today (two-thirds of this), not Track B (no multi-tenant).
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ═══════════════════════════════════════════════════════════════════
+  //  test_t URL param carries through to all API fetches
+  // ═══════════════════════════════════════════════════════════════════
+  const qs = new URLSearchParams(window.location.search);
+  const testT = qs.get('test_t') ? `test_t=${encodeURIComponent(qs.get('test_t'))}` : '';
+  const addParam = (url) => testT ? url + (url.includes('?') ? '&' : '?') + testT : url;
+
+  const svg = document.querySelector('svg');
+  const NS = 'http://www.w3.org/2000/svg';
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  1. DISCOVER TOGGLEABLE ORGANS (every g.embryonic / g.intended)
+  // ═══════════════════════════════════════════════════════════════════
+  const organs = [];
+  document.querySelectorAll('g.embryonic, g.intended').forEach((g, idx) => {
+    const label = g.querySelector('text.label-big, text');
+    if (!label) return;
+    const name = label.textContent.trim().replace(/^♥\s*/, '');
+    g.dataset.organ = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    g.dataset.originalState = g.classList.contains('embryonic') ? 'embryonic' : 'intended';
+    g.classList.add('toggleable');
+    g.addEventListener('click', () => toggleOrgan(g));
+    organs.push({ el: g, name, originalState: g.dataset.originalState });
+  });
+
+  function toggleOrgan(g) {
+    if (g.classList.contains('forced-alive')) {
+      g.classList.remove('forced-alive');
+    } else {
+      g.classList.add('forced-alive');
+      pulseRing(g);
+    }
+    refreshToggleList();
+    refreshCount();
+    const checkbox = document.querySelector(`#tog-${g.dataset.organ}`);
+    if (checkbox) checkbox.checked = g.classList.contains('forced-alive');
+  }
+
+  function pulseRing(g) {
+    const rect = g.querySelector('rect, circle');
+    if (!rect) return;
+    const clone = rect.cloneNode();
+    clone.setAttribute('class', 'pulse-ring');
+    clone.setAttribute('fill', 'none');
+    clone.setAttribute('stroke', 'var(--ok)');
+    clone.setAttribute('stroke-width', '3');
+    g.appendChild(clone);
+    setTimeout(() => clone.remove(), 1700);
+  }
+
+  function refreshToggleList() {
+    const list = document.getElementById('toggle-list');
+    list.innerHTML = organs.map(({ el, name, originalState }) => {
+      const isOn = el.classList.contains('forced-alive');
+      const stateLabel = originalState === 'embryonic'
+        ? '<span style="color:var(--seed)">◐</span>'
+        : '<span style="color:var(--ghost)">○</span>';
+      return `
+        <label class="toggle-row" for="tog-${el.dataset.organ}">
+          <input type="checkbox" id="tog-${el.dataset.organ}" ${isOn ? 'checked' : ''}>
+          ${stateLabel} ${name}
+        </label>`;
+    }).join('');
+    list.querySelectorAll('input').forEach(input => {
+      input.addEventListener('change', () => {
+        const org = organs.find(o => `tog-${o.el.dataset.organ}` === input.id);
+        if (org) toggleOrgan(org.el);
+      });
+    });
+  }
+
+  function refreshCount() {
+    const n = organs.filter(o => o.el.classList.contains('forced-alive')).length;
+    document.getElementById('preview-count').textContent =
+      `${n} organ${n !== 1 ? 's' : ''} previewed` + (n > 0 ? ' — click again or reset to revert' : '');
+  }
+
+  document.getElementById('btn-activate-all').addEventListener('click', () => {
+    organs.forEach(o => { if (!o.el.classList.contains('forced-alive')) toggleOrgan(o.el); });
+  });
+  document.getElementById('btn-reset').addEventListener('click', () => {
+    organs.forEach(o => { if (o.el.classList.contains('forced-alive')) toggleOrgan(o.el); });
+  });
+
+  refreshToggleList();
+  refreshCount();
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  2. PARTICLE ANIMATION along named SVG paths
+  //  Global speed multiplier (slider 0.25× .. 4×). Durations divide by it.
+  // ═══════════════════════════════════════════════════════════════════
+  let SPEED = 1;
+  const speedSlider = document.getElementById('speed-slider');
+  const speedLabel = document.getElementById('speed-label');
+  if (speedSlider) {
+    speedSlider.addEventListener('input', () => {
+      SPEED = parseFloat(speedSlider.value);
+      speedLabel.textContent = SPEED + '×';
+    });
+  }
+  const scaled = (ms) => Math.max(80, ms / SPEED);
+
+  function spawnParticle(pathId, color, duration = 1800, radius = 5) {
+    const path = document.getElementById(pathId);
+    if (!path) return;
+    const len = path.getTotalLength();
+    const circle = document.createElementNS(NS, 'circle');
+    circle.setAttribute('r', radius);
+    circle.setAttribute('fill', color);
+    circle.setAttribute('class', 'live-particle');
+    svg.appendChild(circle);
+
+    const d = scaled(duration);
+    const start = performance.now();
+    function frame(now) {
+      const t = Math.min((now - start) / d, 1);
+      const e = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+      const pt = path.getPointAtLength(e * len);
+      circle.setAttribute('cx', pt.x);
+      circle.setAttribute('cy', pt.y);
+      circle.setAttribute('opacity', Math.max(0, 1 - Math.max(0, (t - 0.7) / 0.3) * 0.9));
+      if (t < 1) requestAnimationFrame(frame);
+      else circle.remove();
+    }
+    requestAnimationFrame(frame);
+  }
+
+  async function chainParticles(pathIds, color, perSegment = 1200) {
+    for (const id of pathIds) {
+      await new Promise(res => {
+        spawnParticle(id, color, perSegment);
+        setTimeout(res, scaled(perSegment) - 150);
+      });
+    }
+  }
+
+  // Fire several particles in parallel with slight stagger (for entanglement)
+  function parallelParticles(items, perSegment = 1200) {
+    items.forEach(({ pathId, color, delay = 0 }) => {
+      setTimeout(() => spawnParticle(pathId, color, perSegment), scaled(delay));
+    });
+  }
+
+  // Is an organ currently toggled to preview-alive? By its label.
+  function isPreviewActive(name) {
+    const needle = name.toLowerCase();
+    return organs.some(o =>
+      o.name.toLowerCase().includes(needle) && o.el.classList.contains('forced-alive')
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  SIMULATIONS — drive the organism synthetically
+  // ═══════════════════════════════════════════════════════════════════
+  async function simulateChatTurn() {
+    // Forward path: you → CLI → router → brain → watchdog → reply → you
+    addTail('sim', 'evt-cycle', '▶ simulate chat turn');
+    await chainParticles(['path-you-to-cli', 'path-cli-to-router', 'path-router-to-brain'], COLORS.brain, 900);
+    // Entanglement — fire in parallel with main brain path
+    parallelParticles([
+      { pathId: 'path-memory-to-brain-entangle', color: COLORS.ok, delay: 100 },
+      { pathId: 'path-soul-to-brain', color: COLORS.brain, delay: 200 },
+    ], 900);
+    // Activated extras: if Salience is in preview, show it gating
+    if (isPreviewActive('salience')) {
+      parallelParticles([{ pathId: 'path-salience-to-brain-entangle', color: COLORS.warn, delay: 0 }], 900);
+    }
+    // Brain processes briefly
+    await new Promise(res => setTimeout(res, scaled(600)));
+    // Output: brain → watchdog → reply
+    await chainParticles(['path-brain-to-watchdog', 'path-watchdog-to-reply'], COLORS.ok, 900);
+    // Residue bias if activated
+    if (isPreviewActive('residue')) {
+      spawnParticle('path-residue-to-reply', COLORS.claude, 900);
+    }
+    // Reply → you closing arc
+    spawnParticle('path-reply-to-you', COLORS.ok, 1400);
+    addTail('sim', 'evt-tied', '    ✓ reply delivered');
+  }
+
+  async function simulateCycle() {
+    addTail('sim', 'evt-cycle', '♥ simulate daemon cycle');
+    // Daemon tick → Brain → Memory store
+    await chainParticles(['path-daemon-to-brain', 'path-brain-to-memory'], COLORS.claude, 1000);
+    // If Wondering picks (80% of the time in sim)
+    if (Math.random() < 0.8) {
+      await new Promise(res => setTimeout(res, scaled(300)));
+      addTail('sim', 'evt-cycle', '  → wondering picks a question');
+      // Wondering path outcomes — weighted
+      const r = Math.random();
+      if (r < 0.5) {
+        // tied advance: wondering → brain → tool → memory write
+        await chainParticles(['path-wondering-to-brain', 'path-wondering-to-tool', 'path-tool-to-memwrite'], COLORS.ok, 900);
+        addTail('sim', 'evt-tied', '    ✓ tied learning stored');
+        // If Consequence Learning is activated, show the amber cascade
+        if (isPreviewActive('consequence')) {
+          await new Promise(res => setTimeout(res, scaled(400)));
+          addTail('sim', 'evt-card', '    ⧗ consequence cascade firing');
+          await chainParticles(['path-tool-to-perception', 'path-perception-to-salience', 'path-salience-to-brain'], COLORS.warn, 800);
+        }
+      } else if (r < 0.75) {
+        // card queued
+        await chainParticles(['path-wondering-to-tool', 'path-tool-to-cards'], COLORS.warn, 900);
+        addTail('sim', 'evt-card', '    ⚠ routed to approval card');
+      } else {
+        // invalidated
+        await chainParticles(['path-wondering-to-brain', 'path-wondering-to-tool'], COLORS.err, 900);
+        addTail('sim', 'evt-inval', '    ✗ synth invalidated (fabrication gate)');
+      }
+    }
+  }
+
+  async function simulateDream() {
+    if (!isPreviewActive('dream')) {
+      addTail('sim', 'evt-cycle', '🌙 dream requires preview-activation — toggle Dream on first');
+      return;
+    }
+    addTail('sim', 'evt-cycle', '🌙 simulate AFK · dream cycle');
+    // Dream consolidates — flows into memory
+    await chainParticles(['path-dream-to-memory'], COLORS.claude, 1400);
+    // If Self-Model is active, dream updates it
+    if (isPreviewActive('self-model')) {
+      await new Promise(res => setTimeout(res, scaled(400)));
+      addTail('sim', 'evt-cycle', '  → self-model update from dream insight');
+    }
+  }
+
+  async function simulateRepair() {
+    if (!isPreviewActive('repair')) {
+      addTail('sim', 'evt-inval', '🛠 repair requires preview-activation — toggle Repair & Recovery on first');
+      return;
+    }
+    addTail('sim', 'evt-inval', '🛠 simulate damage · repair cascade');
+    // Damage detected → isolate → compensate → recover
+    spawnParticle('path-repair-to-memory', COLORS.err, 1200);
+    await new Promise(res => setTimeout(res, scaled(800)));
+    spawnParticle('path-repair-to-brain', COLORS.ok, 1600);
+    addTail('sim', 'evt-tied', '    ✓ isolated → fallback → recovered');
+  }
+
+  async function simulateProactive() {
+    addTail('sim', 'evt-card', '✨ simulate proactive outreach (Maez reaches out on its own)');
+    // Brain produces a reply unprompted — no incoming "you → cli" edge
+    // If Inner Residue is active, it originates the outreach
+    if (isPreviewActive('residue')) {
+      addTail('sim', 'evt-card', '  → triggered by unresolved residue');
+    }
+    await chainParticles(['path-brain-to-watchdog', 'path-watchdog-to-reply'], COLORS.claude, 900);
+    spawnParticle('path-reply-to-you', COLORS.claude, 1400);
+    addTail('sim', 'evt-tied', '    ✓ unprompted reply delivered');
+  }
+
+  document.getElementById('sim-chat').addEventListener('click', simulateChatTurn);
+  document.getElementById('sim-cycle').addEventListener('click', simulateCycle);
+  document.getElementById('sim-dream').addEventListener('click', simulateDream);
+  document.getElementById('sim-repair').addEventListener('click', simulateRepair);
+  document.getElementById('sim-proactive').addEventListener('click', simulateProactive);
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  3. POLLING LOOP — turn real events into particles
+  // ═══════════════════════════════════════════════════════════════════
+  const COLORS = {
+    brain: getComputedStyle(document.documentElement).getPropertyValue('--brain').trim(),
+    ok: getComputedStyle(document.documentElement).getPropertyValue('--ok').trim(),
+    warn: getComputedStyle(document.documentElement).getPropertyValue('--warn').trim(),
+    err: getComputedStyle(document.documentElement).getPropertyValue('--err').trim(),
+    claude: getComputedStyle(document.documentElement).getPropertyValue('--claude').trim(),
+    dim: getComputedStyle(document.documentElement).getPropertyValue('--dim').trim(),
+  };
+
+  let seenEvents = new Set();  // event fingerprints already processed
+  let firstPoll = true;
+  const tailEl = document.getElementById('event-tail');
+  const tailEvents = [];
+
+  async function fetchJson(path) {
+    try {
+      const r = await fetch(addParam(path), { credentials: 'same-origin' });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch (e) { return null; }
+  }
+
+  function fingerprint(ev) {
+    return `${ev.ts}|${ev.tag || ''}|${ev.wid || ''}|${ev.action || ''}|${ev.primary || ''}|${ev.score || ''}|${ev.cmd || ''}`;
+  }
+
+  function addTail(ts, cls, msg) {
+    const t = ts.split(' ')[1] || ts;
+    tailEvents.unshift(`<div><span class="evt-time">${t}</span> <span class="${cls}">${msg}</span></div>`);
+    if (tailEvents.length > 15) tailEvents.length = 15;
+    tailEl.innerHTML = tailEvents.join('');
+  }
+
+  async function poll() {
+    const [cycle, wondering, fab] = await Promise.all([
+      fetchJson('/api/debug/cycle-timeline?limit=12'),
+      fetchJson('/api/debug/wondering-events?limit=12'),
+      fetchJson('/api/debug/fabrication-feed?limit=12'),
+    ]);
+
+    const nowStamp = new Date().toLocaleTimeString();
+    document.getElementById('last-update').textContent = `last updated ${nowStamp}`;
+
+    // gather new events
+    const newEvents = [];
+
+    if (cycle && cycle.events) {
+      // events are newest-first; process oldest-new first so particles fire in order
+      for (const ev of cycle.events.slice().reverse()) {
+        const fp = fingerprint(ev);
+        if (seenEvents.has(fp)) continue;
+        seenEvents.add(fp);
+        if (!firstPoll) newEvents.push({ kind: 'cycle', ev });
+      }
+    }
+    if (wondering && wondering.events) {
+      for (const ev of wondering.events.slice().reverse()) {
+        const fp = fingerprint(ev);
+        if (seenEvents.has(fp)) continue;
+        seenEvents.add(fp);
+        if (!firstPoll) newEvents.push({ kind: 'wondering', ev });
+      }
+    }
+    if (fab && fab.real_feeds && fab.real_feeds.self_claim_audit) {
+      for (const ev of fab.real_feeds.self_claim_audit.slice().reverse()) {
+        const fp = `sca|${ev.ts}|${ev.surface}|${ev.flagged}`;
+        if (seenEvents.has(fp)) continue;
+        seenEvents.add(fp);
+        if (!firstPoll && ev.flagged > 0) newEvents.push({ kind: 'audit', ev });
+      }
+    }
+
+    // fire particles + log
+    for (const { kind, ev } of newEvents) {
+      if (kind === 'cycle') {
+        spawnParticle('path-daemon-to-brain', COLORS.brain, 1600);
+        setTimeout(() => spawnParticle('path-brain-to-memory', COLORS.brain, 900), 1500);
+        addTail(ev.ts, 'evt-cycle', `cycle · score=${ev.score || '?'} · ${ev.primary || '?'}`);
+      } else if (kind === 'wondering') {
+        let color = COLORS.claude, cls = 'evt-cycle', paths = ['path-wondering-to-brain'];
+        let msg = `wondering · wid=${ev.wid || '?'} · ${ev.action || '?'}`;
+        if (ev.synth_state === 'tied')           { color = COLORS.ok;   cls = 'evt-tied';  paths = ['path-wondering-to-brain', 'path-wondering-to-tool', 'path-tool-to-memwrite']; msg += ' [tied]'; }
+        else if (ev.synth_state === 'invalidated') { color = COLORS.err;  cls = 'evt-inval'; paths = ['path-wondering-to-brain', 'path-wondering-to-tool']; msg += ' [invalidated]'; }
+        else if (ev.action === 'card_queued')     { color = COLORS.warn; cls = 'evt-card';  paths = ['path-wondering-to-tool', 'path-tool-to-cards']; msg += ' [card]'; }
+        chainParticles(paths, color, 1200);
+        addTail(ev.ts, cls, msg);
+      } else if (kind === 'audit') {
+        spawnParticle('path-brain-to-watchdog', COLORS.err, 1600);
+        addTail(ev.ts, 'evt-inval', `audit · rewrote ${ev.flagged} [${ev.kinds || '?'}] on ${ev.surface || '?'}`);
+      }
+    }
+
+    // stats (last 5 minutes)
+    const cutoff = Date.now() - 5 * 60 * 1000;
+    const inWindow = (ts) => {
+      try { return new Date(ts).getTime() > cutoff; } catch (e) { return false; }
+    };
+    let cycleN = 0, wondN = 0, auditN = 0, tiedN = 0, invalN = 0;
+    if (cycle && cycle.events) cycle.events.forEach(ev => { if (inWindow(ev.ts)) cycleN++; });
+    if (wondering && wondering.events) wondering.events.forEach(ev => {
+      if (inWindow(ev.ts)) {
+        wondN++;
+        if (ev.synth_state === 'tied') tiedN++;
+        if (ev.synth_state === 'invalidated') invalN++;
+      }
+    });
+    if (fab && fab.real_feeds && fab.real_feeds.self_claim_audit) {
+      fab.real_feeds.self_claim_audit.forEach(ev => {
+        if (inWindow(ev.ts) && ev.flagged > 0) auditN++;
+      });
+    }
+    document.getElementById('stat-cycles').textContent = cycleN;
+    document.getElementById('stat-wonderings').textContent = wondN;
+    document.getElementById('stat-audits').textContent = auditN;
+    document.getElementById('stat-tied').textContent = tiedN;
+    document.getElementById('stat-inval').textContent = invalN;
+
+    // Populate tail with recent events on first poll (without firing particles)
+    if (firstPoll) {
+      const recent = [];
+      if (cycle && cycle.events) cycle.events.slice(0, 5).forEach(ev =>
+        recent.push({ ts: ev.ts, cls: 'evt-cycle', msg: `cycle · score=${ev.score || '?'} · ${ev.primary || '?'}` })
+      );
+      if (wondering && wondering.events) wondering.events.slice(0, 5).forEach(ev => {
+        let cls = 'evt-cycle', tag = '';
+        if (ev.synth_state === 'tied')           { cls = 'evt-tied';  tag = ' [tied]'; }
+        else if (ev.synth_state === 'invalidated') { cls = 'evt-inval'; tag = ' [invalidated]'; }
+        else if (ev.action === 'card_queued')     { cls = 'evt-card';  tag = ' [card]'; }
+        recent.push({ ts: ev.ts, cls, msg: `wondering · wid=${ev.wid} · ${ev.action}${tag}` });
+      });
+      // sort newest-first and take 15
+      recent.sort((a, b) => (a.ts > b.ts ? -1 : 1));
+      recent.slice(0, 15).forEach(r => {
+        const t = r.ts.split(' ')[1] || r.ts;
+        tailEvents.push(`<div><span class="evt-time">${t}</span> <span class="${r.cls}">${r.msg}</span></div>`);
+      });
+      tailEl.innerHTML = tailEvents.join('') || 'no recent events';
+      firstPoll = false;
+    }
+  }
+
+  poll();
+  setInterval(poll, 4000);
+
+})();
+</script>
+
+</body>
+</html>

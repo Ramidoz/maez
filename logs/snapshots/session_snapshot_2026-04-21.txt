@@ -1,0 +1,79 @@
+Session Snapshot — 2026-04-21
+================================================================================
+
+## Session Summary
+
+This session completed Tasks 1–4 of the semantic grounding judge plan and
+implemented two high-value patterns from OpenClaw. Disk cleanup executed at
+end of session.
+
+## What Landed
+
+### Semantic Grounding Judge (Tasks 1–4)
+- `core/grounding_judge.py` — pure LLM-based fabrication classifier
+  - `judge(text, signals_present, signals_absent, few_shots)` fails open on all errors
+  - Extracts JSON from prose preamble via `_JSON_OBJ_RE`
+- `core/fabrication_memory.py` — extended with:
+  - `fabrication_events` table for storing per-response judge hits
+  - `record_event(surface, text, signals_absent, reason, mode)`
+  - `few_shots_for(signals_absent, k)` — ranks events by signal-absent overlap
+- `core/self_claim_audit.py` — dual-run mode:
+  - When `MAEZ_SEMANTIC_AUDIT=1`, runs judge in parallel with regex (both gated separately)
+  - Regex governs behavior; judge logs for future validation
+  - signals_present/signals_absent now flow from daemon → audit() → judge
+- `scripts/validate_judge.py` — offline recall/FP harness
+  - Pulls Langfuse traces, classifies fabricated/clean, reports recall/FP vs thresholds
+  - Task 5 (delete regex) gated on ≥90% recall / ≤10% FP
+- `/etc/maez/langfuse.env` — `MAEZ_SEMANTIC_AUDIT=1` live
+
+### OpenClaw Patterns (daemon)
+- `<final>` tag enforcement in `_reason()`:
+  - Model wraps grounded output in `<final>...</final>`; `_extract_final()` strips preamble
+  - Fail-open: if no tags, full text passes through
+- `HEARTBEAT_OK` sentinel:
+  - Model responds with `<final>HEARTBEAT_OK</final>` when nothing noteworthy
+  - Daemon skips audit/storage/broadcast on HEARTBEAT_OK — eliminates forced prose
+
+### Disk Cleanup
+- Deleted ~77G total:
+  - `/home/rohit/.cache/huggingface/hub/models--unsloth--Qwen3.6-35B-A3B/` (67G SFT weights)
+  - `mmproj-Qwen3-VL-8B-Instruct-F16.gguf` (1.1G duplicate projector)
+  - `Qwen3-VL-8B-Instruct-Q4_K_M.gguf` (4.7G unused quant)
+  - `Qwen3-VL-4B-Instruct-Q4_K_M.gguf` (2.4G)
+  - `Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf` (1.8G)
+  - `mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf` (0.8G)
+  - `mmproj-Qwen3-VL-4B-Instruct-F16.gguf` (0.8G)
+- Root now at 71% used (32G/47G), 13G free
+- Kept: qwen36-35b-q3kxl.gguf (active), Qwen_Qwen3-VL-8B-Instruct-Q3_K_M + projector (paused vision), gemma-4-26B-A4B-it-Q4_K_M.gguf
+
+## Pending / Gated Work
+
+1. **Task 5 — delete regex detectors** (gated)
+   - Gate: validate_judge.py reports >=90% recall / <=10% FP
+   - Needs ~50 dual-run cycles to accumulate training data in fabrication_events
+   - Run: python scripts/validate_judge.py --source langfuse --limit 100
+
+2. **Chat self-claim hallucination regression** (queued post-cockpit)
+   - Maez invents frameworks/paths on chat surface (e.g., "Maelstrom 2.0.0")
+   - Trust files, not reflective self-answers
+
+3. **Disk-fixation daemon observation** (do NOT patch yet)
+   - Recurring low-uniqueness drift on baseline _reason() cycle
+   - Queue after cockpit + self-claim cleanup
+
+## Current Git State
+e82e93d feat(daemon): <final> tag enforcement + HEARTBEAT_OK sentinel
+2879679 feat(validate_judge): offline recall/FP harness for grounding judge
+dd5ebce feat(audit): dual-run mode — regex + semantic judge when MAEZ_SEMANTIC_AUDIT=1
+e1edb20 feat(fabrication_memory): add record_event + few_shots_for for judge context
+7e46966 feat(grounding_judge): local-LLM semantic judge to replace regex detectors
+
+## Test Status
+- 17/17 wondering tests pass
+- 10/10 grounding_judge tests pass
+- 4/4 audit dual-run tests pass
+- 5/5 fabrication_memory few_shots tests pass
+
+## Next Session Start
+Read docs/TRACK_A.md + this file. Check validate_judge.py output before
+touching Task 5. Do not re-run the 7-track sweep.

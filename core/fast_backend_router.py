@@ -49,9 +49,7 @@ to selection regardless of env vars.
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass, field
-from typing import Optional
 
 from core.fast_backend_local import LocalGemmaBackend, BackendResult
 from core.fast_backend_cloud import CloudBackend

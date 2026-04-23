@@ -12,7 +12,6 @@ Maez uses this to:
 - Understand the shape and weight of the owner's day
 """
 
-import json
 import logging
 import os
 import time

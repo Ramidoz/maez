@@ -111,6 +111,12 @@ def maez_notes_path() -> Path:
     return logs_dir() / "maez_notes.md"
 
 
+def wonderings_db() -> Path:
+    """Sqlite DB for the daemon's exploratory-mind state.
+    Mirrors dream_proposals.db — personal, gitignored."""
+    return memory_dir() / "wonderings.db"
+
+
 # ── training + models (often on a separate volume) ─────────────────────
 def training_dir() -> Path:
     return home() / "training"

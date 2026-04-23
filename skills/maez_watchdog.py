@@ -5,7 +5,6 @@ Works completely independently of Maez.
 """
 
 import logging
-import os
 import subprocess
 import time
 from datetime import datetime
@@ -15,7 +14,7 @@ import requests
 import sys
 
 sys.path.insert(0, str(Path("/home/rohit/maez")))
-from skills.dev_notifier import send_dev, send_service_card
+from skills.dev_notifier import send_service_card
 
 # --- Config ---
 LOG_PATH = Path("/home/rohit/maez/logs/maez_watchdog.log")

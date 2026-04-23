@@ -11,7 +11,6 @@ Module-level API preserved: initialize(), speak(), shutdown(), is_speaking()
 import logging
 import os
 import re
-import subprocess
 import threading
 import time
 from typing import Optional

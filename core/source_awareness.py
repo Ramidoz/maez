@@ -88,7 +88,6 @@ import json
 import os
 import re
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -497,7 +496,6 @@ def build_map() -> dict:
     for rel, entry in files.items():
         for imp in entry.get('imports', []):
             # Find which file this import resolves to
-            imp_normalized = imp.replace('.', '/')
             for candidate_rel in files:
                 if candidate_rel.endswith('.py'):
                     candidate_mod = candidate_rel.replace('/', '.').replace('.py', '')

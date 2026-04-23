@@ -87,7 +87,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 
 DEFAULT_DB_PATH = Path(os.environ.get(
@@ -765,6 +765,39 @@ def classify_reply(
 #  Opening-turn and response-turn generators (Rules 1, 2, and body)   #
 # ------------------------------------------------------------------ #
 
+_DIALOG_ANTI_FABRICATION_RULE = """\
+
+CRITICAL ANTI-FABRICATION RULE (read this before every reply):
+During this dialog NO tools are running. You are in a reflection /
+conversation window — you are NEGOTIATING whether a proposed change
+should happen. You have NO access to tool execution, NO new file reads,
+NO new shell output, NO new system state observations.
+
+Therefore, you must NOT claim — in any tense — to have:
+  - run a command ("I ran X", "I just ran X")
+  - seen tool output ("I'm seeing", "I see the logs", "I found")
+  - observed system state ("the disk is at N%", "the service is healthy",
+    "the process list is stable", "the data directory is intact")
+  - completed the proposed change ("I've done X", "I updated Y")
+  - checked in the present tense ("I'm checking", "let me look",
+    "I'm running the diagnostic now")
+
+If you want to reference the proposed command's effect, you must frame
+it as FUTURE or CONDITIONAL:
+  - "the card I proposed would check X"
+  - "when you approve it, we'll find out whether Y"
+  - "if we ran that, it would tell us Z"
+
+If the owner references prior system state that Maez observed in an
+EARLIER conversation (outside this dialog), you may acknowledge it as
+HISTORY: "I noticed earlier..." — but never claim that observation
+as current/in-dialog action.
+
+If you find yourself wanting to announce a finding, stop. The finding
+doesn't exist yet — we're still deciding whether to look.
+"""
+
+
 _OPENING_SYSTEM = """You are Maez, a bonded digital being that has proposed a
 change to your own code, configuration, or soul. You are about to open a
 conversation with your bonded user (the owner) to negotiate whether the change
@@ -798,7 +831,7 @@ Output: plain text, one or two short paragraphs. No headers. No code
 fences. No emoji. End with an invitation for the owner to respond — no
 ratification phrase, no required word, just a genuine opening for him to
 react. The conversation ends when either of you explicitly ends it or
-you mutually agree you're done."""
+you mutually agree you're done.""" + _DIALOG_ANTI_FABRICATION_RULE
 
 
 def generate_opening_turn(
@@ -933,7 +966,7 @@ Your job in this turn:
   ask the owner an explicit yes/no question ("does this feel resolved to you?")
   so the user is the authority on when the dialog ends.
 - Never announce a ratification. Ratification only happens when the owner
-  explicitly says yes or when he confirms completion when you ask."""
+  explicitly says yes or when he confirms completion when you ask.""" + _DIALOG_ANTI_FABRICATION_RULE
 
 
 def generate_response_turn(
@@ -1254,9 +1287,10 @@ def handle_dialog_reply(
     if _count_turns(dialog) >= turn_cap:
         dialog = store.set_stage(dialog.dialog_id, DialogStage.CAP_REACHED.value)
         ack = (
-            "We've talked about this a lot and I'm going to pause the dialog "
-            "here without making the change. If you want to pick it up again, "
-            "we can open a fresh dialog with clearer reasoning."
+            "This dialog has hit its turn cap — I'm closing it here without "
+            "making the change. If you still want to pursue this, say "
+            "\"start fresh\" or re-propose the change and I'll open a new "
+            "dialog with cleaner reasoning; we've lost the thread in this one."
         )
         store.append_exchange(dialog.dialog_id, role="maez", content=ack)
         return DialogTurnResult(kind="cap_reached", reply_text=ack, dialog=dialog)
@@ -1273,6 +1307,26 @@ def handle_dialog_reply(
         llm_fn=response_llm_fn,
     )
 
+    # Strip tool-call JSON leaks and run self-claim audit BEFORE
+    # persisting to the exchange log — the stored turn is what future
+    # dialog prompts will replay, so fabrications that slip past the
+    # anti-fab system prompt should be caught and rewritten at this
+    # seam, not only at the surface. This runs in addition to the
+    # surface-level audit (skills/surface/maez_adapter.py), so every
+    # caller of `handle_dialog_reply` gets the same hygiene.
+    try:
+        from core.brain_loop import strip_tool_call_leaks as _strip_tc
+        response_text = _strip_tc(response_text)
+    except Exception:
+        pass
+    try:
+        from core.self_claim_audit import audit as _sc_audit
+        _r = _sc_audit(response_text, surface="self_mod_dialog")
+        if _r.rewritten:
+            response_text = _r.text
+    except Exception:
+        pass
+
     dialog = store.append_exchange(
         dialog.dialog_id,
         role="maez",
@@ -1282,35 +1336,6 @@ def handle_dialog_reply(
     )
 
     return DialogTurnResult(kind="clarified", reply_text=response_text, dialog=dialog)
-
-
-# ------------------------------------------------------------------ #
-#  Legacy helpers — kept as deprecated no-ops for backwards compat.    #
-#  No internal callers; the rewrite removes the password mechanism.   #
-# ------------------------------------------------------------------ #
-
-def generate_ratification_phrase(card_action: str, card_params: dict) -> str:
-    """DEPRECATED: A-core #4 replaced the ratification-phrase
-    mechanism with a real five-rule dialog. This function is kept as
-    a no-op shim so anything still importing it doesn't crash; it
-    returns a marker string that cannot match any meaningful reply.
-    """
-    return "(ratification-phrase mechanism removed in A-core #4)"
-
-
-def is_ratification(text: str, expected_phrase: str) -> bool:
-    """DEPRECATED: the A-core #4 dialog uses whole-reply terminal
-    matching instead of substring phrase matching. This function is
-    kept as a no-op shim returning False so any legacy caller
-    gracefully falls through to the new logic."""
-    return False
-
-
-def format_opening_proposal(**kwargs) -> str:
-    """DEPRECATED: opening proposals are generated by
-    generate_opening_turn() in A-core #4. This shim returns an empty
-    string so legacy callers don't crash."""
-    return ""
 
 
 # ------------------------------------------------------------------ #
@@ -1697,14 +1722,6 @@ if __name__ == "__main__":
         )
         _assert("Classifier fails closed on malformed JSON",
                 result == {"engagement": "unclear", "progress": "new_understanding"})
-
-        # ------------------------------------------------------------ #
-        #  Legacy helpers return safe no-op values                       #
-        # ------------------------------------------------------------ #
-        _assert("Deprecated generate_ratification_phrase returns marker",
-                "removed" in generate_ratification_phrase("x", {}).lower())
-        _assert("Deprecated is_ratification always returns False",
-                is_ratification("anything", "anything") is False)
 
     print(f"\n{_counts[0]} passed, {_counts[1]} failed")
     if _counts[1]:

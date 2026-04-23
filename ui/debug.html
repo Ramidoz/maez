@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>maez · debug</title>
+<style>
+  :root {
+    --bg: #0d0f13;
+    --panel: #15191f;
+    --panel-br: #242933;
+    --text: #d7dbe3;
+    --dim: #8a93a3;
+    --accent: #8f7cff;
+    --ok: #5ccb7d;
+    --warn: #e0b44a;
+    --err: #e47272;
+    --mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); }
+  body { font-family: var(--mono); font-size: 13px; line-height: 1.4; }
+  header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 10px 16px; border-bottom: 1px solid var(--panel-br);
+    background: var(--panel);
+  }
+  header .brand { font-weight: bold; color: var(--accent); letter-spacing: 0.5px; }
+  header .brand small { color: var(--dim); font-weight: normal; margin-left: 8px; }
+  header .meta { color: var(--dim); font-size: 12px; }
+  header button {
+    background: #1f242c; color: var(--text); border: 1px solid var(--panel-br);
+    padding: 4px 10px; font-family: var(--mono); font-size: 12px; cursor: pointer;
+    margin-left: 8px;
+  }
+  header button:hover { border-color: var(--accent); }
+
+  main {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+    gap: 1px;
+    background: var(--panel-br);
+    padding: 1px;
+  }
+  .pane {
+    background: var(--panel); padding: 12px 14px 14px; min-height: 120px;
+    display: flex; flex-direction: column;
+  }
+  .pane h2 {
+    font-size: 11px; font-weight: normal; color: var(--dim); margin: 0 0 8px;
+    text-transform: uppercase; letter-spacing: 1.5px;
+    border-bottom: 1px solid var(--panel-br); padding-bottom: 6px;
+    display: flex; align-items: baseline; justify-content: space-between;
+  }
+  .pane h2 .label {
+    font-size: 10px; color: var(--warn); text-transform: none; letter-spacing: 0;
+    font-style: italic; margin-left: 10px; text-align: right; flex: 1;
+  }
+  .pane .body { flex: 1; }
+  .placeholder {
+    color: var(--dim); font-style: italic; padding: 10px 0;
+  }
+  .placeholder .slice { color: var(--accent); font-style: normal; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table td { padding: 3px 6px; vertical-align: top; }
+  table td.k { color: var(--dim); width: 45%; }
+  table td.v { font-weight: bold; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .dot.active { background: var(--ok); }
+  .dot.inactive, .dot.failed { background: var(--err); }
+  .dot.activating, .dot.reloading { background: var(--warn); }
+  .dot.unknown, .dot.unreachable { background: var(--dim); }
+  .state-active { color: var(--ok); }
+  .state-inactive, .state-failed { color: var(--err); }
+  .state-activating, .state-reloading { color: var(--warn); }
+  .state-unknown, .state-unreachable { color: var(--dim); }
+
+  .err-banner {
+    color: var(--err); font-size: 11px; padding: 4px 8px;
+    border: 1px solid var(--err); background: rgba(228,114,114,0.07);
+    margin-top: 8px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <span class="brand">maez · debug</span>
+    <small>v1 · read-only · Slice C (cards + shells + fabrication)</small>
+  </div>
+  <div>
+    <span class="meta" id="lastUpdated">loaded: —</span>
+    <button id="refreshBtn" title="refresh all panes">refresh</button>
+  </div>
+</header>
+
+<main>
+  <!-- ── Pane 1: Machine state / services ────────────────────────── -->
+  <section class="pane" id="pane-services">
+    <h2>machine state · services</h2>
+    <div class="body">
+      <table id="svc-table">
+        <tr><td class="placeholder" colspan="2">loading…</td></tr>
+      </table>
+      <div id="svc-err" class="err-banner" style="display:none"></div>
+    </div>
+  </section>
+
+  <!-- ── Pane 2: Cycle timeline (Slice B) ─────────────────────────── -->
+  <section class="pane" id="pane-cycles">
+    <h2>cycle timeline
+      <span class="label" style="color:var(--dim)">cognition.log · cycle + wondering rows</span>
+    </h2>
+    <div class="body">
+      <table id="cycle-table">
+        <tr><td class="placeholder" colspan="4">loading…</td></tr>
+      </table>
+      <div id="cycle-err" class="err-banner" style="display:none"></div>
+    </div>
+  </section>
+
+  <!-- ── Pane 3: Wonderings board (Slice B) ───────────────────────── -->
+  <section class="pane" id="pane-wonderings">
+    <h2>wonderings board
+      <span class="label" style="color:var(--dim)">wonderings.db</span>
+    </h2>
+    <div class="body">
+      <table id="wonder-table">
+        <tr><td class="placeholder" colspan="5">loading…</td></tr>
+      </table>
+      <div id="wonder-err" class="err-banner" style="display:none"></div>
+    </div>
+  </section>
+
+  <!-- ── Pane 4: Last 20 wondering events (Slice B) ──────────────── -->
+  <section class="pane" id="pane-events">
+    <h2>last 20 wondering events
+      <span class="label" style="color:var(--dim)">tail cognition.log | grep wondering</span>
+    </h2>
+    <div class="body">
+      <table id="events-table">
+        <tr><td class="placeholder" colspan="6">loading…</td></tr>
+      </table>
+      <div id="events-err" class="err-banner" style="display:none"></div>
+    </div>
+  </section>
+
+  <!-- ── Pane 5: Open cards ───────────────────────────────────────── -->
+  <section class="pane" id="pane-cards">
+    <h2>open approval cards
+      <span class="label" style="color:var(--dim)">pending_cards.db · open/deferred/approved/running</span>
+    </h2>
+    <div class="body">
+      <table id="cards-table">
+        <tr><td class="placeholder" colspan="5">loading…</td></tr>
+      </table>
+      <div id="cards-err" class="err-banner" style="display:none"></div>
+    </div>
+  </section>
+
+  <!-- ── Pane 6: Recent shells ────────────────────────────────────── -->
+  <section class="pane" id="pane-shells">
+    <h2>
+      recent shell executions
+      <span class="label">v1 shows wondering-originated executions only</span>
+    </h2>
+    <div class="body">
+      <table id="shells-table">
+        <tr><td class="placeholder" colspan="5">loading…</td></tr>
+      </table>
+      <div id="shells-err" class="err-banner" style="display:none"></div>
+    </div>
+  </section>
+
+  <!-- ── Pane 7: Fabrication / correction ─────────────────────────── -->
+  <section class="pane" id="pane-fab">
+    <h2>
+      fabrication · correction
+      <span class="label">chat-surface detectors not wired yet</span>
+    </h2>
+    <div class="body">
+      <div id="fab-body" class="placeholder">loading…</div>
+      <div id="fab-err" class="err-banner" style="display:none"></div>
+    </div>
+  </section>
+
+  <!-- ── Pane 8: Stats strip (Slice B) ────────────────────────────── -->
+  <section class="pane" id="pane-stats">
+    <h2>wonderings · stats
+      <span class="label" style="color:var(--dim)">Wonderings.stats()</span>
+    </h2>
+    <div class="body">
+      <div id="stats-body" class="placeholder">loading…</div>
+      <div id="stats-err" class="err-banner" style="display:none"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function(){
+  const qs = new URLSearchParams(window.location.search);
+  const testT = qs.get('test_t') ? ('test_t=' + encodeURIComponent(qs.get('test_t'))) : '';
+
+  function fmtTs(iso) {
+    if (!iso) return '—';
+    try { return new Date(iso).toLocaleTimeString(); } catch (_) { return iso; }
+  }
+
+  async function fetchJson(path) {
+    // append test_t with the correct separator — some paths already have `?limit=N`
+    const sep = testT ? (path.includes('?') ? '&' : '?') : '';
+    const r = await fetch(path + sep + testT, { credentials: 'same-origin' });
+    if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+    return r.json();
+  }
+
+  // ── Services pane ────────────────────────────────────────────────
+  async function loadServices() {
+    const tbl = document.getElementById('svc-table');
+    const errBox = document.getElementById('svc-err');
+    errBox.style.display = 'none';
+    tbl.innerHTML = '<tr><td class="placeholder" colspan="2">loading…</td></tr>';
+    try {
+      const data = await fetchJson('/api/debug/services');
+      const rows = [];
+      const svcs = data.services || {};
+      for (const name of Object.keys(svcs).sort()) {
+        const state = svcs[name] || 'unknown';
+        rows.push(
+          '<tr><td class="k">' + name + '</td>' +
+          '<td class="v state-' + state + '">' +
+          '<span class="dot ' + state + '"></span>' + state + '</td></tr>'
+        );
+      }
+      const dh = data.daemon || {};
+      const dstate = dh.status || 'unreachable';
+      rows.push(
+        '<tr><td class="k">daemon /health</td>' +
+        '<td class="v state-' + dstate + '">' +
+        '<span class="dot ' + dstate + '"></span>' + dstate +
+        (dh.cycle !== undefined ? ' (cycle ' + dh.cycle + ')' : '') +
+        '</td></tr>'
+      );
+      tbl.innerHTML = rows.join('');
+      document.getElementById('lastUpdated').textContent = 'loaded: ' + fmtTs(data.checked_at);
+    } catch (e) {
+      tbl.innerHTML = '';
+      errBox.textContent = 'failed: ' + e.message;
+      errBox.style.display = 'block';
+    }
+  }
+
+  function esc(s) {
+    if (s === null || s === undefined) return '';
+    return String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function hhmmss(ts) {
+    // cognition.log ts format: "YYYY-MM-DD HH:MM:SS"
+    if (!ts) return '—';
+    const parts = ts.split(' ');
+    return parts.length === 2 ? parts[1] : ts;
+  }
+
+  function trunc(s, n) {
+    if (!s) return '';
+    return s.length > n ? s.slice(0, n - 1) + '…' : s;
+  }
+
+  // ── Wonderings board ─────────────────────────────────────────────
+  async function loadWonderings() {
+    const tbl = document.getElementById('wonder-table');
+    const errBox = document.getElementById('wonder-err');
+    errBox.style.display = 'none';
+    tbl.innerHTML = '<tr><td class="placeholder" colspan="5">loading…</td></tr>';
+    try {
+      const data = await fetchJson('/api/debug/wonderings');
+      const rows = data.wonderings || [];
+      if (rows.length === 0) {
+        tbl.innerHTML = '<tr><td class="placeholder" colspan="5">no wonderings yet — <code>/wonder &lt;q&gt;</code> in the CLI to seed one</td></tr>';
+        return;
+      }
+      const body = ['<tr>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">id</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">status</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">adv</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">def</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">question</th>' +
+        '</tr>'];
+      for (const w of rows) {
+        const statusCls = {
+          'open': 'state-unknown',
+          'active': '',
+          'resolved': 'state-active',
+          'abandoned': 'state-unknown',
+          'blocked_pending_approval': 'state-activating',
+        }[w.status] || '';
+        body.push(
+          '<tr>' +
+          '<td>' + esc(w.id) + '</td>' +
+          '<td class="' + statusCls + '">' + esc(w.status) + '</td>' +
+          '<td>' + esc(w.advance_count) + '</td>' +
+          '<td>' + esc(w.deferral_count) + '</td>' +
+          '<td>' + esc(trunc(w.question, 70)) + '</td>' +
+          '</tr>'
+        );
+      }
+      tbl.innerHTML = body.join('');
+    } catch (e) {
+      tbl.innerHTML = '';
+      errBox.textContent = 'failed: ' + e.message;
+      errBox.style.display = 'block';
+    }
+  }
+
+  // ── Last 20 wondering events ─────────────────────────────────────
+  async function loadEvents() {
+    const tbl = document.getElementById('events-table');
+    const errBox = document.getElementById('events-err');
+    errBox.style.display = 'none';
+    tbl.innerHTML = '<tr><td class="placeholder" colspan="6">loading…</td></tr>';
+    try {
+      const data = await fetchJson('/api/debug/wondering-events?limit=20');
+      const events = data.events || [];
+      if (events.length === 0) {
+        tbl.innerHTML = '<tr><td class="placeholder" colspan="6">no wondering events in cognition.log yet</td></tr>';
+        return;
+      }
+      const body = ['<tr>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">time</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">wid</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">action</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">synth</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">rc</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">cmd / q</th>' +
+        '</tr>'];
+      // Newest first for display
+      events.slice().reverse().forEach(ev => {
+        const synthCls = {
+          'tied': 'state-active',
+          'invalidated': 'state-failed',
+          'timeout': 'state-activating',
+        }[ev.synth_state] || '';
+        const tied = ev.evidence_tied === '1' ? '✓' : '·';
+        const cmdOrQ = ev.cmd || ev.q || '';
+        body.push(
+          '<tr>' +
+          '<td>' + esc(hhmmss(ev.ts)) + '</td>' +
+          '<td>' + esc(ev.wid) + '</td>' +
+          '<td>' + esc(ev.action) + '</td>' +
+          '<td class="' + synthCls + '">' + esc(ev.synth_state) + ' ' + tied + '</td>' +
+          '<td>' + esc(ev.rc === 'null' ? '—' : ev.rc) + '</td>' +
+          '<td title="' + esc(cmdOrQ) + '">' + esc(trunc(cmdOrQ, 50)) + '</td>' +
+          '</tr>'
+        );
+      });
+      tbl.innerHTML = body.join('');
+    } catch (e) {
+      tbl.innerHTML = '';
+      errBox.textContent = 'failed: ' + e.message;
+      errBox.style.display = 'block';
+    }
+  }
+
+  // ── Cycle timeline (cycle + wondering interleaved) ───────────────
+  async function loadCycleTimeline() {
+    const tbl = document.getElementById('cycle-table');
+    const errBox = document.getElementById('cycle-err');
+    errBox.style.display = 'none';
+    tbl.innerHTML = '<tr><td class="placeholder" colspan="4">loading…</td></tr>';
+    try {
+      const data = await fetchJson('/api/debug/cycle-timeline?limit=40');
+      const events = data.events || [];
+      if (events.length === 0) {
+        tbl.innerHTML = '<tr><td class="placeholder" colspan="4">no cycle/wondering events yet</td></tr>';
+        return;
+      }
+      const body = ['<tr>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">time</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">kind</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">outcome</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">detail</th>' +
+        '</tr>'];
+      events.forEach(ev => {
+        let kind, outcome, detail, outCls = '';
+        if (ev.tag === 'cycle') {
+          kind = 'cycle';
+          outcome = ev.primary || '—';
+          detail = 'score=' + (ev.score ?? '—') + ' topic=' + (ev.topic || '—');
+          if (ev.primary === 'fixation' || ev.primary === 'vague') outCls = 'state-activating';
+          else if (ev.primary === 'actionable' || ev.primary === 'insightful') outCls = 'state-active';
+        } else {
+          kind = 'wondering';
+          outcome = ev.action || '—';
+          if (ev.action === 'advanced' && ev.synth_state === 'tied') outCls = 'state-active';
+          else if (ev.synth_state === 'invalidated') outCls = 'state-failed';
+          else if (ev.action === 'skipped_lock_busy') outCls = 'state-activating';
+          const cmdOrQ = ev.cmd || ev.q || '';
+          detail = 'wid=' + esc(ev.wid) + ' ' + esc(trunc(cmdOrQ, 40));
+          // Reset esc since we already applied — undo for the assembly line
+          detail = 'wid=' + ev.wid + ' ' + trunc(cmdOrQ, 40);
+        }
+        body.push(
+          '<tr>' +
+          '<td>' + esc(hhmmss(ev.ts)) + '</td>' +
+          '<td style="color:var(--dim)">' + esc(kind) + '</td>' +
+          '<td class="' + outCls + '">' + esc(outcome) + '</td>' +
+          '<td>' + esc(detail) + '</td>' +
+          '</tr>'
+        );
+      });
+      tbl.innerHTML = body.join('');
+    } catch (e) {
+      tbl.innerHTML = '';
+      errBox.textContent = 'failed: ' + e.message;
+      errBox.style.display = 'block';
+    }
+  }
+
+  // ── Stats strip ──────────────────────────────────────────────────
+  async function loadStats() {
+    const body = document.getElementById('stats-body');
+    const errBox = document.getElementById('stats-err');
+    errBox.style.display = 'none';
+    body.innerHTML = 'loading…';
+    try {
+      const data = await fetchJson('/api/debug/stats');
+      const fmt = (label, s) =>
+        '<div style="margin:6px 0">' +
+        '<span style="color:var(--dim);display:inline-block;width:48px">' + label + '</span>' +
+        '<span>' + (s.probes || 0) + ' probes · </span>' +
+        '<span class="state-active">' + (s.tied || 0) + ' tied</span> · ' +
+        '<span class="state-failed">' + (s.invalidated || 0) + ' invalidated</span> · ' +
+        '<span class="state-activating">' + (s.timeout || 0) + ' timeout</span> · ' +
+        '<span style="color:var(--dim)">' + (s.deferred || 0) + ' deferred</span>' +
+        (s.no_output ? ' · <span style="color:var(--dim)">' + s.no_output + ' no-output</span>' : '') +
+        '</div>';
+      body.innerHTML =
+        fmt('1h', data.hour || {}) +
+        fmt('24h', data.day || {});
+      body.className = ''; // drop the .placeholder styling
+    } catch (e) {
+      body.innerHTML = '';
+      errBox.textContent = 'failed: ' + e.message;
+      errBox.style.display = 'block';
+    }
+  }
+
+  // ── Open approval cards ──────────────────────────────────────────
+  async function loadCards() {
+    const tbl = document.getElementById('cards-table');
+    const errBox = document.getElementById('cards-err');
+    errBox.style.display = 'none';
+    tbl.innerHTML = '<tr><td class="placeholder" colspan="5">loading…</td></tr>';
+    try {
+      const data = await fetchJson('/api/debug/cards');
+      const cards = data.cards || [];
+      if (cards.length === 0) {
+        tbl.innerHTML = '<tr><td class="placeholder" colspan="5">no open cards</td></tr>';
+        return;
+      }
+      const body = ['<tr>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">status</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">origin</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">wid</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">action</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">cmd / reason</th>' +
+        '</tr>'];
+      for (const c of cards) {
+        const statusCls = {
+          'open': '',
+          'deferred': 'state-activating',
+          'approved': 'state-active',
+          'running': 'state-active',
+        }[c.status] || '';
+        const detail = c.cmd || c.reason || '';
+        body.push(
+          '<tr>' +
+          '<td class="' + statusCls + '">' + esc(c.status) +
+          (c.defer_count ? ' <span style="color:var(--dim)">×' + c.defer_count + '</span>' : '') +
+          '</td>' +
+          '<td style="color:var(--dim)">' + esc(c.origin) + '</td>' +
+          '<td>' + esc(c.wondering_id || '—') + '</td>' +
+          '<td>' + esc(c.action) + '</td>' +
+          '<td title="' + esc(detail) + '">' + esc(trunc(detail, 55)) + '</td>' +
+          '</tr>'
+        );
+      }
+      tbl.innerHTML = body.join('');
+    } catch (e) {
+      tbl.innerHTML = '';
+      errBox.textContent = 'failed: ' + e.message;
+      errBox.style.display = 'block';
+    }
+  }
+
+  // ── Recent shell executions (wondering-originated only) ──────────
+  async function loadShells() {
+    const tbl = document.getElementById('shells-table');
+    const errBox = document.getElementById('shells-err');
+    errBox.style.display = 'none';
+    tbl.innerHTML = '<tr><td class="placeholder" colspan="5">loading…</td></tr>';
+    try {
+      const data = await fetchJson('/api/debug/recent-shells?limit=20');
+      const shells = data.shells || [];
+      if (shells.length === 0) {
+        tbl.innerHTML = '<tr><td class="placeholder" colspan="5">no wondering-originated shells yet</td></tr>';
+        return;
+      }
+      const body = ['<tr>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">wid</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">rc</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">tied</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">cmd</th>' +
+        '<th style="text-align:left;color:var(--dim);font-weight:normal">stdout excerpt</th>' +
+        '</tr>'];
+      for (const s of shells) {
+        const rcCls = (s.returncode === 0) ? 'state-active' : 'state-failed';
+        const tied = s.evidence_tied ? '<span class="state-active">✓</span>' : '<span style="color:var(--dim)">·</span>';
+        body.push(
+          '<tr>' +
+          '<td>' + esc(s.wondering_id) + '</td>' +
+          '<td class="' + rcCls + '">' + esc(s.returncode) + '</td>' +
+          '<td>' + tied + '</td>' +
+          '<td title="' + esc(s.cmd) + '">' + esc(trunc(s.cmd, 45)) + '</td>' +
+          '<td style="color:var(--dim)" title="' + esc(s.stdout_excerpt || '') + '">' +
+            esc(trunc(s.stdout_excerpt || '', 40)) + '</td>' +
+          '</tr>'
+        );
+      }
+      tbl.innerHTML = body.join('');
+    } catch (e) {
+      tbl.innerHTML = '';
+      errBox.textContent = 'failed: ' + e.message;
+      errBox.style.display = 'block';
+    }
+  }
+
+  // ── Fabrication pane (real feeds only + explicit placeholders) ───
+  async function loadFabrication() {
+    const body = document.getElementById('fab-body');
+    const errBox = document.getElementById('fab-err');
+    errBox.style.display = 'none';
+    body.innerHTML = 'loading…';
+    try {
+      const data = await fetchJson('/api/debug/fabrication-feed?limit=15');
+      const cog = (data.real_feeds && data.real_feeds.cognition_synth_invalidated) || [];
+      const db = (data.real_feeds && data.real_feeds.db_synth_blocked) || [];
+      const sca = (data.real_feeds && data.real_feeds.self_claim_audit) || [];
+      const ph = data.placeholders || [];
+
+      const parts = [];
+
+      // ── Real feed 1: cognition.log synth_state=invalidated ───────
+      parts.push('<div style="margin-bottom:10px">' +
+        '<div style="color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">' +
+        'cognition.log · synth_state=invalidated <span class="state-active" style="text-transform:none;letter-spacing:0">(real feed)</span>' +
+        '</div>');
+      if (cog.length === 0) {
+        parts.push('<div class="placeholder">no invalidated synth events in log</div>');
+      } else {
+        const rows = cog.slice().reverse().map(ev =>
+          '<tr><td style="color:var(--dim)">' + esc(hhmmss(ev.ts)) + '</td>' +
+          '<td>wid=' + esc(ev.wid) + '</td>' +
+          '<td title="' + esc(ev.cmd || '') + '">' + esc(trunc(ev.cmd || '', 45)) + '</td></tr>'
+        );
+        parts.push('<table>' + rows.join('') + '</table>');
+      }
+      parts.push('</div>');
+
+      // ── Real feed 2: DB ground truth — wondering_probes ──────────
+      parts.push('<div style="margin-bottom:10px">' +
+        '<div style="color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">' +
+        'wondering_probes · LEARNING_SYNTH_BLOCKED <span class="state-active" style="text-transform:none;letter-spacing:0">(real feed)</span>' +
+        '</div>');
+      if (db.length === 0) {
+        parts.push('<div class="placeholder">no blocked-synth probes in db</div>');
+      } else {
+        const rows = db.map(ev =>
+          '<tr><td>#' + esc(ev.probe_id) + '</td>' +
+          '<td>wid=' + esc(ev.wid) + '</td>' +
+          '<td title="' + esc(ev.cmd) + '">' + esc(trunc(ev.cmd, 30)) + '</td>' +
+          '<td style="color:var(--dim)" title="' + esc(ev.stdout_excerpt) + '">' +
+            esc(trunc(ev.stdout_excerpt, 35)) + '</td></tr>'
+        );
+        parts.push('<table>' + rows.join('') + '</table>');
+      }
+      parts.push('</div>');
+
+      // ── Real feed 3 (promoted): self_claim_audit ─────────────────
+      parts.push('<div style="margin-bottom:10px">' +
+        '<div style="color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">' +
+        'self_claim_audit · user-facing rewrites ' +
+        '<span class="state-active" style="text-transform:none;letter-spacing:0">(real feed)</span>' +
+        '</div>');
+      if (sca.length === 0) {
+        parts.push('<div class="placeholder">no self-claim audit events yet</div>');
+      } else {
+        const rows = sca.slice().reverse().map(ev =>
+          '<tr><td style="color:var(--dim)">' + esc(hhmmss(ev.ts)) + '</td>' +
+          '<td>' + esc(ev.surface || '—') + '</td>' +
+          '<td class="state-failed">' + esc(ev.flagged) + ' flagged</td>' +
+          '<td>mode=' + esc(ev.mode || '—') + '</td>' +
+          '<td style="color:var(--dim)">' + esc(ev.kinds || '—') + '</td></tr>'
+        );
+        parts.push('<table>' + rows.join('') + '</table>');
+      }
+      parts.push('</div>');
+
+      // ── Placeholders for detectors that still don't exist ────────
+      parts.push('<div>' +
+        '<div style="color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">' +
+        'detectors not wired yet' +
+        '</div>');
+      const phRows = ph.map(p =>
+        '<tr><td style="color:var(--warn)">' + esc(p.source) + '</td>' +
+        '<td style="color:var(--dim)">(no detector yet)</td>' +
+        '<td style="color:var(--dim)">' + esc(p.note || '') + '</td></tr>'
+      );
+      parts.push('<table>' + phRows.join('') + '</table>');
+      parts.push('</div>');
+
+      body.innerHTML = parts.join('');
+      body.className = '';
+    } catch (e) {
+      body.innerHTML = '';
+      errBox.textContent = 'failed: ' + e.message;
+      errBox.style.display = 'block';
+    }
+  }
+
+  async function refreshAll() {
+    // Run all loaders in parallel — no ordering dependency.
+    await Promise.all([
+      loadServices(),
+      loadWonderings(),
+      loadEvents(),
+      loadCycleTimeline(),
+      loadStats(),
+      loadCards(),
+      loadShells(),
+      loadFabrication(),
+    ]);
+  }
+
+  document.getElementById('refreshBtn').addEventListener('click', refreshAll);
+  refreshAll();
+})();
+</script>
+</body>
+</html>

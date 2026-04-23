@@ -4,12 +4,10 @@ Runs nightly after journal entry. Commits only technical content.
 Never publishes personal conversations, names, or private context.
 """
 
-import json
 import logging
 import os
 import re
 import subprocess
-import time
 
 import requests
 from dotenv import load_dotenv

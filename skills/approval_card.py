@@ -36,11 +36,9 @@ This module provides:
 
 from __future__ import annotations
 
-import json
-import textwrap
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, Protocol
+from typing import Callable, Optional, Protocol
 
 from core.pending_cards import CardRecord, CardStatus
 
@@ -180,6 +178,26 @@ def format_resolution_text(card: CardRecord) -> str:
     to the original card message so it threads cleanly."""
     if card.status == CardStatus.DONE.value:
         out = _truncate(card.execution_output or "", 400)
+        # Enriched user-facing reply for run_shell. The 2026-04-20
+        # Telegram conversation surfaced this: a `systemctl is-active`
+        # auto-execute rendered as bare `✅ Done.\n```\nactive\n```` —
+        # the user had no context for what "active" referred to, and
+        # asked "What is active?". Now we include what was intended
+        # (plain_english) and what ran (cmd).
+        if card.action == "run_shell":
+            cmd = ""
+            if isinstance(card.params, dict):
+                cmd = str(card.params.get("cmd") or "")[:140]
+            intent = (card.plain_english or "").strip()
+            if intent:
+                header = f"✅ {intent}"
+            elif cmd:
+                header = f"✅ Ran `{cmd}`"
+            else:
+                header = "✅ Done."
+            if out:
+                return f"{header}\n```\n{out}\n```"
+            return f"{header} (no output)."
         return f"✅ Done.\n```\n{out}\n```" if out else "✅ Done."
     if card.status == CardStatus.FAILED.value:
         err = _truncate(card.execution_error or "(no error)", 400)
@@ -261,7 +279,7 @@ class TelegramTextRenderer:
         try:
             msg_id = self.send_message_fn(self.chat_id, text)
             return str(msg_id) if msg_id is not None else None
-        except Exception as e:
+        except Exception:
             return None
 
     def re_present(self, card: CardRecord) -> Optional[str]:

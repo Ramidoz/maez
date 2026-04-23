@@ -41,7 +41,7 @@ import logging
 import os
 import tempfile
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from core.llm_client import sanitize_prompt_text
@@ -233,7 +233,7 @@ def _get_watchdog_context() -> dict:
     """Get active watchdog state from evolution DB."""
     try:
         from skills.evolution_engine import _rail_conn, _get_lock_state
-        lock = _get_lock_state()
+        _get_lock_state()  # preserve any side effect; return value unused
         with _rail_conn() as conn:
             row = conn.execute(
                 "SELECT candidate_id, target_file, pre_patch_score_avg, watchdog_cycles, resolved "
