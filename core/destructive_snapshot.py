@@ -41,7 +41,11 @@ from typing import Any
 
 logger = logging.getLogger("maez.destructive_snapshot")
 
-_DEFAULT_ROOT = "/home/rohit/maez/memory/backups/pre_destructive"
+try:
+    from core.paths import memory_dir as _memory_dir
+    _DEFAULT_ROOT = str(_memory_dir() / "backups" / "pre_destructive")
+except Exception:
+    _DEFAULT_ROOT = "/home/rohit/maez/memory/backups/pre_destructive"
 
 # Regexes for each destructive shape. Ordered — more specific first.
 _GIT_PREFIX = r"git\s+(?:-C\s+\S+\s+)?"

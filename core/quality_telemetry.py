@@ -39,10 +39,16 @@ from typing import Optional
 
 logger = logging.getLogger("maez.quality_telemetry")
 
-_MAEZ_HOME = Path("/home/rohit/maez")
-_COG_LOG = _MAEZ_HOME / "logs" / "cognition.log"
-_FAB_DB = _MAEZ_HOME / "memory" / "fabrication_log.db"
-_RECALL_DB = _MAEZ_HOME / "memory" / "recall_stats.db"
+try:
+    from core import paths as _paths
+    _COG_LOG = _paths.logs_dir() / "cognition.log"
+    _FAB_DB = _paths.memory_dir() / "fabrication_log.db"
+    _RECALL_DB = _paths.memory_dir() / "recall_stats.db"
+except Exception:
+    _MAEZ_HOME = Path("/home/rohit/maez")
+    _COG_LOG = _MAEZ_HOME / "logs" / "cognition.log"
+    _FAB_DB = _MAEZ_HOME / "memory" / "fabrication_log.db"
+    _RECALL_DB = _MAEZ_HOME / "memory" / "recall_stats.db"
 
 _READ_TAIL_BYTES = 400_000   # enough to cover ~thousands of lines
 

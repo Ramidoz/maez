@@ -24,9 +24,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core import paths as _paths
+
 logger = logging.getLogger("maez.ambient")
 
-SIGNALS_DIR = Path("/home/rohit/maez/logs/signals")
+SIGNALS_DIR: Path = _paths.signals_dir()
 
 # Fallback coords if no recent location signal from the phone.
 # The phone is the source of truth when available. Defaults here are

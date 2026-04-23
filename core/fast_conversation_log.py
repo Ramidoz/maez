@@ -42,7 +42,11 @@ from typing import Optional
 from core.fast_prompt_builder import TurnRecord
 
 
-DEFAULT_DB_PATH = '/home/rohit/maez/memory/fast_conversation_log.db'
+try:
+    from core.paths import memory_dir as _memory_dir
+    DEFAULT_DB_PATH = str(_memory_dir() / 'fast_conversation_log.db')
+except Exception:
+    DEFAULT_DB_PATH = '/home/rohit/maez/memory/fast_conversation_log.db'
 
 
 class FastConversationLog:

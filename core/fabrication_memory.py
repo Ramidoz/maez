@@ -41,7 +41,11 @@ import time
 from pathlib import Path
 from typing import Optional
 
-_DB_PATH = Path("/home/rohit/maez/memory/fabrication_log.db")
+try:
+    from core.paths import memory_dir as _memory_dir
+    _DB_PATH = _memory_dir() / "fabrication_log.db"
+except Exception:
+    _DB_PATH = Path("/home/rohit/maez/memory/fabrication_log.db")
 _db_lock = threading.Lock()
 _initialized = False
 

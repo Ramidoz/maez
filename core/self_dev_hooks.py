@@ -83,7 +83,11 @@ _BORING_FILE_PATTERNS = (
     ".lock",
 )
 
-_REPO_ROOT = Path("/home/rohit/maez")
+try:
+    from core import paths as _paths
+    _REPO_ROOT = _paths.home()
+except Exception:
+    _REPO_ROOT = Path("/home/rohit/maez")
 
 
 # ── policy result ─────────────────────────────────────────────────────
@@ -370,9 +374,9 @@ exit 0
 
 def render_hook_script(
     *,
-    python_bin: str = "/home/rohit/maez/.venv/bin/python3",
+    python_bin: str = str(_REPO_ROOT / ".venv" / "bin" / "python3"),
     repo_root: str = str(_REPO_ROOT),
-    log_path: str = "/home/rohit/maez/logs/self_dev_hooks.log",
+    log_path: str = str(_REPO_ROOT / "logs" / "self_dev_hooks.log"),
 ) -> str:
     """Return the shell script body for .git/hooks/post-commit."""
     return _HOOK_SCRIPT_TEMPLATE.format(
@@ -432,7 +436,7 @@ if __name__ == "__main__":
     # auditable. Falls back to stderr if the log path is unwritable.
     log_path = Path(os.environ.get(
         "MAEZ_SELF_DEV_HOOK_LOG",
-        "/home/rohit/maez/logs/self_dev_hooks.log",
+        str(_REPO_ROOT / "logs" / "self_dev_hooks.log"),
     ))
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)

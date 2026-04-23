@@ -19,7 +19,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import sys
-sys.path.insert(0, str(Path("/home/rohit/maez")))
+try:
+    from core import paths as _paths
+    BASE_DIR = _paths.home()
+except Exception:
+    BASE_DIR = Path("/home/rohit/maez")
+sys.path.insert(0, str(BASE_DIR))
 from memory.quality_tracker import QualityTracker
 
 logger = logging.getLogger("maez")
@@ -27,7 +32,6 @@ logger = logging.getLogger("maez")
 _quality_tracker = QualityTracker()
 
 # --- Paths ---
-BASE_DIR = Path("/home/rohit/maez")
 ACTIONS_LOG = BASE_DIR / "logs" / "actions.log"
 PENDING_FILE = BASE_DIR / "daemon" / "pending_actions.json"
 SOUL_PATH = BASE_DIR / "config" / "soul.md"
@@ -154,10 +158,10 @@ def _covenant_violation(text: str) -> str | None:
     return None
 
 COVENANT_PATHS = [
-    Path("/home/rohit/maez/memory/db"),
-    Path("/home/rohit/maez/daemon/maez_daemon.py"),
-    Path("/home/rohit/maez/core/action_engine.py"),
-    Path("/home/rohit/maez/skills/evolution_engine.py"),
+    BASE_DIR / "memory" / "db",
+    BASE_DIR / "daemon" / "maez_daemon.py",
+    BASE_DIR / "core" / "action_engine.py",
+    BASE_DIR / "skills" / "evolution_engine.py",
 ]
 
 # --- Obfuscation hard-deny (Session 11z Part 1, Step 4) ---
@@ -688,7 +692,7 @@ class ActionEngine:
                         import subprocess
                         import re as _re
                         _cwd_match = _re.search(r"git\s+-C\s+(\S+)", _cmd_str)
-                        _cwd = _cwd_match.group(1) if _cwd_match else "/home/rohit/maez"
+                        _cwd = _cwd_match.group(1) if _cwd_match else str(BASE_DIR)
                         try:
                             _out = subprocess.check_output(
                                 ["git", "-C", _cwd, "diff", "--name-only"],
@@ -993,7 +997,9 @@ class ActionEngine:
         """Tier 0: Find files matching pattern under /home/rohit."""
         return self._execute_action("search_files", {"pattern": pattern, "directory": directory}, reasoning, tier=0)
 
-    def _do_search_files(self, pattern: str, directory: str = "/home/rohit/maez") -> str:
+    def _do_search_files(self, pattern: str, directory: str = "") -> str:
+        if not directory:
+            directory = str(BASE_DIR)
         p = Path(directory).resolve()
         if not str(p).startswith("/home/rohit/"):
             raise ForbiddenActionError(f"Search outside /home/rohit/: {directory}")
@@ -1190,7 +1196,7 @@ class ActionEngine:
         return self.queue_action("git_commit", {"message": message, "files": files}, reasoning, tier=1)
 
     def _do_git_commit(self, message: str, files: str = ".") -> str:
-        cwd = "/home/rohit/maez"
+        cwd = str(BASE_DIR)
         add_result = subprocess.run(
             ["git", "add"] + files.split(), capture_output=True, text=True,
             timeout=15, cwd=cwd,

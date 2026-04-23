@@ -28,12 +28,16 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-_MAEZ_HOME = Path("/home/rohit/maez")
-
 # Module-level paths so tests can monkey-patch them without touching
 # the real prod DBs.
-_EVOLUTION_DB = str(_MAEZ_HOME / "memory" / "evolution_track.db")
-_DREAM_DB = str(_MAEZ_HOME / "memory" / "dream_proposals.db")
+try:
+    from core import paths as _paths
+    _EVOLUTION_DB = str(_paths.memory_dir() / "evolution_track.db")
+    _DREAM_DB = str(_paths.memory_dir() / "dream_proposals.db")
+except Exception:
+    _MAEZ_HOME = Path("/home/rohit/maez")
+    _EVOLUTION_DB = str(_MAEZ_HOME / "memory" / "evolution_track.db")
+    _DREAM_DB = str(_MAEZ_HOME / "memory" / "dream_proposals.db")
 
 
 def _fetch_evolution_candidate(proposal_id: int) -> dict | None:

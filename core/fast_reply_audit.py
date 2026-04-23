@@ -57,7 +57,11 @@ logger = logging.getLogger('fast_reply_audit')
 # Audit file lives next to the conversation log under memory/, but with
 # a clearly different name so it can never collide with daemon-owned
 # memory files.
-AUDIT_PATH = Path('/home/rohit/maez/memory/fast_reply_audit.jsonl')
+try:
+    from core.paths import memory_dir as _memory_dir
+    AUDIT_PATH = _memory_dir() / 'fast_reply_audit.jsonl'
+except Exception:
+    AUDIT_PATH = Path('/home/rohit/maez/memory/fast_reply_audit.jsonl')
 
 # Defense-in-depth: keys that must NEVER appear in an audit record. The
 # caller is supposed to strip these — this is a backstop. If any of these

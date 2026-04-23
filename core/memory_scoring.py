@@ -54,7 +54,9 @@ from typing import Optional
 
 logger = logging.getLogger("maez.memory_scoring")
 
-_DB_PATH = Path("/home/rohit/maez/memory/recall_stats.db")
+from core import paths as _paths  # noqa: E402
+
+_DB_PATH: Path = _paths.memory_dir() / "recall_stats.db"
 _MAX_QUERY_HASHES = 32      # same ceiling as OpenClaw; caps diversity score
 _MAX_RECALL_DAYS = 16       # ceiling for frequency-via-days
 MAX_CONCEPT_TAGS = 8        # matches OpenClaw constant

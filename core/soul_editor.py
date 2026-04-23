@@ -75,8 +75,13 @@ from typing import Optional
 logger = logging.getLogger("maez.soul_editor")
 
 
-SOUL_PATH = Path("/home/rohit/maez/config/soul.md")
-BACKUP_DIR = Path("/home/rohit/maez/config")  # backups live beside soul.md
+try:
+    from core import paths as _paths
+    SOUL_PATH = _paths.soul_combined_path()
+    BACKUP_DIR = _paths.config_dir()  # backups live beside soul.md
+except Exception:
+    SOUL_PATH = Path("/home/rohit/maez/config/soul.md")
+    BACKUP_DIR = Path("/home/rohit/maez/config")
 
 
 # ── protected content guards ─────────────────────────────────────────

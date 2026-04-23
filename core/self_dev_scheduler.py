@@ -42,7 +42,11 @@ from typing import Optional
 
 logger = logging.getLogger("maez.self_dev_scheduler")
 
-_REPO_ROOT = Path("/home/rohit/maez")
+try:
+    from core import paths as _paths
+    _REPO_ROOT = _paths.home()
+except Exception:
+    _REPO_ROOT = Path("/home/rohit/maez")
 
 
 # ── configuration ─────────────────────────────────────────────────────
@@ -350,7 +354,7 @@ def _build_argparser() -> argparse.ArgumentParser:
 if __name__ == "__main__":
     log_path = Path(os.environ.get(
         "MAEZ_SELF_DEV_SCHEDULER_LOG",
-        "/home/rohit/maez/logs/self_dev_scheduler.log",
+        str(_REPO_ROOT / "logs" / "self_dev_scheduler.log"),
     ))
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)

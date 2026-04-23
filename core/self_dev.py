@@ -193,7 +193,11 @@ class ReviewResult:
 
 # ── git plumbing ──────────────────────────────────────────────────────
 
-_REPO_ROOT = "/home/rohit/maez"
+try:
+    from core import paths as _paths
+    _REPO_ROOT = str(_paths.home())
+except Exception:
+    _REPO_ROOT = "/home/rohit/maez"
 
 # Single-commit refs like "HEAD", "abc1234", "main" — accept `show`
 # diff. Ranges like "HEAD~1..HEAD" — accept `diff` between endpoints.

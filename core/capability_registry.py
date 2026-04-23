@@ -38,7 +38,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-_MAEZ_HOME = Path("/home/rohit/maez")
+try:
+    from core import paths as _paths
+    _MAEZ_HOME = _paths.home()
+except Exception:
+    _MAEZ_HOME = Path("/home/rohit/maez")
 
 # ── static schedules (from daemon source constants) ────────────────────
 

@@ -55,9 +55,15 @@ logger = logging.getLogger("maez.dream")
 # time to avoid a hard dependency on daemon module load order.
 MODEL = "gemma4:26b"
 
-DEFAULT_DB_PATH = "/home/rohit/maez/memory/dream_proposals.db"
-SOUL_PATH = Path("/home/rohit/maez/config/soul.md")
-QUALITY_DB_PATH = Path("/home/rohit/maez/memory/quality.db")
+try:
+    from core import paths as _paths
+    DEFAULT_DB_PATH = str(_paths.memory_dir() / "dream_proposals.db")
+    SOUL_PATH = _paths.soul_combined_path()
+    QUALITY_DB_PATH = _paths.memory_dir() / "quality.db"
+except Exception:
+    DEFAULT_DB_PATH = "/home/rohit/maez/memory/dream_proposals.db"
+    SOUL_PATH = Path("/home/rohit/maez/config/soul.md")
+    QUALITY_DB_PATH = Path("/home/rohit/maez/memory/quality.db")
 
 # Idle detection: the owner is AFK if presence says not-present AND absence
 # has been at least this many seconds.
