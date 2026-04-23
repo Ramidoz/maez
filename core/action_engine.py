@@ -697,13 +697,32 @@ class ActionEngine:
                             _files = [str(_ds.Path(_cwd) / p) for p in _out.splitlines() if p.strip()]
                         except Exception:
                             _files = []
-                    _ds.snapshot(
+                    _snap_result = _ds.snapshot(
                         request_id=action_id or "unknown",
                         cmd=_cmd_str,
                         reason=reasoning or "",
                         files=_files,
                         shape=_cls.get("shape", ""),
                     )
+                    # 06-M1: snapshot() can return a non-empty `errors`
+                    # list on partial copy failures without raising.
+                    # Without this check the command proceeded over an
+                    # incomplete backup and a later revert would find
+                    # some files missing. Log what failed so the outcome
+                    # row records the degraded-backup state.
+                    if isinstance(_snap_result, dict):
+                        _snap_errors = _snap_result.get("errors") or []
+                        if _snap_errors:
+                            import logging as _lg2
+                            _lg2.getLogger("maez.action_engine").warning(
+                                "pre-flight snapshot for %s completed with "
+                                "%d file errors (shape=%s); command will "
+                                "proceed but revert may be incomplete: %s",
+                                action_id or "unknown",
+                                len(_snap_errors),
+                                _cls.get("shape", ""),
+                                _snap_errors[:5],
+                            )
             except Exception as _snap_err:
                 import logging as _lg
                 _lg.getLogger("maez.action_engine").warning(

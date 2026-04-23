@@ -146,7 +146,13 @@ def is_risky_cmd(cmd: str) -> bool:
     s = cmd.strip()
     if not s:
         return True
-    padded = " " + s.lower() + " "
+    # 03-m1: normalize runs of whitespace to a single space before
+    # substring matching. Previously `rm  -rf /` (double space) would
+    # not match the "rm -rf" fragment and a liberal-tier owner would
+    # see it run inline. Literal whitespace in fragments is treated as
+    # "at least one space" after this collapse.
+    normalized = re.sub(r"\s+", " ", s).lower()
+    padded = " " + normalized + " "
     for frag in _RISKY_FRAGMENTS:
         if frag in padded:
             return True

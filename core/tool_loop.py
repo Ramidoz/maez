@@ -168,6 +168,21 @@ def is_read_only(cmd: str) -> bool:
     Conservative: when in doubt, returns False (→ caller queues an approval
     card). safety_check() is still the authoritative refuse layer; this
     decides auto vs card for the commands that already passed safety.
+
+    06-M2: this gate is INTENTIONALLY stricter than the Lane 0 decision in
+    core.action_classifier. The classifier uses a deny-patterns approach
+    (argv0-in-READ, then check for redirects/obfuscation/network); this
+    function uses an allow-list of read-only binaries (_READ_ONLY_BINARIES)
+    and requires every pipeline stage to hit the list. The two should
+    agree on "obviously safe" cases but this one will reject things the
+    classifier would approve — e.g. `sed 's/x/y/' file.txt` is allowed
+    here only because sed is on the allow-list and `sed -i` is separately
+    blocked, whereas the classifier would reason about the sed flags
+    directly. The divergence is load-bearing: the daemon's inline-exec
+    gate trades off recall for the precision that every auto-exec is
+    provably read-only; the classifier trades the other way for the
+    owner-approved card path. Do not "unify" by loosening this without
+    porting the classifier's full flag + redirect analysis.
     """
     stripped = cmd.strip()
     if not stripped:

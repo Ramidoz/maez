@@ -180,9 +180,22 @@ def _extract_substitutions(cmd: str) -> tuple[List[str], str]:
     i = 0
     n = len(cmd)
     in_sq = False  # inside single quotes (no substitution happens there)
+    in_dq = False  # inside double quotes — $() and `...` still substitute
     while i < n:
         c = cmd[i]
-        if c == "'" and not in_sq:
+        # 06-m1: track double-quote state explicitly. In bash, $() and
+        # backticks inside "..." still substitute, so handlers still
+        # fire — but $(...) inside '...' is literal and must be
+        # skipped. Previously only single-quote state was tracked; the
+        # substitution handlers relied on an early `if in_sq: continue`
+        # gate. Tracking in_dq makes the contract explicit and prepares
+        # for future context-sensitive classification.
+        if c == '"' and not in_sq:
+            in_dq = not in_dq
+            out.append(c)
+            i += 1
+            continue
+        if c == "'" and not in_sq and not in_dq:
             in_sq = True
             out.append(c)
             i += 1
