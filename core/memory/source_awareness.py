@@ -88,10 +88,12 @@ CLI USAGE
 import ast
 import hashlib
 import json
+import logging
 import os
 import re
 import sys
-from datetime import datetime, timezone
+import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 try:
@@ -102,6 +104,23 @@ except Exception:
     MAEZ_ROOT = Path("/home/rohit/maez")
     MAP_PATH = MAEZ_ROOT / "memory" / "source_awareness.json"
 SCHEMA_VERSION = "1.0"
+
+_logger = logging.getLogger("maez.source_awareness")
+
+# 2026-04-23 Commit 4: staleness detection + async refresh.
+# The source map was built 2026-04-08 claiming 60 files. The repo now
+# has 516 tracked files (~8.6× the snapshot). Any self-edit / evolution
+# reasoning that trusts this map is using a wrong model of the code.
+# A full rebuild blocks for several seconds scanning + parsing every
+# .py file — too slow to do on daemon startup without risking the
+# first-cycle retry backoff. So: cheap staleness check on first
+# accessor call; if stale AND no refresh is already running, spawn a
+# background thread to rebuild; serve the current (stale-but-present)
+# map in the meantime.
+_STALE_MAX_AGE = timedelta(days=7)
+_refresh_lock = threading.Lock()
+_refresh_running = False
+_refresh_thread: threading.Thread | None = None
 
 # ══════════════════════════════════════════════════════════════════════
 #  CONFIGURATION
@@ -702,11 +721,162 @@ def resolve(weakness_description: str, top_n: int = 3) -> list[dict]:
 
 
 # ══════════════════════════════════════════════════════════════════════
+#  STALENESS + ASYNC REFRESH (2026-04-23 Commit 4)
+# ══════════════════════════════════════════════════════════════════════
+
+def _parse_built_at(source_map: dict) -> datetime | None:
+    """Parse built_at ISO timestamp from a map dict. Returns None if
+    missing or malformed — callers treat that as "built_at unknown → stale"."""
+    raw = source_map.get('built_at')
+    if not raw:
+        return None
+    try:
+        # datetime.fromisoformat accepts the +00:00 suffix produced by
+        # build_map() / refresh_map().
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+def _read_map_raw() -> dict | None:
+    """Load the source map from disk. Returns None if the file is absent
+    or unreadable — treated as "never built yet" by callers."""
+    if not MAP_PATH.exists():
+        return None
+    try:
+        return json.loads(MAP_PATH.read_text())
+    except Exception as e:
+        _logger.debug("source map read failed: %s", e)
+        return None
+
+
+def map_status() -> dict:
+    """Return status metadata about the source map.
+
+    Keys:
+      present          — True if the map file exists
+      total_files      — cached count; meaningless if `stale`
+      built_at         — ISO timestamp of last build (None if unknown)
+      age_days         — float days since built_at (None if unknown)
+      stale            — True if the map is missing, over 7 days old,
+                         or has a schema mismatch. Consumers that build
+                         prompts about Maez's own code should surface
+                         this so reasoning can be hedged appropriately.
+      refresh_running  — True if an async refresh is in flight
+
+    Callers that want the map itself still use the existing
+    `get_file()` / `get_by_scope()` / etc. accessors.
+    """
+    m = _read_map_raw()
+    if m is None:
+        return {
+            "present": False, "total_files": 0, "built_at": None,
+            "age_days": None, "stale": True,
+            "refresh_running": _refresh_running,
+        }
+    built_at = _parse_built_at(m)
+    age_days = None
+    stale = False
+    if built_at is None:
+        stale = True
+    else:
+        age = datetime.now(timezone.utc) - built_at
+        age_days = age.total_seconds() / 86400.0
+        if age > _STALE_MAX_AGE:
+            stale = True
+    if m.get("schema_version") != SCHEMA_VERSION:
+        stale = True
+    return {
+        "present": True,
+        "total_files": m.get("total_files", 0),
+        "built_at": m.get("built_at"),
+        "age_days": age_days,
+        "stale": stale,
+        "refresh_running": _refresh_running,
+    }
+
+
+def is_stale() -> bool:
+    """Cheap staleness predicate. O(1) — just reads the header of the
+    cached map. Does not scan the filesystem. Use this to decide
+    whether to trigger an async refresh."""
+    return map_status().get("stale", True)
+
+
+def _refresh_worker() -> None:
+    """Background thread body. Runs refresh_map() and clears the
+    running flag when done. Logs outcome at INFO; failures do NOT
+    raise — the callers continue to see the previous map."""
+    global _refresh_running
+    try:
+        _logger.info("source_awareness: async refresh starting")
+        stats = refresh_map()
+        _logger.info(
+            "source_awareness: async refresh complete "
+            "(updated=%d, unchanged=%d, errors=%d)",
+            stats.get("updated", 0),
+            stats.get("unchanged", 0),
+            stats.get("errors", 0),
+        )
+    except Exception as e:
+        _logger.warning("source_awareness: async refresh failed: %s", e)
+    finally:
+        with _refresh_lock:
+            _refresh_running = False
+
+
+def trigger_async_refresh() -> bool:
+    """Kick off a background refresh if one isn't already running.
+
+    Returns True if this call started a new refresh thread, False if
+    one was already in flight (in which case the caller should just
+    use the current map — the running refresh will update it
+    shortly). Thread is marked daemon=True so it doesn't block
+    shutdown.
+    """
+    global _refresh_running, _refresh_thread
+    with _refresh_lock:
+        if _refresh_running:
+            return False
+        _refresh_running = True
+    t = threading.Thread(
+        target=_refresh_worker,
+        name="source_awareness_refresh",
+        daemon=True,
+    )
+    _refresh_thread = t
+    t.start()
+    return True
+
+
+def _auto_refresh_if_stale() -> None:
+    """Internal hook called by accessors. Cheap: only fires the
+    refresh thread if `is_stale()` AND we're not already refreshing.
+    Accessors that call this continue to return the CURRENT map —
+    this call does not block."""
+    try:
+        if is_stale():
+            trigger_async_refresh()
+    except Exception as e:
+        _logger.debug("source_awareness auto-refresh check failed: %s", e)
+
+
+# ══════════════════════════════════════════════════════════════════════
 #  ACCESSORS
 # ══════════════════════════════════════════════════════════════════════
 
 def get_file(path: str) -> dict | None:
-    """Get full map entry for a file path (relative to maez_root)."""
+    """Get full map entry for a file path (relative to maez_root).
+
+    2026-04-23 Commit 4: on first call (or if the map has aged past
+    _STALE_MAX_AGE), a background refresh is triggered. This call
+    still returns the CURRENT map (stale or fresh) without blocking
+    — callers that care about staleness should consult `map_status()`.
+    """
+    _auto_refresh_if_stale()
     if not MAP_PATH.exists():
         return None
     source_map = json.loads(MAP_PATH.read_text())
