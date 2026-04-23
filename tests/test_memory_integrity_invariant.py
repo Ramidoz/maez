@@ -46,7 +46,6 @@ in a full runtime harness.
 from __future__ import annotations
 
 import ast
-import inspect
 import os
 import sys
 import unittest
@@ -109,22 +108,70 @@ class AuditedOutputHelper(unittest.TestCase):
 
 
 class DaemonHandleMessageContract(unittest.TestCase):
-    """MaezDaemon.handle_message must accept the new audit-context kwargs."""
+    """MaezDaemon.handle_message must accept the new audit-context kwargs.
+
+    Source-level assertion via AST — avoids importing daemon.maez_daemon
+    entirely, which transitively pulls in skills.calendar_perception
+    which requires google-auth. google-auth is an optional [google]
+    extra and CI doesn't install it, so any test that imports the
+    daemon fails on CI even though the signature check itself has
+    nothing to do with Google APIs.
+    """
 
     def test_signature_accepts_transcript_and_signals(self):
-        from daemon import maez_daemon as _md
-        sig = inspect.signature(_md.MaezDaemon.handle_message)
-        params = sig.parameters
+        src = (_REPO / "daemon" / "maez_daemon.py").read_text()
+        tree = ast.parse(src)
+
+        # Find MaezDaemon.handle_message (method on the class, not a
+        # same-named free function elsewhere).
+        target: ast.FunctionDef | None = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == "MaezDaemon":
+                for sub in node.body:
+                    if (isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef))
+                            and sub.name == "handle_message"):
+                        target = sub
+                        break
+                break
+        self.assertIsNotNone(
+            target, "MaezDaemon.handle_message not found in "
+                    "daemon/maez_daemon.py",
+        )
+
+        # Flatten args + kwonly_args into one name → default map so we
+        # can assert presence + default values regardless of whether
+        # they're positional or keyword-only.
+        def _param_defaults(fn: ast.FunctionDef) -> dict:
+            out: dict[str, ast.AST | None] = {}
+            args = fn.args
+            # Positional: defaults align with the TAIL of args.args.
+            n_pos = len(args.args)
+            n_defaults = len(args.defaults)
+            for i, a in enumerate(args.args):
+                di = i - (n_pos - n_defaults)
+                out[a.arg] = args.defaults[di] if di >= 0 else None
+            # Keyword-only: defaults align 1:1 with kwonlyargs.
+            for a, d in zip(args.kwonlyargs, args.kw_defaults, strict=True):
+                out[a.arg] = d
+            return out
+
+        params = _param_defaults(target)
         self.assertIn("transcript", params,
                       "handle_message must accept transcript= so the "
                       "adapter can pass jarvis tool-loop output.")
         self.assertIn("signals_present", params)
         self.assertIn("signals_absent", params)
         # Defaults must be safe for legacy callers (no-transcript,
-        # no-manifest invocations keep working).
-        self.assertEqual(params["transcript"].default, "")
-        self.assertIsNone(params["signals_present"].default)
-        self.assertIsNone(params["signals_absent"].default)
+        # no-manifest invocations keep working). Compare via ast.Constant.
+        t_default = params["transcript"]
+        self.assertIsInstance(t_default, ast.Constant)
+        self.assertEqual(t_default.value, "",
+                         "transcript default must be an empty string")
+        for key in ("signals_present", "signals_absent"):
+            d = params[key]
+            self.assertIsInstance(d, ast.Constant)
+            self.assertIsNone(d.value,
+                              f"{key} default must be None")
 
     def test_handle_message_source_uses_audited_output(self):
         """handle_message's body should call audit_assistant_text.
