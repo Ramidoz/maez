@@ -3111,6 +3111,63 @@ class MaezDaemon:
             reply = self.handle_message(text, source="UI")
             return jsonify({"reply": reply})
 
+        @app.route("/internal/brain_loop", methods=["POST"])
+        def internal_brain_loop():
+            """Run a brain-loop iteration for a non-Telegram surface.
+
+            2026-04-23 Commit 5 — web body parity. The web process
+            (maez-web.service) lives in a separate process from the
+            daemon and therefore cannot touch ActionEngine directly.
+            This endpoint bridges the gap: web POSTs the owner's
+            message here, the daemon runs the full Jarvis tool-use
+            loop against its own ActionEngine, and returns the
+            transcript of what actually ran (or an empty string if
+            no tools were used). Approval-gated actions are handed
+            off to the card store; the caller is responsible for
+            telling the user "I've proposed X — waiting on your
+            approval" if the transcript contains ⏳ card markers.
+
+            Payload: {"text": "...", "chat_id": "...", "user_id": "rohit"}
+            Response: {"transcript": "..."} (empty string when no tools ran)
+
+            Localhost-only by the service's bind, consistent with the
+            existing /internal/* endpoints. Fails open: any exception
+            returns an empty transcript with a 200 so the caller's
+            fallback path (non-tool LLM synthesis) still works.
+            """
+            data = request.get_json(silent=True) or {}
+            text = (data.get("text") or "").strip()
+            if not text:
+                return jsonify({"transcript": "",
+                                "error": "empty text"}), 400
+            try:
+                telegram = getattr(self, "telegram", None)
+                get_pipeline_fn = (
+                    telegram._get_pipeline if telegram else None
+                )
+                action_engine_ref = getattr(self, "actions", None)
+                if action_engine_ref is None or get_pipeline_fn is None:
+                    return jsonify({
+                        "transcript": "",
+                        "error": "action_engine or pipeline unavailable",
+                    }), 503
+                from core import brain_loop as _bl
+                transcript = _bl.run_brain_loop(
+                    text,
+                    action_engine=action_engine_ref,
+                    get_pipeline=get_pipeline_fn,
+                    user_id=data.get("user_id") or "rohit",
+                    chat_id=str(data.get("chat_id") or ""),
+                    send_intermediate=None,  # web has no out-of-band card surface
+                )
+                return jsonify({"transcript": transcript or ""})
+            except Exception as e:
+                logger.warning("/internal/brain_loop failed: %s", e)
+                # Fail open — empty transcript lets the web caller
+                # fall through to non-tool LLM synthesis rather than
+                # degrade the whole turn.
+                return jsonify({"transcript": "", "error": str(e)}), 200
+
         @app.route("/internal/approve_card/<request_id>", methods=["POST", "OPTIONS"])
         def approve_card(request_id: str):
             """Cockpit approval surface. Runs the full decision_pipeline
