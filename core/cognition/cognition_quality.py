@@ -312,7 +312,9 @@ def classify(text: str, recent_topics: list[str] = None,
                 # tail window same as topic check
                 same_topic_texts = []
                 window = max(0, len(recent_topics) - FIXATION_WINDOW)
-                paired = list(zip(recent_topics[window:], recent_texts[window:]))
+                paired = list(zip(
+                    recent_topics[window:], recent_texts[window:], strict=False
+                ))
                 for rt_topic, rt_text in paired:
                     if rt_topic == topic and rt_text:
                         same_topic_texts.append(rt_text)
@@ -1046,7 +1048,7 @@ def _test():
     assert 'fixation' not in c_varied['labels'], (
         f"Varied content on same topic must NOT fixate: {c_varied['labels']}"
     )
-    print(f"  varied-content same-topic: NOT fixation: OK")
+    print("  varied-content same-topic: NOT fixation: OK")
 
     # And verbatim repetition SHOULD still fixate
     _recent_topics.clear()
@@ -1058,7 +1060,7 @@ def _test():
     c_repeat = classify("Firefox pulling 23% CPU from YouTube tabs, browser heavy",
                          _recent_topics, _recent_texts)
     assert 'fixation' in c_repeat['labels'], f"Verbatim repeat must fixate: {c_repeat['labels']}"
-    print(f"  verbatim-repeat same-topic: fixation: OK")
+    print("  verbatim-repeat same-topic: fixation: OK")
 
     # Single-keyword tag suppression: "I noticed a firefox process" alone
     # should NOT tag as browser_usage (only 1 keyword hit, needs ≥2)
@@ -1068,7 +1070,7 @@ def _test():
     assert 'browser_usage' not in c_single, (
         f"Single 'firefox' keyword must not tag browser_usage: {c_single}"
     )
-    print(f"  single-keyword suppression on rohit_activity subtopic: OK")
+    print("  single-keyword suppression on rohit_activity subtopic: OK")
 
     print("=== Behavior Policy ===")
     _recent_topics.clear()
