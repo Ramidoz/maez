@@ -24,6 +24,21 @@ owner:
   home_lon: 0.0
   timezone: "UTC"
 
+  # Optional — GitHub/GitLab handle. Used when code wants to post a
+  # commit / file an issue on your account. Leave empty to opt out.
+  # Can also be overridden via MAEZ_OWNER_GIT_HANDLE in .env.
+  git_handle: ""
+
+  # Optional — numeric Telegram user ID the daemon DMs. Leave empty to
+  # run Maez without the Telegram push surface. Can also be overridden
+  # via MAEZ_OWNER_TELEGRAM_ID in .env.
+  telegram_user_id: ""
+
+  # Optional — short hardware/OS description. Shown in `maez doctor`
+  # and logs; never load-bearing. Example:
+  #   "MacBook Pro M2 + 32GB RAM, macOS 14"
+  machine_profile: ""
+
 
 policies:
   # If true, Maez may route code/reasoning-heavy questions to an

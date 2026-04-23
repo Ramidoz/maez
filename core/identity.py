@@ -15,6 +15,7 @@ identifier. Always ask through this module.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from typing import Any
 
@@ -33,12 +34,33 @@ _DEFAULTS = {
         "home_lat": 0.0,
         "home_lon": 0.0,
         "timezone": "UTC",
+        # Phase 2 additions — fields that used to be hardcoded across
+        # modules. All optional; leave blank when unknown.
+        "git_handle": "",
+        "telegram_user_id": "",
+        "machine_profile": "",
     },
     "policies": {
         "jarvis_tier": False,
         "signal_ingest": False,
         "proactive_messages": True,
     },
+}
+
+
+# Environment variable overrides. When set, they win over identity.yaml
+# and the defaults — useful for CI / containers / scripted installs
+# where editing a YAML file is awkward. Each field accepts a list of
+# env keys tried in order so pre-existing names (e.g.
+# MAEZ_TELEGRAM_USER_ID) stay valid alongside the new MAEZ_OWNER_* scheme.
+_ENV_OVERRIDES: dict[str, tuple[str, ...]] = {
+    "display_name":      ("MAEZ_OWNER_NAME",),
+    "user_id":           ("MAEZ_OWNER_USER_ID",),
+    "git_handle":        ("MAEZ_OWNER_GIT_HANDLE",),
+    "telegram_user_id":  ("MAEZ_OWNER_TELEGRAM_ID", "MAEZ_TELEGRAM_USER_ID"),
+    "machine_profile":   ("MAEZ_MACHINE_PROFILE",),
+    "home_place":        ("MAEZ_OWNER_HOME_PLACE",),
+    "timezone":          ("MAEZ_OWNER_TIMEZONE",),
 }
 
 _cache: dict[str, Any] | None = None
@@ -102,12 +124,47 @@ def reload() -> None:
 
 
 # ── owner accessors ────────────────────────────────────────────────────
+def _owner_field(field: str, default: str = "") -> str:
+    """Read an owner field, letting any of the MAEZ_OWNER_* env vars
+    win if set. Env keys are tried in order — the first non-empty one
+    wins — so a new canonical name and a legacy alias can co-exist."""
+    for env_key in _ENV_OVERRIDES.get(field, ()):
+        v = os.environ.get(env_key)
+        if v:
+            return v
+    return str(_get().get("owner", {}).get(field) or default)
+
+
 def display_name() -> str:
-    return str(_get().get("owner", {}).get("display_name") or "Friend")
+    return _owner_field("display_name", "Friend")
 
 
 def user_profile_id() -> str:
-    return str(_get().get("owner", {}).get("user_id") or "owner")
+    return _owner_field("user_id", "owner")
+
+
+def git_handle() -> str:
+    """GitHub/GitLab handle for the owner. Empty string when unknown.
+    Used anywhere code needs to post commits / file issues against the
+    owner's account. Do not hardcode — always read through this.
+    """
+    return _owner_field("git_handle", "")
+
+
+def telegram_user_id() -> str:
+    """Numeric Telegram user ID the daemon DMs. Empty string when the
+    Telegram surface is not in use. Readers should treat empty as
+    'no Telegram owner configured' and skip push notifications.
+    """
+    return _owner_field("telegram_user_id", "")
+
+
+def machine_profile() -> str:
+    """Short human-readable string describing the host hardware, e.g.
+    'Alienware R16 + RTX 4090, Ubuntu 24.04'. Used in logs / perception
+    summaries. Empty string when unknown — consumers must tolerate that.
+    """
+    return _owner_field("machine_profile", "")
 
 
 def home_coords() -> tuple[float, float, str]:
@@ -117,12 +174,12 @@ def home_coords() -> tuple[float, float, str]:
         lon = float(owner.get("home_lon") or 0.0)
     except (TypeError, ValueError):
         lat, lon = 0.0, 0.0
-    place = str(owner.get("home_place") or "Somewhere")
+    place = _owner_field("home_place", "Somewhere")
     return lat, lon, place
 
 
 def timezone() -> str:
-    return str(_get().get("owner", {}).get("timezone") or "UTC")
+    return _owner_field("timezone", "UTC")
 
 
 # ── policy accessors ───────────────────────────────────────────────────
@@ -147,11 +204,14 @@ def describe() -> dict[str, Any]:
     """Return the current identity for `maez doctor` output."""
     lat, lon, place = home_coords()
     return {
-        "display_name":   display_name(),
-        "user_id":        user_profile_id(),
-        "place":          place,
-        "coords":         {"lat": lat, "lon": lon},
-        "timezone":       timezone(),
+        "display_name":      display_name(),
+        "user_id":           user_profile_id(),
+        "git_handle":        git_handle(),
+        "telegram_user_id":  telegram_user_id(),
+        "machine_profile":   machine_profile(),
+        "place":             place,
+        "coords":            {"lat": lat, "lon": lon},
+        "timezone":          timezone(),
         "policies": {
             "jarvis_tier":        jarvis_tier(),
             "signal_ingest":      signal_ingest(),
