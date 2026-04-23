@@ -435,7 +435,27 @@ class MaezDaemon:
         a compromised prompt.
         """
         try:
-            raw = SOUL_PATH.read_text().strip()
+            # 2026-04-23 Commit 3: route identity through the layered
+            # SOUL loader. `current_soul()` reads soul.base.md +
+            # soul.local.md, concatenates them, writes the combined
+            # result to the legacy soul.md path (so anything that still
+            # reads soul.md directly stays unbroken), and returns the
+            # text. Previously _load_soul() bypassed the loader and
+            # read soul.md directly, so appends to soul.local.md
+            # (e.g. from dream-proposal-apply) didn't reach the
+            # live daemon until something else regenerated soul.md by
+            # calling current_soul(). Using the loader here makes
+            # every daemon startup (and every _watch_soul cycle) pick
+            # up layered changes automatically.
+            try:
+                from core.evolution.soul_loader import current_soul as _cur_soul
+                raw = _cur_soul().strip()
+            except Exception as _layer_exc:
+                logger.warning(
+                    "soul_loader unavailable, falling back to direct read: %s",
+                    _layer_exc,
+                )
+                raw = SOUL_PATH.read_text().strip()
             from core.context_safety import scan as _scan
             from core.soul_invariants import check as _inv_check
 
@@ -469,7 +489,23 @@ class MaezDaemon:
         """Watch soul.md for changes and hot-reload."""
         while self.running:
             try:
-                raw = SOUL_PATH.read_text().strip()
+                # 2026-04-23 Commit 3: hot-reload via the layered loader
+                # so changes to EITHER soul.base.md OR soul.local.md
+                # are picked up, not just changes to soul.md. The loader
+                # caches internally on mtime of both source files, so
+                # calling it every second is cheap. It also rewrites
+                # the legacy soul.md mirror on content change — that's
+                # what the direct-read fallback below relies on.
+                try:
+                    from core.evolution.soul_loader import current_soul as _cur_soul
+                    raw = _cur_soul().strip()
+                except Exception as _layer_exc:
+                    logger.debug(
+                        "soul_loader failed in hot-reload, "
+                        "falling back to direct read: %s",
+                        _layer_exc,
+                    )
+                    raw = SOUL_PATH.read_text().strip()
                 # Re-scan on every hot-reload: an attacker who overwrites
                 # soul.md while the daemon is running is the threat model
                 # here. Startup scan alone is insufficient.
