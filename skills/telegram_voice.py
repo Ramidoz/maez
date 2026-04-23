@@ -2558,6 +2558,22 @@ class TelegramVoice:
                     "failed to surface brain_loop intermediate message: %s", e,
                 )
 
+        # 2026-04-23: fetch the last 3 owner-telegram exchanges and pass them
+        # so the planner can resolve pronouns like "Why did it fail?" against
+        # the immediate prior turn. Without this, the planner sees the user
+        # message in isolation and either drifts or (correctly) asks for
+        # clarification when there's nothing ambiguous from its view.
+        # Fails open: any error returns an empty list and we keep the old
+        # no-history behavior rather than dropping the whole turn.
+        _chat_history: list[dict] = []
+        try:
+            mm = getattr(self, "memory", None)
+            if mm is not None and hasattr(mm, "recent_telegram_exchanges"):
+                _chat_history = mm.recent_telegram_exchanges(n=3)
+        except Exception as _hist_exc:
+            logger.debug("recent_telegram_exchanges failed (no history): %s", _hist_exc)
+            _chat_history = []
+
         return _brain_loop.run_brain_loop(
             user_text,
             action_engine=self.actions,
@@ -2568,6 +2584,7 @@ class TelegramVoice:
             max_iters=max_iters,
             recovery_seed=recovery_seed,
             send_intermediate=_send_intermediate,
+            chat_history=_chat_history,
         )
 
     def _find_recovery_new_card_cmd(self, since_ts: float) -> str | None:

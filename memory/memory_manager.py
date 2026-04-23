@@ -837,6 +837,53 @@ class MemoryManager:
             logger.error("memory.recent_raw failed: %s", e)
             return {"documents": [], "metadatas": [], "ids": []}
 
+    def recent_telegram_exchanges(self, n: int = 3) -> list[dict]:
+        """Return the most recent N owner-telegram exchanges in chronological
+        order, formatted for core.brain.brain_loop's `chat_history=` param.
+
+        Each exchange was stored by `store_telegram()` as a single string of
+        shape "the owner asked: X\\nMaez replied: Y" with metadata
+        `type='telegram_exchange'`. This method filters raw to that type,
+        orders by timestamp desc, and returns the tail in chronological
+        order wrapped as `[{"content": "..."}]` dicts so brain_loop's
+        RECENT CONVERSATION block renders cleanly.
+
+        Added 2026-04-23: the telegram owner path was calling
+        run_brain_loop without chat_history, so follow-up messages like
+        "Why did it fail?" arrived with no context and the planner
+        correctly asked for clarification on the ambiguous "it". This
+        method closes that gap. Fails open to [] on any error so the
+        hot telegram path is not at risk.
+        """
+        if n <= 0:
+            return []
+        try:
+            # Pull a generous batch then filter client-side. ChromaDB's
+            # `where` can match but `get` doesn't return in timestamp
+            # order, so we fetch extra and sort. Cap fetched at 200 to
+            # bound work.
+            batch = min(max(n * 20, 40), 200)
+            results = self.raw.get(
+                where={"type": "telegram_exchange"},
+                limit=batch,
+                include=["documents", "metadatas"],
+            )
+        except Exception as e:
+            logger.debug("recent_telegram_exchanges get failed: %s", e)
+            return []
+        docs = results.get("documents") or []
+        metas = results.get("metadatas") or []
+        if not docs:
+            return []
+        paired = [
+            (m.get("timestamp", ""), d)
+            for m, d in zip(metas, docs, strict=False)
+            if d
+        ]
+        paired.sort(key=lambda x: x[0])  # chronological
+        tail = paired[-n:]
+        return [{"content": d} for _, d in tail]
+
     def format_for_prompt(self, recalled: dict) -> str:
         """Format multi-tier recalled memories into a structured prompt block.
 
