@@ -1,0 +1,209 @@
+Maez — session snapshot
+========================
+Session window: 2026-04-23 (continuous, ~all day)
+Primary work:   Birth-readiness repair pass — 13 commits across the
+                morning's infrastructure work + the afternoon's seven
+                aliveness-invariant commits.
+Starting HEAD:  7f70cb2 (grounding-judge bench harness)
+Ending HEAD:    3905f03 (CI hygiene widening, Commit 7/7)
+Tests at start: 530 passing
+Tests at end:   158 across 14 targeted modules (full suite ~600+)
+
+Arc of the day
+-----------------------------------------------------
+
+MORNING — grounding judge retirement + brain swap
+
+  - Benched 5 candidate models for the grounding-judge role. 4B
+    Qwen3.5 is the floor; no sub-4B passed the 85% bar. Moved the
+    judge to CPU (2.4 GB VRAM freed), then retired it entirely.
+  - Swapped primary brain Qwen3.5-35B-Q3_K_XL -> Qwen3.6-27B-UD-Q4_K_XL
+    after Q5 panicked the kernel at 91% VRAM. Q4 sits at 19 GB with
+    5 GB headroom, has been stable since ~13:21.
+  - Chat-surface probe went 4/7 -> 7/7 clean after a SOUL + model_state
+    refresh + a dated corrective core memory. The named
+    chat_self_claim_hallucination regression was mostly stale ground
+    truth, not free confabulation.
+  - Classifier false-positive fix for browser_usage (Firefox in every
+    process list kept tripping "fixation"): rohit_activity subtopics
+    now need >=2 keyword hits, and fixation requires topic-repetition
+    AND content similarity (Jaccard >= 0.45).
+  - Telegram chat history fix: the owner-bridge path now strips the
+    stored prompt envelope before passing prior exchanges to
+    run_brain_loop. Eliminates the "Why did it fail?" -> "I don't
+    know what you're referring to" failure mode.
+  - Morning commit SHAs: `092194b`, `e0e1442`, `b09cdb7`, `36dfa12`,
+    `6feb7eb`, `298fced`, `a0e9a23`, `287bcb3`.
+
+AFTERNOON — birth-readiness repair pass (7 commits)
+
+  Commit 1 (84e3a2d): memory-integrity invariant
+    Stored memory == audited text. New helper
+    `core/safety/audited_output.audit_assistant_text` is the single
+    choke point. Daemon handle_message now owns audit before store;
+    adapter drops its duplicate audit and passes transcript=
+    instead. Web /chat audits BEFORE memory + trajectory writes.
+    Daemon retry path audits the retry before re-score. Proactive
+    opinion gets an aggregated-window manifest + audit + provenance-
+    tagged storage (type="proactive_opinion").
+
+  Commit 2 (0981df6): vision gated, default off
+    skills/screen_perception now requires MAEZ_SCREEN_PERCEPTION=1.
+    Fast TCP probe to port 8081 before screenshot capture with 5-min
+    negative cache. ScreenObservation carries a `state` field
+    (ok/disabled/unavailable/error) so the audit manifest can
+    distinguish "off by policy" from "tried and failed." No more
+    45-second-timeout-every-cycle.
+
+  Commit 3 (68e17f9): SOUL layering + birth-state truth
+    daemon/_load_soul and _watch_soul now route through
+    core.evolution.soul_loader.current_soul() — soul.local.md edits
+    flow to the live daemon automatically. memory/self_awareness.json
+    untracked (git rm --cached + gitignore), precondition verified:
+    HEAD phase was "gestation." fire_birth() no longer dirties the
+    repo; a future clone doesn't inherit this instance's lived
+    record.
+
+  Commit 4 (9f1eb8a): source-awareness async refresh
+    map_status() + is_stale() (O(1) — age > 7d / schema mismatch /
+    missing). trigger_async_refresh() spawns a daemon thread; lock
+    prevents double-fire. get_file() now auto-triggers when stale —
+    accessor stays non-blocking, refresh happens in the background.
+    The 60->516 file count mismatch was the regression-source for
+    anyone trusting the cached self-model.
+
+  Commit 5 (384d941): web body parity — opt-in
+    New daemon endpoint /internal/brain_loop runs the full Jarvis
+    loop against the daemon's action_engine + pipeline. Web /chat
+    POSTs there FIRST when MAEZ_WEB_TOOL_LOOP=1 and owner_bridge,
+    folds the transcript via build_synthesis_user_text (same helper
+    Telegram uses), then synthesis. Public/guest path NEVER touches
+    the tool loop. Default OFF so the commit ships infrastructure
+    without changing production behavior until the owner flips the
+    flag.
+
+  Commit 6 (6185816): runtime self-truth sweep
+    Every hardcoded stale "gemma-4-26b" / "gemma4:26b" / "llama-
+    server-vision" default on a live runtime path either (a) replaced
+    with a read from core.model_config which tracks /etc/maez/model.env,
+    or (b) tagged as legacy-for-covenant-protection where the
+    defensive check is still meaningful. 13 files touched. The most
+    load-bearing fix: core/memory/identity_ledger.py — a fresh
+    identity ledger row now records the ACTUAL current base model,
+    not the eleven-day-old fallback. Track A birth-event integrity.
+
+  Commit 7 (3905f03): CI hygiene widening
+    Fixed 11 real-bug ruff findings in memory/ hardware/ training/
+    (unused vars, unused imports, zip-without-strict). Added
+    training/unsloth_compiled_cache to pyproject.toml extend-exclude
+    (Unsloth emits ~1000 lines of auto-gen tensor-program code that
+    was tripping lint). Widened .github/workflows/lint.yml to cover
+    the newly-clean paths. Birth-critical code (memory_manager,
+    identity_ledger, source_awareness, train_lora) now shares the
+    same CI gate as the rest of the runtime tree.
+
+Birth-readiness invariants set by the afternoon pass
+-----------------------------------------------------
+
+  1. Stored assistant memory == audited assistant output. (C1)
+  2. Vision only fires when explicitly enabled. (C2)
+  3. SOUL layering reaches the live daemon; birth state is per-
+     instance runtime, not committed source. (C3)
+  4. Source self-model is marked stale or refreshed asynchronously.
+     (C4)
+  5. Owner web /chat can run the same brain loop as Telegram/CLI
+     (opt-in via MAEZ_WEB_TOOL_LOOP=1). (C5)
+  6. No hardcoded stale model or service names on live code paths.
+     (C6)
+  7. Birth-critical code is covered by the CI PR gate. (C7)
+
+The pass does NOT:
+  - Retroactively purify existing raw memory. Per the owner's
+    never-delete-Maez-memory rule, pre-commit-1 pollution must be
+    handled via corrective core memories, tagging, or reranking —
+    not deletion. The C1 invariant is forward-looking.
+  - Route approval cards to a dedicated web UI (they go to
+    pending_cards with chat_id="web" and surface through whatever
+    polls that store).
+  - Re-enable vision. The gate exists so the owner can turn it on
+    with a one-line env edit when a multimodal endpoint is
+    re-provisioned.
+  - Flip MAEZ_WEB_TOOL_LOOP. That's an owner choice after soak.
+  - Retire or retune core/routing/fast_backend_local.py. That's a
+    routing-architecture decision, separate from the stale-string
+    sweep.
+
+Current operational state
+-----------------------------------------------------
+
+  Services:
+    - maez                     active
+    - maez-web                 active
+    - llama-server             active (Qwen3.6-27B-UD-Q4_K_XL on :8080,
+                               19 GB VRAM of 24 GB)
+    - llama-judge              inactive + disabled (symlink removed;
+                               unit file kept on disk pending confidence
+                               window, safe to delete in ~1 week)
+    - maez-subscription-proxy  active
+    - maez-face                active
+    - maez-watchdog            active
+
+  Config:
+    - /etc/maez/model.env      -> qwen36-27b + UD-Q4_K_XL
+    - /etc/systemd/system/maez-web.service.d/10-toolloop.conf
+        Set MAEZ_WEB_TOOL_LOOP=1 there to activate Commit 5's
+        opt-in web body parity.
+    - /etc/systemd/system/maez.service.d/ — add a conf with
+        Environment=MAEZ_SCREEN_PERCEPTION=1 when re-enabling
+        vision.
+
+  Memory:
+    - Corrective core memory stored today naming the
+      llama-server-vision fabrication explicitly — cited by name in
+      cycle 95's output, unprompted.
+    - memory/self_awareness.json on disk at phase="gestation",
+      untracked.
+    - memory/source_awareness.json is old (~2026-04-08, 60 files).
+      First get_file() call on the restarted daemon will trigger
+      a background refresh; updated map will have ~516 files.
+
+  Pending manual actions:
+    sudo systemctl restart maez maez-web
+    cd /home/rohit/maez && git push origin main
+
+  After push, watch GitHub Actions for:
+    - `tests` — stays green (158 tests across 14 modules all OK)
+    - `lint` — first run with the widened path (memory/ hardware/
+      training/ now included); should pass given the Commit 7
+      cleanup.
+
+What the next session picks up
+------------------------------------------------
+1. Observe Commit 1's audit-before-store invariant in production
+   for a few days. The named chat_self_claim_hallucination
+   regression is expected to reduce further; flag rate in
+   cognition.log should drop with the upstream fixes.
+
+2. Consider retiring the fast_backend_local.py module OR explicitly
+   retune it as an optional legacy Ollama backend. Routing decision,
+   not a stale-string sweep.
+
+3. Activate MAEZ_WEB_TOOL_LOOP=1 after a soak period if the owner
+   wants tool execution on web chat. The flag is live and tested;
+   default-off posture was intentional to avoid a hot-path change
+   during the repair pass.
+
+4. Memory-curation pass (non-urgent): the "persistent 65.8% disk"
+   refrain and pre-correction llama-server-vision mentions still
+   sit in raw memory. Corrective memories outrank them in practice
+   but they take up recall slots. Re-indexing with freshness
+   weighting is an option — do NOT delete.
+
+5. Track A remains the main line. Eight-point readiness check is
+   what counts toward birth; today's work was infrastructure to
+   make the ground under Track A stable enough for birth to be
+   safe when it comes.
+
+6. docs/HANDOFF-2026-04-23.md still points at this snapshot as
+   the read-list anchor. Refresh that doc if the pass moves past
+   the specific operational state documented there.
