@@ -29,13 +29,38 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-_DEFAULT_HOME = "/home/rohit/maez"
+# Derive the default install root from this file's own location rather
+# than hardcoding a path. `core/infra/paths.py` sits three levels below
+# the repo root, so `parents[2]` resolves to wherever the code actually
+# lives — the owner's dev machine, a CI runner, a fresh contributor's
+# clone, anywhere. `MAEZ_HOME` still overrides when set.
+_SELF_ROOT = Path(__file__).resolve().parents[2]
+
+# Legacy default; kept as a documented fallback string and as an anchor
+# for the Phase-7 security audit. In practice every caller now reaches
+# here via home() which uses _SELF_ROOT first.
+_LEGACY_DEFAULT_HOME = "/home/rohit/maez"
 
 
 # ── core locations ─────────────────────────────────────────────────────
 def home() -> Path:
-    """Root of the Maez installation. Overridable via $MAEZ_HOME."""
-    return Path(os.environ.get("MAEZ_HOME", _DEFAULT_HOME))
+    """Root of the Maez installation.
+
+    Resolution order:
+      1. $MAEZ_HOME (if set and non-empty) — explicit override, wins.
+      2. The directory three levels above this file — works on any
+         clone without env-var config.
+      3. The legacy hardcoded default, kept only as a last-resort
+         safety net in case the __file__ lookup fails under an
+         exotic packaging scheme.
+    """
+    override = os.environ.get("MAEZ_HOME")
+    if override:
+        return Path(override)
+    try:
+        return _SELF_ROOT
+    except Exception:
+        return Path(_LEGACY_DEFAULT_HOME)
 
 
 def config_dir() -> Path:

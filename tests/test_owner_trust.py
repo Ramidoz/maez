@@ -166,7 +166,28 @@ class CmdValidityCheck(unittest.TestCase):
 
     def test_real_unit_passes(self):
         from core.owner_trust import cmd_validity_error
-        # A unit we know exists in the Maez deployment.
+        # The validator consults `systemctl list-unit-files`. On a host
+        # where the Maez daemon is actually installed (`maez.service`
+        # present), the check returns None. On a clean CI runner or
+        # fresh clone the unit doesn't exist yet, so the validator
+        # correctly returns a "does not exist" diagnostic — also the
+        # right answer, just a different one.
+        #
+        # Skip on hosts where the daemon isn't installed rather than
+        # pretend both outcomes are the same test result.
+        import shutil
+        import subprocess
+        if not shutil.which("systemctl"):
+            self.skipTest("systemctl not available on this host")
+        probe = subprocess.run(
+            ["systemctl", "list-unit-files", "maez.service"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if "maez.service" not in (probe.stdout or ""):
+            self.skipTest(
+                "maez.service is not installed on this host "
+                "(expected when running tests in CI or on a fresh clone)"
+            )
         self.assertIsNone(cmd_validity_error("systemctl restart maez.service"))
 
     def test_read_verb_not_blocked(self):
