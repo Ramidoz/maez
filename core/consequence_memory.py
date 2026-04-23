@@ -285,9 +285,15 @@ def relevant(
     try:
         if not context_snippet or not context_snippet.strip():
             return []
+        # 01-M1 / 09-B1: drop the `.isalnum()` filter — haystack-side
+        # (below) does not apply it, so keeping it here silently hides
+        # any stored event whose match tokens contain hyphens,
+        # underscores, or dots ("git-push", "my_script.py",
+        # "http://example.com"). The two sides must use the same
+        # token predicate or recall is lossy without any error.
         query_tokens = {
             t.lower() for t in context_snippet.split()
-            if len(t) > 2 and t.isalnum()
+            if len(t) > 2
         }
         if not query_tokens:
             return []

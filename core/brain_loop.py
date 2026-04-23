@@ -206,7 +206,9 @@ def _summarize_shell_error(err: str) -> str:
         elif line.startswith("stderr:") and not stderr_first:
             # First non-empty stderr content
             stderr_content = line[len("stderr:"):].strip()
-            stderr_first = stderr_content.split("\n", 1)[0][:180]
+            stderr_first = stderr_content.split("\n", 1)[0]
+            if len(stderr_first) > 180:
+                stderr_first = stderr_first[:177] + "…"
     if exit_line and stderr_first:
         return f"{exit_line}: {stderr_first}"
     if exit_line:
@@ -877,11 +879,20 @@ def run_brain_loop(
             try:
                 import sqlite3 as _sq3
                 import time as _rtime
-                _db = str(getattr(
-                    getattr(self, "_audit_log", None), "db_path", None
-                ) or "memory/audit_log.db")
+                # 01-B1 + 01-M2: `self` is not defined here — run_brain_loop
+                # is a module-level function, not a method. Previously this
+                # raised NameError on every retry-intent match. Resolve the
+                # audit-log path via core.paths so it works regardless of
+                # the daemon's cwd (which is unpredictable in an executor
+                # thread); add a connect timeout so a locked db doesn't
+                # block indefinitely.
+                try:
+                    from core.paths import memory_dir as _maez_mem
+                    _db = str(_maez_mem() / "audit_log.db")
+                except Exception:
+                    _db = "/home/rohit/maez/memory/audit_log.db"
                 _since = _rtime.time() - 600  # last 10 minutes
-                _rc = _sq3.connect(_db)
+                _rc = _sq3.connect(_db, timeout=10.0)
                 _rc.row_factory = _sq3.Row
                 _recent_fail = _rc.execute(
                     "SELECT action, params_json, outcome_notes "
