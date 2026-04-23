@@ -1556,6 +1556,30 @@ def api_workshop_turn(session_id: str):
         return jsonify({"error": f"workshop turn failed: {e}"}), 500
 
 
+@app.route("/api/v1/workshop/session/<session_id>/model", methods=["POST"])
+def api_workshop_update_model(session_id: str):
+    """Change the session's default model mid-session.
+
+    Body: {"model": "sonnet"|"opus"|"gpt-4o"|"openai/gpt-4o"|...}
+
+    The proxy's adapter registry decides which backend serves the
+    new model. Past turns are NOT retroactively re-routed — their
+    model_used column records what actually handled them.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        model = (body.get("model") or "").strip()
+        if not model:
+            return jsonify({"error": "model required"}), 400
+        from core.workshop import update_session_model
+        ok = update_session_model(session_id, model)
+        if not ok:
+            return jsonify({"error": "session not found or update failed"}), 404
+        return jsonify({"id": session_id, "model": model})
+    except Exception as e:
+        return jsonify({"error": f"update model failed: {e}"}), 500
+
+
 @app.route("/api/v1/workshop/session/<session_id>/apply", methods=["POST"])
 def api_workshop_apply(session_id: str):
     """Apply a unified-diff block to a file in the repo.

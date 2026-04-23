@@ -2186,14 +2186,69 @@ function WorkshopSurface() {
             <div style={{ fontSize: 11, color: A.textDim,
                             fontFamily: A.mono, marginTop: 2 }}>
               {activeSession
-                ? `${activeSession.model} · ${turns.length} turns`
+                ? `${turns.length} turn${turns.length === 1 ? '' : 's'}`
                 : 'pick a session or create one'}
             </div>
           </div>
           {activeSession && (
-            <Button size="sm" onClick={() => deleteSession(activeSession.id)}>
-              delete
-            </Button>
+            <React.Fragment>
+              <select
+                value={activeSession.model}
+                onChange={(e) => {
+                  const newModel = e.target.value;
+                  fetch(`/api/v1/workshop/session/${activeSession.id}/model`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: newModel }),
+                  }).then(r => {
+                    if (r.ok) loadActive(activeSession.id);
+                    else alert('failed to change model');
+                  });
+                }}
+                style={{
+                  background: A.surfaceLo,
+                  border: `0.5px solid ${A.stroke}`,
+                  borderRadius: 6, padding: '4px 8px',
+                  color: A.text, fontFamily: A.mono, fontSize: 11,
+                  outline: 'none', cursor: 'pointer',
+                }}
+              >
+                <optgroup label="Claude (subscription)">
+                  <option value="sonnet">sonnet</option>
+                  <option value="opus">opus</option>
+                  <option value="haiku">haiku</option>
+                </optgroup>
+                <optgroup label="OpenRouter (API key)">
+                  <option value="openai/gpt-4o">openai/gpt-4o</option>
+                  <option value="openai/gpt-4o-mini">openai/gpt-4o-mini</option>
+                  <option value="anthropic/claude-sonnet-4.7">anthropic/claude-sonnet-4.7</option>
+                  <option value="x-ai/grok-4">x-ai/grok-4</option>
+                  <option value="google/gemini-2.5-pro">google/gemini-2.5-pro</option>
+                </optgroup>
+                <optgroup label="Direct API">
+                  <option value="gpt-4o">gpt-4o</option>
+                  <option value="gpt-4o-mini">gpt-4o-mini</option>
+                  <option value="grok-4">grok-4</option>
+                  <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+                </optgroup>
+                {/* Show the current session's model even if it's a
+                    custom one not in the lists above */}
+                {![
+                  'sonnet', 'opus', 'haiku',
+                  'openai/gpt-4o', 'openai/gpt-4o-mini',
+                  'anthropic/claude-sonnet-4.7', 'x-ai/grok-4',
+                  'google/gemini-2.5-pro',
+                  'gpt-4o', 'gpt-4o-mini', 'grok-4', 'gemini-2.5-pro',
+                ].includes(activeSession.model) && (
+                  <option value={activeSession.model}>
+                    {activeSession.model} (custom)
+                  </option>
+                )}
+              </select>
+              <Button size="sm" onClick={() => deleteSession(activeSession.id)}>
+                delete
+              </Button>
+            </React.Fragment>
           )}
         </div>
 

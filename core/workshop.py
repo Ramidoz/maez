@@ -316,6 +316,27 @@ def get_turns(
         return []
 
 
+def update_session_model(session_id: str, model: str) -> bool:
+    """Change a session's default model. Subsequent turn() calls
+    without override_model will route to the new target. Past turns
+    are not retroactively re-routed; their model_used column records
+    what was actually used at the time.
+    """
+    if not model or not model.strip():
+        return False
+    try:
+        with _connect() as con:
+            cur = con.execute(
+                "UPDATE sessions SET model = ?, updated_at = ? WHERE id = ?",
+                (model.strip()[:100], time.time(), session_id),
+            )
+            con.commit()
+            return cur.rowcount == 1
+    except Exception as e:
+        logger.warning("workshop: update_session_model failed: %s", e)
+        return False
+
+
 def update_session_title(session_id: str, title: str) -> bool:
     try:
         with _connect() as con:

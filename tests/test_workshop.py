@@ -64,6 +64,25 @@ class SessionCRUD(_Base):
         self.assertEqual(self.ws.get_turns(sid), [])
         self.assertIsNone(self.ws.get_session(sid))
 
+    def test_update_model_changes_session_default(self):
+        sid = self.ws.create_session(title="model test", model="sonnet")
+        self.assertEqual(self.ws.get_session(sid).model, "sonnet")
+        ok = self.ws.update_session_model(sid, "opus")
+        self.assertTrue(ok)
+        self.assertEqual(self.ws.get_session(sid).model, "opus")
+
+    def test_update_model_rejects_empty(self):
+        sid = self.ws.create_session(title="x", model="sonnet")
+        self.assertFalse(self.ws.update_session_model(sid, ""))
+        self.assertFalse(self.ws.update_session_model(sid, "   "))
+        # Model unchanged
+        self.assertEqual(self.ws.get_session(sid).model, "sonnet")
+
+    def test_update_model_nonexistent_session_returns_false(self):
+        self.assertFalse(
+            self.ws.update_session_model("does-not-exist", "opus"),
+        )
+
     def test_custom_system_prompt(self):
         sid = self.ws.create_session(
             title="x", system_prompt="Be extremely brief.",
