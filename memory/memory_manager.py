@@ -858,14 +858,13 @@ class MemoryManager:
         if n <= 0:
             return []
         try:
-            # Pull a generous batch then filter client-side. ChromaDB's
-            # `where` can match but `get` doesn't return in timestamp
-            # order, so we fetch extra and sort. Cap fetched at 200 to
-            # bound work.
-            batch = min(max(n * 20, 40), 200)
+            # ChromaDB `get()` returns matches in insertion order (oldest
+            # first). Applying a `limit` here would slice off the newest
+            # records, which is the opposite of what we want. The set is
+            # bounded in practice (~500 for a long-running owner history)
+            # so fetch all, then sort + tail client-side.
             results = self.raw.get(
                 where={"type": "telegram_exchange"},
-                limit=batch,
                 include=["documents", "metadatas"],
             )
         except Exception as e:
@@ -882,7 +881,33 @@ class MemoryManager:
         ]
         paired.sort(key=lambda x: x[0])  # chronological
         tail = paired[-n:]
-        return [{"content": d} for _, d in tail]
+
+        # Stored content is the full prompt envelope — shape is:
+        #   "the owner (<source>): <USER_MSG>\n<ENVELOPE>\nMaez: <REPLY>"
+        # Pass the raw envelope as chat_history would pollute the new
+        # turn's prompt with old FORBIDDEN / TURN STATE / AMBIGUOUS
+        # REFERENT rule text. Extract just the user message (first line
+        # after the source label) and the final reply (after the last
+        # "\nMaez:" delimiter) so the planner sees the actual shape of
+        # the conversation without the surrounding scaffolding.
+        import re as _re
+        _SOURCE_PREFIX = _re.compile(r"^the owner \([^)]+\):\s*", _re.MULTILINE)
+        cleaned: list[dict] = []
+        for _, doc in tail:
+            first_line = doc.split("\n", 1)[0]
+            user_msg = _SOURCE_PREFIX.sub("", first_line).strip()
+            pos = doc.rfind("\nMaez:")
+            if pos == -1:
+                pos = doc.find("\nMaez:")
+            reply = doc[pos + len("\nMaez:"):].strip() if pos >= 0 else ""
+            if user_msg or reply:
+                cleaned.append({
+                    "content": f"Rohit: {user_msg}\nMaez: {reply}"
+                })
+            else:
+                # Fall back to raw if parse failed — better than dropping
+                cleaned.append({"content": doc})
+        return cleaned
 
     def format_for_prompt(self, recalled: dict) -> str:
         """Format multi-tier recalled memories into a structured prompt block.
