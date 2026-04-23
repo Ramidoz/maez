@@ -1,0 +1,58 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs for a branch when a new push lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unittest:
+    name: Python 3.12 — unittest suite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # [dev] pulls in ruff + pytest + build; the test suite only
+          # needs core runtime deps. Extras (vision / telegram / google)
+          # are heavy and not required for the default suite. If a test
+          # needs an extra, it should `self.skipUnless(...)` when the
+          # import fails rather than hard-require it in CI.
+          pip install -e .[dev]
+
+      - name: Report installed package versions
+        run: pip list
+
+      - name: Run the unittest suite
+        run: |
+          python -m unittest discover -s tests -p 'test_*.py' --verbose
+
+      - name: Test count invariant
+        if: always()
+        run: |
+          # The suite should only ever grow, never silently shrink.
+          # Phase 5.B ended at 530. If this number drops without an
+          # explicit commit explaining why, something was disabled.
+          n=$(python -m unittest discover -s tests -p 'test_*.py' 2>&1 | \
+              grep -oE 'Ran [0-9]+ tests' | awk '{print $2}')
+          echo "Ran $n tests"
+          if [ -z "$n" ] || [ "$n" -lt 530 ]; then
+            echo "::warning::Test count is $n; floor is 530. Did a test get accidentally disabled?"
+          fi

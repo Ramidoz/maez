@@ -1,0 +1,44 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ruff:
+    name: ruff check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install "ruff>=0.6"
+
+      - name: Lint the runtime tree (informational today)
+        # ruff config (line-length, target-version, ignore list) lives
+        # in pyproject.toml under [tool.ruff]. The current rule set is
+        # deliberately narrow (pyflakes + statement-level pycodestyle
+        # + targeted bugbear) so only real-bug findings surface.
+        #
+        # The job is informational for the v0.1-alpha window — a full
+        # modernisation + format sweep is Phase-8 follow-up work. Once
+        # that sweep lands and the codebase is at ~0 findings, drop
+        # `continue-on-error: true` below so lint becomes a PR gate.
+        continue-on-error: true
+        run: ruff check core/ skills/ daemon/ tests/ cli/ scripts/
+
+      - name: Format check (informational only)
+        continue-on-error: true
+        run: ruff format --check core/ skills/ daemon/ tests/ cli/ scripts/

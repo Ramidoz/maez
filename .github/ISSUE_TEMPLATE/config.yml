@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Deep pitch
+    url: https://github.com/Ramidoz/maez/blob/main/MAEZ_PITCH.md
+    about: Start here if you want to understand what Maez actually is before filing anything.
+  - name: Getting started
+    url: https://github.com/Ramidoz/maez/blob/main/docs/GETTING_STARTED.md
+    about: Installation walk-through. Most "it doesn't work" questions are covered here.
+  - name: Contributing guide
+    url: https://github.com/Ramidoz/maez/blob/main/docs/CONTRIBUTING.md
+    about: Dev workflow, test discipline, commit style.
+  - name: Covenant for OSS users
+    url: https://github.com/Ramidoz/maez/blob/main/docs/covenant/for_oss_users.md
+    about: What's universal across every Maez vs. what's yours. Read before asking about forks or sharing memory.

@@ -1,0 +1,50 @@
+# Pre-commit hook scaffold — opt-in.
+#
+# Install with:
+#   pip install pre-commit
+#   pre-commit install
+#
+# Runs on every `git commit`. Separate from the post-commit self-dev
+# hook (which reviews the commit *after* it lands via Claude). These
+# pre-commit hooks run local, deterministic, and fast.
+
+repos:
+  # -- whitespace / EOL / large-file hygiene ----------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^docs/birth_book/|^docs/audit_2026-04-22/|\.md$
+      - id: end-of-file-fixer
+        exclude: ^docs/birth_book/|^docs/audit_2026-04-22/
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+      - id: check-merge-conflict
+      - id: debug-statements          # catches stray pdb / breakpoint
+
+  # -- secret scan ------------------------------------------------------
+  #
+  # Catches API keys / tokens / PEM keys in a diff before it lands.
+  # Phase 7 SECURITY_AUDIT confirmed zero secrets in history to date;
+  # this keeps it that way.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.22.1
+    hooks:
+      - id: gitleaks
+
+  # -- Python lint ------------------------------------------------------
+  #
+  # ruff config lives in pyproject.toml under [tool.ruff]. These two
+  # hooks lint + format-check on every commit.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.0
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      # Format check warns but doesn't auto-rewrite. A full formatting
+      # sweep is Phase 8 follow-up — until it lands, keep the auto-fix
+      # off so contributors don't get reformat-noise in their diffs.
+      - id: ruff-format
+        args: [--check]
