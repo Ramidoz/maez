@@ -122,6 +122,21 @@ _refresh_lock = threading.Lock()
 _refresh_running = False
 _refresh_thread: threading.Thread | None = None
 
+# 2026-04-23 Commit 7c: cooldown window after a completed refresh,
+# during which `trigger_async_refresh()` becomes a no-op. Observed
+# on the 18:12 restart: two callers each hit get_file() a second
+# apart, the first refresh completed, then the second's staleness
+# check STILL read stale (the first hadn't written yet / was
+# mid-persist) and a second worker ran. The lock prevents
+# concurrency but not redundancy. A 60-second cooldown means a
+# completed refresh is considered "fresh enough" for the next
+# minute — subsequent triggers within the window return False so
+# the accessor doesn't fire a useless rebuild. Longer windows
+# defeat the on-demand freshness goal; shorter windows don't
+# protect against the burst pattern we saw. 60s is empirical.
+_REFRESH_COOLDOWN_S = 60.0
+_last_refresh_complete_monotonic: float = 0.0
+
 # ══════════════════════════════════════════════════════════════════════
 #  CONFIGURATION
 # ══════════════════════════════════════════════════════════════════════
@@ -916,22 +931,43 @@ def _refresh_worker() -> None:
     except Exception as e:
         _logger.warning("source_awareness: async refresh failed: %s", e)
     finally:
+        # 2026-04-23 Commit 7c: stamp the completion time BEFORE
+        # clearing the running flag, so any trigger call that was
+        # waiting on the lock and about to see running=False will
+        # also see the fresh cooldown timestamp and bail. Ordering
+        # matters: if we cleared running first, a fast second
+        # trigger could slip through between clear and stamp.
+        import time as _time_mod
+        global _last_refresh_complete_monotonic
+        _last_refresh_complete_monotonic = _time_mod.monotonic()
         with _refresh_lock:
             _refresh_running = False
 
 
 def trigger_async_refresh() -> bool:
-    """Kick off a background refresh if one isn't already running.
+    """Kick off a background refresh if one isn't already running
+    AND the previous refresh completed more than _REFRESH_COOLDOWN_S
+    ago.
 
-    Returns True if this call started a new refresh thread, False if
-    one was already in flight (in which case the caller should just
-    use the current map — the running refresh will update it
-    shortly). Thread is marked daemon=True so it doesn't block
-    shutdown.
+    Returns True if this call started a new refresh thread, False if:
+      - A refresh is already in flight (use the current map; the
+        running refresh will update it shortly), OR
+      - A refresh completed within the last _REFRESH_COOLDOWN_S
+        seconds (the map is fresh enough; an immediate second
+        rebuild would be wasted work).
+
+    Thread is marked daemon=True so it doesn't block shutdown.
     """
+    import time as _time_mod
     global _refresh_running, _refresh_thread
     with _refresh_lock:
         if _refresh_running:
+            return False
+        # Cooldown check under the lock so the decision is atomic
+        # with the running-flag flip.
+        since = _time_mod.monotonic() - _last_refresh_complete_monotonic
+        if (_last_refresh_complete_monotonic > 0
+                and since < _REFRESH_COOLDOWN_S):
             return False
         _refresh_running = True
     t = threading.Thread(

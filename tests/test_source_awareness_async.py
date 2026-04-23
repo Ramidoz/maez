@@ -252,5 +252,80 @@ class AsyncRefreshBehavior(unittest.TestCase):
         m_trig.assert_not_called()
 
 
+class RefreshCooldown(unittest.TestCase):
+    """2026-04-23 Commit 7c: a completed refresh holds off subsequent
+    triggers for _REFRESH_COOLDOWN_S. Observed on live restart: two
+    get_file() callers each triggered a refresh within a second of
+    the first completing — the lock prevented concurrency but not
+    redundancy."""
+
+    def setUp(self):
+        from core.memory import source_awareness as sa
+        with sa._refresh_lock:
+            sa._refresh_running = False
+        sa._last_refresh_complete_monotonic = 0.0
+
+    def tearDown(self):
+        from core.memory import source_awareness as sa
+        with sa._refresh_lock:
+            sa._refresh_running = False
+        sa._last_refresh_complete_monotonic = 0.0
+
+    def test_trigger_blocked_inside_cooldown_window(self):
+        """After a refresh completes, a subsequent trigger within
+        the cooldown window must return False (no rebuild)."""
+        from core.memory import source_awareness as sa
+        # Simulate a completed refresh: set the completion timestamp
+        # to "just now."
+        import time as _time
+        sa._last_refresh_complete_monotonic = _time.monotonic()
+        # Even though nothing is running, a new trigger must bail.
+        result = sa.trigger_async_refresh()
+        self.assertFalse(
+            result,
+            "trigger_async_refresh must return False within the "
+            "cooldown window immediately after a completed refresh.",
+        )
+
+    def test_trigger_allowed_after_cooldown(self):
+        """After _REFRESH_COOLDOWN_S has elapsed, triggers fire again."""
+        from core.memory import source_awareness as sa
+        import time as _time
+        # Pretend the last refresh completed well before the window.
+        sa._last_refresh_complete_monotonic = (
+            _time.monotonic() - (sa._REFRESH_COOLDOWN_S + 5.0)
+        )
+        with patch.object(sa, "_refresh_strategy", return_value="incremental"), \
+             patch.object(sa, "refresh_map",
+                          return_value={"updated": 0, "unchanged": 500,
+                                         "errors": 0}):
+            started = sa.trigger_async_refresh()
+            self.assertTrue(
+                started,
+                "trigger_async_refresh must return True once the "
+                "cooldown window has elapsed.",
+            )
+            if sa._refresh_thread is not None:
+                sa._refresh_thread.join(timeout=2.0)
+
+    def test_worker_stamps_completion_on_both_success_and_failure(self):
+        """_refresh_worker must record completion time whether
+        build_map/refresh_map succeeded or raised. Otherwise a
+        transient failure would make the cooldown never activate
+        and burst-refresh under load."""
+        from core.memory import source_awareness as sa
+        # Failure path — refresh_map raises.
+        sa._last_refresh_complete_monotonic = 0.0
+        with patch.object(sa, "_refresh_strategy", return_value="incremental"), \
+             patch.object(sa, "refresh_map",
+                          side_effect=RuntimeError("boom")):
+            sa._refresh_worker()
+        self.assertGreater(
+            sa._last_refresh_complete_monotonic, 0.0,
+            "completion timestamp must be set even when the underlying "
+            "rebuild raises — otherwise cooldown never engages.",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
