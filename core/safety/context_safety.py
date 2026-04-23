@@ -39,6 +39,25 @@ from dataclasses import dataclass
 logger = logging.getLogger("maez.context_safety")
 
 
+def _deception_hide_pattern() -> str:
+    """Build the 'do not tell the <owner>' regex at import time with
+    the configured owner's name baked in. Falls back to the legacy
+    `rohit` literal if identity is unresolvable (very early bootstrap
+    or missing yaml)."""
+    names: list[str] = ["user", "owner"]
+    try:
+        from core.identity import display_name, user_profile_id
+        for n in (display_name(), user_profile_id()):
+            n = (n or "").strip()
+            if n and n.lower() not in {"friend", "owner", "user"}:
+                names.append(re.escape(n))
+    except Exception:
+        pass
+    if "rohit" not in [x.lower() for x in names]:
+        names.append("rohit")  # legacy safety net
+    return r"do\s+not\s+tell\s+the\s+(" + "|".join(names) + r")"
+
+
 # ── threat pattern bank ────────────────────────────────────────────────
 
 # (regex, short_id) pairs. Keep the id short and stable — it goes into
@@ -47,7 +66,10 @@ _THREAT_PATTERNS: list[tuple[re.Pattern, str]] = [
     # Classic prompt-injection phrasing
     (re.compile(r"ignore\s+(previous|all|above|prior)\s+instructions", re.I),
      "prompt_injection"),
-    (re.compile(r"do\s+not\s+tell\s+the\s+(user|owner|rohit)", re.I),
+    # "do not tell the user/owner/<owner-name>" — matches the
+    # generic phrasing plus the configured owner's name. Keeps
+    # "rohit" covered when identity is unresolvable (bootstrap).
+    (re.compile(_deception_hide_pattern(), re.I),
      "deception_hide"),
     (re.compile(r"system\s+prompt\s+override", re.I),
      "sys_prompt_override"),

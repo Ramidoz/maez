@@ -1195,7 +1195,7 @@ class ActionEngine:
         return f"Deleted: {p}"
 
     def git_commit(self, message: str, files: str, reasoning: str) -> str:
-        """Queue: git add + commit in /home/rohit/maez."""
+        """Queue: git add + commit in the Maez install root ($MAEZ_HOME)."""
         return self.queue_action("git_commit", {"message": message, "files": files}, reasoning, tier=1)
 
     def _do_git_commit(self, message: str, files: str = ".") -> str:
@@ -1236,7 +1236,10 @@ class ActionEngine:
         """Session 11z: delegates to run_shell. Legacy entry point."""
         p = Path(path)
         if p.suffix == '.py':
-            cmd = f"/home/rohit/maez/.venv/bin/python3 {shlex.quote(str(p))}"
+            # Use the venv's python3 — path derived from BASE_DIR rather
+            # than hardcoded so the right interpreter runs on any install.
+            _venv_py = BASE_DIR / ".venv" / "bin" / "python3"
+            cmd = f"{shlex.quote(str(_venv_py))} {shlex.quote(str(p))}"
         elif p.suffix == '.sh':
             cmd = f"bash {shlex.quote(str(p))}"
         else:

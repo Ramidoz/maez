@@ -43,12 +43,18 @@ from typing import Optional
 
 logger = logging.getLogger("maez.self_dev_persistence")
 
-DB_PATH = Path(
-    os.environ.get(
-        "MAEZ_SELF_DEV_DB",
-        "/home/rohit/maez/memory/self_dev.db",
-    )
-)
+def _default_self_dev_db() -> str:
+    override = os.environ.get("MAEZ_SELF_DEV_DB")
+    if override:
+        return override
+    try:
+        from core.paths import memory_dir as _memory_dir
+        return str(_memory_dir() / "self_dev.db")
+    except Exception:
+        return "/home/rohit/maez/memory/self_dev.db"
+
+
+DB_PATH = Path(_default_self_dev_db())
 
 
 # ── low-level connection ──────────────────────────────────────────────

@@ -35,9 +35,10 @@ Safety contract
   ``HARD CONSTRAINTS``, ``TRUST COVENANT``, or the self-destruct forbid-
   patterns (``NEVER kill``, ``disable ollama``) is rejected.
 - Every write makes a timestamped backup at
-  ``/home/rohit/maez/config/soul.md.bak.YYYYMMDDHHMMSS`` BEFORE the
-  atomic swap. The ``.bak`` files accumulate forever — recovery is
-  trivial, and soul history is never lost.
+  ``$MAEZ_HOME/config/soul.md.bak.YYYYMMDDHHMMSS`` BEFORE the atomic
+  swap (defaults to the repo root if MAEZ_HOME is unset). The ``.bak``
+  files accumulate forever — recovery is trivial, and soul history is
+  never lost.
 - Writes are atomic via ``os.replace(tmp, target)``. The daemon's soul
   watcher thread picks up the MD5 change within 10 seconds and
   hot-reloads ``self.system_prompt``.
@@ -378,7 +379,7 @@ def apply_section_replace(proposal: Proposal) -> tuple[bool, str]:
         4. Double-check the required phrases (HARD CONSTRAINTS etc)
            are still present after the replacement
         5. Write a backup copy of current soul.md to
-           /home/rohit/maez/config/soul.md.bak.YYYYMMDDHHMMSS
+           $MAEZ_HOME/config/soul.md.bak.YYYYMMDDHHMMSS
         6. Write the new full text to soul.md.tmp, then os.replace
            to soul.md (atomic on POSIX)
 

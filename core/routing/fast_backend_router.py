@@ -75,12 +75,24 @@ RULE_DEFAULT                         = 'default'
 
 # Map trust_scope -> rule. Add scopes here as the system grows.
 # Keep this table small and explicit; surprises here cause cloud leaks.
+#
+# Canonical scope names are role-based ("owner", "owner.draft", "guest",
+# "public"). The owner's configured user_id (from identity.yaml) also
+# resolves to the owner rules via the runtime lookup in `lookup_rule`.
+# Legacy scope labels ("rohit", "maez") remain keyed for backwards
+# compatibility with the author's existing callers; these will be
+# removed once downstream code is migrated.
 SCOPE_RULE_TABLE: dict[str, str] = {
-    'rohit':         RULE_MAEZ_LOCAL_ONLY,
-    'maez':          RULE_MAEZ_LOCAL_ONLY,
-    'rohit.draft':   RULE_MAEZ_CLOUD_ALLOWED_FOR_DRAFTING,
+    # Canonical role names
+    'owner':         RULE_MAEZ_LOCAL_ONLY,
+    'owner.draft':   RULE_MAEZ_CLOUD_ALLOWED_FOR_DRAFTING,
     'guest':         RULE_EXTERNAL_GUESTS_LOCAL_ONLY,
     'public':        RULE_EXTERNAL_GUESTS_LOCAL_ONLY,
+    # Legacy author-install aliases — kept to avoid breaking the live
+    # daemon during the migration window. Safe to remove in v0.2.
+    'rohit':         RULE_MAEZ_LOCAL_ONLY,
+    'rohit.draft':   RULE_MAEZ_CLOUD_ALLOWED_FOR_DRAFTING,
+    'maez':          RULE_MAEZ_LOCAL_ONLY,
 }
 
 
@@ -141,8 +153,25 @@ def _cloud() -> CloudBackend:
 
 
 def lookup_rule(trust_scope: str) -> str:
-    """Return the rule name for this scope. Falls back to RULE_DEFAULT."""
-    return SCOPE_RULE_TABLE.get(trust_scope, RULE_DEFAULT)
+    """Return the rule name for this scope. Falls back to RULE_DEFAULT.
+
+    A trust_scope that matches the owner's configured user_id (from
+    core.identity) resolves to the owner's rules even if it isn't
+    spelled verbatim in SCOPE_RULE_TABLE. Same for `<owner_id>.draft`.
+    """
+    if trust_scope in SCOPE_RULE_TABLE:
+        return SCOPE_RULE_TABLE[trust_scope]
+    try:
+        from core.identity import user_profile_id
+        owner_id = user_profile_id()
+    except Exception:
+        owner_id = None
+    if owner_id:
+        if trust_scope == owner_id:
+            return RULE_MAEZ_LOCAL_ONLY
+        if trust_scope == f"{owner_id}.draft":
+            return RULE_MAEZ_CLOUD_ALLOWED_FOR_DRAFTING
+    return RULE_DEFAULT
 
 
 def decide_policy(trust_scope: str, requested_policy: str = POLICY_AUTO) -> PolicyDecision:

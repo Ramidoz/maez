@@ -789,7 +789,12 @@ def _cli_propose_tests(args) -> int:
             f.write(p.test_code)
         print(f"written: {dest_abs} ({len(p.test_code)} chars)")
         print("Next: run it before trusting it —")
-        print(f"  cd /home/rohit/maez && "
+        try:
+            from core.paths import home as _maez_home
+            _repo = str(_maez_home())
+        except Exception:
+            _repo = _REPO_ROOT
+        print(f"  cd {_repo} && "
               f".venv/bin/python3 -m unittest "
               f"{dest.replace('/', '.').replace('.py', '')}")
         return 0

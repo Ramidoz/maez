@@ -350,7 +350,7 @@ def _extract_balanced_json(s: str) -> str | None:
                 return s[start:i + 1]
     return None
 
-_TOOL_MANIFEST = """\
+_TOOL_MANIFEST_TEMPLATE = """\
 TOOLS YOU CAN USE (your body, your hands — these run on the owner's machine):
 
 1. run_shell       {"cmd":"<any shell command>","reason":"<why>"}
@@ -360,14 +360,14 @@ TOOLS YOU CAN USE (your body, your hands — these run on the owner's machine):
      {"cmd":"nvidia-smi","reason":"check GPU utilisation"}
      {"cmd":"df -h /home","reason":"check home disk usage"}
      {"cmd":"systemctl is-active nginx","reason":"is the service up"}
-     {"cmd":"git -C /home/rohit/maez status","reason":"see what's uncommitted"}
+     {"cmd":"git -C __MAEZ_HOME__ status","reason":"see what's uncommitted"}
      {"cmd":"which alienfx openrazer i8kutils","reason":"find installed lighting tools"}
      {"cmd":"sudo apt-get install -y <package>","reason":"the owner asked to install"}
-2. write_any_file  {"path":"/home/rohit/notes.txt","content":"...","reason":"..."}
-   Write or replace any file under /home/rohit. Auto-backs up existing files.
-3. read_file       {"path":"/home/rohit/maez/config/soul.md"}
-   Read any file under /home/rohit. Returns up to 5KB.
-4. search_files    {"pattern":"*.py","directory":"/home/rohit/maez"}
+2. write_any_file  {"path":"__USER_HOME__/notes.txt","content":"...","reason":"..."}
+   Write or replace any file under __USER_HOME__. Auto-backs up existing files.
+3. read_file       {"path":"__MAEZ_HOME__/config/soul.md"}
+   Read any file under __USER_HOME__. Returns up to 5KB.
+4. search_files    {"pattern":"*.py","directory":"__MAEZ_HOME__"}
    find -name pattern, max depth 5.
 5. web_search      {"query":"<search query relevant to the owner's current question>"}
    Real DuckDuckGo search. Use this whenever you need facts you don't have.
@@ -480,6 +480,33 @@ isn't real. Just emit the probe and let the proposer handle the next step.
 If the probe already makes the answer obvious and no further action is needed,
 a terminal DONE is acceptable AFTER the probe — not before.
 """
+
+
+def _render_tool_manifest() -> str:
+    """Substitute install-specific paths into _TOOL_MANIFEST_TEMPLATE at
+    module load. The template carries __MAEZ_HOME__ / __USER_HOME__
+    placeholders so the downstream JSON examples can keep their literal
+    `{ }` braces without f-string escaping. The planner LLM reads
+    concrete paths — not env-var placeholders — because it emits
+    literal paths in shell commands."""
+    try:
+        from core.paths import home as _paths_home
+        _maez_home = str(_paths_home())
+    except Exception:
+        _maez_home = "/home/rohit/maez"
+    try:
+        import os as _os
+        _user_home = _os.path.expanduser("~") or "/home/rohit"
+    except Exception:
+        _user_home = "/home/rohit"
+    return (
+        _TOOL_MANIFEST_TEMPLATE
+        .replace("__MAEZ_HOME__", _maez_home)
+        .replace("__USER_HOME__", _user_home)
+    )
+
+
+_TOOL_MANIFEST = _render_tool_manifest()
 
 
 # ── synthesis-prompt builder ───────────────────────────────────────────

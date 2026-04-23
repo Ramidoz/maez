@@ -42,12 +42,18 @@ from typing import Optional
 
 logger = logging.getLogger("maez.workshop")
 
-DB_PATH = Path(
-    os.environ.get(
-        "MAEZ_WORKSHOP_DB",
-        "/home/rohit/maez/memory/workshop.db",
-    )
-)
+def _default_workshop_db() -> str:
+    override = os.environ.get("MAEZ_WORKSHOP_DB")
+    if override:
+        return override
+    try:
+        from core.paths import memory_dir as _memory_dir
+        return str(_memory_dir() / "workshop.db")
+    except Exception:
+        return "/home/rohit/maez/memory/workshop.db"
+
+
+DB_PATH = Path(_default_workshop_db())
 
 # Default model when a session doesn't specify. Routes through the
 # subscription proxy so "claude-sonnet-4-6" consumes the Max pool.
@@ -533,10 +539,18 @@ def expand_mentions(user_message: str) -> tuple[str, list[dict]]:
 # Separate from evolution_engine's backup dir so a Workshop apply
 # can't collide with an evolution-engine deploy happening at the
 # same moment. Timestamped filenames inside ensure no overwrite.
-_APPLY_BACKUP_DIR = Path(os.environ.get(
-    "MAEZ_WORKSHOP_BACKUP_DIR",
-    "/home/rohit/maez/workshop/backups",
-))
+def _default_workshop_backup_dir() -> str:
+    override = os.environ.get("MAEZ_WORKSHOP_BACKUP_DIR")
+    if override:
+        return override
+    try:
+        from core.paths import home as _home
+        return str(_home() / "workshop" / "backups")
+    except Exception:
+        return "/home/rohit/maez/workshop/backups"
+
+
+_APPLY_BACKUP_DIR = Path(_default_workshop_backup_dir())
 
 def _extract_target_path(diff_text: str) -> tuple[Optional[str], bool]:
     """Parse the b-side ('+++') target from a unified diff. Returns

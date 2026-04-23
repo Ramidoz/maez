@@ -158,15 +158,60 @@ ROLEPLAY = [
 # Maez because it processes emails, RSS, web content, and screen
 # perception — all possible injection vectors.
 
+# The "owner-spoof" patterns below originally hard-matched the literal
+# name `rohit` — because an attacker trying to escalate knew the
+# author's name. On any other install the spoofed name would be
+# different. Build the owner-name alternation at import time from
+# `core.identity.display_name()` + `.user_profile_id()`, so the regex
+# catches `<owner> has already approved` for whoever the owner actually
+# is, plus the generic "the user/operator/admin" cases that are always
+# present. Fall back to the historical `rohit` literal if identity
+# can't be resolved at import (very early bootstrap).
+def _owner_name_alternation() -> str:
+    names: list[str] = []
+    try:
+        from core.identity import display_name, user_profile_id
+        for n in (display_name(), user_profile_id()):
+            n = (n or "").strip()
+            # Generic fallbacks from the template aren't worth matching
+            # — "Friend" and "owner" appear in normal text all the time.
+            if n and n.lower() not in {"friend", "owner"}:
+                names.append(re.escape(n))
+    except Exception:
+        pass
+    if not names:
+        names = ["rohit"]  # legacy default; still catches author-install
+    # Dedup while preserving order
+    seen: set[str] = set()
+    out = []
+    for n in names:
+        if n.lower() not in seen:
+            seen.add(n.lower())
+            out.append(n)
+    return "|".join(out)
+
+
+_OWNER_NAMES_RE = _owner_name_alternation()
+
+
 CONTEXT_MANIPULATION = [
     re.compile(r"\bthe\s+user\s+(actually|really|truly)\s+(said|meant|wanted|asked)\b", re.IGNORECASE),
-    re.compile(r"\b(rohit|the\s+user|the\s+operator)\s+(has\s+)?already\s+(approved|authorized|consented|said\s+yes)\b", re.IGNORECASE),
+    re.compile(
+        rf"\b({_OWNER_NAMES_RE}|the\s+user|the\s+operator)\s+(has\s+)?already\s+(approved|authorized|consented|said\s+yes)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\bper\s+(your|our|the)\s+(last|previous|earlier|prior)\s+(message|conversation|reply|instruction)\b", re.IGNORECASE),
     re.compile(r"\bas\s+(we|you|i)\s+(discussed|agreed|decided|established)\s+(earlier|before|previously|above)\b", re.IGNORECASE),
     re.compile(r"\b(continuing|continue)\s+from\s+(my|our|the|your)\s+(earlier|previous|last|prior)\b", re.IGNORECASE),
     re.compile(r"\bthe\s+(real|actual|true|hidden)\s+(context|meaning|intent|purpose)\b", re.IGNORECASE),
-    re.compile(r"\bignoring\s+what\s+(rohit|the\s+user)\s+(said|wrote|typed)\b", re.IGNORECASE),
-    re.compile(r"\bthis\s+is\s+(rohit|the\s+operator|the\s+admin)\s+(speaking|writing)\b", re.IGNORECASE),
+    re.compile(
+        rf"\bignoring\s+what\s+({_OWNER_NAMES_RE}|the\s+user)\s+(said|wrote|typed)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"\bthis\s+is\s+({_OWNER_NAMES_RE}|the\s+operator|the\s+admin)\s+(speaking|writing)\b",
+        re.IGNORECASE,
+    ),
 ]
 
 

@@ -406,7 +406,7 @@ class AuditLog:
         *,
         reason: str,
         source: str,
-        user_id: str = "rohit",
+        user_id: Optional[str] = None,
         memory_phase: str = MEMORY_PHASE_GESTATION,
     ) -> str:
         """Open a new developer-mode session. Returns the session_id.
@@ -425,12 +425,19 @@ class AuditLog:
                 conversation event elsewhere so Maez "hears" the
                 transition; this method only records the trigger
                 provenance, not the synthetic event itself.
-            user_id: The user who entered the mode. Defaults to
-                'rohit' since Track A is single-user, but explicit
-                for future Track B multi-tenant use.
+            user_id: The user who entered the mode. Defaults to the
+                owner's configured user_id from core.identity (Track A
+                is single-user, but the field is explicit for future
+                Track B multi-tenant use).
             memory_phase: Defaults to 'gestation'. After the birth
                 event, the daemon will pass 'lived' here.
         """
+        if user_id is None:
+            try:
+                from core.identity import user_profile_id as _owner_id
+                user_id = _owner_id()
+            except Exception:
+                user_id = "owner"
         session_id = secrets.token_hex(12)
         request_id = secrets.token_hex(12)
         ts = time.time()
