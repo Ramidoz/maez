@@ -100,7 +100,7 @@ class UserProfileStore:
         )
         if not results['documents']:
             return []
-        pairs = list(zip(results['documents'], results['metadatas']))
+        pairs = list(zip(results['documents'], results['metadatas'], strict=False))
         pairs.sort(key=lambda x: x[1].get('timestamp', ''), reverse=True)
         pairs = pairs[:limit]
         pairs.reverse()

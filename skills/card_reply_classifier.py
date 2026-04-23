@@ -758,25 +758,25 @@ if __name__ == "__main__":
     # No open cards → UNRELATED
     r = classify_reply(text="yes", open_cards=[], use_llm_fallback=False)
     assert r.intent == ReplyIntent.UNRELATED
-    print(f"  ✓ [no open cards] always UNRELATED")
+    print("  ✓ [no open cards] always UNRELATED")
     counts["passed"] += 1
 
     # Ambiguous → UNRELATED (llm fallback off)
     r = classify_reply(text="hmm interesting", open_cards=cards, use_llm_fallback=False)
     assert r.intent == ReplyIntent.UNRELATED
-    print(f"  ✓ [ambiguous + no llm] UNRELATED")
+    print("  ✓ [ambiguous + no llm] UNRELATED")
     counts["passed"] += 1
 
     # Target selection with multiple cards
     multi = [make_card("cA", created_at=100.0), make_card("cB", created_at=200.0)]
     r = classify_reply(text="yes", open_cards=multi, use_llm_fallback=False)
     assert r.target_request_id == "cB", f"expected newest card, got {r.target_request_id}"
-    print(f"  ✓ [multi cards] targets newest")
+    print("  ✓ [multi cards] targets newest")
     counts["passed"] += 1
 
     r = classify_reply(text="yes", open_cards=multi, explicit_target_request_id="cA", use_llm_fallback=False)
     assert r.target_request_id == "cA", f"expected explicit target, got {r.target_request_id}"
-    print(f"  ✓ [multi cards + explicit target] targets cA")
+    print("  ✓ [multi cards + explicit target] targets cA")
     counts["passed"] += 1
 
     # Duration extraction sanity
@@ -788,7 +788,7 @@ if __name__ == "__main__":
     assert extract_defer_duration("in 15 min") == 900
     assert extract_defer_duration("in a second") == 15
     assert extract_defer_duration("hello world") is None
-    print(f"  ✓ extract_defer_duration edge cases")
+    print("  ✓ extract_defer_duration edge cases")
     counts["passed"] += 1
 
     print(f"\n{counts['passed']} passed, {counts['failed']} failed")

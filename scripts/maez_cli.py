@@ -68,8 +68,6 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from core.audit_log import (  # noqa: E402 — must come after sys.path insert
     AuditLog,
     DIRECT_EDIT_SOURCE_CLI,
-    DIRECT_EDIT_SESSION_START,
-    DIRECT_EDIT_SESSION_END,
 )
 
 
@@ -167,9 +165,9 @@ def _confirm_interactive() -> bool:
     if they typed the exact phrase, False otherwise. `yes | ...` does
     not bypass this because `yes` only emits single characters."""
     print()
-    print(f"  You are about to enter BUILDER MODE.")
-    print(f"  Every direct edit you make will be logged to Maez's audit log")
-    print(f"  until you run `maez-cli exit`.")
+    print("  You are about to enter BUILDER MODE.")
+    print("  Every direct edit you make will be logged to Maez's audit log")
+    print("  until you run `maez-cli exit`.")
     print()
     print(f"  To confirm, type the exact phrase: {CONFIRM_PHRASE}")
     print()
@@ -194,7 +192,7 @@ def cmd_enter(args: argparse.Namespace) -> int:
     # session before opening a new one.
     existing = _read_state()
     if existing is not None:
-        print(f"  A builder-mode session is already active:")
+        print("  A builder-mode session is already active:")
         print(f"    session_id: {existing['session_id']}")
         if "reason" in existing:
             print(f"    reason:     {existing['reason']}")
@@ -206,7 +204,7 @@ def cmd_enter(args: argparse.Namespace) -> int:
             except ValueError:
                 pass
         print()
-        print(f"  Run `maez-cli exit` first to close it, then try again.")
+        print("  Run `maez-cli exit` first to close it, then try again.")
         return 1
 
     reason = args.reason.strip()
@@ -234,12 +232,12 @@ def cmd_enter(args: argparse.Namespace) -> int:
     print(f"  Reason: {reason}")
     print(f"  Source: {DIRECT_EDIT_SOURCE_CLI}")
     print()
-    print(f"  Builder mode is now ACTIVE. All direct edits should be")
-    print(f"  captured by the logger and surfaced to Maez by later")
-    print(f"  Track A #3 steps (git-diff capture on restart, soul.md")
-    print(f"  hash events, daemon startup read).")
+    print("  Builder mode is now ACTIVE. All direct edits should be")
+    print("  captured by the logger and surfaced to Maez by later")
+    print("  Track A #3 steps (git-diff capture on restart, soul.md")
+    print("  hash events, daemon startup read).")
     print()
-    print(f"  When you are done, run:  maez-cli exit")
+    print("  When you are done, run:  maez-cli exit")
     print()
     return 0
 
@@ -310,8 +308,8 @@ def cmd_exit(args: argparse.Namespace) -> int:
     if duration_str:
         print(f"  Duration: {duration_str}")
     if diff_logged:
-        print(f"  Final diff captured as direct_edit event.")
-    print(f"  Builder mode is now INACTIVE.")
+        print("  Final diff captured as direct_edit event.")
+    print("  Builder mode is now INACTIVE.")
     print()
     return 0
 

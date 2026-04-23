@@ -107,7 +107,7 @@ def test_offer_non_approval_install_command():
 
 def test_recovery_depth_cap_is_5():
     """depth > 5 must trigger terminal summary; depth = 5 must still recover."""
-    import ast, os
+    import os
     tv_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "skills", "telegram_voice.py",
@@ -170,7 +170,6 @@ def test_do_fetch_url_strips_html(monkeypatch=None):
     """_do_fetch_url strips HTML tags from response content."""
     from core.action_engine import ActionEngine
     import unittest.mock as mock
-    import io
 
     html = b"<html><head><style>body{color:red}</style></head><body><h1>OpenRGB</h1><p>Install with: sudo apt install openrgb</p></body></html>"
 

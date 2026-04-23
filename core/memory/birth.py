@@ -85,7 +85,7 @@ logger = logging.getLogger("maez")
 # ══════════════════════════════════════════════════════════════════════
 
 try:
-    from core.paths import home as _home, memory_dir as _memory_dir
+    from core.paths import home as _home
     _REPO_ROOT = _home()
 except Exception:
     _REPO_ROOT = Path(__file__).resolve().parent.parent.parent

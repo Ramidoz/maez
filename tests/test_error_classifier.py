@@ -9,9 +9,7 @@ telemetry shape. Does not assert any _reason()-level behavior change
 """
 from __future__ import annotations
 
-import logging
 import unittest
-from unittest.mock import patch
 
 from core.error_classifier import (
     classify, emit_telemetry,

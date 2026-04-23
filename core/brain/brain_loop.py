@@ -33,7 +33,6 @@ from __future__ import annotations
 import json as _json
 import logging
 import re as _re
-from typing import Any, Callable, Optional
 
 from core import llm_client as _llm_client
 
@@ -251,7 +250,6 @@ def _should_run_jarvis_loop(text: str) -> bool:
 # emits, plus the literal TOOL_CALL: {...} form we ask for in the manifest.
 # Returns {"action": str, "params": dict} or None.
 def _parse_tool_call(text: str) -> dict | None:
-    import json as _json
     import re as _re
     if not text:
         return None
@@ -705,7 +703,6 @@ def run_brain_loop(
         from core.model_config import PRIMARY_MODEL as _mc
         model = _mc
 
-    import json as _json
     import re as _re
     try:
         from core.action_engine import ACTION_TIERS, FORBIDDEN_ACTION_TYPES
@@ -787,20 +784,20 @@ def run_brain_loop(
             # The PPA was added but doesn't support this Ubuntu release.
             # Do NOT retry apt. Move directly to snap/flatpak/AppImage.
             _apt_override = (
-                f"PPA-NOT-SUPPORTED OVERRIDE — READ THIS FIRST:\n"
-                f"The error 'does not have a Release file' means the PPA you "
-                f"just tried does NOT support this Ubuntu release (noble/24.04). "
-                f"Do NOT try any apt-based install or PPA again. Move to the "
-                f"next method immediately. Priority order:\n"
-                f"  1. snap: sudo snap install openrgb\n"
-                f"  2. Download the AppImage directly:\n"
-                f"     TOOL_CALL: {{\"action\":\"run_shell\",\"params\":{{\"cmd\":"
-                f"\"wget -q https://openrgb.org/releases/release_0.9/OpenRGB_0.9_x86_64_b5f46e3.AppImage "
-                f"-O /tmp/openrgb.AppImage && chmod +x /tmp/openrgb.AppImage\","
-                f"\"reason\":\"download openrgb AppImage since PPA has no noble release\"}}}}\n"
-                f"  3. web_search for current openrgb Ubuntu 24.04 install method, "
-                f"then fetch_url on the result to get the exact commands\n"
-                f"  4. Build from source (last resort)\n\n"
+                "PPA-NOT-SUPPORTED OVERRIDE — READ THIS FIRST:\n"
+                "The error 'does not have a Release file' means the PPA you "
+                "just tried does NOT support this Ubuntu release (noble/24.04). "
+                "Do NOT try any apt-based install or PPA again. Move to the "
+                "next method immediately. Priority order:\n"
+                "  1. snap: sudo snap install openrgb\n"
+                "  2. Download the AppImage directly:\n"
+                "     TOOL_CALL: {\"action\":\"run_shell\",\"params\":{\"cmd\":"
+                "\"wget -q https://openrgb.org/releases/release_0.9/OpenRGB_0.9_x86_64_b5f46e3.AppImage "
+                "-O /tmp/openrgb.AppImage && chmod +x /tmp/openrgb.AppImage\","
+                "\"reason\":\"download openrgb AppImage since PPA has no noble release\"}}\n"
+                "  3. web_search for current openrgb Ubuntu 24.04 install method, "
+                "then fetch_url on the result to get the exact commands\n"
+                "  4. Build from source (last resort)\n\n"
             )
         elif _apt_not_found:
             _missing_pkg = _apt_not_found.group(1)

@@ -852,17 +852,17 @@ if __name__ == "__main__":
     store.attach_channel_message(card.request_id, "tg_msg_42")
     card = store.get(card.request_id)
     assert card.channel_message_id == "tg_msg_42"
-    print(f"  ✓ attached channel_message_id=tg_msg_42")
+    print("  ✓ attached channel_message_id=tg_msg_42")
 
     # Look up by channel message
     card2 = store.get_by_message("telegram_text", "tg_msg_42")
     assert card2 and card2.request_id == card.request_id
-    print(f"  ✓ lookup by (channel, message_id) works")
+    print("  ✓ lookup by (channel, message_id) works")
 
     # Open list for the owner
     open_cards = store.get_open_for_user("rohit")
     assert len(open_cards) == 1
-    print(f"  ✓ get_open_for_user → 1 card")
+    print("  ✓ get_open_for_user → 1 card")
 
     # Defer with reminder
     future = time.time() + 3600
@@ -876,7 +876,7 @@ if __name__ == "__main__":
     open_cards = store.get_open_for_user("rohit")
     assert len(open_cards) == 1
     assert open_cards[0].status == CardStatus.DEFERRED.value
-    print(f"  ✓ deferred cards still appear in open list")
+    print("  ✓ deferred cards still appear in open list")
 
     # No due reminders yet
     due = store.find_due_reminders()
@@ -884,7 +884,7 @@ if __name__ == "__main__":
     # Due reminder if we look in the future
     due = store.find_due_reminders(now=future + 1)
     assert len(due) == 1
-    print(f"  ✓ find_due_reminders works")
+    print("  ✓ find_due_reminders works")
 
     # Defer again (simulate "wait another 30 min")
     deferred = store.defer(card.request_id, remind_at=time.time() + 1800, reason="more time", user_id="rohit")
@@ -895,7 +895,7 @@ if __name__ == "__main__":
     reopened = store.re_open(card.request_id)
     assert reopened.status == CardStatus.OPEN.value
     assert reopened.remind_at is None
-    print(f"  ✓ reopened deferred card")
+    print("  ✓ reopened deferred card")
 
     # State hash check: fresh state matches
     assert store.check_state_fresh(card.request_id, state) is True
@@ -903,7 +903,7 @@ if __name__ == "__main__":
     stale_state = dict(state)
     stale_state["disk_free_pct_bucket"] = 5  # world changed
     assert store.check_state_fresh(card.request_id, stale_state) is False
-    print(f"  ✓ state hash fresh/stale detection works")
+    print("  ✓ state hash fresh/stale detection works")
 
     # Approve with matching state → APPROVED
     approved = store.approve(
@@ -913,7 +913,7 @@ if __name__ == "__main__":
         current_state_fields=state,
     )
     assert approved.status == CardStatus.APPROVED.value
-    print(f"  ✓ approved card (matching state)")
+    print("  ✓ approved card (matching state)")
 
     # Run + done
     running = store.mark_running(card.request_id)
@@ -921,16 +921,16 @@ if __name__ == "__main__":
     done = store.mark_done(card.request_id, output="cowsay installed")
     assert done.status == CardStatus.DONE.value
     assert done.execution_success is True
-    print(f"  ✓ running → done lifecycle")
+    print("  ✓ running → done lifecycle")
 
     # Open list should now be empty
     assert len(store.get_open_for_user("rohit")) == 0
-    print(f"  ✓ completed card drops out of open list")
+    print("  ✓ completed card drops out of open list")
 
     # Terminal cards can't transition
     try:
         store.approve(card.request_id, user_id="rohit", via="text_reply")
-        assert False, "should have raised"
+        raise AssertionError("should have raised CardStoreError")
     except CardStoreError as e:
         print(f"  ✓ terminal card refuses re-transition: {e}")
 
@@ -953,7 +953,7 @@ if __name__ == "__main__":
         current_state_fields={"pkg_exists": True, "disk_free_pct_bucket": 40},
     )
     assert expired.status == CardStatus.EXPIRED.value
-    print(f"  ✓ stale state on approval → EXPIRED instead of APPROVED")
+    print("  ✓ stale state on approval → EXPIRED instead of APPROVED")
     assert "state hash changed" in (expired.resolution_notes or "")
 
     # --- Third card: deny path ---
@@ -968,7 +968,7 @@ if __name__ == "__main__":
     )
     denied = store.deny(card3.request_id, user_id="rohit", via="reaction", notes="no thanks")
     assert denied.status == CardStatus.DENIED.value
-    print(f"  ✓ deny path works")
+    print("  ✓ deny path works")
 
     # Stats
     s = store.stats()
@@ -979,7 +979,7 @@ if __name__ == "__main__":
 
     # Housekeeping: expire old cards (nothing old yet)
     assert store.expire_abandoned(older_than_seconds=0) == 0  # all already terminal
-    print(f"  ✓ expire_abandoned does not touch terminal cards")
+    print("  ✓ expire_abandoned does not touch terminal cards")
 
     db_path.unlink(missing_ok=True)
-    print(f"\n=== pending_cards self-test complete ===")
+    print("\n=== pending_cards self-test complete ===")

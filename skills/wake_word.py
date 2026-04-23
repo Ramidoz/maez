@@ -294,8 +294,11 @@ def _audio_loop_inner(callback: Callable[[str], None], stop_event: threading.Eve
                                 record_buffer = []
                                 record_start = time.time()
                                 silence_start = None
-                                logger.info("[AUDIO] Recording started — ring buffer seeded with %d samples (%.1fs)",
-                                            len(ring_float), len(ring_float) / SAMPLE_RATE)
+                                # Log is stale with respect to the "no seed" decision on
+                                # line 294 — the buffer is intentionally empty at this
+                                # point so the wake-word utterance itself doesn't get
+                                # mixed into the command transcription.
+                                logger.info("[AUDIO] Recording started (buffer cleared — command follows wake word)")
                                 continue
                             elif prob > 0.1:
                                 logger.info("[AUDIO] confidence=%.3f rms=%.4f", prob, rms)

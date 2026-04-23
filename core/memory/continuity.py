@@ -60,8 +60,13 @@ POST_RESTART_INJECTION_CYCLES = 5      # cycles to inject [CONTINUITY] after res
 MAX_CAPSULE_AGE_HOURS = 24             # capsule older than this is stale
 RESUME_INSTRUCTIONS_CACHE_TTL = 300    # seconds before re-generating resume text
 
-CAPSULE_PATH = Path("/home/rohit/maez/memory/continuity_capsule.json")
-ARCHIVE_DIR = Path("/home/rohit/maez/memory/continuity_archive")
+try:
+    from core.paths import memory_dir as _memory_dir
+    CAPSULE_PATH = _memory_dir() / "continuity_capsule.json"
+    ARCHIVE_DIR = _memory_dir() / "continuity_archive"
+except Exception:
+    CAPSULE_PATH = Path("/home/rohit/maez/memory/continuity_capsule.json")
+    ARCHIVE_DIR = Path("/home/rohit/maez/memory/continuity_archive")
 CAPSULE_VERSION = "1.0"
 
 

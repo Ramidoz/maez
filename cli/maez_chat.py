@@ -67,9 +67,7 @@ from rich.table import Table
 from core import identity, soul_loader
 from core.ambient_format import ambient_prompt_block
 from core.ambient import ambient_context, current_coords, latest_per_kind
-from core.action_engine import _covenant_violation as _covenant_check
 from core.tool_loop import (
-    BASH_FENCE_RE, TOOL_TIMEOUT_SEC, TOOL_OUTPUT_MAX,
     ToolRun, extract_shell_commands, safety_check,
     _run_shell, format_tool_results_for_model,
 )
@@ -183,7 +181,7 @@ def _thinking_status(thinking: str, done: bool) -> Text:
         t.append(f"(hidden thinking · {lines} lines — Ctrl+T pending for next session)",
                  style="dim italic")
     else:
-        t.append(f"thinking… ", style="dim italic")
+        t.append("thinking… ", style="dim italic")
         t.append(f"[{lines} lines so far]", style="dim")
     return t
 
@@ -345,7 +343,6 @@ class ChatSession:
         console.print(Panel(table, title="commands", border_style="dim", expand=False))
 
     def cmd_status(self, _: str):
-        import subprocess
         def svc_active(name: str) -> str:
             try:
                 r = subprocess.run(["systemctl", "is-active", name],
@@ -443,7 +440,7 @@ class ChatSession:
         if window.get("title"):
             lines.append(f"[bold]window[/bold]   {window['title']} ({window.get('class')})")
         else:
-            lines.append(f"[bold]window[/bold]   [dim]not detected (no DISPLAY or Wayland)[/dim]")
+            lines.append("[bold]window[/bold]   [dim]not detected (no DISPLAY or Wayland)[/dim]")
         sigs = ctx.get("signals_latest") or {}
         if sigs:
             lines.append(f"[bold]signals[/bold]  {', '.join(sorted(sigs))}")
@@ -686,12 +683,17 @@ class ChatSession:
                 last_render = 0.0
                 RENDER_EVERY = 0.08
 
-                def build_renderable(done: bool = False):
-                    body = assistant.content
+                # B023: `assistant` is captured by closure here. The
+                # surrounding scope is a single iteration — build_renderable
+                # is only called while `assistant` still refers to the
+                # current turn — but ruff flags the pattern defensively.
+                # Bind via default-arg to make the capture explicit.
+                def build_renderable(done: bool = False, _a=assistant):
+                    body = _a.content
                     md = Markdown(body) if body else Text("…", style="dim")
                     parts: list = []
-                    if assistant.thinking:
-                        parts.append(_thinking_status(assistant.thinking, done))
+                    if _a.thinking:
+                        parts.append(_thinking_status(_a.thinking, done))
                     parts.append(md)
                     return Group(*parts)
 

@@ -14,10 +14,8 @@ Integration points:
 """
 
 import collections
-import json
 import logging
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger("maez")
@@ -522,7 +520,7 @@ def format_for_prompt(critique: dict | None) -> str:
 
     if critique['fixation_ratio'] >= 0.4:
         lines.append(f"  WARNING: Fixating on '{critique['dominant_topic']}' ({critique['fixation_ratio']:.0%})")
-        lines.append(f"  Vary your attention. Look at what CHANGED, not what stayed the same.")
+        lines.append("  Vary your attention. Look at what CHANGED, not what stayed the same.")
 
     return '\n'.join(lines)
 
@@ -597,7 +595,7 @@ def get_behavior_policy() -> dict:
 
         # Flatten recent labels
         flat_labels = [l for ll in recent_l for l in ll]
-        label_counts = collections.Counter(flat_labels)
+        collections.Counter(flat_labels)
 
         # --- Fixation response ---
         fixation_streak = 0
@@ -769,7 +767,7 @@ def format_active_prompt() -> str:
     elif fixation_ratio >= 0.4:
         readable = dominant.replace('_', ' ')
         lines.append(f"  Avoid repeating '{readable}' unless something genuinely changed.")
-        lines.append(f"  Look at what is DIFFERENT right now.")
+        lines.append("  Look at what is DIFFERENT right now.")
 
     return '\n'.join(lines)
 
@@ -880,7 +878,7 @@ def _test():
     monitoring_topic = extract_topics("Check the daemon logs and maez.service status")[0]
     assert git_topic != browser_topic, f"git and browser should differ: {git_topic} vs {browser_topic}"
     assert git_topic != monitoring_topic, f"git and monitoring should differ: {git_topic} vs {monitoring_topic}"
-    assert browser_topic != monitoring_topic, f"browser and monitoring should differ"
+    assert browser_topic != monitoring_topic, "browser and monitoring should differ"
     print(f"  differentiation: git={git_topic} browser={browser_topic} monitoring={monitoring_topic}: OK")
 
     print("=== Classification ===")
@@ -918,7 +916,7 @@ def _test():
     for _ in range(8):
         score_and_classify("You should git commit your uncommitted staged changes now")
     c_fix = classify("Run git commit to push your staged changes", _recent_topics)
-    assert 'fixation' in c_fix['labels'], f"Expected fixation on git_workflow streak"
+    assert 'fixation' in c_fix['labels'], "Expected fixation on git_workflow streak"
     assert c_fix['topic'] == 'git_workflow', f"Expected git_workflow, got {c_fix['topic']}"
     print(f"  git_workflow fixation: OK (topic={c_fix['topic']})")
 
@@ -939,8 +937,8 @@ def _test():
     policy = get_behavior_policy()
     assert 'git_workflow' in policy['avoid_topics'], f"Expected avoid git_workflow, got {policy}"
     assert policy['force_new_angle'], f"Expected force_new_angle, got {policy}"
-    assert policy['require_metric_specificity'], f"Expected require specificity"
-    assert policy['directive'], f"Expected non-empty directive"
+    assert policy['require_metric_specificity'], "Expected require specificity"
+    assert policy['directive'], "Expected non-empty directive"
     print(f"  fixation policy: avoid={policy['avoid_topics']} mode={policy['reflection_mode']}: OK")
     print(f"  directive: {policy['directive'][:80]}...")
 
@@ -952,14 +950,14 @@ def _test():
     retry_prompt = build_retry_prompt(bad_result, policy)
     assert 'scored 25' in retry_prompt
     assert 'DIFFERENT topic' in retry_prompt
-    print(f"  retry trigger: OK")
+    print("  retry trigger: OK")
     print(f"  retry prompt: {retry_prompt[:80]}...")
 
     print("=== Active Prompt ===")
     prompt = format_active_prompt()
     assert '[COGNITION]' in prompt
     assert 'Last score' in prompt
-    print(f"  active prompt block generated: OK")
+    print("  active prompt block generated: OK")
 
     print("=== Consolidation Quality ===")
     # Reset for clean consolidation test

@@ -38,7 +38,7 @@ def _make_fake_result(
 ):
     """Build a ReviewResult stand-in without depending on the real
     class import (avoids circular reload)."""
-    from core.self_dev import Concern, ReviewResult
+    from core.self_dev import ReviewResult
     return ReviewResult(
         target_ref=target,
         diff_size_chars=diff_size,

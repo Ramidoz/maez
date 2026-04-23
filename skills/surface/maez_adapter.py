@@ -28,7 +28,7 @@ import logging
 from typing import Any, Optional
 
 from skills.surface.platform_base import MessageEvent
-from skills.surface.platform_config import Platform, PlatformConfig
+from skills.surface.platform_config import PlatformConfig
 from skills.surface.telegram_adapter import TelegramAdapter
 
 logger = logging.getLogger(__name__)

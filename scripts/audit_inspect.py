@@ -235,7 +235,7 @@ def print_text(stats: dict) -> None:
     print(f'  replies total      : {rt["replies_total"]}')
     print(f'  retry attempted    : {rt["retry_attempted"]}')
     print(f'  attempt rate       : {rt["attempt_rate"]:.2%}')
-    print(f'  by strategy        :')
+    print('  by strategy        :')
     for k, v in rt['by_strategy'].items():
         print(f'    {k:25s} {v:6d}')
 

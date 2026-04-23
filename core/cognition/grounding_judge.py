@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import urllib.request
 from typing import Any
 

@@ -955,7 +955,6 @@ class MaezDaemon:
                     from core.error_classifier import (
                         classify as _classify,
                         emit_telemetry as _emit_err,
-                        ErrorClass as _ErrClass,
                     )
                     _cls = _classify(first_err)
                     _emit_err(_cls, surface="daemon_cycle")
@@ -1143,7 +1142,7 @@ class MaezDaemon:
             cutoff_iso = _dt.fromtimestamp(time.time() - 86400, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
             results = col.get(include=["documents", "metadatas"])
             filtered = [
-                (doc, meta) for doc, meta in zip(results["documents"], results["metadatas"])
+                (doc, meta) for doc, meta in zip(results["documents"], results["metadatas"], strict=False)
                 if meta.get("timestamp", "") >= cutoff_iso
             ]
             if not filtered:

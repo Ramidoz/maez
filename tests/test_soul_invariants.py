@@ -13,8 +13,7 @@ import unittest
 from pathlib import Path
 
 from core.soul_invariants import (
-    check, InvariantResult,
-    _diag_required_keys, _diag_anti_keys,
+    check, _diag_required_keys, _diag_anti_keys,
 )
 
 

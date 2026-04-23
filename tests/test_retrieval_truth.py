@@ -37,7 +37,6 @@ Reproducers these tests exist to prevent:
 Offline only. No LLM calls.
 """
 
-import os
 import re
 import sys
 

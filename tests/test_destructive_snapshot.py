@@ -10,8 +10,6 @@ path existed. This module closes the gap."""
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import tempfile
 import unittest
 from pathlib import Path

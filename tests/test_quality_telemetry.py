@@ -11,7 +11,7 @@ from unittest.mock import patch
 from core import quality_telemetry as qt
 from core.quality_telemetry import (
     _parse_audit_lines, _parse_error_lines, _parse_consolidation_lines,
-    build_rollup, AuditRollup, ErrorRollup, ConsolidationRollup,
+    build_rollup,
 )
 
 

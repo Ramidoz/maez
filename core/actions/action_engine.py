@@ -1636,7 +1636,7 @@ class ActionEngine:
                 # Tier 3 expired without approval
                 self._log_action(entry["tier"], entry["action"],
                                  entry["reasoning"], entry["params"],
-                                 f"EXPIRED (no approval after 10m)")
+                                 "EXPIRED (no approval after 10m)")
                 _quality_tracker.record_outcome(entry["id"], 'rejected', 'timeout')
                 if self.telegram:
                     self.telegram.send_message(

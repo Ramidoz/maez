@@ -26,19 +26,17 @@ jobs:
       - name: Install ruff
         run: pip install "ruff>=0.6"
 
-      - name: Lint the runtime tree (informational today)
-        # ruff config (line-length, target-version, ignore list) lives
-        # in pyproject.toml under [tool.ruff]. The current rule set is
-        # deliberately narrow (pyflakes + statement-level pycodestyle
-        # + targeted bugbear) so only real-bug findings surface.
-        #
-        # The job is informational for the v0.1-alpha window — a full
-        # modernisation + format sweep is Phase-8 follow-up work. Once
-        # that sweep lands and the codebase is at ~0 findings, drop
-        # `continue-on-error: true` below so lint becomes a PR gate.
-        continue-on-error: true
+      - name: Lint the runtime tree (strict — PR gate)
+        # ruff config lives in pyproject.toml under [tool.ruff.lint].
+        # The selected rule set catches real bugs (pyflakes, syntax,
+        # mutable-arg defaults, closure-over-loop pitfalls, strict-zip).
+        # Modernisation + format rules (UP, I, E7, full B) are deferred
+        # to a later sweep; see pyproject.toml comment for the plan.
         run: ruff check core/ skills/ daemon/ tests/ cli/ scripts/
 
       - name: Format check (informational only)
+        # Format check stays informational until the modernisation
+        # sweep lands — a one-shot reformat would bury real diffs for
+        # no immediate reader benefit.
         continue-on-error: true
         run: ruff format --check core/ skills/ daemon/ tests/ cli/ scripts/

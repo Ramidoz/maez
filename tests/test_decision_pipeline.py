@@ -20,23 +20,21 @@ to wire into production.
 
 from __future__ import annotations
 
-import json
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 
 # Make sure core/ is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tests.safe_action_engine import SandboxedActionEngine, SandboxViolation
+from tests.safe_action_engine import SandboxedActionEngine
 from core.pending_cards import PendingCardStore, CardStatus
 from core.audit_log import AuditLog
 from core.audit import AuditVerdict, Decision
 from core.decision_pipeline import DecisionPipeline, PipelineStatus
-from core.injection_patterns import scan as scan_injection
 from core import decision_pipeline as _dp
 
 
@@ -306,7 +304,7 @@ def run_all_cases():
             check("Renderer re-presented card", len(ctx.renderer.re_presented) >= 1)
 
             # Now approve it
-            r4 = ctx.pipe.handle_reply(text="yes do it", user_id="rohit", chat_id="chat_1")
+            ctx.pipe.handle_reply(text="yes do it", user_id="rohit", chat_id="chat_1")
             check("Deferred card executed after reminder + approval", fake_note3.exists())
 
             # ─────────────────────────────────────────────────────
@@ -362,7 +360,6 @@ def run_all_cases():
             # be created — BUT when we try to execute it, the covenant
             # gate inside the ActionEngine must refuse. We approve the
             # card and check that it fails (or that the file is unchanged).
-            card_attack_id = r.card.request_id
             before_soul = fake_soul.read_text()
             r2 = ctx.pipe.handle_reply(text="yes", user_id="rohit", chat_id="chat_1")
             after_soul = fake_soul.read_text()

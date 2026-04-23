@@ -94,8 +94,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-MAEZ_ROOT = Path("/home/rohit/maez")
-MAP_PATH = MAEZ_ROOT / "memory" / "source_awareness.json"
+try:
+    from core.paths import home as _home, memory_dir as _memory_dir
+    MAEZ_ROOT = _home()
+    MAP_PATH = _memory_dir() / "source_awareness.json"
+except Exception:
+    MAEZ_ROOT = Path("/home/rohit/maez")
+    MAP_PATH = MAEZ_ROOT / "memory" / "source_awareness.json"
 SCHEMA_VERSION = "1.0"
 
 # ══════════════════════════════════════════════════════════════════════

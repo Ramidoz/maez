@@ -178,7 +178,11 @@ def _collect_top_processes(by: str, n: int = 10) -> list[dict]:
     ]
 
 
-_PERCEPTION_CACHE_PATH = "/home/rohit/maez/memory/perception_cache.json"
+try:
+    from core.paths import memory_dir as _memory_dir
+    _PERCEPTION_CACHE_PATH = str(_memory_dir() / "perception_cache.json")
+except Exception:
+    _PERCEPTION_CACHE_PATH = "/home/rohit/maez/memory/perception_cache.json"
 
 
 def _persist_cache(snap: "PerceptionSnapshot") -> None:

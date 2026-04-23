@@ -30,12 +30,12 @@ jobs:
       - name: Install dev dependencies
         run: |
           python -m pip install --upgrade pip
-          # [dev] pulls in ruff + pytest + build; the test suite only
-          # needs core runtime deps. Extras (vision / telegram / google)
-          # are heavy and not required for the default suite. If a test
-          # needs an extra, it should `self.skipUnless(...)` when the
-          # import fails rather than hard-require it in CI.
-          pip install -e .[dev]
+          # [dev] pulls in ruff + pytest + build.
+          # [telegram] adds python-telegram-bot so the telegram-gated
+          # tests actually run in CI instead of skipping.
+          # [vision] + [google] stay out because they're heavier and
+          # their tests already skipUnless cleanly without them.
+          pip install -e .[dev,telegram]
 
       - name: Report installed package versions
         run: pip list

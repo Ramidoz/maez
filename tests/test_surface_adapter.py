@@ -15,9 +15,7 @@ import unittest
 from typing import Optional
 
 from skills.surface import (
-    MessageEvent, MessageType,
-    Platform, PlatformConfig, HomeChannel,
-    SessionSource, build_session_key,
+    MessageEvent, Platform, PlatformConfig, SessionSource, build_session_key,
     MaezMessageHandler, build_telegram_adapter, SURFACE_NAME,
 )
 

@@ -1385,7 +1385,6 @@ def api_memory():
 def api_dreams():
     """Merged view of evolution candidates + dream proposals."""
     import sqlite3 as _sq
-    import time as _time
     dreams = []
     evo_path = "/home/rohit/maez/memory/evolution_track.db"
     dream_path = "/home/rohit/maez/memory/dream_proposals.db"
@@ -2036,7 +2035,7 @@ def register():
         if match:
             result["possible_telegram_match"] = {
                 **match,
-                "suggestion": f"I think I've spoken with you on Telegram before. Want to link those conversations?"
+                "suggestion": "I think I've spoken with you on Telegram before. Want to link those conversations?"
             }
         response = jsonify({"success": True, **result})
         return _attach_auth_cookie(response, result.get("web_token", ""))
@@ -2109,13 +2108,13 @@ def chat():
         owner_system = (
             f"{SOUL}\n\n"
             + (f"{ambient_block}\n\n" if ambient_block else "")
-            + f"CRITICAL:\n"
-            f"- You are talking to the owner through the maez.live web interface.\n"
-            f"- This is the same the owner as the private Telegram conversation.\n"
-            f"- Treat web and private Telegram as one continuous relationship.\n"
-            f"- Use long-term continuity naturally. Do not act like this is a fresh introduction.\n"
-            f"- Reply naturally for the web. Do not pretend this message came from Telegram unless the owner asks.\n"
-            f"- Ambient context above is a passive snapshot; do not recite it back unless relevant.\n"
+            + "CRITICAL:\n"
+            "- You are talking to the owner through the maez.live web interface.\n"
+            "- This is the same the owner as the private Telegram conversation.\n"
+            "- Treat web and private Telegram as one continuous relationship.\n"
+            "- Use long-term continuity naturally. Do not act like this is a fresh introduction.\n"
+            "- Reply naturally for the web. Do not pretend this message came from Telegram unless the owner asks.\n"
+            "- Ambient context above is a passive snapshot; do not recite it back unless relevant.\n"
         )
         owner_memory = memory.format_for_prompt(memory.recall_for_telegram(message))
         messages_list = [{"role": "system", "content": owner_system}]
@@ -2387,7 +2386,7 @@ def history():
             try:
                 results = convos.get(where={"user_id": str(user_key)},
                                      include=["documents", "metadatas"])
-                for doc, meta in zip(results["documents"], results["metadatas"]):
+                for doc, meta in zip(results["documents"], results["metadatas"], strict=False):
                     all_msgs.append({
                         "role": meta.get("role", "?"),
                         "content": doc,

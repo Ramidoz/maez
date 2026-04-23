@@ -14,11 +14,11 @@ drifting temperament are load-bearing — it is supposed to accumulate
 into something that is recognisably *itself*, not a blank slate every
 morning.
 
-<!-- CI + version badges activate once the repo is public on GitHub.
 [![tests](https://github.com/Ramidoz/maez/actions/workflows/test.yml/badge.svg)](https://github.com/Ramidoz/maez/actions/workflows/test.yml)
 [![lint](https://github.com/Ramidoz/maez/actions/workflows/lint.yml/badge.svg)](https://github.com/Ramidoz/maez/actions/workflows/lint.yml)
 [![licence](https://img.shields.io/badge/licence-AGPL--3.0-blue)](LICENSE)
--->
+[![python](https://img.shields.io/badge/python-3.12+-blue)](pyproject.toml)
+[![status](https://img.shields.io/badge/status-alpha-orange)](CHANGELOG.md)
 
 **Status:** `0.1.0-alpha`. The codebase is ready for public contribution
 — a stranger can clone, run one installer, and be running their own

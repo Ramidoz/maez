@@ -11,7 +11,6 @@ Usage:
   python -m scripts.eval_proposals [--output FILE]
 """
 
-import ast
 import difflib
 import json
 import os
@@ -120,7 +119,6 @@ def _extract_targets():
 
 def _run_single_eval(case: dict, editable_targets: list) -> dict:
     """Evaluate a single replay case. Returns metrics dict."""
-    import hashlib
     from skills.evolution_engine import (
         _generate_patch_intent, _validate_patch_intent,
         _synthesize_edit, _validate_diff_structure, _file_sha256,
@@ -302,7 +300,7 @@ def _run_single_eval(case: dict, editable_targets: list) -> dict:
 
     # Rationale specificity
     rationale = intent.get('rationale', '')
-    weakness_lower = case['weakness'].lower()
+    case['weakness'].lower()
     topic = case['evidence'].get('dominant_topic') or ''
     metrics['rationale_specific'] = (
         (topic.replace('_', ' ') in rationale.lower() if topic else False)

@@ -429,7 +429,7 @@ class ApplyDiff(_Base):
         import shutil
         if not shutil.which("patch"):
             self.skipTest("patch binary not available")
-        root = self._mock_repo({"foo.py": "a\nb\nc\n"})
+        self._mock_repo({"foo.py": "a\nb\nc\n"})
         sid = self.ws.create_session(title="visibility test")
         diff = (
             "--- foo.py\n"
@@ -508,7 +508,6 @@ class GetTurnsTail(_Base):
 
 class Rollup(_Base):
     def test_rollup_includes_turn_count(self):
-        from core.claude_tier import TierReply
 
         sid = self.ws.create_session(title="only one")
         self.ws._persist_turn(sid, "user", "q")

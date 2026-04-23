@@ -518,7 +518,7 @@ def expand_mentions(user_message: str) -> tuple[str, list[dict]]:
         lang = _EXT_LANG.get(ext, "")
         fence = f"```{lang}" if lang else "```"
         parts.extend([
-            f"",
+            "",
             f"--- {rel} ---",
             fence,
             content,

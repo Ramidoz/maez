@@ -7,7 +7,6 @@ says "reading is fine" in natural language, so subsequent read-safe
 ops auto-execute instead of stacking proposal cards."""
 from __future__ import annotations
 
-import time
 import unittest
 
 from core import approval_sessions as ap

@@ -373,7 +373,7 @@ if __name__ == "__main__":
     card.execution_error = "apt: lock file in use"
     res = format_resolution_text(card)
     assert "⚠️ Failed" in res
-    print(f"  ✓ failed resolution")
+    print("  ✓ failed resolution")
 
     # Resolution: denied
     card.status = "denied"
@@ -381,7 +381,7 @@ if __name__ == "__main__":
     res = format_resolution_text(card)
     assert "🛑 Not running" in res
     assert "changed my mind" in res
-    print(f"  ✓ denied resolution")
+    print("  ✓ denied resolution")
 
     # Resolution: expired
     card.status = "expired"
@@ -389,7 +389,7 @@ if __name__ == "__main__":
     res = format_resolution_text(card)
     assert "expired" in res
     assert "re-run the audit" in res
-    print(f"  ✓ expired resolution")
+    print("  ✓ expired resolution")
 
     # Resolution: deferred with future reminder
     card.status = "deferred"
@@ -397,7 +397,7 @@ if __name__ == "__main__":
     res = format_resolution_text(card)
     assert "Deferred" in res
     assert ("1h" in res or "61m" in res)
-    print(f"  ✓ deferred resolution with reminder")
+    print("  ✓ deferred resolution with reminder")
 
     # --- Renderer ---
     sent = []
@@ -429,7 +429,7 @@ if __name__ == "__main__":
     assert msg_id2 == "msg_2"
     assert sent[-1]["reply_to"] == "msg_1"  # threaded to original
     assert "Checking back" in sent[-1]["text"]
-    print(f"  ✓ renderer.re_present threads to original msg")
+    print("  ✓ renderer.re_present threads to original msg")
 
     # Resolution notice
     card.status = "done"
@@ -437,7 +437,7 @@ if __name__ == "__main__":
     renderer.send_resolution(card)
     assert sent[-1]["reply_to"] == "msg_1"
     assert "✅" in sent[-1]["text"]
-    print(f"  ✓ renderer.send_resolution threads to original msg")
+    print("  ✓ renderer.send_resolution threads to original msg")
 
     print(f"\n{len(sent)} Telegram messages sent during test")
     print("=== approval_card self-test complete ===")

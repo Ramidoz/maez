@@ -5,7 +5,7 @@ pass that replaces the regex detectors in self_claim_audit."""
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 class JudgePromptShape(unittest.TestCase):

@@ -3,7 +3,7 @@
 # Licensed under the GNU Affero General Public License v3.0 or later.
 # See LICENSE for full text.
 """Run the 5 Claude Code-style tests against stock-SFT brain (parity with Ornstein run)."""
-import json, time, urllib.request, sys, pathlib
+import json, time, urllib.request, pathlib
 
 BRAIN = "http://127.0.0.1:8080/v1/chat/completions"
 SOUL = pathlib.Path("/home/rohit/maez/config/soul.md").read_text()

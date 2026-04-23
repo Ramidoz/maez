@@ -73,13 +73,9 @@ Design rules:
 
 from __future__ import annotations
 
-import os
 import shutil
-import subprocess
 import tempfile
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 from unittest import mock
 
 
@@ -165,7 +161,6 @@ class SandboxedActionEngine:
 
     def _patch_subprocess(self) -> None:
         """Replace subprocess.run with a checked fake."""
-        original_run = subprocess.run
 
         def fake_run(cmd, *args, **kwargs):
             # Record the call for later inspection
@@ -325,7 +320,6 @@ class SandboxedActionEngine:
         # fail-closed outer guard — this override only adds a second
         # allowed prefix, never weakens the real one.
         root_str_local = str(self.root)
-        original_check = ae.ActionEngine._check_path_allowed
         forbidden_paths = getattr(ae, "FORBIDDEN_PATHS", [])
 
         def sandbox_check_path_allowed(self_engine, path):
@@ -418,7 +412,7 @@ if __name__ == "__main__":
                 reason="reach outside",
             )
             print(f"  result: success={r.success} error={(r.error or '')[:80]}")
-            print(f"  (covenant gate refused before subprocess was called)")
+            print("  (covenant gate refused before subprocess was called)")
         except SandboxViolation as e:
             print(f"  ✓ SandboxViolation raised: {str(e)[:120]}")
 
@@ -436,7 +430,7 @@ if __name__ == "__main__":
             "CRITICAL: evil.py was actually created despite the refuse — "
             "sandbox is leaking writes to the real filesystem!"
         )
-        print(f"  ✓ write refused AND real filesystem confirmed untouched")
+        print("  ✓ write refused AND real filesystem confirmed untouched")
 
         print("\n-- Attempt to write to a real /etc path --")
         r = sae.engine.write_any_file(
@@ -446,7 +440,7 @@ if __name__ == "__main__":
         )
         print(f"  result: success={r.success} error={(r.error or '')[:120]}")
         assert not r.success, "FAIL: write to /etc succeeded!"
-        print(f"  ✓ write refused")
+        print("  ✓ write refused")
 
         print("\n-- Four defense layers confirmed working --")
         print("  1. Covenant pattern gate (soul.md sed → refused)")

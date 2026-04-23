@@ -94,7 +94,7 @@ def _get_public_context_for_telegram() -> str:
         cutoff_iso = _dt.fromtimestamp(_time.time() - 86400, tz=_tz.utc).strftime('%Y-%m-%dT%H:%M:%S')
         results = col.get(include=["documents", "metadatas"])
         filtered = [
-            (doc, meta) for doc, meta in zip(results["documents"], results["metadatas"])
+            (doc, meta) for doc, meta in zip(results["documents"], results["metadatas"], strict=False)
             if meta.get("timestamp", "") >= cutoff_iso
         ]
         if not filtered:
@@ -2021,7 +2021,7 @@ class TelegramVoice:
                     "",
                     f"What I want to do: {i.get('human_rationale', '(no plain-English description)')}",
                     "",
-                    f"Technical details:",
+                    "Technical details:",
                     f"  File: {disp.get('target_file', '?')}",
                     f"  Target: {i.get('target_name', '?')}",
                     f"  Before: {i.get('current_value')!r}",
@@ -2458,7 +2458,7 @@ class TelegramVoice:
                     capture_output=True, text=True, timeout=5,
                 ).stdout.strip().split('\n')
                 svc_names = ['maez', 'maez-web', 'nginx', 'ollama']
-                svc_str = " | ".join(f"{n}: {s}" for n, s in zip(svc_names, services))
+                svc_str = " | ".join(f"{n}: {s}" for n, s in zip(svc_names, services, strict=False))
                 msg = (
                     f"All systems nominal.\n"
                     f"CPU {snap['cpu']['percent']}% | RAM {snap['ram']['percent']}% | "
@@ -3946,7 +3946,7 @@ class TelegramVoice:
                 f"Before:   {intent.get('current_value')!r}",
                 f"After:    {intent.get('proposed_value')!r}",
                 f"Why:      {intent.get('rationale', '?')[:150]}",
-                f"",
+                "",
                 f"Failure mode:    {ev.get('dominant_failure_mode', '?')}",
                 f"Addresses:       {u.get('addresses_failure_mode')}",
                 f"Direction sane:  {u.get('direction_sane')}",

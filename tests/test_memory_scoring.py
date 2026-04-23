@@ -10,13 +10,11 @@ from __future__ import annotations
 
 import time
 import unittest
-from pathlib import Path
 
 from core import memory_scoring as ms
 from core.memory_scoring import (
     derive_concept_tags, record_recall, get_stats, mark_consolidated,
-    promotion_score, RecallStats, PromotionWeights, DEFAULT_WEIGHTS,
-    MAX_CONCEPT_TAGS,
+    promotion_score, RecallStats, PromotionWeights, MAX_CONCEPT_TAGS,
 )
 
 

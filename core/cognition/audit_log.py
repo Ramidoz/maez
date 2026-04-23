@@ -934,7 +934,7 @@ if __name__ == "__main__":
         DIRECT_EDIT_SESSION_END,
     ]
     assert [r["action"] for r in all_dme] == expected_sequence
-    print(f"  ✓ recent_direct_edits() returned all 7 events in ascending order")
+    print("  ✓ recent_direct_edits() returned all 7 events in ascending order")
 
     # Scope to tg session only
     tg_only = log.recent_direct_edits(session_id=sid_tg)
@@ -947,18 +947,18 @@ if __name__ == "__main__":
     cli_only = log.recent_direct_edits(since_ts=cli_start_ts)
     assert len(cli_only) == 3  # start + 1 edit + end
     assert all(r["session_id"] == sid_cli for r in cli_only)
-    print(f"  ✓ recent_direct_edits(since_ts) scoped correctly to cli session")
+    print("  ✓ recent_direct_edits(since_ts) scoped correctly to cli session")
 
     # Every direct-edit event should be tagged gestation (pre-birth default)
     assert all(r["memory_phase"] == MEMORY_PHASE_GESTATION for r in all_dme)
-    print(f"  ✓ all direct-edit events tagged memory_phase=gestation")
+    print("  ✓ all direct-edit events tagged memory_phase=gestation")
 
     # The existing audit rows (from the earlier part of the test) should
     # also be tagged gestation by the default — verify this cross-cutting
     # property of the memory_phase column applies to all event types.
     audit_row = log.get(rid1)
     assert audit_row["memory_phase"] == MEMORY_PHASE_GESTATION
-    print(f"  ✓ pre-existing audit rows tagged memory_phase=gestation via column default")
+    print("  ✓ pre-existing audit rows tagged memory_phase=gestation via column default")
 
     # Recent() should now return 10 total (3 audit + 7 direct-edit)
     all_rows = log.recent(limit=100)
@@ -972,14 +972,14 @@ if __name__ == "__main__":
     assert parsed["paths"] == ["core/action_classifier.py", "tests/test_decision_pipeline.py"]
     assert parsed["commit_hash"] == "abc123def456"
     assert parsed["diff_summary"].startswith("committed:")
-    print(f"  ✓ direct-edit params_json round-trips cleanly")
+    print("  ✓ direct-edit params_json round-trips cleanly")
 
     # Verify migration idempotency: opening the same DB again should not
     # double-apply the ALTER TABLE migration.
     log2 = AuditLog(db_path)
     assert log2.get(eid2) is not None
-    print(f"  ✓ reopening DB is idempotent (migration guard holds)")
+    print("  ✓ reopening DB is idempotent (migration guard holds)")
 
     # Cleanup
     db_path.unlink(missing_ok=True)
-    print(f"\n=== audit_log self-test complete ===")
+    print("\n=== audit_log self-test complete ===")

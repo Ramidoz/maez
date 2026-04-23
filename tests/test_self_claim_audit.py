@@ -171,7 +171,7 @@ class PreFilter(unittest.TestCase):
         from unittest.mock import patch
         with patch("core.self_claim_audit._find_flags",
                    return_value=([], True)) as mock_find:
-            r = audit("The disk has been trending upward for weeks.",
+            audit("The disk has been trending upward for weeks.",
                       surface="chat")
             mock_find.assert_called_once()
 

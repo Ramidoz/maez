@@ -77,7 +77,6 @@ except ImportError:
         DEFAULT_TYPE = Any
     ContextTypes = _MockContextTypes
 
-import sys
 
 from skills.surface.platform_config import Platform, PlatformConfig
 from skills.surface.platform_base import (

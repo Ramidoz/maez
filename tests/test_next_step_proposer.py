@@ -379,4 +379,4 @@ if __name__ == "__main__":
     test_telegram_voice_delegation_passes_audit_db_path()
     print("  ✓ TelegramVoice delegation passes audit_db_path")
 
-    print(f"\n15/15 checks PASS — next_step_proposer extraction verified.")
+    print("\n15/15 checks PASS — next_step_proposer extraction verified.")

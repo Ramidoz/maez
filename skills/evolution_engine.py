@@ -894,7 +894,7 @@ def apply_candidate(candidate_id: int) -> dict:
         current_hash = _file_sha256(full_path)
         if current_hash != pre_hash:
             _set_candidate_state(candidate_id, 'rejected',
-                                 rejection_reason=f'File changed since validation (hash mismatch)')
+                                 rejection_reason='File changed since validation (hash mismatch)')
             return {'error': 'Target file hash changed since validation'}
 
         # Acquire lock
@@ -3125,7 +3125,7 @@ def _render_candidate_cli(disp: dict):
         print(f"  After:   {intent.get('proposed_value')!r}")
         print(f"  Why:     {intent.get('rationale', '?')}")
     else:
-        print(f"  (no structured intent available)")
+        print("  (no structured intent available)")
 
     print()
     print("Usefulness assessment:")

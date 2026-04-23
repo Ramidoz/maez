@@ -82,7 +82,7 @@ class GitHubSkill:
 
     def get_user_repos(self) -> list:
         data = self._get(
-            f'https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner',
+            'https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner',
             cache_key='user_repos', ttl=300,
         )
         return data if isinstance(data, list) else []

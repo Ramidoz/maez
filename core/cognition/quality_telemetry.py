@@ -35,7 +35,6 @@ import time
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger("maez.quality_telemetry")
 
