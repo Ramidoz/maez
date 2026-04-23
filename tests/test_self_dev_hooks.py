@@ -65,9 +65,28 @@ class DecideSkipCases(_PolicyFixture):
 
     def test_lockfile_only_diff_skips(self):
         """diff that only touches package-lock.json has zero
-        significant size → skip."""
+        significant size → skip.
+
+        self-dev review on a063b35 (concern #43) fix: diffs used by
+        `git show` include a full commit-header preamble (Author,
+        Date, commit message) before the first `diff --git`. The
+        old implementation counted those header chars as
+        significant, which meant lockfile-only commits with any
+        commit message > 0 chars (effectively all of them) silently
+        exceeded the zero-significant threshold and DID fire a
+        review. Test with a realistic git-show preamble to regress
+        the bug.
+        """
         from core import self_dev_hooks
         diff = (
+            "commit abc123def4567890abc123def4567890abc123de\n"
+            "Author: Rohit Ananthan <rohit@example.com>\n"
+            "Date:   Wed Apr 22 18:00:00 2026 -0500\n"
+            "\n"
+            "    chore: bump lockfile\n"
+            "\n"
+            "    keeps dependencies fresh.\n"
+            "\n"
             "diff --git a/package-lock.json b/package-lock.json\n"
             "+a lot of lockfile churn here\n"
             "+more of it\n"
@@ -77,8 +96,43 @@ class DecideSkipCases(_PolicyFixture):
             side_effect=self._mock_ok_git(diff),
         ):
             d = self_dev_hooks.decide(self.VALID_SHA)
-        self.assertFalse(d.should_review)
+        self.assertFalse(d.should_review,
+                         f"lockfile-only commit with commit-header "
+                         f"preamble must NOT trigger review (pre-fix "
+                         f"bug). reason: {d.reason}")
         self.assertIn("boring-only", d.reason.lower())
+
+    def test_lockfile_with_non_boring_file_still_fires(self):
+        """Sanity: if a commit touches BOTH a lockfile AND a real
+        Python file, the non-boring diff content counts and the
+        review should fire. Regresses the over-correction risk of
+        the boring-filter fix."""
+        from core import self_dev_hooks
+        diff = (
+            "commit abc123def4567890abc123def4567890abc123de\n"
+            "Author: R <r@example.com>\n"
+            "Date:   Wed Apr 22 18:00:00 2026 -0500\n"
+            "\n"
+            "    feat: actual change + lockfile bump\n"
+            "\n"
+            "diff --git a/package-lock.json b/package-lock.json\n"
+            "+lockfile junk\n"
+            "diff --git a/core/real.py b/core/real.py\n"
+            "+def actual_function():\n"
+            "+    return 1\n"
+        )
+        with mock.patch.object(
+            self_dev_hooks, "_git",
+            side_effect=self._mock_ok_git(diff),
+        ), mock.patch(
+            "core.claude_tier.budget",
+            return_value={"claude": self.HEALTHY_BUDGET["claude"]},
+        ):
+            d = self_dev_hooks.decide(self.VALID_SHA)
+        self.assertTrue(d.should_review,
+                         f"commit with non-boring Python changes "
+                         f"must trigger review even if it also "
+                         f"touches a lockfile. reason: {d.reason}")
 
     def test_oversized_diff_skips(self):
         from core import self_dev_hooks
