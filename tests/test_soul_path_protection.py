@@ -39,11 +39,22 @@ if str(_REPO) not in sys.path:
 
 class SoulAbsolutePathBlocked(unittest.TestCase):
     """COVENANT_PATHS catches absolute-path references to soul files
-    in any shell command, regardless of verb."""
+    in any shell command, regardless of verb.
+
+    CI-portability (2026-04-24): use `BASE_DIR` at test time rather
+    than hardcoding `/home/rohit/maez/...`. In CI, `BASE_DIR` resolves
+    to the runner's checkout path (e.g. `/home/runner/work/maez/maez`),
+    and `COVENANT_PATHS` is derived from `BASE_DIR` at module load —
+    so a literal `/home/rohit/maez/config/soul.md` never matches when
+    the test runs on a non-dev machine. Earlier commit 7086d6d did the
+    same pass for other CI-fragile absolute-path tests."""
 
     def setUp(self):
-        from core.action_engine import ActionEngine
+        from core.action_engine import ActionEngine, BASE_DIR
         self.engine = ActionEngine.__new__(ActionEngine)
+        self.soul_abs = str(BASE_DIR / "config" / "soul.md")
+        self.soul_base_abs = str(BASE_DIR / "config" / "soul.base.md")
+        self.soul_local_abs = str(BASE_DIR / "config" / "soul.local.md")
 
     def _assert_blocked(self, cmd: str):
         from core.action_engine import ForbiddenActionError
@@ -51,13 +62,13 @@ class SoulAbsolutePathBlocked(unittest.TestCase):
             self.engine._check_forbidden("run_shell", {"cmd": cmd})
 
     def test_rm_soul_abs_path(self):
-        self._assert_blocked("rm /home/rohit/maez/config/soul.md")
+        self._assert_blocked(f"rm {self.soul_abs}")
 
     def test_rm_soul_base_abs_path(self):
-        self._assert_blocked("rm /home/rohit/maez/config/soul.base.md")
+        self._assert_blocked(f"rm {self.soul_base_abs}")
 
     def test_rm_soul_local_abs_path(self):
-        self._assert_blocked("rm /home/rohit/maez/config/soul.local.md")
+        self._assert_blocked(f"rm {self.soul_local_abs}")
 
 
 class SoulRelativePathBlocked(unittest.TestCase):
@@ -119,8 +130,9 @@ class SoulReadViaRelativePathAllowed(unittest.TestCase):
     bypass the shell layer entirely, so this doesn't hurt operation."""
 
     def setUp(self):
-        from core.action_engine import ActionEngine
+        from core.action_engine import ActionEngine, BASE_DIR
         self.engine = ActionEngine.__new__(ActionEngine)
+        self.soul_abs = str(BASE_DIR / "config" / "soul.md")
 
     def _assert_allowed(self, cmd: str):
         self.assertIsNone(self.engine._check_forbidden("run_shell", {"cmd": cmd}))
@@ -146,7 +158,9 @@ class SoulReadViaRelativePathAllowed(unittest.TestCase):
         # Consistent with existing protection for daemon/maez_daemon.py
         # and core/action_engine.py — any mention of the absolute path
         # is refused. Daemon's own file reads don't go through shell.
-        self._assert_blocked_absolute_path("cat /home/rohit/maez/config/soul.md")
+        # Path constructed from BASE_DIR so this test passes in CI
+        # (where BASE_DIR != /home/rohit/maez) as well as locally.
+        self._assert_blocked_absolute_path(f"cat {self.soul_abs}")
 
 
 if __name__ == "__main__":
