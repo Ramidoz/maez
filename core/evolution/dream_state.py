@@ -316,9 +316,22 @@ class DreamState:
         # emitting proper code-formatted commands is the right fix
         # at the source.
         if self.telegram is not None:
+            # 2026-04-24 audit pass (docs/audit_2026-04-24/
+            # autonomous_surface_audit.md, F2): `insight` is raw LLM
+            # output — route it through the same audit stack the
+            # interactive reply path uses so an ungrounded or
+            # command-echoing dream can't reach the owner unchecked.
+            audited_insight = insight
+            try:
+                from core.safety.audited_output import audit_assistant_text
+                audited_insight = audit_assistant_text(
+                    insight, surface="dream_state",
+                )
+            except Exception as _aud_exc:
+                logger.debug("dream: audit fail-open: %s", _aud_exc)
             try:
                 msg = (
-                    f"💭 [DREAM #{prop_id}]\n\n{insight}\n\n"
+                    f"💭 [DREAM #{prop_id}]\n\n{audited_insight}\n\n"
                     f"`/apply_dream {prop_id}`  ·  `/reject_dream {prop_id}`"
                 )
                 self.telegram.send_message(msg)

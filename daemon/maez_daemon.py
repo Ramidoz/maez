@@ -1523,14 +1523,27 @@ class MaezDaemon:
     def _send_morning_briefing(self, snap: dict):
         """Send morning briefing when the owner first sits down. Once per day.
 
-        State is persisted to /home/rohit/maez/memory/last_briefing.txt
-        so daemon restarts don't reset the once-per-day guarantee.
-        Before the persistence fix (observed 2026-04-22: 3 briefings in
-        34 minutes after several restarts), _last_briefing_date was
+        State is persisted to `{BASE_DIR}/memory/last_briefing.txt` so
+        daemon restarts don't reset the once-per-day guarantee. Before
+        the persistence fix (observed 2026-04-22: 3 briefings in 34
+        minutes after several restarts), `_last_briefing_date` was
         in-memory only and every restart re-enabled the briefing.
+
+        2026-04-24 audit pass (see docs/audit_2026-04-24/
+        autonomous_surface_audit.md, F1): (a) the briefing now goes
+        through `audit_assistant_text` before send so an LLM
+        fabrication has the same backstop as interactive replies;
+        (b) briefing stamp path uses `BASE_DIR` so the daemon works in
+        CI and on non-dev installs; (c) the LLM prompt uses
+        `display_name()` instead of the ungrammatical "the owner his"
+        role label; (d) the sent briefing is stored in telegram
+        memory so `chat_history` threading surfaces it as a prior
+        assistant turn when the owner replies.
         """
+        from core import paths as _paths
+        from core.memory.identity import display_name as _display_name
         today = time.strftime('%Y-%m-%d')
-        briefing_stamp = Path("/home/rohit/maez/memory/last_briefing.txt")
+        briefing_stamp = _paths.home() / "memory" / "last_briefing.txt"
         try:
             if briefing_stamp.exists():
                 persisted = briefing_stamp.read_text().strip()
@@ -1576,8 +1589,9 @@ class MaezDaemon:
             disk_pct = snap["disk"].get("/", {}).get("percent", 0)
             stats = self.memory.memory_stats()
 
+            owner_name = _display_name() or "Friend"
             briefing_prompt = (
-                f"You are sending the owner his morning briefing.\n"
+                f"You are sending {owner_name}'s morning briefing.\n"
                 f"It is {time.strftime('%A, %B %d, %Y at %I:%M %p')}.\n\n"
                 f"Context:\n"
                 f"- {cal_text}\n"
@@ -1602,8 +1616,36 @@ class MaezDaemon:
             )
             briefing = (response.message.content or "").strip()
             if briefing:
-                self.telegram.send_message(f"Morning briefing:\n\n{briefing}")
+                # 2026-04-24: audit before send. Same contract as the
+                # interactive reply path — stored text == sent text ==
+                # audited text. surface="morning_briefing" so audit
+                # telemetry can bucket this path.
+                try:
+                    from core.safety.audited_output import audit_assistant_text
+                    briefing = audit_assistant_text(
+                        briefing, surface="morning_briefing",
+                    )
+                except Exception as _aud_exc:
+                    logger.warning(
+                        "morning_briefing audit fail-open: %s", _aud_exc,
+                    )
+                final_msg = f"Morning briefing:\n\n{briefing}"
+                self.telegram.send_message(final_msg)
                 logger.info("Morning briefing sent")
+                # Store as a telegram exchange so chat_history threading
+                # picks it up when the owner replies. Placeholder user
+                # turn ([just arrived]) keeps the stored shape
+                # consistent with `_clean_exchange`'s parse expectation.
+                try:
+                    self.memory.store_telegram(
+                        f"the owner (morning_briefing): [just arrived]\n"
+                        f"Maez: {briefing}"
+                    )
+                except Exception as _store_exc:
+                    logger.debug(
+                        "morning_briefing memory store skipped: %s",
+                        _store_exc,
+                    )
 
         except Exception as e:
             logger.error("Morning briefing failed: %s", e)
