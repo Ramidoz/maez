@@ -160,6 +160,59 @@ def _covenant_violation(text: str) -> str | None:
             return f"{name_p.pattern} with destructive verb"
     return None
 
+
+_CONTINUOUS_COMMAND_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(
+            r"\bnvidia-smi\b(?=[^;&|]*\s(?:-l(?:ms)?(?:[=\s]?\d+)?|--loop(?:-ms)?(?:[=\s]\d+)?)(?:\s|$))",
+            re.IGNORECASE,
+        ),
+        "nvidia-smi loop flag (-l/-lms/--loop)",
+    ),
+    (
+        re.compile(
+            r"\btail\b(?=[^;&|]*\s(?:-[A-Za-z]*[fF][A-Za-z]*|--follow)(?:[=\s]|\b))",
+            re.IGNORECASE,
+        ),
+        "tail follow mode (-f/-F/--follow)",
+    ),
+    (
+        re.compile(
+            r"\bjournalctl\b(?=[^;&|]*\s(?:-[A-Za-z]*f[A-Za-z]*|--follow)(?:[=\s]|\b))",
+            re.IGNORECASE,
+        ),
+        "journalctl follow mode (-f/--follow)",
+    ),
+    (
+        re.compile(r"(?:^|[;&|]{1,2})\s*watch\b", re.IGNORECASE),
+        "watch loop",
+    ),
+    (
+        re.compile(r"(?:^|[;&|]{1,2})\s*(?:htop|btop|atop)\b", re.IGNORECASE),
+        "interactive/continuous process monitor",
+    ),
+)
+
+
+def _continuous_command_violation(text: str) -> str | None:
+    """Return a reason if a shell command is designed to stream forever."""
+    for pattern, reason in _CONTINUOUS_COMMAND_PATTERNS:
+        if pattern.search(text):
+            return (
+                "continuous/streaming command not allowed in non-streaming "
+                f"tool loop: {reason}"
+            )
+    if (
+        re.search(r"\bstrace\b(?=[^;&|]*\s-p\s*\d+)", text, re.IGNORECASE)
+        and not re.search(r"\bstrace\b(?=[^;&|]*\s-c\b)", text, re.IGNORECASE)
+    ):
+        return (
+            "continuous/streaming command not allowed in non-streaming "
+            "tool loop: strace -p without -c"
+        )
+    return None
+
+
 COVENANT_PATHS = [
     BASE_DIR / "memory" / "db",
     BASE_DIR / "daemon" / "maez_daemon.py",
@@ -512,6 +565,11 @@ class ActionEngine:
             if violation:
                 raise ForbiddenActionError(
                     f"[COVENANT] shell command hits protected surface: {violation}"
+                )
+            continuous_violation = _continuous_command_violation(cmd)
+            if continuous_violation:
+                raise ForbiddenActionError(
+                    f"[COVENANT] shell command is non-terminating: {continuous_violation}"
                 )
             # Path-based check against any /home/rohit/maez/... reference
             # inside the shell command string

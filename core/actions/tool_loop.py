@@ -23,7 +23,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from core.action_engine import _covenant_violation as _covenant_check
+from core.action_engine import (
+    _continuous_command_violation as _continuous_check,
+    _covenant_violation as _covenant_check,
+)
 
 try:
     from core.paths import home as _home
@@ -121,6 +124,9 @@ def safety_check(cmd: str) -> Optional[str]:
     rm_danger = _rm_rf_danger(low)
     if rm_danger:
         return rm_danger
+    continuous = _continuous_check(cmd)
+    if continuous:
+        return continuous
     maez_root = str(_MAEZ_ROOT).lower()
     if maez_root in low and re.search(
         r"\b(rm\s|mv\s|sed\s+-i|tee\s+|>\s*|>>\s*|truncate\s|chmod\s|chown\s)",

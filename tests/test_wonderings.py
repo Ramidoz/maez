@@ -57,6 +57,29 @@ class ToolLoopGates(unittest.TestCase):
         self.assertIsNone(safety_check("rm -rf /tmp/build-scratch"))
         self.assertIsNone(safety_check("rm -rf ./scratch"))
 
+    def test_safety_blocks_continuous_commands(self):
+        blocked = [
+            "nvidia-smi --query-gpu=temperature.gpu --format=csv -l 1",
+            "nvidia-smi -l1",
+            "nvidia-smi --loop=1",
+            "nvidia-smi -lms 500",
+            "tail -f logs/maez.log",
+            "tail -F logs/maez.log",
+            "journalctl --follow -u maez",
+            "journalctl -fu maez",
+            "watch systemctl status maez",
+            "ps aux && watch nvidia-smi",
+        ]
+        for cmd in blocked:
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(safety_check(cmd))
+
+    def test_safety_allows_finite_nvidia_smi_probe(self):
+        self.assertIsNone(safety_check(
+            "nvidia-smi --query-gpu=temperature.gpu,memory.used "
+            "--format=csv,noheader"
+        ))
+
 
 class LearningValidation(unittest.TestCase):
     def test_empty_output_accepts_sentinel(self):
