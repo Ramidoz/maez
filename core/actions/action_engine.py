@@ -102,6 +102,15 @@ PROTECTED_NAMES = [
     re.compile(r"\bevolution_engine\b", re.IGNORECASE),
     re.compile(r"\bmaez-watchdog\b", re.IGNORECASE),
     re.compile(r"\bmaez\.pid\b", re.IGNORECASE),
+    # 2026-04-23: soul files by bare filename. Absolute-path form is
+    # also covered via COVENANT_PATHS (below), but COVENANT_PATHS uses
+    # `str(path) in cmd` substring matching which misses relative-path
+    # forms like `rm config/soul.md` or `cd config && rm soul.md`.
+    # Combined with DESTRUCTIVE_VERB this catches `rm`, `mv`, `cp`,
+    # `tee`, `>`, `>>`, etc. targeting soul files — identity ground
+    # truth cannot be destroyed via path-obfuscation tricks. Gap found
+    # during the 2026-04-23 evening adversarial-probe pre-audit.
+    re.compile(r"\bsoul(?:\.base|\.local)?\.md\b", re.IGNORECASE),
 ]
 
 # Verbs/operators that change state. Presence near a PROTECTED_NAME = deny.
@@ -218,6 +227,13 @@ COVENANT_PATHS = [
     BASE_DIR / "daemon" / "maez_daemon.py",
     BASE_DIR / "core" / "action_engine.py",
     BASE_DIR / "skills" / "evolution_engine.py",
+    # 2026-04-23: soul files are identity ground truth. Absolute-path
+    # references to them in a shell command are always refused at this
+    # layer. The bare-filename catch is in PROTECTED_NAMES above; this
+    # layer covers the `rm /home/rohit/maez/config/soul.md` form.
+    BASE_DIR / "config" / "soul.md",
+    BASE_DIR / "config" / "soul.base.md",
+    BASE_DIR / "config" / "soul.local.md",
 ]
 
 # --- Obfuscation hard-deny (Session 11z Part 1, Step 4) ---
