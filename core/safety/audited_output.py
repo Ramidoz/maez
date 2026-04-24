@@ -91,6 +91,21 @@ def audit_assistant_text(
     if not text or not text.strip():
         return text
 
+    # Output-side command guard: any fenced block or inline backtick
+    # span that contains a command the covenant gate would refuse gets
+    # replaced with a plain-language refusal. Runs before the self-claim
+    # audit so the audit sees the scrubbed text (no point judging a
+    # reply for a dangerous quote that the owner never should see).
+    try:
+        from core.safety.output_command_guard import scrub_protected_commands
+        text, _scrubbed = scrub_protected_commands(text)
+    except Exception as exc:
+        logger.warning(
+            "audit_assistant_text: output_command_guard raised on %s "
+            "(continuing without scrub): %s",
+            surface, exc,
+        )
+
     # Derive tool-continuation from transcript presence unless caller
     # explicitly forced the value. Single knob, minimal API surface.
     if in_tool_continuation is None:
