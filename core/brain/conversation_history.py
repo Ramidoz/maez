@@ -27,25 +27,39 @@ from __future__ import annotations
 
 from typing import Iterable
 
-
-_USER_PREFIX = "Rohit:"
+# Cleaned exchange shape: "<display_name>: <msg>\nMaez: <reply>" —
+# owner prefix is prefix-agnostic (split on first ":" of line 1) so no
+# name is hardcoded and future display_name changes don't break
+# parsing of historical rows.
 _ASSISTANT_MARKER = "\nMaez:"
+_LEGACY_ENVELOPE_PREFIX = "the owner ("
 
 
 def _split_exchange(content: str) -> tuple[str, str] | None:
     """Return (user_msg, assistant_reply) for a cleaned exchange, or
-    None if the shape doesn't match. Rejects legacy envelope entries
-    by requiring both the "Rohit:" prefix and a "\\nMaez:" delimiter.
+    None if the shape doesn't match. Shape requirement: line 1 must
+    carry a `Name:` prefix (anything before the first `:`), and
+    somewhere below there must be a `\\nMaez:` assistant marker.
     Either field empty → reject (no point polluting messages[] with
-    empty turns)."""
+    empty turns). Legacy envelope rows (start with
+    "the owner (<surface>):") are explicitly rejected because they
+    carry hundreds of lines of turn-state / forbidden-rule envelope
+    text between the user question and the Maez reply — that noise
+    would flood the synthesis prompt if threaded in verbatim."""
     if not content:
         return None
-    if not content.startswith(_USER_PREFIX):
+    first_line, _, _ = content.partition("\n")
+    if not first_line:
+        return None
+    if first_line.startswith(_LEGACY_ENVELOPE_PREFIX):
+        return None
+    colon = first_line.find(":")
+    if colon <= 0:
         return None
     pos = content.find(_ASSISTANT_MARKER)
-    if pos <= 0:
+    if pos < 0:
         return None
-    user_msg = content[len(_USER_PREFIX):pos].strip()
+    user_msg = first_line[colon + 1:].strip()
     assistant_msg = content[pos + len(_ASSISTANT_MARKER):].strip()
     if not user_msg or not assistant_msg:
         return None

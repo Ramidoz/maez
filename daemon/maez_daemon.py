@@ -2186,47 +2186,58 @@ class MaezDaemon:
                                     # Under 20 minutes — no greeting
                                     logger.debug("the owner back after %.0fs — no greeting (< 20min)",
                                                  absence_secs)
-                                elif absence_secs < 7200:
-                                    # 20 min to 2 hours — simple greeting
-                                    self.telegram.send_message("Welcome back the owner.")
-                                    self._greeted_this_session = True
-                                    self._last_greeted_at = time.time()
-                                    logger.info("Greeted the owner (away %.0fm)", absence_secs / 60)
                                 else:
-                                    # Over 2 hours — detailed greeting
-                                    hrs = int(absence_secs // 3600)
-                                    mins = int((absence_secs % 3600) // 60)
-                                    last_thought = ""
-                                    try:
-                                        recent = self.memory.raw.get(
-                                            limit=1, include=["documents"]
-                                        )
-                                        if recent["documents"]:
-                                            last_thought = recent["documents"][0][:120]
-                                    except Exception:
-                                        pass
-                                    # Temporal grounding fix: strip stale weekday
-                                    # phrases from recalled thoughts so the greeting
-                                    # never says "Monday" when it's actually Thursday.
-                                    if last_thought:
-                                        last_thought = self._strip_temporal_phrases(last_thought)
-                                    now_local = datetime.now().astimezone()
-                                    greeting_weekday = now_local.strftime('%A')
-                                    greeting_daypart = self._get_circadian_context().split('\n')[1].strip() if self._get_circadian_context() else ''
-                                    msg = (f"Welcome back the owner — you've been away for "
-                                           f"{hrs}h {mins}m.")
-                                    if last_thought:
-                                        msg += f" Here's what I've been thinking about: {last_thought}"
-                                    self.telegram.send_message(msg)
-                                    self._greeted_this_session = True
-                                    self._last_greeted_at = time.time()
-                                    logger.info(
-                                        "Greeted the owner (away %dh %dm) | "
-                                        "greeting_weekday=%s greeting_daypart=%s "
-                                        "thought_stripped=%s",
-                                        hrs, mins, greeting_weekday, greeting_daypart,
-                                        bool(last_thought),
+                                    # 2026-04-24: unified greeting composer —
+                                    # replaces the pair of hardcoded "Welcome
+                                    # back the owner" strings (role label
+                                    # leaked into surface; no thread
+                                    # continuity on the short-absence path,
+                                    # random raw-memory thought on the long-
+                                    # absence path). See
+                                    # core/brain/return_greeting.py.
+                                    from core.brain.return_greeting import (
+                                        compose_return_greeting,
                                     )
+                                    from core.memory.identity import (
+                                        display_name as _display_name,
+                                    )
+                                    last_exchange = None
+                                    last_exchange_age = None
+                                    try:
+                                        _exs = self.memory.get_telegram_exchanges(
+                                            limit=1,
+                                        )
+                                        if _exs:
+                                            last_exchange = _exs[0]
+                                            _meta = (last_exchange or {}).get(
+                                                "metadata", {},
+                                            ) or {}
+                                            _ts = _meta.get("timestamp")
+                                            if isinstance(_ts, (int, float)):
+                                                last_exchange_age = time.time() - _ts
+                                    except Exception as _greet_exc:
+                                        logger.debug(
+                                            "greeting exchange fetch failed: %s",
+                                            _greet_exc,
+                                        )
+                                    msg = compose_return_greeting(
+                                        display_name=_display_name(),
+                                        absence_secs=absence_secs,
+                                        last_exchange=last_exchange,
+                                        last_exchange_age_secs=last_exchange_age,
+                                    )
+                                    if msg:
+                                        self.telegram.send_message(msg)
+                                        self._greeted_this_session = True
+                                        self._last_greeted_at = time.time()
+                                        hrs = int(absence_secs // 3600)
+                                        mins = int((absence_secs % 3600) // 60)
+                                        logger.info(
+                                            "Greeted %s (away %dh %dm) | "
+                                            "thread_ref=%s",
+                                            _display_name(), hrs, mins,
+                                            bool(last_exchange),
+                                        )
 
                         # Morning briefing check
                         if (self._last_presence_snap.just_arrived

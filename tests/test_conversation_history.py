@@ -64,13 +64,31 @@ class HistoryToMessages(unittest.TestCase):
         self.assertEqual(out[3]["content"], "yes")
 
     def test_legacy_envelope_entries_rejected(self):
-        # Pre-2026-04-23 storage form — has envelope text, no
-        # "Rohit:" prefix after cleaning. Must not leak into messages.
+        # Pre-2026-04-23 storage form — starts with "the owner
+        # (<surface>):" and carries hundreds of envelope lines
+        # between the user turn and the reply. Must not leak into
+        # messages (would flood the synthesis prompt with stale
+        # forbidden-rule text).
         entries = [
             {"content": "the owner (telegram_surface): stuff\n[TURN STATE...]\nMaez: whatever"},
             {"content": "some other opaque stored blob"},
         ]
         self.assertEqual(self._convert(entries), [])
+
+    def test_parser_prefix_agnostic(self):
+        # Owner-side prefix is whatever display_name() configured —
+        # the parser must not hardcode any one name. Prove it by
+        # roundtripping a non-Rohit exchange.
+        entries = [
+            {"content": "Friend: hello there\nMaez: hi back"},
+            {"content": "Alex: what's up?\nMaez: not much"},
+        ]
+        out = self._convert(entries)
+        self.assertEqual(len(out), 4)
+        self.assertEqual(out[0], {"role": "user", "content": "hello there"})
+        self.assertEqual(out[1], {"role": "assistant", "content": "hi back"})
+        self.assertEqual(out[2], {"role": "user", "content": "what's up?"})
+        self.assertEqual(out[3], {"role": "assistant", "content": "not much"})
 
     def test_empty_user_or_assistant_rejected(self):
         entries = [

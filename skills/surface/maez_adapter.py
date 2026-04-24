@@ -54,6 +54,13 @@ def _clean_exchange(doc: str) -> str:
     prefix `the owner (<source>):` — anything else (older storage
     shapes, test fixtures, future formats) passes through unchanged so
     this helper is safe to add without needing to migrate every caller.
+
+    The owner-side prefix used in the cleaned output is resolved from
+    `core.memory.identity.display_name()` at call time — not hardcoded
+    — so a fresh install with `display_name="Friend"` (or any other
+    configured value) produces self-consistent conversation history.
+    Falls back to a generic "Owner:" if identity lookup fails so the
+    cleaner can never crash a surface turn.
     """
     if not doc:
         return ""
@@ -75,7 +82,12 @@ def _clean_exchange(doc: str) -> str:
     reply = doc[pos + len("\nMaez:"):].strip()
     if not user_msg and not reply:
         return doc
-    return f"Rohit: {user_msg}\nMaez: {reply}".strip()
+    try:
+        from core.memory.identity import display_name as _display_name
+        owner_prefix = _display_name() or "Owner"
+    except Exception:
+        owner_prefix = "Owner"
+    return f"{owner_prefix}: {user_msg}\nMaez: {reply}".strip()
 
 logger = logging.getLogger(__name__)
 
