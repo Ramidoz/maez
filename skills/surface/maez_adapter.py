@@ -354,6 +354,7 @@ class MaezMessageHandler:
                         synthesis_text,
                         SURFACE_NAME,
                         transcript=jarvis_transcript or "",
+                        chat_history=chat_history,
                     ),
                 )
             except Exception as e:

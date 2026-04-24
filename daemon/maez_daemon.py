@@ -1149,6 +1149,7 @@ class MaezDaemon:
         transcript: str = "",
         signals_present: "list | None" = None,
         signals_absent: "list | None" = None,
+        chat_history: "list | None" = None,
     ) -> str:
         """Process an incoming message through full reasoning context. Returns reply string.
 
@@ -1170,6 +1171,19 @@ class MaezDaemon:
                 the audit. Defaults to None (the audit falls back to
                 its legacy "infer from surface" behavior) when the
                 caller does not know.
+            chat_history: prior telegram exchanges — list of dicts
+                each with `"content"` in the adapter-cleaned
+                `"Rohit: <msg>\\nMaez: <reply>"` shape. When passed,
+                each exchange is split into a user/assistant message
+                pair and inserted between the system prompt and the
+                current turn so the synthesis model can resolve
+                anaphoric references (e.g. "it" binding to the
+                subject of the prior assistant reply). Silently
+                ignored when None; unparseable entries are filtered.
+                The 2026-04-24 fix: memory recall alone was missing
+                the just-said turn on follow-up questions with low
+                keyword overlap (incident: meta-harness at 04:42,
+                "it" at 04:53 lost the referent).
         """
         from skills.web_search import (
             search as web_search, format_for_context as web_format,
@@ -1271,15 +1285,25 @@ class MaezDaemon:
                 "if conversations are present."
             )
 
+        # Thread prior-turn context into the synthesis. Without this,
+        # follow-ups like "you think it'll be useful?" have no referent
+        # because the last assistant reply lives only in chat history,
+        # not in memory recall (semantic overlap is too low for recall
+        # to surface it reliably). See chat_history docstring above.
+        messages: list[dict] = [{"role": "system", "content": sys_prompt}]
+        try:
+            from core.brain.conversation_history import history_to_messages
+            messages.extend(history_to_messages(chat_history))
+        except Exception as _hist_exc:
+            logger.debug("chat_history threading skipped: %s", _hist_exc)
+        messages.append({"role": "user", "content": prompt})
+
         try:
             # Session 11r: via llm_client (was missed in 11p batch)
             from core import llm_client as _llm_client
             response = _llm_client.chat(
                 model=MODEL,
-                messages=[
-                    {"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": prompt},
-                ],
+                messages=messages,
                 think=False,
                 options={"temperature": 0.7, "num_predict": 4096},
             )
