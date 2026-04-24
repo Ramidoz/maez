@@ -2064,6 +2064,17 @@ class MaezDaemon:
                 f"Memories: {stats['raw']} raw / {stats['daily']} daily / {stats['core']} core."
             )
 
+        try:
+            from core.safety.audited_output import audit_assistant_text
+            summary = audit_assistant_text(
+                summary,
+                surface="nightly_journal",
+                signals_present=["daemon_logs", "memory_stats", "perception_snapshot"],
+                signals_absent=[],
+            )
+        except Exception as e:
+            logger.debug("Nightly journal audit fail-open: %s", e)
+
         # Append to PROGRESS.md
         progress_path = BASE_DIR / "PROGRESS.md"
         entry = (
@@ -2083,6 +2094,21 @@ class MaezDaemon:
             source="nightly_journal",
         )
 
+        try:
+            self._write_developmental_heartbeat(
+                date_str=date_str,
+                day_name=day_name,
+                journal_summary=summary,
+                cycle_count=cycle_count,
+                error_count=len(errors),
+                warning_count=len(warnings),
+                action_count=len(action_lines),
+                alert_count=alerts_sent,
+                stats=stats,
+            )
+        except Exception as e:
+            logger.warning("Developmental heartbeat failed: %s", e)
+
         # Publish to GitHub after journal
         try:
             from skills.github_publish import GitHubPublisher
@@ -2093,6 +2119,90 @@ class MaezDaemon:
                 logger.warning("GitHub publish failed")
         except Exception as e:
             logger.error("GitHub publish error: %s", e)
+
+    def _write_developmental_heartbeat(
+        self,
+        *,
+        date_str: str,
+        day_name: str,
+        journal_summary: str,
+        cycle_count: int,
+        error_count: int,
+        warning_count: int,
+        action_count: int,
+        alert_count: int,
+        stats: dict,
+    ) -> str | None:
+        """Store one audited daily self-continuity core memory."""
+        from core.brain.developmental_heartbeat import (
+            HeartbeatEvidence,
+            already_recorded,
+            build_prompt,
+            fallback_heartbeat,
+            normalize_heartbeat,
+            record_if_absent,
+        )
+
+        if already_recorded(self.memory, date_str):
+            logger.info("Developmental heartbeat already recorded for %s", date_str)
+            return None
+
+        try:
+            from core.memory.identity import display_name as _display_name
+            owner_name = _display_name()
+        except Exception:
+            owner_name = "the owner"
+
+        evidence = HeartbeatEvidence(
+            date=date_str,
+            day_name=day_name,
+            cycle_count=cycle_count,
+            error_count=error_count,
+            warning_count=warning_count,
+            action_count=action_count,
+            alert_count=alert_count,
+            raw_count=int(stats.get("raw", 0)),
+            daily_count=int(stats.get("daily", 0)),
+            core_count=int(stats.get("core", 0)),
+            owner_name=owner_name,
+            journal_summary=journal_summary,
+        )
+
+        try:
+            from core import llm_client as _llm_client
+            response = _llm_client.chat(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": build_prompt(evidence)},
+                ],
+                think=False,
+                options={"temperature": 0.2, "num_predict": 700},
+            )
+            heartbeat = normalize_heartbeat(
+                (response.message.content or "").strip(),
+                evidence,
+            )
+        except Exception as e:
+            logger.debug("Developmental heartbeat model failed: %s", e)
+            heartbeat = fallback_heartbeat(evidence)
+
+        try:
+            from core.safety.audited_output import audit_assistant_text
+            heartbeat = audit_assistant_text(
+                heartbeat,
+                surface="developmental_heartbeat",
+                signals_present=["nightly_journal", "memory_stats", "daemon_logs"],
+                signals_absent=[],
+            )
+            heartbeat = normalize_heartbeat(heartbeat, evidence)
+        except Exception as e:
+            logger.debug("Developmental heartbeat audit fail-open: %s", e)
+
+        memory_id = record_if_absent(self.memory, evidence, heartbeat)
+        if memory_id:
+            logger.info("Developmental heartbeat stored: %s", memory_id)
+        return memory_id
 
     def _loop(self):
         """Main reasoning loop — runs every LOOP_INTERVAL seconds."""

@@ -55,7 +55,7 @@ at line 282, and at line 324 sends `f"💭 [DREAM #{prop_id}]\n\n{insight}\n\n..
 Telegram. No audit. This is the classic "unsupervised LLM output reaches
 the owner" shape — exactly the risk class the audit stack was built for.
 
-### F3 — training proposal: partially-LLM rationale → Telegram (MEDIUM)
+### F3 — training proposal: partially-LLM rationale → Telegram (MEDIUM) — FIXED 2026-04-24
 
 [`core/evolution/dream_state.py:608-617`](core/evolution/dream_state.py#L608-L617)
 
@@ -63,6 +63,11 @@ The `rationale_parts` assembled at line 407 appear to be deterministic
 template fragments derived from cognition_quality scores, not raw LLM
 output. Lower risk than F2. Audit is still good hygiene — and it's
 trivial to add alongside F2 — but not the same severity.
+
+Resolution: `store_training_proposal` now routes the full Telegram
+message through `audit_assistant_text(surface="training_proposal")`
+before `telegram.send_message`. Regression locked in
+`tests/test_autonomous_surface_audit.py`.
 
 ### F4 — store_telegram format divergence across surfaces (MEDIUM)
 
@@ -89,7 +94,7 @@ Fix direction: extend `_clean_exchange` to parse both forms *or*
 unify the storage format across surfaces. The latter is cleaner but
 re-writes historical entries' parse shape.
 
-### F5 — `github_publish._generate_commit_message` LLM output to public GitHub (LOW)
+### F5 — `github_publish._generate_commit_message` LLM output to public GitHub (LOW) — FIXED 2026-04-24
 
 [`skills/github_publish.py:128-151`](skills/github_publish.py#L128-L151)
 
@@ -97,6 +102,11 @@ LLM-generated commit messages push to public GitHub unaudited. Low
 risk because commit messages are short, not user-facing text in the
 usual sense, and any weirdness is already public-safe (no private
 data in the prompt). Defense-in-depth only.
+
+Resolution: `_generate_commit_message` now routes the model output
+through `audit_assistant_text(surface="github_publish_commit_message")`
+before single-line normalization and 72-character truncation. Regression
+locked in `tests/test_autonomous_surface_audit.py`.
 
 ### F6 — `_ws_broadcast` (web cockpit websocket) (LOW)
 
@@ -135,11 +145,11 @@ tier. No LLM output. No fix needed.
    hygiene, store in memory for continuity. Four things in one file.
 2. **F2 — dream insight**: add audit. One line change with error
    handling around it.
-3. **F4 — store format unification**: extend `_clean_exchange` to
-   parse `"the owner asked:"` form. Keeps existing entries readable;
-   new writes eventually unify.
-4. **F3, F5**: defense-in-depth only. Do alongside F1/F2 if trivial,
-   skip otherwise.
+3. **F4 — store format unification**: fixed in `a7f99fb`; `_clean_exchange`
+   now parses both daemon and web/voice storage forms.
+4. **F3, F5**: fixed 2026-04-24; all known autonomous text surfaces
+   now route through the audit stack or are explicitly deterministic/
+   structured-safe.
 
 ---
 

@@ -625,6 +625,17 @@ class DreamState:
                     f"Corpus: {corpus_window}\n"
                     f"/approve_train {prop_id}  ·  /reject_train {prop_id}"
                 )
+                # 2026-04-24 autonomous-surface audit F3: training
+                # proposals are mostly deterministic, but they still
+                # reach Telegram without an owner prompt. Keep every
+                # autonomous surface behind the same output guard.
+                try:
+                    from core.safety.audited_output import audit_assistant_text
+                    msg = audit_assistant_text(
+                        msg, surface="training_proposal",
+                    )
+                except Exception as _aud_exc:
+                    logger.debug("dream: training proposal audit fail-open: %s", _aud_exc)
                 self.telegram.send_message(msg)
             except Exception as e:
                 logger.debug("dream: training proposal telegram send failed: %s", e)
