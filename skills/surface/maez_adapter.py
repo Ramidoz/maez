@@ -34,26 +34,46 @@ from skills.surface.telegram_adapter import TelegramAdapter
 
 
 # 2026-04-23: strip the stored prompt envelope before passing a prior
-# exchange to run_brain_loop as chat_history. Stored content shape is:
+# exchange to run_brain_loop as chat_history. Stored content shapes:
 #
-#     the owner (<source>): <USER_MSG>
-#     [<TURN STATE/FORBIDDEN/JARVIS TRANSCRIPT/etc. envelope>]
-#     Maez: <REPLY>
+#   (a) daemon telegram  (daemon/maez_daemon.py:1346):
+#       the owner (<source>): <USER_MSG>
+#       [<TURN STATE/FORBIDDEN/JARVIS TRANSCRIPT/etc. envelope>]
+#       Maez: <REPLY>
 #
-# Passing that raw would flood the planning prompt with stale
+#   (b) web + telegram_voice  (web_interface.py, telegram_voice.py):
+#       the owner asked: <USER_MSG>
+#       Maez replied: <REPLY>
+#
+# Passing form (a) raw would flood the planning prompt with stale
 # FORBIDDEN and AMBIGUOUS-REFERENT rule text from the previous turn,
-# burying the actual Q/A signal. Collapse to a clean "Rohit: ... /
-# Maez: ..." pair so the planner sees the shape of the conversation.
+# burying the actual Q/A signal. Form (b) has no envelope but the
+# `Maez replied:` delimiter doesn't match the daemon-form
+# `Maez:` delimiter the parser expected.
+#
+# 2026-04-24 audit pass (F4): both forms now clean to the same
+# shape — `"<display_name>: <USER_MSG>\nMaez: <REPLY>"` — so the
+# downstream `core.brain.conversation_history.history_to_messages`
+# threads them uniformly. Without this, web + voice follow-ups
+# silently lost continuity threading (the failure we just closed
+# for telegram in commit cc462c5).
 _SOURCE_PREFIX_RE = re.compile(r"^the owner \([^)]+\):\s*")
+_ASKED_PREFIX_RE = re.compile(r"^the owner asked:\s*")
+_ASSISTANT_MARKER_DAEMON = "\nMaez:"
+_ASSISTANT_MARKER_WEB_VOICE = "\nMaez replied:"
 
 
 def _clean_exchange(doc: str) -> str:
     """Collapse a stored telegram_exchange envelope to a clean Q/A pair.
 
-    Only triggers when the stored content starts with the envelope
-    prefix `the owner (<source>):` — anything else (older storage
-    shapes, test fixtures, future formats) passes through unchanged so
-    this helper is safe to add without needing to migrate every caller.
+    Handles two stored forms (see module-level note):
+      (a) daemon telegram:      `the owner (<source>): <msg>\\n[envelope]\\nMaez: <reply>`
+      (b) web + telegram_voice: `the owner asked: <msg>\\nMaez replied: <reply>`
+
+    Any other shape (operational notes like card-state summaries,
+    recovery markers, test fixtures, future formats) passes through
+    unchanged so this helper is safe to add without migrating every
+    caller. The downstream parser rejects unparseable passthroughs.
 
     The owner-side prefix used in the cleaned output is resolved from
     `core.memory.identity.display_name()` at call time — not hardcoded
@@ -65,21 +85,34 @@ def _clean_exchange(doc: str) -> str:
     if not doc:
         return ""
     first_line = doc.split("\n", 1)[0]
-    if not _SOURCE_PREFIX_RE.match(first_line):
+    user_msg = None
+    reply = None
+
+    # Try daemon form first — the `\nMaez:` marker is more
+    # restrictive than `\nMaez replied:`, so match that explicitly.
+    if _SOURCE_PREFIX_RE.match(first_line):
+        user_msg = _SOURCE_PREFIX_RE.sub("", first_line).strip()
+        # The reply is appended after a final "\nMaez:" delimiter
+        # (prefer `rfind` so an embedded "Maez:" mention in the
+        # envelope can't fool us — the real reply is always the last
+        # segment).
+        pos = doc.rfind(_ASSISTANT_MARKER_DAEMON)
+        if pos == -1:
+            pos = doc.find(_ASSISTANT_MARKER_DAEMON)
+        if pos < 0:
+            return doc
+        reply = doc[pos + len(_ASSISTANT_MARKER_DAEMON):].strip()
+    # Then the web/voice form — single-line user, `\nMaez replied:`
+    # marker, no envelope between.
+    elif _ASKED_PREFIX_RE.match(first_line):
+        user_msg = _ASKED_PREFIX_RE.sub("", first_line).strip()
+        pos = doc.find(_ASSISTANT_MARKER_WEB_VOICE)
+        if pos < 0:
+            return doc
+        reply = doc[pos + len(_ASSISTANT_MARKER_WEB_VOICE):].strip()
+    else:
         return doc
-    user_msg = _SOURCE_PREFIX_RE.sub("", first_line).strip()
-    # The reply is appended after a final "\nMaez:" delimiter (prefer
-    # `rfind` so an embedded "Maez:" mention in the envelope can't fool
-    # us — the real reply is always the last segment). Fall back to the
-    # raw doc if we can't locate the boundary, so a shape change
-    # upstream degrades to "noisy but present" rather than silently
-    # empty.
-    pos = doc.rfind("\nMaez:")
-    if pos == -1:
-        pos = doc.find("\nMaez:")
-    if pos < 0:
-        return doc
-    reply = doc[pos + len("\nMaez:"):].strip()
+
     if not user_msg and not reply:
         return doc
     try:
