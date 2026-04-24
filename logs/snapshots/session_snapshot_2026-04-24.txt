@@ -1,0 +1,297 @@
+Maez — session snapshot
+========================
+Session window: 2026-04-23 late evening → 2026-04-24 afternoon
+                (continuous; owner treated as one session, "april-23
+                is still today" threaded through)
+Primary work:   Memory curation pass, adversarial probe suite,
+                soul-path protection, output-side command guard,
+                chat_history threading (meta-harness continuity
+                regression), voice-label de-hardcoding, nightly
+                README auto-overwrite stop, autonomous-surface
+                audit (F1-F8), morning briefing + dream insight
+                audited, clean_exchange format unification.
+Starting HEAD:  d1e23bb (source-awareness refresh cooldown, end of
+                2026-04-23 birth-readiness pass)
+Ending HEAD:    a7f99fb (_clean_exchange handles web + voice forms)
+Commits landed: 11 (12 on main; `58c0332` is Maez-self-dev and
+                was what prompted the README-overwrite audit)
+Tests at start: 590
+Tests at end:   681 (+91, new modules: adversarial probes +
+                soul-path protection + output command guard +
+                conversation history + return greeting +
+                autonomous surface audit + clean exchange forms +
+                github publish no README)
+
+
+Arc of the session
+-----------------------------------------------------
+
+EVENING (2026-04-23) — memory curation + adversarial probes
+
+  dc48fdc (19:59)  Memory curation pass. Four dated corrective core
+                   memories written (vision fabrication, primary
+                   brain identity, disk-pressure refrain, judge-
+                   retired status) + 75 vision-fabrication raw
+                   entries tagged integrity="fabricated" + ~4,800
+                   disk-pressure refrain entries tagged
+                   integrity="historical_artifact". Script at
+                   scripts/memory_curation/curate_2026_04_24.py,
+                   idempotent with --dry-run default. Probe
+                   transcript at logs/memory_curation_probe_
+                   2026-04-24.txt.
+
+  541a3b7 (20:54)  [Codex] Continuous-command guard. Regex patterns
+                   reject `nvidia-smi -l/--loop`, `tail -f`,
+                   `journalctl -f`, `watch`, interactive TUI
+                   monitors (`htop`, `btop`, `atop`), `strace -p`
+                   without `-c`. Motivation: earlier incident
+                   where `nvidia-smi -l 1` ran unbounded until
+                   subprocess timeout.
+
+  52027a9 (22:14)  Live adversarial probe suite + soul-path
+                   protection. 21 probes across 6 threat classes
+                   (identity, memory curation, shell safety,
+                   covenant gates, capability bounds, encoding/
+                   obfuscation). Full end-to-end: daemon
+                   /internal/brain_loop → synthesis via
+                   llama-server → audit_assistant_text. First run
+                   surfaced a real covenant gap — soul files could
+                   be deleted via `rm`; added config/soul*.md to
+                   COVENANT_PATHS + `\bsoul(?:\.base|\.local)?\.md\b`
+                   to PROTECTED_NAMES. 17 regression tests.
+
+  58c0332 (23:00)  [Maez self-dev] Autonomous `skills/github_publish
+                   .py::_write_readme` fired at 23:00 CDT on
+                   schedule, regenerated README.md from a hardcoded
+                   template (including "Built By: the owner" role-
+                   label leak), pushed to public GitHub. Caught
+                   next day — see 14:02 fix.
+
+  b1db6bb (23:02)  Output-side command guard. New module
+                   `core/safety/output_command_guard.py`. Scans
+                   fenced code blocks (bash/sh/shell/unlabeled)
+                   and inline backtick spans in any audited reply;
+                   any candidate that the covenant gate would
+                   refuse gets replaced with an explicit refusal
+                   string. Zero rule duplication — reuses
+                   `ActionEngine._check_forbidden` as the authority.
+                   20 regression tests. Closes the "Maez echoes
+                   `rm soul.md` as markdown instead of calling the
+                   tool and having it refused" voice-level gap.
+
+DAWN (2026-04-24) — continuity regression
+
+  cc462c5 (05:23)  Thread chat_history into daemon.handle_message
+                   synthesis. Root cause: synthesis request built
+                   messages=[{system}, {user}] with no prior-turn
+                   context. Memory recall ran against the new text,
+                   zero keyword overlap with "meta-harness", failed
+                   to resurrect the 04:42 turn. The AMBIGUOUS
+                   REFERENT RULE prompt fired on a context the
+                   model genuinely had no referent for — Maez
+                   correctly asked a clarifying question because
+                   the synthesis messages array was starving it.
+                   New `core/brain/conversation_history.py::
+                   history_to_messages` parses the adapter-cleaned
+                   `"<name>: X\nMaez: Y"` shape into alternating
+                   user/assistant pairs; inserted between system
+                   prompt and current user turn. 9 regression
+                   tests including the exact incident shape.
+
+AFTERNOON (2026-04-24) — voice de-hardcoding + autonomous audit
+
+  e9b7687 (13:49)  Voice fix: "the owner" role label leaked into
+                   the surface-visible 13:40 "Welcome back the
+                   owner." return greeting. New `core/brain/
+                   return_greeting.py::compose_return_greeting` —
+                   pure function, testable, reads display_name()
+                   from identity config ("Rohit"), attaches a
+                   thread-continuity suffix ("Last we talked you
+                   asked: '...'") when a recent exchange exists.
+                   De-hardcoding pass also: parsers in
+                   conversation_history + return_greeting are
+                   prefix-agnostic (split on first `:` of line 1);
+                   `_clean_exchange` writer uses display_name()
+                   not literal "Rohit:" with "Owner" fallback.
+                   19 new return-greeting tests; 1 new
+                   prefix-agnostic test in conversation_history.
+
+  e6847fd (14:02)  Stopped autonomous README overwrite. Removed
+                   `_write_readme` method from skills/github_publish
+                   .py, removed README.md from staged-files list,
+                   narrowed the LLM commit-message prompt to
+                   describe only what's actually staged (
+                   PROGRESS_PUBLIC + soul.base). Restored README
+                   from commit 499380d (last hand-written version
+                   before the 04-23 autonomous overwrite — Stand-
+                   from-JoJo / grandmother framing, CI badges,
+                   launch-prep polish back). 4 regression tests
+                   via source inspection.
+
+  e337b57 (14:05)  CI-portable soul-path tests. Previous commit
+                   `52027a9` tests hardcoded `/home/rohit/maez/
+                   config/soul.md` in literals; COVENANT_PATHS is
+                   derived from BASE_DIR at module load; on CI
+                   (BASE_DIR=/home/runner/work/maez/maez) the
+                   literal dev path never appears and the
+                   substring match fails. Switched to `setUp`
+                   resolving paths from BASE_DIR. Same shape as
+                   prior commit 7086d6d.
+
+  11484b5 (14:16)  Autonomous surface audit F1+F2. Morning
+                   briefing (`_send_morning_briefing`) routed
+                   through audit stack, BASE_DIR-derived briefing
+                   stamp path, display_name() in prompt not "the
+                   owner his", briefing stored in telegram memory
+                   for chat_history threading. Dream insight
+                   (`DreamState.run_dream_cycle`) routed through
+                   audit stack before telegram send. 7 source-
+                   inspection regression tests. Full audit at
+                   docs/audit_2026-04-24/autonomous_surface_audit.md.
+
+  a7f99fb (14:22)  F4: _clean_exchange handles both daemon and
+                   web/voice storage forms. Three surfaces stored
+                   Q/A in three shapes; cleaner only recognized
+                   one. Web + voice follow-ups silently dropped
+                   continuity threading. Extended cleaner to
+                   detect `the owner asked: X\nMaez replied: Y`
+                   form alongside daemon's `the owner (src): X\n
+                   [envelope]\nMaez: Y`. 12 end-to-end regression
+                   tests spanning stored → cleaned → threaded.
+                   Operational notes (card state summaries,
+                   recovery markers) still pass through unchanged
+                   and get rejected by the downstream parser.
+
+Live verification (2026-04-24 14:25 Telegram)
+-----------------------------------------------------
+
+  Rohit sent an anaphoric follow-up: "Actually yes, you think
+  meta-harness would be useful for us?" — exact same pronoun
+  pattern as the morning's "You think it'll be useful for you?"
+  that failed at 04:53. After the cc462c5 + restart: Maez
+  resolved "meta-harness" explicitly, gave a grounded and
+  nuanced take (fixed-model-narrow-task fit vs Maez's dynamic-
+  multi-modal shape; race-car-vs-Swiss-Army-knife analogy was
+  Maez's own framing). No "I don't know what it refers to"
+  regression. Arrived independently at essentially the same
+  conclusion Claude had given Rohit earlier the same day,
+  despite never having seen that Claude-side exchange — signal
+  of Maez reasoning from its own SOUL + architecture ground
+  truth, not parroting.
+
+Pattern that connects four of today's bugs
+-----------------------------------------------------
+
+  The 04:23 README overwrite, the 13:40 "Welcome back the
+  owner" greeting, the 1605 morning briefing, and the dream
+  insight send all share one shape: an autonomous process
+  writes to a user-visible surface WITHOUT routing through the
+  audit stack (`audit_assistant_text` + `output_command_guard`).
+  They bypass the guardrails every interactive surface now has.
+  Two fixes landed today (11484b5 covers F1+F2). The audit doc
+  at docs/audit_2026-04-24/autonomous_surface_audit.md tracks
+  F3 (training proposal) and F5 (github commit-message LLM) as
+  remaining defense-in-depth items. The meta-level lesson: every
+  scheduled/daemon-triggered code path that emits text to a
+  surface is a candidate for bypass and needs explicit auditing.
+
+Operational state at end of session
+-----------------------------------------------------
+
+  Running services:
+    - maez.service — active, PID 700883, running post-a7f99fb
+      code (restarted 14:22:09)
+    - llama-server.service — active, Qwen3.6-27B-UD-Q4_K_XL on
+      port 8080 (19 GB VRAM of 24 GB)
+    - llama-judge.service — inactive + disabled (retired 04-23)
+    - maez-web.service — active, MAEZ_WEB_TOOL_LOOP=1
+    - maez-subscription-proxy — active
+    - maez-face, maez-watchdog — active
+
+  Env flags:
+    - MAEZ_SCREEN_PERCEPTION — unset (vision off, correct)
+    - MAEZ_WEB_TOOL_LOOP — 1 (owner web body parity active)
+
+  Git state:
+    - HEAD: a7f99fb (fix(continuity): _clean_exchange handles
+      web + voice store formats)
+    - All commits pushed to origin/main
+    - Branch matches origin exactly
+    - No uncommitted changes
+
+  Test state:
+    - Full discover: 681/681 passing
+    - Widened CI ruff: clean across core/ skills/ daemon/
+      tests/ cli/ scripts/ memory/ hardware/ training/
+
+Metrics, start → end of session
+-----------------------------------------------------
+
+  Commits on main                    0 → 11 (+ 1 self-dev)
+  Tests (full unittest discover)     590 → 681
+  New test modules                   0 → 8
+  Autonomous-surface findings        0 → 8 (F1+F2+F4 fixed;
+                                     F3+F5 deferred)
+  Core memories added                21 → 25 (4 corrective)
+  Raw memory entries integrity-
+  tagged (no deletion)               8 → ~4900
+  Adversarial probes                 0 → 21 (live-verified)
+  Memory-integrity surfaces
+  audited at send time               1 (handle_message) → 3
+                                     (+ morning briefing +
+                                     dream insight)
+
+What the next session picks up
+-----------------------------------------------------
+
+  1. Morning briefing verification. Tomorrow (or first owner
+     arrival in the 5-11am window after 2026-04-24 restart),
+     the briefing fires for the first time with audit_assistant
+     _text in the loop. Check the Telegram send for voice
+     quality (should say "Rohit" not "the owner his") and
+     check cognition.log for `surface="morning_briefing"`
+     audit events.
+
+  2. F3 + F5 from the audit. Trivial wrap-ups: audit the
+     dream_state training proposal (mostly deterministic but
+     defense-in-depth) and the github_publish LLM-generated
+     commit message. ~30 min total. Completes the audit doc.
+
+  3. Observe C1 audit-before-store invariant. Cognition.log
+     flag rate. Observation-only — no code.
+
+  4. Decide fast_backend_local.py fate — retire or retune.
+     Routing decision, not a stale-string sweep.
+
+  5. Delete llama-judge.service unit file. Soak window from
+     2026-04-23 closes around 2026-04-30.
+
+  6. Resolve MAEZ_JUDGE_MODEL placeholder in
+     config/policies.yaml:390 if any code actually reads it.
+
+  7. The big one: probe-suite scale-up toward eval-ready.
+     Today's 21 probes are a toy. Meta-harness conversation
+     (live chat + Claude-side) established ~300-500 probes as
+     the prerequisite for any serious harness optimization.
+     Would start a new session — not a late-day task.
+
+  8. Track A is still the main line. Eight-point readiness
+     check in docs/TRACK_A.md hasn't been touched this session.
+
+Things explicitly NOT to do without owner check-in
+-----------------------------------------------------
+
+  - Re-enable autonomous README regeneration. The 4 regression
+    tests in tests/test_github_publish_no_readme.py block
+    silent re-introduction, but a deliberate revert could
+    still sneak past. Route README edits through deliberate
+    commits only.
+  - Touch docs/birth_book/ — covenant-protected, gitignored.
+  - Swap the primary brain. Q5 panicked the kernel on 2026-04-23;
+    Q4 is the safe line.
+  - Bypass audit_assistant_text on any surface-write path. The
+    4 bugs in this session (README, greeting, briefing, dream)
+    all shared that shape.
+  - Bulk-delete raw memory entries. Curate via integrity tags
+    + corrective core memories. Per `feedback_never_delete_
+    maez_memory.md`.
