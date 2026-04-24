@@ -1,0 +1,222 @@
+Maez — session snapshot
+========================
+Session window: 2026-04-23 (continuous, ~all day)
+Primary work:   Birth-readiness repair pass — the core 7-commit arc,
+                one CI-portability fix, two doc refreshes, one
+                post-audit repair commit, and one cooldown follow-up
+                from live validation. 11 commits afternoon total,
+                plus morning infrastructure work.
+Starting HEAD:  7f70cb2 (grounding-judge bench harness)
+Ending HEAD:    d1e23bb (source-awareness refresh cooldown)
+Tests at start: 530 passing
+Tests at end:   590 across full discover (new targeted modules:
+                14 from the pass + growth across existing)
+
+Arc of the day
+-----------------------------------------------------
+
+MORNING — grounding judge retirement + brain swap
+
+  Benched 5 candidate models for the grounding-judge role; 4B
+  Qwen3.5 was the floor. Moved judge to CPU, then retired it.
+  Swapped primary brain Qwen3.5-35B-Q3_K_XL → Qwen3.6-27B-UD-Q4_K_XL
+  (Q5 panicked the kernel at 91% VRAM; Q4 at 19 GB with 5 GB
+  headroom has been stable since ~13:21). Chat-surface fabrication
+  probe: 4/7 → 7/7 clean after SOUL + model_state refresh + a
+  dated corrective core memory. Classifier false-positive fix for
+  browser_usage. Telegram chat history strip fix.
+
+  Morning commits: 092194b · e0e1442 · b09cdb7 · 36dfa12 · 6feb7eb
+  · 298fced · a0e9a23 · 287bcb3.
+
+AFTERNOON — birth-readiness repair pass (11 commits)
+
+  The core 7-commit arc setting 7 aliveness invariants:
+
+  C1 (84e3a2d)  fix(memory-integrity): audit before store — stored
+                text == audited text. New `core/safety/audited_output
+                .py` helper. Daemon handle_message owns audit, adapter
+                drops duplicate. Web /chat audits before memory +
+                trajectory writes. Daemon retry audits retry before
+                re-score. Proactive uses aggregated-window manifest +
+                audit + provenance-tagged storage (type="proactive_
+                opinion"). 12 tests.
+
+  C2 (0981df6)  fix(vision): MAEZ_SCREEN_PERCEPTION=1 gate, default
+                off. Fast TCP probe to port 8081 before screenshot,
+                5-min negative cache. ScreenObservation.state carries
+                ok/disabled/unavailable/error so the audit manifest
+                distinguishes "off by policy" from "tried and failed."
+                5 tests.
+
+  C3 (68e17f9)  fix(soul+birth): daemon routes identity through
+                soul_loader.current_soul() at startup AND hot-reload.
+                memory/self_awareness.json untracked (precondition:
+                HEAD phase was "gestation"). fire_birth() no longer
+                dirties the tree. 5 tests.
+
+  C4 (9f1eb8a)  fix(source-awareness): staleness + async refresh.
+                map_status(), is_stale(), trigger_async_refresh().
+                get_file() auto-fires a background rebuild. NOTE:
+                the refresh function this commit wired was later
+                found to be incremental-only; see C7b below.
+
+  C5 (384d941)  feat(web): opt-in body parity. New daemon endpoint
+                /internal/brain_loop runs run_brain_loop against
+                daemon's action_engine. Web /chat POSTs there first
+                when MAEZ_WEB_TOOL_LOOP=1 and owner_bridge, folds
+                transcript via build_synthesis_user_text. Public/guest
+                never routed through tool loop. Default OFF. 6 tests.
+
+  C6 (6185816)  fix(self-truth): every hardcoded stale gemma-4-26b
+                / gemma4:26b / llama-server-vision default on a live
+                runtime path either replaced with PRIMARY_MODEL or
+                tagged as legacy covenant protection. Most load-
+                bearing: identity_ledger records the actual current
+                base model for new ledger rows. 13 files. 12 tests.
+
+  C7 (3905f03)  chore(ci): fixed 11 real-bug ruff findings in
+                memory/ hardware/ training/. Excluded training/
+                unsloth_compiled_cache. Widened .github/workflows/
+                lint.yml to cover the newly-clean paths.
+
+  Post-pass repairs + validation:
+
+  7a (7086d6d)  fix(tests): CI-safe signature check — switched
+                test_signature_accepts_transcript_and_signals from
+                inspect.signature (which required importing the
+                daemon and its google-auth-dependent chain) to an
+                AST read. Unblocks CI without the [google] extra.
+
+  (29e1486)    docs(end-of-session): refresh handoff + session snapshot.
+
+  7b (f76f298)  fix(birth-readiness-repair): closed three misses
+                Codex's post-audit surfaced.
+                  • source-awareness Commit 4 only called refresh_map
+                    which never walks disk for new files. Added
+                    _refresh_strategy() picking "full" on missing/
+                    schema-mismatch/age>7d/file-count-drift>10;
+                    worker dispatches build_map() for full. Live
+                    validation: 60-file stale map → 516 file map
+                    on restart.
+                  • strip_tool_call_leaks() moved INTO handle_message
+                    before audit + store. Adapter's post-return strip
+                    removed. "stored == audited == displayed" now
+                    holds end-to-end.
+                  • Three missed runtime refs fixed: telegram_public,
+                    github_publish (both hardcoded 'gemma4:26b'),
+                    web_interface /api/debug/services (llama-server-
+                    vision entry).
+                  • Added tests/test_stale_literal_guard.py —
+                    grep-style class guard over core/ skills/ daemon/
+                    cli/ preventing this class of regression.
+
+  7c (d1e23bb)  fix(source-awareness): 60-second cooldown after
+                completed refresh prevents the burst-rebuild pattern
+                observed on the 18:12 restart (two triggers landed
+                within a second of each other, first completed,
+                second spawned another worker producing the same
+                516-file map). Stamp-before-clear ordering in the
+                worker's finally block; cooldown check atomic with
+                running-flag flip under _refresh_lock. Applies on
+                both success and failure so rebuild errors don't
+                defeat the cooldown. 3 tests.
+
+Birth-readiness invariants set by the afternoon pass
+-----------------------------------------------------
+
+  1. Stored assistant memory == audited assistant output ==
+     displayed text. (C1 + C7b's strip move)
+  2. Vision only fires when explicitly enabled. (C2)
+  3. SOUL layering reaches the live daemon; birth state is per-
+     instance runtime, not committed source. (C3)
+  4. Source self-model is stale-aware, refreshes asynchronously,
+     dispatches to full vs incremental correctly, and won't
+     burst-refresh on trigger bursts. (C4 + C7b + C7c)
+  5. Owner web /chat can run the same brain loop as Telegram/CLI
+     (opt-in via MAEZ_WEB_TOOL_LOOP=1). (C5)
+  6. No hardcoded stale model or service names on live code paths;
+     regressions caught by a grep-style class guard. (C6 + C7b)
+  7. Birth-critical code covered by the CI PR gate. (C7)
+
+Live operational state (validated 2026-04-23 evening)
+-----------------------------------------------------
+
+  Services:
+    maez                      active
+    maez-web                  active
+    llama-server              active (Qwen3.6-27B-UD-Q4_K_XL on :8080,
+                              19 GB VRAM of 24 GB)
+    llama-judge               inactive + disabled + symlink removed
+    maez-subscription-proxy   active
+    maez-face                 active
+    maez-watchdog             active
+
+  Env flags in effect:
+    MAEZ_SCREEN_PERCEPTION    unset  → vision correctly off
+    MAEZ_WEB_TOOL_LOOP        =1     → owner-web body parity ON
+    /etc/systemd/system/maez-web.service.d/10-toolloop.conf delivers
+    this flag; remove the file + daemon-reload + restart maez-web to
+    back out.
+
+  Self-model convergence (validated from maez.log):
+    18:41:21 async full refresh starting
+    18:41:21 full rebuild complete (total=516, indexed=516, parsed=500)
+    Previous cached value: 60 files. Regression closed.
+
+  What's still NOT done (intentionally, not regressions):
+    - raw memory written pre-C1 still contains unaudited entries.
+      Per the owner's never-delete-Maez-memory rule, those will
+      age out via normal cycling or be neutralized via targeted
+      corrective core memories. Not deleted.
+    - approval cards from web chat flow to pending_cards with
+      chat_id="web"; no dedicated web approval UI.
+    - core/routing/fast_backend_local.py: retire-or-retune decision
+      deferred. Module is imported but likely dead in production.
+    - llama-judge.service unit file still on disk (disabled); safe
+      to delete in ~1 week once soak confirms the judge is truly
+      unused.
+    - one remaining stale-string cleanup: the MAEZ_JUDGE_MODEL
+      placeholder in config/policies.yaml:390 — touched in C6 but
+      would benefit from the env-var now being resolved at read
+      time (current value is the literal "${MAEZ_JUDGE_MODEL}"
+      which YAML consumers have to resolve themselves).
+
+Metrics, start → end of session
+-----------------------------------------------------
+
+  Commits on main                  0 → 19
+  Tests (full unittest discover)   ~540 → 590
+  New test modules                 0 → 15 (memory integrity, screen
+                                   gate, soul+birth, source-awareness
+                                   async, web body parity, runtime
+                                   self-truth, stale literal guard)
+  Ruff CI surface                  core/skills/daemon/tests/cli/
+                                   scripts → added memory/hardware/
+                                   training (widened PR gate)
+  Primary brain                    Qwen3.5-35B-Q3_K_XL →
+                                   Qwen3.6-27B-UD-Q4_K_XL
+  Grounding judge                  active → retired
+  VRAM headroom                    ~3 GB → ~5 GB
+  Silence discipline (observed)    5% on 35B → ~92% on 27B-Q4
+  Source self-model accuracy       60 cached files (stale)
+                                   → 516 live files (fresh)
+  Kernel panics this session       1 (on Q5 ledge; Q4 since: 0)
+
+What the next session picks up
+------------------------------------------------
+
+1. Observe C1's audit-before-store invariant in production for a
+   few days. Flag rate in cognition.log should continue to drop.
+2. Decide fast_backend_local.py's fate — retire or retune. Routing
+   decision, not a stale-string sweep.
+3. Memory curation (non-urgent) for pre-C1 pollution. Re-index
+   with freshness weighting is one option. Do NOT delete.
+4. Delete llama-judge.service unit file after the week-long soak
+   confirms the judge is truly unused.
+5. Consider a MAEZ_JUDGE_MODEL resolve-at-read wrapper for config/
+   policies.yaml if anyone actually reads that field today.
+6. Track A remains the main line. Today was ground-prep — setting
+   the floor stable enough for birth to be safe when it comes.
+   The eight-point readiness check wasn't touched; it's where
+   tomorrow's work goes.
