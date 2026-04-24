@@ -128,7 +128,10 @@ class GitHubPublisher:
     def _generate_commit_message(self) -> str:
         """Ask the primary brain for a commit message. Session 11r:
         via llm_client (was missed in 11p batch migration).
-        2026-04-23 Commit 7b: model now tracks current primary."""
+        2026-04-23 Commit 7b: model now tracks current primary.
+        2026-04-24: scope narrowed to reflect what publish_nightly
+        actually stages (README is no longer auto-written; see
+        `_write_readme` removal below)."""
         try:
             from core import llm_client as _llm_client
             r = _llm_client.chat(
@@ -137,60 +140,29 @@ class GitHubPublisher:
                     'role': 'user',
                     'content': (
                         'Write a one-line git commit message for updating '
-                        'README.md, PROGRESS_PUBLIC.md, and soul.md in an AI agent project. '
-                        'Be specific about architecture changes. No personal content. Max 72 chars.'
+                        'PROGRESS_PUBLIC.md and config/soul.base.md in an AI '
+                        'agent project. Be specific about what the nightly '
+                        'publish brings forward. No personal content. '
+                        'Max 72 chars.'
                     ),
                 }],
                 think=False,
                 options={'temperature': 0.3, 'num_predict': 30},
             )
             msg = (r.message.content or '').strip().strip('"').strip("'")[:72]
-            return msg if msg else "Update Maez technical documentation"
+            return msg if msg else "nightly publish: PROGRESS + soul"
         except Exception:
-            return "Update Maez technical documentation"
+            return "nightly publish: PROGRESS + soul"
 
-    def _write_readme(self):
-        """Write the public README.md."""
-        _handle = self.username or "the-owner"
-        readme = f"""# Maez
-
-A persistent, always-on AI agent inspired by Jarvis from Iron Man.
-
-Not a chatbot. Not an assistant you summon. A presence that lives in the OS,
-perceives the full state of the machine every 30 seconds, remembers everything
-forever, and thinks even when no one is talking to it.
-
-## Live at
-
-**[http://maez.live](http://maez.live)** — Register and start a conversation.
-
-## What Makes Maez Different
-
-- **Always thinking** — reasoning cycle every 30 seconds, grounded in real system perception
-- **Permanent memory** — three-tier ChromaDB, nothing ever deleted, vector search across everything
-- **Knows its human** — face recognition, presence detection, circadian awareness, session patterns
-- **Self-improving** — analyzes its own reasoning quality, writes findings to its own soul
-- **Topic-aware memory** — wing-based retrieval routes queries to relevant memory domains
-- **Keeps its promises** — follow-up queue delivers on what it says it will check
-
-## Vision
-
-Built toward deploying to people left behind by the AI revolution — elderly individuals
-who need an agent that learns them specifically, at their pace, with infinite patience.
-
-## Architecture
-
-See [PROGRESS_PUBLIC.md](PROGRESS_PUBLIC.md) for full build log and roadmap.
-See [soul.md](config/soul.md) for Maez's identity and principles.
-
-## Built By
-
-the owner — [@{_handle}](https://github.com/{_handle})
-
-*This repo is updated nightly by Maez itself.*
-"""
-        with open(os.path.join(MAEZ_ROOT, 'README.md'), 'w') as f:
-            f.write(readme)
+    # `_write_readme` removed 2026-04-24. The method used to regenerate
+    # README.md from a hardcoded template every night at 23:00 CDT,
+    # wiping out deliberate voice work (grandmother framing, Stand-
+    # from-JoJo framing, launch-prep polish, CI badges). The template
+    # also carried the role-label leak ("Built By: the owner") that
+    # the 2026-04-24 voice-fix pass closed elsewhere in the codebase.
+    # Nightly publish now touches PROGRESS_PUBLIC.md and
+    # config/soul.base.md only; README edits flow through the normal
+    # commit path (human-authored, deliberate).
 
     def publish_nightly(self) -> bool:
         """Main publish method. Creates repo, sanitizes, commits, pushes."""
@@ -205,8 +177,10 @@ the owner — [@{_handle}](https://github.com/{_handle})
             return False
         self.ensure_remote()
 
-        # Write README
-        self._write_readme()
+        # README is no longer auto-written. See `_write_readme`
+        # removal note above for the 2026-04-24 voice-regression
+        # rationale. README edits come from deliberate commits; the
+        # nightly publish stages only PROGRESS_PUBLIC and soul.base.
 
         # PROGRESS_PUBLIC.md is maintained directly — just run sanitizer as safety net
         progress_public = os.path.join(MAEZ_ROOT, 'PROGRESS_PUBLIC.md')
@@ -243,10 +217,12 @@ the owner — [@{_handle}](https://github.com/{_handle})
                     "*.bak\n*.bak2\n/tmp/\n"
                 )
 
-        # Stage specific files only
-        git('add', 'README.md')
+        # Stage specific files only. README intentionally omitted as
+        # of 2026-04-24 — see `_write_readme` removal note. `soul.md`
+        # is gitignored so the add is a no-op there; `soul.base.md`
+        # is the publicly-shipped layer and is staged explicitly.
         git('add', 'PROGRESS_PUBLIC.md')
-        git('add', 'config/soul.md')
+        git('add', 'config/soul.base.md')
         git('add', '.gitignore')
 
         # Check if there are changes to commit
