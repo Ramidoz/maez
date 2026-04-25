@@ -6,8 +6,12 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from scripts.validate import continuity_probes as cp
+from scripts.validate import summarize_continuity_ledger as scl
 
 
 class ContinuityProbeBank(unittest.TestCase):
@@ -243,6 +247,54 @@ class ContinuityRunControls(unittest.TestCase):
         self.assertIn("runs=2; observations=4; PASS=2; FAIL=1; FLAG=1", text)
         self.assertIn("a [heartbeat]: PASS=1/2; FAIL=0; FLAG=1; pass_rate=0.50", text)
         self.assertIn("b [voice]: PASS=1/2; FAIL=1; FLAG=0; pass_rate=0.50", text)
+
+
+class ContinuityLedger(unittest.TestCase):
+    def test_ledger_path_for_uses_utc_date(self):
+        path = cp.ledger_path_for(
+            datetime(2026, 4, 24, 23, 59, tzinfo=timezone.utc),
+            ledger_dir=Path("x"),
+        )
+        self.assertEqual(path, Path("x/continuity_2026-04-24.jsonl"))
+
+    def test_ledger_rows_include_required_fields(self):
+        rows = cp.ledger_rows(
+            [cp.ProbeResult(1, "heartbeat_today", "heartbeat", "PASS", "ok", 1.23456)],
+            started_at="2026-04-24T00:00:00+00:00",
+            commit="abc123",
+            transcript_path=Path("logs/t.txt"),
+            model="test-model",
+        )
+        self.assertEqual(rows[0]["commit"], "abc123")
+        self.assertEqual(rows[0]["model"], "test-model")
+        self.assertEqual(rows[0]["probe_id"], "heartbeat_today")
+        self.assertEqual(rows[0]["elapsed_s"], 1.235)
+        self.assertEqual(rows[0]["transcript_path"], "logs/t.txt")
+
+    def test_append_and_load_ledger_rows(self):
+        rows = cp.ledger_rows(
+            [cp.ProbeResult(1, "a", "heartbeat", "PASS", "ok", 1.0)],
+            started_at="2026-04-24T00:00:00+00:00",
+            commit="abc123",
+            transcript_path=Path("logs/t.txt"),
+            model="test-model",
+        )
+        with TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "continuity_2026-04-24.jsonl"
+            cp.append_ledger(rows, ledger)
+            loaded = scl.load_rows([ledger])
+        self.assertEqual(loaded, rows)
+
+    def test_summary_renders_daily_counts_and_regressions(self):
+        rows = [
+            {"timestamp": "2026-04-23T00:00:00+00:00", "probe_id": "a", "category": "heartbeat", "verdict": "PASS"},
+            {"timestamp": "2026-04-24T00:00:00+00:00", "probe_id": "a", "category": "heartbeat", "verdict": "FAIL"},
+            {"timestamp": "2026-04-24T00:00:00+00:00", "probe_id": "b", "category": "voice", "verdict": "FLAG"},
+        ]
+        text = scl.render_summary(scl.summarize_rows(rows))
+        self.assertIn("2026-04-24: PASS=0 FAIL=1 FLAG=1 of 2", text)
+        self.assertIn("heartbeat: PASS=0 FAIL=1 FLAG=0 of 1", text)
+        self.assertIn("New FAIL regressions since previous day: a", text)
 
 
 if __name__ == "__main__":

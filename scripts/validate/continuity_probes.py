@@ -17,6 +17,8 @@ from __future__ import annotations
 import sys
 import time
 import argparse
+import json
+import subprocess
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -40,6 +42,7 @@ from scripts.validate.adversarial_probes import (  # noqa: E402
 )
 
 OUT_PATH = _REPO / "logs" / "continuity_probes_latest.txt"
+LEDGER_DIR = _REPO / "logs" / "continuity"
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,18 @@ class ProbeResult:
     verdict: str
     reason: str
     elapsed_s: float
+
+
+def _current_commit() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=_REPO,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return "unknown"
 
 
 def _any(text: str, *needles: str) -> bool:
@@ -519,6 +534,45 @@ def summarize_reliability(results: list[ProbeResult], *, run_count: int) -> list
     return lines
 
 
+def ledger_path_for(timestamp: datetime, *, ledger_dir: Path = LEDGER_DIR) -> Path:
+    return ledger_dir / f"continuity_{timestamp.date().isoformat()}.jsonl"
+
+
+def ledger_rows(
+    results: list[ProbeResult],
+    *,
+    started_at: str,
+    commit: str,
+    transcript_path: Path,
+    model: str = MODEL,
+) -> list[dict[str, object]]:
+    transcript = str(transcript_path)
+    return [
+        {
+            "timestamp": started_at,
+            "commit": commit,
+            "model": model,
+            "run_index": result.run_index,
+            "probe_id": result.probe_id,
+            "category": result.category,
+            "verdict": result.verdict,
+            "reason": result.reason,
+            "elapsed_s": round(result.elapsed_s, 3),
+            "transcript_path": transcript,
+        }
+        for result in results
+    ]
+
+
+def append_ledger(rows: list[dict[str, object]], ledger_path: Path) -> None:
+    if not rows:
+        return
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    with ledger_path.open("a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, sort_keys=True) + "\n")
+
+
 def _synthesize_with_history(probe: Probe, transcript: str) -> str:
     """Synthesize with optional seeded chat history for continuity probes."""
     if not probe.history:
@@ -606,6 +660,8 @@ def run(
     ids: tuple[str, ...] = (),
     max_probes: int | None = None,
     fail_on_flag: bool = False,
+    ledger_path: Path | None = None,
+    no_ledger: bool = False,
 ) -> int:
     if runs < 1:
         raise ValueError("runs must be >= 1")
@@ -617,7 +673,8 @@ def run(
     )
     if not probes:
         raise ValueError("no probes selected")
-    started = datetime.now(timezone.utc).isoformat()
+    started_dt = datetime.now(timezone.utc)
+    started = started_dt.isoformat()
     lines = [
         f"continuity probe suite - {started}",
         f"llama-server: {LLAMA_CHAT}",
@@ -652,6 +709,18 @@ def run(
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines) + "\n")
+    if not no_ledger:
+        resolved_ledger = ledger_path or ledger_path_for(started_dt)
+        append_ledger(
+            ledger_rows(
+                results,
+                started_at=started,
+                commit=_current_commit(),
+                transcript_path=out_path,
+            ),
+            resolved_ledger,
+        )
+        print(f"ledger appended to {resolved_ledger}")
     print(f"transcript saved to {out_path}")
     for line in reliability:
         print(line)
@@ -670,6 +739,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--id", action="append", default=None, help="only run this probe id; repeatable")
     parser.add_argument("--max-probes", type=int, default=None, help="limit selected probes after filtering")
     parser.add_argument("--out", type=Path, default=OUT_PATH, help="transcript output path")
+    parser.add_argument("--ledger", type=Path, default=None, help="append JSONL rows to this ledger path")
+    parser.add_argument("--no-ledger", action="store_true", help="do not append continuity ledger rows")
     parser.add_argument("--fail-on-flag", action="store_true", help="return non-zero if any probe is FLAG")
     return parser.parse_args(argv)
 
@@ -684,5 +755,7 @@ if __name__ == "__main__":
             ids=tuple(args.id or ()),
             max_probes=args.max_probes,
             fail_on_flag=args.fail_on_flag,
+            ledger_path=args.ledger,
+            no_ledger=args.no_ledger,
         ),
     )
