@@ -267,6 +267,23 @@ class ClosingStatementSuppressesSuffix(unittest.TestCase):
         )
         self.assertNotIn("you asked", msg.lower())
 
+    def test_what_is_good_maez_incident_suppressed(self):
+        # 2026-04-25 incident: owner sent "What is good maez?" at
+        # 14:02 (casual greeting). On welcome-back at 15:33 + 16:12,
+        # the greeting suffix surfaced "Last we talked you asked:
+        # 'What is good maez?'" both times. Casual greetings shouldn't
+        # be re-quoted as pending questions.
+        msg = self._compose(
+            absence_secs=90 * 60,
+            last_exchange={
+                "content": "Rohit: What is good maez?\n"
+                           "Maez: Good. Just thinking about what we talked about.",
+            },
+            last_exchange_age_secs=90 * 60,
+        )
+        self.assertNotIn("What is good maez", msg)
+        self.assertNotIn("you asked", msg.lower())
+
 
 class QuestionDetector(unittest.TestCase):
     def _looks(self, msg: str) -> bool:
@@ -279,9 +296,14 @@ class QuestionDetector(unittest.TestCase):
         self.assertTrue(self._looks("Wait, what?"))
 
     def test_question_words_detect(self):
-        for q in ("How are you", "What do you think", "Why does it",
-                  "Can you check", "Should we keep going",
-                  "Tell me about it", "Show me the log"):
+        # Note: "How are you" was previously here but is now
+        # correctly classified as a casual greeting (see the
+        # 2026-04-25 second-pass fix). Substantive "how"
+        # questions still detect.
+        for q in ("How does the audit work", "What do you think of it",
+                  "Why does it fail", "Can you check the log",
+                  "Should we keep going", "Tell me about it",
+                  "Show me the log"):
             self.assertTrue(self._looks(q), q)
 
     def test_statements_do_not_detect(self):
@@ -302,6 +324,54 @@ class QuestionDetector(unittest.TestCase):
     def test_empty_does_not_detect(self):
         self.assertFalse(self._looks(""))
         self.assertFalse(self._looks("   "))
+
+    def test_casual_greetings_do_not_detect(self):
+        # 2026-04-25 second-pass fix: these shapes match
+        # question-opener patterns ("what...", "how...") but are
+        # conversational openers, not real questions. Re-quoting
+        # them on welcome-back feels uncanny.
+        for casual in (
+            "What is good maez?",
+            "What is good maez",
+            "What's up?",
+            "What's up",
+            "Whats up",
+            "What's good",
+            "How are you?",
+            "How are you",
+            "How's it going",
+            "How have you been?",
+            "Yo",
+            "Yo maez",
+            "hey",
+            "Hey Maez",
+            "Hi",
+            "Hi rohit",
+            "Hello",
+            "Good morning",
+            "Good morning maez",
+            "Sup",
+            "Sup man",
+        ):
+            self.assertFalse(
+                self._looks(casual),
+                f"casual greeting {casual!r} should not be classified as a real question",
+            )
+
+    def test_genuine_questions_starting_with_what_still_detect(self):
+        # Make sure the casual-greeting carve-out doesn't swallow
+        # real questions that start with the same opener.
+        for q in (
+            "What did you think of the proposal?",
+            "What's the disk usage right now?",
+            "What was wrong with cycle 42?",
+            "How do I configure the gate?",
+            "How does the cognition_quality module score?",
+        ):
+            self.assertTrue(
+                self._looks(q),
+                f"genuine question {q!r} should still be classified",
+            )
 
 
 class ExchangeContentParsing(unittest.TestCase):

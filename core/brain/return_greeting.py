@@ -60,6 +60,28 @@ _QUESTION_OPENERS = (
     "tell me", "show me", "explain", "describe",
 )
 
+# 2026-04-25 second pass: the 11:16 + closing-statement fix had a
+# hole — casual greetings like "What is good maez?", "What's up?",
+# "How are you?" all start with a question opener and got surfaced
+# as "Last we talked you asked: '...'". They aren't open questions;
+# they're conversational openers. Re-quoting them on welcome-back
+# feels uncanny — the owner saw it twice today (15:33 + 16:12 both
+# pulled "What is good maez?" back). These shapes get suppressed
+# regardless of question-opener status. Conservative — if it looks
+# like a greeting, treat as one.
+_GREETING_SHAPES = (
+    "what is good", "whats good", "what's good",
+    "what is up", "whats up", "what's up", "sup",
+    "what's new", "whats new", "what is new",
+    "how are you", "how're you", "how have you been", "how you been",
+    "how's it going", "hows it going", "how is it going",
+    "how's it", "hows it",
+    "how goes", "how's everything", "hows everything",
+    "good morning", "good afternoon", "good evening", "good night",
+    "morning", "evening",
+    "yo", "hey", "hi", "hello", "howdy", "hola",
+)
+
 
 def _extract_owner_message(exchange_content: str) -> Optional[str]:
     """Return just the owner's last message text from a stored
@@ -93,19 +115,47 @@ def _extract_owner_message(exchange_content: str) -> Optional[str]:
 _extract_owner_question = _extract_owner_message
 
 
+def _is_casual_greeting(message: str) -> bool:
+    """True iff message is a conversational opener that shouldn't be
+    re-quoted on welcome-back. "What is good maez?", "How are you?",
+    "Yo", etc. — questions in form but greetings in function.
+    Whether or not the original got an answer, re-asking them when
+    the owner returns feels uncanny."""
+    low = message.strip().lower().rstrip("?!.,").strip()
+    if not low:
+        return False
+    # Strip trailing common addressee names so "what's up maez" /
+    # "what is good rohit" / "hey maez" all hit the same shape.
+    for name in ("maez", "rohit", "friend", "buddy", "man"):
+        if low.endswith(" " + name):
+            low = low[: -len(name) - 1].strip()
+    # Match on full message (single-word greetings) OR start (longer
+    # greetings).
+    for shape in _GREETING_SHAPES:
+        if low == shape or low.startswith(shape + " ") or low.startswith(shape + ","):
+            return True
+    return False
+
+
 def _looks_like_open_question(message: str) -> bool:
     """True iff `message` reads as a question or open request worth
     re-opening on welcome-back. False for statements, closing
-    remarks, and ambiguous text — those get suppressed.
+    remarks, casual greetings, and ambiguous text — those get
+    suppressed.
 
     Heuristic, not perfect. Conservative: when in doubt, return
     False so the suffix is suppressed. A bare "Welcome back, Rohit."
-    is much better voice than a misframed re-open of a settled
-    thread."""
+    is much better voice than a misframed re-open of a casual
+    "What's up?" or a settled thread."""
     if not message:
         return False
     stripped = message.strip()
     if not stripped:
+        return False
+    # Casual greetings ("what's up", "how are you", "yo") — these
+    # match question-opener patterns but aren't real open questions.
+    # Catch them before the opener check.
+    if _is_casual_greeting(stripped):
         return False
     # Explicit question mark anywhere is the strongest signal.
     if "?" in stripped:
