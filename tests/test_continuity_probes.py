@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import unittest
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -389,6 +390,8 @@ class ContinuityLedger(unittest.TestCase):
             ledger = Path(tmp) / "continuity_2026-04-24.jsonl"
             cp.append_ledger(rows, ledger)
             loaded = scl.load_rows([ledger])
+        self.assertEqual(loaded[0]["_ledger_day"], "2026-04-24")
+        loaded[0].pop("_ledger_day")
         self.assertEqual(loaded, rows)
 
     def test_summary_renders_daily_counts_and_regressions(self):
@@ -401,6 +404,20 @@ class ContinuityLedger(unittest.TestCase):
         self.assertIn("2026-04-24: PASS=0 FAIL=1 FLAG=1 of 2", text)
         self.assertIn("heartbeat: PASS=0 FAIL=1 FLAG=0 of 1", text)
         self.assertIn("New FAIL regressions since previous day: a", text)
+
+    def test_loaded_rows_summarize_by_local_ledger_filename(self):
+        row = {
+            "timestamp": "2026-04-25T03:00:00+00:00",
+            "probe_id": "a",
+            "category": "scenario",
+            "verdict": "PASS",
+        }
+        with TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "continuity_2026-04-24.jsonl"
+            ledger.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            text = scl.render_summary(scl.summarize_rows(scl.load_rows([ledger])))
+        self.assertIn("2026-04-24: PASS=1 FAIL=0 FLAG=0 of 1", text)
+        self.assertNotIn("2026-04-25:", text)
 
 
 if __name__ == "__main__":

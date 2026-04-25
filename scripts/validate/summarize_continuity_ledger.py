@@ -29,6 +29,7 @@ def load_rows(paths: list[Path]) -> list[dict[str, object]]:
     for path in paths:
         if not path.exists():
             continue
+        ledger_day = _day_from_path(path)
         for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if not line.strip():
                 continue
@@ -38,8 +39,18 @@ def load_rows(paths: list[Path]) -> list[dict[str, object]]:
                 raise ValueError(f"{path}:{line_no}: invalid JSONL row: {exc}") from exc
             if "timestamp" not in row or "probe_id" not in row or "verdict" not in row:
                 raise ValueError(f"{path}:{line_no}: missing required continuity ledger fields")
+            if ledger_day:
+                row["_ledger_day"] = ledger_day
             rows.append(row)
     return rows
+
+
+def _day_from_path(path: Path) -> str:
+    stem = path.stem
+    prefix = "continuity_"
+    if not stem.startswith(prefix):
+        return ""
+    return stem.removeprefix(prefix)
 
 
 def ledger_paths(ledger_dir: Path = LEDGER_DIR, *, days: int = 7) -> list[Path]:
@@ -52,8 +63,8 @@ def ledger_paths(ledger_dir: Path = LEDGER_DIR, *, days: int = 7) -> list[Path]:
 def summarize_rows(rows: list[dict[str, object]]) -> list[DaySummary]:
     days: dict[str, list[dict[str, object]]] = defaultdict(list)
     for row in rows:
-        timestamp = str(row["timestamp"])
-        days[timestamp[:10]].append(row)
+        day = str(row.get("_ledger_day") or row["timestamp"])[:10]
+        days[day].append(row)
 
     summaries: list[DaySummary] = []
     for day in sorted(days):
