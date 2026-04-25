@@ -2375,13 +2375,13 @@ class MaezDaemon:
                                     logger.debug("the owner back after %.0fs — no greeting (< 20min)",
                                                  absence_secs)
                                 else:
-                                    # 2026-04-24: unified greeting composer —
-                                    # replaces the pair of hardcoded "Welcome
-                                    # back the owner" strings (role label
-                                    # leaked into surface; no thread
-                                    # continuity on the short-absence path,
-                                    # random raw-memory thought on the long-
-                                    # absence path). See
+                                    # 2026-04-25: simplified greeting —
+                                    # name + absence duration only. No
+                                    # re-quoting prior exchanges; that
+                                    # duplicated chat_history threading
+                                    # (commit cc462c5) and led to uncanny
+                                    # re-quotes of casual greetings and
+                                    # closed remarks. See
                                     # core/brain/return_greeting.py.
                                     from core.brain.return_greeting import (
                                         compose_return_greeting,
@@ -2389,30 +2389,9 @@ class MaezDaemon:
                                     from core.memory.identity import (
                                         display_name as _display_name,
                                     )
-                                    last_exchange = None
-                                    last_exchange_age = None
-                                    try:
-                                        _exs = self.memory.get_telegram_exchanges(
-                                            limit=1,
-                                        )
-                                        if _exs:
-                                            last_exchange = _exs[0]
-                                            _meta = (last_exchange or {}).get(
-                                                "metadata", {},
-                                            ) or {}
-                                            _ts = _meta.get("timestamp")
-                                            if isinstance(_ts, (int, float)):
-                                                last_exchange_age = time.time() - _ts
-                                    except Exception as _greet_exc:
-                                        logger.debug(
-                                            "greeting exchange fetch failed: %s",
-                                            _greet_exc,
-                                        )
                                     msg = compose_return_greeting(
                                         display_name=_display_name(),
                                         absence_secs=absence_secs,
-                                        last_exchange=last_exchange,
-                                        last_exchange_age_secs=last_exchange_age,
                                     )
                                     if msg:
                                         self.telegram.send_message(msg)
@@ -2421,10 +2400,8 @@ class MaezDaemon:
                                         hrs = int(absence_secs // 3600)
                                         mins = int((absence_secs % 3600) // 60)
                                         logger.info(
-                                            "Greeted %s (away %dh %dm) | "
-                                            "thread_ref=%s",
+                                            "Greeted %s (away %dh %dm)",
                                             _display_name(), hrs, mins,
-                                            bool(last_exchange),
                                         )
 
                         # Morning briefing check

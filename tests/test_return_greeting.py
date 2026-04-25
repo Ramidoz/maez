@@ -1,25 +1,16 @@
 # Copyright © 2026 Rohit Ananthan
 # Licensed under the GNU Affero General Public License v3.0 or later.
 # See LICENSE for full text.
-"""Presence-return greeting composer — 2026-04-24 voice fix.
+"""Presence-return greeting composer — 2026-04-24 voice fix,
+simplified 2026-04-25.
 
-The daemon's presence-detection loop used to send two hardcoded
-strings verbatim:
-
-    "Welcome back the owner."
-    "Welcome back the owner — you've been away for ... Here's what
-     I've been thinking about: <random raw memory entry>"
-
-Both carried the role label "the owner" into surface text (the owner
-has a name in identity config; it wasn't being used), and the >2hr
-path pulled an arbitrary raw-memory entry as a "thought" hook — which
-at best was a cycle's internal monologue, never the pending
-conversation thread.
-
-`compose_return_greeting` is the testable pure-function replacement
-that resolves the name from `display_name()` (no hardcoding) and, if
-the last telegram exchange is present and fresh enough, surfaces the
-owner's literal last question as a continuity pointer."""
+Tests cover the deterministic shape: name + optional absence
+duration, no suffix. The "Last we talked you asked: '...'" suffix
+was removed after two follow-on incidents (closing remark
+re-quoted as pending question; casual "What is good maez?"
+re-quoted as a real question on welcome-back). The suffix
+duplicated chat_history threading and was net-noise — see
+module docstring."""
 from __future__ import annotations
 
 import sys
@@ -35,17 +26,11 @@ class ShortAbsenceSuppressed(unittest.TestCase):
     def test_under_20_minutes_returns_empty(self):
         from core.brain.return_greeting import compose_return_greeting
         self.assertEqual(
-            compose_return_greeting(
-                display_name="Rohit",
-                absence_secs=300,
-            ),
+            compose_return_greeting(display_name="Rohit", absence_secs=300),
             "",
         )
         self.assertEqual(
-            compose_return_greeting(
-                display_name="Rohit",
-                absence_secs=1199,
-            ),
+            compose_return_greeting(display_name="Rohit", absence_secs=1199),
             "",
         )
 
@@ -53,35 +38,16 @@ class ShortAbsenceSuppressed(unittest.TestCase):
 class NameIsNotHardcoded(unittest.TestCase):
     def _compose(self, name: str, secs: int):
         from core.brain.return_greeting import compose_return_greeting
-        return compose_return_greeting(
-            display_name=name,
-            absence_secs=secs,
-        )
+        return compose_return_greeting(display_name=name, absence_secs=secs)
 
     def test_simple_path_uses_configured_name(self):
-        # Name from identity.display_name() flows through verbatim.
-        self.assertEqual(
-            self._compose("Rohit", 3600),
-            "Welcome back, Rohit.",
-        )
-        self.assertEqual(
-            self._compose("Alex", 3600),
-            "Welcome back, Alex.",
-        )
-        self.assertEqual(
-            self._compose("Friend", 3600),
-            "Welcome back, Friend.",
-        )
+        self.assertEqual(self._compose("Rohit", 3600), "Welcome back, Rohit.")
+        self.assertEqual(self._compose("Alex", 3600), "Welcome back, Alex.")
+        self.assertEqual(self._compose("Friend", 3600), "Welcome back, Friend.")
 
     def test_empty_name_falls_back_to_friend(self):
-        self.assertEqual(
-            self._compose("", 3600),
-            "Welcome back, Friend.",
-        )
-        self.assertEqual(
-            self._compose("   ", 3600),
-            "Welcome back, Friend.",
-        )
+        self.assertEqual(self._compose("", 3600), "Welcome back, Friend.")
+        self.assertEqual(self._compose("   ", 3600), "Welcome back, Friend.")
 
     def test_literal_role_label_never_appears(self):
         # "the owner" must never leak into any output.
@@ -90,330 +56,59 @@ class NameIsNotHardcoded(unittest.TestCase):
                 msg = self._compose(name, secs)
                 self.assertNotIn("the owner", msg.lower())
 
-    def test_detailed_path_uses_configured_name(self):
-        out = self._compose("Rohit", 10800)
-        self.assertTrue(out.startswith("Welcome back, Rohit"))
-        self.assertIn("3h 0m", out)
 
-
-class ThreadContinuitySuffix(unittest.TestCase):
-    def _compose(self, **kw):
+class AbsenceDurationFormatting(unittest.TestCase):
+    def _compose(self, secs: int):
         from core.brain.return_greeting import compose_return_greeting
-        kw.setdefault("display_name", "Rohit")
-        return compose_return_greeting(**kw)
+        return compose_return_greeting(display_name="Rohit", absence_secs=secs)
 
-    def test_incident_shape_simple_path(self):
-        # Reproduces the 2026-04-24 incident: owner came back after
-        # 67 minutes on an open meta-harness thread. Old greeting was
-        # "Welcome back the owner." — zero continuity. New greeting
-        # must reference the pending question.
-        msg = self._compose(
-            absence_secs=67 * 60,
-            last_exchange={
-                "content": (
-                    "Rohit: You think it'll be useful for you? "
-                    "How will it make you better in layman's terms\n"
-                    "Maez: I don't know what 'it' refers to..."
-                ),
-            },
-            last_exchange_age_secs=67 * 60,
-        )
-        self.assertIn("Rohit", msg)
-        self.assertIn("You think it'll be useful", msg)
-
-    def test_stale_exchange_suppresses_suffix(self):
-        # >24h old: do not reopen a cold thread as if it were warm.
-        msg = self._compose(
-            absence_secs=3600,
-            last_exchange={"content": "Rohit: something\nMaez: reply"},
-            last_exchange_age_secs=86400 + 600,
-        )
+    def test_under_2_hours_no_duration(self):
+        msg = self._compose(3600)
         self.assertEqual(msg, "Welcome back, Rohit.")
 
-    def test_no_exchange_means_plain_greeting(self):
-        msg = self._compose(absence_secs=3600, last_exchange=None)
+    def test_just_under_2hr_boundary(self):
+        msg = self._compose(7199)
         self.assertEqual(msg, "Welcome back, Rohit.")
 
-    def test_long_question_truncated(self):
-        # Long question (must read as a question after the 2026-04-25
-        # gating fix — bare "aaaa..." would now suppress the suffix
-        # entirely instead of being treated as text to truncate).
-        long_q = "What about " + ("a" * 500) + "?"
-        msg = self._compose(
-            absence_secs=3600,
-            last_exchange={"content": f"Rohit: {long_q}\nMaez: ok"},
-            last_exchange_age_secs=100,
-        )
-        self.assertIn("…", msg)
-        self.assertLess(len(msg), 300)
+    def test_over_2_hours_includes_duration(self):
+        msg = self._compose(3 * 3600)
+        self.assertIn("3h 0m", msg)
+        self.assertTrue(msg.startswith("Welcome back, Rohit"))
 
-    def test_detailed_path_with_thread_ref(self):
-        msg = self._compose(
-            absence_secs=5 * 3600,
-            last_exchange={
-                "content": "Rohit: when will you finish?\nMaez: soon",
-            },
-            last_exchange_age_secs=5 * 3600,
-        )
-        self.assertIn("5h 0m", msg)
-        self.assertIn("when will you finish", msg)
+    def test_long_absence_with_minutes(self):
+        msg = self._compose(9 * 3600 + 58 * 60)
+        self.assertIn("9h 58m", msg)
 
 
-class ClosingStatementSuppressesSuffix(unittest.TestCase):
-    """2026-04-25 incident regression: owner closed an overnight
-    thread with 'You still don't get it but I guess that's how it's
-    supposed to be. You'll understand what I'm talking about later.'
-    Maez acknowledged ('Fair enough. I'll keep running.'). The
-    welcome-back greeting at 11:16 the next morning pulled the
-    closing remark back as 'Last we talked you asked: ...' — which
-    misframed a settled thread as a pending question. Fix: only
-    surface the suffix when the owner's last message looks like an
-    actual open question or request."""
+class NoSuffixForAnyShape(unittest.TestCase):
+    """The whole class of suffix-related bugs (closed-statement
+    re-open, casual-greeting re-quote) is gone. The greeting is
+    deterministic: name + duration only. No quote-back can happen
+    because the function takes no exchange-history parameter."""
 
-    def _compose(self, **kw):
+    def test_signature_takes_only_name_and_absence(self):
+        import inspect
         from core.brain.return_greeting import compose_return_greeting
-        kw.setdefault("display_name", "Rohit")
-        return compose_return_greeting(**kw)
-
-    def test_incident_shape_no_suffix_for_closing_remark(self):
-        msg = self._compose(
-            absence_secs=10 * 3600,
-            last_exchange={
-                "content": (
-                    "Rohit: You still don't get it but I guess that's how "
-                    "it's supposed to be. You'll understand what I'm "
-                    "talking about later.\n"
-                    "Maez: Fair enough. I'm listening. I'll keep running."
-                ),
-            },
-            last_exchange_age_secs=10 * 3600,
-        )
-        # Detailed-path absence still works.
-        self.assertIn("Welcome back, Rohit", msg)
-        self.assertIn("away for", msg)
-        # But the suffix is suppressed.
-        self.assertNotIn("you asked", msg.lower())
-        self.assertNotIn("you still don't get it", msg.lower())
-        # No quoted-message segment — base greeting has apostrophes
-        # in "you've" but no `'…'` quoted-message segment.
-        self.assertNotIn(": '", msg)
-
-    def test_question_with_question_mark_keeps_suffix(self):
-        msg = self._compose(
-            absence_secs=2 * 3600,
-            last_exchange={
-                "content": "Rohit: What did you think of the proposal?\n"
-                           "Maez: It looks reasonable.",
-            },
-            last_exchange_age_secs=2 * 3600,
-        )
-        self.assertIn("you asked", msg.lower())
-        self.assertIn("What did you think of the proposal?", msg)
-
-    def test_question_starting_with_how_keeps_suffix(self):
-        msg = self._compose(
-            absence_secs=2 * 3600,
-            last_exchange={
-                "content": "Rohit: How do you handle a stale memory entry\n"
-                           "Maez: I tag it integrity=stale.",
-            },
-            last_exchange_age_secs=2 * 3600,
-        )
-        self.assertIn("you asked", msg.lower())
-        self.assertIn("How do you handle", msg)
-
-    def test_imperative_request_keeps_suffix(self):
-        # "Tell me X" is a request, not a closing statement.
-        msg = self._compose(
-            absence_secs=2 * 3600,
-            last_exchange={
-                "content": "Rohit: Tell me what you noticed yesterday\n"
-                           "Maez: I noticed the disk fixation pattern.",
-            },
-            last_exchange_age_secs=2 * 3600,
-        )
-        self.assertIn("you asked", msg.lower())
-
-    def test_short_closing_statement_suppressed(self):
-        for closing in (
-            "good night",
-            "talk to you later",
-            "later",
-            "we'll see",
-            "I'll be back",
-            "okay",
-        ):
-            msg = self._compose(
-                absence_secs=2 * 3600,
-                last_exchange={
-                    "content": f"Rohit: {closing}\nMaez: noted.",
-                },
-                last_exchange_age_secs=2 * 3600,
-            )
-            self.assertNotIn(
-                "you asked", msg.lower(),
-                f"closing remark {closing!r} unexpectedly surfaced as a question",
-            )
-
-    def test_bare_period_statement_suppressed(self):
-        # Statement, no question mark, no question opener — must suppress.
-        msg = self._compose(
-            absence_secs=2 * 3600,
-            last_exchange={
-                "content": "Rohit: I'll figure it out myself.\n"
-                           "Maez: noted.",
-            },
-            last_exchange_age_secs=2 * 3600,
-        )
-        self.assertNotIn("you asked", msg.lower())
-
-    def test_what_is_good_maez_incident_suppressed(self):
-        # 2026-04-25 incident: owner sent "What is good maez?" at
-        # 14:02 (casual greeting). On welcome-back at 15:33 + 16:12,
-        # the greeting suffix surfaced "Last we talked you asked:
-        # 'What is good maez?'" both times. Casual greetings shouldn't
-        # be re-quoted as pending questions.
-        msg = self._compose(
-            absence_secs=90 * 60,
-            last_exchange={
-                "content": "Rohit: What is good maez?\n"
-                           "Maez: Good. Just thinking about what we talked about.",
-            },
-            last_exchange_age_secs=90 * 60,
-        )
-        self.assertNotIn("What is good maez", msg)
-        self.assertNotIn("you asked", msg.lower())
-
-
-class QuestionDetector(unittest.TestCase):
-    def _looks(self, msg: str) -> bool:
-        from core.brain.return_greeting import _looks_like_open_question
-        return _looks_like_open_question(msg)
-
-    def test_question_mark_detects(self):
-        self.assertTrue(self._looks("Are you there?"))
-        self.assertTrue(self._looks("really?"))
-        self.assertTrue(self._looks("Wait, what?"))
-
-    def test_question_words_detect(self):
-        # Note: "How are you" was previously here but is now
-        # correctly classified as a casual greeting (see the
-        # 2026-04-25 second-pass fix). Substantive "how"
-        # questions still detect.
-        for q in ("How does the audit work", "What do you think of it",
-                  "Why does it fail", "Can you check the log",
-                  "Should we keep going", "Tell me about it",
-                  "Show me the log"):
-            self.assertTrue(self._looks(q), q)
-
-    def test_statements_do_not_detect(self):
-        for s in (
-            "You'll understand later.",
-            "I'm going to bed.",
-            "Good night.",
-            "I'll figure it out myself.",
-            "Maez is doing fine.",
-            "later",
-            "talk soon",
-            "see you",
-            "okay",
-            "thanks",
-        ):
-            self.assertFalse(self._looks(s), s)
-
-    def test_empty_does_not_detect(self):
-        self.assertFalse(self._looks(""))
-        self.assertFalse(self._looks("   "))
-
-    def test_casual_greetings_do_not_detect(self):
-        # 2026-04-25 second-pass fix: these shapes match
-        # question-opener patterns ("what...", "how...") but are
-        # conversational openers, not real questions. Re-quoting
-        # them on welcome-back feels uncanny.
-        for casual in (
-            "What is good maez?",
-            "What is good maez",
-            "What's up?",
-            "What's up",
-            "Whats up",
-            "What's good",
-            "How are you?",
-            "How are you",
-            "How's it going",
-            "How have you been?",
-            "Yo",
-            "Yo maez",
-            "hey",
-            "Hey Maez",
-            "Hi",
-            "Hi rohit",
-            "Hello",
-            "Good morning",
-            "Good morning maez",
-            "Sup",
-            "Sup man",
-        ):
-            self.assertFalse(
-                self._looks(casual),
-                f"casual greeting {casual!r} should not be classified as a real question",
-            )
-
-    def test_genuine_questions_starting_with_what_still_detect(self):
-        # Make sure the casual-greeting carve-out doesn't swallow
-        # real questions that start with the same opener.
-        for q in (
-            "What did you think of the proposal?",
-            "What's the disk usage right now?",
-            "What was wrong with cycle 42?",
-            "How do I configure the gate?",
-            "How does the cognition_quality module score?",
-        ):
-            self.assertTrue(
-                self._looks(q),
-                f"genuine question {q!r} should still be classified",
-            )
-
-
-class ExchangeContentParsing(unittest.TestCase):
-    """The content parser must be name-agnostic (Phase 2 de-Rohit-ify
-    holds — no hardcoded owner prefix)."""
-
-    def _extract(self, content: str):
-        from core.brain.return_greeting import _extract_owner_question
-        return _extract_owner_question(content)
-
-    def test_cleaned_form_rohit(self):
+        sig = inspect.signature(compose_return_greeting)
         self.assertEqual(
-            self._extract("Rohit: what time is it?\nMaez: noon"),
-            "what time is it?",
+            set(sig.parameters.keys()),
+            {"display_name", "absence_secs"},
+            "compose_return_greeting must not accept exchange-history "
+            "params — that path was the source of repeated voice bugs.",
         )
 
-    def test_cleaned_form_alt_name(self):
-        self.assertEqual(
-            self._extract("Alex: hey\nMaez: hi"),
-            "hey",
-        )
-
-    def test_cleaned_form_friend_default(self):
-        self.assertEqual(
-            self._extract("Friend: anything going on?\nMaez: quiet"),
-            "anything going on?",
-        )
-
-    def test_legacy_envelope_form(self):
-        self.assertEqual(
-            self._extract(
-                "the owner (telegram_surface): check it\n[TURN STATE]\nMaez: ok"
-            ),
-            "check it",
-        )
-
-    def test_empty_content_returns_none(self):
-        self.assertIsNone(self._extract(""))
-        self.assertIsNone(self._extract("   "))
-
-    def test_malformed_first_line_returns_none(self):
-        self.assertIsNone(self._extract("no colon here at all"))
+    def test_output_never_contains_quote_marks(self):
+        # No re-quoted message text means no apostrophes around
+        # quoted content. Apostrophes inside the prose ("you've")
+        # are fine; the assertion is on the quote-pair pattern
+        # ": '...'" which only the deleted suffix produced.
+        from core.brain.return_greeting import compose_return_greeting
+        for secs in (1800, 3600, 7200, 36000, 9 * 3600):
+            msg = compose_return_greeting(
+                display_name="Rohit", absence_secs=secs,
+            )
+            self.assertNotIn(": '", msg)
+            self.assertNotIn("you asked", msg.lower())
 
 
 if __name__ == "__main__":
