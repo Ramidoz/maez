@@ -250,9 +250,23 @@ class ContinuityRunControls(unittest.TestCase):
 
 
 class ContinuityLedger(unittest.TestCase):
-    def test_ledger_path_for_uses_utc_date(self):
+    def test_ledger_path_for_uses_local_date(self):
+        # 2026-04-25 03:00 UTC is 2026-04-24 22:00 CDT — a probe run
+        # at that local hour belongs to the local day's developmental
+        # bucket so tonight's 23:00 heartbeat finds it. Filename
+        # derived from local date, not UTC.
+        ts = datetime(2026, 4, 25, 3, 0, tzinfo=timezone.utc)
+        path = cp.ledger_path_for(ts, ledger_dir=Path("x"))
+        # In the test environment we don't pin TZ, so verify by
+        # comparing to whatever local date the conversion produces.
+        local_date = ts.astimezone().date().isoformat()
+        self.assertEqual(path, Path(f"x/continuity_{local_date}.jsonl"))
+
+    def test_ledger_path_for_naive_datetime(self):
+        # Naive datetime is treated as already-local — common case for
+        # ad-hoc test fixtures.
         path = cp.ledger_path_for(
-            datetime(2026, 4, 24, 23, 59, tzinfo=timezone.utc),
+            datetime(2026, 4, 24, 23, 59),
             ledger_dir=Path("x"),
         )
         self.assertEqual(path, Path("x/continuity_2026-04-24.jsonl"))

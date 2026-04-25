@@ -535,7 +535,22 @@ def summarize_reliability(results: list[ProbeResult], *, run_count: int) -> list
 
 
 def ledger_path_for(timestamp: datetime, *, ledger_dir: Path = LEDGER_DIR) -> Path:
-    return ledger_dir / f"continuity_{timestamp.date().isoformat()}.jsonl"
+    """Return the ledger file path for a probe run.
+
+    Filename uses the LOCAL date of the probe run, not UTC. The
+    heartbeat consumer (`daemon._write_developmental_heartbeat` at
+    23:00 local) calls `summarize_day(local_date_str)`, and the
+    nightly journal in PROGRESS.md is also local-dated. Using UTC
+    here meant a probe run between 19:00 and 23:59 CDT would write
+    into tomorrow's UTC file and the same-night heartbeat would find
+    no entries — observed 2026-04-24 with the smoke run at 21:30 CDT
+    landing in `continuity_2026-04-25.jsonl`. Aligning the ledger to
+    local-day matches the rest of the developmental-day framework.
+    Row timestamps stay UTC ISO inside each row, which keeps strict
+    sortability across boundaries.
+    """
+    local = timestamp.astimezone() if timestamp.tzinfo else timestamp
+    return ledger_dir / f"continuity_{local.date().isoformat()}.jsonl"
 
 
 def ledger_rows(
