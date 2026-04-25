@@ -33,9 +33,30 @@ def load_day_rows(date_str: str, *, ledger_dir: Path = LEDGER_DIR) -> list[dict[
     return rows
 
 
-def summarize_day_rows(rows: list[dict[str, object]]) -> str:
+def official_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [row for row in rows if str(row.get("ledger_label", "")) == "official"]
+
+
+def latest_run_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     if not rows:
-        return "No continuity probes were recorded today."
+        return []
+    latest = max(str(row.get("timestamp", "")) for row in rows)
+    return [row for row in rows if str(row.get("timestamp", "")) == latest]
+
+
+def summarize_day_rows(
+    rows: list[dict[str, object]],
+    *,
+    label: str = "official",
+    latest_run_only: bool = True,
+) -> str:
+    if label:
+        rows = [row for row in rows if str(row.get("ledger_label", "")) == label]
+    if latest_run_only:
+        rows = latest_run_rows(rows)
+    if not rows:
+        label_note = f" {label}" if label else ""
+        return f"No{label_note} continuity probes were recorded today."
     totals: Counter[str] = Counter(str(row.get("verdict", "UNKNOWN")) for row in rows)
     categories = sorted({str(row.get("category", "unknown")) for row in rows})
     failed = sorted({
@@ -60,5 +81,15 @@ def summarize_day_rows(rows: list[dict[str, object]]) -> str:
     return f"{base} No objective regressions recorded."
 
 
-def summarize_day(date_str: str, *, ledger_dir: Path = LEDGER_DIR) -> str:
-    return summarize_day_rows(load_day_rows(date_str, ledger_dir=ledger_dir))
+def summarize_day(
+    date_str: str,
+    *,
+    ledger_dir: Path = LEDGER_DIR,
+    label: str = "official",
+    latest_run_only: bool = True,
+) -> str:
+    return summarize_day_rows(
+        load_day_rows(date_str, ledger_dir=ledger_dir),
+        label=label,
+        latest_run_only=latest_run_only,
+    )

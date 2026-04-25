@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 
 from core.brain.continuity_ledger import (
     ledger_path_for_date,
+    latest_run_rows,
     load_day_rows,
     summarize_day,
     summarize_day_rows,
@@ -28,14 +29,14 @@ class ContinuityLedgerSummary(unittest.TestCase):
     def test_summarize_empty_day(self):
         self.assertEqual(
             summarize_day_rows([]),
-            "No continuity probes were recorded today.",
+            "No official continuity probes were recorded today.",
         )
 
     def test_summarize_clean_day(self):
         summary = summarize_day_rows([
             {"probe_id": "a", "category": "heartbeat", "verdict": "PASS"},
             {"probe_id": "b", "category": "refusal", "verdict": "PASS"},
-        ])
+        ], label="")
         self.assertIn("PASS=2, FAIL=0, FLAG=0 of 2", summary)
         self.assertIn("heartbeat, refusal", summary)
         self.assertIn("No objective regressions recorded.", summary)
@@ -44,16 +45,39 @@ class ContinuityLedgerSummary(unittest.TestCase):
         summary = summarize_day_rows([
             {"probe_id": "a", "category": "heartbeat", "verdict": "FAIL"},
             {"probe_id": "b", "category": "voice", "verdict": "FLAG"},
-        ])
+        ], label="")
         self.assertIn("PASS=0, FAIL=1, FLAG=1 of 2", summary)
         self.assertIn("Failed probes: a.", summary)
+
+    def test_summarize_day_rows_filters_to_official(self):
+        summary = summarize_day_rows([
+            {"probe_id": "a", "category": "scenario", "verdict": "FAIL", "ledger_label": "calibration"},
+            {"probe_id": "b", "category": "scenario", "verdict": "PASS", "ledger_label": "official"},
+            {"probe_id": "c", "category": "heartbeat", "verdict": "PASS"},
+        ])
+        self.assertIn("PASS=1, FAIL=0, FLAG=0 of 1", summary)
+        self.assertNotIn("Failed probes", summary)
+
+    def test_latest_run_rows_keeps_only_latest_timestamp(self):
+        rows = [
+            {"timestamp": "2026-04-25T00:00:00+00:00", "probe_id": "old"},
+            {"timestamp": "2026-04-25T01:00:00+00:00", "probe_id": "new"},
+        ]
+        self.assertEqual(latest_run_rows(rows), [rows[1]])
+
+    def test_summarize_day_rows_uses_latest_official_run(self):
+        summary = summarize_day_rows([
+            {"timestamp": "2026-04-25T00:00:00+00:00", "probe_id": "a", "category": "scenario", "verdict": "FAIL", "ledger_label": "official"},
+            {"timestamp": "2026-04-25T01:00:00+00:00", "probe_id": "b", "category": "scenario", "verdict": "PASS", "ledger_label": "official"},
+        ])
+        self.assertIn("PASS=1, FAIL=0, FLAG=0 of 1", summary)
 
     def test_load_and_summarize_day_from_jsonl(self):
         with TemporaryDirectory() as tmp:
             ledger_dir = Path(tmp)
             path = ledger_path_for_date("2026-04-25", ledger_dir=ledger_dir)
             path.write_text(
-                json.dumps({"probe_id": "a", "category": "heartbeat", "verdict": "PASS"}) + "\n",
+                json.dumps({"probe_id": "a", "category": "heartbeat", "verdict": "PASS", "ledger_label": "official"}) + "\n",
                 encoding="utf-8",
             )
             self.assertEqual(len(load_day_rows("2026-04-25", ledger_dir=ledger_dir)), 1)

@@ -60,7 +60,35 @@ def ledger_paths(ledger_dir: Path = LEDGER_DIR, *, days: int = 7) -> list[Path]:
     return paths[-days:]
 
 
-def summarize_rows(rows: list[dict[str, object]]) -> list[DaySummary]:
+def filter_rows_by_label(
+    rows: list[dict[str, object]],
+    *,
+    include_label: str | None = None,
+    exclude_label: str | None = None,
+) -> list[dict[str, object]]:
+    filtered: list[dict[str, object]] = []
+    for row in rows:
+        label = str(row.get("ledger_label", ""))
+        if include_label is not None and label != include_label:
+            continue
+        if exclude_label is not None and label == exclude_label:
+            continue
+        filtered.append(row)
+    return filtered
+
+
+def summarize_rows(
+    rows: list[dict[str, object]],
+    *,
+    include_label: str | None = None,
+    exclude_label: str | None = None,
+    latest_run_only: bool = False,
+) -> list[DaySummary]:
+    rows = filter_rows_by_label(
+        rows,
+        include_label=include_label,
+        exclude_label=exclude_label,
+    )
     days: dict[str, list[dict[str, object]]] = defaultdict(list)
     for row in rows:
         day = str(row.get("_ledger_day") or row["timestamp"])[:10]
@@ -68,10 +96,14 @@ def summarize_rows(rows: list[dict[str, object]]) -> list[DaySummary]:
 
     summaries: list[DaySummary] = []
     for day in sorted(days):
+        day_rows = days[day]
+        if latest_run_only and day_rows:
+            latest = max(str(row.get("timestamp", "")) for row in day_rows)
+            day_rows = [row for row in day_rows if str(row.get("timestamp", "")) == latest]
         totals: Counter[str] = Counter()
         by_category: dict[str, Counter[str]] = defaultdict(Counter)
         by_probe: dict[str, Counter[str]] = defaultdict(Counter)
-        for row in days[day]:
+        for row in day_rows:
             verdict = str(row["verdict"])
             category = str(row.get("category", "unknown"))
             probe_id = str(row["probe_id"])
@@ -134,13 +166,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ledger-dir", type=Path, default=LEDGER_DIR)
     parser.add_argument("--days", type=int, default=7)
+    parser.add_argument("--label", default=None, help="only include this ledger_label")
+    parser.add_argument("--exclude-label", default=None, help="exclude this ledger_label")
+    parser.add_argument("--latest-run", action="store_true", help="summarize only the latest run per day")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     paths = ledger_paths(args.ledger_dir, days=args.days)
-    summaries = summarize_rows(load_rows(paths))
+    summaries = summarize_rows(
+        load_rows(paths),
+        include_label=args.label,
+        exclude_label=args.exclude_label,
+        latest_run_only=args.latest_run,
+    )
     print(render_summary(summaries))
     return 0
 
