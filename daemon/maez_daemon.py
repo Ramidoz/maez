@@ -378,6 +378,11 @@ class MaezDaemon:
         self._git_cycle_counter = 0
         self.GIT_EVERY_N_CYCLES = 10  # every ~5 minutes
         self._last_git_context = ""
+        # 2026-04-25 disk-fixation gate state. See
+        # core/cognition/perception_signature.py.
+        self._last_git_dirty_count = 0
+        self._last_thought_signature: str | None = None
+        self._cycles_since_last_thought = 0
         self._pending_cleanup = None
         self._ollama_lock = threading.Lock()
         self.followup_queue = FollowUpQueue()
@@ -2419,6 +2424,14 @@ class MaezDaemon:
                     logger.debug("Git: %s", self._last_git_context[:80])
                 except Exception as e:
                     logger.debug("Git context failed: %s", e)
+                # Cache dirty-repo count for the perception-signature gate.
+                try:
+                    from skills.git_awareness import scan_all
+                    self._last_git_dirty_count = sum(
+                        1 for r in scan_all() if r.get("is_dirty")
+                    )
+                except Exception as e:
+                    logger.debug("git dirty count update failed: %s", e)
 
             # GitHub — every 10 cycles
             self._github_counter += 1
@@ -2515,13 +2528,47 @@ class MaezDaemon:
                 except Exception as e:
                     logger.warning("Self-reflection error: %s", e)
 
-            result = self._reason(snap)
+            # 2026-04-25 perception-signature gate. If perception's
+            # fixation-relevant axes (disk%, presence, git dirty count,
+            # top processes) match the last cycle that produced a
+            # stored thought AND the floor hasn't been reached, skip
+            # the LLM call. The model can't fixate on cycles it
+            # doesn't run. See core/cognition/perception_signature.py.
+            from core.cognition.perception_signature import (
+                compute_signature,
+                should_skip_reasoning,
+            )
+            current_sig = compute_signature(
+                snap,
+                presence_state=(
+                    "at_desk" if (
+                        self._last_presence_snap is not None
+                        and self._last_presence_snap.rohit_present
+                    ) else "away"
+                ),
+                git_dirty_count=self._last_git_dirty_count,
+            )
+            if should_skip_reasoning(
+                current_signature=current_sig,
+                last_thought_signature=self._last_thought_signature,
+                cycles_since_last_thought=self._cycles_since_last_thought,
+            ):
+                logger.info(
+                    "Cycle %d: HEARTBEAT_OK — perception unchanged (gated)",
+                    self.cycle_count,
+                )
+                self._cycles_since_last_thought += 1
+                result = None
+            else:
+                result = self._reason(snap)
             if result is None:
-                logger.warning("Cycle %d: no response from model", self.cycle_count)
+                # Either gate skipped, or _reason couldn't run. No-op.
+                pass
             elif result.strip() == _HEARTBEAT_OK:
                 # Nothing noteworthy this cycle — skip audit, storage, broadcast.
                 # Storing fabricated prose is worse than storing nothing.
                 logger.info("Cycle %d: HEARTBEAT_OK — silent cycle", self.cycle_count)
+                self._cycles_since_last_thought += 1
                 result = None
             else:
                 # Self-claim audit on the cycle response BEFORE anything
@@ -2734,6 +2781,13 @@ class MaezDaemon:
                     "cycle": self.cycle_count,
                     "thought": result,
                 })
+
+                # 2026-04-25 fixation gate: thought stored — pin the
+                # signature, reset the floor counter. The next cycle
+                # whose perception matches this one will skip the LLM
+                # until either perception changes or the floor is hit.
+                self._last_thought_signature = current_sig
+                self._cycles_since_last_thought = 0
 
             # Exploratory mind — advance one wondering with remaining budget.
             # _reason() ran first. If there's no room left in the cycle, the
