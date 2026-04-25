@@ -96,6 +96,15 @@ class DevelopmentalHeartbeatModule(unittest.TestCase):
         self.assertIsNone(record_if_absent(memory, _evidence(), body))
         self.assertEqual(len(memory.core), 1)
 
+    def test_already_recorded_accepts_memory_manager_shape(self):
+        memory = FakeMemory()
+        memory.core.append({
+            "id": "core-x",
+            "content": "heartbeat",
+            "metadata": {"source": "developmental_heartbeat_2026-04-24"},
+        })
+        self.assertTrue(already_recorded(memory, "2026-04-24"))
+
 
 class DaemonDevelopmentalHeartbeatWiring(unittest.TestCase):
     def test_nightly_journal_is_audited_before_core_store(self):

@@ -52,7 +52,10 @@ def already_recorded(memory, date_str: str) -> bool:
     wanted = source_for_date(date_str)
     try:
         for entry in memory.get_all_core():
-            if (entry.get("source") or "") == wanted:
+            source = entry.get("source")
+            if source is None and isinstance(entry.get("metadata"), dict):
+                source = entry["metadata"].get("source")
+            if (source or "") == wanted:
                 return True
     except Exception:
         return False
