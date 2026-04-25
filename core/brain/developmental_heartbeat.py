@@ -41,6 +41,7 @@ class HeartbeatEvidence:
     core_count: int
     owner_name: str
     journal_summary: str = ""
+    continuity_summary: str = ""
 
 
 def source_for_date(date_str: str) -> str:
@@ -92,6 +93,7 @@ def build_prompt(evidence: HeartbeatEvidence) -> str:
         f"Warnings: {evidence.warning_count}\n"
         f"Memory counts: raw={evidence.raw_count}, daily={evidence.daily_count}, "
         f"core={evidence.core_count}\n\n"
+        f"Continuity probe summary:\n{_one_line(evidence.continuity_summary, 900)}\n\n"
         f"Nightly journal summary:\n{_one_line(evidence.journal_summary, 1600)}\n"
     )
 
@@ -104,10 +106,13 @@ def fallback_heartbeat(evidence: HeartbeatEvidence) -> str:
         else "no logged errors in the evidence window"
     )
     summary = _one_line(evidence.journal_summary, 240)
+    continuity = _one_line(evidence.continuity_summary, 240)
     noticed = summary or (
         f"{evidence.cycle_count} cycles, {evidence.action_count} actions, "
         f"and {evidence.alert_count} alerts were recorded today."
     )
+    if continuity and continuity != "No continuity probes were recorded today.":
+        noticed = f"{noticed} {continuity}"
     return "\n".join((
         f"What I noticed: {noticed}",
         "What changed in me: I preserved a dated account of today instead "
@@ -141,7 +146,8 @@ def format_core_memory(body: str, evidence: HeartbeatEvidence) -> str:
         f"cycles={evidence.cycle_count}; actions={evidence.action_count}; "
         f"alerts={evidence.alert_count}; errors={evidence.error_count}; "
         f"warnings={evidence.warning_count}; raw={evidence.raw_count}; "
-        f"daily={evidence.daily_count}; core={evidence.core_count}."
+        f"daily={evidence.daily_count}; core={evidence.core_count}. "
+        f"Continuity: {_one_line(evidence.continuity_summary, 300)}"
     )
 
 

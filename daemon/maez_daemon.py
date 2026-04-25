@@ -2152,6 +2152,12 @@ class MaezDaemon:
             owner_name = _display_name()
         except Exception:
             owner_name = "the owner"
+        try:
+            from core.brain.continuity_ledger import summarize_day
+            continuity_summary = summarize_day(date_str)
+        except Exception as e:
+            logger.debug("Continuity ledger summary unavailable: %s", e)
+            continuity_summary = "Continuity probe summary unavailable."
 
         evidence = HeartbeatEvidence(
             date=date_str,
@@ -2166,6 +2172,7 @@ class MaezDaemon:
             core_count=int(stats.get("core", 0)),
             owner_name=owner_name,
             journal_summary=journal_summary,
+            continuity_summary=continuity_summary,
         )
 
         try:
@@ -2192,7 +2199,7 @@ class MaezDaemon:
             heartbeat = audit_assistant_text(
                 heartbeat,
                 surface="developmental_heartbeat",
-                signals_present=["nightly_journal", "memory_stats", "daemon_logs"],
+                signals_present=["nightly_journal", "memory_stats", "daemon_logs", "continuity_ledger"],
                 signals_absent=[],
             )
             heartbeat = normalize_heartbeat(heartbeat, evidence)

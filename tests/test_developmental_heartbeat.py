@@ -34,6 +34,7 @@ def _evidence() -> HeartbeatEvidence:
         core_count=12,
         owner_name="Rohit",
         journal_summary="I verified continuity and cleaned autonomous surfaces.",
+        continuity_summary="Continuity probes today: PASS=26, FAIL=0, FLAG=2 of 28.",
     )
 
 
@@ -66,6 +67,8 @@ class DevelopmentalHeartbeatModule(unittest.TestCase):
             "What I owe next:",
         ):
             self.assertIn(label, prompt)
+        self.assertIn("Continuity probe summary:", prompt)
+        self.assertIn("PASS=26, FAIL=0, FLAG=2", prompt)
 
     def test_normalize_accepts_required_shape(self):
         raw = "\n".join((
@@ -87,6 +90,7 @@ class DevelopmentalHeartbeatModule(unittest.TestCase):
         formatted = format_core_memory(body, _evidence())
         self.assertIn("[DEVELOPMENTAL HEARTBEAT — 2026-04-24 (Friday)]", formatted)
         self.assertIn("Evidence: cycles=42; actions=3; alerts=4", formatted)
+        self.assertIn("Continuity: Continuity probes today: PASS=26", formatted)
 
     def test_record_if_absent_is_idempotent_per_date(self):
         memory = FakeMemory()
@@ -131,6 +135,7 @@ class DaemonDevelopmentalHeartbeatWiring(unittest.TestCase):
     def test_developmental_heartbeat_method_audits_before_recording(self):
         from daemon.maez_daemon import MaezDaemon
         src = inspect.getsource(MaezDaemon._write_developmental_heartbeat)
+        self.assertIn("summarize_day(date_str)", src)
         audit_pos = src.find('surface="developmental_heartbeat"')
         record_pos = src.rfind("record_if_absent(")
         self.assertGreater(audit_pos, 0, "heartbeat audit not found")
