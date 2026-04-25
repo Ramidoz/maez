@@ -37,8 +37,31 @@ _LEGACY_SURFACE_PREFIX = re.compile(r"^the owner \([^)]+\):\s*")
 # Keeps long questions from blowing up the greeting length.
 _QUESTION_SNIPPET_CHARS = 140
 
+# Heuristic: only surface the last owner message in a "Last we talked
+# you asked: …" suffix when it actually looks like a question or open
+# request. Statements (especially closing ones — "later", "good
+# night", "you'll understand") get suppressed. The 2026-04-25 incident
+# that drove this fix: owner closed an overnight philosophical thread
+# with "You still don't get it but I guess that's how it's supposed
+# to be. You'll understand what I'm talking about later." Maez
+# acknowledged with "I'll keep running." The 11:16 morning greeting
+# pulled that closing remark back as if a pending question — which it
+# wasn't, and the conversation had already resolved cleanly.
+#
+# Conservative bias: when ambiguous, suppress the suffix. A missing
+# pointer is a smaller failure than a false re-open of a settled
+# thread.
+_QUESTION_OPENERS = (
+    "how", "what", "why", "when", "where", "who", "which",
+    "is", "are", "was", "were", "do", "does", "did",
+    "can", "could", "would", "should", "may", "might",
+    "will", "won't", "shall",
+    "have", "has", "had",
+    "tell me", "show me", "explain", "describe",
+)
 
-def _extract_owner_question(exchange_content: str) -> Optional[str]:
+
+def _extract_owner_message(exchange_content: str) -> Optional[str]:
     """Return just the owner's last message text from a stored
     telegram exchange, or None if the shape is unparseable.
 
@@ -47,7 +70,10 @@ def _extract_owner_question(exchange_content: str) -> Optional[str]:
          "<display_name>: <msg>\\nMaez: <reply>"
       2. Legacy envelope: "the owner (<surface>): <msg>\\n[...]\\nMaez:"
       3. Bare "Name: <msg>" on line 1 regardless of source.
-    """
+
+    Renamed 2026-04-25 from `_extract_owner_question` — the value
+    isn't always a question (see module-level note about the closing-
+    statement incident)."""
     if not exchange_content:
         return None
     first_line = exchange_content.split("\n", 1)[0].strip()
@@ -60,6 +86,37 @@ def _extract_owner_question(exchange_content: str) -> Optional[str]:
     if colon > 0:
         return first_line[colon + 1:].strip() or None
     return None
+
+
+# Backward-compat alias — the old name was used in older tests and
+# external scripts before the 2026-04-25 rename.
+_extract_owner_question = _extract_owner_message
+
+
+def _looks_like_open_question(message: str) -> bool:
+    """True iff `message` reads as a question or open request worth
+    re-opening on welcome-back. False for statements, closing
+    remarks, and ambiguous text — those get suppressed.
+
+    Heuristic, not perfect. Conservative: when in doubt, return
+    False so the suffix is suppressed. A bare "Welcome back, Rohit."
+    is much better voice than a misframed re-open of a settled
+    thread."""
+    if not message:
+        return False
+    stripped = message.strip()
+    if not stripped:
+        return False
+    # Explicit question mark anywhere is the strongest signal.
+    if "?" in stripped:
+        return True
+    low = stripped.lower()
+    # Imperative / interrogative openers — owner asking Maez to do
+    # something, not making a closing remark.
+    for opener in _QUESTION_OPENERS:
+        if low.startswith(opener + " ") or low == opener:
+            return True
+    return False
 
 
 def _snippet(text: str, limit: int = _QUESTION_SNIPPET_CHARS) -> str:
@@ -109,18 +166,22 @@ def compose_return_greeting(
         mins = int((absence_secs % 3600) // 60)
         base = f"Welcome back, {name} — you've been away for {hrs}h {mins}m."
 
-    # Thread-continuity suffix. Gated on the last exchange being both
-    # present and fresh enough (< 24h) to be worth reopening.
-    question = None
+    # Thread-continuity suffix. Gated on three things:
+    #   1. last exchange is present
+    #   2. exchange is fresh enough (< 24h) to be worth reopening
+    #   3. the owner's last message ACTUALLY looks like a question or
+    #      open request. Closing statements get suppressed — see the
+    #      2026-04-25 incident note above for why.
+    message = None
     if last_exchange:
         stale = (last_exchange_age_secs is not None
                  and last_exchange_age_secs > 86400)
         if not stale:
-            question = _extract_owner_question(
+            message = _extract_owner_message(
                 last_exchange.get("content", "") if isinstance(last_exchange, dict)
                 else "",
             )
 
-    if question:
-        return f"{base} Last we talked you asked: '{_snippet(question)}'"
+    if message and _looks_like_open_question(message):
+        return f"{base} Last we talked you asked: '{_snippet(message)}'"
     return base

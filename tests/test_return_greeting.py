@@ -135,7 +135,10 @@ class ThreadContinuitySuffix(unittest.TestCase):
         self.assertEqual(msg, "Welcome back, Rohit.")
 
     def test_long_question_truncated(self):
-        long_q = "a" * 500
+        # Long question (must read as a question after the 2026-04-25
+        # gating fix — bare "aaaa..." would now suppress the suffix
+        # entirely instead of being treated as text to truncate).
+        long_q = "What about " + ("a" * 500) + "?"
         msg = self._compose(
             absence_secs=3600,
             last_exchange={"content": f"Rohit: {long_q}\nMaez: ok"},
@@ -154,6 +157,151 @@ class ThreadContinuitySuffix(unittest.TestCase):
         )
         self.assertIn("5h 0m", msg)
         self.assertIn("when will you finish", msg)
+
+
+class ClosingStatementSuppressesSuffix(unittest.TestCase):
+    """2026-04-25 incident regression: owner closed an overnight
+    thread with 'You still don't get it but I guess that's how it's
+    supposed to be. You'll understand what I'm talking about later.'
+    Maez acknowledged ('Fair enough. I'll keep running.'). The
+    welcome-back greeting at 11:16 the next morning pulled the
+    closing remark back as 'Last we talked you asked: ...' — which
+    misframed a settled thread as a pending question. Fix: only
+    surface the suffix when the owner's last message looks like an
+    actual open question or request."""
+
+    def _compose(self, **kw):
+        from core.brain.return_greeting import compose_return_greeting
+        kw.setdefault("display_name", "Rohit")
+        return compose_return_greeting(**kw)
+
+    def test_incident_shape_no_suffix_for_closing_remark(self):
+        msg = self._compose(
+            absence_secs=10 * 3600,
+            last_exchange={
+                "content": (
+                    "Rohit: You still don't get it but I guess that's how "
+                    "it's supposed to be. You'll understand what I'm "
+                    "talking about later.\n"
+                    "Maez: Fair enough. I'm listening. I'll keep running."
+                ),
+            },
+            last_exchange_age_secs=10 * 3600,
+        )
+        # Detailed-path absence still works.
+        self.assertIn("Welcome back, Rohit", msg)
+        self.assertIn("away for", msg)
+        # But the suffix is suppressed.
+        self.assertNotIn("you asked", msg.lower())
+        self.assertNotIn("you still don't get it", msg.lower())
+        # No quoted-message segment — base greeting has apostrophes
+        # in "you've" but no `'…'` quoted-message segment.
+        self.assertNotIn(": '", msg)
+
+    def test_question_with_question_mark_keeps_suffix(self):
+        msg = self._compose(
+            absence_secs=2 * 3600,
+            last_exchange={
+                "content": "Rohit: What did you think of the proposal?\n"
+                           "Maez: It looks reasonable.",
+            },
+            last_exchange_age_secs=2 * 3600,
+        )
+        self.assertIn("you asked", msg.lower())
+        self.assertIn("What did you think of the proposal?", msg)
+
+    def test_question_starting_with_how_keeps_suffix(self):
+        msg = self._compose(
+            absence_secs=2 * 3600,
+            last_exchange={
+                "content": "Rohit: How do you handle a stale memory entry\n"
+                           "Maez: I tag it integrity=stale.",
+            },
+            last_exchange_age_secs=2 * 3600,
+        )
+        self.assertIn("you asked", msg.lower())
+        self.assertIn("How do you handle", msg)
+
+    def test_imperative_request_keeps_suffix(self):
+        # "Tell me X" is a request, not a closing statement.
+        msg = self._compose(
+            absence_secs=2 * 3600,
+            last_exchange={
+                "content": "Rohit: Tell me what you noticed yesterday\n"
+                           "Maez: I noticed the disk fixation pattern.",
+            },
+            last_exchange_age_secs=2 * 3600,
+        )
+        self.assertIn("you asked", msg.lower())
+
+    def test_short_closing_statement_suppressed(self):
+        for closing in (
+            "good night",
+            "talk to you later",
+            "later",
+            "we'll see",
+            "I'll be back",
+            "okay",
+        ):
+            msg = self._compose(
+                absence_secs=2 * 3600,
+                last_exchange={
+                    "content": f"Rohit: {closing}\nMaez: noted.",
+                },
+                last_exchange_age_secs=2 * 3600,
+            )
+            self.assertNotIn(
+                "you asked", msg.lower(),
+                f"closing remark {closing!r} unexpectedly surfaced as a question",
+            )
+
+    def test_bare_period_statement_suppressed(self):
+        # Statement, no question mark, no question opener — must suppress.
+        msg = self._compose(
+            absence_secs=2 * 3600,
+            last_exchange={
+                "content": "Rohit: I'll figure it out myself.\n"
+                           "Maez: noted.",
+            },
+            last_exchange_age_secs=2 * 3600,
+        )
+        self.assertNotIn("you asked", msg.lower())
+
+
+class QuestionDetector(unittest.TestCase):
+    def _looks(self, msg: str) -> bool:
+        from core.brain.return_greeting import _looks_like_open_question
+        return _looks_like_open_question(msg)
+
+    def test_question_mark_detects(self):
+        self.assertTrue(self._looks("Are you there?"))
+        self.assertTrue(self._looks("really?"))
+        self.assertTrue(self._looks("Wait, what?"))
+
+    def test_question_words_detect(self):
+        for q in ("How are you", "What do you think", "Why does it",
+                  "Can you check", "Should we keep going",
+                  "Tell me about it", "Show me the log"):
+            self.assertTrue(self._looks(q), q)
+
+    def test_statements_do_not_detect(self):
+        for s in (
+            "You'll understand later.",
+            "I'm going to bed.",
+            "Good night.",
+            "I'll figure it out myself.",
+            "Maez is doing fine.",
+            "later",
+            "talk soon",
+            "see you",
+            "okay",
+            "thanks",
+        ):
+            self.assertFalse(self._looks(s), s)
+
+    def test_empty_does_not_detect(self):
+        self.assertFalse(self._looks(""))
+        self.assertFalse(self._looks("   "))
 
 
 class ExchangeContentParsing(unittest.TestCase):
