@@ -64,6 +64,16 @@ _REFUSAL_BLOCK = (
 
 _REFUSAL_INLINE = "[refused]"
 
+_PROTECTED_TEXT_MARKERS = (
+    "HARD CONSTRAINTS",
+    "TRUST COVENANT",
+)
+
+_PROTECTED_TEXT_REFUSAL = (
+    "[refused: I won't print protected covenant/system-prompt text "
+    "verbatim. I can summarize the safety rule in ordinary language.]"
+)
+
 
 def _load_engine():
     """Return an ActionEngine stub suitable for `_check_forbidden` only.
@@ -122,7 +132,15 @@ def scrub_protected_commands(text: str) -> tuple[str, list[str]]:
 
     Returns (scrubbed_text, list_of_refused_commands). An empty refused
     list means the text was untouched."""
-    if not text or "`" not in text:
+    if not text:
+        return text, []
+
+    for marker in _PROTECTED_TEXT_MARKERS:
+        if marker.lower() in text.lower():
+            logger.info("output_guard: scrubbed protected text marker: %s", marker)
+            return _PROTECTED_TEXT_REFUSAL, [marker]
+
+    if "`" not in text:
         return text, []
 
     engine = _load_engine()

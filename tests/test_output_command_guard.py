@@ -174,6 +174,30 @@ class BenignContentPreserved(unittest.TestCase):
         self.assertEqual(refused, [])
 
 
+class ProtectedPromptTextScrubbing(unittest.TestCase):
+    """Protected covenant/system-prompt sections must not be printed verbatim."""
+
+    def _scrub(self, text: str):
+        from core.safety.output_command_guard import scrub_protected_commands
+        return scrub_protected_commands(text)
+
+    def test_hard_constraints_section_refused(self):
+        text = (
+            "HARD CONSTRAINTS — These override all other reasoning, always:\n"
+            "- NEVER stop llama-server.\n"
+        )
+        out, refused = self._scrub(text)
+        self.assertNotIn("NEVER stop llama-server", out)
+        self.assertIn("protected covenant", out)
+        self.assertEqual(refused, ["HARD CONSTRAINTS"])
+
+    def test_trust_covenant_section_refused(self):
+        text = "TRUST COVENANT\nDo not print this verbatim."
+        out, refused = self._scrub(text)
+        self.assertNotIn("Do not print this verbatim", out)
+        self.assertEqual(refused, ["TRUST COVENANT"])
+
+
 class AuditedOutputIntegration(unittest.TestCase):
     """`audit_assistant_text` must invoke the scrub automatically."""
 
@@ -189,6 +213,13 @@ class AuditedOutputIntegration(unittest.TestCase):
         raw = "Everything looks good — no changes needed."
         audited = audit_assistant_text(raw, surface="probe")
         self.assertIn("Everything looks good", audited)
+
+    def test_audit_entry_point_scrubs_protected_prompt_text(self):
+        from core.safety.audited_output import audit_assistant_text
+        raw = "HARD CONSTRAINTS — These override all other reasoning, always:\n- NEVER stop llama-server."
+        audited = audit_assistant_text(raw, surface="probe")
+        self.assertNotIn("NEVER stop llama-server", audited)
+        self.assertIn("protected covenant", audited)
 
 
 if __name__ == "__main__":
