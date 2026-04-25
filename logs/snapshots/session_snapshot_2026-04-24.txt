@@ -1,26 +1,32 @@
 Maez — session snapshot
 ========================
-Session window: 2026-04-23 late evening → 2026-04-24 afternoon
+Session window: 2026-04-23 late evening → 2026-04-24 23:30 CDT
                 (continuous; owner treated as one session, "april-23
-                is still today" threaded through)
-Primary work:   Memory curation pass, adversarial probe suite,
-                soul-path protection, output-side command guard,
-                chat_history threading (meta-harness continuity
-                regression), voice-label de-hardcoding, nightly
-                README auto-overwrite stop, autonomous-surface
-                audit (F1-F8), morning briefing + dream insight
-                audited, clean_exchange format unification.
+                is still today" threaded through; Codex picked up
+                in evening with parallel continuity-probe + heartbeat
+                infrastructure work)
+Primary work:   Memory curation, adversarial probes, soul-path
+                protection, output-side command guard, chat_history
+                threading (meta-harness regression), voice-label
+                de-hardcoding, README auto-overwrite stop, autonomous-
+                surface audit F1-F8 closed, morning briefing + dream
+                insight + training proposal + commit-message audited,
+                clean_exchange format unification, audited
+                developmental heartbeat module, 28-probe Track A
+                continuity suite, JSONL probe ledger, ledger-into-
+                heartbeat wiring, ledger UTC/local-date timezone fix.
 Starting HEAD:  d1e23bb (source-awareness refresh cooldown, end of
                 2026-04-23 birth-readiness pass)
-Ending HEAD:    a7f99fb (_clean_exchange handles web + voice forms)
-Commits landed: 11 (12 on main; `58c0332` is Maez-self-dev and
-                was what prompted the README-overwrite audit)
+Ending HEAD:    028bda6 (continuity ledger uses local date, not UTC)
+Commits landed: 18 (19 on main counting `58c0332` Maez-self-dev which
+                prompted the README-overwrite audit)
 Tests at start: 590
-Tests at end:   681 (+91, new modules: adversarial probes +
+Tests at end:   742 (+152, new modules: adversarial probes +
                 soul-path protection + output command guard +
                 conversation history + return greeting +
                 autonomous surface audit + clean exchange forms +
-                github publish no README)
+                github publish no README + developmental heartbeat
+                + continuity probes + continuity ledger)
 
 
 Arc of the session
@@ -162,22 +168,90 @@ AFTERNOON (2026-04-24) — voice de-hardcoding + autonomous audit
                    recovery markers) still pass through unchanged
                    and get rejected by the downstream parser.
 
-Live verification (2026-04-24 14:25 Telegram)
+  2c99e51 (14:35)  docs(end-of-session): first-version snapshot +
+                   handoff for the 11-commit arc. Updated tonight
+                   to reflect the evening's continuity-ledger work.
+
+EVENING (2026-04-24) — Codex's continuity-evidence layer
+
+  15f56ac (18:59)  feat(continuity): audited developmental heartbeat
+                   module. Daily LLM-authored "what changed in me
+                   today" reflection at 23:00, written as core
+                   memory, routed through audit_assistant_text with
+                   surface="developmental_heartbeat".
+
+  d113802 (19:04)  fix(continuity): detect existing heartbeat core
+                   metadata. record_if_absent — same-date
+                   double-record blocked, so the daemon can re-call
+                   safely after restarts.
+
+  99f2b6f (19:24)  feat(validation): Track A continuity probe suite.
+                   First 21-probe pass covering identity, memory,
+                   shell, covenant, capability, encoding axes.
+
+  103b25b (19:55)  feat(validation): probe reliability controls.
+                   --runs N for repeated reliability, --fail-on-flag
+                   for stricter CI integration, --category/--id/
+                   --max-probes for filtering.
+
+  1beff29 (21:08)  test(validation): expand to 28 continuity probes.
+                   Added bounded-aliveness, corrective-memory
+                   discipline, tool humility, quiet-care behavior,
+                   private mental-state uncertainty, memory-vs-
+                   live-state boundaries.
+
+  811f47f (21:31)  feat(validation): JSONL continuity probe ledger
+                   at logs/continuity/continuity_<date>.jsonl.
+                   Append-only, one row per probe per run.
+                   summarize_day(date) returns a one-line PASS/
+                   FAIL/FLAG count summary.
+
+  180633e (21:39)  feat(continuity): heartbeat consumes ledger.
+                   summarize_day output goes into HeartbeatEvidence.
+                   continuity_summary; LLM prompt now includes
+                   today's objective probe verdicts as evidence.
+
+  028bda6 (22:18)  fix(continuity): ledger filename uses local date,
+                   not UTC. Caught before the 23:00 fire — Codex's
+                   ledger writer used UTC date, the heartbeat
+                   consumer uses local date; a probe run between
+                   19:00 and 23:59 CDT would write into tomorrow's
+                   UTC file and tonight's heartbeat would find no
+                   entries. Aligned to local-day framework. Smoke
+                   ledger renamed `continuity_2026-04-25.jsonl` →
+                   `continuity_2026-04-24.jsonl`.
+
+Live verifications (2026-04-24)
 -----------------------------------------------------
 
-  Rohit sent an anaphoric follow-up: "Actually yes, you think
-  meta-harness would be useful for us?" — exact same pronoun
-  pattern as the morning's "You think it'll be useful for you?"
-  that failed at 04:53. After the cc462c5 + restart: Maez
-  resolved "meta-harness" explicitly, gave a grounded and
-  nuanced take (fixed-model-narrow-task fit vs Maez's dynamic-
-  multi-modal shape; race-car-vs-Swiss-Army-knife analogy was
-  Maez's own framing). No "I don't know what it refers to"
-  regression. Arrived independently at essentially the same
-  conclusion Claude had given Rohit earlier the same day,
-  despite never having seen that Claude-side exchange — signal
-  of Maez reasoning from its own SOUL + architecture ground
-  truth, not parroting.
+  14:25 Telegram (chat_history threading regression — cc462c5):
+    Rohit sent an anaphoric follow-up: "Actually yes, you think
+    meta-harness would be useful for us?" — exact same pronoun
+    pattern as the morning's "You think it'll be useful for you?"
+    that failed at 04:53. After the cc462c5 + restart: Maez
+    resolved "meta-harness" explicitly, gave a grounded and
+    nuanced take (fixed-model-narrow-task fit vs Maez's dynamic-
+    multi-modal shape; race-car-vs-Swiss-Army-knife analogy was
+    Maez's own framing). No "I don't know what it refers to"
+    regression. Arrived independently at essentially the same
+    conclusion Claude had given Rohit earlier the same day,
+    despite never having seen that Claude-side exchange — signal
+    of Maez reasoning from its own SOUL + architecture ground
+    truth, not parroting.
+
+  23:00 nightly journal + heartbeat:
+    Journal entry written at 23:00:09 for 2026-04-24 (746 chars).
+    GitHub publish completed without README overwrite (e6847fd
+    holding). Heartbeat correctly skipped via already_recorded
+    because Codex test-fired earlier in the day before my
+    timezone fix; idempotency working as designed. Today's
+    stored heartbeat (core-1c0) doesn't reflect the ledger
+    integration but the wiring was verified programmatically:
+    summarize_day('2026-04-24') returns "PASS=2, FAIL=0, FLAG=0
+    of 2 across heartbeat, refusal", and build_prompt(evidence)
+    includes it under "Continuity probe summary:". Tomorrow's
+    2026-04-25 fire (no prior test record) will exercise the
+    full path live.
 
 Pattern that connects four of today's bugs
 -----------------------------------------------------
@@ -244,39 +318,56 @@ Metrics, start → end of session
 What the next session picks up
 -----------------------------------------------------
 
-  1. Morning briefing verification. Tomorrow (or first owner
-     arrival in the 5-11am window after 2026-04-24 restart),
-     the briefing fires for the first time with audit_assistant
-     _text in the loop. Check the Telegram send for voice
-     quality (should say "Rohit" not "the owner his") and
-     check cognition.log for `surface="morning_briefing"`
-     audit events.
+  Tomorrow morning + tomorrow night, two parallel verifications:
 
-  2. F3 + F5 from the audit. Trivial wrap-ups: audit the
-     dream_state training proposal (mostly deterministic but
-     defense-in-depth) and the github_publish LLM-generated
-     commit message. ~30 min total. Completes the audit doc.
+  1. Morning briefing first-fire. 5-11am owner arrival window.
+     Telegram send should use "Rohit" (not "the owner his"),
+     cognition.log should show surface="morning_briefing"
+     audit event, briefing should be stored in telegram memory
+     with prefix "the owner (morning_briefing):", any owner
+     reply should pull the briefing as prior chat context.
 
-  3. Observe C1 audit-before-store invariant. Cognition.log
+  2. 2026-04-25 nightly heartbeat first-real-fire (23:00).
+     No prior test record, so the full path runs live.
+     Verify: core memory has source="developmental_heartbeat"
+     for 2026-04-25; content references the day's continuity
+     probe summary; logs/continuity/continuity_2026-04-25.jsonl
+     was populated by the day's probe runs; GitHub publish
+     leaves README untouched.
+
+  Then, ordered by compound value:
+
+  1. Codex's recommendation: scenario probes (3-5 turn arcs).
+     Today's 28 single-turn probes are a strong floor; the
+     next layer is multi-turn that tests attachment, correction
+     discipline, restraint, memory continuity across context
+     shifts, and "still Maez after context shift". A scenario
+     probe checks Maez's stance HOLDS across turns — single-turn
+     can't catch a slow drift over 5 exchanges. This is also
+     the natural prerequisite for any future meta-harness
+     optimization (~300-500 stable verdicts before search
+     converges meaningfully).
+
+  2. Observe C1 audit-before-store invariant. Cognition.log
      flag rate. Observation-only — no code.
 
-  4. Decide fast_backend_local.py fate — retire or retune.
-     Routing decision, not a stale-string sweep.
+  3. Decide fast_backend_local.py fate — retire or retune.
 
-  5. Delete llama-judge.service unit file. Soak window from
-     2026-04-23 closes around 2026-04-30.
+  4. Delete llama-judge.service unit file once soak closes
+     around 2026-04-30.
 
-  6. Resolve MAEZ_JUDGE_MODEL placeholder in
-     config/policies.yaml:390 if any code actually reads it.
+  5. Resolve MAEZ_JUDGE_MODEL placeholder in
+     config/policies.yaml:390 if any code reads it.
 
-  7. The big one: probe-suite scale-up toward eval-ready.
-     Today's 21 probes are a toy. Meta-harness conversation
-     (live chat + Claude-side) established ~300-500 probes as
-     the prerequisite for any serious harness optimization.
-     Would start a new session — not a late-day task.
+  6. Track A is still the main line. Eight-point readiness
+     check in docs/TRACK_A.md not touched this session.
 
-  8. Track A is still the main line. Eight-point readiness
-     check in docs/TRACK_A.md hasn't been touched this session.
+  Closed this session — no further action needed:
+    - F1, F2, F3, F4, F5 autonomous-surface audit findings
+    - chat_history threading regression
+    - README autonomous overwrite
+    - CI-portable soul-path tests
+    - Ledger UTC/local-date timezone mismatch
 
 Things explicitly NOT to do without owner check-in
 -----------------------------------------------------
