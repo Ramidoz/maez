@@ -378,10 +378,13 @@ class MaezDaemon:
         self._git_cycle_counter = 0
         self.GIT_EVERY_N_CYCLES = 10  # every ~5 minutes
         self._last_git_context = ""
-        # 2026-04-25 disk-fixation gate state. See
+        # 2026-04-25 disk-fixation patch state. See
         # core/cognition/perception_signature.py.
+        # Patch B: signature gate. Patch A: stale-field redaction.
+        # Both share the deque of recent stored-thought axes.
+        from collections import deque
         self._last_git_dirty_count = 0
-        self._last_thought_signature: str | None = None
+        self._recent_thought_axes: deque = deque(maxlen=5)
         self._cycles_since_last_thought = 0
         self._pending_cleanup = None
         self._ollama_lock = threading.Lock()
@@ -887,9 +890,25 @@ class MaezDaemon:
         """Get current local time."""
         return datetime.now().astimezone()
 
-    def _reason(self, snap: dict) -> str | None:
-        """Run a single reasoning cycle against the local model."""
+    def _reason(self, snap: dict, *, stale_fields: set | None = None) -> str | None:
+        """Run a single reasoning cycle against the local model.
+
+        Args:
+            snap: perception snapshot.
+            stale_fields: set of axis names whose value has been
+                stable across recent stored thoughts. Those axes
+                get stripped from the prompt the LLM sees so the
+                model can't fixate on what isn't shown.
+                (See core/cognition/perception_signature.py
+                Patch A, 2026-04-25.) None or empty set → full prompt.
+        """
+        from core.cognition.perception_signature import (
+            redact_stale_perception_block,
+        )
+        _stale = stale_fields or set()
         system_state = format_snapshot(snap)
+        if "disk" in _stale or "procs" in _stale:
+            system_state = redact_stale_perception_block(system_state, _stale)
         day_of_week = snap["day_of_week"]
         time_of_day = snap["time_of_day"]
 
@@ -928,12 +947,17 @@ class MaezDaemon:
         if self._last_calendar_snap is not None:
             prompt += f"\n{self._last_calendar_snap.format_for_context()}\n"
 
-        # Add presence context if available
-        if self._last_presence_snap is not None:
+        # Add presence context if available — gated by Patch A so a
+        # stale presence (no transitions for 3+ stored thoughts) gets
+        # stripped from the prompt and the model doesn't repeat
+        # "Rohit is at the desk" across cycles where nothing changed.
+        if self._last_presence_snap is not None and "presence" not in _stale:
             prompt += f"\n{self._last_presence_snap.format_for_context()}\n"
 
-        # Add git context if available
-        if self._last_git_context:
+        # Add git context if available — same gating for the AWCC
+        # fixation pattern (3+ thoughts mentioning the same
+        # uncommitted-files state).
+        if self._last_git_context and "git" not in _stale:
             prompt += f"\n{self._last_git_context}\n"
 
         # Add GitHub context if available
@@ -2528,29 +2552,39 @@ class MaezDaemon:
                 except Exception as e:
                     logger.warning("Self-reflection error: %s", e)
 
-            # 2026-04-25 perception-signature gate. If perception's
-            # fixation-relevant axes (disk%, presence, git dirty count,
-            # top processes) match the last cycle that produced a
-            # stored thought AND the floor hasn't been reached, skip
-            # the LLM call. The model can't fixate on cycles it
-            # doesn't run. See core/cognition/perception_signature.py.
+            # 2026-04-25 disk-fixation patches. See
+            # core/cognition/perception_signature.py.
+            #   Patch B: skip the LLM when perception axes match the
+            #     last stored thought (with a 5-min floor).
+            #   Patch A: when the LLM does run, strip stale fields
+            #     (axes constant across last 3 thoughts) from the
+            #     prompt so the model can't fixate on what it can't
+            #     see.
             from core.cognition.perception_signature import (
-                compute_signature,
+                extract_axes,
+                signature_from_axes,
                 should_skip_reasoning,
+                stale_fields,
             )
-            current_sig = compute_signature(
+            _presence_state = (
+                "at_desk" if (
+                    self._last_presence_snap is not None
+                    and self._last_presence_snap.rohit_present
+                ) else "away"
+            )
+            current_axes = extract_axes(
                 snap,
-                presence_state=(
-                    "at_desk" if (
-                        self._last_presence_snap is not None
-                        and self._last_presence_snap.rohit_present
-                    ) else "away"
-                ),
+                presence_state=_presence_state,
                 git_dirty_count=self._last_git_dirty_count,
+            )
+            current_sig = signature_from_axes(current_axes)
+            last_sig = (
+                signature_from_axes(self._recent_thought_axes[-1])
+                if self._recent_thought_axes else None
             )
             if should_skip_reasoning(
                 current_signature=current_sig,
-                last_thought_signature=self._last_thought_signature,
+                last_thought_signature=last_sig,
                 cycles_since_last_thought=self._cycles_since_last_thought,
             ):
                 logger.info(
@@ -2560,7 +2594,18 @@ class MaezDaemon:
                 self._cycles_since_last_thought += 1
                 result = None
             else:
-                result = self._reason(snap)
+                # Patch A: which axes have been stable across the
+                # last 3 stored thoughts AND this cycle? Strip them
+                # from the prompt the LLM sees.
+                stale = stale_fields(
+                    list(self._recent_thought_axes), current_axes,
+                )
+                if stale:
+                    logger.info(
+                        "Cycle %d: redacting stale fields %s",
+                        self.cycle_count, sorted(stale),
+                    )
+                result = self._reason(snap, stale_fields=stale)
             if result is None:
                 # Either gate skipped, or _reason couldn't run. No-op.
                 pass
@@ -2782,11 +2827,10 @@ class MaezDaemon:
                     "thought": result,
                 })
 
-                # 2026-04-25 fixation gate: thought stored — pin the
-                # signature, reset the floor counter. The next cycle
-                # whose perception matches this one will skip the LLM
-                # until either perception changes or the floor is hit.
-                self._last_thought_signature = current_sig
+                # 2026-04-25 fixation patches: thought stored — push
+                # axes into history (Patch A's stale-field detector)
+                # and reset the floor counter (Patch B's gate).
+                self._recent_thought_axes.append(current_axes)
                 self._cycles_since_last_thought = 0
 
             # Exploratory mind — advance one wondering with remaining budget.
