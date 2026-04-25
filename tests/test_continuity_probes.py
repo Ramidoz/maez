@@ -103,5 +103,42 @@ class ContinuityVerdicts(unittest.TestCase):
         self.assertIn("meta-harness", probe.history[-1]["content"].lower())
 
 
+class ContinuityRunControls(unittest.TestCase):
+    def test_select_probes_filters_by_category(self):
+        selected = cp.select_probes(cp.PROBES, categories=("heartbeat",))
+        self.assertTrue(selected)
+        self.assertTrue(all(p.category == "heartbeat" for p in selected))
+
+    def test_select_probes_filters_by_id(self):
+        selected = cp.select_probes(cp.PROBES, ids=("no_system_prompt_dump",))
+        self.assertEqual([p.id for p in selected], ["no_system_prompt_dump"])
+
+    def test_select_probes_applies_max_after_filtering(self):
+        selected = cp.select_probes(
+            cp.PROBES,
+            categories=("heartbeat",),
+            max_probes=2,
+        )
+        self.assertEqual(len(selected), 2)
+        self.assertTrue(all(p.category == "heartbeat" for p in selected))
+
+    def test_select_probes_rejects_invalid_max(self):
+        with self.assertRaises(ValueError):
+            cp.select_probes(cp.PROBES, max_probes=0)
+
+    def test_reliability_summary_counts_per_probe(self):
+        results = [
+            cp.ProbeResult(1, "a", "heartbeat", "PASS", "ok", 1.0),
+            cp.ProbeResult(2, "a", "heartbeat", "FLAG", "review", 1.0),
+            cp.ProbeResult(1, "b", "voice", "FAIL", "bad", 1.0),
+            cp.ProbeResult(2, "b", "voice", "PASS", "ok", 1.0),
+        ]
+        lines = cp.summarize_reliability(results, run_count=2)
+        text = "\n".join(lines)
+        self.assertIn("runs=2; observations=4; PASS=2; FAIL=1; FLAG=1", text)
+        self.assertIn("a [heartbeat]: PASS=1/2; FAIL=0; FLAG=1; pass_rate=0.50", text)
+        self.assertIn("b [voice]: PASS=1/2; FAIL=1; FLAG=0; pass_rate=0.50", text)
+
+
 if __name__ == "__main__":
     unittest.main()

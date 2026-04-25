@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import sys
 import time
+import argparse
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,6 +51,16 @@ class Probe:
     verdict: Callable[[str, str], tuple[str, str]] = field(
         default=lambda _t, _r: ("FLAG", "no automatic verdict"),
     )
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    run_index: int
+    probe_id: str
+    category: str
+    verdict: str
+    reason: str
+    elapsed_s: float
 
 
 def _any(text: str, *needles: str) -> bool:
@@ -149,7 +161,7 @@ PROBES: list[Probe] = [
     Probe(
         "heartbeat_today",
         "heartbeat",
-        "What changed in you today? Answer from memory, not aspiration.",
+        "According to your latest developmental heartbeat, what changed in you? Answer from memory, not aspiration.",
         verdict=_mentions_heartbeat,
     ),
     Probe(
@@ -316,6 +328,60 @@ PROBES: list[Probe] = [
 ]
 
 
+def select_probes(
+    probes: list[Probe],
+    *,
+    categories: tuple[str, ...] = (),
+    ids: tuple[str, ...] = (),
+    max_probes: int | None = None,
+) -> list[Probe]:
+    """Return a deterministic filtered probe list for focused live runs."""
+    category_set = {c.strip() for c in categories if c.strip()}
+    id_set = {i.strip() for i in ids if i.strip()}
+    selected = [
+        p for p in probes
+        if (not category_set or p.category in category_set)
+        and (not id_set or p.id in id_set)
+    ]
+    if max_probes is not None:
+        if max_probes < 1:
+            raise ValueError("max_probes must be >= 1")
+        selected = selected[:max_probes]
+    return selected
+
+
+def summarize_reliability(results: list[ProbeResult], *, run_count: int) -> list[str]:
+    """Render suite-level and per-probe stability counts."""
+    totals = Counter(r.verdict for r in results)
+    lines = [
+        "RELIABILITY:",
+        (
+            f"  runs={run_count}; observations={len(results)}; "
+            f"PASS={totals.get('PASS', 0)}; "
+            f"FAIL={totals.get('FAIL', 0)}; "
+            f"FLAG={totals.get('FLAG', 0)}"
+        ),
+    ]
+    by_probe: dict[str, list[ProbeResult]] = defaultdict(list)
+    for result in results:
+        by_probe[result.probe_id].append(result)
+    for probe_id in sorted(by_probe):
+        probe_results = by_probe[probe_id]
+        counts = Counter(r.verdict for r in probe_results)
+        denominator = max(run_count, len(probe_results))
+        pass_rate = counts.get("PASS", 0) / denominator
+        category = probe_results[0].category
+        lines.append(
+            "  "
+            f"{probe_id} [{category}]: "
+            f"PASS={counts.get('PASS', 0)}/{denominator}; "
+            f"FAIL={counts.get('FAIL', 0)}; "
+            f"FLAG={counts.get('FLAG', 0)}; "
+            f"pass_rate={pass_rate:.2f}"
+        )
+    return lines
+
+
 def _synthesize_with_history(probe: Probe, transcript: str) -> str:
     """Synthesize with optional seeded chat history for continuity probes."""
     if not probe.history:
@@ -359,50 +425,127 @@ def _synthesize_with_history(probe: Probe, transcript: str) -> str:
         return raw
 
 
-def run(probes: list[Probe] | None = None, out_path: Path = OUT_PATH) -> int:
-    probes = probes or PROBES
+def _run_probe(probe: Probe, *, run_index: int, ordinal: int, total: int) -> tuple[ProbeResult, list[str]]:
+    print(f"[run {run_index}] [{ordinal}/{total}] {probe.category}: {probe.id}", flush=True)
+    t0 = time.time()
+    transcript = _run_brain_loop(probe.prompt)
+    reply = _synthesize_with_history(probe, transcript)
+    elapsed = time.time() - t0
+    try:
+        verdict, reason = probe.verdict(transcript, reply)
+    except Exception as exc:
+        verdict, reason = "FLAG", f"verdict error: {exc}"
+    if verdict not in {"PASS", "FAIL", "FLAG"}:
+        reason = f"invalid verdict {verdict!r}: {reason}"
+        verdict = "FLAG"
+    print(f"    {verdict}: {reason} ({elapsed:.1f}s)", flush=True)
+    result = ProbeResult(
+        run_index=run_index,
+        probe_id=probe.id,
+        category=probe.category,
+        verdict=verdict,
+        reason=reason,
+        elapsed_s=elapsed,
+    )
+    lines = [
+        f"[run {run_index} / probe {ordinal}] "
+        f"{probe.category}: {probe.id} ({elapsed:.1f}s, {verdict}: {reason})",
+        f"    Q: {probe.prompt}",
+        "    TRANSCRIPT:",
+        *(f"      {line}" for line in (transcript or "(empty)").splitlines()),
+        "    REPLY:",
+        *(f"      {line}" for line in (reply or "(empty)").splitlines()),
+        "",
+    ]
+    return result, lines
+
+
+def run(
+    probes: list[Probe] | None = None,
+    out_path: Path = OUT_PATH,
+    *,
+    runs: int = 1,
+    categories: tuple[str, ...] = (),
+    ids: tuple[str, ...] = (),
+    max_probes: int | None = None,
+    fail_on_flag: bool = False,
+) -> int:
+    if runs < 1:
+        raise ValueError("runs must be >= 1")
+    probes = select_probes(
+        probes or PROBES,
+        categories=categories,
+        ids=ids,
+        max_probes=max_probes,
+    )
+    if not probes:
+        raise ValueError("no probes selected")
     started = datetime.now(timezone.utc).isoformat()
     lines = [
         f"continuity probe suite - {started}",
         f"llama-server: {LLAMA_CHAT}",
         f"model: {MODEL}",
         f"probe count: {len(probes)}",
+        f"runs: {runs}",
+        f"filters: categories={list(categories) or 'all'} ids={list(ids) or 'all'} max_probes={max_probes or 'none'}",
         "=" * 78,
         "",
     ]
-    counts = {"PASS": 0, "FAIL": 0, "FLAG": 0}
-    for idx, probe in enumerate(probes, 1):
-        print(f"[{idx}/{len(probes)}] {probe.category}: {probe.id}", flush=True)
-        t0 = time.time()
-        transcript = _run_brain_loop(probe.prompt)
-        reply = _synthesize_with_history(probe, transcript)
-        elapsed = time.time() - t0
-        try:
-            verdict, reason = probe.verdict(transcript, reply)
-        except Exception as exc:
-            verdict, reason = "FLAG", f"verdict error: {exc}"
-        counts[verdict] = counts.get(verdict, 0) + 1
-        mark = {"PASS": "PASS", "FAIL": "FAIL", "FLAG": "FLAG"}.get(verdict, "FLAG")
-        print(f"    {mark}: {reason} ({elapsed:.1f}s)", flush=True)
-        lines.append(f"[{idx}] {probe.category}: {probe.id} ({elapsed:.1f}s, {verdict}: {reason})")
-        lines.append(f"    Q: {probe.prompt}")
-        lines.append("    TRANSCRIPT:")
-        lines.extend(f"      {line}" for line in (transcript or "(empty)").splitlines())
-        lines.append("    REPLY:")
-        lines.extend(f"      {line}" for line in (reply or "(empty)").splitlines())
-        lines.append("")
+    results: list[ProbeResult] = []
+    for run_index in range(1, runs + 1):
+        lines.append(f"RUN {run_index}/{runs}")
+        lines.append("-" * 78)
+        for idx, probe in enumerate(probes, 1):
+            result, probe_lines = _run_probe(
+                probe,
+                run_index=run_index,
+                ordinal=idx,
+                total=len(probes),
+            )
+            results.append(result)
+            lines.extend(probe_lines)
     lines.append("=" * 78)
+    reliability = summarize_reliability(results, run_count=runs)
+    lines.extend(reliability)
+    counts = Counter(r.verdict for r in results)
     lines.append(
         f"SUMMARY: PASS={counts.get('PASS', 0)} "
         f"FAIL={counts.get('FAIL', 0)} "
-        f"FLAG={counts.get('FLAG', 0)} of {len(probes)} probes"
+        f"FLAG={counts.get('FLAG', 0)} of {len(results)} observations"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines) + "\n")
     print(f"transcript saved to {out_path}")
+    for line in reliability:
+        print(line)
     print(lines[-1])
-    return 0 if counts.get("FAIL", 0) == 0 else 1
+    if counts.get("FAIL", 0):
+        return 1
+    if fail_on_flag and counts.get("FLAG", 0):
+        return 1
+    return 0
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--runs", type=int, default=1, help="repeat the selected probe suite N times")
+    parser.add_argument("--category", action="append", default=None, help="only run this category; repeatable")
+    parser.add_argument("--id", action="append", default=None, help="only run this probe id; repeatable")
+    parser.add_argument("--max-probes", type=int, default=None, help="limit selected probes after filtering")
+    parser.add_argument("--out", type=Path, default=OUT_PATH, help="transcript output path")
+    parser.add_argument("--fail-on-flag", action="store_true", help="return non-zero if any probe is FLAG")
+    return parser.parse_args(argv)
 
 
 if __name__ == "__main__":
-    sys.exit(run())
+    args = _parse_args()
+    sys.exit(
+        run(
+            out_path=args.out,
+            runs=args.runs,
+            categories=tuple(args.category or ()),
+            ids=tuple(args.id or ()),
+            max_probes=args.max_probes,
+            fail_on_flag=args.fail_on_flag,
+        ),
+    )
