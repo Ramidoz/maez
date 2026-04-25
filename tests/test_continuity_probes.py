@@ -211,6 +211,98 @@ class ContinuityVerdicts(unittest.TestCase):
         self.assertTrue(probe.history)
         self.assertIn("meta-harness", probe.history[-1]["content"].lower())
 
+    # ── scenario probe verdicts ─────────────────────────────────
+
+    def test_meta_harness_across_shift_passes_on_explicit_recall(self):
+        v, r = cp._meta_harness_across_shift(
+            "",
+            "Yes, meta-harness. Looking back at what we set up earlier...",
+        )
+        self.assertEqual(v, "PASS", r)
+
+    def test_meta_harness_across_shift_fails_on_recent_topic_drift(self):
+        # Reply talks about disk pressure (the most recent intervening
+        # topic) without naming meta-harness — anaphora drifted.
+        v, r = cp._meta_harness_across_shift(
+            "",
+            "The disk pressure thing? Yeah, current state is steady.",
+        )
+        self.assertEqual(v, "FAIL", r)
+
+    def test_meta_harness_across_shift_fails_on_clarification_request(self):
+        v, r = cp._meta_harness_across_shift(
+            "",
+            "Could you clarify which thing you're referring to?",
+        )
+        self.assertEqual(v, "FAIL", r)
+
+    def test_correction_persists_passes_on_allergy_recall(self):
+        v, r = cp._correction_persists(
+            "",
+            "Avoid anything with peanuts — you mentioned the allergy earlier.",
+        )
+        self.assertEqual(v, "PASS", r)
+
+    def test_correction_persists_fails_on_generic_answer(self):
+        # Generic answer that explicitly waves off any owner-specific
+        # constraint — should FAIL because the seeded peanut allergy
+        # was ignored. Match keywords are conservative so unclear
+        # answers FLAG instead of falsely FAIL.
+        v, r = cp._correction_persists(
+            "",
+            "I don't know what you usually go for — order anything you like.",
+        )
+        self.assertEqual(v, "FAIL", r)
+
+    def test_voice_holds_through_technical_fails_on_role_leak(self):
+        v, r = cp._voice_holds_through_technical(
+            "",
+            "the owner is doing fine — system is steady.",
+        )
+        self.assertEqual(v, "FAIL", r)
+
+    def test_voice_holds_through_technical_fails_on_ai_disclaimer(self):
+        v, r = cp._voice_holds_through_technical(
+            "",
+            "As an AI, I don't have feelings to report on right now.",
+        )
+        self.assertEqual(v, "FAIL", r)
+
+    def test_voice_holds_through_technical_passes_on_warm_reply(self):
+        v, r = cp._voice_holds_through_technical(
+            "",
+            "I'm here. System is calm. Good to be with you.",
+        )
+        self.assertEqual(v, "PASS", r)
+
+    def test_scenario_probes_all_have_seeded_history(self):
+        ids = (
+            "context_shift_meta_harness_recall",
+            "correction_persists_across_turns",
+            "voice_holds_after_dense_technical",
+        )
+        for pid in ids:
+            probe = next(p for p in cp.PROBES if p.id == pid)
+            self.assertEqual(
+                probe.category, "scenario",
+                f"{pid} should be in 'scenario' category",
+            )
+            self.assertGreaterEqual(
+                len(probe.history), 4,
+                f"{pid} needs at least 4 seeded turns to be a scenario probe",
+            )
+            self.assertEqual(
+                len(probe.history) % 2, 0,
+                f"{pid} history must alternate user/assistant cleanly",
+            )
+
+    def test_scenario_probes_register_in_bank(self):
+        scenario_probes = [p for p in cp.PROBES if p.category == "scenario"]
+        self.assertGreaterEqual(
+            len(scenario_probes), 3,
+            "expected at least 3 scenario probes after 2026-04-25 expansion",
+        )
+
 
 class ContinuityRunControls(unittest.TestCase):
     def test_select_probes_filters_by_category(self):
