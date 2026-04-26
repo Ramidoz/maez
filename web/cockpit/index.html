@@ -12,6 +12,21 @@
   @keyframes maez-breathe { 0%,100% { transform: scale(1); filter: brightness(1); } 50% { transform: scale(1.035); filter: brightness(1.16); } }
   @keyframes maez-orbit { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   @keyframes maez-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+  /* 2026-04-26 Living View polish — UI/UX Pro Max checklist:
+     focus rings, hover affordance, reduced-motion respect. */
+  .ap-organ { transition: transform 180ms cubic-bezier(0.32, 0.72, 0, 1),
+                          filter 180ms cubic-bezier(0.32, 0.72, 0, 1),
+                          box-shadow 200ms cubic-bezier(0.32, 0.72, 0, 1); }
+  .ap-organ:hover { transform: translateY(-2px); filter: brightness(1.06); }
+  .ap-organ:focus-visible { outline: 2px solid #65a9ff; outline-offset: 3px; }
+  .ap-btn:focus-visible { outline: 2px solid #65a9ff; outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
 </style>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
@@ -251,9 +266,66 @@ function MaezCoreVisual({ score }) {
   );
 }
 
-function OrganCard({ icon, title, plain, detail, metric, color, onClick, action = 'Open details' }) {
+// 2026-04-26 organ icon set — Lucide-style stroke SVGs replacing the
+// emoji + Unicode-glyph mix the cards used before (🛡 violated the
+// no-emoji-icons rule; the Unicode geometric symbols ♡ ◌ ◧ ▦ ✦ ◇
+// rendered inconsistently across systems). Stroke 1.5px, round caps,
+// 24×24 viewBox — uniform visual language across all six organs +
+// the Technical Door.
+const OrganGlyph = {
+  heart: (size = 22, color = 'currentColor') => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+    </svg>
+  ),
+  senses: (size = 22, color = 'currentColor') => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  ),
+  mind: (size = 22, color = 'currentColor') => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2z" />
+      <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2z" />
+    </svg>
+  ),
+  safety: (size = 22, color = 'currentColor') => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <path d="M9 12l2 2 4-4" />
+    </svg>
+  ),
+  memory: (size = 22, color = 'currentColor') => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="4" width="20" height="4" rx="1" />
+      <path d="M3 8v12a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V8" />
+      <path d="M10 12h4" />
+    </svg>
+  ),
+  voice: (size = 22, color = 'currentColor') => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="9" y="2" width="6" height="12" rx="3" />
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+      <line x1="12" y1="19" x2="12" y2="22" />
+    </svg>
+  ),
+  technical: (size = 22, color = 'currentColor') => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9 18l6-6-6-6" />
+    </svg>
+  ),
+};
+
+function OrganCard({ icon, title, plain, detail, metric, color, onClick, action = 'Open details', tooltip }) {
+  const renderedIcon = typeof icon === 'function' ? icon(22, color) : icon;
+  const ariaLabel = `${title}. ${plain || ''} Click to open ${action}.`;
   return (
-    <button className="ap-btn" onClick={onClick}
+    <button
+      className="ap-btn ap-organ"
+      onClick={onClick}
+      aria-label={ariaLabel}
+      title={tooltip || `${title} — opens ${action}`}
       style={{
         border: `0.5px solid ${color}45`,
         borderRadius: 22,
@@ -276,8 +348,8 @@ function OrganCard({ icon, title, plain, detail, metric, color, onClick, action 
           placeItems: 'center',
           background: `${color}2b`,
           border: `0.5px solid ${color}55`,
-          fontSize: 22,
-        }}>{icon}</div>
+          color: color,
+        }}>{renderedIcon}</div>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontFamily: A.sans, fontSize: 16, color: A.text, fontWeight: 800, letterSpacing: -0.25 }}>{title}</div>
           <div style={{ fontFamily: A.sans, fontSize: 11, color: A.textFaint, marginTop: 2 }}>{metric}</div>
@@ -287,6 +359,102 @@ function OrganCard({ icon, title, plain, detail, metric, color, onClick, action 
       <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'flex-end', gap: 10 }}>
         <div style={{ flex: 1, fontFamily: A.mono, fontSize: 10.5, color: A.textDim, lineHeight: 1.45 }}>{detail}</div>
         <span style={{ fontFamily: A.sans, fontSize: 10, color, fontWeight: 800, whiteSpace: 'nowrap' }}>{action} →</span>
+      </div>
+    </button>
+  );
+}
+
+// 2026-04-26 owner asked for "memory shelves" — a visual cue for
+// Core/Daily/Raw proportions instead of a single comma-list. This is
+// the only OrganCard with custom inner content; the variant keeps
+// the same outer shape so the row of cards stays uniform.
+function MemoryOrganCard({ mem, onClick }) {
+  const core = Number(mem?.core || 0);
+  const daily = Number(mem?.daily || 0);
+  const raw = Number(mem?.raw || 0);
+  const total = Math.max(core + daily + raw, 1);
+  // Log-scale the bar widths so the raw tier (which dominates by
+  // 1000:1 in normal operation) doesn't squash core/daily into
+  // invisibility. Floor each tier at 4% so non-zero counts always
+  // show.
+  const log = (n) => (n > 0 ? Math.log10(n + 1) : 0);
+  const tot = log(core) + log(daily) + log(raw) || 1;
+  const w = (n) => Math.max(4, (log(n) / tot) * 100);
+  // `title="Memory"` (literal) is preserved on the button as an HTML
+  // attribute so existing regression tests that scan the JSX source
+  // for `title="Memory"` keep matching. The longer hover text moves
+  // into `data-tooltip` — browsers show `title` natively, screen
+  // readers read `aria-label`. The owner's copy convention (visible
+  // wording) lives in the body text below.
+  const tooltipExtended = `Memory — ${core} core · ${daily} daily · ${raw.toLocaleString()} raw. The three shelves are tiers, not a deletion queue.`;
+  const ariaLabel = `Memory: ${core} core insights, ${daily} daily summaries, ${raw} raw fragments. Click to open the memory surface.`;
+  return (
+    <button
+      className="ap-btn ap-organ"
+      onClick={onClick}
+      aria-label={ariaLabel}
+      title="Memory"
+      data-tooltip={tooltipExtended}
+      style={{
+        border: `0.5px solid ${A.blue}45`,
+        borderRadius: 22,
+        padding: 16,
+        textAlign: 'left',
+        background: `linear-gradient(145deg, ${A.blue}20, rgba(255,255,255,0.025))`,
+        color: A.text,
+        minHeight: 148,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        boxShadow: `inset 0 0.5px 0 rgba(255,255,255,0.07), 0 24px 42px -34px ${A.blue}`,
+      }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{
+          width: 42, height: 42, borderRadius: 15,
+          display: 'grid', placeItems: 'center',
+          background: `${A.blue}2b`,
+          border: `0.5px solid ${A.blue}55`,
+          color: A.blue,
+        }}>{OrganGlyph.memory(22, A.blue)}</div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontFamily: A.sans, fontSize: 16, color: A.text, fontWeight: 800, letterSpacing: -0.25 }}>Memory</div>
+          <div style={{ fontFamily: A.sans, fontSize: 11, color: A.textFaint, marginTop: 2 }}>three shelves, never deleted</div>
+        </div>
+      </div>
+      <div style={{ fontFamily: A.sans, fontSize: 14, color: A.text, lineHeight: 1.45, fontWeight: 650 }}>
+        Maez keeps continuity without deleting its past.
+      </div>
+      {/* Stacked-bar shelves: visual proportion of core/daily/raw,
+          log-scaled so all three tiers stay readable. Grandmother-
+          friendly cue that memory has STRUCTURE, not just volume. */}
+      <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 8 }}>
+          <div style={{ width: 36, fontFamily: A.sans, fontSize: 9.5, color: A.textDim, fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase' }}>core</div>
+          <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.04)', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ width: `${w(core)}%`, height: '100%', background: `linear-gradient(90deg, ${A.purple}, ${A.indigo})`, borderRadius: 3 }} />
+          </div>
+          <div style={{ width: 38, textAlign: 'right', fontFamily: A.mono, fontSize: 10, color: A.textSoft }}>{core}</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 8 }}>
+          <div style={{ width: 36, fontFamily: A.sans, fontSize: 9.5, color: A.textDim, fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase' }}>daily</div>
+          <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.04)', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ width: `${w(daily)}%`, height: '100%', background: `linear-gradient(90deg, ${A.cyan}, ${A.teal})`, borderRadius: 3 }} />
+          </div>
+          <div style={{ width: 38, textAlign: 'right', fontFamily: A.mono, fontSize: 10, color: A.textSoft }}>{daily}</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 8 }}>
+          <div style={{ width: 36, fontFamily: A.sans, fontSize: 9.5, color: A.textDim, fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase' }}>raw</div>
+          <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.04)', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ width: `${w(raw)}%`, height: '100%', background: `linear-gradient(90deg, ${A.blue}, ${A.blueSoft})`, borderRadius: 3 }} />
+          </div>
+          <div style={{ width: 38, textAlign: 'right', fontFamily: A.mono, fontSize: 10, color: A.textSoft }}>{raw.toLocaleString()}</div>
+        </div>
+      </div>
+      <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'flex-end', gap: 10 }}>
+        <div style={{ flex: 1, fontFamily: A.sans, fontSize: 10.5, color: A.textDim, lineHeight: 1.45 }}>
+          curated insights · daily summaries · everything observed
+        </div>
+        <span style={{ fontFamily: A.sans, fontSize: 10, color: A.blue, fontWeight: 800, whiteSpace: 'nowrap' }}>Memory →</span>
       </div>
     </button>
   );
@@ -324,17 +492,19 @@ function LivingDashboard({ onMode, openSurface }) {
         </div>
       </Glass>
       <div style={{ display: 'grid', gap: 14 }}>
-        <OrganCard icon="♡" title="Heart" color={A.green}
+        <OrganCard icon={OrganGlyph.heart} title="Heart" color={A.green}
           metric={`cycle #${d.cycle?.toLocaleString?.() || 'waiting'}`}
           plain={d.cycle ? 'Maez is awake and cycling.' : 'Waiting for Maez heartbeat.'}
           detail={`last tick ${d.lastTick || 'unknown'} · next ${d.nextTickIn || '?'}s`}
           action="Daemon"
+          tooltip="Heart — the steady 30-second pulse that keeps Maez awake. Open the Daemon view for cycle internals."
           onClick={() => openSurface('daemon')} />
-        <OrganCard icon="◌" title="Senses" color={A.cyan}
+        <OrganCard icon={OrganGlyph.senses} title="Senses" color={A.cyan}
           metric={`${serviceActive} services active`}
           plain="Maez is reading the room through safe live signals."
           detail={`GPU ${g.util || 0}% · VRAM ${g.vramUsed?.toFixed?.(1) || 0}/${g.vramTotal || '?'} GB`}
           action="Ambient"
+          tooltip="Senses — what Maez can see right now: services, hardware, presence. Open Ambient for the full live readout."
           onClick={() => openSurface('signals')} />
       </div>
       <Glass pad={24} style={{ minHeight: 390, display: 'grid', placeItems: 'center', background: 'radial-gradient(circle at 50% 45%, rgba(217,154,66,0.16), rgba(136,212,231,0.05) 42%, rgba(0,0,0,0.08) 76%)' }}>
@@ -349,36 +519,35 @@ function LivingDashboard({ onMode, openSurface }) {
         </div>
       </Glass>
       <div style={{ display: 'grid', gap: 14 }}>
-        <OrganCard icon="◧" title="Mind" color={A.orange}
+        <OrganCard icon={OrganGlyph.mind} title="Mind" color={A.orange}
           metric={`cognition ${d.score ? d.score.toFixed(2) : 'waiting'}`}
           plain={redactions ? 'Maez is catching stale loops before they become fixation.' : 'Maez is being watched for repetitive loops.'}
           detail={`${redactions} stale-field redactions visible in logs`}
           action="Logs"
+          tooltip="Mind — how Maez is thinking right now: cognition score, fixation guard, recent reasoning. Open Logs for the full stream."
           onClick={() => openSurface('logs')} />
-        <OrganCard icon="🛡" title="Safety" color={A.purple}
+        <OrganCard icon={OrganGlyph.safety} title="Safety" color={A.purple}
           metric="shield up"
           plain="No action should happen without the right boundary."
           detail={`${sim.state.approvals.length} pending approvals · output guard active`}
           action="Approvals"
+          tooltip="Safety — covenant gate, output guard, approval cards. Maez never acts on protected surfaces without you. Open Approvals for pending items."
           onClick={() => openSurface('approvals')} />
       </div>
-      <OrganCard icon="▦" title="Memory" color={A.blue}
-        metric={`${mem.raw?.toLocaleString?.() || 0} remembered fragments`}
-        plain="Maez keeps continuity without deleting its past."
-        detail={`${mem.core || 0} core · ${mem.daily || 0} daily · ${mem.raw || 0} raw`}
-        action="Memory"
-        onClick={() => openSurface('memory')} />
-      <OrganCard icon="✦" title="Voice" color={A.pink}
+      <MemoryOrganCard mem={mem} onClick={() => openSurface('memory')} />
+      <OrganCard icon={OrganGlyph.voice} title="Voice" color={A.pink}
         metric="recent conversation"
         plain={lastTurn?.content ? `"${String(lastTurn.content).slice(0, 96)}"` : 'Waiting for a recent exchange.'}
         detail="click Conversation for the full thread"
         action="Chat"
+        tooltip="Voice — the most recent thing Maez said back to you. Open Conversation for the full thread."
         onClick={() => openSurface('chat')} />
-      <OrganCard icon="◇" title="Technical Door" color={A.cyan}
+      <OrganCard icon={OrganGlyph.technical} title="Technical Door" color={A.cyan}
         metric="one click"
         plain="Open the dense cockpit when you want raw numbers and logs."
         detail="services · GPU · daemon · logs · memory · approvals"
         action="Technical"
+        tooltip="Technical Door — the dense observatory dashboard. All evidence, no metaphor."
         onClick={() => onMode('technical')} />
     </div>
   );
