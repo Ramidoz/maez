@@ -23,7 +23,12 @@ import time
 from collections import deque
 from typing import Callable, Optional
 
-import joblib
+# 2026-04-26: `joblib` import deferred into `_load_verifier()` —
+# same pattern as `skills/calendar_perception.py`. CI installs only
+# `[dev,telegram]` (per `.github/workflows/test.yml:38`); joblib
+# lives in the optional `[voice]` extra, so a top-level import here
+# breaks the daemon import chain (daemon.maez_daemon → wake_word).
+# `numpy` stays at top — it's a core runtime dep.
 import numpy as np
 
 os.environ.setdefault('PIPEWIRE_RUNTIME_DIR', '/run/user/1000')
@@ -104,9 +109,20 @@ def extract_verifier_features(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
 
 
 def _load_verifier():
-    """Load Hey Maez verifier v3 (MFCC classifier)."""
+    """Load Hey Maez verifier v3 (MFCC classifier).
+
+    Returns None if the verifier file is missing OR if `joblib` isn't
+    installed (CI / non-voice installs)."""
     if not os.path.exists(VERIFIER_PATH):
         logger.warning("Verifier not found at %s", VERIFIER_PATH)
+        return None
+    try:
+        import joblib
+    except ImportError:
+        logger.debug(
+            "joblib not installed; wake-word verifier disabled. "
+            "Install with `pip install -e .[voice]` to enable."
+        )
         return None
     try:
         data = joblib.load(VERIFIER_PATH)
