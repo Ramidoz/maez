@@ -1,6 +1,7 @@
-// Direction A — Apple Inc. redesign
-// Aesthetic: glass / soft gradients / muted palette.
-// Glass morphism, SF-style type (Inter fallback), precise motion, tight density.
+// Direction A — observatory redesign
+// Aesthetic: live instrument room, warm glass, legible telemetry.
+// The cockpit should help the owner observe Maez without mistaking demo
+// placeholders for live truth.
 // Rich interactive chat: model picker, thinking toggle, tool menu, attachments,
 // inline approval, tool-call cards, streaming with thinking trace.
 (function() {
@@ -16,12 +17,12 @@ if (typeof document !== 'undefined' && !document.getElementById('apple-fonts')) 
 
 const A = {
   // Apple-style palette (dark)
-  bg:          '#000000',
-  bgElev:      '#0a0a0c',
-  surface:     'rgba(28, 28, 30, 0.72)',   // glass primary
-  surfaceHi:   'rgba(44, 44, 46, 0.78)',
-  surfaceLo:   'rgba(18, 18, 20, 0.68)',
-  surfaceRaised:'rgba(58, 58, 60, 0.6)',
+  bg:          '#090a07',
+  bgElev:      '#11120d',
+  surface:     'rgba(31, 29, 22, 0.74)',
+  surfaceHi:   'rgba(48, 44, 32, 0.80)',
+  surfaceLo:   'rgba(19, 18, 14, 0.72)',
+  surfaceRaised:'rgba(72, 62, 39, 0.58)',
 
   stroke:      'rgba(255, 255, 255, 0.08)',
   strokeHi:    'rgba(255, 255, 255, 0.14)',
@@ -35,21 +36,21 @@ const A = {
   textGhost:   '#3a3a3c',
 
   // system accents (Apple HIG)
-  blue:        '#0a84ff',
-  blueSoft:    '#409cff',
-  indigo:      '#5e5ce6',
-  purple:      '#bf5af2',
-  pink:        '#ff375f',
-  red:         '#ff453a',
-  orange:      '#ff9f0a',
-  yellow:      '#ffd60a',
-  green:       '#30d158',
-  mint:        '#63e6e2',
-  teal:        '#40c8e0',
-  cyan:        '#64d2ff',
+  blue:        '#65a9ff',
+  blueSoft:    '#9fc8ff',
+  indigo:      '#8b8cf5',
+  purple:      '#c79dff',
+  pink:        '#f487a0',
+  red:         '#ff6b5e',
+  orange:      '#d99a42',
+  yellow:      '#e8ca67',
+  green:       '#75c47a',
+  mint:        '#90d8b1',
+  teal:        '#78c8bd',
+  cyan:        '#88d4e7',
 
   // accent gradient (used by `.ap-ai-text` class for title-bar accents)
-  aiGrad:      'linear-gradient(135deg, #ff375f 0%, #bf5af2 35%, #5e5ce6 70%, #0a84ff 100%)',
+  aiGrad:      'linear-gradient(135deg, #d99a42 0%, #f487a0 34%, #8b8cf5 68%, #88d4e7 100%)',
 
   // type
   sans:   '"Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif',
@@ -167,6 +168,60 @@ function Button({ children, onClick, variant = 'secondary', size = 'md', color =
       {icon && <span style={{ display: 'flex' }}>{icon}</span>}
       {children}
     </button>
+  );
+}
+
+function endpointMeta(name) {
+  const meta = SIM?.state?.meta?.endpoints?.[name];
+  if (!meta) return { status: 'pending', age: null, error: '' };
+  const age = meta.at ? Math.max(0, Math.round((Date.now() - meta.at) / 1000)) : null;
+  return { ...meta, age };
+}
+
+function LiveBadge({ endpoint, label = 'live', compact = false }) {
+  const meta = endpointMeta(endpoint);
+  const live = meta.status === 'live';
+  const pending = meta.status === 'pending';
+  const color = live ? A.green : pending ? A.orange : A.red;
+  const text = live
+    ? (compact ? label : `${label} · ${meta.age ?? 0}s`)
+    : pending
+      ? 'waiting'
+      : 'offline';
+  return (
+    <Chip color={color} title={meta.error || ''} style={{ fontSize: compact ? 9 : 10 }}>
+      <Dot c={color} size={4} pulse={live} /> {text}
+    </Chip>
+  );
+}
+
+function StatusTile({ label, value, sub, color = A.blue, tone }) {
+  return (
+    <div style={{
+      minHeight: 78,
+      borderRadius: 16,
+      padding: 14,
+      background: tone || `linear-gradient(145deg, ${color}1d, rgba(255,255,255,0.025))`,
+      border: `0.5px solid ${color}45`,
+      boxShadow: `inset 0 0.5px 0 rgba(255,255,255,0.06), 0 18px 34px -26px ${color}66`,
+    }}>
+      <div style={{ fontFamily: A.sans, fontSize: 10, color: A.textFaint, letterSpacing: 0.9, fontWeight: 700, textTransform: 'uppercase' }}>{label}</div>
+      <div style={{ fontFamily: A.sans, fontSize: 22, color: A.text, letterSpacing: -0.6, fontWeight: 700, lineHeight: 1.05, marginTop: 8 }}>{value}</div>
+      {sub && <div style={{ fontFamily: A.sans, fontSize: 11.5, color: A.textDim, marginTop: 5, lineHeight: 1.35 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function SectionKicker({ children }) {
+  return (
+    <div style={{
+      fontFamily: A.sans,
+      fontSize: 10,
+      color: A.textFaint,
+      letterSpacing: 1.2,
+      textTransform: 'uppercase',
+      fontWeight: 700,
+    }}>{children}</div>
   );
 }
 
@@ -855,17 +910,18 @@ function PendingCommand({ p }) {
 function ServicesPane() {
   const sim = useSim();
   const entries = Object.entries(sim.state.health);
+  const inactive = entries.filter(([, v]) => v.status !== 'active').length;
   return (
-    <Card title="Services" subtitle={`${entries.length} running · 0 errors`}
-      icon={<Dot c={A.green} size={6} pulse />} iconColor={A.green}
-      right={<Chip color={A.green}>Nominal</Chip>}>
+    <Card title="Services" subtitle={`${entries.length} tracked · ${inactive} attention`}
+      icon={<Dot c={inactive ? A.orange : A.green} size={6} pulse={!inactive} />} iconColor={inactive ? A.orange : A.green}
+      right={<LiveBadge endpoint="services" compact />}>
       <div className="ap-scroll" style={{ margin: '-4px -4px', overflow: 'auto', maxHeight: '100%', paddingRight: 4 }}>
         {entries.map(([name, v]) => (
           <div key={name} className="ap-hover-lift" style={{
             display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 8,
             border: '0.5px solid transparent', transition: `all 180ms`,
           }}>
-            <Dot c={v.status === 'active' ? A.green : A.red} pulse={v.status === 'active'} size={5} />
+            <Dot c={v.status === 'active' ? A.green : v.status === 'unknown' ? A.orange : A.red} pulse={v.status === 'active'} size={5} />
             <span style={{ flex: 1, fontFamily: A.sans, fontSize: 12.5, color: A.text }}>{name}</span>
             <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textDim }}>{v.port ? `:${v.port}` : '—'}</span>
             {v.ms != null && (
@@ -881,19 +937,19 @@ function ServicesPane() {
 function GpuPane() {
   const sim = useSim();
   const g = sim.state.gpu;
-  const vramPct = (g.vramUsed / g.vramTotal) * 100;
+  const vramPct = g.vramTotal ? (g.vramUsed / g.vramTotal) * 100 : 0;
   const vramHist = useSparkValues(() => SIM.state.gpu.vramUsed);
   const utilHist = useSparkValues(() => SIM.state.gpu.util);
   return (
-    <Card title="RTX 4090" subtitle={`${g.temp.toFixed(0)}° · ${g.power}W · CUDA 12.4`}
+    <Card title="GPU" subtitle={`${g.temp ? g.temp.toFixed(0) + '°' : 'waiting'} · ${g.power || 0}W · live nvidia-smi`}
       icon="⚡" iconColor={A.orange}
-      right={<Chip color={A.orange}>GPU</Chip>}>
+      right={<LiveBadge endpoint="gpu" compact />}>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
             <span style={{ fontFamily: A.sans, fontSize: 11, color: A.textDim }}>VRAM</span>
             <span style={{ fontFamily: A.mono, fontSize: 11.5, color: A.text }}>
-              {g.vramUsed.toFixed(1)} <span style={{ color: A.textFaint }}>/ {g.vramTotal} GB</span>
+              {g.vramUsed.toFixed(1)} <span style={{ color: A.textFaint }}>/ {g.vramTotal || '?'} GB</span>
             </span>
           </div>
           <div style={{ height: 4, background: A.bgElev, borderRadius: 2, overflow: 'hidden' }}>
@@ -921,6 +977,61 @@ function StatTile({ label, value, color, spark }) {
       <div style={{ fontFamily: A.sans, fontSize: 22, color, letterSpacing: -0.6, fontWeight: 600, lineHeight: 1.1, marginTop: 2 }}>{value}</div>
       {spark && <div style={{ marginTop: 4 }}><Sparkline values={spark} color={color} w={100} h={22} /></div>}
     </div>
+  );
+}
+
+function ReadinessPane({ compact = false }) {
+  const sim = useSim();
+  const logs = sim.state.logs.cognition || [];
+  const maezLogs = sim.state.logs.maez || [];
+  const recentRedactions = logs.concat(maezLogs).filter((l) =>
+    String(l.msg || '').toLowerCase().includes('redacting stale fields')
+  ).slice(-5);
+  const silentCycles = maezLogs.filter((l) =>
+    String(l.msg || '').toLowerCase().includes('heartbeat_ok')
+  ).length;
+  const score = sim.state.daemon.score || 0;
+  const scoreLabel = score ? score.toFixed(2) : 'waiting';
+  const scenario = '15/15';
+  const gateColor = score >= 0.5 ? A.green : A.orange;
+  return (
+    <Card title="Track A Readiness" subtitle="Acceptance gate · observation only"
+      icon="◇" iconColor={gateColor}
+      right={<LiveBadge endpoint="logs:cognition" label="logs" compact />}>
+      <div style={{ display: 'grid', gridTemplateColumns: compact ? '1fr 1fr' : 'repeat(4, 1fr)', gap: 10, marginBottom: 12 }}>
+        <StatusTile label="Scenario" value={scenario} sub="official continuity" color={A.green} />
+        <StatusTile label="Cognition" value={scoreLabel} sub="live daemon score" color={gateColor} />
+        <StatusTile label="Redactions" value={recentRedactions.length} sub="stale fields caught" color={A.orange} />
+        <StatusTile label="Silent" value={silentCycles} sub="HEARTBEAT_OK lines" color={A.cyan} />
+      </div>
+      <div style={{
+        borderRadius: 14,
+        border: `0.5px solid ${A.stroke}`,
+        background: 'rgba(0,0,0,0.18)',
+        padding: 12,
+        minHeight: compact ? 74 : 92,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <SectionKicker>what to watch</SectionKicker>
+          <span style={{ flex: 1 }} />
+          <Chip color={A.orange} style={{ fontSize: 9 }}>24h soak</Chip>
+        </div>
+        {recentRedactions.length ? (
+          <div className="ap-scroll" style={{ display: 'grid', gap: 6, maxHeight: compact ? 62 : 90, overflow: 'auto' }}>
+            {recentRedactions.map((l, i) => (
+              <div key={i} style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, fontFamily: A.mono, fontSize: 10.5, color: A.textDim }}>
+                <span>{String(l.t || '').slice(-8)}</span>
+                <span style={{ color: A.textSoft, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.msg}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ fontFamily: A.sans, fontSize: 12, color: A.textDim, lineHeight: 1.45 }}>
+            Waiting for cognition log evidence. Do not patch the gate unless the 24-hour window trends bad.
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }
 
@@ -2356,8 +2467,9 @@ function WorkshopSurface() {
 
 
 window.TerminalUI = {
-  S, A, Card, Glass, Chip, Dot, Button, MaezAvatar, Icon, SegmentedControl,
+  S, A, Card, Glass, Chip, Dot, Button, MaezAvatar, Icon, SegmentedControl, StatusTile,
   ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane, RouterPane,
+  ReadinessPane,
   MemorySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
   JudgmentSurface, SelfDevSurface, WorkshopSurface, DaemonDeep,
   // back-compat aliases (in case shell uses these)

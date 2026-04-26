@@ -24,6 +24,7 @@
 
 <script type="text/babel" data-presets="react">
 const { ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane, RouterPane,
+        ReadinessPane, StatusTile,
         MemorySurface, SoulSurface, DreamsSurface, IdentitySurface, LogsSurface, ApprovalsQueueSurface,
         JudgmentSurface, SelfDevSurface, WorkshopSurface,
         DaemonDeep, S, A, Card, Glass, Chip, Pill, Dot, Button, SoftBtn, MaezAvatar, Icon } = window.TerminalUI;
@@ -56,28 +57,30 @@ function TerminalDirection() {
 
   return (
     <div style={{ width: '100vw', height: '100vh', background: A.bg, color: A.text, fontFamily: A.sans,
-      display: 'grid', gridTemplateColumns: '228px 1fr 340px', gridTemplateRows: '44px 1fr', overflow: 'hidden',
-      backgroundImage: `radial-gradient(ellipse 60% 50% at 15% 10%, ${A.indigo}22 0%, transparent 55%), radial-gradient(ellipse 60% 50% at 90% 90%, ${A.purple}1c 0%, transparent 55%), radial-gradient(ellipse 50% 40% at 60% 50%, ${A.blue}14 0%, transparent 60%)` }}
+      display: 'grid', gridTemplateColumns: '236px minmax(0, 1fr) 380px', gridTemplateRows: '52px 1fr', overflow: 'hidden',
+      backgroundImage: `radial-gradient(ellipse 70% 50% at 18% 4%, ${A.orange}1f 0%, transparent 56%), radial-gradient(ellipse 60% 45% at 78% 12%, ${A.cyan}18 0%, transparent 58%), radial-gradient(ellipse 55% 45% at 62% 92%, ${A.purple}18 0%, transparent 62%), linear-gradient(180deg, rgba(255,255,255,0.025), transparent 28%)` }}
       data-screen-label="maez · command center">
 
       {/* top bar */}
-      <div className="ap-glass" style={{ gridColumn: '1 / -1', background: 'rgba(10,10,12,0.6)', borderBottom: `0.5px solid ${A.stroke}`, display: 'flex', alignItems: 'center', padding: '0 20px', gap: 14, fontSize: 11, color: A.textDim }}>
+      <div className="ap-glass" style={{ gridColumn: '1 / -1', background: 'rgba(9,10,7,0.68)', borderBottom: `0.5px solid ${A.stroke}`, display: 'flex', alignItems: 'center', padding: '0 22px', gap: 14, fontSize: 11, color: A.textDim }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <MaezAvatar size={22} />
-          <span style={{ fontFamily: A.sans, fontSize: 14, color: A.text, fontWeight: 600, letterSpacing: -0.2 }}>Maez</span>
-          <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textFaint }}>0.12.4</span>
+          <MaezAvatar size={24} />
+          <div>
+            <div style={{ fontFamily: A.sans, fontSize: 14, color: A.text, fontWeight: 700, letterSpacing: -0.2 }}>Maez Cockpit</div>
+            <div style={{ fontFamily: A.mono, fontSize: 9.5, color: A.textFaint, marginTop: 1 }}>observation surface · Track A</div>
+          </div>
         </div>
         <span style={{ width: 1, height: 14, background: A.stroke }} />
-        <span style={{ fontFamily: A.mono, fontSize: 11 }}>rohit<span style={{ color: A.textFaint }}>@</span>alienware</span>
-        <Chip color={A.green}><Dot c={A.green} size={4} pulse /> All systems nominal</Chip>
+        <Chip color={A.green}><Dot c={A.green} size={4} pulse /> live-first</Chip>
+        <Chip color={A.orange}>observation only</Chip>
         <span style={{ flex: 1 }} />
         <span style={{ width: 1, height: 14, background: A.stroke }} />
-        <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textFaint }}>$MAEZ_HOME · /home/rohit/maez</span>
+        <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textFaint }}>official continuity · 15/15</span>
         <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textDim }}>{sim.state.daemon.lastTick}</span>
       </div>
 
       {/* sidebar */}
-      <div className="ap-glass" style={{ background: 'rgba(10,10,12,0.5)', borderRight: `0.5px solid ${A.stroke}`, padding: '16px 0', display: 'flex', flexDirection: 'column' }}>
+      <div className="ap-glass" style={{ background: 'rgba(9,10,7,0.58)', borderRight: `0.5px solid ${A.stroke}`, padding: '16px 0', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '0 22px 12px', fontSize: 10, color: A.textFaint, letterSpacing: 0.8, textTransform: 'uppercase', fontFamily: A.sans, fontWeight: 600 }}>Surfaces</div>
         <div style={{ padding: '0 10px' }}>
           {nav.map((n) => {
@@ -133,9 +136,9 @@ function TerminalDirection() {
       </div>
 
       {/* right rail */}
-      <div className="ap-glass" style={{ background: 'rgba(10,10,12,0.5)', borderLeft: `0.5px solid ${A.stroke}`, display: 'grid', gridTemplateRows: '1fr 1fr 1fr', gap: 12, padding: 12, overflow: 'hidden' }}>
+      <div className="ap-glass" style={{ background: 'rgba(9,10,7,0.58)', borderLeft: `0.5px solid ${A.stroke}`, display: 'grid', gridTemplateRows: '1.08fr 0.92fr 1fr', gap: 12, padding: 12, overflow: 'hidden' }}>
+        <ReadinessPane compact />
         <DaemonPane compact />
-        <ScratchpadPane />
         <SignalsPane compact />
       </div>
     </div>
@@ -147,23 +150,35 @@ function DashboardGrid() {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
   return (
-    <div className="ap-scroll" style={{ padding: 20, display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: 'auto 240px 1fr', gap: 14, height: '100%', overflow: 'auto' }}>
-      <div style={{ gridColumn: '1 / span 2', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+    <div className="ap-scroll" style={{ padding: 22, display: 'grid', gridTemplateColumns: '1.08fr 0.92fr', gridTemplateRows: '156px 250px minmax(440px, 1fr)', gap: 14, height: '100%', overflow: 'auto' }}>
+      <Glass pad={22} style={{ gridColumn: '1 / span 2', display: 'grid', gridTemplateColumns: '1fr 360px', gap: 22, alignItems: 'center', background: `linear-gradient(135deg, rgba(217,154,66,0.16), rgba(136,212,231,0.08) 45%, rgba(199,157,255,0.10))` }}>
         <div>
-          <div style={{ fontFamily: A.sans, fontSize: 26, color: A.text, letterSpacing: -0.6, fontWeight: 600 }}>
-            {greeting}, <span className="ap-ai-text">Rohit</span>.
+          <div style={{ fontFamily: A.sans, fontSize: 11, color: A.textFaint, letterSpacing: 1.1, fontWeight: 800, textTransform: 'uppercase', marginBottom: 10 }}>
+            {new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })} · live observatory
           </div>
-          <div style={{ fontFamily: A.sans, fontSize: 13, color: A.textSoft, marginTop: 4 }}>
-            Maez has been <span style={{ color: A.green, fontWeight: 500 }}>{sim.state.daemon.mood}</span> for {Math.floor(sim.state.daemon.cycle / 120)} hours · {sim.state.memory.stats.raw.toLocaleString()} things remembered
+          <div style={{ fontFamily: A.sans, fontSize: 34, color: A.text, letterSpacing: -1.2, lineHeight: 1.05, fontWeight: 760 }}>
+            {greeting}. Watch the ground, not the myth.
+          </div>
+          <div style={{ fontFamily: A.sans, fontSize: 14, color: A.textSoft, marginTop: 12, lineHeight: 1.5, maxWidth: 760 }}>
+            Maez is in Track A acceptance soak. This cockpit separates live evidence from fallback UI, so observation stays truthful while cognition stabilizes.
           </div>
         </div>
-        <Chip color={A.blue} tone="soft" style={{ fontSize: 11, padding: '4px 10px' }}>
-          {new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}
-        </Chip>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <StatusTile label="Cycle" value={sim.state.daemon.cycle ? `#${sim.state.daemon.cycle.toLocaleString()}` : 'waiting'} sub={sim.state.daemon.mood} color={A.indigo} />
+          <StatusTile label="Memory" value={sim.state.memory.stats.raw.toLocaleString()} sub="raw entries" color={A.orange} />
+          <StatusTile label="Daemon" value={sim.state.daemon.score ? sim.state.daemon.score.toFixed(2) : 'waiting'} sub="cognition score" color={sim.state.daemon.score >= 0.5 ? A.green : A.orange} />
+          <StatusTile label="Mode" value="Observe" sub="writes visually gated" color={A.cyan} />
+        </div>
+      </Glass>
+      <div style={{ gridColumn: '1', gridRow: '2' }}><ReadinessPane /></div>
+      <div style={{ gridColumn: '2', gridRow: '2', display: 'grid', gridTemplateColumns: '1fr', gap: 14 }}>
+        <ServicesPane />
       </div>
-      <div style={{ gridColumn: '1', gridRow: '2' }}><ServicesPane /></div>
-      <div style={{ gridColumn: '2', gridRow: '2' }}><GpuPane /></div>
-      <div style={{ gridColumn: '1 / span 2', gridRow: '3', minHeight: 420, display: 'flex' }}><ChatPane /></div>
+      <div style={{ gridColumn: '1', gridRow: '3', minHeight: 440, display: 'flex' }}><ChatPane /></div>
+      <div style={{ gridColumn: '2', gridRow: '3', display: 'grid', gridTemplateRows: '250px 1fr', gap: 14, minHeight: 440 }}>
+        <GpuPane />
+        <ScratchpadPane />
+      </div>
     </div>
   );
 }
@@ -346,7 +361,7 @@ function InnerRouter() {
       <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft, marginBottom: 24, maxWidth: 700 }}>most turns, I answer from my own head. some — deep, long, code-heavy — I send to Claude. you can see every choice.</div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
         <div style={{ background: I.paperHi, border: `1px solid ${I.rule}`, padding: 20 }}>
-          <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1 }}>local · qwen3.6-35b</div>
+            <div style={{ fontFamily: I.sans, fontSize: 10, color: I.inkDim, textTransform: 'uppercase', letterSpacing: 1 }}>local · qwen3.6-27b</div>
           <div style={{ fontFamily: I.serif, fontSize: 48, color: I.sage, marginTop: 4 }}>{r.totals.local}</div>
           <div style={{ fontFamily: I.serif, fontStyle: 'italic', color: I.inkSoft }}>turns this month</div>
         </div>

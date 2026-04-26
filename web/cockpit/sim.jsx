@@ -13,38 +13,30 @@ const SIM = (() => {
   const hms = (d = now()) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 
   const state = {
-    health: {
-      'llama-server':        { port: 8080,  status: 'active', vram: 18.2, ms: 42 },
-      'llama-server-vision': { port: 8081,  status: 'active', vram: 4.1,  ms: 71 },
-      'maez (daemon)':       { port: null,  status: 'active', vram: 0,    ms: null },
-      'maez-web':            { port: 11437, status: 'active', vram: 0,    ms: 18 },
-      'telegram-bot':        { port: null,  status: 'active', vram: 0,    ms: null },
-      'iphone-ingest':       { port: 11437, status: 'active', vram: 0,    ms: 24 },
+    meta: {
+      endpoints: {},
+      mode: 'live-first',
     },
-    gpu: { vramUsed: 22.3, vramTotal: 24, temp: 62, power: 180, util: 47 },
+    health: {
+      'maez (daemon)':       { port: 11435, status: 'unknown', vram: 0, ms: null },
+      'maez-web':            { port: 11437, status: 'unknown', vram: 0, ms: null },
+      'llama-server':        { port: 8080,  status: 'unknown', vram: 0, ms: null },
+    },
+    gpu: { vramUsed: 0, vramTotal: 24, temp: 0, power: 0, util: 0 },
     cpu: { util: 14, temp: 48, load: [0.92, 1.12, 0.88] },
     signals: [
-      { t: '14:22:03', kind: 'focus',   text: 'Active window → Ghostty · maez_chat.py',  src: 'macos' },
-      { t: '14:21:47', kind: 'weather', text: 'Berkeley · 58°F · light fog', src: 'openweather' },
-      { t: '14:21:31', kind: 'iphone',  text: 'Motion: walking · 0.8 m/s · heading 240°', src: 'iphone' },
-      { t: '14:21:02', kind: 'iphone',  text: 'Ambient: 42 dB · indoor · stationary', src: 'iphone' },
-      { t: '14:20:28', kind: 'reddit',  text: 'r/LocalLLaMA · new: "Qwen3.6 + mmproj on 24GB"', src: 'reddit' },
-      { t: '14:19:55', kind: 'focus',   text: 'Active window → Arc · claude.ai',  src: 'macos' },
-      { t: '14:19:12', kind: 'iphone',  text: 'Battery: 67% · charging · 23°C', src: 'iphone' },
+      { t: '', kind: 'info', text: 'Waiting for live ambient signals from /api/v1/signals.', src: 'system' },
     ],
     daemon: {
-      cycle: 11847,
-      lastTick: ts(),
+      cycle: 0,
+      lastTick: '',
       nextTickIn: 29,
-      score: 0.72,
-      mood: 'attentive',
-      uncertainty: 0.31,
-      currentThought: 'rohit just opened the chat. last turn asked about rgb — i should still have that context in working memory. checking vram headroom before Claude call.',
+      score: 0,
+      mood: 'observing',
+      uncertainty: 0,
+      currentThought: 'Waiting for live daemon state.',
       scratchpad: [
-        { t: '14:22:00', text: "rohit's back. 6 min since last turn. good." },
-        { t: '14:21:30', text: "cpu load nominal. no fan spike. he's not compiling." },
-        { t: '14:20:45', text: "thinking about the rgb thread from this morning — did i resolve it?" },
-        { t: '14:19:00', text: "the reddit watch found something interesting. note it but don't interrupt." },
+        { t: '', text: 'Waiting for live scratchpad entries.' },
       ],
     },
     chat: {
@@ -54,10 +46,10 @@ const SIM = (() => {
           id: 's1', title: 'Alienware RGB status', preview: 'active for 16h, memory fine…', updated: '14:18', pinned: true, color: 'blue', unread: 0,
           history: [
             { role: 'user', t: '14:18:12', content: 'check alienware rgb' },
-            { role: 'assistant', t: '14:18:13', route: 'local', model: 'qwen3.6-35b', thinking: 'user wants status of rgb controller. probably openrgb. check systemd.', content: "let me look — openrgb runs as a user service on your box. checking status.", commands: [
+            { role: 'assistant', t: '14:18:13', route: 'local', model: 'qwen3.6-27b', thinking: 'demo conversation until live chat history loads.', content: "Waiting for live chat history from /api/v1/chat/sessions.", commands: [
               { cmd: 'systemctl --user status openrgb', status: 'approved', output: '● openrgb.service - OpenRGB daemon\n   Loaded: loaded (/home/rohit/.config/systemd/user/openrgb.service)\n   Active: active (running) since Sun 2026-04-19 22:14:07 PDT; 16h ago\n   Main PID: 48221 (openrgb)\n      Tasks: 6 (limit: 76890)\n     Memory: 18.4M\n        CPU: 2.441s' },
             ], trace: { tools: ['shell'], memory: 2, tokens: 48 } },
-            { role: 'assistant', t: '14:18:19', route: 'local', model: 'qwen3.6-35b', content: 'active for 16h, memory fine. zones look healthy — anything specific feel off?', trace: { tools: ['shell'], memory: 1, tokens: 31 } },
+            { role: 'assistant', t: '14:18:19', route: 'local', model: 'qwen3.6-27b', content: 'Live history will replace this demo row when maez-web is reachable.', trace: { tools: ['shell'], memory: 1, tokens: 31 } },
           ],
         },
         {
@@ -71,7 +63,7 @@ const SIM = (() => {
           id: 's3', title: 'Yesterday · daily summary', preview: '14 conversations, 3 commands run, 2 dreams proposed.', updated: '09:12', color: 'green', unread: 0,
           history: [
             { role: 'user', t: '09:12:00', content: 'summarize yesterday' },
-            { role: 'assistant', t: '09:12:04', route: 'local', model: 'qwen3.6-35b', content: 'yesterday: 14 conversations, mostly about the RGB config and the reddit crawler. 3 shell commands (all approved). 2 dreams — you approved the signal-window change, rejected the memory compaction one. mood: steady, curious by evening.', trace: { tools: ['memory'], memory: 9, tokens: 98 } },
+            { role: 'assistant', t: '09:12:04', route: 'local', model: 'qwen3.6-27b', content: 'Demo row. Live chat history replaces this when /api/v1/chat/sessions responds.', trace: { tools: ['memory'], memory: 9, tokens: 98 } },
           ],
         },
         {
@@ -85,7 +77,7 @@ const SIM = (() => {
           id: 's5', title: 'Weather + focus correlation', preview: 'barometric pressure drops seem to…', updated: '2d ago', color: 'cyan', unread: 0,
           history: [
             { role: 'user', t: '10:02:11', content: 'do i focus better on sunny days' },
-            { role: 'assistant', t: '10:02:15', route: 'local', model: 'qwen3.6-35b', content: "from your 6 weeks of signals: barometric pressure drops seem to correlate with shorter deep-work blocks. sunlight itself less so. but the dataset is small.", trace: { tools: ['memory'], memory: 7, tokens: 74 } },
+            { role: 'assistant', t: '10:02:15', route: 'local', model: 'qwen3.6-27b', content: "Demo row. Live chat history replaces this when /api/v1/chat/sessions responds.", trace: { tools: ['memory'], memory: 7, tokens: 74 } },
           ],
         },
       ],
@@ -99,7 +91,7 @@ const SIM = (() => {
         { t: '14:15:02', msg: 'what does phenomenology mean in…',route: 'claude',  conf: 0.81, tag: 'deep-knowledge', model: 'sonnet-4.6' },
         { t: '14:11:40', msg: 'refactor core/ambient.py',        route: 'claude',  conf: 0.77, tag: 'code-heavy',    model: 'opus-4.7' },
         { t: '14:09:15', msg: 'remind me to buy coffee',         route: 'local',   conf: 0.98, tag: 'chat' },
-        { t: '14:03:22', msg: 'ls /home/rohit/maez',             route: 'local',   conf: 0.99, tag: 'shell' },
+        { t: '14:03:22', msg: 'ls $MAEZ_HOME',                   route: 'local',   conf: 0.99, tag: 'shell' },
         { t: '13:58:44', msg: 'explain the covenant',            route: 'local',   conf: 0.88, tag: 'self-query' },
         { t: '13:54:18', msg: 'summarize this pdf',              route: 'claude',  conf: 0.72, tag: 'long-ctx',      model: 'sonnet-4.6' },
       ],
@@ -146,8 +138,19 @@ const SIM = (() => {
     },
     approvals: [
       { id: 'cmd-3', cmd: 'systemctl --user restart openrgb', reason: 'user: "fix the rgb"', risk: 'low',  ts: '14:22:08' },
-      { id: 'cmd-4', cmd: 'cat /home/rohit/maez/logs/maez_notes.md', reason: 'self-query about last session', risk: 'low', ts: '14:22:10' },
+      { id: 'cmd-4', cmd: 'cat $MAEZ_HOME/logs/maez_notes.md', reason: 'self-query about last session', risk: 'low', ts: '14:22:10' },
     ],
+  };
+
+  const markLive = (name) => {
+    state.meta.endpoints[name] = { status: 'live', at: Date.now(), error: '' };
+  };
+  const markOffline = (name, error) => {
+    state.meta.endpoints[name] = {
+      status: 'offline',
+      at: Date.now(),
+      error: String(error || 'unreachable').slice(0, 140),
+    };
   };
 
   // seed logs
@@ -212,8 +215,8 @@ const SIM = (() => {
 
   const signalKinds = [
     { kind: 'iphone',  src: 'iphone',   gen: () => `Ambient: ${Math.round(rand(38, 54))} dB · ${pick(['indoor','walking','stationary'])}` },
-    { kind: 'focus',   src: 'macos',    gen: () => `Active window → ${pick(['Ghostty · maez_chat.py','Arc · claude.ai','VSCode · ambient.py','Obsidian · notes','Terminal'])}` },
-    { kind: 'weather', src: 'openweather', gen: () => `Berkeley · ${Math.round(rand(54, 64))}°F · ${pick(['light fog','clear','overcast','breeze ↗'])}` },
+    { kind: 'focus',   src: 'system',   gen: () => `Active window → ${pick(['terminal','editor','browser','notes'])}` },
+    { kind: 'weather', src: 'weather',  gen: () => `Weather source unavailable in demo mode` },
     { kind: 'iphone',  src: 'iphone',   gen: () => `Motion: ${pick(['stationary','walking','driving'])} · ${rand(0, 2.2).toFixed(1)} m/s` },
     { kind: 'reddit',  src: 'reddit',   gen: () => `${pick(['r/LocalLLaMA','r/selfhosted','r/MachineLearning'])} · new: "${pick(['llama.cpp 3.2 drop','mmproj on cpu works?','qwen3.6 quants roundup','RAG without vectors?'])}"` },
   ];
@@ -291,14 +294,14 @@ const SIM = (() => {
       const isShell = /^(ls|cat|systemctl|tail|ps|curl|df|free|nvidia-smi|journalctl)|\bcheck\b|\brestart\b|\brun\b/i.test(text);
       const isDeep = /explain|why|phenomenology|compare|refactor|design/i.test(text);
       const route = isDeep ? 'claude' : 'local';
-      const model = route === 'claude' ? 'sonnet-4.6' : 'qwen3.6-35b';
+      const model = route === 'claude' ? 'sonnet-4.6' : 'qwen3.6-27b';
       let reply;
       if (isShell) {
         reply = 'let me take a look.';
         setTimeout(() => {
           state.chat.pendingCommand = {
             id: 'cmd-' + Math.random().toString(36).slice(2, 6),
-            cmd: (text.match(/check (\w+)/) ? `systemctl --user status ${text.match(/check (\w+)/)[1]}` : 'ls /home/rohit/maez'),
+            cmd: (text.match(/check (\w+)/) ? `systemctl --user status ${text.match(/check (\w+)/)[1]}` : 'ls $MAEZ_HOME'),
             reason: `user: "${text}"`, risk: 'low', ts: ts(),
           };
           emit();
@@ -385,7 +388,7 @@ const SIM = (() => {
       const p = state.chat.pendingCommand;
       if (!p) return;
       const sess = state.chat.sessions.find(s => s.id === state.chat.activeSessionId);
-      if (sess) sess.history.push({ role: 'assistant', t: ts(), route: 'local', model: 'qwen3.6-35b', commands: [{
+      if (sess) sess.history.push({ role: 'assistant', t: ts(), route: 'local', model: 'qwen3.6-27b', commands: [{
         cmd: p.cmd, status: approve ? 'approved' : 'denied',
         output: approve ? '● ok. active (running) since 10:03. memory 18.4M.' : '(skipped — user declined)',
       }], trace: { tools: ['shell'], memory: 0, tokens: 20 } });
@@ -435,7 +438,7 @@ const SIM = (() => {
   };
 
   // tick() is DISABLED — it was the prototype's fake-data pump that
-  // every 800ms prepended fake Berkeley/walking/weather signals,
+  // every 800ms prepended fake location/weather signals,
   // fake logs, and jittered fake GPU/daemon numbers. Now that the
   // real /api/v1/* endpoints own daemon, signals, gpu, logs, cards,
   // memory, dreams, soul, identity, router, services, chat — tick()
@@ -454,8 +457,9 @@ const SIM = (() => {
   const _pollDaemon = async () => {
     try {
       const r = await fetch('/api/v1/daemon/state');
-      if (!r.ok) return;
+      if (!r.ok) { markOffline('daemon', r.status); return; }
       const d = await r.json();
+      markLive('daemon');
       if (typeof d.cycle === 'number' && d.cycle > 0) {
         state.daemon.cycle = d.cycle;
       }
@@ -466,15 +470,16 @@ const SIM = (() => {
         state.daemon.scratchpad = d.scratchpad;
       }
       emit();
-    } catch (e) { /* keep fake values */ }
+    } catch (e) { markOffline('daemon', e); }
   };
 
   const _pollCards = async () => {
     try {
       const r = await fetch('/api/v1/cards');
-      if (!r.ok) return;
+      if (!r.ok) { markOffline('cards', r.status); return; }
       const d = await r.json();
       if (!Array.isArray(d.cards)) return;
+      markLive('cards');
       // Only surface still-open cards as "approvals" (the red-badged
       // queue). Resolved cards stay in the API response for an
       // eventual "recent activity" view but don't clutter the badge.
@@ -487,19 +492,19 @@ const SIM = (() => {
         ts: new Date((c.created_at || 0) * 1000).toTimeString().slice(0, 8),
       }));
       emit();
-    } catch (e) { /* keep fake values */ }
+    } catch (e) { markOffline('cards', e); }
   };
 
   const _pollServices = async () => {
     try {
       const r = await fetch('/api/v1/services');
-      if (!r.ok) return;
+      if (!r.ok) { markOffline('services', r.status); return; }
       const d = await r.json();
       if (!d.services) return;
+      markLive('services');
       // Overlay real status onto whatever's in state.health that matches
       const rename = {
         'maez': 'maez (daemon)',
-        'llama-server-vision': 'llama-server-vision',
       };
       const newHealth = { ...state.health };
       for (const [name, info] of Object.entries(d.services)) {
@@ -512,31 +517,33 @@ const SIM = (() => {
       }
       state.health = newHealth;
       emit();
-    } catch (e) { /* keep fake */ }
+    } catch (e) { markOffline('services', e); }
   };
 
   const _pollGpu = async () => {
     try {
       const r = await fetch('/api/v1/gpu');
-      if (!r.ok) return;
+      if (!r.ok) { markOffline('gpu', r.status); return; }
       const d = await r.json();
+      markLive('gpu');
       if (typeof d.vramUsed === 'number') state.gpu.vramUsed = d.vramUsed;
       if (typeof d.vramTotal === 'number') state.gpu.vramTotal = d.vramTotal;
       if (typeof d.temp === 'number') state.gpu.temp = d.temp;
       if (typeof d.power === 'number') state.gpu.power = d.power;
       if (typeof d.util === 'number') state.gpu.util = d.util;
       emit();
-    } catch (e) { /* keep fake */ }
+    } catch (e) { markOffline('gpu', e); }
   };
 
   const _pollSignals = async () => {
     try {
       const r = await fetch('/api/v1/signals');
-      if (!r.ok) return;
+      if (!r.ok) { markOffline('signals', r.status); return; }
       const d = await r.json();
+      markLive('signals');
       if (Array.isArray(d.signals)) {
         // Unconditional replace: showing empty is more honest than
-        // the seed "Berkeley weather" fake when no real source is
+        // the seed weather fake when no real source is
         // configured. Signals falls back to a short "no sources"
         // placeholder so the UI still has something to render.
         if (d.signals.length) {
@@ -550,77 +557,83 @@ const SIM = (() => {
         }
         emit();
       }
-    } catch (e) { /* keep fake */ }
+    } catch (e) { markOffline('signals', e); }
   };
 
   const _pollSoul = async () => {
     try {
       const r = await fetch('/api/v1/soul');
-      if (!r.ok) return;
+      if (!r.ok) { markOffline('soul', r.status); return; }
       const d = await r.json();
+      markLive('soul');
       if (d.base) state.soul.base = d.base;
       if (d.local) state.soul.local = d.local;
       emit();
-    } catch (e) { /* keep fake */ }
+    } catch (e) { markOffline('soul', e); }
   };
 
   const _pollMemory = async () => {
     try {
       const r = await fetch('/api/v1/memory');
-      if (!r.ok) return;
+      if (!r.ok) { markOffline('memory', r.status); return; }
       const d = await r.json();
+      markLive('memory');
       if (d.stats) state.memory.stats = d.stats;
       if (Array.isArray(d.hits) && d.hits.length) state.memory.hits = d.hits;
       emit();
-    } catch (e) { /* keep fake */ }
+    } catch (e) { markOffline('memory', e); }
   };
 
   const _pollDreams = async () => {
     try {
       const r = await fetch('/api/v1/dreams');
-      if (!r.ok) return;
+      if (!r.ok) { markOffline('dreams', r.status); return; }
       const d = await r.json();
+      markLive('dreams');
       if (Array.isArray(d.dreams) && d.dreams.length) {
         state.dreams = d.dreams;
         emit();
       }
-    } catch (e) { /* keep fake */ }
+    } catch (e) { markOffline('dreams', e); }
   };
 
   const _pollIdentity = async () => {
     try {
       const r = await fetch('/api/v1/identity');
-      if (!r.ok) return;
+      if (!r.ok) { markOffline('identity', r.status); return; }
       const d = await r.json();
+      markLive('identity');
       if (d.owner) state.identity.owner = { ...state.identity.owner, ...d.owner };
       if (d.machine) state.identity.machine = { ...state.identity.machine, ...d.machine };
       if (d.policies) state.identity.policies = { ...state.identity.policies, ...d.policies };
       if (Array.isArray(d.redditSubs)) state.identity.redditSubs = d.redditSubs;
       emit();
-    } catch (e) { /* keep fake */ }
+    } catch (e) { markOffline('identity', e); }
   };
 
   const _pollRouter = async () => {
     try {
       const r = await fetch('/api/v1/router');
-      if (!r.ok) return;
+      if (!r.ok) { markOffline('router', r.status); return; }
       const d = await r.json();
+      markLive('router');
       if (d.totals) state.router.totals = { ...state.router.totals, ...d.totals };
       if (Array.isArray(d.window) && d.window.length) state.router.window = d.window;
       emit();
-    } catch (e) { /* keep fake */ }
+    } catch (e) { markOffline('router', e); }
   };
 
   const _pollLogs = async () => {
     for (const name of ['maez', 'cognition', 'evolution']) {
       try {
         const r = await fetch(`/api/v1/logs/${name}`);
-        if (!r.ok) continue;
+        if (!r.ok) { markOffline(`logs:${name}`, r.status); continue; }
         const d = await r.json();
+        markLive(`logs:${name}`);
         if (Array.isArray(d.lines) && d.lines.length) {
           state.logs[name] = d.lines;
         }
-      } catch (e) { /* keep fake */ }
+      } catch (e) { markOffline(`logs:${name}`, e); }
     }
     emit();
   };
@@ -628,14 +641,15 @@ const SIM = (() => {
   const _pollChatSessions = async () => {
     try {
       const r = await fetch('/api/v1/chat/sessions');
-      if (!r.ok) return;
+      if (!r.ok) { markOffline('chat', r.status); return; }
       const d = await r.json();
+      markLive('chat');
       if (Array.isArray(d.sessions) && d.sessions.length) {
         state.chat.sessions = d.sessions;
         state.chat.activeSessionId = d.activeSessionId || d.sessions[0].id;
         emit();
       }
-    } catch (e) { /* keep fake */ }
+    } catch (e) { markOffline('chat', e); }
   };
 
   // Kick off immediately, then poll each on its own cadence. Chose
