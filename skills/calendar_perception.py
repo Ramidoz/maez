@@ -20,12 +20,17 @@ import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Any, Optional
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+# 2026-04-26: Google client imports moved into the helper functions
+# that use them. The module's public surface (CalendarEvent /
+# CalendarSnapshot dataclasses, `observe()` signature) doesn't need
+# them at import time — the daemon-import chain (maez_daemon →
+# calendar_perception) was breaking on CI because google-auth is in
+# the optional `[google]` extra and CI installs only `[dev,telegram]`.
+# Deferred imports let the module load cleanly without the google
+# packages; calendar features gracefully degrade to "credentials
+# unavailable" when the imports fail.
 
 logger = logging.getLogger("maez")
 
@@ -116,8 +121,18 @@ class CalendarSnapshot:
         return alerts
 
 
-def _get_credentials() -> Optional[Credentials]:
-    """Load and refresh OAuth2 credentials."""
+def _get_credentials() -> Optional[Any]:
+    """Load and refresh OAuth2 credentials. Returns None if google-auth
+    isn't installed or credentials are missing/invalid."""
+    try:
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+    except ImportError:
+        logger.debug(
+            "google-auth not installed; calendar perception disabled. "
+            "Install with `pip install -e .[google]` to enable."
+        )
+        return None
     try:
         if not os.path.exists(TOKEN_PATH):
             logger.error("Token not found at %s. Run auth flow first.", TOKEN_PATH)
@@ -141,8 +156,9 @@ def _get_credentials() -> Optional[Credentials]:
         return None
 
 
-def _fetch_events(creds: Credentials) -> list:
+def _fetch_events(creds: Any) -> list:
     """Fetch upcoming events from Google Calendar API."""
+    from googleapiclient.discovery import build
     service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
 
     now = datetime.now(timezone.utc)
@@ -196,6 +212,14 @@ def observe(force_refresh: bool = False) -> CalendarSnapshot:
     if not force_refresh and _cache is not None and (now - _cache_time) < 300:
         return _cache
 
+    # HttpError is imported lazily — same reason as the helpers above.
+    # If googleapiclient isn't installed, _get_credentials() already
+    # returns None and we never reach the API path; in that case
+    # HttpError won't be raised so the import-fail fallback is safe.
+    try:
+        from googleapiclient.errors import HttpError as _HttpError
+    except ImportError:
+        _HttpError = ()  # tuple in except matches no exceptions
     try:
         creds = _get_credentials()
         if creds is None:
@@ -210,7 +234,7 @@ def observe(force_refresh: bool = False) -> CalendarSnapshot:
                 next_event=upcoming[0] if upcoming else None,
                 success=True,
             )
-    except HttpError as e:
+    except _HttpError as e:
         snap = CalendarSnapshot(success=False, error=f"Google API error: {e}")
     except Exception as e:
         snap = CalendarSnapshot(success=False, error=str(e))
