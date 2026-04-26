@@ -40,6 +40,23 @@ const { ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane
 function TerminalDirection() {
   const sim = useSim();
   const [surface, setSurface] = React.useState('dashboard');
+  const [dashboardMode, setDashboardMode] = React.useState(() => {
+    try {
+      return localStorage.getItem('maez.cockpit.dashboardMode') || 'living';
+    } catch (e) {
+      return 'living';
+    }
+  });
+  const setDashboardModeStored = React.useCallback((mode) => {
+    setDashboardMode(mode);
+    try {
+      localStorage.setItem('maez.cockpit.dashboardMode', mode);
+    } catch (e) {}
+  }, []);
+  const openSurface = React.useCallback((nextSurface, mode) => {
+    if (mode) setDashboardModeStored(mode);
+    setSurface(nextSurface);
+  }, [setDashboardModeStored]);
 
   const nav = [
     { id: 'dashboard',  label: 'Dashboard',   hotkey: '1', icon: '◈' },
@@ -122,7 +139,13 @@ function TerminalDirection() {
 
       {/* main — surface */}
       <div style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-        {surface === 'dashboard' && <DashboardGrid />}
+        {surface === 'dashboard' && (
+          <DashboardGrid
+            mode={dashboardMode}
+            onMode={setDashboardModeStored}
+            openSurface={openSurface}
+          />
+        )}
         {surface === 'chat' && <div style={{ padding: 20, height: '100%', display: 'flex' }}><div style={{ flex: 1, display: 'flex' }}><ChatPane tall /></div></div>}
         {surface === 'approvals' && <ApprovalsQueueSurface />}
         {surface === 'memory' && <MemorySurface />}
@@ -148,11 +171,10 @@ function TerminalDirection() {
   );
 }
 
-function DashboardGrid() {
-  const [mode, setMode] = React.useState('living');
+function DashboardGrid({ mode, onMode, openSurface }) {
   return mode === 'living'
-    ? <LivingDashboard onMode={setMode} />
-    : <TechnicalDashboard onMode={setMode} />;
+    ? <LivingDashboard onMode={onMode} openSurface={openSurface} />
+    : <TechnicalDashboard onMode={onMode} openSurface={openSurface} />;
 }
 
 function DashboardModeSwitch({ mode, onMode }) {
@@ -229,7 +251,7 @@ function MaezCoreVisual({ score }) {
   );
 }
 
-function OrganCard({ icon, title, plain, detail, metric, color, onClick }) {
+function OrganCard({ icon, title, plain, detail, metric, color, onClick, action = 'Open details' }) {
   return (
     <button className="ap-btn" onClick={onClick}
       style={{
@@ -262,12 +284,15 @@ function OrganCard({ icon, title, plain, detail, metric, color, onClick }) {
         </div>
       </div>
       <div style={{ fontFamily: A.sans, fontSize: 14, color: A.text, lineHeight: 1.45, fontWeight: 650 }}>{plain}</div>
-      <div style={{ marginTop: 'auto', fontFamily: A.mono, fontSize: 10.5, color: A.textDim, lineHeight: 1.45 }}>{detail}</div>
+      <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'flex-end', gap: 10 }}>
+        <div style={{ flex: 1, fontFamily: A.mono, fontSize: 10.5, color: A.textDim, lineHeight: 1.45 }}>{detail}</div>
+        <span style={{ fontFamily: A.sans, fontSize: 10, color, fontWeight: 800, whiteSpace: 'nowrap' }}>{action} →</span>
+      </div>
     </button>
   );
 }
 
-function LivingDashboard({ onMode }) {
+function LivingDashboard({ onMode, openSurface }) {
   const sim = useSim();
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
@@ -303,12 +328,14 @@ function LivingDashboard({ onMode }) {
           metric={`cycle #${d.cycle?.toLocaleString?.() || 'waiting'}`}
           plain={d.cycle ? 'Maez is awake and cycling.' : 'Waiting for Maez heartbeat.'}
           detail={`last tick ${d.lastTick || 'unknown'} · next ${d.nextTickIn || '?'}s`}
-          onClick={() => onMode('technical')} />
+          action="Daemon"
+          onClick={() => openSurface('daemon')} />
         <OrganCard icon="◌" title="Senses" color={A.cyan}
           metric={`${serviceActive} services active`}
           plain="Maez is reading the room through safe live signals."
           detail={`GPU ${g.util || 0}% · VRAM ${g.vramUsed?.toFixed?.(1) || 0}/${g.vramTotal || '?'} GB`}
-          onClick={() => onMode('technical')} />
+          action="Ambient"
+          onClick={() => openSurface('signals')} />
       </div>
       <Glass pad={24} style={{ minHeight: 390, display: 'grid', placeItems: 'center', background: 'radial-gradient(circle at 50% 45%, rgba(217,154,66,0.16), rgba(136,212,231,0.05) 42%, rgba(0,0,0,0.08) 76%)' }}>
         <div style={{ textAlign: 'center', width: '100%' }}>
@@ -326,27 +353,32 @@ function LivingDashboard({ onMode }) {
           metric={`cognition ${d.score ? d.score.toFixed(2) : 'waiting'}`}
           plain={redactions ? 'Maez is catching stale loops before they become fixation.' : 'Maez is being watched for repetitive loops.'}
           detail={`${redactions} stale-field redactions visible in logs`}
-          onClick={() => onMode('technical')} />
+          action="Logs"
+          onClick={() => openSurface('logs')} />
         <OrganCard icon="🛡" title="Safety" color={A.purple}
           metric="shield up"
           plain="No action should happen without the right boundary."
           detail={`${sim.state.approvals.length} pending approvals · output guard active`}
-          onClick={() => onMode('technical')} />
+          action="Approvals"
+          onClick={() => openSurface('approvals')} />
       </div>
       <OrganCard icon="▦" title="Memory" color={A.blue}
         metric={`${mem.raw?.toLocaleString?.() || 0} remembered fragments`}
         plain="Maez keeps continuity without deleting its past."
         detail={`${mem.core || 0} core · ${mem.daily || 0} daily · ${mem.raw || 0} raw`}
-        onClick={() => onMode('technical')} />
+        action="Memory"
+        onClick={() => openSurface('memory')} />
       <OrganCard icon="✦" title="Voice" color={A.pink}
         metric="recent conversation"
         plain={lastTurn?.content ? `"${String(lastTurn.content).slice(0, 96)}"` : 'Waiting for a recent exchange.'}
         detail="click Conversation for the full thread"
-        onClick={() => onMode('technical')} />
+        action="Chat"
+        onClick={() => openSurface('chat')} />
       <OrganCard icon="◇" title="Technical Door" color={A.cyan}
         metric="one click"
         plain="Open the dense cockpit when you want raw numbers and logs."
         detail="services · GPU · daemon · logs · memory · approvals"
+        action="Technical"
         onClick={() => onMode('technical')} />
     </div>
   );
