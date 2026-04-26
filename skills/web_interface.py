@@ -1346,7 +1346,7 @@ def api_soul():
 
 @app.route("/api/v1/memory")
 def api_memory():
-    """ChromaDB tier counts + recent telegram exchanges as 'hits'."""
+    """ChromaDB tier counts + visible samples from each memory tier."""
     import sqlite3 as _sq
     import os as _os
     stats = {"raw": 0, "daily": 0, "core": 0}
@@ -1363,11 +1363,40 @@ def api_memory():
             c.close()
         except Exception:
             pass
-    # Recent hits — read last few telegram exchanges from raw
     hits = []
     try:
         from memory.memory_manager import MemoryManager
         mem = MemoryManager()
+        for core in (mem.get_all_core() or [])[-8:]:
+            content = (core.get("content") or "")[:320]
+            meta = core.get("metadata") or {}
+            ts_val = meta.get("timestamp", "")
+            hits.append({
+                "tier": "core",
+                "score": 1.0,
+                "date": str(ts_val)[:10],
+                "text": content,
+                "tokens": len(content) // 4,
+                "source": meta.get("source", ""),
+            })
+        try:
+            daily_results = mem.daily.get(include=["documents", "metadatas"])
+        except Exception:
+            daily_results = {"ids": [], "documents": [], "metadatas": []}
+        daily_rows = []
+        for i in range(len(daily_results.get("ids", []))):
+            content = (daily_results["documents"][i] or "")[:320]
+            meta = daily_results["metadatas"][i] or {}
+            ts_val = meta.get("date") or meta.get("timestamp", "")
+            daily_rows.append({
+                "tier": "daily",
+                "score": 0.8,
+                "date": str(ts_val)[:10],
+                "text": content,
+                "tokens": len(content) // 4,
+                "source": meta.get("source", "daily_consolidation"),
+            })
+        hits.extend(daily_rows[-8:])
         for ex in (mem.get_telegram_exchanges(limit=8) or [])[-5:]:
             content = (ex.get("content") or "")[:200]
             ts_val = (ex.get("metadata") or {}).get("timestamp", "")
@@ -1377,6 +1406,7 @@ def api_memory():
                 "date": str(ts_val)[:10],
                 "text": content,
                 "tokens": len(content) // 4,
+                "source": "telegram_exchange",
             })
     except Exception:
         pass

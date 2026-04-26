@@ -1054,9 +1054,14 @@ function DaemonPane({ compact }) {
           </div>
         </div>
         {!compact && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, borderTop: `0.5px solid ${A.stroke}`, paddingTop: 10 }}>
-            <Meter label="Cognition" value={d.score} color={d.score > 0.75 ? A.green : A.orange} />
-            <Meter label="Uncertainty" value={d.uncertainty} color={A.cyan} />
+          <div style={{ display: 'grid', gap: 10, borderTop: `0.5px solid ${A.stroke}`, paddingTop: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <Meter label="Cognition" value={d.score} color={d.score > 0.75 ? A.green : A.orange} />
+              <Meter label="Uncertainty" value={d.uncertainty} color={A.cyan} />
+            </div>
+            <div style={{ fontFamily: A.sans, fontSize: 11.5, color: A.textDim, lineHeight: 1.45, background: A.surfaceLo, border: `0.5px solid ${A.stroke}`, borderRadius: 10, padding: 10 }}>
+              <span style={{ color: A.textSoft, fontWeight: 700 }}>{cognitionLabel(d.score)}.</span> {cognitionExplanation(d.score)}
+            </div>
           </div>
         )}
       </div>
@@ -1090,6 +1095,18 @@ function Meter({ label, value, color }) {
       </div>
     </div>
   );
+}
+
+function cognitionLabel(score) {
+  if (!score) return 'waiting for score';
+  if (score >= 0.75) return 'clear and useful';
+  if (score >= 0.5) return 'steady enough';
+  if (score >= 0.3) return 'careful / low novelty';
+  return 'needs attention';
+}
+
+function cognitionExplanation(score) {
+  return `Cognition score is Maez's own cycle-quality signal: grounding, novelty, continuity, specificity, and whether speaking is useful. It is not IQ or consciousness. ${score ? `Right now it means: ${cognitionLabel(score)}.` : 'Waiting for live daemon data.'}`;
 }
 
 function SignalsPane({ compact }) {
@@ -1194,15 +1211,20 @@ function MemorySurface() {
     (!q || h.text.toLowerCase().includes(q.toLowerCase())) && (tier === 'all' || h.tier === tier)
   );
   const colorFor = (t) => ({ core: A.orange, daily: A.green, raw: A.blue }[t]);
+  const tierHelp = {
+    core: 'Always carried: identity, corrections, and covenant-load-bearing truths.',
+    daily: 'Compressed day summaries: recent continuity without raw noise.',
+    raw: 'Exact fragments: chats, observations, tool transcripts, and remembered events.',
+  };
   return (
     <div className="ap-scroll" style={{ height: '100%', overflow: 'auto', padding: 28 }}>
-      <SurfaceHeader title="Memory" subtitle="Chroma archive · three tiers of remembering" icon="◍" color={A.orange} />
+      <SurfaceHeader title="Memory" subtitle="Core truths, daily summaries, and raw fragments" icon="◍" color={A.orange} />
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 20 }}>
-        {Object.entries(sim.state.memory.stats).map(([k, v]) => (
+        {['core', 'daily', 'raw'].map((k) => (
           <Glass key={k} pad={18} style={{ borderTop: `2px solid ${colorFor(k)}` }}>
             <div style={{ fontSize: 10, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 600 }}>{k}</div>
-            <div style={{ fontFamily: A.sans, fontSize: 34, color: colorFor(k), letterSpacing: -1, lineHeight: 1, marginTop: 6, fontWeight: 600 }}>{v.toLocaleString()}</div>
-            <div style={{ fontSize: 11, color: A.textFaint, marginTop: 4 }}>entries</div>
+            <div style={{ fontFamily: A.sans, fontSize: 34, color: colorFor(k), letterSpacing: -1, lineHeight: 1, marginTop: 6, fontWeight: 600 }}>{(sim.state.memory.stats[k] || 0).toLocaleString()}</div>
+            <div style={{ fontSize: 11.5, color: A.textDim, marginTop: 7, lineHeight: 1.4 }}>{tierHelp[k]}</div>
           </Glass>
         ))}
       </div>
@@ -1219,6 +1241,11 @@ function MemorySurface() {
           ]} value={tier} onChange={setTier} />
         </div>
       </Glass>
+      {!hits.length && (
+        <Glass pad={18} style={{ color: A.textDim, fontFamily: A.sans, fontSize: 13 }}>
+          No visible entries for this tier yet. Counts can exist before preview rows load; check that /api/v1/memory is live.
+        </Glass>
+      )}
       {hits.map((h, i) => (
         <Glass key={i} pad={14} style={{ marginBottom: 10, borderLeft: `3px solid ${colorFor(h.tier)}` }} className="ap-rise ap-card">
           <div style={{ display: 'flex', gap: 8, marginBottom: 6, fontSize: 10, color: A.textDim, alignItems: 'center' }}>
@@ -1226,6 +1253,7 @@ function MemorySurface() {
             <span style={{ fontFamily: A.mono }}>score {h.score.toFixed(2)}</span>
             <span>·</span>
             <span style={{ fontFamily: A.mono }}>{h.date}</span>
+            {h.source && <><span>·</span><span style={{ fontFamily: A.mono }}>{h.source}</span></>}
             <span>·</span>
             <span style={{ fontFamily: A.mono }}>{h.tokens} tok</span>
           </div>

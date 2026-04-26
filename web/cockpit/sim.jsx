@@ -579,7 +579,7 @@ const SIM = (() => {
       const d = await r.json();
       markLive('memory');
       if (d.stats) state.memory.stats = d.stats;
-      if (Array.isArray(d.hits) && d.hits.length) state.memory.hits = d.hits;
+      if (Array.isArray(d.hits)) state.memory.hits = d.hits;
       emit();
     } catch (e) { markOffline('memory', e); }
   };
