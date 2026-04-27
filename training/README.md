@@ -66,9 +66,17 @@ cd /home/rohit/maez/training
     --max-pairs 2000
 ```
 
-Pulls Telegram exchanges from ChromaDB, web /chat replies from
-`memory/site_analytics.jsonl`, and (optionally) the fast conversation
-log. Read-only — safe to run anytime.
+Pulls Telegram exchanges from ChromaDB, fast conversation turns,
+SOUL-derived stable voice/identity pairs, evolution candidates, and
+continuity capsules. Read-only — safe to run anytime.
+
+The extractor intentionally excludes daemon reasoning cycles by
+default. Those records contain live CPU/GPU/RAM/process observations;
+they belong in perception/retrieval, not in LoRA/SFT weights. If you
+are deliberately reviewing a capability experiment, pass
+`--include-reasoning-cycles`, inspect the output, and do not promote the
+adapter unless the validation battery proves it did not memorize stale
+system facts.
 
 ### 2. Sanity-check training (MAINTENANCE WINDOW REQUIRED)
 

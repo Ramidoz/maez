@@ -10,10 +10,14 @@ Sources (11u/11v expansion)
 ---------------------------
 1. ChromaDB telegram exchanges (167 records, "the owner asked / Maez replied")
 2. fast_conversation_log.db (35 rows, alternating user/maez turns)
-3. ChromaDB daemon reasoning cycles (type="reasoning", ~377 records)
-4. Soul.md synthetic Q&A (~50 identity-reinforcing pairs)
-5. Evolution engine candidates (evolution_track.db, ~13 weakness→fix pairs)
-6. Continuity capsule archive (~23 state→resumption pairs)
+3. Soul.md synthetic Q&A (~50 identity-reinforcing pairs)
+4. Evolution engine candidates (evolution_track.db, ~13 weakness→fix pairs)
+5. Continuity capsule archive (~23 state→resumption pairs)
+
+Daemon reasoning cycles are deliberately excluded by default. They
+contain live CPU/GPU/RAM/process snapshots, which belong in retrieval
+and perception, not in LoRA/SFT weights. Use --include-reasoning-cycles
+only for a deliberately reviewed experiment.
 
 Sources considered and REJECTED
 -------------------------------
@@ -268,25 +272,26 @@ def iter_soul_qa_pairs() -> Iterator[tuple[str, str, str, str]]:
             "How do you reflect on your own behavior?",
             "Describe your self-reflection process.",
         ],
-        "presence awareness": [
-            "How do you detect whether the owner is at his desk?",
-        ],
         "public bot identity": [
             "How do you behave with people other than the owner?",
             "What's your public personality like?",
         ],
-        "internet access": [
-            "Can you browse the internet?",
-        ],
-        "calendar awareness": [
-            "How do you use calendar information?",
-        ],
+    }
+    volatile_capability_sections = {
+        "presence awareness",
+        "internet access",
+        "calendar awareness",
     }
 
     for section in doc.sections:
         name_lower = section.name.strip().lower()
         body = section.body.strip()
         if not body or len(body) < 30:
+            continue
+        if any(key in name_lower for key in volatile_capability_sections):
+            # These sections describe current integrations/signal sources.
+            # They must remain runtime-retrieved facts, not weight-level
+            # character shaping data.
             continue
         questions = []
         for key, qs in section_questions.items():
@@ -410,12 +415,43 @@ def pair_passes(
     return True
 
 
+def iter_training_sources(
+    *,
+    include_reasoning_cycles: bool = False,
+) -> tuple[Iterator[tuple[str, str, str, str]], ...]:
+    """Return the source iterators used for SFT extraction.
+
+    The default keeps LoRA/SFT data focused on stable behavior,
+    continuity, and voice. Live daemon reasoning cycles are opt-in
+    because their system-state numbers and process observations are
+    runtime facts that should be pulled through perception/retrieval.
+    """
+    sources: list[Iterator[tuple[str, str, str, str]]] = [
+        iter_chromadb_pairs(),
+        iter_fast_log_pairs(),
+        iter_soul_qa_pairs(),
+        iter_evolution_pairs(),
+        iter_continuity_pairs(),
+    ]
+    if include_reasoning_cycles:
+        sources.insert(2, iter_reasoning_pairs())
+    return tuple(sources)
+
+
 # ── main ─────────────────────────────────────────────────────────────
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument("--out", required=True, help="output JSONL path")
     ap.add_argument("--max-pairs", type=int, default=2000)
     ap.add_argument("--min-assistant-chars", type=int, default=30)
+    ap.add_argument(
+        "--include-reasoning-cycles",
+        action="store_true",
+        help=(
+            "include daemon reasoning cycles despite live-state facts; "
+            "off by default to keep volatile perception out of LoRA/SFT"
+        ),
+    )
     args = ap.parse_args()
 
     out_path = Path(args.out)
@@ -430,13 +466,8 @@ def main() -> int:
     seen: set[tuple[str, str]] = set()
     kept: list[dict] = []
 
-    all_iterators = (
-        iter_chromadb_pairs(),
-        iter_fast_log_pairs(),
-        iter_reasoning_pairs(),
-        iter_soul_qa_pairs(),
-        iter_evolution_pairs(),
-        iter_continuity_pairs(),
+    all_iterators = iter_training_sources(
+        include_reasoning_cycles=args.include_reasoning_cycles,
     )
     for iterator in all_iterators:
         for user, assistant, source, _ts in iterator:
