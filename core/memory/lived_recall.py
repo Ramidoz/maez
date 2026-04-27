@@ -410,9 +410,12 @@ def build_lived_recall_brief(
                 )
             )
 
-    if not scored_episodes and not scored_edges:
-        return ""
-
+    # Note: there is intentionally NO early-return here even when both
+    # pools are empty. Temporal-mode queries can still produce a brief
+    # via find_echoes() which operates over the episode store directly,
+    # not over the keyword-scored pools — that's the v1.2 abstraction
+    # path. The final `if not sections` check at the bottom handles
+    # the genuinely-empty case.
     scored_episodes.sort(key=lambda x: x.score, reverse=True)
     scored_edges.sort(key=lambda x: x.score, reverse=True)
 
@@ -480,11 +483,38 @@ def build_lived_recall_brief(
     for s in selected_graph_beliefs:
         sections.append(_format_graph_belief(s.edge, s.subject_label, s.object_label))
 
-    # Live-state guard.
-    if _is_live_state_query(query):
-        sections.append("- Live state: unavailable from graph (check perception layer)")
+    # ── temporal echoes (v1.2) ──────────────────────────────────────
+    # Only fire on temporal-mode queries. The echo finder is
+    # deterministic and operates over the entire episode store, NOT
+    # the keyword-scored pools above — that's the whole point: this
+    # is the path for queries like "what is today echoing from last
+    # week" that have no domain-token overlap with episode bodies.
+    # Echoes get their own micro-section (max 2) on top of the main
+    # six-item budget; the budget is not stretched, it's
+    # supplemented with a different output type (synthesis, not
+    # retrieval). Empty-result is silent: the section is omitted
+    # entirely when no qualifying pair exists.
+    if mode == "temporal":
+        from core.memory.temporal_echo import find_echoes
 
+        echoes = find_echoes(episode_store, max_echoes=2)
+        if echoes:
+            sections.append("Temporal echoes:")
+            for echo in echoes:
+                sections.append(f"- {echo.explanation}")
+
+    # Empty-result short-circuit. The live-state guard below is
+    # additive context only — it must never surface alone, otherwise
+    # an empty store + a "now"-flavored query would produce a brief
+    # that fabricates the existence of a memory layer it doesn't
+    # have.
     if not sections:
         return ""
+
+    # Live-state guard. Only appended when the brief already carries
+    # content for the guard to qualify — never as a standalone
+    # claim.
+    if _is_live_state_query(query):
+        sections.append("- Live state: unavailable from graph (check perception layer)")
 
     return "\n".join(["=== LIVED RECALL — EVIDENCE-BACKED ===", *sections])

@@ -561,5 +561,94 @@ class GlobalScoreFillsLeftoverBudget(unittest.TestCase):
             cleanup()
 
 
+class TemporalModeSurfacesEchoes(unittest.TestCase):
+    """v1.2 (owner-anchored 2026-04-27): temporal-mode queries get a
+    deterministic-echo section on top of the keyword-scored brief.
+    The echo path is the only way an abstract query like *"what is
+    today echoing from last week"* can produce evidence-backed past
+    references — token scoring drops every candidate at score>0
+    because such queries don't carry domain tokens."""
+
+    def _seed_corrective_set(self, store, n=6):
+        # Six corrective core episodes that share tag={correction},
+        # participants={Maez}, and topic terms (correction / vision /
+        # maez). Pairs across the recent/older split must produce
+        # multi-feature echoes.
+        import time
+
+        for i in range(n):
+            store.add(
+                title=f"Correction #{i}: Maez vision narrative retired",
+                summary=(
+                    "Earlier raw memories described an active vision "
+                    "pipeline. That belief is wrong."
+                ),
+                participants=["Maez"],
+                source_memory_ids=[f"core-corr-{i}"],
+                source_kind="core_memory",
+                emotional_tone="corrective",
+                importance=4,
+            )
+            time.sleep(0.01)
+
+    def test_temporal_query_with_no_keyword_overlap_still_gets_echo(self):
+        # The exact probe shape: query with words that don't appear in
+        # any episode body, but the temporal-mode router routes to
+        # find_echoes which doesn't depend on keyword overlap.
+        from core.memory.lived_recall import build_lived_recall_brief
+
+        store, graph, cleanup = _stores()
+        try:
+            self._seed_corrective_set(store)
+            brief = build_lived_recall_brief(
+                "What is today echoing from last week?",
+                episode_store=store,
+                graph=graph,
+            )
+            self.assertNotEqual(brief, "")
+            self.assertIn("Temporal echoes:", brief)
+            # Probe pass criterion — substring "past episode" must
+            # appear and the brief must carry an evidence ID.
+            self.assertIn("past episode", brief.lower())
+            self.assertIn("ep-", brief)
+        finally:
+            cleanup()
+
+    def test_temporal_echo_omits_section_when_no_qualifying_pair(self):
+        # An empty store should produce an empty brief — no temporal
+        # echoes section even though the mode is temporal.
+        from core.memory.lived_recall import build_lived_recall_brief
+
+        store, graph, cleanup = _stores()
+        try:
+            brief = build_lived_recall_brief(
+                "what reminds you of last week",
+                episode_store=store,
+                graph=graph,
+            )
+            self.assertEqual(brief, "")
+        finally:
+            cleanup()
+
+    def test_default_mode_does_not_emit_echo_section(self):
+        # Echoes are temporal-mode only — a default-mode query that
+        # does have keyword overlap should produce a normal brief
+        # WITHOUT the echo section.
+        from core.memory.lived_recall import build_lived_recall_brief
+
+        store, graph, cleanup = _stores()
+        try:
+            self._seed_corrective_set(store)
+            brief = build_lived_recall_brief(
+                "vision pipeline correction",
+                episode_store=store,
+                graph=graph,
+            )
+            self.assertNotEqual(brief, "")
+            self.assertNotIn("Temporal echoes:", brief)
+        finally:
+            cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()

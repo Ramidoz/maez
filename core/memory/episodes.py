@@ -61,7 +61,12 @@ _MIGRATIONS: tuple[str, ...] = (
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Microsecond precision: two episodes added within the same
+    # second must still sort deterministically by created_at, which
+    # the temporal-echo finder relies on for the recent/older split.
+    # Pre-2026-04-27 this was second-precision and silently ambiguous
+    # for any ingestion burst.
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 class EpisodeStore:
