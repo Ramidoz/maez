@@ -1339,6 +1339,28 @@ class MaezDaemon:
         except Exception:
             pass
 
+        # Premise-acceptance audit (2026-04-27 incident). Detect user
+        # claims about past Maez actions ("the X you suggested",
+        # "I was approving X", "you said X") and verify against the
+        # proposal store + audit log. When unverified, the synthesis
+        # path receives a system-level flag instructing Maez to ask
+        # for clarification rather than silently proceed on a
+        # potentially fabricated premise. Advisory, not blocking.
+        # Silent on failure — synthesis must not abort on audit error.
+        _premise_flag: str | None = None
+        try:
+            from core.safety.premise_audit import audit_user_premise
+
+            _premise_flag = audit_user_premise(text)
+            if _premise_flag:
+                logger.info(
+                    "premise unverified for surface=%s; flagging "
+                    "synthesis to ask for clarification",
+                    source,
+                )
+        except Exception as _premise_exc:
+            logger.debug("premise audit skipped: %s", _premise_exc)
+
         logger.info("%s message: %s", source, text[:100])
         snap = perception_snapshot()
         system_state = format_snapshot(snap)
@@ -1424,6 +1446,12 @@ class MaezDaemon:
             messages.extend(history_to_messages(chat_history))
         except Exception as _hist_exc:
             logger.debug("chat_history threading skipped: %s", _hist_exc)
+        # Inject the premise-audit flag (if any) as a system note
+        # *immediately before* the user turn so the synthesis model
+        # treats it as a directive about THIS message specifically,
+        # not background context. 2026-04-27 incident fix.
+        if _premise_flag:
+            messages.append({"role": "system", "content": _premise_flag})
         messages.append({"role": "user", "content": prompt})
 
         try:
