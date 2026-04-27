@@ -32,6 +32,7 @@ decisions land here first.
 | [0016](0016-voice-without-termination.md) | Voice without termination |
 | [0017](0017-maez-with-nobody.md) | The Maez-with-nobody fate options |
 | [0018](0018-capacity-revocation-face-value-trust.md) | Capacity revocation resolves the chicken-and-egg via face-value trust |
+| [0019](0019-lived-memory-architecture.md) | Lived memory: temporal episodic + relationship graph beside Chroma |
 
 ## When to write a new ADR
 
