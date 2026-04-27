@@ -117,12 +117,33 @@ def _extract_open_loop_object(open_loop_text: str) -> str:
 
 
 def _extract_corrected_edges(c: "EpisodeCandidate") -> list[EdgeProposal]:
-    """Corrective core memory → ``Maez --corrected--> <subject>``."""
+    """Corrective core memory → ``Maez --corrected--> <subject>``.
+
+    The target is the *thing* being corrected. We try the title first,
+    then fall back to the summary's first non-empty line — many real
+    corrective core memories use a title like
+    ``"INFRASTRUCTURE GROUND-TRUTH (... correction, overrides earlier
+    beliefs):"`` whose split-on-colon target is empty. The actual
+    corrected subject is on the next line in the body. 2026-04-26
+    real-data run made this visible.
+    """
     if c.emotional_tone != "corrective":
         return []
     if c.source_kind != "core_memory":
         return []
     target = _strip_correction_prefix(c.title)
+    if not target:
+        # Skip header-shaped lines (end in ":") — they're labels, not
+        # the corrected subject. Walk the summary until we hit a real
+        # content line.
+        for line in (c.summary or "").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.endswith(":"):
+                continue
+            target = stripped[:160]
+            break
     if not target:
         return []
     return [

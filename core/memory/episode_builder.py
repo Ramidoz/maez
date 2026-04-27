@@ -186,16 +186,25 @@ def _detect_open_loop(memory: dict) -> Optional[EpisodeCandidate]:
     )
 
 
+# Unambiguous fault signatures only. Patterns like "daemon restarted",
+# "system rebooted", and bare "OOM" were dropped on 2026-04-26 after a
+# real-data run on the developmental heartbeats triggered a false
+# positive — heartbeats describing healthy daemon activity ("the daemon
+# restarted cleanly, and tests passed") would otherwise match. Each
+# pattern below is a kernel/driver fault signature that has no benign
+# reading.
 _HARDWARE_INSTABILITY_RE = re.compile(
-    r"\b("
-    r"kernel panic|kernel NULL pointer|kernel oops|"
-    r"NVRM:\s*Xid|\bXid\s+\d+|"
-    r"fallen off the bus|GPU has fallen|"
-    r"system rebooted|daemon restarted|"
-    r"out of memory: killed|\bOOM\b|"
-    r"call trace:|"
-    r"hardware error"
-    r")\b",
+    r"("
+    r"\bkernel panic\b|"
+    r"\bkernel NULL pointer\b|"
+    r"\bkernel oops\b|"
+    r"\bNVRM:\s*Xid\b|\bXid\s+\d+\b|"
+    r"\bfallen off the bus\b|"
+    r"\bGPU has fallen\b|"
+    r"\bcall trace:\b|"
+    r"\bhardware error\b|"
+    r"\bout of memory: killed\b"
+    r")",
     re.IGNORECASE,
 )
 

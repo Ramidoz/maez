@@ -222,13 +222,20 @@ def _load_memories_from_chroma() -> Iterable[dict]:
     mm = MemoryManager()
     out: list[dict] = []
     for ep in mm.get_all_core() or []:
+        # MemoryManager nests provenance fields under .metadata. The
+        # earlier loader looked at ep["source"] (top-level), which is
+        # always empty for ChromaDB-derived rows — silently dropping
+        # the source signal that the corrective-core detector relies
+        # on. 2026-04-26 real-data run made this visible.
+        meta = ep.get("metadata") or {}
         out.append(
             {
                 "id": ep["id"],
                 "document": ep.get("content") or ep.get("document") or "",
                 "metadata": {
                     "kind": "core",
-                    "source": ep.get("source") or "",
+                    "source": meta.get("source") or "",
+                    "timestamp": meta.get("timestamp") or "",
                 },
             }
         )
@@ -238,13 +245,15 @@ def _load_memories_from_chroma() -> Iterable[dict]:
     except AttributeError:
         daily_recent = []
     for d in daily_recent or []:
+        meta = d.get("metadata") or {}
         out.append(
             {
                 "id": d["id"],
                 "document": d.get("content") or d.get("document") or "",
                 "metadata": {
                     "kind": "daily",
-                    "source": d.get("source") or "",
+                    "source": meta.get("source") or "",
+                    "timestamp": meta.get("timestamp") or "",
                 },
             }
         )

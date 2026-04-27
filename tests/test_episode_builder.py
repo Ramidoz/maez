@@ -196,6 +196,30 @@ class ExtractsHardwareInstability(unittest.TestCase):
         self.assertIsNotNone(c)
         self.assertGreaterEqual(c.importance, 4)
 
+    def test_benign_daemon_restart_does_not_trigger(self):
+        # 2026-04-26 real-data regression: a developmental heartbeat
+        # said "the daemon restarted cleanly, and tests passed" — the
+        # earlier loose regex matched 'daemon restarted' and produced
+        # a false-positive Hardware-instability episode. Tightened to
+        # only fire on unambiguous fault signatures.
+        self.assertIsNone(
+            self._extract(
+                "Developmental heartbeat 2026-04-24: the new code was "
+                "deployed, the daemon restarted cleanly, and tests "
+                "passed. What changed in me: increased confidence in "
+                "the deployment story."
+            )
+        )
+
+    def test_benign_system_reboot_phrasing_does_not_trigger(self):
+        self.assertIsNone(
+            self._extract(
+                "Notes from this morning: after applying the kernel "
+                "update, the system rebooted as expected and the daemon "
+                "came back online without intervention."
+            )
+        )
+
     def test_nvrm_xid_extracts(self):
         c = self._extract(
             "NVRM: Xid 79 — GPU has fallen off the bus. llama-server exited; daemon restarted."

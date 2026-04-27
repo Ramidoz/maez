@@ -110,6 +110,61 @@ class CorrectiveCoreProducesCorrectedEdge(unittest.TestCase):
         # Source memory IDs flow through unchanged.
         self.assertEqual(e.source_memory_ids, ["core-vision-1"])
 
+    def test_correction_with_header_title_falls_back_to_summary(self):
+        # 2026-04-26 real-data regression: real corrective core
+        # memories in this codebase use a header-only title like
+        # "INFRASTRUCTURE GROUND-TRUTH (... correction, overrides
+        # earlier beliefs):". Split-on-colon yields empty target,
+        # which previously dropped the edge silently. Fix: fall back
+        # to the summary's first non-empty line.
+        from core.memory.relationship_extractor import extract_edges
+
+        c = _candidate(
+            title=(
+                "INFRASTRUCTURE GROUND-TRUTH (2026-04-23 correction, overrides earlier beliefs):"
+            ),
+            summary=("Vision pipeline is retired. Do not narrate llama-server-vision as active."),
+            source_memory_ids=["core-vision-real"],
+            source_kind="core_memory",
+            emotional_tone="corrective",
+        )
+        edges = extract_edges(c)
+        self.assertEqual(len(edges), 1)
+        e = edges[0]
+        self.assertEqual(e.relation, "corrected")
+        self.assertEqual(e.subject_label, "Maez")
+        # Target must be non-empty and pulled from the summary body.
+        self.assertTrue(e.object_label)
+        self.assertIn("vision", e.object_label.lower())
+
+    def test_correction_skips_header_lines_in_fallback(self):
+        # Real corrective core memories use multi-header bodies:
+        # "INFRASTRUCTURE GROUND-TRUTH (...): \n\nSomething: \n
+        # actual correction text". The fallback must skip BOTH header
+        # lines and find the real content.
+        from core.memory.relationship_extractor import extract_edges
+
+        c = _candidate(
+            title="INFRASTRUCTURE GROUND-TRUTH (correction):",
+            summary=(
+                "INFRASTRUCTURE GROUND-TRUTH (correction):\n"
+                "\n"
+                "Subject: \n"
+                "Maez runs on Qwen3.6-27B-UD-Q4_K_XL via llama.cpp."
+            ),
+            source_memory_ids=["core-brain-1"],
+            source_kind="core_memory",
+            emotional_tone="corrective",
+        )
+        edges = extract_edges(c)
+        self.assertEqual(len(edges), 1)
+        e = edges[0]
+        self.assertEqual(e.relation, "corrected")
+        # The header lines (ending with ":") must NOT be the target.
+        self.assertNotIn("ground-truth", e.object_label.lower())
+        self.assertNotIn("subject:", e.object_label.lower())
+        self.assertIn("qwen", e.object_label.lower())
+
     def test_corrective_edge_carries_high_confidence(self):
         from core.memory.relationship_extractor import extract_edges
 
