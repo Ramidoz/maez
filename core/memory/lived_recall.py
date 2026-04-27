@@ -503,6 +503,44 @@ def build_lived_recall_brief(
             for echo in echoes:
                 sections.append(f"- {echo.explanation}")
 
+    # ── pushback predictions (v1.3) ─────────────────────────────────
+    # Forward-looking pushback queries get a Predictions section. The
+    # simulator pulls graph edges by relation type and open-loop
+    # episodes directly — bypassing the keyword-overlap filter that
+    # blocks the relationship section for queries with no domain-
+    # token overlap. Predictions are emitted only when ≥2 distinct
+    # evidence items support a pattern; otherwise the section is
+    # silently omitted.
+    #
+    # The relationship floor reservation above still runs; if the
+    # graph happens to surface a matching belief through token
+    # overlap, it appears as usual. Predictions are an additional
+    # layer, not a replacement.
+    if mode == "relationship":
+        from core.memory.belief_simulator import (
+            is_pushback_prediction_query,
+            simulate_owner_pushback,
+            format_predictions_section,
+        )
+
+        if is_pushback_prediction_query(query):
+            from core.memory.temporal_echo import find_echoes
+
+            edges_for_sim: list[dict] = []
+            for edge, subj, obj in _all_active_edges_with_labels(graph):
+                edges_for_sim.append({**edge, "subject_label": subj, "object_label": obj})
+            open_loop_eps = [
+                ep for ep in (episode_store.list_active() or []) if ep.get("open_loop")
+            ]
+            sim_echoes = find_echoes(episode_store, max_echoes=4)
+            predictions = simulate_owner_pushback(
+                query,
+                graph_edges=edges_for_sim,
+                open_loops=open_loop_eps,
+                echoes=sim_echoes,
+            )
+            sections.extend(format_predictions_section(predictions))
+
     # Empty-result short-circuit. The live-state guard below is
     # additive context only — it must never surface alone, otherwise
     # an empty store + a "now"-flavored query would produce a brief
