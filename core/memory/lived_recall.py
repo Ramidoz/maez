@@ -133,7 +133,12 @@ _LIVE_STATE_HINTS: frozenset[str] = frozenset(
 # (Defensive note for future maintainers; not used at runtime.)
 _FORBIDDEN_PRESENT_TENSE = ("currently", "right now", "is happening")
 
-_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
+# Alphabetic-only so compound identifiers split: "cares_about" →
+# ["cares", "about"], "dream-state" → ["dream", "state"]. This keeps
+# query/relation overlap from being defeated by the ID's punctuation
+# convention. Numbers are dropped (mostly version stamps and dates;
+# rarely informative for relevance).
+_TOKEN_RE = re.compile(r"[A-Za-z]+")
 
 
 def _tokenize(text: str) -> list[str]:
