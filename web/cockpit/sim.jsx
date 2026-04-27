@@ -97,6 +97,14 @@ const SIM = (() => {
       ],
       totals: { local: 1142, claude: 287, bytesIn: 4_812_004, bytesOut: 1_344_221, costUsd: 2.41 },
     },
+    livedMemory: {
+      // ADR 0019 — populated by _pollLivedMemory from
+      // /api/v1/lived-memory; empty until owner runs the nightly
+      // reflection orchestrator.
+      episodes: [],
+      edges: [],
+      counts: { episodes: 0, edges: 0 },
+    },
     memory: {
       query: '',
       stats: { raw: 48221, daily: 1208, core: 342 },
@@ -584,6 +592,19 @@ const SIM = (() => {
     } catch (e) { markOffline('memory', e); }
   };
 
+  const _pollLivedMemory = async () => {
+    try {
+      const r = await fetch('/api/v1/lived-memory');
+      if (!r.ok) { markOffline('livedMemory', r.status); return; }
+      const d = await r.json();
+      markLive('livedMemory');
+      if (Array.isArray(d.episodes)) state.livedMemory.episodes = d.episodes;
+      if (Array.isArray(d.edges)) state.livedMemory.edges = d.edges;
+      if (d.counts) state.livedMemory.counts = d.counts;
+      emit();
+    } catch (e) { markOffline('livedMemory', e); }
+  };
+
   const _pollDreams = async () => {
     try {
       const r = await fetch('/api/v1/dreams');
@@ -656,7 +677,7 @@ const SIM = (() => {
   // cadences by staleness tolerance: daemon/gpu/cards update often,
   // soul/identity/logs rarely, memory/dreams in the middle.
   _pollDaemon(); _pollCards(); _pollGpu(); _pollServices();
-  _pollSignals(); _pollMemory(); _pollDreams(); _pollSoul();
+  _pollSignals(); _pollMemory(); _pollLivedMemory(); _pollDreams(); _pollSoul();
   _pollIdentity(); _pollRouter(); _pollLogs(); _pollChatSessions();
   setInterval(_pollDaemon, 5000);
   setInterval(_pollCards, 10000);
@@ -664,6 +685,7 @@ const SIM = (() => {
   setInterval(_pollServices, 15000);
   setInterval(_pollSignals, 10000);
   setInterval(_pollMemory, 30000);
+  setInterval(_pollLivedMemory, 60000);
   setInterval(_pollDreams, 20000);
   setInterval(_pollSoul, 120000);
   setInterval(_pollIdentity, 300000);

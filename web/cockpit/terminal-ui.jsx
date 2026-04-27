@@ -1203,6 +1203,149 @@ function RouterPane() {
 
 // ═══ surfaces ═════════════════════════════════════════════════════
 
+// ── Living Memory section (ADR 0019, Phase 7) ─────────────────────
+// Surfaces the lived-memory layer beside the Chroma tier counts.
+// Per the plan, the framing is plain-language, not graph-theory:
+//   What happened (episode title)
+//   Why it mattered (summary)
+//   Still open? (open_loop, if set)
+//   Evidence (episode ID + source memory IDs)
+// Plus the relationship view: subject → relation → object with
+// evidence. Never asserts live state.
+
+function LivingMemorySection({ lived }) {
+  const epCount = lived.counts?.episodes ?? 0;
+  const edCount = lived.counts?.edges ?? 0;
+  const total = epCount + edCount;
+
+  if (total === 0) {
+    return (
+      <Glass pad={18} style={{
+        marginBottom: 20,
+        borderLeft: `3px solid ${A.violet || A.blue}`,
+        background: 'rgba(120, 100, 200, 0.04)',
+      }}>
+        <div style={{ fontSize: 11, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 600 }}>
+          Living memory · ADR 0019
+        </div>
+        <div style={{ fontSize: 14, color: A.textDim, marginTop: 8, lineHeight: 1.55, fontFamily: A.sans }}>
+          The lived-memory layer is empty. Run{' '}
+          <code style={{ fontFamily: A.mono, fontSize: 12, color: A.text }}>
+            scripts/memory_reflection/nightly_lived_memory.py --apply
+          </code>{' '}
+          to populate it from the corrective core memories and high-signal entries.
+        </div>
+      </Glass>
+    );
+  }
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <Glass pad={16} style={{
+        marginBottom: 10,
+        borderLeft: `3px solid ${A.violet || A.blue}`,
+        background: 'rgba(120, 100, 200, 0.04)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 4 }}>
+          <div style={{ fontSize: 11, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 600 }}>
+            Living memory · ADR 0019
+          </div>
+          <div style={{ fontFamily: A.mono, fontSize: 11, color: A.textDim }}>
+            {epCount} episode{epCount === 1 ? '' : 's'} · {edCount} edge{edCount === 1 ? '' : 's'}
+          </div>
+        </div>
+        <div style={{ fontSize: 12, color: A.textDim, lineHeight: 1.5, fontFamily: A.sans }}>
+          Past, never present. Each item cites the memory it came from.
+        </div>
+      </Glass>
+
+      {/* Episodes */}
+      {lived.episodes.map((ep) => (
+        <Glass key={ep.id} pad={14} style={{
+          marginBottom: 8,
+          borderLeft: `3px solid ${ep.open_loop ? A.orange : A.green}`,
+        }} className="ap-rise ap-card">
+          <div style={{ display: 'flex', gap: 8, marginBottom: 6, fontSize: 10, color: A.textDim, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Chip color={ep.open_loop ? A.orange : A.green}>
+              {ep.open_loop ? 'open loop' : 'past episode'}
+            </Chip>
+            {ep.emotional_tone && <Chip color={A.violet || A.blue}>{ep.emotional_tone}</Chip>}
+            <span style={{ fontFamily: A.mono }}>{ep.source_kind}</span>
+            <span>·</span>
+            <span style={{ fontFamily: A.mono }}>importance {ep.importance}</span>
+          </div>
+          <div style={{ fontFamily: A.sans, fontSize: 13, color: A.text, fontWeight: 500, lineHeight: 1.4, marginBottom: 4 }}>
+            {ep.title}
+          </div>
+          {ep.summary && (
+            <div style={{ fontFamily: A.sans, fontSize: 12.5, color: A.textDim, lineHeight: 1.55, marginBottom: 6 }}>
+              {ep.summary.length > 220 ? ep.summary.slice(0, 220) + '…' : ep.summary}
+            </div>
+          )}
+          {ep.open_loop && (
+            <div style={{
+              fontFamily: A.sans, fontSize: 12, color: A.orange,
+              background: 'rgba(255, 170, 60, 0.06)',
+              padding: '6px 10px', borderRadius: 6, marginBottom: 6,
+              borderLeft: `2px solid ${A.orange}`,
+            }}>
+              Still open: {ep.open_loop}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+            <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textFaint }}>evidence:</span>
+            <span style={{ fontFamily: A.mono, fontSize: 10, color: A.textDim }}>{ep.id}</span>
+            {(ep.source_memory_ids || []).map((mid) => (
+              <span key={mid} style={{ fontFamily: A.mono, fontSize: 10, color: A.textDim }}>· {mid}</span>
+            ))}
+          </div>
+        </Glass>
+      ))}
+
+      {/* Edges */}
+      {lived.edges.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 10, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 600, marginBottom: 8 }}>
+            Relationship beliefs · advisory, not live state
+          </div>
+          {lived.edges.map((e) => (
+            <Glass key={e.id} pad={12} style={{
+              marginBottom: 6,
+              borderLeft: `3px solid ${A.blue}`,
+            }} className="ap-card">
+              <div style={{ fontFamily: A.sans, fontSize: 13, color: A.text, lineHeight: 1.4, marginBottom: 4 }}>
+                <strong style={{ color: A.text }}>{e.subject_label}</strong>
+                <span style={{ color: A.textDim }}> — </span>
+                <span style={{ color: A.violet || A.blue, fontFamily: A.mono, fontSize: 12 }}>
+                  {e.relation}
+                </span>
+                <span style={{ color: A.textDim }}> → </span>
+                <span style={{ color: A.text }}>
+                  {e.object_label && e.object_label.length > 100
+                    ? e.object_label.slice(0, 100) + '…'
+                    : e.object_label}
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontSize: 10, color: A.textFaint, fontFamily: A.mono }}>
+                <span>confidence {Number(e.confidence || 0).toFixed(2)}</span>
+                <span>·</span>
+                <span>evidence:</span>
+                {(e.source_episode_ids || []).map((id) => (
+                  <span key={id} style={{ color: A.textDim }}>{id}</span>
+                ))}
+                {(e.source_memory_ids || []).map((id) => (
+                  <span key={id} style={{ color: A.textDim }}>· {id}</span>
+                ))}
+              </div>
+            </Glass>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function MemorySurface() {
   const sim = useSim();
   const [q, setQ] = React.useState('');
@@ -1216,9 +1359,11 @@ function MemorySurface() {
     daily: 'Compressed day summaries: recent continuity without raw noise.',
     raw: 'Exact fragments: chats, observations, tool transcripts, and remembered events.',
   };
+  const lived = sim.state.livedMemory || { episodes: [], edges: [], counts: { episodes: 0, edges: 0 } };
   return (
     <div className="ap-scroll" style={{ height: '100%', overflow: 'auto', padding: 28 }}>
       <SurfaceHeader title="Memory" subtitle="Core truths, daily summaries, and raw fragments" icon="◍" color={A.orange} />
+      <LivingMemorySection lived={lived} />
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 20 }}>
         {['core', 'daily', 'raw'].map((k) => (
           <Glass key={k} pad={18} style={{ borderTop: `2px solid ${colorFor(k)}` }}>
