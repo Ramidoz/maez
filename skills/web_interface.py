@@ -1413,6 +1413,136 @@ def api_memory():
     return jsonify({"stats": stats, "hits": hits})
 
 
+# ── Lived memory (ADR 0019) ─────────────────────────────────────────
+# Cockpit-facing read-only view over the Phase-1 SQLite stores. The
+# endpoint never asserts live state — it surfaces past episodes, open
+# loops, and graph beliefs with evidence intact, and tells the panel
+# nothing else.
+
+_LIVED_EPISODE_DB_PATH = "/home/rohit/maez/memory/lived_episodes.db"
+_LIVED_GRAPH_DB_PATH = "/home/rohit/maez/memory/lived_graph.db"
+
+
+def _read_lived_episodes(db_path):
+    import json as _json
+    import os as _os
+    import sqlite3 as _sq
+
+    if not _os.path.exists(db_path):
+        return []
+    try:
+        c = _sq.connect(db_path, timeout=1.5)
+        c.row_factory = _sq.Row
+        # rowid as secondary sort handles ties when two episodes land
+        # in the same second; SQLite's rowid is monotonic in insertion
+        # order so it matches "most recent first" semantically.
+        rows = c.execute(
+            "SELECT * FROM episodes WHERE status = 'active' "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 50"
+        ).fetchall()
+        c.close()
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        d = dict(r)
+        out.append(
+            {
+                "id": d.get("id"),
+                "title": d.get("title"),
+                "summary": d.get("summary"),
+                "open_loop": d.get("open_loop"),
+                "source_memory_ids": _json.loads(
+                    d.get("source_memory_ids_json") or "[]"
+                ),
+                "source_kind": d.get("source_kind"),
+                "emotional_tone": d.get("emotional_tone"),
+                "importance": d.get("importance"),
+                "status": d.get("status"),
+                "created_at": d.get("created_at"),
+                "occurred_at": d.get("occurred_at"),
+                "participants": _json.loads(
+                    d.get("participants_json") or "[]"
+                ),
+            }
+        )
+    return out
+
+
+def _read_lived_edges(db_path):
+    import json as _json
+    import os as _os
+    import sqlite3 as _sq
+
+    if not _os.path.exists(db_path):
+        return []
+    try:
+        c = _sq.connect(db_path, timeout=1.5)
+        c.row_factory = _sq.Row
+        rows = c.execute(
+            "SELECT e.*, s.label AS subject_label, "
+            "       s.kind AS subject_kind, "
+            "       o.label AS object_label, "
+            "       o.kind AS object_kind "
+            "FROM edges e "
+            "JOIN nodes s ON s.id = e.subject_id "
+            "JOIN nodes o ON o.id = e.object_id "
+            "WHERE e.status = 'active' "
+            "ORDER BY e.created_at DESC LIMIT 50"
+        ).fetchall()
+        c.close()
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        d = dict(r)
+        out.append(
+            {
+                "id": d.get("id"),
+                "subject_label": d.get("subject_label"),
+                "subject_kind": d.get("subject_kind"),
+                "relation": d.get("relation"),
+                "object_label": d.get("object_label"),
+                "object_kind": d.get("object_kind"),
+                "confidence": d.get("confidence"),
+                "status": d.get("status"),
+                "valid_from": d.get("valid_from"),
+                "valid_to": d.get("valid_to"),
+                "source_episode_ids": _json.loads(
+                    d.get("source_episode_ids_json") or "[]"
+                ),
+                "source_memory_ids": _json.loads(
+                    d.get("source_memory_ids_json") or "[]"
+                ),
+                "created_at": d.get("created_at"),
+            }
+        )
+    return out
+
+
+@app.route("/api/v1/lived-memory")
+def api_lived_memory():
+    """Lived-memory layer (ADR 0019) — episodes + graph edges with
+    evidence trails, for the cockpit's Living Memory panel.
+
+    Returns empty lists (not 500) when the SQLite stores haven't been
+    populated yet. Owner runs scripts/memory_reflection/
+    nightly_lived_memory.py --apply to populate.
+    """
+    episodes = _read_lived_episodes(_LIVED_EPISODE_DB_PATH)
+    edges = _read_lived_edges(_LIVED_GRAPH_DB_PATH)
+    return jsonify(
+        {
+            "episodes": episodes,
+            "edges": edges,
+            "counts": {
+                "episodes": len(episodes),
+                "edges": len(edges),
+            },
+        }
+    )
+
+
 @app.route("/api/v1/dreams")
 def api_dreams():
     """Merged view of evolution candidates + dream proposals."""
