@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 # fresh contributor). Legacy hardcode kept as a last-resort fallback.
 try:
     from core.paths import env_file as _env_file
+
     load_dotenv(_env_file())
 except Exception:
     load_dotenv(Path("/home/rohit/maez/config/.env"))
@@ -39,6 +40,7 @@ from flask import Flask, jsonify, request, send_file
 
 try:
     from core.paths import home as _maez_home
+
     sys.path.insert(0, str(_maez_home()))
 except Exception:
     sys.path.insert(0, str(Path("/home/rohit/maez")))
@@ -77,11 +79,16 @@ from core.cognition_quality import (
 from skills.disk_cleanup import scan as disk_scan, format_telegram_message as disk_msg
 from skills.self_analysis import analyze as self_analyze, format_for_telegram as analysis_telegram
 from skills.wake_word import start as wake_word_start, stop as wake_word_stop
-from skills.voice_output import initialize as voice_output_init, speak, shutdown as voice_output_shutdown
+from skills.voice_output import (
+    initialize as voice_output_init,
+    speak,
+    shutdown as voice_output_shutdown,
+)
 
 # --- Paths ---
 try:
     from core.paths import home as _paths_home
+
     BASE_DIR = _paths_home()
 except Exception:
     BASE_DIR = Path("/home/rohit/maez")
@@ -93,6 +100,7 @@ SHUTDOWN_FILE = BASE_DIR / "daemon" / "last_shutdown"
 
 # --- Constants ---
 from core.model_config import PRIMARY_MODEL as MODEL  # single source of truth — /etc/maez/model.env
+
 LOOP_INTERVAL = 30  # seconds
 HEALTH_PORT = 11435
 WS_PORT = 11436
@@ -112,6 +120,52 @@ def _extract_final(text: str) -> str:
     """Extract content from <final>...</final>. Falls back to full text."""
     m = _FINAL_TAG_RE.search(text)
     return m.group(1).strip() if m else text
+
+
+def _pair_history_for_chat_threading(raw_history) -> list[dict]:
+    """Pair flat {role, content} history into the chat_history shape
+    that handle_message expects.
+
+    Input: list of dicts like
+        [{"role": "user", "content": "Hey"},
+         {"role": "assistant", "content": "Hi back"},
+         {"role": "user", "content": "Hi"}]   # current turn, dropped
+
+    Output: list of dicts each with a single "content" key in the
+    "<display>: <user msg>\\nMaez: <assistant reply>" shape that
+    core.brain.conversation_history.history_to_messages parses.
+
+    Walks adjacent (user, assistant) pairs. Unpaired entries (e.g. a
+    trailing user turn that has no assistant reply yet, or a leading
+    assistant turn without a user turn before it) are skipped — the
+    current turn is the live message, not history.
+
+    Errors silently produce an empty list rather than raise; the
+    /message endpoint must not 500 on a malformed history field.
+    """
+    if not isinstance(raw_history, (list, tuple)):
+        return []
+    try:
+        from core.identity import display_name
+
+        name = (display_name() or "Rohit").strip() or "Rohit"
+    except Exception:
+        name = "Rohit"
+
+    out: list[dict] = []
+    items = [h for h in raw_history if isinstance(h, dict) and h.get("role") and h.get("content")]
+    i = 0
+    while i < len(items) - 1:
+        a, b = items[i], items[i + 1]
+        if a.get("role") == "user" and b.get("role") == "assistant":
+            user_msg = str(a.get("content") or "").strip()
+            assistant_msg = str(b.get("content") or "").strip()
+            if user_msg and assistant_msg:
+                out.append({"content": f"{name}: {user_msg}\nMaez: {assistant_msg}"})
+            i += 2
+        else:
+            i += 1
+    return out
 
 
 # Stable cycle instructions — appended to the SOUL system prompt at every
@@ -176,15 +230,15 @@ logger.setLevel(logging.DEBUG)
 logger.propagate = False
 
 file_handler = logging.FileHandler(LOG_PATH)
-file_handler.setFormatter(logging.Formatter(
-    "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-))
+file_handler.setFormatter(
+    logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+)
 logger.addHandler(file_handler)
 
 stream_handler = logging.StreamHandler()
-stream_handler.setFormatter(logging.Formatter(
-    "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-))
+stream_handler.setFormatter(
+    logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+)
 logger.addHandler(stream_handler)
 
 
@@ -207,6 +261,7 @@ class MaezDaemon:
         # memories, stores novel insights as soul-note proposals for
         # manual approval via private Telegram bot.
         from core.dream_state import DreamState
+
         self.dream = DreamState(
             memory=self.memory,
             telegram=self.telegram,
@@ -232,9 +287,11 @@ class MaezDaemon:
         # design (persisted HWM + bounded-window fallback + open-
         # session supplement + total-events cap).
         from core.audit_log import AuditLog as _AuditLog
+
         self._builder_audit_log = _AuditLog()
         self._builder_hwm_file = Path(__file__).resolve().parent / "builder_mode_hwm.txt"
         from core.builder_mode_perception import load_high_water_mark as _load_hwm
+
         self._builder_hwm = _load_hwm(self._builder_hwm_file)
 
         # A-core #3 Step 5: on startup, if a builder-mode session is
@@ -244,6 +301,7 @@ class MaezDaemon:
         # restarts with no new edits produce no duplicate entries.
         try:
             from core.builder_mode_capture import capture_startup_diff_if_active
+
             repo_root = Path(__file__).resolve().parent.parent
             state_file = Path(__file__).resolve().parent / "builder_mode_current.txt"
             logged_session = capture_startup_diff_if_active(
@@ -273,20 +331,17 @@ class MaezDaemon:
                 IdentityLedger,
                 detect_and_record_startup,
             )
+
             self._identity_ledger = IdentityLedger()
-            self.continuity_id, wrote_event = detect_and_record_startup(
-                self._identity_ledger
-            )
+            self.continuity_id, wrote_event = detect_and_record_startup(self._identity_ledger)
             if wrote_event:
                 logger.info(
-                    "Identity ledger: startup detected a fingerprint "
-                    "change (continuity_id=%s)",
+                    "Identity ledger: startup detected a fingerprint change (continuity_id=%s)",
                     self.continuity_id[:12] if self.continuity_id else "?",
                 )
             else:
                 logger.info(
-                    "Identity ledger: startup fingerprint unchanged "
-                    "(continuity_id=%s)",
+                    "Identity ledger: startup fingerprint unchanged (continuity_id=%s)",
                     self.continuity_id[:12] if self.continuity_id else "?",
                 )
         except Exception as e:
@@ -305,6 +360,7 @@ class MaezDaemon:
         # for the no-fixed-floors rationale (NULL == "observing").
         try:
             from core.temperament import Temperament
+
             self.temperament = Temperament()
             cur = self.temperament.current()
             observed = sum(1 for v in cur.values() if v is not None)
@@ -322,6 +378,7 @@ class MaezDaemon:
         # producer, no reasoning-loop reader. See core/wants.py.
         try:
             from core.wants import Wants
+
             self.wants = Wants()
             logger.info(
                 "Wants log ready: %d event(s) recorded",
@@ -338,6 +395,7 @@ class MaezDaemon:
         # log line. See core/will_i.py.
         try:
             from core.will_i import REGISTERED_GROUNDS
+
             logger.info(
                 "Will-I check active: %d registered ground(s)",
                 len(REGISTERED_GROUNDS),
@@ -352,6 +410,7 @@ class MaezDaemon:
         # at startup but no content is. See core/private_thoughts.py.
         try:
             from core.private_thoughts import PrivateThoughts
+
             self.private_thoughts = PrivateThoughts()
             logger.info(
                 "Private thoughts ready: %d thought(s) recorded",
@@ -383,6 +442,7 @@ class MaezDaemon:
         # Patch B: signature gate. Patch A: stale-field redaction.
         # Both share the deque of recent stored-thought axes.
         from collections import deque
+
         self._last_git_dirty_count = 0
         self._recent_thought_axes: deque = deque(maxlen=5)
         self._cycles_since_last_thought = 0
@@ -398,7 +458,7 @@ class MaezDaemon:
         self._last_public_context = ""
         # Write startup timestamp to file (survives in-memory state issues)
         try:
-            with open('/tmp/maez_started_at', 'w') as f:
+            with open("/tmp/maez_started_at", "w") as f:
                 f.write(str(time.time()))
         except Exception:
             pass
@@ -457,6 +517,7 @@ class MaezDaemon:
             # up layered changes automatically.
             try:
                 from core.evolution.soul_loader import current_soul as _cur_soul
+
                 raw = _cur_soul().strip()
             except Exception as _layer_exc:
                 logger.warning(
@@ -506,11 +567,11 @@ class MaezDaemon:
                 # what the direct-read fallback below relies on.
                 try:
                     from core.evolution.soul_loader import current_soul as _cur_soul
+
                     raw = _cur_soul().strip()
                 except Exception as _layer_exc:
                     logger.debug(
-                        "soul_loader failed in hot-reload, "
-                        "falling back to direct read: %s",
+                        "soul_loader failed in hot-reload, falling back to direct read: %s",
                         _layer_exc,
                     )
                     raw = SOUL_PATH.read_text().strip()
@@ -519,6 +580,7 @@ class MaezDaemon:
                 # here. Startup scan alone is insufficient.
                 from core.context_safety import scan as _scan
                 from core.soul_invariants import check as _inv_check
+
                 scanned = _scan(raw, source="soul.md (hot-reload)")
                 if scanned.blocked:
                     logger.error(
@@ -563,6 +625,7 @@ class MaezDaemon:
                             read_active_session_id,
                             AUTONOMOUS_SESSION_ID,
                         )
+
                         repo_root = Path(__file__).resolve().parent.parent
                         summary, _h, _p = capture_git_diff_summary(
                             repo_root, watched_paths=["config/soul.md"]
@@ -572,25 +635,16 @@ class MaezDaemon:
                         # git unavailable), fall back to a hash-delta
                         # summary so the event still carries shape.
                         if not summary:
-                            summary = (
-                                f"  config/soul.md (md5 "
-                                f"{old_hash[:8]} -> {current_hash[:8]})"
-                            )
-                        state_file = (
-                            Path(__file__).resolve().parent
-                            / "builder_mode_current.txt"
-                        )
+                            summary = f"  config/soul.md (md5 {old_hash[:8]} -> {current_hash[:8]})"
+                        state_file = Path(__file__).resolve().parent / "builder_mode_current.txt"
                         active_sid = read_active_session_id(state_file)
                         if active_sid:
                             session_id = active_sid
-                            change_reason = (
-                                "soul.md changed during active builder session"
-                            )
+                            change_reason = "soul.md changed during active builder session"
                         else:
                             session_id = AUTONOMOUS_SESSION_ID
                             change_reason = (
-                                "soul.md changed (autonomous — no active "
-                                "builder session)"
+                                "soul.md changed (autonomous — no active builder session)"
                             )
                         self._builder_audit_log.log_direct_edit(
                             session_id=session_id,
@@ -601,8 +655,7 @@ class MaezDaemon:
                         )
                         logger.info(
                             "Builder soul-change event logged (session=%s)",
-                            session_id if session_id == AUTONOMOUS_SESSION_ID
-                            else session_id[:12],
+                            session_id if session_id == AUTONOMOUS_SESSION_ID else session_id[:12],
                         )
                     except Exception as e:
                         logger.debug("soul-change direct_edit logging failed: %s", e)
@@ -611,9 +664,15 @@ class MaezDaemon:
             time.sleep(10)
 
     UNCERTAINTY_SIGNALS = [
-        "i'm not sure", "i don't know", "unclear to me",
-        "i can't confirm", "i wonder", "i should check",
-        "not certain", "i'll look into", "need to verify",
+        "i'm not sure",
+        "i don't know",
+        "unclear to me",
+        "i can't confirm",
+        "i wonder",
+        "i should check",
+        "not certain",
+        "i'll look into",
+        "need to verify",
     ]
 
     def _should_search(self, thought: str) -> str:
@@ -625,7 +684,7 @@ class MaezDaemon:
         for sig in self.UNCERTAINTY_SIGNALS:
             if sig in thought_lower:
                 idx = thought_lower.index(sig)
-                topic = thought[idx + len(sig):idx + 100].strip(' .,;:').split('.')[0]
+                topic = thought[idx + len(sig) : idx + 100].strip(" .,;:").split(".")[0]
                 if len(topic) > 5:
                     return topic[:80]
         return ""
@@ -634,6 +693,7 @@ class MaezDaemon:
         """Ask the owner about new people who talked to Maez today."""
         try:
             from skills.user_accounts import UserAccounts
+
             accts = UserAccounts()
             unconfirmed = accts.get_unconfirmed_users(since_hours=24)
             if not unconfirmed:
@@ -643,7 +703,7 @@ class MaezDaemon:
                 lines.append(f"  {user['display_name']} — {user.get('notes') or 'no details yet'}")
             lines.append("\nReply with: /trust [username] [relationship] [tier 0-3]")
             lines.append("Example: /trust [person] partner 3")
-            self.telegram.send_message('\n'.join(lines))
+            self.telegram.send_message("\n".join(lines))
             logger.info("[SOCIAL] Curiosity check-in sent for %d users", len(unconfirmed))
         except Exception as e:
             logger.error("Curiosity check-in error: %s", e)
@@ -668,7 +728,7 @@ class MaezDaemon:
             thoughts = results.get("documents", [])
             if len(thoughts) < 10:
                 return
-            thoughts_text = '\n'.join(thoughts[-window_size:])
+            thoughts_text = "\n".join(thoughts[-window_size:])
             prompt = (
                 f"You are reviewing your last 20 observations about the owner and his system.\n\n"
                 f"{thoughts_text}\n\n"
@@ -680,6 +740,7 @@ class MaezDaemon:
             )
             # Session 11r: via llm_client (was missed in 11p batch)
             from core import llm_client as _llm_client
+
             response = _llm_client.chat(
                 model=MODEL,
                 messages=[{"role": "user", "content": prompt}],
@@ -714,6 +775,7 @@ class MaezDaemon:
 
             try:
                 from core.safety.audited_output import audit_assistant_text
+
                 result = audit_assistant_text(
                     result,
                     surface="daemon_proactive",
@@ -735,17 +797,20 @@ class MaezDaemon:
             try:
                 import uuid as _uuid
                 from datetime import datetime as _dt, timezone as _tz
+
                 self.memory.raw.add(
                     ids=[_uuid.uuid4().hex],
                     documents=[result],
-                    metadatas=[{
-                        "type": "proactive_opinion",
-                        "surface": "daemon_proactive",
-                        "source_window_count": window_size,
-                        "sent_to_owner": True,
-                        "timestamp": _dt.now(_tz.utc).isoformat(),
-                        "cycle": self.cycle_count,
-                    }],
+                    metadatas=[
+                        {
+                            "type": "proactive_opinion",
+                            "surface": "daemon_proactive",
+                            "source_window_count": window_size,
+                            "sent_to_owner": True,
+                            "timestamp": _dt.now(_tz.utc).isoformat(),
+                            "cycle": self.cycle_count,
+                        }
+                    ],
                 )
             except Exception as _store_exc:
                 logger.debug("proactive provenance store failed: %s", _store_exc)
@@ -768,10 +833,12 @@ class MaezDaemon:
             phase, energy, tone = "late evening", "tired", "brief and warm"
         else:
             phase, energy, tone = "night", "should be sleeping", "very brief, check if okay"
-        return (f"[CIRCADIAN]\n"
-                f"  Time: {phase} ({hour:02d}:00)\n"
-                f"  Expected energy: {energy}\n"
-                f"  Suggested tone: {tone}")
+        return (
+            f"[CIRCADIAN]\n"
+            f"  Time: {phase} ({hour:02d}:00)\n"
+            f"  Expected energy: {energy}\n"
+            f"  Suggested tone: {tone}"
+        )
 
     @staticmethod
     def _strip_temporal_phrases(text: str) -> str:
@@ -792,26 +859,30 @@ class MaezDaemon:
         Returns the sanitized text (may be shorter).
         """
         import re
-        days = r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)'
-        parts = r'(?:morning|afternoon|evening|night|late evening|early morning|midday)'
+
+        days = r"(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)"
+        parts = r"(?:morning|afternoon|evening|night|late evening|early morning|midday)"
 
         # "it is Monday evening" / "it's Tuesday morning" / "it was Wednesday night"
         text = re.sub(
             rf"\b[Ii]t(?:'s|\s+is|\s+was)\s+{days}\b(?:\s+{parts})?\s*[.,;—–-]?\s*",
-            '', text,
+            "",
+            text,
         )
         # "on Monday evening," at the start of a temporal phrase — NOT "on Fridays"
         text = re.sub(
             rf"\b[Oo]n\s+{days}\b(?:\s+{parts})\s*[.,;—–-]?\s*",
-            '', text,
+            "",
+            text,
         )
         # "this Monday" / "today is Wednesday" — NOT "last Monday's"
         text = re.sub(
             rf"\b(?:[Tt]his|[Tt]oday\s+is)\s+{days}\b\s*[.,;—–-]?\s*",
-            '', text,
+            "",
+            text,
         )
         # Clean up leading whitespace / double spaces left behind
-        text = re.sub(r'\s{2,}', ' ', text).strip()
+        text = re.sub(r"\s{2,}", " ", text).strip()
         # If the stripping left us with a lowercase first char, capitalize
         if text and text[0].islower():
             text = text[0].upper() + text[1:]
@@ -839,25 +910,26 @@ class MaezDaemon:
         healing on the systemd restart 10s later. A brief retry loop
         (total ~14s window) absorbs those blips without further action.
         """
-        backend = os.environ.get('MAEZ_LLM_BACKEND', 'ollama').lower()
+        backend = os.environ.get("MAEZ_LLM_BACKEND", "ollama").lower()
         total_attempts = 4
         delays = (0, 2, 4, 8)  # cumulative ~14s of patience
         last_err: str = ""
         for attempt, delay in enumerate(delays[:total_attempts]):
             if delay:
                 time.sleep(delay)
-            if backend == 'llamacpp':
+            if backend == "llamacpp":
                 try:
                     import urllib.request
-                    base = os.environ.get('MAEZ_LLAMACPP_URL',
-                                          'http://127.0.0.1:8080/v1')
+
+                    base = os.environ.get("MAEZ_LLAMACPP_URL", "http://127.0.0.1:8080/v1")
                     req = urllib.request.Request(f"{base}/models")
                     with urllib.request.urlopen(req, timeout=5) as r:
                         if r.status == 200:
                             if attempt:
                                 logger.info(
-                                    "llama-server reachable after "
-                                    "attempt %d/%d", attempt + 1, total_attempts,
+                                    "llama-server reachable after attempt %d/%d",
+                                    attempt + 1,
+                                    total_attempts,
                                 )
                             return True
                         last_err = f"HTTP {r.status}"
@@ -865,9 +937,10 @@ class MaezDaemon:
                     last_err = str(e)
                 if attempt < total_attempts - 1:
                     logger.info(
-                        "llama-server not yet ready (attempt %d/%d: %s); "
-                        "retrying after backoff",
-                        attempt + 1, total_attempts, last_err,
+                        "llama-server not yet ready (attempt %d/%d: %s); retrying after backoff",
+                        attempt + 1,
+                        total_attempts,
+                        last_err,
                     )
                 continue
             # Ollama branch — single-shot is still fine here; Ollama
@@ -882,8 +955,9 @@ class MaezDaemon:
             except Exception as e:
                 logger.error("Ollama connection failed: %s", e)
                 return False
-        logger.error("llama-server connection failed after %d attempts: %s",
-                     total_attempts, last_err)
+        logger.error(
+            "llama-server connection failed after %d attempts: %s", total_attempts, last_err
+        )
         return False
 
     def _get_local_time(self) -> datetime:
@@ -905,6 +979,7 @@ class MaezDaemon:
         from core.cognition.perception_signature import (
             redact_stale_perception_block,
         )
+
         _stale = stale_fields or set()
         system_state = format_snapshot(snap)
         if "disk" in _stale or "procs" in _stale:
@@ -922,8 +997,12 @@ class MaezDaemon:
         memory_block = self.memory.format_for_prompt(recalled)
         stats = self.memory.memory_stats()
         if memory_block:
-            logger.info("Recalled: %d core, %d daily, %d raw",
-                        len(recalled["core"]), len(recalled["daily"]), len(recalled["raw"]))
+            logger.info(
+                "Recalled: %d core, %d daily, %d raw",
+                len(recalled["core"]),
+                len(recalled["daily"]),
+                len(recalled["raw"]),
+            )
 
         # Per-cycle dynamic body. The VRAM baseline note and grounding
         # rules used to live at the END of this string, but they never
@@ -1003,6 +1082,7 @@ class MaezDaemon:
                 format_recent_builder_events,
                 save_high_water_mark,
             )
+
             builder_block, new_builder_hwm = format_recent_builder_events(
                 self._builder_audit_log,
                 since_ts=self._builder_hwm,
@@ -1026,9 +1106,8 @@ class MaezDaemon:
         # now." Observed 2026-04-21: screen_perception has been
         # silently failing for weeks, and every cycle response was
         # inventing activity. Closes the confabulation-at-source gap.
-        screen_present = (
-            self._last_screen_obs is not None
-            and getattr(self._last_screen_obs, "success", False)
+        screen_present = self._last_screen_obs is not None and getattr(
+            self._last_screen_obs, "success", False
         )
         presence_present = self._last_presence_snap is not None
         calendar_present = self._last_calendar_snap is not None
@@ -1039,7 +1118,9 @@ class MaezDaemon:
         if screen_present:
             signals_present.append("screen observation — live")
         else:
-            signals_absent.append("screen observation — UNAVAILABLE this cycle (vision source down or capture failed)")
+            signals_absent.append(
+                "screen observation — UNAVAILABLE this cycle (vision source down or capture failed)"
+            )
         if presence_present:
             signals_present.append("presence snapshot — live")
         else:
@@ -1050,13 +1131,13 @@ class MaezDaemon:
             signals_absent.append("calendar — UNAVAILABLE this cycle (OAuth or API)")
 
         signal_manifest = (
-            "SIGNALS PRESENT THIS CYCLE:\n"
-            + "\n".join(f"  ✓ {s}" for s in signals_present) + "\n"
+            "SIGNALS PRESENT THIS CYCLE:\n" + "\n".join(f"  ✓ {s}" for s in signals_present) + "\n"
         )
         if signals_absent:
             signal_manifest += (
                 "SIGNALS ABSENT THIS CYCLE (do NOT fabricate content for these):\n"
-                + "\n".join(f"  ✗ {s}" for s in signals_absent) + "\n"
+                + "\n".join(f"  ✗ {s}" for s in signals_absent)
+                + "\n"
             )
 
         # Signal manifest is the only per-cycle-dynamic rule-shaped block.
@@ -1095,6 +1176,7 @@ class MaezDaemon:
             # daemon path benefits more from parser stability than hidden
             # scratchpad depth right now.
             from core import llm_client as _llm_client
+
             # Byte-stable system message (SOUL + static cycle instructions)
             # enables llama.cpp KV cache reuse across cycles. self.system_prompt
             # is loaded once at startup; _STATIC_CYCLE_INSTRUCTIONS is a module
@@ -1114,8 +1196,10 @@ class MaezDaemon:
             # keeping cycle time bounded.
             try:
                 response = _llm_client.chat(
-                    model=MODEL, messages=chat_messages,
-                    think=False, options=chat_options,
+                    model=MODEL,
+                    messages=chat_messages,
+                    think=False,
+                    options=chat_options,
                 )
             except Exception as first_err:
                 try:
@@ -1123,6 +1207,7 @@ class MaezDaemon:
                         classify as _classify,
                         emit_telemetry as _emit_err,
                     )
+
                     _cls = _classify(first_err)
                     _emit_err(_cls, surface="daemon_cycle")
                 except Exception:
@@ -1133,23 +1218,26 @@ class MaezDaemon:
                 if transient:
                     logger.info(
                         "Cycle %d: %s error, retrying once after 2s backoff",
-                        self.cycle_count, _cls.error_class.value,
+                        self.cycle_count,
+                        _cls.error_class.value,
                     )
                     time.sleep(2.0)
                     try:
                         response = _llm_client.chat(
-                            model=MODEL, messages=chat_messages,
-                            think=False, options=chat_options,
+                            model=MODEL,
+                            messages=chat_messages,
+                            think=False,
+                            options=chat_options,
                         )
                     except Exception as retry_err:
                         try:
-                            _emit_err(_classify(retry_err),
-                                      surface="daemon_cycle_retry")
+                            _emit_err(_classify(retry_err), surface="daemon_cycle_retry")
                         except Exception:
                             pass
                         logger.error(
                             "Cycle %d: retry also failed: %s",
-                            self.cycle_count, retry_err,
+                            self.cycle_count,
+                            retry_err,
                         )
                         return None
                 else:
@@ -1215,8 +1303,11 @@ class MaezDaemon:
                 "it" at 04:53 lost the referent).
         """
         from skills.web_search import (
-            search as web_search, format_for_context as web_format,
-            needs_web_search, search_rss, is_news_query,
+            search as web_search,
+            format_for_context as web_format,
+            needs_web_search,
+            search_rss,
+            is_news_query,
         )
 
         # Inner-residue detection on incoming user text. See
@@ -1224,9 +1315,9 @@ class MaezDaemon:
         # state that shapes the next turn's voice. Silent on failure.
         try:
             from core import inner_residue as _residue
+
             if _residue.detect_user_rejection(text):
-                _residue.record(kind="user_rejection",
-                                context={"surface": source})
+                _residue.record(kind="user_rejection", context={"surface": source})
         except Exception:
             pass
 
@@ -1237,11 +1328,13 @@ class MaezDaemon:
         # core/approval_sessions.py.
         try:
             from core import approval_sessions as _approvals
+
             _granted = _approvals.detect_and_grant(text)
             if _granted:
                 logger.info(
                     "approval session granted: kinds=%s source=%s",
-                    _granted, source,
+                    _granted,
+                    source,
                 )
         except Exception:
             pass
@@ -1260,10 +1353,13 @@ class MaezDaemon:
                 sr = search_rss(text, max_results=5)
             else:
                 sr = web_search(text, max_results=3)
-            if sr.get('success'):
+            if sr.get("success"):
                 web_context = web_format(sr)
-                logger.info("Web search: %d results injected (%s)",
-                            sr['result_count'], sr.get('source_type', 'web'))
+                logger.info(
+                    "Web search: %d results injected (%s)",
+                    sr["result_count"],
+                    sr.get("source_type", "web"),
+                )
 
         is_voice = source == "voice"
         prompt = f"{system_state}\n\n"
@@ -1290,11 +1386,12 @@ class MaezDaemon:
             )
         else:
             prompt += (
-                f'the owner sent via {source}:\n"{text}"\n\n'
-                f"Respond directly and concisely.\n\n"
+                f'the owner sent via {source}:\n"{text}"\n\nRespond directly and concisely.\n\n'
             )
-        prompt += ("Remember: NEVER suggest touching ollama, its models, or any "
-                    "process that powers your reasoning.")
+        prompt += (
+            "Remember: NEVER suggest touching ollama, its models, or any "
+            "process that powers your reasoning."
+        )
 
         # Build system prompt with public bot awareness
         sys_prompt = self.system_prompt
@@ -1304,6 +1401,7 @@ class MaezDaemon:
         # schedules, or postconditions.
         try:
             from core.capability_registry import prompt_snippet as _cap_snippet
+
             sys_prompt += "\n\n" + _cap_snippet()
         except Exception:
             pass
@@ -1322,6 +1420,7 @@ class MaezDaemon:
         messages: list[dict] = [{"role": "system", "content": sys_prompt}]
         try:
             from core.brain.conversation_history import history_to_messages
+
             messages.extend(history_to_messages(chat_history))
         except Exception as _hist_exc:
             logger.debug("chat_history threading skipped: %s", _hist_exc)
@@ -1330,6 +1429,7 @@ class MaezDaemon:
         try:
             # Session 11r: via llm_client (was missed in 11p batch)
             from core import llm_client as _llm_client
+
             response = _llm_client.chat(
                 model=MODEL,
                 messages=messages,
@@ -1352,6 +1452,7 @@ class MaezDaemon:
         #     stored text == audited text == text returned to caller.
         try:
             from core.brain_loop import strip_tool_call_leaks
+
             reply = strip_tool_call_leaks(reply)
         except Exception as _strip_exc:
             logger.debug("tool-call-leak strip skipped: %s", _strip_exc)
@@ -1362,6 +1463,7 @@ class MaezDaemon:
         # tool loop ran; `in_tool_continuation` is derived from it.
         try:
             from core.safety.audited_output import audit_assistant_text
+
             reply = audit_assistant_text(
                 reply,
                 surface=source,
@@ -1382,6 +1484,7 @@ class MaezDaemon:
             import chromadb
             from chromadb.config import Settings
             from datetime import datetime as _dt
+
             client = chromadb.PersistentClient(
                 path="/home/rohit/maez/memory/db/public_users",
                 settings=Settings(anonymized_telemetry=False),
@@ -1390,10 +1493,13 @@ class MaezDaemon:
             if col.count() == 0:
                 return ""
             # Fetch all and filter in Python (timestamps are ISO strings)
-            cutoff_iso = _dt.fromtimestamp(time.time() - 86400, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+            cutoff_iso = _dt.fromtimestamp(time.time() - 86400, tz=timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%S"
+            )
             results = col.get(include=["documents", "metadatas"])
             filtered = [
-                (doc, meta) for doc, meta in zip(results["documents"], results["metadatas"], strict=False)
+                (doc, meta)
+                for doc, meta in zip(results["documents"], results["metadatas"], strict=False)
                 if meta.get("timestamp", "") >= cutoff_iso
             ]
             if not filtered:
@@ -1428,8 +1534,11 @@ class MaezDaemon:
         import requests as _req
         from skills.voice_output import feed_sentence
         from skills.web_search import (
-            search as web_search, format_for_context as web_format,
-            needs_web_search, search_rss, is_news_query,
+            search as web_search,
+            format_for_context as web_format,
+            needs_web_search,
+            search_rss,
+            is_news_query,
         )
 
         logger.info("Voice stream: %s", text[:100])
@@ -1437,19 +1546,36 @@ class MaezDaemon:
         import datetime as _dt
 
         simple_patterns = [
-            'what time', 'what day', 'what date', 'how are you', 'hello', 'hi maez',
-            'good morning', 'good night', 'good afternoon', 'good evening',
-            'thanks', 'thank you', 'who are you', 'what can you do',
-            'tell me a joke', 'are you there', 'can you hear', 'you there',
-            'status', "what's up", 'whats up', 'sup',
+            "what time",
+            "what day",
+            "what date",
+            "how are you",
+            "hello",
+            "hi maez",
+            "good morning",
+            "good night",
+            "good afternoon",
+            "good evening",
+            "thanks",
+            "thank you",
+            "who are you",
+            "what can you do",
+            "tell me a joke",
+            "are you there",
+            "can you hear",
+            "you there",
+            "status",
+            "what's up",
+            "whats up",
+            "sup",
         ]
         text_lower = text.lower().strip()
         is_simple = any(p in text_lower for p in simple_patterns)
 
         if is_simple:
             now_dt = _dt.datetime.now()
-            time_str = now_dt.strftime('%I:%M %p').lstrip('0')
-            day_str = now_dt.strftime('%A, %B %d, %Y')
+            time_str = now_dt.strftime("%I:%M %p").lstrip("0")
+            day_str = now_dt.strftime("%A, %B %d, %Y")
             prompt = (
                 f"Current time: {time_str}, {day_str}\n\n"
                 f'the owner just spoke to you out loud:\n"{text}"\n\n'
@@ -1469,7 +1595,7 @@ class MaezDaemon:
                     sr = search_rss(text, max_results=3)
                 else:
                     sr = web_search(text, max_results=3)
-                if sr.get('success'):
+                if sr.get("success"):
                     web_context = web_format(sr)
             prompt = f"{system_state}\n\n"
             if memory_block:
@@ -1491,15 +1617,15 @@ class MaezDaemon:
         self._ollama_lock.acquire()
         try:
             resp = _req.post(
-                'http://localhost:11434/api/chat',
+                "http://localhost:11434/api/chat",
                 json={
-                    'model': MODEL,
-                    'messages': [
-                        {'role': 'system', 'content': self.system_prompt},
-                        {'role': 'user', 'content': prompt},
+                    "model": MODEL,
+                    "messages": [
+                        {"role": "system", "content": self.system_prompt},
+                        {"role": "user", "content": prompt},
                     ],
-                    'stream': True,
-                    'options': {'temperature': 0.7, 'num_predict': num_predict},
+                    "stream": True,
+                    "options": {"temperature": 0.7, "num_predict": num_predict},
                 },
                 stream=True,
                 timeout=60,
@@ -1510,7 +1636,7 @@ class MaezDaemon:
                     continue
                 try:
                     chunk = json.loads(line)
-                    token = chunk.get('message', {}).get('content', '')
+                    token = chunk.get("message", {}).get("content", "")
                     if not token:
                         continue
 
@@ -1519,7 +1645,7 @@ class MaezDaemon:
 
                     # Check for sentence boundaries — handles multiple in buffer
                     while True:
-                        m = re.search(r'([.!?])\s', sentence_buf)
+                        m = re.search(r"([.!?])\s", sentence_buf)
                         if m:
                             idx = m.end()
                             sentence = sentence_buf[:idx].strip()
@@ -1571,7 +1697,8 @@ class MaezDaemon:
         """
         from core import paths as _paths
         from core.memory.identity import display_name as _display_name
-        today = time.strftime('%Y-%m-%d')
+
+        today = time.strftime("%Y-%m-%d")
         briefing_stamp = _paths.home() / "memory" / "last_briefing.txt"
         try:
             if briefing_stamp.exists():
@@ -1585,7 +1712,7 @@ class MaezDaemon:
             pass
         if self._last_briefing_date == today:
             return
-        hour = int(time.strftime('%H'))
+        hour = int(time.strftime("%H"))
         if hour < 5 or hour > 11:
             return
 
@@ -1607,12 +1734,14 @@ class MaezDaemon:
 
             # Git
             from skills.git_awareness import get_summary_for_telegram
+
             git_text = get_summary_for_telegram()
 
             # News
             from skills.web_search import search_rss, format_for_context as web_fmt
-            news = search_rss('general', 3)
-            news_text = web_fmt(news) if news.get('success') else "No news loaded."
+
+            news = search_rss("general", 3)
+            news_text = web_fmt(news) if news.get("success") else "No news loaded."
 
             # System
             disk_pct = snap["disk"].get("/", {}).get("percent", 0)
@@ -1634,6 +1763,7 @@ class MaezDaemon:
 
             # Session 11r: via llm_client (was missed in 11p batch)
             from core import llm_client as _llm_client
+
             response = _llm_client.chat(
                 model=MODEL,
                 messages=[
@@ -1651,12 +1781,15 @@ class MaezDaemon:
                 # telemetry can bucket this path.
                 try:
                     from core.safety.audited_output import audit_assistant_text
+
                     briefing = audit_assistant_text(
-                        briefing, surface="morning_briefing",
+                        briefing,
+                        surface="morning_briefing",
                     )
                 except Exception as _aud_exc:
                     logger.warning(
-                        "morning_briefing audit fail-open: %s", _aud_exc,
+                        "morning_briefing audit fail-open: %s",
+                        _aud_exc,
                     )
                 final_msg = f"Morning briefing:\n\n{briefing}"
                 self.telegram.send_message(final_msg)
@@ -1667,8 +1800,7 @@ class MaezDaemon:
                 # consistent with `_clean_exchange`'s parse expectation.
                 try:
                     self.memory.store_telegram(
-                        f"the owner (morning_briefing): [just arrived]\n"
-                        f"Maez: {briefing}"
+                        f"the owner (morning_briefing): [just arrived]\nMaez: {briefing}"
                     )
                 except Exception as _store_exc:
                     logger.debug(
@@ -1701,7 +1833,9 @@ class MaezDaemon:
         if ram_pct >= self.RAM_THRESHOLD:
             reasons.append(f"RAM {ram_pct}% (threshold: {self.RAM_THRESHOLD}%)")
         if disk_free_pct < self.DISK_THRESHOLD:
-            reasons.append(f"Root disk {disk_free_pct:.1f}% free (threshold: {self.DISK_THRESHOLD}%)")
+            reasons.append(
+                f"Root disk {disk_free_pct:.1f}% free (threshold: {self.DISK_THRESHOLD}%)"
+            )
         if self._high_cpu_streak >= self.CPU_STREAK_REQUIRED:
             reasons.append(f"CPU sustained {cpu_pct}% for {self._high_cpu_streak} cycles")
 
@@ -1712,8 +1846,11 @@ class MaezDaemon:
         now = time.time()
         elapsed = now - self._last_alert_time
         if self._last_alert_time > 0 and elapsed < self.ALERT_COOLDOWN:
-            logger.info("Alert suppressed (cooldown: %dm remaining): %s",
-                        int((self.ALERT_COOLDOWN - elapsed) / 60), ", ".join(reasons))
+            logger.info(
+                "Alert suppressed (cooldown: %dm remaining): %s",
+                int((self.ALERT_COOLDOWN - elapsed) / 60),
+                ", ".join(reasons),
+            )
             return
 
         alert_msg = f"[Cycle {self.cycle_count}]\n" + "\n".join(f"⚠ {r}" for r in reasons)
@@ -1766,15 +1903,17 @@ class MaezDaemon:
             try:
                 snap = perception_snapshot()
                 gpu = snap.get("gpu") or {}
-                self._ws_broadcast({
-                    "type": "health",
-                    "system": {
-                        "cpu_percent": snap["cpu"]["percent"],
-                        "ram_percent": snap["ram"]["percent"],
-                        "gpu_percent": gpu.get("utilization_pct"),
-                        "gpu_temp_c": gpu.get("temperature_c"),
-                    },
-                })
+                self._ws_broadcast(
+                    {
+                        "type": "health",
+                        "system": {
+                            "cpu_percent": snap["cpu"]["percent"],
+                            "ram_percent": snap["ram"]["percent"],
+                            "gpu_percent": gpu.get("utilization_pct"),
+                            "gpu_temp_c": gpu.get("temperature_c"),
+                        },
+                    }
+                )
             except Exception:
                 pass
             time.sleep(10)
@@ -1791,8 +1930,7 @@ class MaezDaemon:
                 if summary:
                     logger.info("Missed consolidation complete: %d chars", len(summary))
                     send_dev(
-                        f"Missed consolidation recovered.\n"
-                        f"Stats: {self.memory.memory_stats()}"
+                        f"Missed consolidation recovered.\nStats: {self.memory.memory_stats()}"
                     )
             except Exception as e:
                 logger.error("Missed consolidation error: %s", e)
@@ -1806,8 +1944,11 @@ class MaezDaemon:
                 target += timedelta(days=1)
             wait_seconds = (target - now).total_seconds()
 
-            logger.info("Next consolidation in %.1f hours at %s",
-                        wait_seconds / 3600, target.strftime("%Y-%m-%d %H:%M"))
+            logger.info(
+                "Next consolidation in %.1f hours at %s",
+                wait_seconds / 3600,
+                target.strftime("%Y-%m-%d %H:%M"),
+            )
 
             # Sleep in 60s increments so shutdown is responsive
             slept = 0
@@ -1826,7 +1967,7 @@ class MaezDaemon:
                     # Check consolidation quality
                     cq = cog_check_consolidation(summary)
                     quality_note = f"Quality: {'PASS' if cq['passed'] else 'FAIL'}"
-                    if not cq['passed']:
+                    if not cq["passed"]:
                         quality_note += f" ({', '.join(cq['reasons'])})"
                     send_dev(
                         f"Daily memory consolidation complete.\n"
@@ -1858,7 +1999,7 @@ class MaezDaemon:
             try:
                 candidates = self.actions.check_promotions()
                 if candidates:
-                    types_str = ", ".join(c['action_type'] for c in candidates)
+                    types_str = ", ".join(c["action_type"] for c in candidates)
                     send_dev(
                         f"Maez has earned higher autonomy for: {types_str}.\n"
                         f"Reply /promote <action_type> to lower its tier."
@@ -1868,15 +2009,17 @@ class MaezDaemon:
                 logger.debug("Trust promotion check failed: %s", e)
 
             # Evolution cycle after self-analysis
-            evo_summary = {'experiments': 0, 'failed': 0, 'deployed': 0, 'flagged': 0}
+            evo_summary = {"experiments": 0, "failed": 0, "deployed": 0, "flagged": 0}
             try:
                 from skills.evolution_engine import run_evolution_cycle
                 from skills.self_analysis import get_weaknesses
+
                 weaknesses = get_weaknesses(self.memory)
                 if weaknesses:
                     logger.info("Evolution: %d weaknesses found", len(weaknesses))
                     self._evolution_summary = run_evolution_cycle(
-                        weaknesses, telegram_callback=send_dev,
+                        weaknesses,
+                        telegram_callback=send_dev,
                     )
                     evo_summary = self._evolution_summary
                 else:
@@ -1888,22 +2031,26 @@ class MaezDaemon:
             try:
                 from skills.dev_notifier import send_nightly_card
                 from skills.self_analysis import analyze as _self_analyze
+
                 analysis = _self_analyze(self.memory, self.actions) or {}
                 top_topics = []
                 try:
                     # Best-effort top topics from cognition recent buffer
                     from core.cognition_quality import _recent_topics
                     import collections as _cc
+
                     if _recent_topics:
                         top_topics = _cc.Counter(_recent_topics[-50:]).most_common(3)
                 except Exception:
                     pass
                 send_nightly_card(
-                    memories_analyzed=analysis.get('total_analyzed', self.memory.memory_stats().get('raw', 0)),
-                    unique_insight_rate=analysis.get('unique_insight_rate', 0),
+                    memories_analyzed=analysis.get(
+                        "total_analyzed", self.memory.memory_stats().get("raw", 0)
+                    ),
+                    unique_insight_rate=analysis.get("unique_insight_rate", 0),
                     top_topics=top_topics,
-                    proposals_attempted=evo_summary.get('experiments', 0),
-                    proposals_failed=evo_summary.get('failed', 0),
+                    proposals_attempted=evo_summary.get("experiments", 0),
+                    proposals_failed=evo_summary.get("failed", 0),
                 )
             except Exception as e:
                 logger.debug("Nightly card failed: %s", e)
@@ -1921,8 +2068,11 @@ class MaezDaemon:
                 target += timedelta(days=1)
             wait_seconds = (target - now).total_seconds()
 
-            logger.info("Next journal entry in %.1f hours at %s",
-                        wait_seconds / 3600, target.strftime("%Y-%m-%d %H:%M"))
+            logger.info(
+                "Next journal entry in %.1f hours at %s",
+                wait_seconds / 3600,
+                target.strftime("%Y-%m-%d %H:%M"),
+            )
 
             slept = 0
             while slept < wait_seconds and self.running:
@@ -2006,7 +2156,7 @@ class MaezDaemon:
                 # Grab the response text (next non-empty content after "response:")
                 idx = l.find("response:")
                 if idx >= 0:
-                    text = l[idx + 9:].strip()
+                    text = l[idx + 9 :].strip()
                     if text and text != "(empty response)":
                         sample_responses.append(text[:200])
 
@@ -2069,6 +2219,7 @@ class MaezDaemon:
         try:
             # Session 11r: via llm_client (was missed in 11p batch)
             from core import llm_client as _llm_client
+
             response = _llm_client.chat(
                 model=MODEL,
                 messages=[
@@ -2095,6 +2246,7 @@ class MaezDaemon:
 
         try:
             from core.safety.audited_output import audit_assistant_text
+
             summary = audit_assistant_text(
                 summary,
                 surface="nightly_journal",
@@ -2106,11 +2258,7 @@ class MaezDaemon:
 
         # Append to PROGRESS.md
         progress_path = BASE_DIR / "PROGRESS.md"
-        entry = (
-            f"\n\n---\n\n"
-            f"## Daily Journal — {date_str} ({day_name})\n\n"
-            f"{summary}\n"
-        )
+        entry = f"\n\n---\n\n## Daily Journal — {date_str} ({day_name})\n\n{summary}\n"
 
         with open(progress_path, "a") as f:
             f.write(entry)
@@ -2141,6 +2289,7 @@ class MaezDaemon:
         # Publish to GitHub after journal
         try:
             from skills.github_publish import GitHubPublisher
+
             publisher = GitHubPublisher()
             if publisher.publish_nightly():
                 logger.info("GitHub publish completed after journal")
@@ -2178,11 +2327,13 @@ class MaezDaemon:
 
         try:
             from core.memory.identity import display_name as _display_name
+
             owner_name = _display_name()
         except Exception:
             owner_name = "the owner"
         try:
             from core.brain.continuity_ledger import summarize_day
+
             continuity_summary = summarize_day(date_str)
         except Exception as e:
             logger.debug("Continuity ledger summary unavailable: %s", e)
@@ -2206,6 +2357,7 @@ class MaezDaemon:
 
         try:
             from core import llm_client as _llm_client
+
             response = _llm_client.chat(
                 model=MODEL,
                 messages=[
@@ -2225,10 +2377,16 @@ class MaezDaemon:
 
         try:
             from core.safety.audited_output import audit_assistant_text
+
             heartbeat = audit_assistant_text(
                 heartbeat,
                 surface="developmental_heartbeat",
-                signals_present=["nightly_journal", "memory_stats", "daemon_logs", "continuity_ledger"],
+                signals_present=[
+                    "nightly_journal",
+                    "memory_stats",
+                    "daemon_logs",
+                    "continuity_ledger",
+                ],
                 signals_absent=[],
             )
             heartbeat = normalize_heartbeat(heartbeat, evidence)
@@ -2265,7 +2423,11 @@ class MaezDaemon:
             # back when the hour is up. Failure here must never crash
             # the cycle, so the whole block is guarded.
             try:
-                pipe = self.telegram._get_pipeline() if hasattr(self.telegram, "_get_pipeline") else None
+                pipe = (
+                    self.telegram._get_pipeline()
+                    if hasattr(self.telegram, "_get_pipeline")
+                    else None
+                )
                 if pipe is not None:
                     due = pipe.tick_reminders()
                     if due:
@@ -2283,10 +2445,13 @@ class MaezDaemon:
 
             # Collect system perception
             snap = perception_snapshot()
-            logger.info("Perception: CPU %.1f%%, RAM %.1f%%, GPU %s%%, %s°C",
-                        snap["cpu"]["percent"], snap["ram"]["percent"],
-                        snap["gpu"]["utilization_pct"] if snap.get("gpu") else "N/A",
-                        snap["gpu"]["temperature_c"] if snap.get("gpu") else "N/A")
+            logger.info(
+                "Perception: CPU %.1f%%, RAM %.1f%%, GPU %s%%, %s°C",
+                snap["cpu"]["percent"],
+                snap["ram"]["percent"],
+                snap["gpu"]["utilization_pct"] if snap.get("gpu") else "N/A",
+                snap["gpu"]["temperature_c"] if snap.get("gpu") else "N/A",
+            )
 
             # Screen perception — every N cycles using gemma4 vision
             self._screen_cycle_counter += 1
@@ -2308,8 +2473,9 @@ class MaezDaemon:
                 try:
                     self._last_calendar_snap = calendar_observe()
                     if self._last_calendar_snap.success:
-                        logger.info("Calendar: %d events upcoming",
-                                    len(self._last_calendar_snap.events))
+                        logger.info(
+                            "Calendar: %d events upcoming", len(self._last_calendar_snap.events)
+                        )
                         # Fire Telegram alerts for imminent events
                         alerts = self._last_calendar_snap.get_alert_events(
                             self._calendar_alerted_events
@@ -2323,13 +2489,13 @@ class MaezDaemon:
                                 speak_msg = f"{event.title} starts in {threshold} minutes."
                                 speak(speak_msg, priority=True)
                                 self._calendar_alerted_events.add(key)
-                                logger.info("Calendar alert sent: %s in %dm",
-                                            event.title, threshold)
+                                logger.info(
+                                    "Calendar alert sent: %s in %dm", event.title, threshold
+                                )
                             except Exception as te:
                                 logger.warning("Calendar Telegram alert failed: %s", te)
                     else:
-                        logger.debug("Calendar fetch failed: %s",
-                                     self._last_calendar_snap.error)
+                        logger.debug("Calendar fetch failed: %s", self._last_calendar_snap.error)
                 except Exception as e:
                     logger.warning("Calendar perception error: %s", e)
 
@@ -2360,20 +2526,23 @@ class MaezDaemon:
                             # Suppress greetings within 2 minutes of daemon start
                             startup_grace = True
                             try:
-                                with open('/tmp/maez_started_at') as f:
+                                with open("/tmp/maez_started_at") as f:
                                     started = float(f.read().strip())
                                 startup_grace = time.time() - started > 120
                             except Exception:
                                 pass
 
-                            if (person in ("the owner", "unknown")
-                                    and startup_grace
-                                    and not self._greeted_this_session):
-
+                            if (
+                                person in ("the owner", "unknown")
+                                and startup_grace
+                                and not self._greeted_this_session
+                            ):
                                 if absence_secs < 1200:
                                     # Under 20 minutes — no greeting
-                                    logger.debug("the owner back after %.0fs — no greeting (< 20min)",
-                                                 absence_secs)
+                                    logger.debug(
+                                        "the owner back after %.0fs — no greeting (< 20min)",
+                                        absence_secs,
+                                    )
                                 else:
                                     # 2026-04-25: simplified greeting —
                                     # name + absence duration only. No
@@ -2389,6 +2558,7 @@ class MaezDaemon:
                                     from core.memory.identity import (
                                         display_name as _display_name,
                                     )
+
                                     msg = compose_return_greeting(
                                         display_name=_display_name(),
                                         absence_secs=absence_secs,
@@ -2401,17 +2571,20 @@ class MaezDaemon:
                                         mins = int((absence_secs % 3600) // 60)
                                         logger.info(
                                             "Greeted %s (away %dh %dm)",
-                                            _display_name(), hrs, mins,
+                                            _display_name(),
+                                            hrs,
+                                            mins,
                                         )
 
                         # Morning briefing check
-                        if (self._last_presence_snap.just_arrived
-                                and person in ("the owner", "unknown")):
+                        if self._last_presence_snap.just_arrived and person in (
+                            "the owner",
+                            "unknown",
+                        ):
                             self._send_morning_briefing(snap)
 
                         # Stranger detected — log, don't greet
-                        if (self._last_presence_snap.rohit_present
-                                and person == "stranger"):
+                        if self._last_presence_snap.rohit_present and person == "stranger":
                             logger.info("Stranger at desk — not greeting")
                 except Exception as e:
                     logger.warning("Presence error: %s", e)
@@ -2428,9 +2601,8 @@ class MaezDaemon:
                 # Cache dirty-repo count for the perception-signature gate.
                 try:
                     from skills.git_awareness import scan_all
-                    self._last_git_dirty_count = sum(
-                        1 for r in scan_all() if r.get("is_dirty")
-                    )
+
+                    self._last_git_dirty_count = sum(1 for r in scan_all() if r.get("is_dirty"))
                 except Exception as e:
                     logger.debug("git dirty count update failed: %s", e)
 
@@ -2462,21 +2634,22 @@ class MaezDaemon:
             if self.cycle_count % 20 == 0:
                 try:
                     from skills.evolution_engine import check_and_revert
+
                     check_and_revert(self.memory, telegram_callback=send_dev)
                 except Exception as e:
                     logger.debug("Evolution check failed: %s", e)
 
             # Disk cleanup check — every 2 hours, if disk > 75%
-            if (self.cycle_count % 240 == 0
-                    and snap["disk"].get("/", {}).get("percent", 0) > 75):
+            if self.cycle_count % 240 == 0 and snap["disk"].get("/", {}).get("percent", 0) > 75:
                 try:
                     report = disk_scan()
-                    if report['total_bytes'] > 100 * 1024 * 1024:
+                    if report["total_bytes"] > 100 * 1024 * 1024:
                         msg = disk_msg(report)
                         send_dev(msg)
                         self._pending_cleanup = report
-                        logger.info("Disk cleanup proposed: %.0f MB",
-                                    report['total_bytes'] / (1024 * 1024))
+                        logger.info(
+                            "Disk cleanup proposed: %.0f MB", report["total_bytes"] / (1024 * 1024)
+                        )
                 except Exception as e:
                     logger.error("Disk scan failed: %s", e)
 
@@ -2488,8 +2661,10 @@ class MaezDaemon:
                     critique = cog_self_critique()
                     if critique:
                         self._last_cognition_critique = critique
-                        if critique.get('should_write_soul_note') and critique.get('soul_note_reason'):
-                            reason = critique['soul_note_reason']
+                        if critique.get("should_write_soul_note") and critique.get(
+                            "soul_note_reason"
+                        ):
+                            reason = critique["soul_note_reason"]
                             soul_text = self.system_prompt or ""
                             if reason[:60] not in soul_text:
                                 logger.info("Cognition soul note: %s", reason[:100])
@@ -2516,8 +2691,9 @@ class MaezDaemon:
                         # If soul.md mentions "approval rate" AND this insight
                         # is about approval rate, it's a duplicate lesson
                         key_concepts = ["approval rate", "fixation", "repetition"]
-                        covered = sum(1 for k in key_concepts
-                                      if k in soul_lower and k in insight_lower)
+                        covered = sum(
+                            1 for k in key_concepts if k in soul_lower and k in insight_lower
+                        )
                         # Also dedup against last-written insight
                         last = getattr(self, "_last_reflection_insight", None)
                         if covered > 0 or insight == last:
@@ -2543,11 +2719,11 @@ class MaezDaemon:
                 should_skip_reasoning,
                 stale_fields,
             )
+
             _presence_state = (
-                "at_desk" if (
-                    self._last_presence_snap is not None
-                    and self._last_presence_snap.rohit_present
-                ) else "away"
+                "at_desk"
+                if (self._last_presence_snap is not None and self._last_presence_snap.rohit_present)
+                else "away"
             )
             current_axes = extract_axes(
                 snap,
@@ -2557,7 +2733,8 @@ class MaezDaemon:
             current_sig = signature_from_axes(current_axes)
             last_sig = (
                 signature_from_axes(self._recent_thought_axes[-1])
-                if self._recent_thought_axes else None
+                if self._recent_thought_axes
+                else None
             )
             if should_skip_reasoning(
                 current_signature=current_sig,
@@ -2575,12 +2752,14 @@ class MaezDaemon:
                 # last 3 stored thoughts AND this cycle? Strip them
                 # from the prompt the LLM sees.
                 stale = stale_fields(
-                    list(self._recent_thought_axes), current_axes,
+                    list(self._recent_thought_axes),
+                    current_axes,
                 )
                 if stale:
                     logger.info(
                         "Cycle %d: redacting stale fields %s",
-                        self.cycle_count, sorted(stale),
+                        self.cycle_count,
+                        sorted(stale),
                     )
                 result = self._reason(snap, stale_fields=stale)
             if result is None:
@@ -2614,22 +2793,26 @@ class MaezDaemon:
                     # audit (summary of memory window, not live), and for
                     # daemon-cycle audits to correctly know that narration of
                     # activity is unsupported when vision is off by policy.
-                    _screen_state = getattr(
-                        self._last_screen_obs, "state", None,
-                    ) if self._last_screen_obs is not None else None
+                    _screen_state = (
+                        getattr(
+                            self._last_screen_obs,
+                            "state",
+                            None,
+                        )
+                        if self._last_screen_obs is not None
+                        else None
+                    )
                     if _screen_state == "ok" and getattr(
-                        self._last_screen_obs, "success", False,
+                        self._last_screen_obs,
+                        "success",
+                        False,
                     ):
                         _audit_transcript_parts.append("✓ screen_observation: present")
                         _cycle_signals_present.append("screen observation")
                     elif _screen_state == "disabled":
-                        _cycle_signals_absent.append(
-                            "screen observation (disabled by policy)"
-                        )
+                        _cycle_signals_absent.append("screen observation (disabled by policy)")
                     elif _screen_state == "unavailable":
-                        _cycle_signals_absent.append(
-                            "screen observation (endpoint unreachable)"
-                        )
+                        _cycle_signals_absent.append("screen observation (endpoint unreachable)")
                     else:
                         _cycle_signals_absent.append("screen observation")
                     if self._last_presence_snap is not None:
@@ -2645,6 +2828,7 @@ class MaezDaemon:
                     _cycle_signals_present.append("system stats")
                     _audit_transcript = "\n".join(_audit_transcript_parts)
                     from core.self_claim_audit import audit as _sc_audit
+
                     _audit_result = _sc_audit(
                         result,
                         surface="daemon_cycle",
@@ -2654,8 +2838,7 @@ class MaezDaemon:
                     )
                     if _audit_result.rewritten:
                         logger.info(
-                            "Cycle %d: audit rewrote fabrication "
-                            "(kinds=%s)",
+                            "Cycle %d: audit rewrote fabrication (kinds=%s)",
                             self.cycle_count,
                             ",".join(sorted({f.kind for f in _audit_result.flags})),
                         )
@@ -2693,23 +2876,27 @@ class MaezDaemon:
                     if cog_should_retry(cog_metadata):
                         policy = cog_get_behavior_policy()
                         retry_instruction = cog_build_retry_prompt(cog_metadata, policy)
-                        initial_score = cog_metadata.get('cog_score', 0)
-                        initial_labels = cog_metadata.get('cog_labels', '')
-                        logger.info("Cycle %d: retry triggered (score=%d, labels=%s)",
-                                    self.cycle_count, initial_score, initial_labels)
+                        initial_score = cog_metadata.get("cog_score", 0)
+                        initial_labels = cog_metadata.get("cog_labels", "")
+                        logger.info(
+                            "Cycle %d: retry triggered (score=%d, labels=%s)",
+                            self.cycle_count,
+                            initial_score,
+                            initial_labels,
+                        )
 
                         # One corrective retry — append instruction to existing prompt
-                        last_prompt = getattr(self, '_last_reasoning_prompt', '')
+                        last_prompt = getattr(self, "_last_reasoning_prompt", "")
                         acquired = self._ollama_lock.acquire(timeout=0)
                         if acquired:
                             try:
                                 # Session 11r: via llm_client (was missed in 11p batch)
                                 from core import llm_client as _llm_client
+
                                 # Same stable system content as primary cycle —
                                 # keeps KV cache warm for retries too.
                                 retry_system = (
-                                    self.system_prompt + "\n\n"
-                                    + _STATIC_CYCLE_INSTRUCTIONS
+                                    self.system_prompt + "\n\n" + _STATIC_CYCLE_INSTRUCTIONS
                                 )
                                 retry_response = _llm_client.chat(
                                     model=MODEL,
@@ -2739,6 +2926,7 @@ class MaezDaemon:
                                         from core.safety.audited_output import (
                                             audit_assistant_text as _aud_txt,
                                         )
+
                                         retry_content = _aud_txt(
                                             retry_content,
                                             surface="daemon_cycle_retry",
@@ -2755,26 +2943,35 @@ class MaezDaemon:
                                     retry_thought = retry_content + screen_note + calendar_note
                                     retry_cog = cog_score_and_classify(retry_thought)
 
-                                    if retry_cog.get('cog_score', 0) > initial_score:
+                                    if retry_cog.get("cog_score", 0) > initial_score:
                                         # Retry is better — use it
                                         full_thought = retry_thought
                                         result = retry_content
                                         cog_metadata = retry_cog
-                                        cog_metadata['cog_retried'] = 'improved'
-                                        cog_metadata['cog_initial_score'] = initial_score
-                                        cog_metadata['cog_initial_labels'] = initial_labels
-                                        logger.info("Cycle %d: retry improved %d → %d",
-                                                    self.cycle_count, initial_score,
-                                                    retry_cog.get('cog_score', 0))
+                                        cog_metadata["cog_retried"] = "improved"
+                                        cog_metadata["cog_initial_score"] = initial_score
+                                        cog_metadata["cog_initial_labels"] = initial_labels
+                                        logger.info(
+                                            "Cycle %d: retry improved %d → %d",
+                                            self.cycle_count,
+                                            initial_score,
+                                            retry_cog.get("cog_score", 0),
+                                        )
                                     else:
                                         # Retry didn't help — keep original
-                                        cog_metadata['cog_retried'] = 'kept_original'
-                                        cog_metadata['cog_retry_score'] = retry_cog.get('cog_score', 0)
-                                        logger.info("Cycle %d: retry not better (%d vs %d), keeping original",
-                                                    self.cycle_count, retry_cog.get('cog_score', 0), initial_score)
+                                        cog_metadata["cog_retried"] = "kept_original"
+                                        cog_metadata["cog_retry_score"] = retry_cog.get(
+                                            "cog_score", 0
+                                        )
+                                        logger.info(
+                                            "Cycle %d: retry not better (%d vs %d), keeping original",
+                                            self.cycle_count,
+                                            retry_cog.get("cog_score", 0),
+                                            initial_score,
+                                        )
                             except Exception as e:
                                 logger.debug("Retry generation failed: %s", e)
-                                cog_metadata['cog_retried'] = 'failed'
+                                cog_metadata["cog_retried"] = "failed"
                             finally:
                                 self._ollama_lock.release()
                 except Exception as e:
@@ -2790,19 +2987,23 @@ class MaezDaemon:
                     "screen_activity": screen_activity,
                     "focus_level": focus_level,
                     "next_event": next_event,
-                    "rohit_present": str(self._last_presence_snap.rohit_present) if self._last_presence_snap else "unknown",
+                    "rohit_present": str(self._last_presence_snap.rohit_present)
+                    if self._last_presence_snap
+                    else "unknown",
                 }
                 mem_metadata.update(cog_metadata)
-                self.memory.store(full_thought,
-                                  cycle=self.cycle_count,
-                                  snapshot=snap, metadata=mem_metadata)
+                self.memory.store(
+                    full_thought, cycle=self.cycle_count, snapshot=snap, metadata=mem_metadata
+                )
 
                 # Broadcast cycle end with thought to UI
-                self._ws_broadcast({
-                    "type": "cycle_end",
-                    "cycle": self.cycle_count,
-                    "thought": result,
-                })
+                self._ws_broadcast(
+                    {
+                        "type": "cycle_end",
+                        "cycle": self.cycle_count,
+                        "thought": result,
+                    }
+                )
 
                 # 2026-04-25 fixation patches: thought stored — push
                 # axes into history (Patch A's stale-field detector)
@@ -2817,6 +3018,7 @@ class MaezDaemon:
                 cycle_deadline = cycle_start + LOOP_INTERVAL - 2.0
                 if time.time() < cycle_deadline - 10:
                     from daemon.wondering_cycle import advance_one
+
                     w_result = advance_one(self, deadline=cycle_deadline)
                     if w_result:
                         logger.info("Wondering advance: %s", w_result)
@@ -2829,14 +3031,16 @@ class MaezDaemon:
                 if self._continuity_checkpoint_counter >= CONTINUITY_CHECKPOINT_INTERVAL:
                     self._continuity_checkpoint_counter = 0
                     try:
-                        _last_cog = getattr(self, '_last_cog_metadata', {})
-                        continuity_checkpoint(last_thought={
-                            'text': result[:200],
-                            'cycle': self.cycle_count,
-                            'score': _last_cog.get('cog_score', 0),
-                            'topic': _last_cog.get('cog_topic', ''),
-                            'labels': _last_cog.get('cog_labels', '').split(','),
-                        })
+                        _last_cog = getattr(self, "_last_cog_metadata", {})
+                        continuity_checkpoint(
+                            last_thought={
+                                "text": result[:200],
+                                "cycle": self.cycle_count,
+                                "score": _last_cog.get("cog_score", 0),
+                                "topic": _last_cog.get("cog_topic", ""),
+                                "labels": _last_cog.get("cog_labels", "").split(","),
+                            }
+                        )
                     except Exception as e:
                         logger.debug("Continuity checkpoint failed: %s", e)
 
@@ -2858,11 +3062,11 @@ class MaezDaemon:
                 if sq:
                     try:
                         from skills.web_search import search as _ws
+
                         sr = _ws(sq, max_results=2)
-                        if sr.get('success') and sr['results']:
+                        if sr.get("success") and sr["results"]:
                             self._proactive_search_context = (
-                                f"[PROACTIVE SEARCH: '{sq}']\n"
-                                f"  {sr['results'][0]['snippet'][:200]}"
+                                f"[PROACTIVE SEARCH: '{sq}']\n  {sr['results'][0]['snippet'][:200]}"
                             )
                             logger.info("Proactive search queued: %s", sq[:60])
                     except Exception as e:
@@ -2891,7 +3095,7 @@ class MaezDaemon:
                     self.followup_queue.expire_old()
                     pending = self.followup_queue.get_pending()
                     for fu in pending:
-                        action_id = fu.get('action_id')
+                        action_id = fu.get("action_id")
                         if not action_id:
                             continue
                         # Look up the real action outcome from the quality
@@ -2899,26 +3103,37 @@ class MaezDaemon:
                         # re-asking the LLM what happened.
                         try:
                             from memory.quality_tracker import QualityTracker
+
                             qt = QualityTracker()
-                            outcome = qt.get_outcome(action_id) if hasattr(qt, 'get_outcome') else None
+                            outcome = (
+                                qt.get_outcome(action_id) if hasattr(qt, "get_outcome") else None
+                            )
                         except Exception:
                             outcome = None
-                        if not outcome or outcome.get('status') not in ('executed', 'cancelled', 'failed'):
+                        if not outcome or outcome.get("status") not in (
+                            "executed",
+                            "cancelled",
+                            "failed",
+                        ):
                             # Action still pending — wait for next window.
                             continue
-                        status = outcome.get('status', 'unknown')
-                        output = (outcome.get('output') or outcome.get('error') or '').strip()[:600]
-                        desc = fu.get('task', 'the action you asked about')
-                        if status == 'executed':
-                            msg = f"Done — {desc}\n\nResult: {output}" if output else f"Done — {desc}"
-                        elif status == 'cancelled':
+                        status = outcome.get("status", "unknown")
+                        output = (outcome.get("output") or outcome.get("error") or "").strip()[:600]
+                        desc = fu.get("task", "the action you asked about")
+                        if status == "executed":
+                            msg = (
+                                f"Done — {desc}\n\nResult: {output}" if output else f"Done — {desc}"
+                            )
+                        elif status == "cancelled":
                             msg = f"Cancelled — {desc}"
                         else:
                             msg = f"Failed — {desc}\n\n{output or 'No error detail.'}"
                         try:
                             self.telegram.send_message(msg)
-                            self.followup_queue.mark_delivered(fu['id'])
-                            logger.info("[FOLLOWUP] Delivered (grounded): %s → %s", action_id, status)
+                            self.followup_queue.mark_delivered(fu["id"])
+                            logger.info(
+                                "[FOLLOWUP] Delivered (grounded): %s → %s", action_id, status
+                            )
                         except Exception as e:
                             logger.error("[FOLLOWUP] Delivery send failed: %s", e)
                 except Exception as e:
@@ -2938,16 +3153,12 @@ class MaezDaemon:
             # re-spawn while an earlier dream is still in flight.
             try:
                 _now = time.time()
-                _absence = (
-                    (_now - self._last_departure_time)
-                    if self._last_departure_time
-                    else 0.0
-                )
-                if (
-                    self.dream.is_idle(self._last_presence_snap, _absence)
-                    and self.dream.should_run_now(_now)
-                ):
+                _absence = (_now - self._last_departure_time) if self._last_departure_time else 0.0
+                if self.dream.is_idle(
+                    self._last_presence_snap, _absence
+                ) and self.dream.should_run_now(_now):
                     logger.info("Dream cycle triggered — the owner AFK %.0fs", _absence)
+
                     def _run_dream_bg():
                         try:
                             _insight = self.dream.run_dream_cycle()
@@ -2960,6 +3171,7 @@ class MaezDaemon:
                                 logger.info("Training proposal #%d submitted", _train_id)
                         except Exception as _e:
                             logger.error("Dream cycle worker failed: %s", _e)
+
                     threading.Thread(
                         target=_run_dream_bg,
                         name="dream-cycle",
@@ -2993,16 +3205,18 @@ class MaezDaemon:
         # the model identifier for llamacpp — it uses the model the
         # server was started with — so this is cosmetic only, but a
         # wrong cosmetic is worse than no cosmetic.
-        _backend = os.environ.get('MAEZ_LLM_BACKEND', 'ollama').lower()
-        if _backend == 'llamacpp':
+        _backend = os.environ.get("MAEZ_LLM_BACKEND", "ollama").lower()
+        if _backend == "llamacpp":
             try:
                 from core.model_config import (
                     PRIMARY_MODEL as _pm,
                     PRIMARY_BASE_URL as _pb,
                 )
+
                 logger.info(
                     "Runtime brain confirmed: %s via llama.cpp (%s)",
-                    _pm, _pb,
+                    _pm,
+                    _pb,
                 )
             except Exception as _mc_e:
                 # self-dev review on 5d27884 flagged: import failure
@@ -3049,15 +3263,16 @@ class MaezDaemon:
             except Exception as e:
                 logger.warning("surface v2 bootstrap failed: %s", e)
 
-
         # Load continuity capsule BEFORE greeting/session-resume logic
         self._continuity_capsule = continuity_load()
         if self._continuity_capsule:
             self._continuity_active = True
             self._continuity_cycles_remaining = POST_RESTART_INJECTION_CYCLES
-            logger.info("Continuity active: %d orientation cycles, mode=%s",
-                        self._continuity_cycles_remaining,
-                        self._continuity_capsule.get('current_mode', '?'))
+            logger.info(
+                "Continuity active: %d orientation cycles, mode=%s",
+                self._continuity_cycles_remaining,
+                self._continuity_capsule.get("current_mode", "?"),
+            )
 
         # Detect offline duration from last shutdown timestamp
         stats = self.memory.memory_stats()
@@ -3069,7 +3284,9 @@ class MaezDaemon:
             if SHUTDOWN_FILE.exists():
                 last_shutdown = datetime.fromisoformat(SHUTDOWN_FILE.read_text().strip())
                 offline_seconds = (datetime.now(timezone.utc) - last_shutdown).total_seconds()
-                logger.info("Last shutdown: %s (offline %.0fs)", last_shutdown.isoformat(), offline_seconds)
+                logger.info(
+                    "Last shutdown: %s (offline %.0fs)", last_shutdown.isoformat(), offline_seconds
+                )
         except Exception as e:
             logger.warning("Could not read last shutdown time: %s", e)
 
@@ -3129,18 +3346,21 @@ class MaezDaemon:
         loop_thread.start()
 
         # Start daily consolidation thread (3:00 AM)
-        consol_thread = threading.Thread(target=self._consolidation_loop, daemon=True,
-                                         name="consolidation")
+        consol_thread = threading.Thread(
+            target=self._consolidation_loop, daemon=True, name="consolidation"
+        )
         consol_thread.start()
 
         # Start nightly journal thread (11:00 PM)
-        journal_thread = threading.Thread(target=self._nightly_journal_loop, daemon=True,
-                                           name="journal")
+        journal_thread = threading.Thread(
+            target=self._nightly_journal_loop, daemon=True, name="journal"
+        )
         journal_thread.start()
 
         # Start proposal worker thread
         try:
             from skills.evolution_engine import start_proposal_worker
+
             start_proposal_worker()
         except Exception as e:
             logger.debug("Proposal worker start failed: %s", e)
@@ -3153,8 +3373,9 @@ class MaezDaemon:
         ws_thread.start()
 
         # Start health broadcast thread
-        hb_thread = threading.Thread(target=self._start_health_broadcast, daemon=True,
-                                      name="health-broadcast")
+        hb_thread = threading.Thread(
+            target=self._start_health_broadcast, daemon=True, name="health-broadcast"
+        )
         hb_thread.start()
 
         # Voice disabled — re-enable when voice pipeline is stable
@@ -3181,10 +3402,16 @@ class MaezDaemon:
                     try:
                         clean = text.lower()
                         text_cmd = text
-                        for phrase in ['hey maez', 'hey maze', 'hey maz',
-                                       'maez', 'maze', 'hey jarvis']:
+                        for phrase in [
+                            "hey maez",
+                            "hey maze",
+                            "hey maz",
+                            "maez",
+                            "maze",
+                            "hey jarvis",
+                        ]:
                             if clean.startswith(phrase):
-                                text_cmd = text[len(phrase):].strip(' ,.!?')
+                                text_cmd = text[len(phrase) :].strip(" ,.!?")
                                 break
 
                         if not text_cmd:
@@ -3198,8 +3425,7 @@ class MaezDaemon:
                         with self._voice_lock:
                             self._voice_active = False
 
-                threading.Thread(target=_handle, daemon=True,
-                                  name="maez-voice-handler").start()
+                threading.Thread(target=_handle, daemon=True, name="maez-voice-handler").start()
 
             if wake_word_start(_on_voice_command):
                 logger.info("Unified audio pipeline active — say 'Hey Maez'")
@@ -3229,13 +3455,16 @@ class MaezDaemon:
                 # logger only, so without this, everything outside
                 # that namespace silently drops.
                 import logging as _lg
+
                 _root = _lg.getLogger()
                 if not _root.handlers:
                     _h = _lg.StreamHandler()
-                    _h.setFormatter(_lg.Formatter(
-                        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-                        datefmt="%Y-%m-%d %H:%M:%S",
-                    ))
+                    _h.setFormatter(
+                        _lg.Formatter(
+                            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+                            datefmt="%Y-%m-%d %H:%M:%S",
+                        )
+                    )
                     _root.addHandler(_h)
                     _root.setLevel(_lg.INFO)
                 # Scope noise: vendored HTTP/telegram stacks talk a lot
@@ -3244,8 +3473,10 @@ class MaezDaemon:
                 # "POST getUpdates 200 OK" chatter doesn't. Maez and
                 # skills.surface stay at INFO for visibility.
                 for _name in (
-                    "httpx", "httpcore",
-                    "telegram", "telegram.ext",
+                    "httpx",
+                    "httpcore",
+                    "telegram",
+                    "telegram.ext",
                     "telegram.ext.Application",
                     "telegram.ext.Updater",
                 ):
@@ -3267,6 +3498,7 @@ class MaezDaemon:
                         logger.warning("surface v2 connect() returned False")
                         return
                     import asyncio as __a
+
                     self._surface_v2_loop = __a.get_running_loop()
                     logger.info("surface v2 live (tasks=%d)", len(__a.all_tasks()))
                     _hb = 0
@@ -3291,7 +3523,9 @@ class MaezDaemon:
                 logger.exception("surface v2 runner crashed: %s", e)
 
         self._surface_v2_thread = _threading.Thread(
-            target=_runner, daemon=True, name="surface-v2",
+            target=_runner,
+            daemon=True,
+            name="surface-v2",
         )
         self._surface_v2_thread.start()
 
@@ -3335,11 +3569,13 @@ class MaezDaemon:
             logger.debug("WebSocket loop stop failed: %s", e)
         try:
             if self._health_server is not None:
+
                 def _shutdown_health():
                     try:
                         self._health_server.shutdown()
                     except Exception as inner:
                         logger.debug("Health server shutdown failed: %s", inner)
+
                 threading.Thread(
                     target=_shutdown_health,
                     name="health-server-shutdown",
@@ -3371,21 +3607,25 @@ class MaezDaemon:
         def health():
             snap = perception_snapshot()
             gpu = snap.get("gpu") or {}
-            return jsonify({
-                "status": "alive",
-                "model": MODEL,
-                "boot_time": self.boot_time,
-                "cycle_count": self.cycle_count,
-                "last_cycle": self.last_cycle_time,
-                "uptime_seconds": int(time.time() - datetime.fromisoformat(self.boot_time).timestamp()),
-                "memory": self.memory.memory_stats(),
-                "system": {
-                    "cpu_percent": snap["cpu"]["percent"],
-                    "ram_percent": snap["ram"]["percent"],
-                    "gpu_percent": gpu.get("utilization_pct"),
-                    "gpu_temp_c": gpu.get("temperature_c"),
-                },
-            })
+            return jsonify(
+                {
+                    "status": "alive",
+                    "model": MODEL,
+                    "boot_time": self.boot_time,
+                    "cycle_count": self.cycle_count,
+                    "last_cycle": self.last_cycle_time,
+                    "uptime_seconds": int(
+                        time.time() - datetime.fromisoformat(self.boot_time).timestamp()
+                    ),
+                    "memory": self.memory.memory_stats(),
+                    "system": {
+                        "cpu_percent": snap["cpu"]["percent"],
+                        "ram_percent": snap["ram"]["percent"],
+                        "gpu_percent": gpu.get("utilization_pct"),
+                        "gpu_temp_c": gpu.get("temperature_c"),
+                    },
+                }
+            )
 
         @app.route("/message", methods=["POST"])
         def message():
@@ -3393,7 +3633,21 @@ class MaezDaemon:
             text = data.get("text", "").strip()
             if not text:
                 return jsonify({"error": "empty message"}), 400
-            reply = self.handle_message(text, source="UI")
+            # Accept optional history list ({role, content} dicts) so
+            # the UI can thread prior turns into synthesis. Without
+            # this, "Hi" mid-session re-greets because handle_message
+            # has no chat_history. Each adjacent (user, assistant)
+            # pair becomes one chat_history entry in the
+            # "<display>: <msg>\nMaez: <reply>" shape that
+            # core.brain.conversation_history.history_to_messages
+            # expects. 2026-04-27 incident fix.
+            raw_history = data.get("history") or []
+            chat_history = _pair_history_for_chat_threading(raw_history) if raw_history else None
+            reply = self.handle_message(
+                text,
+                source="UI",
+                chat_history=chat_history,
+            )
             return jsonify({"reply": reply})
 
         @app.route("/internal/brain_loop", methods=["POST"])
@@ -3423,20 +3677,20 @@ class MaezDaemon:
             data = request.get_json(silent=True) or {}
             text = (data.get("text") or "").strip()
             if not text:
-                return jsonify({"transcript": "",
-                                "error": "empty text"}), 400
+                return jsonify({"transcript": "", "error": "empty text"}), 400
             try:
                 telegram = getattr(self, "telegram", None)
-                get_pipeline_fn = (
-                    telegram._get_pipeline if telegram else None
-                )
+                get_pipeline_fn = telegram._get_pipeline if telegram else None
                 action_engine_ref = getattr(self, "actions", None)
                 if action_engine_ref is None or get_pipeline_fn is None:
-                    return jsonify({
-                        "transcript": "",
-                        "error": "action_engine or pipeline unavailable",
-                    }), 503
+                    return jsonify(
+                        {
+                            "transcript": "",
+                            "error": "action_engine or pipeline unavailable",
+                        }
+                    ), 503
                 from core import brain_loop as _bl
+
                 transcript = _bl.run_brain_loop(
                     text,
                     action_engine=action_engine_ref,
@@ -3472,11 +3726,14 @@ class MaezDaemon:
                 if card is None:
                     return jsonify({"ok": False, "error": f"no such card: {request_id}"}), 404
                 from core.pending_cards import CardStatus
+
                 if card.status not in {CardStatus.OPEN.value, CardStatus.DEFERRED.value}:
-                    return jsonify({
-                        "ok": False,
-                        "error": f"card status is {card.status!r}, not approvable",
-                    }), 409
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": f"card status is {card.status!r}, not approvable",
+                        }
+                    ), 409
 
                 class _CockpitCls:
                     source = "cockpit"
@@ -3486,13 +3743,19 @@ class MaezDaemon:
                 # PipelineResult may be the executed card result or a
                 # refusal (e.g., covenant / will-I / stale state).
                 ok = bool(getattr(result, "execution_success", None))
-                return jsonify({
-                    "ok": ok,
-                    "status": getattr(getattr(result, "status", None), "value", str(getattr(result, "status", ""))),
-                    "message": getattr(result, "message", ""),
-                    "output": (getattr(result, "execution_output", "") or "")[:2000],
-                    "error": getattr(result, "execution_error", None),
-                })
+                return jsonify(
+                    {
+                        "ok": ok,
+                        "status": getattr(
+                            getattr(result, "status", None),
+                            "value",
+                            str(getattr(result, "status", "")),
+                        ),
+                        "message": getattr(result, "message", ""),
+                        "output": (getattr(result, "execution_output", "") or "")[:2000],
+                        "error": getattr(result, "execution_error", None),
+                    }
+                )
             except Exception as e:
                 logger.warning("cockpit approve_card %s failed: %s", request_id, e)
                 return jsonify({"ok": False, "error": str(e)}), 500
@@ -3508,6 +3771,7 @@ class MaezDaemon:
 
         try:
             from werkzeug.serving import make_server
+
             srv = make_server("127.0.0.1", HEALTH_PORT, app)
             srv.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self._health_server = srv

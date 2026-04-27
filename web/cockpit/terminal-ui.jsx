@@ -429,11 +429,24 @@ function ChatPane({ tall, showSidebar = true }) {
     setInput('');
     // Optimistically show the user turn + a "thinking" placeholder
     sim.pushUserTurn ? sim.pushUserTurn(text) : sim.sendMessage(text);
+    // Build prior-turn history for the daemon to thread into synthesis.
+    // Without this, "Hi" mid-session re-greets because handle_message
+    // gets no chat_history (2026-04-27 incident). pushUserTurn appended
+    // the current text; drop the trailing entry and cap to last 6
+    // turns of prior context.
+    const activeSess = sim.state?.chat?.sessions?.find(
+      (s) => s.id === sim.state.chat.activeSessionId,
+    );
+    const allHistory = activeSess?.history || [];
+    const priorOnly = allHistory.slice(0, -1).slice(-6);
+    const history = priorOnly
+      .filter((h) => h && h.role && h.content)
+      .map((h) => ({ role: h.role, content: h.content }));
     try {
       const res = await fetch('http://127.0.0.1:11435/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, source: 'cockpit' }),
+        body: JSON.stringify({ text, source: 'cockpit', history }),
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
