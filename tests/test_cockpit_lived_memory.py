@@ -251,5 +251,248 @@ class MissingSqliteFilesHandledGracefully(_ClientFixture):
         self.assertEqual(body["edges"], [])
 
 
+def _seed_pushback_corpus(episode_db, graph_db):
+    """Seed a corpus that triggers the v1.3 belief simulator's
+    fabrication-path pattern. Two corrective edges that mention
+    fabrication / invented service plus a memory-integrity-tagging
+    followup doc give the simulator enough evidence to fire."""
+    from core.memory.episodes import EpisodeStore
+    from core.memory.relationship_graph import RelationshipGraph
+
+    store = EpisodeStore(episode_db)
+    graph = RelationshipGraph(graph_db)
+
+    ep_a = store.add(
+        title="INFRASTRUCTURE GROUND-TRUTH (correction):",
+        summary=(
+            "A prior reasoning loop invented a systemd service called "
+            "llama-server-vision."
+        ),
+        participants=["Maez"],
+        source_memory_ids=["core-vision-fix"],
+        source_kind="core_memory",
+        emotional_tone="corrective",
+        importance=4,
+    )
+    ep_b = store.add(
+        title="INFRASTRUCTURE GROUND-TRUTH (correction):",
+        summary=(
+            "Earlier raw-memory entries describe a hallucinated grounding "
+            "judge service. Confabulated narrative."
+        ),
+        participants=["Maez"],
+        source_memory_ids=["core-judge-fix"],
+        source_kind="core_memory",
+        emotional_tone="corrective",
+        importance=4,
+    )
+    # Stamp the edges with wording that includes the simulator's
+    # pattern keywords so the simulator can extract them.
+    subj = graph.upsert_node(label="Maez", kind="being")
+    obj_v = graph.upsert_node(
+        label="invented systemd service llama-server-vision",
+        kind="concept",
+    )
+    obj_j = graph.upsert_node(
+        label="hallucinated grounding judge fabrication",
+        kind="concept",
+    )
+    graph.add_edge(
+        subject_id=subj,
+        relation="corrected",
+        object_id=obj_v,
+        source_episode_ids=[ep_a],
+        source_memory_ids=["core-vision-fix"],
+        confidence=0.9,
+    )
+    graph.add_edge(
+        subject_id=subj,
+        relation="corrected",
+        object_id=obj_j,
+        source_episode_ids=[ep_b],
+        source_memory_ids=["core-judge-fix"],
+        confidence=0.9,
+    )
+    return ep_a, ep_b
+
+
+class CombinedEndpointSurfacesEchoesAndPredictions(_ClientFixture):
+    """v1.4: the existing /api/v1/lived-memory endpoint also returns
+    echoes (v1.2) and predictions (v1.3) so the cockpit panel can
+    render the full Living Memory surface from a single fetch."""
+
+    def test_combined_endpoint_includes_echoes_predictions_provenance(self):
+        _seed_pushback_corpus(self._ep_tmp.name, self._g_tmp.name)
+        resp = self.client.get("/api/v1/lived-memory")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_json()
+        # Existing fields still there.
+        self.assertIn("episodes", body)
+        self.assertIn("edges", body)
+        # New fields.
+        self.assertIn("echoes", body)
+        self.assertIn("predictions", body)
+        self.assertIn("provenance", body)
+        # Provenance summary shape.
+        self.assertIn("maez_authored", body["provenance"])
+        self.assertIn("project_doc", body["provenance"])
+        self.assertIn("total", body["provenance"])
+        # Counts grew.
+        self.assertIn("echoes", body["counts"])
+        self.assertIn("predictions", body["counts"])
+
+    def test_predictions_fire_on_pushback_corpus(self):
+        _seed_pushback_corpus(self._ep_tmp.name, self._g_tmp.name)
+        resp = self.client.get("/api/v1/lived-memory")
+        body = resp.get_json()
+        # Two corrective edges about fabrication should produce at
+        # least one prediction (the fabrication_path pattern).
+        self.assertGreaterEqual(len(body["predictions"]), 1)
+        for p in body["predictions"]:
+            # Hedge phrasing required.
+            cl = p["claim"].lower()
+            self.assertTrue(
+                "i would expect" in cl or "likely" in cl or "based on prior evidence" in cl,
+                f"unhedged prediction surfaced: {p['claim']}",
+            )
+            # Evidence IDs cited.
+            self.assertGreaterEqual(len(p["evidence_ids"]), 1)
+            # Uncertainty present.
+            self.assertTrue(p["uncertainty"])
+
+
+class DedicatedEndpointsExist(_ClientFixture):
+    """v1.4 splits the combined endpoint into per-resource APIs so the
+    cockpit (and any later consumer) can fetch only the slice it
+    needs without paying for the others."""
+
+    def test_episodes_endpoint(self):
+        _seed_stores(self._ep_tmp.name, self._g_tmp.name)
+        resp = self.client.get("/api/v1/lived-memory/episodes")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_json()
+        self.assertIn("episodes", body)
+        self.assertIn("count", body)
+        self.assertIn("provenance", body)
+        self.assertEqual(body["count"], len(body["episodes"]))
+
+    def test_graph_endpoint(self):
+        _seed_stores(self._ep_tmp.name, self._g_tmp.name)
+        resp = self.client.get("/api/v1/lived-memory/graph")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_json()
+        self.assertIn("edges", body)
+        self.assertIn("count", body)
+        self.assertEqual(body["count"], len(body["edges"]))
+
+    def test_echoes_endpoint(self):
+        _seed_stores(self._ep_tmp.name, self._g_tmp.name)
+        resp = self.client.get("/api/v1/lived-memory/echoes")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_json()
+        self.assertIn("echoes", body)
+        self.assertIn("count", body)
+
+    def test_predictions_endpoint_default_query(self):
+        _seed_pushback_corpus(self._ep_tmp.name, self._g_tmp.name)
+        resp = self.client.get("/api/v1/lived-memory/predictions")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_json()
+        self.assertIn("query", body)
+        self.assertIn("predictions", body)
+        self.assertGreaterEqual(len(body["predictions"]), 1)
+
+    def test_predictions_endpoint_custom_query(self):
+        _seed_pushback_corpus(self._ep_tmp.name, self._g_tmp.name)
+        resp = self.client.get(
+            "/api/v1/lived-memory/predictions?q=" "what+would+I+reject+next"
+        )
+        body = resp.get_json()
+        self.assertEqual(body["query"], "what would I reject next")
+        self.assertGreaterEqual(len(body["predictions"]), 1)
+
+    def test_predictions_endpoint_non_pushback_query_returns_empty(self):
+        _seed_pushback_corpus(self._ep_tmp.name, self._g_tmp.name)
+        resp = self.client.get(
+            "/api/v1/lived-memory/predictions?q=what+is+for+breakfast"
+        )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_json()
+        # Simulator is gated on query shape; non-pushback → empty.
+        self.assertEqual(body["predictions"], [])
+
+    def test_brief_endpoint_returns_lines(self):
+        _seed_stores(self._ep_tmp.name, self._g_tmp.name)
+        resp = self.client.get(
+            "/api/v1/lived-memory/brief?q=what+is+today+echoing+from+last+week"
+        )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_json()
+        self.assertIn("query", body)
+        self.assertIn("brief", body)
+        self.assertIn("lines", body)
+        # Brief must be a string and lines must split on newlines.
+        self.assertIsInstance(body["brief"], str)
+        self.assertIsInstance(body["lines"], list)
+
+
+class ProvenanceFieldsSurfaceOnEpisodes(_ClientFixture):
+    """v1.4: episode payloads must include the v1.0 provenance fields
+    so the cockpit panel can distinguish Maez-authored vs project-doc
+    open loops at a glance."""
+
+    def test_followup_episode_carries_external_provenance(self):
+        from core.memory.episodes import EpisodeStore
+
+        store = EpisodeStore(self._ep_tmp.name)
+        store.add(
+            title="Project open loop: example",
+            summary="external doc summary",
+            participants=[],
+            source_memory_ids=["followup-doc:docs/followups/example.md"],
+            source_kind="followup_doc",
+            open_loop="(project ledger) example",
+            authorship="project_doc",
+            memory_voice="external_to_maez",
+        )
+        store.add(
+            title="Maez self-observation: example",
+            summary="something I noticed",
+            participants=["Maez"],
+            source_memory_ids=["raw-1"],
+            source_kind="raw_observation",
+        )
+        resp = self.client.get("/api/v1/lived-memory/episodes")
+        body = resp.get_json()
+        # Provenance summary counts both.
+        self.assertEqual(body["provenance"]["project_doc"], 1)
+        self.assertEqual(body["provenance"]["maez_authored"], 1)
+        # Authorship and memory_voice are present on each episode row.
+        for ep in body["episodes"]:
+            self.assertIn("authorship", ep)
+            self.assertIn("memory_voice", ep)
+
+
+class PredictionsNeverContainMindReadingLanguage(_ClientFixture):
+    """The v1.3 hard rules must hold all the way through the API
+    boundary. No claim served by the cockpit may use mind-reading
+    language."""
+
+    _FORBIDDEN = ("hates", "angry", "upset", "feels", "definitely", "certainly")
+
+    def test_no_forbidden_words_in_predictions(self):
+        _seed_pushback_corpus(self._ep_tmp.name, self._g_tmp.name)
+        resp = self.client.get("/api/v1/lived-memory")
+        body = resp.get_json()
+        for p in body.get("predictions", []):
+            cl = p["claim"].lower()
+            for forbidden in self._FORBIDDEN:
+                self.assertNotIn(
+                    forbidden,
+                    cl,
+                    f"forbidden word {forbidden!r} in claim: {p['claim']}",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

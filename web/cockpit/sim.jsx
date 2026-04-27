@@ -100,10 +100,16 @@ const SIM = (() => {
     livedMemory: {
       // ADR 0019 — populated by _pollLivedMemory from
       // /api/v1/lived-memory; empty until owner runs the nightly
-      // reflection orchestrator.
+      // reflection orchestrator. v1.4 adds echoes (v1.2 finder),
+      // predictions (v1.3 simulator), and provenance summary so the
+      // Living Memory panel can render the full surface from a
+      // single fetch.
       episodes: [],
       edges: [],
-      counts: { episodes: 0, edges: 0 },
+      echoes: [],
+      predictions: [],
+      provenance: { maez_authored: 0, project_doc: 0, total: 0 },
+      counts: { episodes: 0, edges: 0, echoes: 0, predictions: 0 },
     },
     memory: {
       query: '',
@@ -600,6 +606,9 @@ const SIM = (() => {
       markLive('livedMemory');
       if (Array.isArray(d.episodes)) state.livedMemory.episodes = d.episodes;
       if (Array.isArray(d.edges)) state.livedMemory.edges = d.edges;
+      if (Array.isArray(d.echoes)) state.livedMemory.echoes = d.echoes;
+      if (Array.isArray(d.predictions)) state.livedMemory.predictions = d.predictions;
+      if (d.provenance) state.livedMemory.provenance = d.provenance;
       if (d.counts) state.livedMemory.counts = d.counts;
       emit();
     } catch (e) { markOffline('livedMemory', e); }

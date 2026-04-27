@@ -1446,6 +1446,12 @@ def _read_lived_episodes(db_path):
     out = []
     for r in rows:
         d = dict(r)
+        # Provenance fields (added 2026-04-27 by v1.0 followup-doc
+        # ingest). NULL on pre-existing rows means Maez-authored,
+        # first-person — the only mode that existed before. The
+        # cockpit panel renders external project-doc episodes
+        # distinctly so the owner can tell a hand-curated open loop
+        # apart from a Maez self-observation.
         out.append(
             {
                 "id": d.get("id"),
@@ -1464,6 +1470,8 @@ def _read_lived_episodes(db_path):
                 "participants": _json.loads(
                     d.get("participants_json") or "[]"
                 ),
+                "authorship": d.get("authorship"),
+                "memory_voice": d.get("memory_voice"),
             }
         )
     return out
@@ -1520,25 +1528,252 @@ def _read_lived_edges(db_path):
     return out
 
 
+_DEFAULT_BRIEF_QUERY = "What is today echoing from last week?"
+_DEFAULT_PREDICTIONS_QUERY = "What would I push back on next?"
+
+
+def _provenance_summary(episodes: list) -> dict:
+    """Cockpit-friendly counts of episodes by authorship/voice. The
+    panel uses this to badge the section header so the owner can see
+    at a glance how much of lived memory is Maez-authored vs
+    project-doc carried."""
+    maez_authored = 0
+    project_doc = 0
+    for ep in episodes:
+        authorship = (ep.get("authorship") or "").lower()
+        if authorship == "project_doc":
+            project_doc += 1
+        else:
+            # NULL or "maez" or anything else falls back to
+            # Maez-authored — that's the only mode pre-2026-04-27.
+            maez_authored += 1
+    return {
+        "maez_authored": maez_authored,
+        "project_doc": project_doc,
+        "total": len(episodes),
+    }
+
+
+def _compute_echoes_for_cockpit() -> list:
+    """Render-ready echoes for the cockpit panel. Empty list on any
+    failure path so the panel never 500s."""
+    try:
+        from core.memory.episodes import EpisodeStore
+        from core.memory.temporal_echo import find_echoes
+
+        import os as _os
+
+        if not _os.path.exists(_LIVED_EPISODE_DB_PATH):
+            return []
+        store = EpisodeStore(_LIVED_EPISODE_DB_PATH)
+        echoes = find_echoes(store, max_echoes=2)
+        return [
+            {
+                "recent_episode_id": e.recent_episode_id,
+                "older_episode_id": e.older_episode_id,
+                "shared_features": list(e.shared_features),
+                "explanation": e.explanation,
+                "score": e.score,
+            }
+            for e in echoes
+        ]
+    except Exception:
+        return []
+
+
+def _compute_predictions_for_cockpit(query: str) -> list:
+    """Render-ready predictions for the cockpit panel. The simulator
+    is gated on pushback-shape queries; non-pushback queries return
+    [] and the panel silently omits the section."""
+    try:
+        from core.memory.episodes import EpisodeStore
+        from core.memory.relationship_graph import RelationshipGraph
+        from core.memory.belief_simulator import (
+            simulate_owner_pushback,
+            is_pushback_prediction_query,
+        )
+        from core.memory.temporal_echo import find_echoes
+
+        import os as _os
+
+        if not _os.path.exists(_LIVED_EPISODE_DB_PATH) or not _os.path.exists(
+            _LIVED_GRAPH_DB_PATH
+        ):
+            return []
+        if not is_pushback_prediction_query(query or ""):
+            return []
+        store = EpisodeStore(_LIVED_EPISODE_DB_PATH)
+        graph = RelationshipGraph(_LIVED_GRAPH_DB_PATH)
+        edges_for_sim: list = []
+        # Reuse the readers' edge format and stamp labels onto each
+        # row so simulator pattern matching can scan the relation
+        # triple text.
+        edges = _read_lived_edges(_LIVED_GRAPH_DB_PATH)
+        edges_for_sim = list(edges)
+        open_loops = [
+            ep
+            for ep in (store.list_active() or [])
+            if ep.get("open_loop")
+        ]
+        echoes = find_echoes(store, max_echoes=4)
+        predictions = simulate_owner_pushback(
+            query,
+            graph_edges=edges_for_sim,
+            open_loops=open_loops,
+            echoes=echoes,
+        )
+        return [
+            {
+                "claim": p.claim,
+                "basis": list(p.basis),
+                "confidence": p.confidence,
+                "evidence_ids": list(p.evidence_ids),
+                "uncertainty": p.uncertainty,
+                # Compact supporting evidence so the panel can render
+                # the trail under each claim. Full edge/episode rows
+                # are too verbose for inline; the panel can re-fetch
+                # /episodes or /graph if it wants the full record.
+                "supporting_edge_ids": [
+                    e.get("id") for e in p.supporting_edges if e.get("id")
+                ],
+                "supporting_episode_ids": [
+                    ep.get("id") for ep in p.supporting_episodes if ep.get("id")
+                ],
+            }
+            for p in predictions
+        ]
+    except Exception:
+        return []
+
+
 @app.route("/api/v1/lived-memory")
 def api_lived_memory():
     """Lived-memory layer (ADR 0019) — episodes + graph edges with
-    evidence trails, for the cockpit's Living Memory panel.
+    evidence trails, plus v1.2 echoes and v1.3 predictions, for the
+    cockpit's Living Memory panel.
 
     Returns empty lists (not 500) when the SQLite stores haven't been
     populated yet. Owner runs scripts/memory_reflection/
     nightly_lived_memory.py --apply to populate.
+
+    Echoes use the v1.2 deterministic finder; predictions are
+    computed on the canonical pushback query so the panel always has
+    something to show on first load. The dedicated /predictions
+    endpoint accepts a custom query.
     """
     episodes = _read_lived_episodes(_LIVED_EPISODE_DB_PATH)
     edges = _read_lived_edges(_LIVED_GRAPH_DB_PATH)
+    echoes = _compute_echoes_for_cockpit()
+    predictions = _compute_predictions_for_cockpit(_DEFAULT_PREDICTIONS_QUERY)
     return jsonify(
         {
             "episodes": episodes,
             "edges": edges,
+            "echoes": echoes,
+            "predictions": predictions,
+            "provenance": _provenance_summary(episodes),
             "counts": {
                 "episodes": len(episodes),
                 "edges": len(edges),
+                "echoes": len(echoes),
+                "predictions": len(predictions),
             },
+        }
+    )
+
+
+@app.route("/api/v1/lived-memory/episodes")
+def api_lived_memory_episodes():
+    """Just the episodes — for cockpit views that want the raw
+    episode list without graph / echo / prediction overhead."""
+    episodes = _read_lived_episodes(_LIVED_EPISODE_DB_PATH)
+    return jsonify(
+        {
+            "episodes": episodes,
+            "count": len(episodes),
+            "provenance": _provenance_summary(episodes),
+        }
+    )
+
+
+@app.route("/api/v1/lived-memory/graph")
+def api_lived_memory_graph():
+    """Just the relationship graph edges, for the relationship-belief
+    pane in the cockpit."""
+    edges = _read_lived_edges(_LIVED_GRAPH_DB_PATH)
+    return jsonify({"edges": edges, "count": len(edges)})
+
+
+@app.route("/api/v1/lived-memory/echoes")
+def api_lived_memory_echoes():
+    """v1.2 temporal echoes — query-agnostic deterministic
+    resemblance claims between recent and older important episodes.
+    The panel surfaces these directly; the chat surface does NOT
+    consume this endpoint in v1.4 (observation-only)."""
+    echoes = _compute_echoes_for_cockpit()
+    return jsonify({"echoes": echoes, "count": len(echoes)})
+
+
+@app.route("/api/v1/lived-memory/predictions")
+def api_lived_memory_predictions():
+    """v1.3 belief-simulator predictions for a pushback-shape query.
+
+    Query parameter ``q`` is optional; defaults to the canonical
+    pushback prompt so the cockpit panel always has something to
+    show. Non-pushback queries return an empty list — the simulator
+    is gated on query shape and the panel omits the section in that
+    case.
+    """
+    query = request.args.get("q") or _DEFAULT_PREDICTIONS_QUERY
+    predictions = _compute_predictions_for_cockpit(query)
+    return jsonify(
+        {
+            "query": query,
+            "predictions": predictions,
+            "count": len(predictions),
+        }
+    )
+
+
+@app.route("/api/v1/lived-memory/brief")
+def api_lived_memory_brief():
+    """Run the lived-recall planner against a query and return the
+    full brief as a string. The cockpit can use this to inspect
+    exactly what the planner would surface for any query before that
+    surface is wired into Maez's chat path.
+
+    Returns ``{"query": ..., "brief": ..., "lines": [...]}``. The
+    ``lines`` field splits the brief on newlines for easier rendering
+    in the panel; ``brief`` is the raw multi-line string.
+    """
+    query = request.args.get("q") or _DEFAULT_BRIEF_QUERY
+    try:
+        from core.memory.episodes import EpisodeStore
+        from core.memory.relationship_graph import RelationshipGraph
+        from core.memory.lived_recall import build_lived_recall_brief
+
+        import os as _os
+
+        if not _os.path.exists(_LIVED_EPISODE_DB_PATH) or not _os.path.exists(
+            _LIVED_GRAPH_DB_PATH
+        ):
+            brief = ""
+        else:
+            store = EpisodeStore(_LIVED_EPISODE_DB_PATH)
+            graph = RelationshipGraph(_LIVED_GRAPH_DB_PATH)
+            brief = build_lived_recall_brief(
+                query,
+                episode_store=store,
+                graph=graph,
+            )
+    except Exception:
+        brief = ""
+    lines = brief.splitlines() if brief else []
+    return jsonify(
+        {
+            "query": query,
+            "brief": brief,
+            "lines": lines,
         }
     )
 

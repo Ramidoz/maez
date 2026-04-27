@@ -1226,10 +1226,19 @@ function RouterPane() {
 // Plus the relationship view: subject → relation → object with
 // evidence. Never asserts live state.
 
+// v1.4 cockpit-only observability surfaces (ADR 0019):
+//   - Provenance chip per episode (Maez-authored vs project-doc)
+//   - Temporal echoes section (v1.2 deterministic finder)
+//   - Predicted pushbacks section (v1.3 belief simulator, hedged
+//     and evidence-cited; observation-only — Maez's voice never
+//     consumes these in v1.4)
+
 function LivingMemorySection({ lived }) {
   const epCount = lived.counts?.episodes ?? 0;
   const edCount = lived.counts?.edges ?? 0;
-  const total = epCount + edCount;
+  const echoCount = lived.counts?.echoes ?? 0;
+  const predCount = lived.counts?.predictions ?? 0;
+  const total = epCount + edCount + echoCount + predCount;
 
   if (total === 0) {
     return (
@@ -1259,16 +1268,21 @@ function LivingMemorySection({ lived }) {
         borderLeft: `3px solid ${A.violet || A.blue}`,
         background: 'rgba(120, 100, 200, 0.04)',
       }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 4, flexWrap: 'wrap' }}>
           <div style={{ fontSize: 11, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 600 }}>
             Living memory · ADR 0019
           </div>
           <div style={{ fontFamily: A.mono, fontSize: 11, color: A.textDim }}>
-            {epCount} episode{epCount === 1 ? '' : 's'} · {edCount} edge{edCount === 1 ? '' : 's'}
+            {epCount} episode{epCount === 1 ? '' : 's'} · {edCount} edge{edCount === 1 ? '' : 's'} · {echoCount} echo{echoCount === 1 ? '' : 'es'} · {predCount} prediction{predCount === 1 ? '' : 's'}
           </div>
+          {lived.provenance && lived.provenance.total > 0 && (
+            <div style={{ fontFamily: A.mono, fontSize: 10, color: A.textFaint }}>
+              · provenance: {lived.provenance.maez_authored} Maez-authored, {lived.provenance.project_doc} project-doc
+            </div>
+          )}
         </div>
         <div style={{ fontSize: 12, color: A.textDim, lineHeight: 1.5, fontFamily: A.sans }}>
-          Past, never present. Each item cites the memory it came from.
+          Past, never present. Each item cites the memory it came from. Predictions are pattern-based expectations, never claims about hidden intent.
         </div>
       </Glass>
 
@@ -1283,6 +1297,11 @@ function LivingMemorySection({ lived }) {
               {ep.open_loop ? 'open loop' : 'past episode'}
             </Chip>
             {ep.emotional_tone && <Chip color={A.violet || A.blue}>{ep.emotional_tone}</Chip>}
+            {ep.authorship === 'project_doc' ? (
+              <Chip color={A.blue}>project doc · external to Maez</Chip>
+            ) : (
+              <Chip color={A.green}>Maez-authored</Chip>
+            )}
             <span style={{ fontFamily: A.mono }}>{ep.source_kind}</span>
             <span>·</span>
             <span style={{ fontFamily: A.mono }}>importance {ep.importance}</span>
@@ -1349,6 +1368,82 @@ function LivingMemorySection({ lived }) {
                 {(e.source_memory_ids || []).map((id) => (
                   <span key={id} style={{ color: A.textDim }}>· {id}</span>
                 ))}
+              </div>
+            </Glass>
+          ))}
+        </div>
+      )}
+
+      {/* Temporal echoes (v1.2) */}
+      {lived.echoes && lived.echoes.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 10, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 600, marginBottom: 8 }}>
+            Temporal echoes · today resembles…
+          </div>
+          {lived.echoes.map((echo, i) => (
+            <Glass key={`${echo.recent_episode_id}_${echo.older_episode_id}_${i}`} pad={12} style={{
+              marginBottom: 6,
+              borderLeft: `3px solid ${A.violet || A.blue}`,
+            }} className="ap-card">
+              <div style={{ fontFamily: A.sans, fontSize: 12.5, color: A.text, lineHeight: 1.5, marginBottom: 6 }}>
+                {echo.explanation}
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontSize: 10, color: A.textFaint, fontFamily: A.mono }}>
+                <span>shared:</span>
+                {(echo.shared_features || []).map((f) => (
+                  <Chip key={f} color={A.violet || A.blue} style={{ fontSize: 9 }}>{f}</Chip>
+                ))}
+                <span>· score {echo.score}</span>
+              </div>
+            </Glass>
+          ))}
+        </div>
+      )}
+
+      {/* Predicted pushbacks (v1.3) — observation-only in v1.4 */}
+      {lived.predictions && lived.predictions.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 10, color: A.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontFamily: A.sans, fontWeight: 600, marginBottom: 8 }}>
+            Predicted pushbacks · pattern-based, not mind-reading
+          </div>
+          <div style={{ fontSize: 11, color: A.textDim, marginBottom: 10, lineHeight: 1.5, fontFamily: A.sans }}>
+            What recent evidence suggests Rohit would likely push back on. Each prediction hedges, cites evidence, and includes uncertainty. Maez's spoken surfaces do <strong>not</strong> consume these in v1.4 — observation only.
+          </div>
+          {lived.predictions.map((p, i) => (
+            <Glass key={`pred_${i}`} pad={14} style={{
+              marginBottom: 8,
+              borderLeft: `3px solid ${A.orange}`,
+            }} className="ap-card">
+              <div style={{ display: 'flex', gap: 8, marginBottom: 6, fontSize: 10, color: A.textDim, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Chip color={A.orange}>prediction</Chip>
+                <span style={{ fontFamily: A.mono }}>confidence {Number(p.confidence || 0).toFixed(2)}</span>
+                <span style={{ fontFamily: A.mono, color: A.textFaint }}>(capped at 0.85)</span>
+              </div>
+              <div style={{ fontFamily: A.sans, fontSize: 13.5, color: A.text, fontWeight: 500, lineHeight: 1.5, marginBottom: 6 }}>
+                {p.claim}
+              </div>
+              {Array.isArray(p.basis) && p.basis.length > 0 && (
+                <div style={{ fontFamily: A.sans, fontSize: 12, color: A.textDim, lineHeight: 1.5, marginBottom: 4 }}>
+                  <strong style={{ color: A.textDim }}>Basis:</strong> {p.basis.join('; ')}
+                </div>
+              )}
+              <div style={{
+                fontFamily: A.sans, fontSize: 11.5, color: A.orange,
+                background: 'rgba(255, 170, 60, 0.06)',
+                padding: '6px 10px', borderRadius: 6, marginTop: 6, marginBottom: 6,
+                borderLeft: `2px solid ${A.orange}`,
+                lineHeight: 1.5,
+              }}>
+                <strong>Uncertainty:</strong> {p.uncertainty}
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontSize: 10, color: A.textFaint, fontFamily: A.mono, marginTop: 6 }}>
+                <span>evidence:</span>
+                {(p.evidence_ids || []).slice(0, 8).map((id) => (
+                  <span key={id} style={{ color: A.textDim }}>{id}</span>
+                ))}
+                {(p.evidence_ids || []).length > 8 && (
+                  <span style={{ color: A.textFaint }}>+{p.evidence_ids.length - 8} more</span>
+                )}
               </div>
             </Glass>
           ))}
