@@ -780,26 +780,35 @@ class TelegramAdapter(BasePlatformAdapter):
             # Handle inline keyboard button callbacks (update prompts)
             self._app.add_handler(CallbackQueryHandler(self._handle_callback_query))
             
-            # Start polling — retry initialize() for transient TLS resets
+            # Start polling — retry initialize() indefinitely on transient
+            # network failures. Bounded retry (the previous 8-attempt cap)
+            # left the bot permanently dead after a slow boot where DNS
+            # wasn't ready yet (2026-04-26 incident: daemon started before
+            # network was up, gave up after ~75s, never reconnected).
+            #
+            # Auth/config errors raise different exception classes and
+            # bypass this loop — only transient (NetworkError / TimedOut /
+            # OSError) is treated as retry-forever. Backoff caps at 60s
+            # so we don't hammer; heartbeat warning every 10 attempts so
+            # long outages stay visible in journal.
             try:
                 from telegram.error import NetworkError, TimedOut
             except ImportError:
                 NetworkError = TimedOut = OSError  # type: ignore[misc,assignment]
-            _max_connect = 8
-            for _attempt in range(_max_connect):
+            _attempt = 0
+            while True:
                 try:
                     await self._app.initialize()
                     break
                 except (NetworkError, TimedOut, OSError) as init_err:
-                    if _attempt < _max_connect - 1:
-                        wait = min(2 ** _attempt, 15)
+                    _attempt += 1
+                    wait = min(2 ** min(_attempt - 1, 6), 60)
+                    if _attempt <= 8 or _attempt % 10 == 0:
                         logger.warning(
-                            "[%s] Connect attempt %d/%d failed: %s — retrying in %ds",
-                            self.name, _attempt + 1, _max_connect, init_err, wait,
+                            "[%s] Connect attempt %d failed: %s — retrying in %ds",
+                            self.name, _attempt, init_err, wait,
                         )
-                        await asyncio.sleep(wait)
-                    else:
-                        raise
+                    await asyncio.sleep(wait)
             await self._app.start()
 
             # Decide between webhook and polling mode
