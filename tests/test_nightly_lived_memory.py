@@ -319,5 +319,143 @@ class MixedNoiseAndSignal(unittest.TestCase):
             cleanup()
 
 
+def _followup_memory(mid="followup-doc:docs/followups/example.md"):
+    return {
+        "id": mid,
+        "document": (
+            "# Example deferred follow-up\n\n"
+            "**Status:** Deferred follow-up. Filed 2026-04-27.\n\n"
+            "## What this is\n\n"
+            "A placeholder body so the detector has substance to chew on."
+        ),
+        "metadata": {
+            "kind": "followup",
+            "source": "docs_followups",
+            "authorship": "project_doc",
+            "memory_voice": "external_to_maez",
+            "file_path": "docs/followups/example.md",
+        },
+    }
+
+
+class FollowupIngestProducesProjectDocEpisode(unittest.TestCase):
+    """End-to-end through run_reflection: a followup-doc memory must
+    land an episode with provenance = project_doc / external_to_maez,
+    source_kind = followup_doc, no first-person participants, and the
+    open_loop field set so the recall planner surfaces it."""
+
+    def test_followup_round_trip_through_orchestrator(self):
+        from scripts.memory_reflection.nightly_lived_memory import (
+            run_reflection,
+        )
+
+        store, graph, cleanup = _stores()
+        try:
+            report = run_reflection(
+                memories=[_followup_memory()],
+                episode_store=store,
+                graph=graph,
+            )
+            self.assertEqual(report.candidates_seen, 1)
+            self.assertEqual(report.episodes_added, 1)
+            active = store.list_active()
+            self.assertEqual(len(active), 1)
+            ep = active[0]
+            self.assertEqual(ep["source_kind"], "followup_doc")
+            self.assertEqual(ep["authorship"], "project_doc")
+            self.assertEqual(ep["memory_voice"], "external_to_maez")
+            # No first-person attribution on a project doc.
+            self.assertEqual(ep["participants"], [])
+            # Open loop populated so the recall planner can surface it.
+            self.assertTrue(ep["open_loop"])
+            self.assertIn("project ledger", (ep["open_loop"] or "").lower())
+            # Evidence points back to the file via the synthetic id.
+            self.assertEqual(len(ep["source_memory_ids"]), 1)
+            self.assertTrue(
+                ep["source_memory_ids"][0].startswith("followup-doc:")
+            )
+        finally:
+            cleanup()
+
+
+class LoadFollowupsReadsRealDirectory(unittest.TestCase):
+    """The loader must read a temp followups directory and emit one
+    memory-shaped dict per .md file with the provenance metadata
+    pre-set so the builder doesn't have to re-derive it."""
+
+    def test_load_followups_emits_provenance_metadata(self):
+        from scripts.memory_reflection.nightly_lived_memory import (
+            _load_followups,
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "docs" / "followups").mkdir(parents=True)
+            (root / "docs" / "followups" / "alpha.md").write_text(
+                "# Alpha\n\n**Status:** Deferred follow-up.\n",
+                encoding="utf-8",
+            )
+            (root / "docs" / "followups" / "beta.md").write_text(
+                "# Beta\n\nNot a followup header.\n",
+                encoding="utf-8",
+            )
+            out = _load_followups(root)
+            # Both files are picked up — the builder, not the loader,
+            # is responsible for rejecting docs that lack the status
+            # header. Loader is a thin file-system reader.
+            self.assertEqual(len(out), 2)
+            ids = {m["id"] for m in out}
+            self.assertIn("followup-doc:docs/followups/alpha.md", ids)
+            self.assertIn("followup-doc:docs/followups/beta.md", ids)
+            for m in out:
+                meta = m["metadata"]
+                self.assertEqual(meta["kind"], "followup")
+                self.assertEqual(meta["source"], "docs_followups")
+                self.assertEqual(meta["authorship"], "project_doc")
+                self.assertEqual(meta["memory_voice"], "external_to_maez")
+                self.assertTrue(meta.get("file_path"))
+
+    def test_load_followups_missing_dir_returns_empty(self):
+        from scripts.memory_reflection.nightly_lived_memory import (
+            _load_followups,
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            # No docs/followups subtree at all.
+            out = _load_followups(Path(td))
+            self.assertEqual(out, [])
+
+
+class MissingDailyAccessorFailsLoud(unittest.TestCase):
+    """Silent ``except AttributeError`` swallowed an entire daily corpus
+    for an unknown number of nightly runs — an ingestion bug that
+    looked like cognition failure on the lived-memory probes. The
+    replacement contract: missing accessor raises RuntimeError with
+    a message that names the broken contract, never silently empties
+    the corpus."""
+
+    def test_missing_get_recent_daily_raises(self):
+        # Simulate a MemoryManager that has lost the accessor.
+        from scripts.memory_reflection import nightly_lived_memory as nlm
+
+        class FakeMM:
+            def get_all_core(self):
+                return []
+
+            # Intentionally no get_recent_daily.
+
+        # Patch the import target the loader uses.
+        import memory.memory_manager as mm_mod
+
+        original = mm_mod.MemoryManager
+        mm_mod.MemoryManager = FakeMM
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                nlm._load_memories_from_chroma()
+            self.assertIn("get_recent_daily", str(ctx.exception))
+        finally:
+            mm_mod.MemoryManager = original
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -144,6 +144,8 @@ def run_reflection(
                 emotional_tone=candidate.emotional_tone,
                 importance=candidate.importance,
                 open_loop=candidate.open_loop,
+                authorship=candidate.authorship,
+                memory_voice=candidate.memory_voice,
             )
         except Exception as e:
             report.extraction_errors += 1
@@ -209,13 +211,77 @@ def _write_log(report: ReflectionReport, log_path: Path) -> None:
         f.write("\n".join(lines))
 
 
-def _load_memories_from_chroma() -> Iterable[dict]:
-    """Read high-signal memories from the live MemoryManager.
+def _load_followups(repo_root: Path) -> list[dict]:
+    """Read ``docs/followups/*.md`` as memory-shaped dicts.
 
-    v1 sources: every active core memory + the most recent N daily
-    summaries. The raw collection is intentionally NOT scanned in v1
-    — it's 30k+ entries and most are heartbeat noise. The Phase 4
-    plan calls out "do not bulk-ingest all raw memories."
+    Followup docs are external project-level open-loop ledger entries
+    — hand-authored, NOT first-person Maez memory. The provenance
+    metadata set here (``source=docs_followups``, ``kind=followup``,
+    ``authorship=project_doc``, ``memory_voice=external_to_maez``)
+    instructs the builder's ``_detect_followup`` to phrase the
+    resulting episode as *"the project carries an open loop about X"*
+    instead of *"Maez decided X"*.
+
+    Each file becomes one memory-shaped dict with a synthetic but
+    stable id of the form ``followup-doc:<relative_path>`` so the
+    episode store's evidence requirement is satisfied and re-runs
+    are idempotent (dedup is by source_memory_id overlap).
+
+    Missing or empty directory → empty list. Per-file read errors
+    are skipped with a logger warning so one bad doc cannot kill
+    the run.
+    """
+    out: list[dict] = []
+    followups_dir = repo_root / "docs" / "followups"
+    if not followups_dir.exists():
+        return out
+    for path in sorted(followups_dir.glob("*.md")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as e:
+            logger.warning("followup read failed for %s: %s", path, e)
+            continue
+        rel = path.relative_to(repo_root).as_posix()
+        try:
+            mtime_iso = datetime.fromtimestamp(
+                path.stat().st_mtime, tz=timezone.utc
+            ).isoformat(timespec="seconds")
+        except OSError:
+            mtime_iso = ""
+        out.append(
+            {
+                "id": f"followup-doc:{rel}",
+                "document": text,
+                "metadata": {
+                    "kind": "followup",
+                    "source": "docs_followups",
+                    "authorship": "project_doc",
+                    "memory_voice": "external_to_maez",
+                    "file_path": rel,
+                    "timestamp": mtime_iso,
+                },
+            }
+        )
+    return out
+
+
+def _load_memories_from_chroma() -> Iterable[dict]:
+    """Read high-signal memories from the live MemoryManager + project
+    open-loop ledger.
+
+    v1 sources:
+
+    - every active core memory (Maez first-person)
+    - the most recent N daily summaries (Maez first-person)
+    - every file under ``docs/followups/*.md`` (external project doc)
+
+    The raw collection is intentionally NOT scanned in v1 — it's 30k+
+    entries and most are heartbeat noise. The Phase 4 plan calls out
+    "do not bulk-ingest all raw memories."
+
+    Missing accessors fail loudly (RuntimeError) — silent empty
+    corpora previously made probe failures look like cognition
+    failure when it was just ingestion failure.
     """
     from memory.memory_manager import MemoryManager
 
@@ -239,11 +305,22 @@ def _load_memories_from_chroma() -> Iterable[dict]:
                 },
             }
         )
-    # Daily summaries: also small, also high-signal.
-    try:
-        daily_recent = mm.get_recent_daily(limit=30)
-    except AttributeError:
-        daily_recent = []
+    # Daily summaries: also small, also high-signal. The earlier
+    # implementation wrapped this in try/except AttributeError, which
+    # silently dropped the entire daily corpus the day get_recent_daily
+    # went missing (5 daily summaries in the live store, 0 reaching
+    # the builder). Fail loud now: missing accessor means the
+    # MemoryManager contract changed and lived-memory ingestion has a
+    # real gap to fix, not a silent skip to absorb.
+    if not hasattr(mm, "get_recent_daily"):
+        raise RuntimeError(
+            "MemoryManager.get_recent_daily is missing — the daily "
+            "corpus would silently disappear from lived-memory "
+            "ingestion. Restore the accessor or update this loader "
+            "explicitly; do not patch the symptom by re-adding a "
+            "broad except."
+        )
+    daily_recent = mm.get_recent_daily(limit=30)
     for d in daily_recent or []:
         meta = d.get("metadata") or {}
         out.append(
@@ -257,6 +334,7 @@ def _load_memories_from_chroma() -> Iterable[dict]:
                 },
             }
         )
+    out.extend(_load_followups(_REPO_ROOT))
     return out
 
 

@@ -58,6 +58,11 @@ class EpisodeCandidateShape(unittest.TestCase):
         self.assertIsNone(c.emotional_tone)
         self.assertEqual(c.importance, 3)
         self.assertIsNone(c.open_loop)
+        # Provenance fields default to None — meaning Maez-authored,
+        # first-person (the only mode that existed pre-2026-04-27).
+        # External sources MUST set both explicitly.
+        self.assertIsNone(c.authorship)
+        self.assertIsNone(c.memory_voice)
 
 
 class RejectsLowSignal(unittest.TestCase):
@@ -298,6 +303,137 @@ class DoesNotHallucinateParticipants(unittest.TestCase):
         if c is not None:
             for invented in ("Owner", "Bot", "User", "Assistant"):
                 self.assertNotIn(invented, c.participants)
+
+
+class ExtractsFollowupDoc(unittest.TestCase):
+    """docs/followups/*.md files are external project-doc open loops.
+    They become episodes with hard provenance separation so the
+    recall layer can phrase them as *the project carries an open loop
+    about X* — never as *Maez decided X*. Owner anchor 2026-04-27."""
+
+    _DOC = (
+        "# Judge Lane 3 policy for read-only inner actions\n\n"
+        "**Status:** Deferred follow-up. Not in A-core #4b scope. "
+        "Not blocking any current Track A item.\n\n"
+        "## The problem\n\n"
+        "The audit judge currently denies Lane 3 actions that are "
+        "actually read-only against Maez-surface files."
+    )
+
+    def _extract(self, doc=None, **meta_overrides):
+        from core.memory.episode_builder import extract_candidate
+
+        meta = {
+            "kind": "followup",
+            "source": "docs_followups",
+            "authorship": "project_doc",
+            "memory_voice": "external_to_maez",
+            "file_path": "docs/followups/judge_lane3_read_escalate.md",
+        }
+        meta.update(meta_overrides)
+        memory = {
+            "id": "followup-doc:docs/followups/judge_lane3_read_escalate.md",
+            "document": doc if doc is not None else self._DOC,
+            "metadata": meta,
+        }
+        return extract_candidate(memory)
+
+    def test_followup_doc_produces_open_loop_episode(self):
+        c = self._extract()
+        self.assertIsNotNone(c)
+        self.assertIsNotNone(c.open_loop)
+        self.assertEqual(c.source_kind, "followup_doc")
+
+    def test_followup_provenance_is_external_project_doc(self):
+        c = self._extract()
+        self.assertIsNotNone(c)
+        # Provenance must be set explicitly — not None, not Maez.
+        self.assertEqual(c.authorship, "project_doc")
+        self.assertEqual(c.memory_voice, "external_to_maez")
+
+    def test_followup_does_not_invent_maez_participation(self):
+        c = self._extract()
+        self.assertIsNotNone(c)
+        # External doc → no first-person attribution. The owner's
+        # rule: "Do not let these become 'Maez remembers deciding X'".
+        self.assertEqual(c.participants, [])
+        self.assertNotIn("Maez", c.participants)
+        self.assertNotIn("Rohit", c.participants)
+
+    def test_followup_evidence_is_file_path_synthetic_id(self):
+        c = self._extract()
+        self.assertIsNotNone(c)
+        # Source memory ID must point traceably back to the file.
+        self.assertEqual(len(c.source_memory_ids), 1)
+        self.assertTrue(c.source_memory_ids[0].startswith("followup-doc:"))
+        self.assertIn("docs/followups/", c.source_memory_ids[0])
+
+    def test_followup_title_carries_project_ledger_marker(self):
+        c = self._extract()
+        self.assertIsNotNone(c)
+        # Title must read as project-voice, not first-person Maez.
+        self.assertTrue(c.title.lower().startswith("project open loop"))
+
+    def test_followup_open_loop_text_is_project_voiced(self):
+        c = self._extract()
+        self.assertIsNotNone(c)
+        # The open_loop one-liner must signal project-ledger scope.
+        self.assertIn("project ledger", c.open_loop.lower())
+
+    def test_followup_without_status_header_returns_none(self):
+        # A markdown file in docs/followups/ that lacks the "Deferred
+        # follow-up" header is not a reliable open-loop signal — the
+        # builder must stay sparse-but-true and skip it.
+        c = self._extract(
+            doc="# Some other doc\n\nThis file is not labeled as a deferred follow-up."
+        )
+        self.assertIsNone(c)
+
+    def test_non_followup_kind_is_not_picked_up(self):
+        # A regular core memory that happens to contain "Deferred
+        # follow-up" text in its body must NOT be classified as a
+        # followup-doc — the followup detector must require the
+        # explicit metadata signal. The doc may still be picked up by
+        # another detector (e.g. corrective core), but the provenance
+        # separation must hold: source_kind != followup_doc and the
+        # external project-doc provenance fields stay unset.
+        c = self._extract(
+            kind="core",
+            source="some_other_correction",
+        )
+        if c is not None:
+            self.assertNotEqual(c.source_kind, "followup_doc")
+            self.assertNotEqual(c.authorship, "project_doc")
+            self.assertNotEqual(c.memory_voice, "external_to_maez")
+
+
+class FollowupTakesPriorityOverCorrection(unittest.TestCase):
+    """A followup doc whose body contains correction-shaped text must
+    classify as ``followup_doc`` with project-doc provenance, NOT as a
+    corrective core memory. Provenance is load-bearing — losing it
+    would let project ledger entries surface as 'Maez remembers
+    deciding X' in the recall brief."""
+
+    def test_followup_with_correction_text_stays_followup(self):
+        from core.memory.episode_builder import extract_candidate
+
+        memory = {
+            "id": "followup-doc:docs/followups/memory_integrity_tagging.md",
+            "document": (
+                "# Memory Integrity Tagging\n\n"
+                "**Status:** Deferred follow-up.\n\n"
+                "Correction: deletion was the wrong approach; tagging is."
+            ),
+            "metadata": {
+                "kind": "followup",
+                "source": "docs_followups",
+            },
+        }
+        c = extract_candidate(memory)
+        self.assertIsNotNone(c)
+        self.assertEqual(c.source_kind, "followup_doc")
+        self.assertEqual(c.authorship, "project_doc")
+        self.assertEqual(c.memory_voice, "external_to_maez")
 
 
 class IterableForm(unittest.TestCase):

@@ -87,6 +87,80 @@ class EpisodeStoreEvidenceRequired(unittest.TestCase):
         self.assertEqual(ep["open_loop"], "Revisit this when next ritual lands")
 
 
+class EpisodeStoreProvenanceColumns(unittest.TestCase):
+    """The 2026-04-27 followup-doc ingest landed two provenance columns
+    (``authorship`` / ``memory_voice``). Defaults must be NULL so
+    pre-existing rows keep their meaning ("Maez-authored, first-person"
+    — the only mode that existed before). Explicit values must round-
+    trip through ``add`` → ``get``."""
+
+    def setUp(self):
+        from core.memory.episodes import EpisodeStore
+
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._tmp.close()
+        self.store = EpisodeStore(self._tmp.name)
+
+    def tearDown(self):
+        Path(self._tmp.name).unlink(missing_ok=True)
+
+    def test_default_authorship_and_voice_are_null(self):
+        ep_id = self.store.add(
+            title="t",
+            summary="s",
+            participants=["Maez"],
+            source_memory_ids=["raw-1"],
+            source_kind="core_memory",
+        )
+        ep = self.store.get(ep_id)
+        self.assertIsNone(ep["authorship"])
+        self.assertIsNone(ep["memory_voice"])
+
+    def test_external_provenance_round_trips(self):
+        ep_id = self.store.add(
+            title="Project open loop: example",
+            summary="external doc summary",
+            participants=[],
+            source_memory_ids=["followup-doc:docs/followups/example.md"],
+            source_kind="followup_doc",
+            authorship="project_doc",
+            memory_voice="external_to_maez",
+            open_loop="(project ledger) example",
+        )
+        ep = self.store.get(ep_id)
+        self.assertEqual(ep["authorship"], "project_doc")
+        self.assertEqual(ep["memory_voice"], "external_to_maez")
+        self.assertEqual(ep["source_kind"], "followup_doc")
+
+
+class EpisodeStoreSchemaMigrationIdempotent(unittest.TestCase):
+    """Opening the store on a DB that already has the provenance
+    columns must not error. The migration path uses ALTER TABLE ADD
+    COLUMN guarded by a duplicate-column catch — this test pins that
+    behavior."""
+
+    def test_re_init_after_provenance_columns_exist(self):
+        from core.memory.episodes import EpisodeStore
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        try:
+            EpisodeStore(tmp.name)
+            # Second open must succeed even though authorship /
+            # memory_voice already exist from the first open.
+            s2 = EpisodeStore(tmp.name)
+            ep_id = s2.add(
+                title="re-init-ok",
+                summary="s",
+                participants=["Maez"],
+                source_memory_ids=["raw-x"],
+                source_kind="core_memory",
+            )
+            self.assertTrue(ep_id.startswith("ep-"))
+        finally:
+            Path(tmp.name).unlink(missing_ok=True)
+
+
 class EpisodeStoreNoDelete(unittest.TestCase):
     """The never-delete-Maez-memory covenant is enforced at the layer.
     No delete / remove / drop / clear API is exposed."""

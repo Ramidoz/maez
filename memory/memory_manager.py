@@ -598,6 +598,46 @@ class MemoryManager:
             })
         return memories
 
+    def get_recent_daily(self, limit: int = 30) -> list[dict]:
+        """Return the most recent daily consolidations, newest first.
+
+        Mirrors :meth:`get_all_core`'s shape (``id`` / ``content`` /
+        ``metadata``) so the lived-memory nightly job can hand both
+        sources to the same builder without translation. Sorted by
+        the metadata ``timestamp`` field, falling back to the date
+        prefix in the synthetic ID (``daily-YYYY-MM-DD-...``) when
+        a row is missing the timestamp.
+
+        Added 2026-04-27 to close the silent-AttributeError gap that
+        had been hiding the daily corpus from lived-memory ingestion.
+        """
+        count = self.daily.count()
+        if count == 0:
+            return []
+        if limit <= 0:
+            return []
+
+        results = self.daily.get(include=["documents", "metadatas"])
+        rows = []
+        for i in range(len(results["ids"])):
+            rows.append({
+                "id": results["ids"][i],
+                "content": results["documents"][i],
+                "metadata": results["metadatas"][i],
+            })
+
+        def _sort_key(row: dict) -> str:
+            meta = row.get("metadata") or {}
+            ts = meta.get("timestamp")
+            if ts:
+                return str(ts)
+            # Fallback: the synthetic id starts with daily-YYYY-MM-DD-
+            # which sorts lexically by date.
+            return row.get("id", "")
+
+        rows.sort(key=_sort_key, reverse=True)
+        return rows[:limit]
+
     # ------------------------------------------------------------------ #
     #  RETRIEVAL — Multi-tier context building                             #
     # ------------------------------------------------------------------ #

@@ -40,13 +40,24 @@ CREATE TABLE IF NOT EXISTS episodes (
     open_loop TEXT,
     source_memory_ids_json TEXT NOT NULL,
     source_kind TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'active'
+    status TEXT NOT NULL DEFAULT 'active',
+    authorship TEXT,
+    memory_voice TEXT
 );
 
 CREATE INDEX IF NOT EXISTS episodes_status_idx ON episodes(status);
 CREATE INDEX IF NOT EXISTS episodes_occurred_idx ON episodes(occurred_at);
 CREATE INDEX IF NOT EXISTS episodes_source_kind_idx ON episodes(source_kind);
 """
+
+# Provenance columns added 2026-04-27 for followup-doc ingestion.
+# Existing rows keep authorship/memory_voice NULL — readers must
+# treat NULL as "Maez-authored, first-person" (the only mode that
+# existed before).
+_MIGRATIONS: tuple[str, ...] = (
+    "ALTER TABLE episodes ADD COLUMN authorship TEXT",
+    "ALTER TABLE episodes ADD COLUMN memory_voice TEXT",
+)
 
 
 def _now_iso() -> str:
@@ -66,6 +77,12 @@ class EpisodeStore:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as c:
             c.executescript(_SCHEMA)
+            for stmt in _MIGRATIONS:
+                try:
+                    c.execute(stmt)
+                except sqlite3.OperationalError:
+                    # Column already exists. Idempotent re-run.
+                    pass
 
     def _connect(self) -> sqlite3.Connection:
         c = sqlite3.connect(str(self._path))
@@ -84,6 +101,8 @@ class EpisodeStore:
         emotional_tone: Optional[str] = None,
         importance: int = 3,
         open_loop: Optional[str] = None,
+        authorship: Optional[str] = None,
+        memory_voice: Optional[str] = None,
     ) -> str:
         if not source_memory_ids:
             raise ValueError(
@@ -95,8 +114,9 @@ class EpisodeStore:
                 "INSERT INTO episodes ("
                 "id, created_at, occurred_at, title, summary, "
                 "participants_json, emotional_tone, importance, "
-                "open_loop, source_memory_ids_json, source_kind, status"
-                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "open_loop, source_memory_ids_json, source_kind, status, "
+                "authorship, memory_voice"
+                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     episode_id,
                     _now_iso(),
@@ -110,6 +130,8 @@ class EpisodeStore:
                     json.dumps(list(source_memory_ids)),
                     source_kind,
                     "active",
+                    authorship,
+                    memory_voice,
                 ),
             )
         return episode_id

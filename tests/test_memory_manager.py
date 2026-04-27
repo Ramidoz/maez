@@ -109,5 +109,119 @@ class FormatForPromptAgeFramingTests(unittest.TestCase):
         )
 
 
+class GetRecentDailyTests(unittest.TestCase):
+    """``get_recent_daily(limit)`` was added 2026-04-27 to close the
+    silent AttributeError gap in the lived-memory nightly job. Mirror
+    of ``get_all_core``'s shape so the builder consumes both with no
+    translation. Sort is newest-first by metadata timestamp, falling
+    back to the daily-YYYY-MM-DD- id prefix."""
+
+    def _mm_with_fake_daily(self, items):
+        """Build a MemoryManager stub whose .daily collection returns
+        the supplied items via Chroma's get/count contract."""
+
+        class FakeDaily:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def count(self):
+                return len(self._rows)
+
+            def get(self, include=None):
+                return {
+                    "ids": [r["id"] for r in self._rows],
+                    "documents": [r["content"] for r in self._rows],
+                    "metadatas": [r["metadata"] for r in self._rows],
+                }
+
+        mm = _mm()
+        mm.daily = FakeDaily(items)
+        return mm
+
+    def test_empty_collection_returns_empty_list(self):
+        mm = self._mm_with_fake_daily([])
+        self.assertEqual(mm.get_recent_daily(limit=5), [])
+
+    def test_returns_newest_first_by_timestamp(self):
+        items = [
+            {
+                "id": "daily-2026-04-22-aaa",
+                "content": "older",
+                "metadata": {"timestamp": "2026-04-22T08:00:00+00:00"},
+            },
+            {
+                "id": "daily-2026-04-26-bbb",
+                "content": "newer",
+                "metadata": {"timestamp": "2026-04-26T08:00:00+00:00"},
+            },
+            {
+                "id": "daily-2026-04-24-ccc",
+                "content": "middle",
+                "metadata": {"timestamp": "2026-04-24T08:00:00+00:00"},
+            },
+        ]
+        mm = self._mm_with_fake_daily(items)
+        out = mm.get_recent_daily(limit=10)
+        self.assertEqual(
+            [r["id"] for r in out],
+            [
+                "daily-2026-04-26-bbb",
+                "daily-2026-04-24-ccc",
+                "daily-2026-04-22-aaa",
+            ],
+        )
+        self.assertEqual(out[0]["content"], "newer")
+
+    def test_limit_caps_returned_count(self):
+        items = [
+            {
+                "id": f"daily-2026-04-{day:02d}-x",
+                "content": f"day {day}",
+                "metadata": {"timestamp": f"2026-04-{day:02d}T08:00:00+00:00"},
+            }
+            for day in range(1, 11)
+        ]
+        mm = self._mm_with_fake_daily(items)
+        self.assertEqual(len(mm.get_recent_daily(limit=3)), 3)
+
+    def test_limit_zero_returns_empty(self):
+        items = [
+            {
+                "id": "daily-2026-04-22-aaa",
+                "content": "x",
+                "metadata": {"timestamp": "2026-04-22T08:00:00+00:00"},
+            }
+        ]
+        mm = self._mm_with_fake_daily(items)
+        self.assertEqual(mm.get_recent_daily(limit=0), [])
+
+    def test_falls_back_to_id_prefix_when_timestamp_missing(self):
+        items = [
+            {"id": "daily-2026-04-20-x", "content": "older", "metadata": {}},
+            {"id": "daily-2026-04-26-x", "content": "newer", "metadata": {}},
+        ]
+        mm = self._mm_with_fake_daily(items)
+        out = mm.get_recent_daily(limit=5)
+        self.assertEqual(out[0]["id"], "daily-2026-04-26-x")
+        self.assertEqual(out[1]["id"], "daily-2026-04-20-x")
+
+    def test_shape_matches_get_all_core(self):
+        items = [
+            {
+                "id": "daily-2026-04-26-x",
+                "content": "summary text",
+                "metadata": {"timestamp": "2026-04-26T08:00:00+00:00", "date": "2026-04-26"},
+            }
+        ]
+        mm = self._mm_with_fake_daily(items)
+        out = mm.get_recent_daily(limit=5)
+        self.assertEqual(len(out), 1)
+        row = out[0]
+        # Same keys as get_all_core's output: id / content / metadata.
+        self.assertEqual(set(row.keys()), {"id", "content", "metadata"})
+        self.assertEqual(row["content"], "summary text")
+        self.assertEqual(row["metadata"]["date"], "2026-04-26")
+
+
 if __name__ == "__main__":
     unittest.main()

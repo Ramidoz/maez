@@ -58,6 +58,14 @@ class EpisodeCandidate:
     emotional_tone: Optional[str] = None
     importance: int = 3
     open_loop: Optional[str] = None
+    # Provenance separation (added 2026-04-27 for followup-doc ingest).
+    # Default None means "Maez-authored, first-person" — the only
+    # mode that existed before this change. External sources (project
+    # docs, hand-curated followups) MUST set both fields explicitly so
+    # the recall layer can distinguish *the project carries an open
+    # loop* from *Maez remembers deciding*.
+    authorship: Optional[str] = None
+    memory_voice: Optional[str] = None
 
 
 # ── source-kind classification ──────────────────────────────────────
@@ -186,6 +194,89 @@ def _detect_open_loop(memory: dict) -> Optional[EpisodeCandidate]:
     )
 
 
+# ── followup-doc detector ────────────────────────────────────────────
+#
+# Followup docs (docs/followups/*.md) are project-level open-loop ledger
+# entries hand-authored OUTSIDE Maez. They become open-loop episodes
+# with hard provenance so the recall layer can phrase them as *"the
+# project carries an open loop about X"* — never as *"I (Maez)
+# remember deciding X"*. The shape rule comes directly from the owner:
+# external project docs are a different kind of memory, not Maez's
+# first-person experience.
+_FOLLOWUP_STATUS_RE = re.compile(
+    r"\*\*Status:\*\*\s*Deferred follow-up", re.IGNORECASE
+)
+
+
+def _extract_followup_title(doc: str) -> str:
+    """Pull the H1 from a followup doc. Falls back to the first non-
+    blank line trimmed to 120 chars."""
+    for line in doc.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            return stripped[2:].strip()
+    for line in doc.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped[:120]
+    return "Project open loop"
+
+
+def _detect_followup(memory: dict) -> Optional[EpisodeCandidate]:
+    """Detect a followup-doc memory and emit an open-loop episode with
+    explicit external/project-doc provenance.
+
+    Fires only when the memory is explicitly tagged as a followup
+    source (``metadata.source == "docs_followups"`` or
+    ``metadata.kind == "followup"``). The doc must also carry the
+    "**Status:** Deferred follow-up" header — otherwise we don't have
+    a reliable signal that it's truly an open loop.
+    """
+    meta = memory.get("metadata") or {}
+    source = (meta.get("source") or "").lower()
+    kind = (meta.get("kind") or "").lower()
+    if source != "docs_followups" and kind != "followup":
+        return None
+
+    doc = (memory.get("document") or "").strip()
+    if len(doc) < _MIN_DOC_LEN:
+        return None
+    if not _FOLLOWUP_STATUS_RE.search(doc):
+        return None
+
+    mid = memory.get("id") or ""
+    if not mid:
+        return None
+
+    title_text = _extract_followup_title(doc)
+    title = f"Project open loop: {title_text}"[:160]
+    # Summary is the document's leading material so the recall planner
+    # has something concrete to surface beyond the title.
+    summary = doc[:400]
+    # The open_loop field is what the planner emits as a one-liner.
+    # The "(project ledger)" prefix is the project-voice marker that
+    # makes the brief read as ledger-scoped instead of first-person —
+    # without doubling "open loop" since the formatter already prefixes
+    # "Open loop:".
+    open_loop = f"(project ledger) {title_text}"[:200]
+
+    return EpisodeCandidate(
+        title=title,
+        # No participants on project docs — they aren't a conversation
+        # between people, they're a ledger written outside Maez.
+        # Empty list is the explicit "no first-person attribution"
+        # signal; the existing tests guard against invented names.
+        participants=[],
+        summary=summary,
+        source_memory_ids=[mid],
+        source_kind="followup_doc",
+        open_loop=open_loop,
+        importance=3,
+        authorship="project_doc",
+        memory_voice="external_to_maez",
+    )
+
+
 # Unambiguous fault signatures only. Patterns like "daemon restarted",
 # "system rebooted", and bare "OOM" were dropped on 2026-04-26 after a
 # real-data run on the developmental heartbeats triggered a false
@@ -280,7 +371,13 @@ def _detect_self_observation(memory: dict) -> Optional[EpisodeCandidate]:
 
 
 # Detectors run in priority order. First match wins.
+# _detect_followup runs first because followup docs are guarded by a
+# strict source/kind metadata check — putting it last would let other
+# detectors steal the match on incidental phrase overlap (e.g. a
+# followup mentioning "correction" would be classified core_memory
+# instead of followup_doc and lose its provenance separation).
 _DETECTORS = (
+    _detect_followup,
     _detect_corrective_core,
     _detect_hardware_instability,
     _detect_track_a_readiness,
