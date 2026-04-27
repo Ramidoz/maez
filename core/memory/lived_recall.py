@@ -154,6 +154,103 @@ def _is_live_state_query(query: str) -> bool:
     return bool(tokens & _LIVE_STATE_HINTS)
 
 
+# ── query-shape detection (v1.1, owner-anchored 2026-04-27) ──────────
+#
+# Pure keyword-overlap scoring is the wrong mechanism for queries that
+# are *about* the shape of memory rather than its contents — *"what do
+# you know I care about"*, *"what's still pending"*, *"what reminds you
+# of last week"*. The probe regression on 2026-04-27 showed the relationship
+# brief lose its graph-belief slot to better-matching past episodes.
+#
+# Fix: classify the query into a mode, and reserve a per-mode floor for
+# each section so the right kind of evidence is guaranteed to surface
+# regardless of token-overlap noise. Modes are matched by substring
+# (lowercased query) so multi-word phrases survive even though the
+# words themselves are stopwords or short tokens.
+#
+# Phrase lists are owner-anchored and intentionally narrow. The default
+# mode catches everything not explicitly relationship / open-loop.
+# A future v1.2 will add a temporal-pattern mode that does more than
+# keyword matching for *"echoes from last week"* style queries; for now
+# v1.1 detects temporal queries but only adjusts section floors, not
+# retrieval mechanism.
+_RELATIONSHIP_QUERY_PHRASES: tuple[str, ...] = (
+    "care about",
+    "cares about",
+    "know about me",
+    "what matters to me",
+    "what do i value",
+    "what would i push back",
+    "push back on",
+)
+_OPEN_LOOP_QUERY_PHRASES: tuple[str, ...] = (
+    "unfinished",
+    "pending",
+    "not done",
+    "not finished",
+    "still open",
+    "what's next",
+    "whats next",
+    "what is next",
+    "haven't finished",
+)
+_TEMPORAL_QUERY_PHRASES: tuple[str, ...] = (
+    "remind",
+    "reminds",
+    "echo",
+    "echoing",
+    "last week",
+    "before",
+    "pattern",
+    "again",
+    "recurring",
+)
+
+
+def _classify_query_mode(query: str) -> str:
+    """Return one of ``"relationship"``, ``"open_loop"``,
+    ``"temporal"``, ``"default"`` based on the query's surface phrasing.
+
+    Relationship matches are checked before open-loop and temporal so
+    *"what would I push back on next"* (which contains both the
+    relationship phrase ``push back on`` and the open-loop phrase
+    ``next``) routes to the relationship floor — the more specific
+    phrase wins, and the relational shape is the load-bearing one for
+    the predict-as-mind / surprise probes.
+    """
+    if not query:
+        return "default"
+    q = query.lower()
+    for phrase in _RELATIONSHIP_QUERY_PHRASES:
+        if phrase in q:
+            return "relationship"
+    for phrase in _OPEN_LOOP_QUERY_PHRASES:
+        if phrase in q:
+            return "open_loop"
+    for phrase in _TEMPORAL_QUERY_PHRASES:
+        if phrase in q:
+            return "temporal"
+    return "default"
+
+
+# Per-mode section floor: minimum slots reserved for each section
+# before any global-score fill happens. Sums are ≤ max_items (default
+# 6); any leftover budget is filled from the highest-scoring items
+# across all sections, so floors are *minimums*, not quotas.
+#
+# Default mode is balanced (2/2/2). Relationship mode floors graph
+# beliefs at 3 because the regression specifically came from graph
+# beliefs losing to past-episode token-overlap noise. Open-loop mode
+# floors open-loops at 3. Temporal mode prefers past episodes + graph
+# beliefs and reduces open-loop pressure.
+_SECTION_FLOORS_BY_MODE: dict[str, dict[str, int]] = {
+    "default": {"open_loops": 2, "past_episodes": 2, "graph_beliefs": 2},
+    "relationship": {"open_loops": 1, "past_episodes": 1, "graph_beliefs": 3},
+    "open_loop": {"open_loops": 3, "past_episodes": 1, "graph_beliefs": 1},
+    "temporal": {"open_loops": 1, "past_episodes": 2, "graph_beliefs": 2},
+}
+
+
 @dataclass
 class _ScoredEpisode:
     score: int
@@ -319,35 +416,69 @@ def build_lived_recall_brief(
     scored_episodes.sort(key=lambda x: x.score, reverse=True)
     scored_edges.sort(key=lambda x: x.score, reverse=True)
 
-    # ── build sections within max_items budget ──────────────────────
+    # ── split scored items into the three section pools ─────────────
+    open_loop_pool: list[_ScoredEpisode] = [
+        s for s in scored_episodes if s.episode.get("open_loop")
+    ]
+    past_episode_pool: list[_ScoredEpisode] = [
+        s for s in scored_episodes if not s.episode.get("open_loop")
+    ]
+    graph_belief_pool: list[_ScoredEdge] = list(scored_edges)
+
+    # ── reserve per-section floors based on the query mode ──────────
+    mode = _classify_query_mode(query)
+    floors = _SECTION_FLOORS_BY_MODE.get(mode, _SECTION_FLOORS_BY_MODE["default"])
+
+    budget = max(0, max_items)
+    selected_open_loops: list[_ScoredEpisode] = []
+    selected_past_episodes: list[_ScoredEpisode] = []
+    selected_graph_beliefs: list[_ScoredEdge] = []
+
+    def _take(pool: list, selected: list, floor: int) -> None:
+        nonlocal budget
+        n = min(floor, len(pool), budget)
+        for _ in range(n):
+            selected.append(pool.pop(0))
+            budget -= 1
+
+    _take(open_loop_pool, selected_open_loops, floors["open_loops"])
+    _take(past_episode_pool, selected_past_episodes, floors["past_episodes"])
+    _take(graph_belief_pool, selected_graph_beliefs, floors["graph_beliefs"])
+
+    # ── fill remaining budget by global score across all leftovers ──
+    # Section floors are minimums; if a section's pool was smaller than
+    # its floor, the unused budget flows to the highest-scoring item
+    # in any other section. This keeps the brief responsive to score
+    # signal while guaranteeing each section's reserved presence.
+    leftovers: list[tuple[int, str, object]] = []
+    for s in open_loop_pool:
+        leftovers.append((s.score, "open_loops", s))
+    for s in past_episode_pool:
+        leftovers.append((s.score, "past_episodes", s))
+    for s in graph_belief_pool:
+        leftovers.append((s.score, "graph_beliefs", s))
+    # Sort highest-score-first; stable on ties keeps section pool order
+    # (open-loops, then past, then graph) as the secondary sort.
+    leftovers.sort(key=lambda x: x[0], reverse=True)
+    for _score, section, item in leftovers:
+        if budget <= 0:
+            break
+        if section == "open_loops":
+            selected_open_loops.append(item)  # type: ignore[arg-type]
+        elif section == "past_episodes":
+            selected_past_episodes.append(item)  # type: ignore[arg-type]
+        else:
+            selected_graph_beliefs.append(item)  # type: ignore[arg-type]
+        budget -= 1
+
+    # ── emit in canonical section order ─────────────────────────────
     sections: list[str] = []
-    remaining = max_items
-
-    # Open loops first when applicable — they are the most actionable
-    # output of lived recall and worth surfacing before the broader
-    # historical context.
-    for s in scored_episodes:
-        if remaining <= 0:
-            break
-        if s.episode.get("open_loop"):
-            sections.append(_format_open_loop(s.episode))
-            remaining -= 1
-
-    # Past episodes that don't have an open_loop.
-    for s in scored_episodes:
-        if remaining <= 0:
-            break
-        if s.episode.get("open_loop"):
-            continue  # already emitted above
+    for s in selected_open_loops:
+        sections.append(_format_open_loop(s.episode))
+    for s in selected_past_episodes:
         sections.append(_format_past_episode(s.episode))
-        remaining -= 1
-
-    # Graph beliefs.
-    for s in scored_edges:
-        if remaining <= 0:
-            break
+    for s in selected_graph_beliefs:
         sections.append(_format_graph_belief(s.edge, s.subject_label, s.object_label))
-        remaining -= 1
 
     # Live-state guard.
     if _is_live_state_query(query):

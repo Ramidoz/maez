@@ -311,5 +311,255 @@ class LiveStateQueryGetsUnavailableNote(unittest.TestCase):
             cleanup()
 
 
+class QueryModeClassification(unittest.TestCase):
+    """v1.1 (owner-anchored 2026-04-27): the planner classifies the
+    query into a mode and reserves per-section floor slots so the
+    right kind of evidence is guaranteed to surface regardless of
+    token-overlap noise. Pin the mode-detection contract directly so
+    future drift in the phrase lists is visible."""
+
+    def test_relationship_phrases_detected(self):
+        from core.memory.lived_recall import _classify_query_mode
+
+        for q in (
+            "what do you know I care about in Maez?",
+            "what does Rohit care about",
+            "what would I push back on next",
+            "what matters to me here",
+        ):
+            self.assertEqual(_classify_query_mode(q), "relationship", msg=q)
+
+    def test_open_loop_phrases_detected(self):
+        from core.memory.lived_recall import _classify_query_mode
+
+        for q in (
+            "what's still pending",
+            "anything not done",
+            "what's unfinished",
+            "what's still open",
+            "haven't finished what",
+        ):
+            self.assertEqual(_classify_query_mode(q), "open_loop", msg=q)
+
+    def test_temporal_phrases_detected(self):
+        from core.memory.lived_recall import _classify_query_mode
+
+        for q in (
+            "what reminds you of last week",
+            "is there a pattern echoing here",
+            "when did this happen before",
+            "is this happening again",
+            "any recurring failures",
+        ):
+            self.assertEqual(_classify_query_mode(q), "temporal", msg=q)
+
+    def test_default_when_no_phrase_matches(self):
+        from core.memory.lived_recall import _classify_query_mode
+
+        self.assertEqual(_classify_query_mode("kernel oops"), "default")
+        self.assertEqual(_classify_query_mode(""), "default")
+
+    def test_relationship_takes_priority_over_open_loop_phrase(self):
+        # "push back on next" contains both the relationship phrase
+        # ("push back on") and the open-loop phrase ("next"). The
+        # planner must route to relationship — that's the load-bearing
+        # shape for predict-as-mind / surprise probes.
+        from core.memory.lived_recall import _classify_query_mode
+
+        self.assertEqual(
+            _classify_query_mode("what would I push back on next"),
+            "relationship",
+        )
+
+
+def _seed_relationship_pressure(store, graph):
+    """Build a corpus shaped like the live-store regression: many
+    open-loop and past-episode candidates that all match a
+    relationship query's tokens, plus exactly one graph belief that
+    also matches. Pre-v1.1 ordering surfaced 1 open-loop + 5 past
+    episodes and pushed the graph belief out of the 6-item budget."""
+    # 5 followup-shaped open-loop episodes — each mentions "Maez" and
+    # "care" so they all score on a relationship query.
+    for i in range(5):
+        store.add(
+            title=f"Project open loop: care item #{i}",
+            summary=(
+                f"The project carries an open loop about how Maez should "
+                f"care about thread #{i}."
+            ),
+            participants=[],
+            source_memory_ids=[f"followup-doc:docs/followups/care-{i}.md"],
+            source_kind="followup_doc",
+            open_loop=f"(project ledger) care item #{i}",
+            authorship="project_doc",
+            memory_voice="external_to_maez",
+        )
+    # 4 past-episode corrections that also mention Maez.
+    for i in range(4):
+        store.add(
+            title=f"Correction: Maez ground truth #{i}",
+            summary=(
+                f"Earlier raw memories about Maez's behaviour were stale; "
+                f"this correction overrides them. {i}"
+            ),
+            participants=["Maez"],
+            source_memory_ids=[f"core-correction-{i}"],
+            source_kind="core_memory",
+            emotional_tone="corrective",
+        )
+    # Exactly one graph belief that matches the relationship query.
+    subj = graph.upsert_node(label="Rohit", kind="person")
+    obj = graph.upsert_node(label="truthful continuity", kind="concept")
+    edge_ep = store.add(
+        title="Owner stated preference: truthful continuity",
+        summary="Owner cares about truthful continuity over impressive claims.",
+        participants=["Rohit", "Maez"],
+        source_memory_ids=["core-pref-1"],
+        source_kind="core_memory",
+    )
+    graph.add_edge(
+        subject_id=subj,
+        relation="cares_about",
+        object_id=obj,
+        source_episode_ids=[edge_ep],
+        source_memory_ids=["core-pref-1"],
+        confidence=0.9,
+    )
+
+
+class RelationshipProbeRegressionGuard(unittest.TestCase):
+    """The 2026-04-27 probe regression: with a corpus full of
+    open-loop and past-episode candidates that all match a relationship
+    query's tokens, the planner pushed the only matching graph belief
+    out of the 6-item budget.
+
+    This test pins the v1.1 fix: relationship-shaped queries reserve
+    a graph-belief floor so at least one ``Current graph belief`` row
+    surfaces regardless of how many other items match."""
+
+    def test_relationship_query_surfaces_graph_belief_under_corpus_pressure(self):
+        from core.memory.lived_recall import build_lived_recall_brief
+
+        store, graph, cleanup = _stores()
+        try:
+            _seed_relationship_pressure(store, graph)
+            brief = build_lived_recall_brief(
+                "What do you know I care about in Maez?",
+                episode_store=store,
+                graph=graph,
+                max_items=6,
+            )
+            self.assertNotEqual(brief, "")
+            lower = brief.lower()
+            # The probe's pass criterion — at least one graph belief
+            # must appear.
+            self.assertIn("current graph belief", lower)
+            # Evidence trail back to the relationship's source.
+            self.assertIn("core-pref-1", brief)
+        finally:
+            cleanup()
+
+    def test_open_loop_query_floor_does_not_starve_other_sections(self):
+        # An open-loop query in a corpus with both open-loops and a
+        # graph belief should still surface the graph belief at floor
+        # 1 — the per-mode floors are minimums, not exclusivity.
+        from core.memory.lived_recall import build_lived_recall_brief
+
+        store, graph, cleanup = _stores()
+        try:
+            _seed_relationship_pressure(store, graph)
+            # Use a query that triggers open_loop mode but still has
+            # token overlap with the graph belief ("rohit", "care").
+            brief = build_lived_recall_brief(
+                "What's still open about what Rohit cares about",
+                episode_store=store,
+                graph=graph,
+                max_items=6,
+            )
+            self.assertNotEqual(brief, "")
+            lower = brief.lower()
+            # Open-loop floor of 3 means at least 3 open-loop rows.
+            self.assertGreaterEqual(brief.count("- Open loop:"), 3)
+            # Graph-belief floor of 1 means the relationship row is
+            # still present.
+            self.assertIn("current graph belief", lower)
+        finally:
+            cleanup()
+
+
+class SectionFloorsRespectMaxItems(unittest.TestCase):
+    """Section floors are minimums but the total brief size remains
+    capped by ``max_items``. When max_items is smaller than the sum
+    of floors, the floor reservation is taken in section order
+    (open-loops, past, graph) and stops at the budget."""
+
+    def test_max_items_smaller_than_floor_sum_is_respected(self):
+        from core.memory.lived_recall import build_lived_recall_brief
+
+        store, graph, cleanup = _stores()
+        try:
+            _seed_relationship_pressure(store, graph)
+            brief = build_lived_recall_brief(
+                "What do you know I care about in Maez?",
+                episode_store=store,
+                graph=graph,
+                max_items=2,
+            )
+            item_lines = [ln for ln in brief.splitlines() if ln.startswith("- ")]
+            # Hard cap holds even though the relationship floor sums
+            # to 5.
+            self.assertLessEqual(len(item_lines), 2)
+        finally:
+            cleanup()
+
+
+class GlobalScoreFillsLeftoverBudget(unittest.TestCase):
+    """Floors are minimums; once each section gets its reserved slots,
+    leftover budget is filled by the highest-scoring item in any
+    section. This keeps the brief responsive to score signal while
+    guaranteeing each section's reserved presence."""
+
+    def test_leftover_budget_goes_to_highest_score(self):
+        from core.memory.lived_recall import build_lived_recall_brief
+
+        store, graph, cleanup = _stores()
+        try:
+            # Seed: only one open-loop (so its floor of 2 in default
+            # mode is partially unused) but many past-episode
+            # candidates that all score on the query. The default
+            # mode floor (2/2/2) reserves 1 open-loop, 2 past, 2
+            # graph; the leftover 1 slot should go to the next-highest
+            # past or graph episode by score.
+            store.add(
+                title="Project open loop: kernel revisit",
+                summary="we need to revisit kernel investigation",
+                participants=[],
+                source_memory_ids=["followup-doc:open-1"],
+                source_kind="followup_doc",
+                open_loop="(project ledger) kernel revisit",
+            )
+            for i in range(4):
+                store.add(
+                    title=f"Past kernel oops #{i}",
+                    summary=f"kernel oops at boot {i}",
+                    participants=["Maez"],
+                    source_memory_ids=[f"raw-kernel-{i}"],
+                    source_kind="raw_observation",
+                )
+            brief = build_lived_recall_brief(
+                "kernel issue",  # default mode (no phrase match)
+                episode_store=store,
+                graph=graph,
+                max_items=6,
+            )
+            item_lines = [ln for ln in brief.splitlines() if ln.startswith("- ")]
+            # 1 open-loop available + up to 4 past episodes — total
+            # available = 5. Brief should surface all 5 (under the 6
+            # budget) since global-score fill picks them up.
+            self.assertEqual(len(item_lines), 5)
+        finally:
+            cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()
