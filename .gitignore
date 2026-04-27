@@ -28,6 +28,7 @@ daemon/builder_mode_current.txt
 daemon/builder_mode_hwm.txt
 *.bak
 *.bak2
+*.bak-*
 *.bak.*
 *.orig
 *.db-shm
