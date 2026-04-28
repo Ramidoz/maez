@@ -268,9 +268,32 @@ class _ScoredEdge:
 # ── episode scoring ──────────────────────────────────────────────────
 
 
+# Meta-query keywords — when present in the user query, reflection
+# episodes (Phase 7 high-level inferences) get a small score boost so
+# a question like "what patterns do you notice" surfaces them even
+# when their summary text doesn't keyword-overlap the query directly.
+_META_QUERY_KEYWORDS = frozenset({
+    "pattern", "patterns", "notice", "noticed", "noticing",
+    "theme", "themes", "trend", "trends", "observe", "observed",
+    "lately", "recently", "summarize", "summary", "overall",
+    "reflect", "reflection", "reflections", "habits", "habit",
+})
+
+# Bonus added to reflection episodes' base keyword-overlap score when
+# the query is meta-shaped. Small enough that strong direct matches
+# still win, large enough to lift reflections above zero-overlap noise.
+_META_QUERY_REFLECTION_BONUS = 3
+
+
 def _score_episode(query_tokens: set[str], ep: dict) -> int:
     haystack_tokens = set(_tokenize(ep.get("title", "") + " " + ep.get("summary", "")))
-    return len(query_tokens & haystack_tokens)
+    score = len(query_tokens & haystack_tokens)
+    if (
+        ep.get("source_kind") == "reflection"
+        and (query_tokens & _META_QUERY_KEYWORDS)
+    ):
+        score += _META_QUERY_REFLECTION_BONUS
+    return score
 
 
 def _score_edge(

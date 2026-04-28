@@ -71,6 +71,8 @@ class ReflectionReport:
     episodes_skipped_duplicate: int = 0
     edges_added: int = 0
     extraction_errors: int = 0
+    reflections_attempted: int = 0
+    reflections_added: int = 0
     dry_run: bool = False
     started_at: str = ""
     finished_at: str = ""
@@ -202,6 +204,8 @@ def _write_log(report: ReflectionReport, log_path: Path) -> None:
         f"  episodes_added:             {report.episodes_added}",
         f"  episodes_skipped_duplicate: {report.episodes_skipped_duplicate}",
         f"  edges_added:                {report.edges_added}",
+        f"  reflections_attempted:      {report.reflections_attempted}",
+        f"  reflections_added:          {report.reflections_added}",
         f"  extraction_errors:          {report.extraction_errors}",
     ]
     for err in report.error_messages:
@@ -338,6 +342,85 @@ def _load_memories_from_chroma() -> Iterable[dict]:
     return out
 
 
+def _default_llm_call(model: str, timeout_s: int):
+    """Build a one-prompt llama-server caller for the reflection pass.
+
+    Each call is independent (no chat history). Returns "" on timeout
+    or any HTTP error so synthesize_reflections() falls back to its
+    fail-open empty-list contract."""
+    import urllib.request
+    import urllib.error
+    import json as _json
+
+    def _call(prompt: str) -> str:
+        body = _json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            # Reasoning models (Qwen 3.6) emit a long chain-of-thought
+            # before the JSON. 4096 leaves room for the trace plus the
+            # final array even on a busy reflection set.
+            "max_tokens": 4096,
+            "temperature": 0.4,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "http://127.0.0.1:8080/v1/chat/completions",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                payload = _json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, _json.JSONDecodeError, OSError) as exc:
+            logger.warning("reflection LLM call failed: %s", exc)
+            return ""
+        try:
+            return payload["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError):
+            return ""
+
+    return _call
+
+
+def run_synthesis_pass(
+    *,
+    episode_store: EpisodeStore,
+    llm_call,
+    max_reflections: int = 3,
+    recent_window_episodes: int = 30,
+    report: ReflectionReport,
+    dry_run: bool = False,
+) -> None:
+    """ADR 0019 Phase 7 — draw a few high-level reflections from the
+    most recent active episodes and persist them as new episodes with
+    ``source_kind="reflection"``. Read-only on success failure (silent
+    no-op if synthesis returns []). Updates ``report`` in place."""
+    from core.memory.reflection import (
+        synthesize_reflections,
+        persist_reflections,
+    )
+
+    active = episode_store.list_active()
+    # `list_active` returns newest-first; take the recent window to
+    # focus reflection on what's been happening lately rather than
+    # ancient state.
+    recent = active[:recent_window_episodes]
+    if not recent:
+        return
+
+    refls = synthesize_reflections(
+        recent_episodes=recent,
+        recent_raw=None,
+        llm_call=llm_call,
+        max_reflections=max_reflections,
+    )
+    report.reflections_attempted = len(refls)
+    if dry_run or not refls:
+        return
+    new_ids = persist_reflections(refls, episode_store=episode_store)
+    report.reflections_added = len(new_ids)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument(
@@ -365,6 +448,36 @@ def main(argv: Optional[list[str]] = None) -> int:
         default=str(_default_log_path()),
         help="reflection log path (append-only)",
     )
+    ap.add_argument(
+        "--with-synthesis",
+        action="store_true",
+        default=True,
+        help="ADR 0019 Phase 7 — run high-level reflection synthesis on "
+        "recent episodes after the main pass (default: on)",
+    )
+    ap.add_argument(
+        "--no-synthesis",
+        dest="with_synthesis",
+        action="store_false",
+        help="skip the Phase 7 synthesis pass (e.g. when llama-server is down)",
+    )
+    ap.add_argument(
+        "--synthesis-model",
+        default="qwen36-27b",
+        help="model alias for the reflection LLM call (default: qwen36-27b)",
+    )
+    ap.add_argument(
+        "--synthesis-timeout",
+        type=int,
+        default=120,
+        help="seconds to wait for the reflection LLM (default: 120)",
+    )
+    ap.add_argument(
+        "--synthesis-max",
+        type=int,
+        default=3,
+        help="cap on reflections produced per nightly run (default: 3)",
+    )
     args = ap.parse_args(argv)
 
     if args.dry_run and args.apply:
@@ -382,6 +495,26 @@ def main(argv: Optional[list[str]] = None) -> int:
         graph=graph,
         dry_run=args.dry_run,
     )
+
+    # ADR 0019 Phase 7 — synthesis pass over the freshly-built episode
+    # set. Wrapped in a try/except: synthesis is best-effort, the rest
+    # of the nightly run must finalize regardless.
+    if args.with_synthesis:
+        try:
+            llm_call = _default_llm_call(
+                args.synthesis_model,
+                args.synthesis_timeout,
+            )
+            run_synthesis_pass(
+                episode_store=store,
+                llm_call=llm_call,
+                max_reflections=args.synthesis_max,
+                report=report,
+                dry_run=args.dry_run,
+            )
+        except Exception as exc:
+            logger.warning("synthesis pass failed (continuing): %s", exc)
+            report.error_messages.append(f"synthesis: {exc}")
 
     _write_log(report, Path(args.log_path))
     print(

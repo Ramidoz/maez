@@ -185,6 +185,77 @@ class QueryAboutOwnerPreferenceReturnsEdge(unittest.TestCase):
             cleanup()
 
 
+class ReflectionEpisodesPreferredOnMetaQueries(unittest.TestCase):
+    """Phase 7 — reflection-tier episodes (``source_kind="reflection"``)
+    get a small score boost when the query is meta-shaped (asks about
+    *patterns*, *trends*, *what have you noticed*). Without this lift,
+    high-level reflections rarely keyword-match the user's surface
+    wording and stay invisible in the brief."""
+
+    def test_reflection_surfaces_on_pattern_query(self):
+        from core.memory.lived_recall import build_lived_recall_brief
+
+        store, graph, cleanup = _stores()
+        try:
+            # persist_reflections stores the reflection text as title
+            # (so lived_recall's title-based formatter surfaces it);
+            # mirror that shape here.
+            refl_text = (
+                "Maez consistently retracts confident infrastructure "
+                "claims when grounding evidence contradicts them."
+            )
+            store.add(
+                title=refl_text,
+                summary=refl_text,
+                participants=["Maez"],
+                source_memory_ids=["ep-x"],
+                source_kind="reflection",
+                importance=4,
+            )
+            # A non-reflection episode that does NOT keyword-overlap
+            # the query at all — should not surface; reflection should.
+            store.add(
+                title="kernel NULL pointer at 13:48",
+                summary="Hardware instability event from earlier today.",
+                participants=["Maez"],
+                source_memory_ids=["raw-hw-1"],
+                source_kind="raw_observation",
+            )
+            brief = build_lived_recall_brief(
+                "what patterns do you notice",
+                episode_store=store,
+                graph=graph,
+            )
+            self.assertIn("retracts confident infrastructure", brief)
+        finally:
+            cleanup()
+
+    def test_non_meta_query_does_not_force_reflection(self):
+        """Reflection bonus must NOT fire when the query has no
+        meta-shaped keyword — otherwise reflections would dominate
+        every brief and crowd out direct hits."""
+        from core.memory.lived_recall import build_lived_recall_brief
+
+        store, graph, cleanup = _stores()
+        try:
+            refl_text = "Some abstract pattern about codebase shape."
+            store.add(
+                title=refl_text,
+                summary=refl_text,
+                participants=["Maez"],
+                source_memory_ids=["ep-x"],
+                source_kind="reflection",
+            )
+            brief = build_lived_recall_brief(
+                "where did i put my keys",
+                episode_store=store,
+                graph=graph,
+            )
+            self.assertNotIn("abstract pattern", brief)
+        finally:
+            cleanup()
+
+
 class EveryItemCarriesEvidence(unittest.TestCase):
     def test_every_item_line_has_an_evidence_marker(self):
         from core.memory.lived_recall import build_lived_recall_brief
