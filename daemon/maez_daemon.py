@@ -2643,7 +2643,14 @@ class MaezDaemon:
                 except Exception as e:
                     logger.debug("GitHub context failed: %s", e)
 
-            # Reddit — every 15 cycles
+            # Reddit — every 15 cycles. After fetching the in-cycle
+            # context block, persist newly-cached posts to raw memory
+            # so audit pipelines can verify Maez's Reddit references.
+            # 2026-04-27 incident: a TRELLIS.2 reference was correctly
+            # surfaced in-cycle but invisible to audits because Reddit
+            # signals weren't persisted. persist_to_memory closes that
+            # gap; both sides of the fix have to land for the audit
+            # path to see the signal.
             self._reddit_counter += 1
             if self._reddit_counter >= 15:
                 self._reddit_counter = 0
@@ -2651,6 +2658,17 @@ class MaezDaemon:
                     self._last_reddit_block = self.reddit.get_context_block()
                 except Exception as e:
                     logger.debug("Reddit context failed: %s", e)
+                try:
+                    written = self.reddit.persist_to_memory(
+                        self.memory, cycle=self.cycle_count,
+                    )
+                    if written:
+                        logger.info(
+                            "reddit persistence: %d new posts to raw memory",
+                            written,
+                        )
+                except Exception as e:
+                    logger.debug("Reddit persist failed: %s", e)
 
             # Public bot context — every cycle
             try:
