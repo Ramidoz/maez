@@ -11,6 +11,8 @@ offline checks that should be green before a live/runtime change:
 1. Unit test suite.
 2. Lived-memory probe score.
 3. Voice-LoRA dataset extraction health.
+4. Reproducibility / git cleanliness.
+5. Optional live service health checks.
 
 The dataset count is advisory until enough organic chat exists. The
 unit suite and lived-memory probes are hard gates.
@@ -31,6 +33,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 DEFAULT_REPORT_DIR = REPO_ROOT / "logs" / "harness"
 DEFAULT_DATASET_OUT = REPO_ROOT / "training" / "datasets" / "track_a_harness_latest.jsonl"
+DEFAULT_REQUIRED_SERVICES = "maez.service,llama-server.service"
+DEFAULT_ADVISORY_SERVICES = "maez-web.service,maez-subscription-proxy.service"
 
 
 @dataclass
@@ -140,6 +144,69 @@ def check_voice_dataset(*, target_pairs: int, out_path: Path) -> CheckResult:
     )
 
 
+def check_git_clean() -> CheckResult:
+    rc, out, err, elapsed = _run_command(["git", "status", "--short"])
+    if rc != 0:
+        return CheckResult(
+            name="git_clean",
+            status="WARN",
+            detail=err.strip() or f"git status exited {rc}",
+            elapsed_s=elapsed,
+            required=False,
+        )
+    dirty = [line for line in out.splitlines() if line.strip()]
+    return CheckResult(
+        name="git_clean",
+        status="PASS" if not dirty else "WARN",
+        detail="clean" if not dirty else f"{len(dirty)} changed path(s)",
+        elapsed_s=elapsed,
+        required=False,
+    )
+
+
+def _split_csv(value: str) -> list[str]:
+    return [part.strip() for part in (value or "").split(",") if part.strip()]
+
+
+def check_services(*, services: list[str], required: bool) -> CheckResult:
+    if not services:
+        return CheckResult(
+            name="service_health_required" if required else "service_health_advisory",
+            status="SKIP",
+            detail="no services configured",
+            elapsed_s=0.0,
+            required=False,
+        )
+    start = time.time()
+    bad: list[str] = []
+    states: list[str] = []
+    for service in services:
+        rc, out, err, _elapsed = _run_command(
+            ["systemctl", "is-active", service],
+            timeout=10,
+        )
+        state = (out or err).strip() or f"exit={rc}"
+        states.append(f"{service}:{state}")
+        if rc != 0 or state != "active":
+            bad.append(f"{service}:{state}")
+    elapsed = time.time() - start
+    if bad:
+        return CheckResult(
+            name="service_health_required" if required else "service_health_advisory",
+            status="FAIL" if required else "WARN",
+            detail=", ".join(bad),
+            elapsed_s=elapsed,
+            required=required,
+        )
+    return CheckResult(
+        name="service_health_required" if required else "service_health_advisory",
+        status="PASS",
+        detail=", ".join(states),
+        elapsed_s=elapsed,
+        required=required,
+    )
+
+
 def write_report(results: list[CheckResult], *, report_dir: Path) -> Path:
     report_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -172,6 +239,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--voice-target", type=int, default=500)
     ap.add_argument("--dataset-out", default=str(DEFAULT_DATASET_OUT))
     ap.add_argument("--report-dir", default=str(DEFAULT_REPORT_DIR))
+    ap.add_argument(
+        "--include-live-services",
+        action="store_true",
+        help=(
+            "also check systemd service health. Required services are hard "
+            "gates in this mode; advisory services warn only."
+        ),
+    )
+    ap.add_argument("--required-services", default=DEFAULT_REQUIRED_SERVICES)
+    ap.add_argument("--advisory-services", default=DEFAULT_ADVISORY_SERVICES)
     args = ap.parse_args(argv)
 
     results = [
@@ -181,7 +258,21 @@ def main(argv: list[str] | None = None) -> int:
             target_pairs=args.voice_target,
             out_path=Path(args.dataset_out),
         ),
+        check_git_clean(),
     ]
+    if args.include_live_services:
+        results.append(
+            check_services(
+                services=_split_csv(args.required_services),
+                required=True,
+            )
+        )
+        results.append(
+            check_services(
+                services=_split_csv(args.advisory_services),
+                required=False,
+            )
+        )
     report_path = write_report(results, report_dir=Path(args.report_dir))
     print(format_summary(results, report_path))
     return 0 if all(r.status == "PASS" for r in results if r.required) else 1
