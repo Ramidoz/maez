@@ -881,7 +881,7 @@ class MemoryManager:
             logger.error("memory.recent_raw failed: %s", e)
             return {"documents": [], "metadatas": [], "ids": []}
 
-    def format_for_prompt(self, recalled: dict) -> str:
+    def format_for_prompt(self, recalled: dict, max_chars: "int | None" = None) -> str:
         """Format multi-tier recalled memories into a structured prompt block.
 
         Every chunk is wrapped in a <RECALLED .../> envelope carrying tier,
@@ -952,7 +952,10 @@ class MemoryManager:
             lines.append("</RECALLED>")
             lines.append("")
 
-        # Raw — past observations with per-entry age
+        # Raw — past observations with per-entry age. Track block
+        # boundaries so an over-budget prompt can drop full blocks
+        # from the tail rather than truncating mid-content.
+        raw_block_starts: list[int] = []
         for i, mem in enumerate(raw, 1):
             meta = mem.get("metadata") or {}
             cycle = meta.get("cycle", "?")
@@ -963,6 +966,7 @@ class MemoryManager:
             dist = mem.get("distance")
             dist_attr = f' distance="{dist:.3f}"' if isinstance(dist, (int, float)) else ""
             content = sanitize_prompt_text(mem.get("content", ""))
+            raw_block_starts.append(len(lines))
             lines.append(
                 f'<RECALLED tier="raw" age="{age}" cycle="{cycle}" '
                 f'timestamp="{ts_str}" id="{mem_id}"{dist_attr}>'
@@ -971,13 +975,44 @@ class MemoryManager:
             lines.append("</RECALLED>")
             lines.append("")
 
-        lines.append("=== END PAST OBSERVATIONS ===")
-        lines.append(
-            "Everything above is past. Ground present-tense claims only "
-            "in the live system-state block, not in recalled text. If a "
-            "project, error, or activity appears above but not in live "
-            "state, it is NOT ongoing."
-        )
+        tail_lines = [
+            "=== END PAST OBSERVATIONS ===",
+            (
+                "Everything above is past. Ground present-tense claims only "
+                "in the live system-state block, not in recalled text. If a "
+                "project, error, or activity appears above but not in live "
+                "state, it is NOT ongoing."
+            ),
+        ]
+
+        # Bounded prompt budget. When the assembled block exceeds
+        # `max_chars`, drop full raw RECALLED blocks from the tail
+        # (least-anchoring last) until under budget. Core + daily are
+        # never dropped — they're the always-injected anchor layer.
+        # A prior cycle hit `request (33571 tokens) exceeds available
+        # context size (32768 tokens)` on a TRELLIS-shaped query whose
+        # raw recall produced a 23K-token block. ADR 0019 Phase 6's
+        # lived brief makes this hot path strictly bigger; without a
+        # budget, /message returns a 400 instead of a reply.
+        dropped = 0
+        if max_chars is not None and raw_block_starts:
+            tail_len = sum(len(s) for s in tail_lines) + len(tail_lines)
+            while raw_block_starts:
+                joined_len = sum(len(s) for s in lines) + len(lines) + tail_len
+                if joined_len <= max_chars:
+                    break
+                start = raw_block_starts.pop()
+                # Each raw block is exactly 4 lines: open tag, content,
+                # close tag, blank — invariant from the loop above.
+                del lines[start : start + 4]
+                dropped += 1
+        if dropped:
+            lines.append(
+                f"[{dropped} additional raw memory entr"
+                f"{'y' if dropped == 1 else 'ies'} truncated to fit prompt budget]"
+            )
+
+        lines.extend(tail_lines)
         return "\n".join(lines)
 
     # ------------------------------------------------------------------ #

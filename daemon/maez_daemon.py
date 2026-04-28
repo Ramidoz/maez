@@ -1381,7 +1381,14 @@ class MaezDaemon:
         snap = perception_snapshot()
         system_state = format_snapshot(snap)
         recalled = self.memory.recall_for_telegram(text)
-        memory_block = self.memory.format_for_prompt(recalled)
+        # Bound the recall block so a high-recall query (long-content
+        # core memories + many raw matches) cannot push the whole
+        # prompt past the llama-server context window. 60_000 chars
+        # ~= 15K tokens, leaving headroom for sys_prompt, chat_history,
+        # lived brief, premise flag, user turn, and the response budget
+        # within the 32K ctx. Core + daily are preserved; raw entries
+        # drop from the tail if needed.
+        memory_block = self.memory.format_for_prompt(recalled, max_chars=60_000)
 
         # Web search if needed
         web_context = ""

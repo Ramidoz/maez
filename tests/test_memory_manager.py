@@ -109,6 +109,69 @@ class FormatForPromptAgeFramingTests(unittest.TestCase):
         )
 
 
+class FormatForPromptBudgetTests(unittest.TestCase):
+    """`max_chars` parameter — drops raw RECALLED blocks from the
+    tail until the assembled block fits the budget. Core + daily are
+    never dropped (they are the always-injected anchor layer).
+
+    Closes the 2026-04-28 incident where a TRELLIS-shaped query
+    produced a 23K-token recall block; combined with sys_prompt and
+    Phase-6 lived brief, the request exceeded llama-server's 32K ctx
+    and the daemon's /message endpoint returned a 400 instead of a
+    reply.
+    """
+
+    def _big_raw(self, n: int) -> list:
+        ts = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        return [
+            {
+                "id": f"raw-{i:03d}",
+                "content": "x" * 1000,  # 1KB body each
+                "metadata": {"timestamp": ts, "cycle": i},
+            }
+            for i in range(n)
+        ]
+
+    def test_default_no_cap_preserves_all_entries(self):
+        mm = _mm()
+        recalled = {"core": [], "daily": [], "raw": self._big_raw(20)}
+        out = mm.format_for_prompt(recalled)
+        for i in range(20):
+            self.assertIn(f"raw-{i:03d}", out)
+        self.assertNotIn("truncated", out)
+
+    def test_max_chars_drops_raw_tail(self):
+        mm = _mm()
+        recalled = {"core": [], "daily": [], "raw": self._big_raw(20)}
+        out = mm.format_for_prompt(recalled, max_chars=8000)
+        self.assertLessEqual(len(out), 8000 + 200)  # +slack for truncation marker
+        self.assertIn("truncated", out)
+        # Earlier entries (top of the raw list) must survive.
+        self.assertIn("raw-000", out)
+        # Tail entries must have been dropped.
+        self.assertNotIn("raw-019", out)
+
+    def test_max_chars_preserves_core_even_when_tight(self):
+        mm = _mm()
+        recalled = {
+            "core": [{"id": "core-canonical", "content": "I am Maez."}],
+            "daily": [],
+            "raw": self._big_raw(20),
+        }
+        out = mm.format_for_prompt(recalled, max_chars=4000)
+        self.assertIn("core-canonical", out)
+        self.assertIn("I am Maez.", out)
+
+    def test_max_chars_keeps_end_observations_marker(self):
+        mm = _mm()
+        recalled = {"core": [], "daily": [], "raw": self._big_raw(20)}
+        out = mm.format_for_prompt(recalled, max_chars=8000)
+        # Both opening header and closing footer must remain so the
+        # model still treats the block as past-tense scoped.
+        self.assertIn("PAST OBSERVATIONS", out)
+        self.assertIn("END PAST OBSERVATIONS", out)
+
+
 class GetRecentDailyTests(unittest.TestCase):
     """``get_recent_daily(limit)`` was added 2026-04-27 to close the
     silent AttributeError gap in the lived-memory nightly job. Mirror

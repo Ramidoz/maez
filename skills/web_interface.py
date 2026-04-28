@@ -2511,7 +2511,12 @@ def chat():
             "- Reply naturally for the web. Do not pretend this message came from Telegram unless the owner asks.\n"
             "- Ambient context above is a passive snapshot; do not recite it back unless relevant.\n"
         )
-        owner_memory = memory.format_for_prompt(memory.recall_for_telegram(message))
+        # Same prompt-budget cap as the daemon's /message path so a
+        # high-recall query can't push past the llama-server ctx.
+        owner_memory = memory.format_for_prompt(
+            memory.recall_for_telegram(message),
+            max_chars=60_000,
+        )
         messages_list = [{"role": "system", "content": owner_system}]
         if owner_memory:
             messages_list.append({
