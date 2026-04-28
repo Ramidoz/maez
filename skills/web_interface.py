@@ -2526,6 +2526,34 @@ def chat():
         for h in history[:-1]:
             if isinstance(h, dict) and h.get("role") and h.get("content"):
                 messages_list.append({"role": h["role"], "content": h["content"]})
+        # ADR 0019 Phase 6 — lived recall on the owner-bridge web /chat
+        # path. Same shape and feature flag as the daemon: build from
+        # the user's current message, inject between chat history and
+        # the user turn, gate on MAEZ_LIVED_RECALL, fail-open on any
+        # exception. Lived recall is an owner-only signal (episodes
+        # and graph edges describe the owner's relationships); the
+        # guest path below intentionally does NOT inject it.
+        if os.environ.get("MAEZ_LIVED_RECALL", "1") != "0":
+            try:
+                from core.memory.lived_recall import build_lived_recall_brief as _build_brief
+                from core.memory.episodes import EpisodeStore as _EpStore
+                from core.memory.relationship_graph import RelationshipGraph as _RGraph
+
+                if os.path.exists(_LIVED_EPISODE_DB_PATH) and os.path.exists(
+                    _LIVED_GRAPH_DB_PATH
+                ):
+                    _ep = _EpStore(_LIVED_EPISODE_DB_PATH)
+                    _gr = _RGraph(_LIVED_GRAPH_DB_PATH)
+                    _lived_brief = _build_brief(
+                        message,
+                        episode_store=_ep,
+                        graph=_gr,
+                        max_items=6,
+                    )
+                    if _lived_brief:
+                        messages_list.append({"role": "system", "content": _lived_brief})
+            except Exception as _lived_exc:
+                logger.debug("web /chat lived recall skipped: %s", _lived_exc)
         messages_list.append({"role": "user", "content": message})
     else:
         share_config = user_full.get("share_config", {}) if user_full else {}

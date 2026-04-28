@@ -100,6 +100,9 @@ SHUTDOWN_FILE = BASE_DIR / "daemon" / "last_shutdown"
 
 # --- Constants ---
 from core.model_config import PRIMARY_MODEL as MODEL  # single source of truth — /etc/maez/model.env
+from core.memory.episodes import EpisodeStore
+from core.memory.relationship_graph import RelationshipGraph
+from core.memory.lived_recall import build_lived_recall_brief
 
 LOOP_INTERVAL = 30  # seconds
 HEALTH_PORT = 11435
@@ -250,6 +253,19 @@ class MaezDaemon:
         self.last_cycle_time = None
         self.system_prompt = self._load_soul()
         self.memory = MemoryManager()
+        # ADR 0019 Phase 6 — lived stores constructed once at daemon
+        # init and reused across handle_message calls (re-opening the
+        # SQLite stores on every request would hammer disk for nothing).
+        # Routes through core.paths so a non-default MAEZ_HOME works;
+        # legacy hardcode is the last-resort fallback.
+        try:
+            from core.paths import memory_dir as _mem_dir
+
+            _lived_dir = _mem_dir()
+        except Exception:
+            _lived_dir = Path("/home/rohit/maez/memory")
+        self.lived_episodes = EpisodeStore(str(_lived_dir / "lived_episodes.db"))
+        self.lived_graph = RelationshipGraph(str(_lived_dir / "lived_graph.db"))
         # Session 11m: pass daemon ref so the Telegram bot can signal
         # "the owner is talking" and defer our next reasoning cycle.
         self._rohit_active_until = 0.0
@@ -1446,6 +1462,29 @@ class MaezDaemon:
             messages.extend(history_to_messages(chat_history))
         except Exception as _hist_exc:
             logger.debug("chat_history threading skipped: %s", _hist_exc)
+        # ADR 0019 Phase 6 — lived recall brief. Built from the user's
+        # text (the message they just sent), injected as a system note
+        # AFTER chat_history threading and BEFORE premise_flag so the
+        # synthesis model reads "what we have lived through together"
+        # as background, with the premise flag still landing closest
+        # to the user turn. Gated by MAEZ_LIVED_RECALL — default
+        # enabled, set to "0" for fast rollback if it degrades chat
+        # quality. Build-time exceptions are caught silently; synthesis
+        # must continue regardless of the lived layer's health.
+        _lived_brief = ""
+        if os.environ.get("MAEZ_LIVED_RECALL", "1") != "0":
+            try:
+                _lived_brief = build_lived_recall_brief(
+                    text,
+                    episode_store=self.lived_episodes,
+                    graph=self.lived_graph,
+                    max_items=6,
+                )
+            except Exception as _lived_exc:
+                logger.debug("lived recall brief build failed: %s", _lived_exc)
+                _lived_brief = ""
+        if _lived_brief:
+            messages.append({"role": "system", "content": _lived_brief})
         # Inject the premise-audit flag (if any) as a system note
         # *immediately before* the user turn so the synthesis model
         # treats it as a directive about THIS message specifically,
