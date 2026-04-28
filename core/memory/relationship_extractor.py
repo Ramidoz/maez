@@ -200,10 +200,133 @@ def _extract_open_loop_edges(c: "EpisodeCandidate") -> list[EdgeProposal]:
     ]
 
 
+# ── owner-preference patterns (cares_about) ─────────────────────────
+
+
+# Named cares-about: "<Name> cares about <X>". Subject in regex is a
+# trigger; subject_label on the edge always resolves to identity's
+# display_name() so the graph carries canonical owner identity.
+# Object terminates at sentence-end, em-dash, or " more than " /
+# " rather than " (the comparative tail belongs to the unwanted
+# half of the preference, not the cared-about half).
+_CARES_ABOUT_NAMED_RE = re.compile(
+    r"\b(?P<subj>[A-Z][a-z]+)\s+cares\s+about\s+"
+    r"(?P<obj>.+?)"
+    r"(?:[.!?;\n]|\s+more\s+than\b|\s+rather\s+than\b|\s+—\s+|$)",
+)
+
+# "<X> matters more than <Y>" — the cared-about thing is X.
+_MATTERS_MORE_THAN_RE = re.compile(
+    r"\b(?P<obj>[^.!?;\n]+?)\s+matters\s+more\s+than\b",
+    re.IGNORECASE,
+)
+
+# "what matters most is <X>" / "what I care about is <X>".
+# Implicit subject; defaults to display_name().
+_WHAT_MATTERS_MOST_RE = re.compile(
+    r"\bwhat\s+matters\s+(?:most\s+)?is\s+(?P<obj>.+?)"
+    r"(?:[.!?;\n]|\s+—\s+|$)",
+    re.IGNORECASE,
+)
+
+# Negation window: words within ~30 chars before a "care" match that
+# would invert it. Conservative — short list, low false-positive risk.
+_NEGATION_WINDOW = 30
+_NEGATION_TOKENS = ("don't", "doesn't", "didn't", "do not", "does not")
+
+
+def _has_preceding_negation(text: str, match_start: int) -> bool:
+    window = text[max(0, match_start - _NEGATION_WINDOW) : match_start].lower()
+    return any(tok in window for tok in _NEGATION_TOKENS)
+
+
+def _owner_label() -> str:
+    """Resolve the owner's display name from identity. Falls back to
+    'Rohit' so the extractor still emits sensible edges if identity
+    is unavailable in a test or partial-init context."""
+    try:
+        from core.identity import display_name
+
+        name = (display_name() or "").strip()
+        return name or "Rohit"
+    except Exception:
+        return "Rohit"
+
+
+def _clean_object(text: str, max_len: int = 200) -> str:
+    """Trim, strip trailing punctuation, bound length. Never returns
+    empty for non-empty input — caller checks falsy separately."""
+    obj = (text or "").strip().rstrip(".,;:—-")
+    return obj[:max_len]
+
+
+def _extract_cares_about_edges(
+    c: "EpisodeCandidate",
+) -> list[EdgeProposal]:
+    """Owner-preference statement in a core-memory candidate →
+    ``<owner> --cares_about--> <X>``.
+
+    Closes the relationship-probe quality gap from the 2026-04-27
+    real-data read: the v1 graph had zero ``cares_about`` edges
+    because the existing extractors only produced corrected /
+    threatens / open_loop_about. The relationship probe passed
+    mechanically (brief contained "Rohit") but didn't actually
+    answer the question it asked.
+
+    Three patterns, in priority order. Only fires on
+    ``source_kind == "core_memory"`` — raw observations and daily
+    summaries are too noisy for v1.
+    """
+    if c.source_kind != "core_memory":
+        return []
+
+    text = (c.summary or "") + "\n" + (c.title or "")
+    owner = _owner_label()
+    seen_objects: set[str] = set()  # dedup within one candidate
+    edges: list[EdgeProposal] = []
+
+    def _emit(obj: str) -> None:
+        cleaned = _clean_object(obj)
+        if not cleaned:
+            return
+        key = cleaned.lower()
+        if key in seen_objects:
+            return
+        seen_objects.add(key)
+        edges.append(
+            EdgeProposal(
+                subject_label=owner,
+                subject_kind="person",
+                relation="cares_about",
+                object_label=cleaned,
+                object_kind="concept",
+                source_memory_ids=list(c.source_memory_ids),
+                confidence=0.85,
+            )
+        )
+
+    # Pattern 1: "<Name> cares about <X>" — named-subject trigger.
+    for m in _CARES_ABOUT_NAMED_RE.finditer(text):
+        if _has_preceding_negation(text, m.start()):
+            continue
+        _emit(m.group("obj"))
+
+    # Pattern 2: "<X> matters more than <Y>" — implicit owner subject.
+    for m in _MATTERS_MORE_THAN_RE.finditer(text):
+        _emit(m.group("obj"))
+
+    # Pattern 3: "what matters most is <X>" — implicit owner subject.
+    for m in _WHAT_MATTERS_MOST_RE.finditer(text):
+        _emit(m.group("obj"))
+
+    return edges
+
+
 _EXTRACTORS = (
     _extract_corrected_edges,
     _extract_threatens_edges,
     _extract_open_loop_edges,
+    _extract_cares_about_edges,
 )
 
 

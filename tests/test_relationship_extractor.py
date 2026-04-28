@@ -317,5 +317,186 @@ class EdgeProposalShape(unittest.TestCase):
         self.assertEqual(p.confidence, 0.7)
 
 
+class CaresAboutExtractor(unittest.TestCase):
+    """The relationship-probe quality gap (2026-04-27 17:30 read): the
+    real graph had zero ``cares_about`` edges because the v1 extractor
+    only produced ``corrected`` / ``threatens`` / ``open_loop_about``.
+    The relationship probe passed mechanically (brief contained
+    "Rohit") but didn't actually answer "what Rohit cares about" — it
+    surfaced task lists.
+
+    This extractor closes that gap with high-precision detection of
+    explicit owner-preference statements in core-memory candidates.
+    Sparse-but-true: when in doubt, no edge."""
+
+    def test_matters_more_than_pattern_fires(self):
+        from core.memory.relationship_extractor import extract_edges
+
+        c = _candidate(
+            title="Owner stated preference",
+            summary=(
+                "Rohit cares about truthful continuity in Maez more "
+                "than impressive but fabricated claims."
+            ),
+            source_memory_ids=["core-pref-1"],
+            source_kind="core_memory",
+        )
+        edges = extract_edges(c)
+        cares = [e for e in edges if e.relation == "cares_about"]
+        self.assertEqual(len(cares), 1)
+        e = cares[0]
+        self.assertEqual(e.subject_label, "Rohit")
+        self.assertIn("truthful continuity", e.object_label.lower())
+        self.assertEqual(e.source_memory_ids, ["core-pref-1"])
+
+    def test_what_matters_most_pattern_fires(self):
+        from core.memory.relationship_extractor import extract_edges
+
+        c = _candidate(
+            title="Conversation note",
+            summary=(
+                "Owner expressed yesterday that what matters most is "
+                "the grandmother case — every design decision should "
+                "check against that, not the engineer case."
+            ),
+            source_memory_ids=["core-2"],
+            source_kind="core_memory",
+        )
+        edges = extract_edges(c)
+        cares = [e for e in edges if e.relation == "cares_about"]
+        self.assertEqual(len(cares), 1)
+        self.assertIn("grandmother", cares[0].object_label.lower())
+
+    def test_explicit_care_statement_fires(self):
+        from core.memory.relationship_extractor import extract_edges
+
+        c = _candidate(
+            title="Note",
+            summary="Rohit cares about Maez staying genderless.",
+            source_memory_ids=["core-3"],
+            source_kind="core_memory",
+        )
+        edges = extract_edges(c)
+        cares = [e for e in edges if e.relation == "cares_about"]
+        self.assertEqual(len(cares), 1)
+        self.assertIn("genderless", cares[0].object_label.lower())
+
+    def test_subject_uses_display_name_not_hardcoded(self):
+        from unittest import mock
+
+        from core.memory.relationship_extractor import extract_edges
+
+        c = _candidate(
+            title="Note",
+            summary="Alex cares about quiet honesty more than performance.",
+            source_memory_ids=["core-4"],
+            source_kind="core_memory",
+        )
+        with mock.patch("core.identity.display_name", return_value="Alex"):
+            edges = extract_edges(c)
+        cares = [e for e in edges if e.relation == "cares_about"]
+        self.assertEqual(len(cares), 1)
+        self.assertEqual(cares[0].subject_label, "Alex")
+
+    def test_non_preference_text_yields_no_cares_about_edge(self):
+        # Pure correction with no preference statement — must not
+        # over-fire just because the candidate is core-memory shaped.
+        from core.memory.relationship_extractor import extract_edges
+
+        c = _candidate(
+            title="Correction: vision retired",
+            summary=("Vision pipeline is retired. Do not narrate llama-server-vision as active."),
+            source_memory_ids=["core-5"],
+            source_kind="core_memory",
+            emotional_tone="corrective",
+        )
+        edges = extract_edges(c)
+        cares = [e for e in edges if e.relation == "cares_about"]
+        self.assertEqual(len(cares), 0)
+
+    def test_only_fires_on_core_memory_kind(self):
+        # Raw observations are too noisy for v1 — even a clean
+        # "I care about X" statement in a raw episode should not
+        # produce a cares_about edge until LLM extraction takes over.
+        from core.memory.relationship_extractor import extract_edges
+
+        c = _candidate(
+            title="Raw note",
+            summary="Rohit cares about disk hygiene.",
+            source_memory_ids=["raw-junk-1"],
+            source_kind="raw_observation",
+        )
+        edges = extract_edges(c)
+        cares = [e for e in edges if e.relation == "cares_about"]
+        self.assertEqual(len(cares), 0)
+
+    def test_confidence_is_high(self):
+        # Owner-preference statements are explicit; the extractor's
+        # confidence should reflect that — at least as high as the
+        # corrected-edge floor (0.85) or close to it.
+        from core.memory.relationship_extractor import extract_edges
+
+        c = _candidate(
+            title="Note",
+            summary="Rohit cares about evidence-backed claims.",
+            source_memory_ids=["core-6"],
+            source_kind="core_memory",
+        )
+        edges = extract_edges(c)
+        cares = [e for e in edges if e.relation == "cares_about"]
+        self.assertEqual(len(cares), 1)
+        self.assertGreaterEqual(cares[0].confidence, 0.8)
+
+    def test_object_is_concept_kind(self):
+        from core.memory.relationship_extractor import extract_edges
+
+        c = _candidate(
+            summary="Rohit cares about local-first architecture.",
+            source_memory_ids=["core-7"],
+            source_kind="core_memory",
+        )
+        edges = extract_edges(c)
+        cares = [e for e in edges if e.relation == "cares_about"]
+        self.assertEqual(len(cares), 1)
+        self.assertEqual(cares[0].subject_kind, "person")
+        self.assertEqual(cares[0].object_kind, "concept")
+
+    def test_handles_punctuation_and_short_object(self):
+        # Object extraction must produce a non-empty, bounded label.
+        from core.memory.relationship_extractor import extract_edges
+
+        c = _candidate(
+            summary=(
+                "Rohit cares about Maez's voice — distinct, restrained, honest about uncertainty."
+            ),
+            source_memory_ids=["core-8"],
+            source_kind="core_memory",
+        )
+        edges = extract_edges(c)
+        cares = [e for e in edges if e.relation == "cares_about"]
+        self.assertEqual(len(cares), 1)
+        # Object is non-empty and bounded length (no full-summary leak).
+        self.assertTrue(cares[0].object_label)
+        self.assertLessEqual(len(cares[0].object_label), 200)
+
+    def test_does_not_invent_when_pattern_absent(self):
+        # An episode that mentions "care" in passing without a
+        # preference shape ("we don't care about X" / "doesn't care")
+        # must not produce a positive cares_about edge.
+        from core.memory.relationship_extractor import extract_edges
+
+        c = _candidate(
+            summary=(
+                "The system doesn't care about which specific cipher "
+                "is negotiated — TLS handles that."
+            ),
+            source_memory_ids=["core-9"],
+            source_kind="core_memory",
+        )
+        edges = extract_edges(c)
+        cares = [e for e in edges if e.relation == "cares_about"]
+        self.assertEqual(len(cares), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
