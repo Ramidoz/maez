@@ -51,5 +51,57 @@ class TrainingExtractionBoundaryTests(unittest.TestCase):
         )
 
 
+class VoiceQualityFilterTests(unittest.TestCase):
+    """2026-04-28 — voice-LoRA quality filters (date, fabrication,
+    per-source cap). These prevent training on pre-grounding-fix turns
+    that contain fluently-confabulated narrations the audit pipeline
+    has since flagged as a class."""
+
+    def test_ts_after_empty_passes(self):
+        # No timestamp → can't filter; keep (fail-open).
+        self.assertTrue(extract._ts_after("", "2026-04-23"))
+
+    def test_ts_after_iso_pre_drops(self):
+        self.assertFalse(
+            extract._ts_after("2026-04-19T12:00:00+00:00", "2026-04-23")
+        )
+
+    def test_ts_after_iso_post_passes(self):
+        self.assertTrue(
+            extract._ts_after("2026-04-25T12:00:00+00:00", "2026-04-23")
+        )
+
+    def test_ts_after_unix_float_pre_drops(self):
+        # 2025-04-18 unix → pre-fix
+        self.assertFalse(extract._ts_after("1745000000", "2026-04-23"))
+
+    def test_ts_after_unix_float_post_passes(self):
+        # 2026-04-28 unix → post-fix
+        self.assertTrue(extract._ts_after("1777354719.13", "2026-04-23"))
+
+    def test_ts_after_garbage_passes(self):
+        # Unparseable → keep (fail-open).
+        self.assertTrue(extract._ts_after("not a date", "2026-04-23"))
+
+    def test_fabrication_flagged_substring_match(self):
+        flagged = {extract._norm("the disk has been trending upward for weeks")}
+        self.assertTrue(
+            extract.is_fabrication_flagged(
+                "The disk has been trending upward for weeks.",
+                flagged,
+            )
+        )
+
+    def test_fabrication_flagged_unrelated_passes(self):
+        flagged = {extract._norm("specific fabricated text")}
+        self.assertFalse(
+            extract.is_fabrication_flagged("Hello, what's up?", flagged)
+        )
+
+    def test_fabrication_flagged_empty_set_passes_everything(self):
+        # No fabrication log → no filtering.
+        self.assertFalse(extract.is_fabrication_flagged("anything", set()))
+
+
 if __name__ == "__main__":
     unittest.main()

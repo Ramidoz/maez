@@ -38,6 +38,7 @@ daemon/builder_mode_hwm.txt
 PROGRESS.md
 training/.venv/
 training/runs/
+training/datasets/
 training/unsloth_compiled_cache/
 *.safetensors
 *.gguf

@@ -439,6 +439,62 @@ def iter_training_sources(
 
 
 # ── main ─────────────────────────────────────────────────────────────
+def _load_fabrication_texts() -> set[str]:
+    """Load every text the fabrication audit pipeline has flagged so
+    corresponding training pairs can be excluded. The audit caught these
+    as fabrication-class outputs; training on them re-teaches the
+    pathology we just spent weeks closing."""
+    flagged: set[str] = set()
+    db = Path("memory/fabrication_log.db")
+    if not db.exists():
+        return flagged
+    try:
+        con = sqlite3.connect(str(db))
+        con.row_factory = sqlite3.Row
+        # `fabrication_events` holds the actual text that was flagged.
+        for row in con.execute("SELECT text FROM fabrication_events"):
+            t = (row["text"] or "").strip()
+            if t:
+                flagged.add(_norm(t))
+        con.close()
+    except sqlite3.Error:
+        pass
+    return flagged
+
+
+def is_fabrication_flagged(assistant: str, flagged: set[str]) -> bool:
+    """True if the assistant text matches (or contains) any fabrication-
+    log entry. Conservative — substring match on the normalized form."""
+    if not flagged:
+        return False
+    a_norm = _norm(assistant)
+    for f in flagged:
+        if f and (f in a_norm or a_norm in f):
+            return True
+    return False
+
+
+def _ts_after(ts: str, min_iso: str) -> bool:
+    """True if `ts` is parseable AND >= min_iso. Sources that do not
+    populate timestamps pass through (this filter only catches turns
+    that are demonstrably old)."""
+    if not ts:
+        return True  # no timestamp → can't filter, keep
+    try:
+        # Most timestamps are ISO 8601; a few are unix-float strings.
+        if ts.replace(".", "", 1).isdigit():
+            from datetime import datetime, timezone
+
+            return (
+                datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
+                >= min_iso
+            )
+        # ISO compare is lexicographic for same-format strings.
+        return ts >= min_iso
+    except Exception:
+        return True  # parse fail → keep, fail-open
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument("--out", required=True, help="output JSONL path")
@@ -452,6 +508,52 @@ def main() -> int:
             "off by default to keep volatile perception out of LoRA/SFT"
         ),
     )
+    # Voice-LoRA quality filters added 2026-04-28 — close the
+    # "training on pre-fix fabrication turns" gap. Pre-2026-04-23 is
+    # before the grounding-truth fix (commit 19cde77) AND the
+    # audit-before-store invariant; turns from that window contain
+    # fluently-confabulated activity narrations the audit pipeline
+    # has since flagged. Training on them re-teaches the pathology.
+    ap.add_argument(
+        "--min-date",
+        default="2026-04-23",
+        help=(
+            "drop chromadb / reasoning turns with timestamps before this "
+            "ISO date (default 2026-04-23 — post-grounding-fix). Sources "
+            "without timestamps pass through. Set to '' to disable."
+        ),
+    )
+    ap.add_argument(
+        "--include-fabrication-flagged",
+        action="store_true",
+        help=(
+            "include turns whose assistant text matches a row in "
+            "memory/fabrication_log.db's fabrication_events table. Off by "
+            "default — those texts were the audit pipeline's negative "
+            "training signal, not voice we want to amplify."
+        ),
+    )
+    ap.add_argument(
+        "--max-per-source",
+        type=int,
+        default=None,
+        help=(
+            "cap pairs from a CAPPED source at N (see --capped-sources). "
+            "Prevents boilerplate-heavy sources from drowning chat-voice "
+            "signal. Recommended for voice LoRA: 30."
+        ),
+    )
+    ap.add_argument(
+        "--capped-sources",
+        default="continuity",
+        help=(
+            "comma-separated list of source-prefix names that the "
+            "--max-per-source cap applies to. Default: 'continuity' — "
+            "the post-rollback resumption template that fills 255 raw "
+            "rows with formulaic substitutions. chromadb, fast_log, and "
+            "soul_qa are NEVER capped by default — they are the gold."
+        ),
+    )
     args = ap.parse_args()
 
     out_path = Path(args.out)
@@ -462,9 +564,28 @@ def main() -> int:
     dropped_slash = 0
     dropped_short = 0
     dropped_fallback = 0
+    dropped_pre_min_date = 0
+    dropped_fabrication = 0
 
     seen: set[tuple[str, str]] = set()
     kept: list[dict] = []
+
+    # Sources that carry a meaningful timestamp the date filter applies
+    # to. Synthetic Q&A and continuity capsules don't — their "ts" is
+    # either empty or a stand-in.
+    DATE_FILTERED_SOURCES = {"chromadb", "reasoning"}
+
+    fabrication_texts = (
+        set() if args.include_fabrication_flagged
+        else _load_fabrication_texts()
+    )
+
+    # `kept_per_source` enforces --max-per-source. Boilerplate-heavy
+    # sources (continuity) inflate raw counts without contributing voice
+    # variety; capping them keeps the chromadb / fast_log / soul_qa
+    # signal from being drowned.
+    kept_per_source: dict[str, int] = {}
+    dropped_per_source_cap = 0
 
     all_iterators = iter_training_sources(
         include_reasoning_cycles=args.include_reasoning_cycles,
@@ -488,11 +609,40 @@ def main() -> int:
             if is_fallback(assistant):
                 dropped_fallback += 1
                 continue
+            if (
+                args.min_date
+                and source in DATE_FILTERED_SOURCES
+                and not _ts_after(_ts, args.min_date)
+            ):
+                dropped_pre_min_date += 1
+                continue
+            if is_fabrication_flagged(assistant, fabrication_texts):
+                dropped_fabrication += 1
+                continue
 
             key = (_norm(user), _norm(assistant))
             if key in seen:
                 continue
             seen.add(key)
+
+            # Source-level cap (continuity boilerplate guard).
+            # `source` for soul_qa carries a free-form suffix; collapse
+            # to the prefix so all soul_qa rows share one bucket. Only
+            # source prefixes named in --capped-sources are subject to
+            # the cap — the gold sources (chromadb, fast_log, soul_qa)
+            # pass through unbounded by default.
+            cap_key = source.split(":", 1)[0]
+            capped_set = {
+                s.strip() for s in (args.capped_sources or "").split(",") if s.strip()
+            }
+            if (
+                args.max_per_source is not None
+                and cap_key in capped_set
+                and kept_per_source.get(cap_key, 0) >= args.max_per_source
+            ):
+                dropped_per_source_cap += 1
+                continue
+            kept_per_source[cap_key] = kept_per_source.get(cap_key, 0) + 1
 
             kept.append({
                 "conversations": [
@@ -517,8 +667,46 @@ def main() -> int:
     print(f"[extract] dropped (slash cmd) : {dropped_slash}", file=sys.stderr)
     print(f"[extract] dropped (too short) : {dropped_short}", file=sys.stderr)
     print(f"[extract] dropped (fallback)  : {dropped_fallback}", file=sys.stderr)
+    print(
+        f"[extract] dropped (pre {args.min_date or '-'}) : "
+        f"{dropped_pre_min_date}",
+        file=sys.stderr,
+    )
+    print(
+        f"[extract] dropped (fabrication-flagged) : "
+        f"{dropped_fabrication}",
+        file=sys.stderr,
+    )
+    print(
+        f"[extract] dropped (per-source cap) : "
+        f"{dropped_per_source_cap}",
+        file=sys.stderr,
+    )
     print(f"[extract] after dedup + cap   : {len(kept)}", file=sys.stderr)
     print(f"[extract] wrote {out_path}", file=sys.stderr)
+
+    # Voice-LoRA tripwire — append the survivor count to a trend log so
+    # we can watch the dataset grow week over week. When kept >= 500 the
+    # next session can cross from "tinkering" into "real training".
+    try:
+        from datetime import datetime, timezone
+
+        trip_path = Path("logs/voice_dataset_trend.log")
+        trip_path.parent.mkdir(parents=True, exist_ok=True)
+        with trip_path.open("a") as tf:
+            tf.write(
+                f"{datetime.now(timezone.utc).isoformat(timespec='seconds')}\t"
+                f"min_date={args.min_date or '-'}\t"
+                f"include_fab={args.include_fabrication_flagged}\t"
+                f"raw={raw_total}\t"
+                f"kept={len(kept)}\t"
+                f"by_source="
+                + ",".join(f"{s}:{c}" for s, c in sorted(per_source.items()))
+                + "\n"
+            )
+    except OSError:
+        pass
+
     return 0
 
 
