@@ -1,0 +1,21 @@
+[Unit]
+Description=Fire maez-lived-memory-reflection.service nightly at 04:00 local
+
+[Timer]
+# 04:00 local every day — after 03:00 nightly consolidation has
+# produced fresh daily summaries, before 04:30 self-dev schedule
+# fires. The reflection ingests core + daily + followups into the
+# lived-memory layer (ADR 0019, Phase 4). Sequence:
+#   03:00  daily consolidation builds fresh daily summaries
+#   04:00  THIS — lived-memory reflection ingests them as episodes
+#   04:30  self-dev review pass
+OnCalendar=*-*-* 04:00:00
+
+# If the machine was off / sleeping at 04:00, fire on next boot.
+# Reflection is idempotent so an extra catch-up fire is safe.
+Persistent=true
+
+Unit=maez-lived-memory-reflection.service
+
+[Install]
+WantedBy=timers.target

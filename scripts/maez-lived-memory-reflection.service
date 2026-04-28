@@ -1,0 +1,29 @@
+[Unit]
+Description=Maez nightly lived-memory reflection — episode + edge ingest (ADR 0019)
+Documentation=file:///home/rohit/maez/scripts/memory_reflection/nightly_lived_memory.py
+After=maez.service
+Wants=maez.service
+
+[Service]
+Type=oneshot
+User=rohit
+Group=rohit
+WorkingDirectory=/home/rohit/maez
+EnvironmentFile=/home/rohit/maez/config/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/rohit/maez/.venv/bin/python3 /home/rohit/maez/scripts/memory_reflection/nightly_lived_memory.py --apply
+
+# Paired with maez-lived-memory-reflection.timer (separate file) which
+# fires this unit nightly. Reflection is idempotent (dedups by
+# source_memory_id overlap with already-stored episodes) and reads
+# from MemoryManager + writes only to memory/lived_*.db; nothing
+# in the read path (Chroma) gets mutated.
+TimeoutStartSec=10min
+
+# Reflection is fail-safe by design — a partial run leaves the
+# SQLite stores with some new episodes, and the next nightly fire
+# picks up where it left off via the dedup pass. No retry logic
+# needed.
+
+StandardOutput=append:/home/rohit/maez/logs/lived_memory_reflection.log
+StandardError=append:/home/rohit/maez/logs/lived_memory_reflection.log

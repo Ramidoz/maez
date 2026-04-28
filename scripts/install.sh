@@ -222,6 +222,13 @@ else
     # Non-templated units (timer is already portable)
     [ -f "$MAEZ_HOME/scripts/maez-self-dev-scheduled.timer" ] && \
         cp "$MAEZ_HOME/scripts/maez-self-dev-scheduled.timer" "$RENDER_DIR/" 2>/dev/null || true
+    # Lived-memory reflection — service + timer (not templated; paths
+    # are absolute. Owners on a non-default MAEZ_HOME will need to
+    # adjust by hand.)
+    [ -f "$MAEZ_HOME/scripts/maez-lived-memory-reflection.service" ] && \
+        cp "$MAEZ_HOME/scripts/maez-lived-memory-reflection.service" "$RENDER_DIR/" 2>/dev/null || true
+    [ -f "$MAEZ_HOME/scripts/maez-lived-memory-reflection.timer" ] && \
+        cp "$MAEZ_HOME/scripts/maez-lived-memory-reflection.timer" "$RENDER_DIR/" 2>/dev/null || true
 
     if [ "$SYSTEMD_CHOICE" = "1" ]; then
         systemctl --user daemon-reload
