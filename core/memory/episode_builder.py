@@ -165,6 +165,94 @@ _OPEN_LOOP_PHRASES = (
 )
 
 
+# Owner-preference patterns in two precision tiers:
+#
+# Named-subject pattern carries its own attribution — "<Name> cares
+# about <X>" can only mean someone named X is doing the caring, so
+# whoever it is, it's a preference statement. Fires on any core
+# memory.
+#
+# Implicit-subject patterns ("X matters more than Y" / "what matters
+# most is X") are AMBIGUOUS in general English — they could be Maez
+# self-narration in a heartbeat ("stability matters more than noise")
+# or owner attribution. They fire only when the surrounding context
+# carries explicit owner attribution: source name contains
+# "owner_preference", or doc starts with "OWNER PREFERENCE".
+#
+# 2026-04-27 21:35 real-data trace: a developmental heartbeat
+# produced a false-positive `Rohit cares_about stability` edge
+# because "stability matters more than noise" was matched as
+# implicit-pattern without attribution check. Two-tier rule fixes it.
+_PREFERENCE_NAMED_PATTERN = re.compile(r"\b[A-Z][a-z]+\s+cares\s+about\s+\S")
+_PREFERENCE_IMPLICIT_PATTERNS = (
+    re.compile(r"\bmatters\s+more\s+than\b", re.IGNORECASE),
+    re.compile(r"\bwhat\s+matters\s+(?:most\s+)?is\b", re.IGNORECASE),
+)
+
+
+def _detect_owner_preference(memory: dict) -> Optional[EpisodeCandidate]:
+    """Owner-preference statement in a core memory →
+    EpisodeCandidate(emotional_tone='preference').
+
+    The relationship_extractor's cares_about detector fires on the
+    candidate's summary; this detector's job is to make the candidate
+    exist in the first place. Only fires on core-kind memories — raw
+    observations are too noisy for v1.
+
+    Two-tier precision: named-subject patterns ("X cares about Y")
+    fire on any core memory because the pattern carries its own
+    attribution. Implicit-subject patterns ("matters more than" /
+    "what matters most") fire only when the source or doc prefix
+    explicitly marks owner attribution — otherwise they false-
+    positive on Maez self-narration in heartbeats.
+
+    Detector ordering note: registered AFTER _detect_corrective_core
+    so a corrective memory that incidentally contains preference
+    phrasing ("the truth matters more than the prior fabrication")
+    still gets the corrected edge as the load-bearing signal.
+    """
+    meta = memory.get("metadata") or {}
+    kind = (meta.get("kind") or "").lower()
+    mid = memory.get("id") or ""
+    if kind != "core" and not mid.startswith("core-"):
+        return None
+
+    doc = (memory.get("document") or "").strip()
+    if not doc or len(doc) < _MIN_DOC_LEN:
+        return None
+
+    has_named = _PREFERENCE_NAMED_PATTERN.search(doc) is not None
+    has_implicit = any(p.search(doc) for p in _PREFERENCE_IMPLICIT_PATTERNS)
+
+    if not has_named and not has_implicit:
+        return None
+
+    if not has_named:
+        # Implicit pattern needs explicit owner attribution.
+        source = (meta.get("source") or "").lower()
+        is_owner_attributed = (
+            "owner_preference" in source
+            or doc.upper().startswith("OWNER PREFERENCE")
+        )
+        if not is_owner_attributed:
+            return None
+
+    first_line = doc.splitlines()[0].strip()
+    title = first_line[:120] if first_line else "Owner preference"
+    if "preference" not in title.lower():
+        title = f"Owner preference: {title}"
+    summary = doc[:400]
+    return EpisodeCandidate(
+        title=title,
+        summary=summary,
+        participants=_infer_participants(memory, doc),
+        source_memory_ids=[mid] if mid else [],
+        source_kind="core_memory",
+        emotional_tone="preference",
+        importance=4,
+    )
+
+
 def _detect_open_loop(memory: dict) -> Optional[EpisodeCandidate]:
     doc = (memory.get("document") or "").strip()
     if len(doc) < _MIN_DOC_LEN:
@@ -379,6 +467,7 @@ def _detect_self_observation(memory: dict) -> Optional[EpisodeCandidate]:
 _DETECTORS = (
     _detect_followup,
     _detect_corrective_core,
+    _detect_owner_preference,
     _detect_hardware_instability,
     _detect_track_a_readiness,
     _detect_open_loop,

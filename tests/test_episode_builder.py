@@ -466,5 +466,181 @@ class IterableForm(unittest.TestCase):
         self.assertIn("raw-3", ids)
 
 
+class OwnerPreferenceDetector(unittest.TestCase):
+    """The relationship-probe data gap (2026-04-27 21:30 read): five
+    owner-preference core memories were seeded but produced zero
+    cares_about edges — because the episode_builder had no detector
+    for preference patterns. The relationship_extractor only sees
+    candidates the builder produces; without this detector,
+    preference-shaped core memories never become episodes.
+
+    This detector closes the upstream half of the gap. Patterns
+    mirror the relationship_extractor's cares_about patterns so
+    every detected candidate produces a downstream cares_about
+    edge through the existing pipeline."""
+
+    def _extract(self, doc: str, source: str = "owner_preference_test", mid: str = "core-pref"):
+        from core.memory.episode_builder import extract_candidate
+
+        return extract_candidate({
+            "id": mid,
+            "document": doc,
+            "metadata": {"source": source, "kind": "core"},
+        })
+
+    def test_named_cares_about_produces_candidate(self):
+        c = self._extract(
+            "OWNER PREFERENCE: Rohit cares about truthful continuity in Maez "
+            "more than impressive but fabricated claims."
+        )
+        self.assertIsNotNone(c)
+        self.assertEqual(c.source_kind, "core_memory")
+        # Title should reflect this is a preference for downstream
+        # readers (cockpit panel framing).
+        self.assertIn("preference", c.title.lower())
+
+    def test_what_matters_most_pattern_produces_candidate(self):
+        c = self._extract(
+            "OWNER PREFERENCE: what matters most is the grandmother case — "
+            "every design decision should check against that."
+        )
+        self.assertIsNotNone(c)
+        self.assertEqual(c.source_kind, "core_memory")
+
+    def test_matters_more_than_pattern_produces_candidate(self):
+        c = self._extract(
+            "OWNER PREFERENCE: truthful continuity matters more than "
+            "impressive claims."
+        )
+        self.assertIsNotNone(c)
+
+    def test_only_fires_on_core_memory(self):
+        from core.memory.episode_builder import extract_candidate
+
+        memory = {
+            "id": "raw-1",
+            "document": "Rohit cares about disk hygiene.",
+            "metadata": {"kind": "raw"},
+        }
+        # Raw observations should not become preference episodes via
+        # this detector. (Other detectors might or might not fire on
+        # raw text, but this one specifically must not.)
+        c = extract_candidate(memory)
+        if c is not None:
+            # If something else fires, fine — but it must not be a
+            # preference-tagged candidate.
+            self.assertNotEqual(c.emotional_tone, "preference")
+
+    def test_corrective_core_takes_priority_over_preference(self):
+        # A corrective core memory contains both correction language
+        # and might incidentally have a "matters more than" phrase.
+        # Detector ordering must keep corrective-core winning so the
+        # corrected edge fires (the more important signal).
+        c = self._extract(
+            "Correction 2026-04-23: do not narrate llama-server-vision "
+            "as active. The truth matters more than the prior fabrication.",
+            source="infrastructure_correction_vision_2026-04-24",
+        )
+        self.assertIsNotNone(c)
+        self.assertEqual(c.emotional_tone, "corrective")
+
+    def test_emits_preference_emotional_tone(self):
+        # The downstream relationship_extractor's cares_about detector
+        # only fires on source_kind="core_memory". A "preference" tone
+        # marker also helps cockpit visualization distinguish these
+        # episodes from corrections.
+        c = self._extract(
+            "OWNER PREFERENCE: Rohit cares about Maez staying genderless."
+        )
+        self.assertIsNotNone(c)
+        self.assertEqual(c.emotional_tone, "preference")
+
+    def test_summary_carries_pattern_for_downstream_extraction(self):
+        # The relationship_extractor reads candidate.summary to find
+        # the cares_about pattern. The preference detector must
+        # preserve the original pattern in the summary so downstream
+        # extraction works.
+        c = self._extract(
+            "OWNER PREFERENCE: Rohit cares about evidence-backed claims."
+        )
+        self.assertIsNotNone(c)
+        self.assertIn("cares about", c.summary.lower())
+
+    def test_heartbeat_self_narration_is_not_preference(self):
+        # 2026-04-27 21:35 real-data trace: a developmental heartbeat
+        # contained "stability matters more than noise" as Maez self-
+        # narration. The implicit-subject pattern "matters more than"
+        # is ambiguous without attribution and produced a false-
+        # positive `Rohit cares_about stability` edge. Tightened
+        # detector requires either a named-subject pattern (carries
+        # its own attribution) OR an explicit owner-preference marker
+        # in source/doc prefix.
+        c = self._extract(
+            "[DEVELOPMENTAL HEARTBEAT — 2026-04-26 (Sunday)]\n"
+            "What I noticed: 189 errors dominated the cycle. "
+            "What changed in me: I am learning that high volume does "
+            "not equal high signal; stability matters more than noise. "
+            "What I still want: to resolve the Telegram limits.",
+            source="developmental_heartbeat_2026-04-26",
+        )
+        # Either no candidate, or a candidate that is NOT tagged as
+        # a preference (some other detector might claim it).
+        if c is not None:
+            self.assertNotEqual(c.emotional_tone, "preference")
+
+    def test_implicit_pattern_fires_when_owner_attributed_via_source(self):
+        # When the source name indicates owner attribution, implicit
+        # patterns ("matters more than" / "what matters most") fire
+        # even without a named subject.
+        c = self._extract(
+            "Truthful continuity matters more than impressive claims.",
+            source="owner_preference_test_source",
+        )
+        self.assertIsNotNone(c)
+        self.assertEqual(c.emotional_tone, "preference")
+
+    def test_implicit_pattern_does_not_fire_without_attribution(self):
+        # Same implicit-pattern doc without owner-attribution source
+        # or "OWNER PREFERENCE" prefix → no preference candidate.
+        c = self._extract(
+            "Truthful continuity matters more than impressive claims.",
+            source="random_source_name",
+        )
+        if c is not None:
+            self.assertNotEqual(c.emotional_tone, "preference")
+
+
+class PreferenceCandidateFlowsToCaresAboutEdge(unittest.TestCase):
+    """End-to-end: a preference core memory should produce both an
+    episode AND a cares_about edge through the full pipeline. Locks
+    the integration between episode_builder and
+    relationship_extractor."""
+
+    def test_preference_memory_yields_cares_about_edge(self):
+        from core.memory.episode_builder import extract_candidate
+        from core.memory.relationship_extractor import extract_edges
+
+        memory = {
+            "id": "core-test-pref",
+            "document": (
+                "OWNER PREFERENCE: Rohit cares about truthful continuity "
+                "in Maez more than impressive claims."
+            ),
+            "metadata": {
+                "source": "owner_preference_test_2026-04-27",
+                "kind": "core",
+            },
+        }
+        candidate = extract_candidate(memory)
+        self.assertIsNotNone(candidate)
+        edges = extract_edges(candidate)
+        cares = [e for e in edges if e.relation == "cares_about"]
+        self.assertEqual(len(cares), 1)
+        self.assertIn(
+            "truthful continuity",
+            cares[0].object_label.lower(),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
