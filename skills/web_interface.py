@@ -1587,7 +1587,6 @@ def _compute_predictions_for_cockpit(query: str) -> list:
     [] and the panel silently omits the section."""
     try:
         from core.memory.episodes import EpisodeStore
-        from core.memory.relationship_graph import RelationshipGraph
         from core.memory.belief_simulator import (
             simulate_owner_pushback,
             is_pushback_prediction_query,
@@ -1603,7 +1602,6 @@ def _compute_predictions_for_cockpit(query: str) -> list:
         if not is_pushback_prediction_query(query or ""):
             return []
         store = EpisodeStore(_LIVED_EPISODE_DB_PATH)
-        graph = RelationshipGraph(_LIVED_GRAPH_DB_PATH)
         edges_for_sim: list = []
         # Reuse the readers' edge format and stamp labels onto each
         # row so simulator pattern matching can scan the relation
