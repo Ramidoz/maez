@@ -578,5 +578,94 @@ class TestScoreMemory(unittest.TestCase):
         )
 
 
+class TestGoalRelevanceExcludesEvidence(unittest.TestCase):
+    """Gap 2 fix: ``goal_relevance`` accepts ``exclude_evidence_ids``;
+    goals whose evidence_ids overlap are filtered out before scoring.
+    Prevents the self-referential bonus where an open_loop episode's
+    own goal-text inflates its score against itself."""
+
+    def test_exclude_drops_matching_goals(self):
+        goals = GoalHierarchy(goals=(
+            Goal(
+                text="recovery jarvis cards orphan",
+                source=GOAL_SOURCE_OPEN_LOOP,
+                weight=0.75,
+                evidence_ids=("ep-aaa",),
+            ),
+        ))
+        # Without exclusion: full overlap → 1.0
+        self.assertGreater(
+            goal_relevance("recovery jarvis cards orphan", goals),
+            0.5,
+        )
+        # With exclusion of ep-aaa: only goal is filtered out → 0.0
+        self.assertEqual(
+            goal_relevance(
+                "recovery jarvis cards orphan",
+                goals,
+                exclude_evidence_ids=("ep-aaa",),
+            ),
+            0.0,
+        )
+
+    def test_exclude_preserves_non_matching_goals(self):
+        goals = GoalHierarchy(goals=(
+            Goal(text="alpha goal text", source=GOAL_SOURCE_OPEN_LOOP,
+                 weight=0.75, evidence_ids=("ep-aaa",)),
+            Goal(text="alpha goal text", source=GOAL_SOURCE_CARES_ABOUT,
+                 weight=0.95, evidence_ids=("ep-bbb",)),
+        ))
+        # Excluding ep-aaa drops the open_loop goal but the
+        # cares_about goal (ep-bbb) still contributes.
+        score = goal_relevance(
+            "alpha goal text",
+            goals,
+            exclude_evidence_ids=("ep-aaa",),
+        )
+        self.assertGreater(score, 0.5)
+
+    def test_exclude_default_empty_preserves_old_behavior(self):
+        # Regression: omitting the param must equal passing ().
+        goals = GoalHierarchy(goals=(
+            Goal(text="alpha", source=GOAL_SOURCE_WANTS, weight=0.5,
+                 evidence_ids=("ep-x",)),
+        ))
+        a = goal_relevance("alpha", goals)
+        b = goal_relevance("alpha", goals, exclude_evidence_ids=())
+        self.assertEqual(a, b)
+
+
+class TestScoreMemoryExcludesEvidence(unittest.TestCase):
+    """``score_memory`` plumbs ``exclude_evidence_ids`` through to
+    ``goal_relevance``. Same shape as the unit tests above but at
+    the composite-score layer."""
+
+    def test_self_referential_goal_does_not_inflate(self):
+        from datetime import datetime as _dt, timezone as _tz
+        from core.memory.working_self import score_memory, ScoreWeights
+
+        now = _dt(2026, 4, 28, 12, 0, 0, tzinfo=_tz.utc)
+        memory = {
+            "id": "ep-self",
+            "text": "recovery jarvis cards orphan",
+            "tier": "raw",
+            "created_at": now.isoformat(),
+        }
+        goals = GoalHierarchy(goals=(
+            Goal(text="recovery jarvis cards orphan",
+                 source=GOAL_SOURCE_OPEN_LOOP, weight=0.75,
+                 evidence_ids=("ep-self",)),
+        ))
+        weights = ScoreWeights(recency=0.0, tier=0.0, relevance=0.0, goal=1.0)
+        # Without exclusion: high goal contribution
+        s_with_bonus = score_memory(memory, query_text="", goals=goals,
+                                    weights=weights, now=now)
+        s_excluded = score_memory(memory, query_text="", goals=goals,
+                                  weights=weights, now=now,
+                                  exclude_evidence_ids=("ep-self",))
+        self.assertGreater(s_with_bonus, 0.5)
+        self.assertEqual(s_excluded, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

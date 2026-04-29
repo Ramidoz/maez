@@ -874,5 +874,180 @@ class GoalsParameterIntegration(unittest.TestCase):
             cleanup()
 
 
+class GoalsGapFixesAreApplied(unittest.TestCase):
+    """Two production gaps observed during the 2026-04-29 live spin
+    of the working-self path:
+
+    Gap 1: ``"Do you believe you have grown since then?"`` returned
+    zero memories. The keyword-overlap gate filters anything whose
+    text doesn't share tokens with the query. Conway 2000 says
+    working-self goals SHOULD be able to surface relevant content
+    even when local relevance is sparse — the gate was too strict.
+    Fix: an item passes when ``keyword_score > 0`` OR goal-alignment
+    bonus ≥ 1.
+
+    Gap 2: ``"Remember when you used to bug about openrgb?"`` surfaced
+    unrelated open-loop follow-up-doc episodes. The follow-up-doc
+    episodes had a 1-token coincidence match ("bug") with the query
+    AND a self-referential goal-bonus (the working self's open_loop
+    goals were extracted FROM those same episodes). Fix: when scoring
+    an item, exclude goals whose evidence_ids point back to that
+    same item.
+    """
+
+    def test_gap2_self_referential_goal_does_not_inflate_episode_score(self):
+        """An episode that's the source of one of the goals must NOT
+        get a goal-alignment bonus from its own goal-text. Regression
+        guard against the openrgb-turn noise pattern."""
+        from core.memory.lived_recall import build_lived_recall_brief
+        from core.memory.working_self import (
+            GOAL_SOURCE_OPEN_LOOP,
+            Goal,
+            GoalHierarchy,
+        )
+
+        store, graph, cleanup = _stores()
+        try:
+            # ep_self: a followup_doc-shaped open-loop episode whose
+            # title matches its own goal-text (mimicking the live
+            # trace). Open-loop set so it goes into the open-loop
+            # section.
+            ep_self_id = store.add(
+                title="recovery jarvis cards orphan loop",
+                summary="the underlying bug is structural",
+                participants=["Maez"],
+                source_memory_ids=["raw-self"],
+                source_kind="followup_doc",
+                open_loop="recovery jarvis cards orphan loop",
+            )
+            # ep_other: also open_loop so it competes in the SAME
+            # section pool. Has stronger keyword overlap with the
+            # query (openrgb + bug = 2 tokens). Without the Gap 2
+            # fix, ep_self's self-referential bonus would tie or
+            # beat it; with the fix, ep_other wins on raw keyword
+            # overlap.
+            store.add(
+                title="genuine openrgb bug discussion",
+                summary="openrgb installer crashed in a real bug",
+                participants=["Maez"],
+                source_memory_ids=["raw-other"],
+                source_kind="raw_observation",
+                open_loop="follow up on openrgb installer bug",
+            )
+            # Goal hierarchy contains the goal extracted FROM ep_self.
+            goals = GoalHierarchy(goals=(
+                Goal(
+                    text="recovery jarvis cards orphan loop",
+                    source=GOAL_SOURCE_OPEN_LOOP,
+                    weight=0.75,
+                    evidence_ids=(ep_self_id,),
+                ),
+            ))
+            # Query has 1-token overlap with both episodes ("bug").
+            # Without the fix, ep_self would get inflated by its own
+            # goal and rank above ep_other. With the fix, ep_other
+            # (which has token "openrgb" matching the query too)
+            # ranks above.
+            brief = build_lived_recall_brief(
+                "remember the openrgb bug",
+                episode_store=store,
+                graph=graph,
+                max_items=1,
+                goals=goals,
+            )
+            # The genuine openrgb episode should win — has stronger
+            # keyword overlap with the query (two tokens: openrgb +
+            # bug) and no self-referential inflation.
+            self.assertNotEqual(brief, "")
+            self.assertIn("openrgb", brief.lower())
+            self.assertNotIn("recovery jarvis", brief.lower())
+        finally:
+            cleanup()
+
+    def test_gap1_goal_only_surfacing_for_reflective_query(self):
+        """When a query has no keyword overlap with the stores but
+        a goal aligns with stored content, the relevant content
+        should still surface. Mimics the 'have I grown since then'
+        empty-recall case from the live trace."""
+        from core.memory.lived_recall import build_lived_recall_brief
+        from core.memory.working_self import (
+            GOAL_SOURCE_CARES_ABOUT,
+            Goal,
+            GoalHierarchy,
+        )
+
+        store, graph, cleanup = _stores()
+        try:
+            # Episode about continuity — the topic of the goal.
+            store.add(
+                title="continuity practice notes",
+                summary=(
+                    "Maez's continuity has held across the development "
+                    "trajectory; structural optimizations and memory "
+                    "integrity safeguards remain priorities."
+                ),
+                participants=["Maez"],
+                source_memory_ids=["raw-cont"],
+                source_kind="reflection",
+                importance=4,
+            )
+            # Reflective query — none of these tokens overlap the
+            # episode's title or summary. Stopword filter strips
+            # "do/you/since/then"; what remains: {believe, grown}.
+            # Neither token appears in the episode.
+            goals = GoalHierarchy(goals=(
+                Goal(
+                    text="continuity is a core value of this project",
+                    source=GOAL_SOURCE_CARES_ABOUT,
+                    weight=0.95,
+                    evidence_ids=(),  # not self-referential
+                ),
+            ))
+            brief = build_lived_recall_brief(
+                "do you believe you have grown since then",
+                episode_store=store,
+                graph=graph,
+                goals=goals,
+            )
+            # With Gap 1 fix: continuity episode surfaces via goal
+            # alignment alone (keyword_score=0 but goal bonus ≥ 1).
+            self.assertNotEqual(brief, "",
+                                "reflective query must surface goal-aligned content")
+            self.assertIn("continuity", brief.lower())
+        finally:
+            cleanup()
+
+    def test_gap1_unrelated_goal_still_does_not_pollute(self):
+        """Regression guard: even after relaxing the gate to allow
+        goal-only items, an off-topic goal must NOT lift unrelated
+        content. Goal-relevance threshold is the safety mechanism."""
+        from core.memory.lived_recall import build_lived_recall_brief
+        from core.memory.working_self import (
+            GOAL_SOURCE_OWNER_MSG,
+            Goal,
+            GoalHierarchy,
+        )
+
+        store, graph, cleanup = _stores()
+        try:
+            _seed_hardware_instability(store, graph)
+            goals = GoalHierarchy(goals=(
+                Goal(
+                    text="xylophone marmalade quantum tea ceremony",
+                    source=GOAL_SOURCE_OWNER_MSG,
+                    weight=0.85,
+                ),
+            ))
+            brief = build_lived_recall_brief(
+                "what did i eat for breakfast",
+                episode_store=store,
+                graph=graph,
+                goals=goals,
+            )
+            self.assertEqual(brief, "")
+        finally:
+            cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()

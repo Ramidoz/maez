@@ -297,19 +297,62 @@ _META_QUERY_REFLECTION_BONUS = 3
 _GOAL_ALIGNMENT_BONUS_SCALE = 3
 
 
-def _goal_alignment_bonus(haystack_text: str, goals: "GoalHierarchy | None") -> int:
+def _goal_alignment_bonus(
+    haystack_text: str,
+    goals: "GoalHierarchy | None",
+    *,
+    exclude_evidence_ids: tuple[str, ...] = (),
+) -> int:
     """Return an integer bonus reflecting how well ``haystack_text``
     aligns with the current goal hierarchy. Zero when ``goals`` is
     ``None`` or empty — preserving keyword-only behaviour for callers
-    that haven't opted in."""
+    that haven't opted in.
+
+    ``exclude_evidence_ids`` filters goals whose ``evidence_ids``
+    intersect with the supplied set — Gap 2 fix from the 2026-04-29
+    spin: an episode that is itself the source of an open_loop goal
+    must not get a self-referential bonus from its own goal-text.
+    """
     if goals is None or goals.is_empty:
         return 0
     # Lazy import: working_self is a peer module; avoid creating an
     # import cycle if the import order changes in the future.
     from core.memory.working_self import goal_relevance
 
-    rel = goal_relevance(haystack_text, goals)
+    rel = goal_relevance(
+        haystack_text,
+        goals,
+        exclude_evidence_ids=exclude_evidence_ids,
+    )
     return int(round(_GOAL_ALIGNMENT_BONUS_SCALE * rel))
+
+
+def _episode_evidence_ids(ep: dict) -> tuple[str, ...]:
+    """Evidence ids that identify ``ep`` for self-referential exclusion.
+    Includes the episode's id plus its source_memory_ids — both forms
+    that ``_goals_from_*`` may have stored when extracting goals from
+    this episode."""
+    out: list[str] = []
+    if ep.get("id"):
+        out.append(str(ep["id"]))
+    for mid in (ep.get("source_memory_ids") or []):
+        if mid:
+            out.append(str(mid))
+    return tuple(out)
+
+
+def _edge_evidence_ids(edge: dict) -> tuple[str, ...]:
+    """Evidence ids that identify ``edge`` for self-referential
+    exclusion. The cares_about-goal extractor records source episode
+    ids + source memory ids on the goal; mirror that here."""
+    out: list[str] = []
+    for eid in (edge.get("source_episode_ids") or []):
+        if eid:
+            out.append(str(eid))
+    for mid in (edge.get("source_memory_ids") or []):
+        if mid:
+            out.append(str(mid))
+    return tuple(out)
 
 
 def _score_episode(
@@ -326,7 +369,11 @@ def _score_episode(
         and (query_tokens & _META_QUERY_KEYWORDS)
     ):
         score += _META_QUERY_REFLECTION_BONUS
-    score += _goal_alignment_bonus(haystack_text, goals)
+    score += _goal_alignment_bonus(
+        haystack_text,
+        goals,
+        exclude_evidence_ids=_episode_evidence_ids(ep),
+    )
     return score
 
 
@@ -341,7 +388,11 @@ def _score_edge(
     haystack_text = f"{subject_label} {edge.get('relation', '')} {object_label}"
     haystack_tokens = set(_tokenize(haystack_text))
     score = len(query_tokens & haystack_tokens)
-    score += _goal_alignment_bonus(haystack_text, goals)
+    score += _goal_alignment_bonus(
+        haystack_text,
+        goals,
+        exclude_evidence_ids=_edge_evidence_ids(edge),
+    )
     return score
 
 
@@ -461,25 +512,31 @@ def build_lived_recall_brief(
         return ""
 
     # ── score and rank items ────────────────────────────────────────
-    # Score gate: items must clear keyword-overlap on their own merits;
-    # only after that gate is passed does the goal-alignment bonus
-    # apply. This prevents an aligned-but-off-topic item from leaking
-    # into a brief on goal alignment alone (the test
-    # ``test_unrelated_goals_do_not_pollute_brief`` enforces this).
+    # Two-gate design (Gap 1 fix from the 2026-04-29 spin): items pass
+    # if EITHER they have keyword overlap with the query OR the
+    # working-self goal-alignment bonus is ≥ 1 (meaning
+    # ``goal_relevance >= ~0.17`` — significantly aligned, not a
+    # coincidence). Goal-only items can never out-rank a strong
+    # keyword match because the bonus is capped at
+    # ``_GOAL_ALIGNMENT_BONUS_SCALE`` (3); they only fill briefs that
+    # would otherwise be empty or sparse.
+    #
+    # Self-referential goal exclusion (Gap 2 fix) happens inside
+    # ``_score_episode`` / ``_score_edge`` via
+    # ``_episode_evidence_ids`` / ``_edge_evidence_ids`` so an item
+    # never benefits from a goal extracted from itself.
     scored_episodes: list[_ScoredEpisode] = []
     for ep in episode_store.list_active() or []:
-        keyword_score = _score_episode(query_tokens, ep)
-        if keyword_score <= 0:
-            continue
         score = _score_episode(query_tokens, ep, goals=goals)
+        if score <= 0:
+            continue
         scored_episodes.append(_ScoredEpisode(score=score, episode=ep))
 
     scored_edges: list[_ScoredEdge] = []
     for edge, subj, obj in _all_active_edges_with_labels(graph):
-        keyword_score = _score_edge(query_tokens, edge, subj, obj)
-        if keyword_score <= 0:
-            continue
         score = _score_edge(query_tokens, edge, subj, obj, goals=goals)
+        if score <= 0:
+            continue
         scored_edges.append(
             _ScoredEdge(
                 score=score,

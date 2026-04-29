@@ -422,6 +422,7 @@ def goal_relevance(
     goals: GoalHierarchy,
     *,
     embedder: Optional[Callable[[str, str], float]] = None,
+    exclude_evidence_ids: Sequence[str] = (),
 ) -> float:
     """Score how aligned a memory is to the current goal hierarchy.
 
@@ -436,6 +437,14 @@ def goal_relevance(
     ``embedder`` is a v2 hook — if supplied, it's used for cosine
     similarity per goal instead of token overlap. v1 does not call it.
 
+    ``exclude_evidence_ids`` filters goals whose ``evidence_ids``
+    intersect with the supplied set. Use case: when scoring an
+    episode that is itself the source of an open_loop goal, the
+    goal's text mirrors the episode's text — passing the episode's
+    own id here prevents a self-referential bonus from inflating the
+    episode against unrelated queries (Gap 2 fix from the 2026-04-29
+    live spin).
+
     Empty hierarchy → 0.0 (no goal context to align with).
     """
     if goals.is_empty:
@@ -443,21 +452,29 @@ def goal_relevance(
     mem_toks = _tokenize(memory_text)
     if not mem_toks:
         return 0.0
+    exclude_set = set(exclude_evidence_ids) if exclude_evidence_ids else set()
     if embedder is not None:
         # v2 hook: weighted-mean cosine. v1 callers won't supply this.
         try:
-            scores = []
+            scores: list[float] = []
+            total_w_emb = 0.0
             for g in goals.goals:
+                if exclude_set and (set(g.evidence_ids) & exclude_set):
+                    continue
                 sim = float(embedder(memory_text, g.text))
                 scores.append(g.weight * max(0.0, min(1.0, sim)))
-            total_w = sum(g.weight for g in goals.goals) or 1.0
-            return sum(scores) / total_w
+                total_w_emb += g.weight
+            if total_w_emb == 0:
+                return 0.0
+            return sum(scores) / total_w_emb
         except Exception:
             # fall through to keyword-overlap on embedder failure
             pass
     weighted = 0.0
     total_weight = 0.0
     for g in goals.goals:
+        if exclude_set and (set(g.evidence_ids) & exclude_set):
+            continue
         goal_toks = _tokenize(g.text)
         if not goal_toks:
             continue
@@ -557,6 +574,7 @@ def score_memory(
     weights: ScoreWeights = ScoreWeights(),
     now: Optional[datetime] = None,
     embedder: Optional[Callable[[str, str], float]] = None,
+    exclude_evidence_ids: Sequence[str] = (),
 ) -> float:
     """Composite Park 2023 + Conway 2000 retrieval score for one memory.
 
@@ -591,7 +609,12 @@ def score_memory(
     rec = recency_score(last_seen, now=now)
     tie = tier_score(tier)
     rel = relevance_score(text, query_text, embedder=embedder) if query_text else 0.0
-    goa = goal_relevance(text, goals, embedder=embedder)
+    goa = goal_relevance(
+        text,
+        goals,
+        embedder=embedder,
+        exclude_evidence_ids=exclude_evidence_ids,
+    )
     total_w = (
         weights.recency + weights.tier + weights.relevance + weights.goal
     )
