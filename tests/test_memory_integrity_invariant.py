@@ -228,6 +228,54 @@ class DaemonHandleMessageContract(unittest.TestCase):
                 return
         self.fail("handle_message not found in maez_daemon.py")
 
+    def test_authoritative_currency_tool_reply_bypasses_llm_synthesis(self):
+        """A deterministic currency tool result must not be re-synthesized.
+
+        Regression: the tool correctly returned
+        ``300.00 EUR = 350.82 USD`` but the final LLM reply ignored it
+        and answered from stale web/memory text as ``$327``. Volatile
+        numeric tool output is already the grounded answer.
+        """
+        from daemon.maez_daemon import _authoritative_tool_reply
+
+        reply = _authoritative_tool_reply([
+            {
+                "name": "convert_currency",
+                "status": "ok",
+                "output_summary": (
+                    "300.00 EUR = 350.82 USD "
+                    "(rate 1.1694, date 2026-04-29, source fx)"
+                ),
+                "error_summary": "",
+            }
+        ])
+
+        self.assertEqual(
+            reply,
+            "300.00 EUR = 350.82 USD "
+            "(rate 1.1694, date 2026-04-29, source fx)",
+        )
+
+    def test_handle_message_uses_authoritative_tool_reply_before_llm_chat(self):
+        src = (_REPO / "daemon" / "maez_daemon.py").read_text()
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "handle_message":
+                body_src = ast.get_source_segment(src, node) or ""
+                self.assertIn("_authoritative_tool_reply(tool_calls)", body_src)
+                i_auth = body_src.find("if authoritative_tool_reply:")
+                i_chat = body_src.find("_llm_client.chat(")
+                self.assertGreaterEqual(i_auth, 0)
+                self.assertGreaterEqual(i_chat, 0)
+                self.assertLess(
+                    i_auth,
+                    i_chat,
+                    "authoritative deterministic tool output must be "
+                    "checked before LLM synthesis can override it.",
+                )
+                return
+        self.fail("handle_message not found in maez_daemon.py")
+
     def test_handle_message_ordering_strip_then_audit_then_store(self):
         """2026-04-23 Commit 7b invariant: stored == audited == displayed.
 

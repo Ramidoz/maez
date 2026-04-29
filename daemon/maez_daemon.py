@@ -118,6 +118,31 @@ LOOP_INTERVAL = 30  # seconds
 HEALTH_PORT = 11435
 WS_PORT = 11436
 
+
+def _authoritative_tool_reply(tool_calls: "list[dict] | None") -> str:
+    """Return a final reply when a deterministic tool already answered.
+
+    This is deliberately narrow. Some tool results need synthesis, but
+    volatile numeric conversions should not be handed back to the LLM to
+    paraphrase from memory or web snippets. The tool output already carries
+    the computed value, rate, date, and source.
+    """
+    for call in tool_calls or []:
+        if not isinstance(call, dict):
+            continue
+        if call.get("name") != "convert_currency":
+            continue
+        output = str(call.get("output_summary") or "").strip()
+        error = str(call.get("error_summary") or "").strip()
+        status = str(call.get("status") or "").lower()
+        if status == "ok" and output:
+            return output
+        if error:
+            return f"I could not get a live currency conversion: {error}"
+        if output:
+            return f"I could not get a live currency conversion: {output}"
+    return ""
+
 # Sentinel the model emits when nothing noteworthy to report this cycle.
 # Storing fabricated prose is worse than storing nothing — HEARTBEAT_OK
 # short-circuits audit, storage, and broadcast so the cycle is silent.
@@ -1401,6 +1426,7 @@ class MaezDaemon:
         logger.info("%s message: %s", source, text[:100])
         snap = perception_snapshot()
         system_state = format_snapshot(snap)
+        authoritative_tool_reply = _authoritative_tool_reply(tool_calls)
         recalled = self.memory.recall_for_telegram(text)
         # Trace: capture every memory id surfaced by the recall — across
         # core, daily, raw — so a future harness can verify the model's
@@ -1424,9 +1450,11 @@ class MaezDaemon:
         # drop from the tail if needed.
         memory_block = self.memory.format_for_prompt(recalled, max_chars=60_000)
 
-        # Web search if needed
+        # Web search if needed. If a deterministic tool already answered
+        # a volatile fact (e.g. currency conversion), do not add web
+        # snippets that can override the tool result during synthesis.
         web_context = ""
-        if needs_web_search(text):
+        if not authoritative_tool_reply and needs_web_search(text):
             logger.info("Web search triggered for: %s", text[:80])
             if is_news_query(text):
                 sr = search_rss(text, max_results=5)
@@ -1560,19 +1588,22 @@ class MaezDaemon:
             messages.append({"role": "system", "content": _premise_flag})
         messages.append({"role": "user", "content": prompt})
 
-        try:
-            # Session 11r: via llm_client (was missed in 11p batch)
-            from core import llm_client as _llm_client
+        if authoritative_tool_reply:
+            reply = authoritative_tool_reply
+        else:
+            try:
+                # Session 11r: via llm_client (was missed in 11p batch)
+                from core import llm_client as _llm_client
 
-            response = _llm_client.chat(
-                model=MODEL,
-                messages=messages,
-                think=False,
-                options={"temperature": 0.7, "num_predict": 4096},
-            )
-            reply = (response.message.content or "").strip() or "(no response)"
-        except Exception as e:
-            reply = f"Error: {e}"
+                response = _llm_client.chat(
+                    model=MODEL,
+                    messages=messages,
+                    think=False,
+                    options={"temperature": 0.7, "num_predict": 4096},
+                )
+                reply = (response.message.content or "").strip() or "(no response)"
+            except Exception as e:
+                reply = f"Error: {e}"
 
         # 2026-04-23 Commit 7b: strip tool-call JSON leaks from the raw
         # model output BEFORE audit and BEFORE store. Models occasionally
