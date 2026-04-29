@@ -354,10 +354,17 @@ class MaezMessageHandler:
             # Brain-loop stage — runs the tool iteration synchronously
             # with the pipeline for card-or-inline decisions.
             jarvis_transcript = ""
+            jarvis_tool_calls: list[dict] = []
             try:
                 from core import brain_loop as _brain_loop
                 if action_engine is not None and get_pipeline is not None:
-                    jarvis_transcript = await loop.run_in_executor(
+                    # Slice 3 of trace work: ask for the structured
+                    # result so we can pass tool_calls into
+                    # handle_message and the per-turn trace records the
+                    # actual tool trajectory, not just the synthesis
+                    # text. Falls back to a string + empty tool_calls
+                    # if a future change reverts the structured API.
+                    _result = await loop.run_in_executor(
                         None,
                         lambda: _brain_loop.run_brain_loop(
                             text,
@@ -368,11 +375,20 @@ class MaezMessageHandler:
                             send_intermediate=_send_intermediate,
                             chat_history=chat_history,
                             turn=turn,
+                            return_structured=True,
                         ),
                     )
+                    if hasattr(_result, "transcript"):
+                        jarvis_transcript = _result.transcript or ""
+                        jarvis_tool_calls = list(
+                            getattr(_result, "tool_calls", []) or []
+                        )
+                    else:  # legacy str fallback
+                        jarvis_transcript = _result or ""
             except Exception as e:
                 logger.warning("brain_loop failed on %s: %s", SURFACE_NAME, e)
                 jarvis_transcript = ""
+                jarvis_tool_calls = []
 
             # Fold the brain-loop transcript into the user-text seen by
             # the synthesis call.
@@ -400,6 +416,7 @@ class MaezMessageHandler:
                         SURFACE_NAME,
                         transcript=jarvis_transcript or "",
                         chat_history=chat_history,
+                        tool_calls=jarvis_tool_calls or None,
                     ),
                 )
             except Exception as e:

@@ -33,8 +33,106 @@ from __future__ import annotations
 import json as _json
 import logging
 import re as _re
+from dataclasses import dataclass, field
 
 from core import llm_client as _llm_client
+
+
+@dataclass
+class BrainLoopResult:
+    """Slice 3 of the trace work — structured return from the tool
+    loop. Existing callers that take only the transcript string keep
+    working via ``run_brain_loop(...)``; callers that want trace-grade
+    tool-call data pass ``return_structured=True`` and consume
+    ``result.transcript`` + ``result.tool_calls``.
+
+    ``tool_calls`` is a list of dicts shaped like
+    ``core.turn_traces.ToolCall`` (the daemon's trace schema) so the
+    surface adapter can hand it straight into
+    ``daemon.handle_message(..., tool_calls=...)`` without further
+    translation.
+
+    Status mapping (keep in sync with `_transcript_to_tool_call_dict`):
+
+    - ``ok``       — the tool ran and reported success
+    - ``error``    — the tool ran and reported failure (exception,
+                     non-zero exit, internal error)
+    - ``denied``   — the action was REFUSED before execution
+                     (covenant gate / not on allowlist)
+    - ``pending``  — the action was approval-gated, a card was
+                     created, nothing executed yet
+    - ``timeout``  — reserved for future use; no path emits this
+                     today (timing wrapper is a follow-up)
+    """
+
+    transcript: str = ""
+    tool_calls: list[dict] = field(default_factory=list)
+
+
+def _summarize(value, *, limit: int) -> str:
+    """Stringify-and-truncate. Used to keep tool_call dicts small
+    enough that the trace JSONL line stays a single readable line."""
+    if value is None:
+        return ""
+    try:
+        if isinstance(value, str):
+            return value[:limit]
+        return _json.dumps(value, default=str)[:limit]
+    except Exception:
+        try:
+            return str(value)[:limit]
+        except Exception:
+            return ""
+
+
+def _classify_transcript_status(out: str, ok) -> str:
+    """Map a transcript tuple's ``out`` + ``ok`` flag into the trace
+    schema's status vocabulary. ``ok`` may be True / False / 'pending'
+    (mirroring the tri-state in run_brain_loop's transcript)."""
+    if ok is True:
+        return "ok"
+    if ok == "pending":
+        return "pending"
+    text = (out or "").strip()
+    # The transcript carries human-readable result strings. Distinguish
+    # covenant-rejected (denied) from runtime errors by their leading
+    # marker; the strings are stable shapes emitted from a few sites
+    # in this same module.
+    if text.startswith("REFUSED"):
+        return "denied"
+    if text.startswith("ALREADY_RAN") or text.startswith("PARSE_ERROR"):
+        return "error"
+    return "error"
+
+
+def _transcript_to_tool_call_dict(item: tuple) -> dict:
+    """Convert one ``transcript.append(...)`` tuple into a dict
+    compatible with ``core.turn_traces.ToolCall``. Always returns a
+    dict; on malformed input returns a best-effort placeholder so a
+    single bad tuple cannot break the whole surface."""
+    try:
+        action, params, out, ok = item
+    except Exception:
+        return {
+            "name": "?",
+            "args_summary": "",
+            "status": "error",
+            "elapsed_ms": 0,
+            "output_summary": "",
+            "error_summary": "(malformed transcript tuple)",
+        }
+    status = _classify_transcript_status(out, ok)
+    out_str = "" if out is None else str(out)
+    return {
+        "name": str(action or "?"),
+        "args_summary": _summarize(params, limit=200),
+        # elapsed_ms stays 0 in v1 — adding per-call timing is a
+        # separate small slice (wrap the dispatcher with a stopwatch).
+        "elapsed_ms": 0,
+        "status": status,
+        "output_summary": out_str[:500] if status == "ok" else "",
+        "error_summary": out_str[:500] if status != "ok" else "",
+    }
 
 # Alias to match original module's import style (`_jarvis_re` is the
 # original name for the re module import in telegram_voice.py).
@@ -687,7 +785,8 @@ def run_brain_loop(
     send_intermediate=None,
     chat_history=None,
     turn=None,
-) -> str:
+    return_structured: bool = False,
+) -> "str | BrainLoopResult":
     """ReAct-style tool-use loop. Returns a transcript block to inject
     into the streaming reply prompt, or an empty string if no tools were
     used. Synchronous because the LLM client is synchronous; called from
@@ -706,11 +805,23 @@ def run_brain_loop(
     to async cards. See _run_jarvis_recovery() for the shape of the
     dict: {failed_action, failed_params, error, original_intent,
     recovery_depth}. The conversational gate is bypassed for recovery
-    passes since the 'user message' is synthetic."""
+    passes since the 'user message' is synthetic.
+
+    Slice 3 of trace work: ``return_structured=True`` returns a
+    :class:`BrainLoopResult` carrying both the human-readable
+    transcript string AND a list of structured tool_call dicts
+    matching the ``core.turn_traces.ToolCall`` schema. Existing
+    callers that take the plain string keep working unchanged.
+    """
+    # Sentinel for empty / no-op early returns. Honors the
+    # return_structured kwarg so all exit paths agree on type.
+    def _empty():
+        return BrainLoopResult() if return_structured else ""
+
     if not action_engine:
-        return ""
+        return _empty()
     if recovery_seed is None and not _should_run_jarvis_loop(user_text):
-        return ""
+        return _empty()
 
     # Resolve default user_id from identity (owner.user_id in the yaml)
     # when the caller passed None. Keeps the scope-label "rohit" out of
@@ -735,7 +846,7 @@ def run_brain_loop(
         from core.action_engine import ACTION_TIERS, FORBIDDEN_ACTION_TYPES
     except Exception as e:
         logger.debug("jarvis loop unavailable: %s", e)
-        return ""
+        return _empty()
 
     # Session 11z: flattened allowlist. The two primitives (run_shell,
     # write_any_file) cover everything. Read-only aliases remain for
@@ -1352,7 +1463,7 @@ def run_brain_loop(
             )
 
     if not transcript:
-        return ""
+        return _empty()
 
     lines = [
         "[JARVIS TRANSCRIPT — the AUTHORITATIVE record of what you did",
@@ -1391,5 +1502,13 @@ def run_brain_loop(
             mark = "✗"
         lines.append(f"\n{mark} {action}({_json.dumps(params, default=str)[:200]})")
         lines.append(f"  → {out[:800]}")
-    return "\n".join(lines)
+    transcript_str = "\n".join(lines)
+    if return_structured:
+        return BrainLoopResult(
+            transcript=transcript_str,
+            tool_calls=[
+                _transcript_to_tool_call_dict(item) for item in transcript
+            ],
+        )
+    return transcript_str
 

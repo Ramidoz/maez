@@ -3866,21 +3866,38 @@ class MaezDaemon:
                     ), 503
                 from core import brain_loop as _bl
 
-                transcript = _bl.run_brain_loop(
+                # Slice 3 of trace work: request the structured result
+                # so the JSON response can include tool_calls for the
+                # web surface to forward into its trace path. Backward
+                # compatible — legacy callers still see "transcript".
+                _result = _bl.run_brain_loop(
                     text,
                     action_engine=action_engine_ref,
                     get_pipeline=get_pipeline_fn,
                     user_id=data.get("user_id") or "rohit",
                     chat_id=str(data.get("chat_id") or ""),
                     send_intermediate=None,  # web has no out-of-band card surface
+                    return_structured=True,
                 )
-                return jsonify({"transcript": transcript or ""})
+                if hasattr(_result, "transcript"):
+                    return jsonify({
+                        "transcript": _result.transcript or "",
+                        "tool_calls": list(_result.tool_calls or []),
+                    })
+                # Legacy string fallback (if a future change reverts the
+                # structured API). Kept for safety; not currently
+                # reachable.
+                return jsonify({"transcript": _result or "", "tool_calls": []})
             except Exception as e:
                 logger.warning("/internal/brain_loop failed: %s", e)
                 # Fail open — empty transcript lets the web caller
                 # fall through to non-tool LLM synthesis rather than
                 # degrade the whole turn.
-                return jsonify({"transcript": "", "error": str(e)}), 200
+                return jsonify({
+                    "transcript": "",
+                    "tool_calls": [],
+                    "error": str(e),
+                }), 200
 
         @app.route("/internal/approve_card/<request_id>", methods=["POST", "OPTIONS"])
         def approve_card(request_id: str):
