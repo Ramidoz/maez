@@ -48,7 +48,8 @@ class ConversationalGate(unittest.TestCase):
 
     def test_content_questions_run_loop(self):
         for text in ("check disk usage", "what services are running",
-                     "tell me the uptime", "is maez running"):
+                     "tell me the uptime", "is maez running",
+                     "What is the current price?"):
             self.assertTrue(_should_run_jarvis_loop(text),
                 f"expected loop to run: {text!r}")
 
@@ -60,6 +61,8 @@ class ConversationalGate(unittest.TestCase):
             "What is 300 euros in usd?",
             "What is €300 in dollars?",
             "Convert 20 pounds to yen",
+            "Look up the price of SRXH",
+            "What is the SRXH stock price today?",
         ):
             self.assertTrue(_should_run_jarvis_loop(text),
                 f"expected live-data loop to run: {text!r}")

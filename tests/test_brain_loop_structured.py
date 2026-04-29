@@ -67,12 +67,16 @@ class ToolPlannerManifestContract(unittest.TestCase):
         self.assertIn("'fetch_url'", src)
         self.assertIn("convert_currency", src)
         self.assertIn("'convert_currency'", src)
+        self.assertIn("quote_stock", src)
+        self.assertIn("'quote_stock'", src)
         self.assertIn("Volatile numeric facts", src)
         self.assertIn("exchange rates", src)
         self.assertIn("currency conversions", src)
         self.assertIn("require live evidence", src)
         self.assertIn("Use this FIRST for currency conversions", src)
         self.assertIn("3-letter ISO currency codes", src)
+        self.assertIn("Use this\n   FIRST for ticker price questions", src)
+        self.assertIn("Do not\n   claim you lack stock-price tools", src)
         self.assertIn("do NOT answer from\n  training memory", src)
 
     def test_manifest_contains_endpoint_discovery_rule(self):

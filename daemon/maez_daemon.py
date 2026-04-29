@@ -123,14 +123,14 @@ def _authoritative_tool_reply(tool_calls: "list[dict] | None") -> str:
     """Return a final reply when a deterministic tool already answered.
 
     This is deliberately narrow. Some tool results need synthesis, but
-    volatile numeric conversions should not be handed back to the LLM to
+    volatile numeric facts should not be handed back to the LLM to
     paraphrase from memory or web snippets. The tool output already carries
-    the computed value, rate, date, and source.
+    the value, timestamp/date, and source.
     """
     for call in tool_calls or []:
         if not isinstance(call, dict):
             continue
-        if call.get("name") != "convert_currency":
+        if call.get("name") not in {"convert_currency", "quote_stock"}:
             continue
         output = str(call.get("output_summary") or "").strip()
         error = str(call.get("error_summary") or "").strip()

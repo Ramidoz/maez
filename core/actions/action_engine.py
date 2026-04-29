@@ -296,7 +296,7 @@ ACTION_TIERS = {
     'run_shell': 2,
     'write_any_file': 2,
     # Pure read-only tools — Lane 0 always.
-    'web_search': 0, 'fetch_url': 0, 'convert_currency': 0,
+    'web_search': 0, 'fetch_url': 0, 'convert_currency': 0, 'quote_stock': 0,
     'read_file': 0, 'search_files': 0, 'query_system': 0,
     'lookup_proposal': 0,
     # Soul + memory tools — Lane 0; soul_editor has its own per-section guard.
@@ -496,7 +496,7 @@ class ActionEngine:
     # them to touch covenant paths — Maez's right to self-knowledge.
     # Writes and destructive actions still go through the full gate.
     _READ_ONLY_ACTIONS = frozenset({
-        "read_file", "search_files", "web_search",
+        "read_file", "search_files", "web_search", "quote_stock",
         "promote_to_core_memory", "write_soul_note",  # soul writer has its own guard
         "update_baseline", "edit_soul_section",       # soul_editor enforces sections
     })
@@ -1284,6 +1284,91 @@ class ActionEngine:
             )
         except Exception as e:
             return f"currency conversion error: {e}"
+
+    def quote_stock(
+        self,
+        symbol: str,
+        reasoning: str,
+    ) -> ActionResult:
+        """Tier 0: Deterministic live/delayed stock quote lookup."""
+        return self._execute_action(
+            "quote_stock",
+            {"symbol": symbol},
+            reasoning,
+            tier=0,
+        )
+
+    def _do_quote_stock(self, symbol: str = "", **_ignored) -> str:
+        """Fetch a structured stock quote and format the current price.
+
+        Uses Stooq's no-key CSV quote endpoint by default. The URL
+        template is configurable through MAEZ_STOCK_QUOTE_URL_TEMPLATE
+        and receives `{symbol}` after provider-specific normalization.
+        """
+        raw_symbol = str(symbol or "").strip().upper()
+        if not raw_symbol:
+            return "missing stock symbol"
+        if not re.fullmatch(r"[A-Z0-9.\-]{1,20}", raw_symbol):
+            return f"invalid stock symbol: {symbol!r}"
+
+        provider_symbol = raw_symbol
+        if "." not in provider_symbol:
+            provider_symbol = f"{provider_symbol}.US"
+
+        template = os.environ.get(
+            "MAEZ_STOCK_QUOTE_URL_TEMPLATE",
+            "https://stooq.com/q/l/?s={symbol}&f=sd2t2ohlcv&h&e=csv",
+        )
+        try:
+            import csv as _csv
+            import io as _io
+            import urllib.parse as _urllib_parse
+            import urllib.request as _urllib_req
+
+            encoded_symbol = _urllib_parse.quote(provider_symbol.lower(), safe=".-")
+            url = template.format(symbol=encoded_symbol)
+            req = _urllib_req.Request(
+                url,
+                headers={"User-Agent": "Maez/1.0 stock-quote"},
+            )
+            with _urllib_req.urlopen(req, timeout=10) as resp:
+                raw = resp.read(64 * 1024).decode("utf-8", errors="replace")
+
+            rows = list(_csv.DictReader(_io.StringIO(raw)))
+            if not rows:
+                return f"stock quote error: no rows for {raw_symbol}"
+            row = rows[0]
+            close = (row.get("Close") or row.get("Last") or "").strip()
+            if not close or close.upper() == "N/D":
+                return f"stock quote error: no current price for {raw_symbol}"
+
+            symbol_out = row.get("Symbol") or provider_symbol
+            date = (row.get("Date") or "").strip()
+            quote_time = (row.get("Time") or "").strip()
+            open_ = (row.get("Open") or "").strip()
+            high = (row.get("High") or "").strip()
+            low = (row.get("Low") or "").strip()
+            volume = (row.get("Volume") or "").strip()
+
+            pieces = [
+                f"{symbol_out} = {close} USD",
+                f"as of {date} {quote_time}".strip(),
+            ]
+            context = []
+            if open_ and open_.upper() != "N/D":
+                context.append(f"open {open_}")
+            if high and high.upper() != "N/D":
+                context.append(f"high {high}")
+            if low and low.upper() != "N/D":
+                context.append(f"low {low}")
+            if volume and volume.upper() != "N/D":
+                context.append(f"volume {volume}")
+            if context:
+                pieces.append("; ".join(context))
+            pieces.append(f"source {url}")
+            return f"{pieces[0]} ({'; '.join(pieces[1:])})"
+        except Exception as e:
+            return f"stock quote error: {e}"
 
     # ------------------------------------------------------------------ #
     #  TIER 1 — Autonomous (deferred 30s)                                  #

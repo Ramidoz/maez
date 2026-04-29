@@ -231,7 +231,7 @@ class DaemonHandleMessageContract(unittest.TestCase):
     def test_authoritative_currency_tool_reply_bypasses_llm_synthesis(self):
         """A deterministic currency tool result must not be re-synthesized.
 
-        Regression: the tool correctly returned
+        Regression: the currency tool correctly returned
         ``300.00 EUR = 350.82 USD`` but the final LLM reply ignored it
         and answered from stale web/memory text as ``$327``. Volatile
         numeric tool output is already the grounded answer.
@@ -254,6 +254,27 @@ class DaemonHandleMessageContract(unittest.TestCase):
             reply,
             "300.00 EUR = 350.82 USD "
             "(rate 1.1694, date 2026-04-29, source fx)",
+        )
+
+    def test_authoritative_stock_quote_tool_reply_bypasses_llm_synthesis(self):
+        from daemon.maez_daemon import _authoritative_tool_reply
+
+        reply = _authoritative_tool_reply([
+            {
+                "name": "quote_stock",
+                "status": "ok",
+                "output_summary": (
+                    "SRXH.US = 0.1135 USD "
+                    "(as of 2026-04-29 18:03:11; source stooq)"
+                ),
+                "error_summary": "",
+            }
+        ])
+
+        self.assertEqual(
+            reply,
+            "SRXH.US = 0.1135 USD "
+            "(as of 2026-04-29 18:03:11; source stooq)",
         )
 
     def test_handle_message_uses_authoritative_tool_reply_before_llm_chat(self):
