@@ -63,7 +63,7 @@ Rationale: "most recent last" matches LLM context-window bias toward recency. Nu
 
 **4. Do NOT add chat_history to the recovery path.**
 
-`run_brain_loop` has a `recovery_seed is not None` branch that builds its own seed message (line 544 onward). Recovery passes already carry their own pivot context (the failed action + error). Adding chat history there risks diluting the recovery directive. Only use `chat_history` in the non-recovery else-branch at [core/brain_loop.py:688-738](../../core/brain_loop.py).
+`run_brain_loop` has a `recovery_seed is not None` branch that builds its own seed message (line 544 onward). Recovery passes already carry their own pivot context (the failed action + error). Adding chat history there risks diluting the recovery directive. Only use `chat_history` in the non-recovery else-branch at [core/brain_loop.py:688-738](../../../core/brain_loop.py).
 
 **5. Test-running convention for this repo:**
 

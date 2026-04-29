@@ -39,7 +39,7 @@
 
 5. **Action dispatch** in `core/action_engine.py` uses `getattr(self, f"_do_{action}", None)` at L674, so adding a `_do_lookup_proposal` method is sufficient wiring. No switch table to update.
 
-6. **The brain_loop allowed set** ([core/brain_loop.py:532-542](../../core/brain_loop.py)) gates which action names the planner is permitted to dispatch. If an action is in ACTION_TIERS but NOT in `allowed`, the brain_loop will refuse to send it — the action runs fine from direct callers but the planner can't reach it.
+6. **The brain_loop allowed set** ([core/brain_loop.py:532-542](../../../core/brain_loop.py)) gates which action names the planner is permitted to dispatch. If an action is in ACTION_TIERS but NOT in `allowed`, the brain_loop will refuse to send it — the action runs fine from direct callers but the planner can't reach it.
 
 7. **Test runner convention** (repeat from previous plan): stdlib unittest only, Python 3.12 in `.venv/bin/python`, full suite via `cd /home/rohit/maez && .venv/bin/python -m unittest discover -s tests -p 'test_*.py' 2>&1 | tail -5`. Pre-existing `test_fix6_followups` syntax error counts as 1 unrelated error — ignore.
 
