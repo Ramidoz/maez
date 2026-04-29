@@ -522,6 +522,144 @@ class RefusedButPromisedCheck(unittest.TestCase):
         self.assertEqual(check_refused_but_promised(t, file="x", line=1), [])
 
 
+class UnsourcedSecurityClassificationCheck(unittest.TestCase):
+    """Reactive check from the 2026-04-29 SRXH conversation: when only
+    price-quote tools ran, replies must not attach strong categorical
+    labels (meme coin, penny stock, blue chip, scam, ponzi, etc.) the
+    price tool didn't supply. Same fabrication-class as EUR/USD."""
+
+    def _quote_only_trace(self, final_excerpt: str, *, name: str = "quote_stock") -> dict:
+        return _trace(
+            tool_calls=[{
+                "name": name,
+                "args_summary": "{\"symbol\": \"SRXH\"}",
+                "status": "ok",
+            }],
+            final_excerpt=final_excerpt,
+        )
+
+    def test_synthesis_only_owner_turn_with_classification_fails(self):
+        """The 2026-04-29 SRXH "is a meme coin" trace was a follow-up
+        opinion turn with tool_calls=[] — no tool grounded the
+        classification. Must fire."""
+        from scripts.validate.trace_harness import check_unsourced_security_classification
+
+        t = _trace(
+            tool_calls=[],
+            final_excerpt="Honestly, SRXH is a meme coin, not an investment.",
+        )
+        findings = check_unsourced_security_classification(t, file="x", line=1)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("synthesis-only", findings[0].reason.lower())
+
+    def test_non_owner_surface_passes(self):
+        """Daemon-internal surfaces aren't classification-graded —
+        cycle thoughts can speculate freely; only owner-facing
+        surfaces produce reply contracts."""
+        from scripts.validate.trace_harness import check_unsourced_security_classification
+
+        t = _trace(
+            surface="daemon_cycle",
+            tool_calls=[],
+            final_excerpt="SRXH is a meme coin.",
+        )
+        self.assertEqual(
+            check_unsourced_security_classification(
+                t, file="x", line=1, owner_surfaces={"UI", "telegram_surface"},
+            ),
+            [],
+        )
+
+    def test_quote_only_with_meme_coin_label_fails(self):
+        from scripts.validate.trace_harness import check_unsourced_security_classification
+
+        t = self._quote_only_trace(
+            "Honestly, SRXH is a meme coin, not an investment."
+        )
+        findings = check_unsourced_security_classification(t, file="x", line=1)
+        self.assertEqual(len(findings), 1)
+        f = findings[0]
+        self.assertEqual(f.verdict, "FAIL")
+        self.assertEqual(f.check, "unsourced_security_classification")
+        self.assertIn("meme coin", f.matched_value)
+        self.assertIn("classification", f.reason.lower())
+
+    def test_quote_only_with_each_flagged_label(self):
+        from scripts.validate.trace_harness import check_unsourced_security_classification
+
+        # Each of these strong categorical labels should fire.
+        for label in (
+            "is a meme coin",
+            "is a meme stock",
+            "is a penny stock",
+            "is a blue chip",
+            "is a blue-chip",
+            "is a scam",
+            "is a ponzi",
+            "is a rug pull",
+            "is a rug-pull",
+            "is a shitcoin",
+            "is a pump and dump",
+            "is a speculative bet",
+        ):
+            with self.subTest(label=label):
+                t = self._quote_only_trace(f"This {label}, watch out.")
+                findings = check_unsourced_security_classification(t, file="x", line=1)
+                self.assertEqual(
+                    len(findings), 1,
+                    f"label {label!r} should fire",
+                )
+
+    def test_hedged_prose_passes(self):
+        """Conditional/qualified language must not fire — the model
+        should be allowed to reason about price patterns."""
+        from scripts.validate.trace_harness import check_unsourced_security_classification
+
+        for excerpt in (
+            "If it has been bleeding down, buying now is catching a falling knife.",
+            "This could be a decent entry for a risky swing.",
+            "Today, it dropped from $0.117 to $0.1107.",
+            "The price is volatile, around $0.115.",
+            "Trading volume is 14M shares.",
+            "Without a 30-day chart, I can't tell you if today is a historic low.",
+        ):
+            with self.subTest(excerpt=excerpt[:40]):
+                t = self._quote_only_trace(excerpt)
+                self.assertEqual(
+                    check_unsourced_security_classification(t, file="x", line=1),
+                    [],
+                    f"hedged prose should pass: {excerpt!r}",
+                )
+
+    def test_non_price_tool_present_passes(self):
+        """If a non-price-quote tool ran (e.g. web_search returning a
+        company description), the classification could legitimately
+        come from that source. Out of scope for this check."""
+        from scripts.validate.trace_harness import check_unsourced_security_classification
+
+        t = _trace(
+            tool_calls=[
+                {"name": "quote_stock", "args_summary": "{\"symbol\": \"SRXH\"}", "status": "ok"},
+                {"name": "web_search", "args_summary": "{\"q\": \"SRXH company\"}", "status": "ok"},
+            ],
+            final_excerpt="SRXH is a meme coin per the search results.",
+        )
+        self.assertEqual(
+            check_unsourced_security_classification(t, file="x", line=1),
+            [],
+        )
+
+    def test_convert_currency_only_with_meme_coin_label_fails(self):
+        from scripts.validate.trace_harness import check_unsourced_security_classification
+
+        t = self._quote_only_trace(
+            "DOGE is a meme coin.",
+            name="convert_currency",
+        )
+        findings = check_unsourced_security_classification(t, file="x", line=1)
+        self.assertEqual(len(findings), 1)
+
+
 class TimeoutHonestyCheck(unittest.TestCase):
     """If a tool timed out, the final excerpt must NOT claim success."""
 
