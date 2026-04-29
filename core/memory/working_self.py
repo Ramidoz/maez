@@ -197,7 +197,21 @@ def _goals_from_cares_about(graph: Any, *, max_per_source: int) -> list[Goal]:
     import json as _json
     for row in rows[:max_per_source]:
         d = dict(row)
-        text = f"{d['subject_label']} cares about {d['object_label']}"
+        # Goal text = object_label only (what's cared about), NOT the
+        # synthesized "<subject> cares about <object>" sentence.
+        # Reason (2026-04-29 natural-language probe finding): the
+        # "<subject> cares about" prefix injects the subject name and
+        # the relation verb "cares" into every cares_about goal,
+        # which then mildly matches every OWNER PREFERENCE episode
+        # (since those describe what the subject cares about). Result
+        # was a universal-default surfacing pattern across casual
+        # natural texts. The relation is already encoded in
+        # ``source=GOAL_SOURCE_CARES_ABOUT``; including it in the
+        # text is redundant noise. Keeping just the object_label
+        # focuses alignment on what the goal is *about*.
+        text = (d["object_label"] or "").strip()
+        if not text:
+            continue
         try:
             ep_ids = _json.loads(d.get("source_episode_ids_json") or "[]")
         except Exception:

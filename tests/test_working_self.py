@@ -168,7 +168,10 @@ class TestGoalsFromCaresAbout(unittest.TestCase):
             self.assertFalse(h.is_empty)
             cares = h.by_source(GOAL_SOURCE_CARES_ABOUT)
             self.assertEqual(len(cares), 1)
-            self.assertEqual(cares[0].text, "Rohit cares about truthful continuity")
+            # Goal text is the object label only ("what's cared
+            # about"), not the synthesized "X cares about Y"
+            # sentence — see _goals_from_cares_about for rationale.
+            self.assertEqual(cares[0].text, "truthful continuity")
             self.assertEqual(cares[0].evidence_ids, (ep_id, "raw-1"))
         finally:
             cleanup()
