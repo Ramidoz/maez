@@ -103,6 +103,16 @@ from core.model_config import PRIMARY_MODEL as MODEL  # single source of truth �
 from core.memory.episodes import EpisodeStore
 from core.memory.relationship_graph import RelationshipGraph
 from core.memory.lived_recall import build_lived_recall_brief
+from core.turn_traces import (
+    AuditInfo,
+    Trace,
+    ToolCall,
+    default_writer,
+)
+from core.turn_traces.trace_schema import (
+    extract_evidence_ids as _trace_extract_evidence_ids,
+    hash_text as _trace_hash_text,
+)
 
 LOOP_INTERVAL = 30  # seconds
 HEALTH_PORT = 11435
@@ -1283,6 +1293,7 @@ class MaezDaemon:
         signals_present: "list | None" = None,
         signals_absent: "list | None" = None,
         chat_history: "list | None" = None,
+        tool_calls: "list[dict] | None" = None,
     ) -> str:
         """Process an incoming message through full reasoning context. Returns reply string.
 
@@ -1325,6 +1336,16 @@ class MaezDaemon:
             search_rss,
             is_news_query,
         )
+
+        # Trace harness Slice 1 — start a trace at handle_message entry
+        # so every owner-bridge /message turn produces a structured
+        # JSONL record in logs/traces/. Trace failures must NEVER break
+        # synthesis; the writer fails silent, and every capture below
+        # is wrapped in try/except so a degraded trace never short-
+        # circuits the reply path.
+        _trace = Trace.start(surface=source, user_text=text)
+        _trace_t_start = time.time()
+        _trace_pre_audit_text: str = ""
 
         # Inner-residue detection on incoming user text. See
         # core/inner_residue.py — rejection markers become persistent
@@ -1381,6 +1402,19 @@ class MaezDaemon:
         snap = perception_snapshot()
         system_state = format_snapshot(snap)
         recalled = self.memory.recall_for_telegram(text)
+        # Trace: capture every memory id surfaced by the recall — across
+        # core, daily, raw — so a future harness can verify the model's
+        # reply cited evidence the recall actually pulled.
+        try:
+            _ids: list[str] = []
+            for tier_key in ("core", "daily", "raw"):
+                for entry in (recalled or {}).get(tier_key, []) or []:
+                    eid = entry.get("id")
+                    if eid:
+                        _ids.append(str(eid))
+            _trace.memory_ids = _ids
+        except Exception as _trace_exc:
+            logger.debug("trace memory_ids capture skipped: %s", _trace_exc)
         # Bound the recall block so a high-recall query (long-content
         # core memories + many raw matches) cannot push the whole
         # prompt past the llama-server context window. 60_000 chars
@@ -1492,6 +1526,12 @@ class MaezDaemon:
                 _lived_brief = ""
         if _lived_brief:
             messages.append({"role": "system", "content": _lived_brief})
+        # Trace: capture the evidence ids the lived brief surfaced.
+        # An empty brief yields an empty list — silence is honest.
+        try:
+            _trace.lived_recall_ids = _trace_extract_evidence_ids(_lived_brief)
+        except Exception as _trace_exc:
+            logger.debug("trace lived_recall_ids capture skipped: %s", _trace_exc)
         # Inject the premise-audit flag (if any) as a system note
         # *immediately before* the user turn so the synthesis model
         # treats it as a directive about THIS message specifically,
@@ -1535,6 +1575,9 @@ class MaezDaemon:
         # See core/safety/audited_output.py for the full invariant.
         # `transcript` is the caller's Jarvis tool-use transcript if a
         # tool loop ran; `in_tool_continuation` is derived from it.
+        # Trace: snapshot the pre-audit text so audit.changed_output
+        # is a literal pre/post hash comparison, not a guess.
+        _trace_pre_audit_text = reply
         try:
             from core.safety.audited_output import audit_assistant_text
 
@@ -1545,11 +1588,51 @@ class MaezDaemon:
                 signals_present=signals_present,
                 signals_absent=signals_absent,
             )
+            try:
+                _trace.audit = AuditInfo(
+                    ran=True,
+                    changed_output=(
+                        _trace_hash_text(_trace_pre_audit_text)
+                        != _trace_hash_text(reply)
+                    ),
+                )
+            except Exception as _trace_exc:
+                logger.debug("trace audit capture skipped: %s", _trace_exc)
         except Exception as _aud_exc:
             logger.warning("handle_message audit fail-open: %s", _aud_exc)
+            try:
+                _trace.audit = AuditInfo(ran=False, error=str(_aud_exc)[:200])
+            except Exception:
+                pass
 
         self.memory.store_telegram(f"the owner ({source}): {text}\nMaez: {reply}")
         self._ws_broadcast({"type": "message_reply", "text": reply})
+
+        # Trace harness Slice 1 — finalize and emit the trace before
+        # returning. Three hashes are recorded so the audit-before-
+        # store invariant (stored == sent == final) is *inspectable*:
+        # equal hashes confirm; unequal hashes are a real signal for
+        # the future deterministic harness. Never raises.
+        try:
+            _trace.tool_calls = [
+                ToolCall(**tc) if isinstance(tc, dict) else tc
+                for tc in (tool_calls or [])
+            ]
+            _final_hash = _trace_hash_text(reply)
+            _trace.final_text_hash = _final_hash
+            _trace.final_text_excerpt = (reply or "")[:500]
+            # Owner-bridge /message: the reply is sent (returned to
+            # caller for surface delivery) and stored (via
+            # store_telegram above) verbatim. Same hash for all three
+            # confirms the invariant held this turn.
+            _trace.sent_text_hash = _final_hash
+            _trace.stored_text_hash = _final_hash
+            _trace.latency_ms = int((time.time() - _trace_t_start) * 1000)
+            _trace.terminal_state = "errored" if reply.startswith("Error: ") else "replied"
+            default_writer().write(_trace)
+        except Exception as _trace_exc:
+            logger.warning("trace emission failed (skipping): %s", _trace_exc)
+
         return reply
 
     def _get_public_context(self) -> str:
