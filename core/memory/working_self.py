@@ -296,12 +296,37 @@ def _goals_from_owner_msg(
     return out
 
 
+_LEADING_SCOPE_TAG_RE = re.compile(r"^\s*\([^)]+\)\s*")
+
+
+def _strip_leading_scope_tag(text: str) -> str:
+    """Strip a leading ``(scope-tag) `` wrapper from goal-bound text.
+
+    Reason: ``episode_builder._build_followup_doc_episode`` wraps
+    open_loop strings as ``"(project ledger) <title>"`` so the brief
+    formatter renders them in ledger-voice. That prefix is display
+    scaffolding — not goal content. When the same string is used as
+    goal text for alignment math, the prefix tokens (``project``,
+    ``ledger``) appear in every open_loop goal, which then mildly
+    cross-aligns with every project-ledger episode and produces
+    false-positive surfacing. Stripping any leading parenthesised
+    tag is a syntactic rule (not a project-ledger-specific
+    hardcode) so goals from any future scope-tag convention get
+    cleaned the same way.
+    """
+    return _LEADING_SCOPE_TAG_RE.sub("", text or "", count=1).strip()
+
+
 def _goals_from_open_loops(episode_store: Any, *, max_per_source: int) -> list[Goal]:
     """Open loops are episodes with the ``open_loop`` field set.
 
     These are unresolved threads — questions to follow up, deferred
     follow-ups, partial answers. By construction they're load-bearing
     for the working self because they're explicitly unfinished.
+
+    The goal text strips any leading ``(scope-tag)`` wrapper (see
+    ``_strip_leading_scope_tag``) so display-voice scaffolding doesn't
+    leak into goal-alignment math.
     """
     if episode_store is None:
         return []
@@ -313,7 +338,8 @@ def _goals_from_open_loops(episode_store: Any, *, max_per_source: int) -> list[G
     for ep in active:
         if not ep.get("open_loop"):
             continue
-        text = (ep.get("open_loop") or ep.get("title") or "").strip()
+        raw = (ep.get("open_loop") or ep.get("title") or "").strip()
+        text = _strip_leading_scope_tag(raw)
         if not text:
             continue
         out.append(Goal(

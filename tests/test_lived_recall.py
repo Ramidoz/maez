@@ -1257,5 +1257,137 @@ class GoalAlignmentNoiseFiltering(unittest.TestCase):
             cleanup()
 
 
+class StopwordCoverageForCommonShortWords(unittest.TestCase):
+    """The lived_recall stopword set must exclude the common-English
+    short words that produce false 1-token matches between unrelated
+    queries and rich text. Discovery (2026-04-29 night natural-text
+    probe): query like ``"do you ever get tired of all this"`` matched
+    INFRASTRUCTURE-correction memory text via the single token
+    ``ever``; ``"i don't know if i can do this anymore"`` matched via
+    ``if``. These are language-level stopwords (NLTK-style English)
+    that should never have been signal carriers."""
+
+    def test_common_short_words_filtered_from_keyword_path(self):
+        from core.memory.lived_recall import _tokenize
+
+        # These common words must produce empty token sets when
+        # passed alone (after stopword filtering).
+        common_short = [
+            "ever", "if", "much", "so", "today", "again",
+            "really", "only", "back", "next", "also", "still",
+            "even", "all", "some",
+        ]
+        for w in common_short:
+            tokens = _tokenize(w)
+            self.assertEqual(
+                tokens, [],
+                f"common short word {w!r} must be a stopword "
+                f"(currently tokenises to {tokens!r})",
+            )
+
+    def test_existential_query_does_not_match_infrastructure_via_short_word(self):
+        """Regression test for the natural-text probe finding: a
+        query asking about feelings must NOT surface infrastructure
+        ground-truth memories via single-token coincidence."""
+        from core.memory.lived_recall import build_lived_recall_brief
+
+        store, graph, cleanup = _stores()
+        try:
+            # Episode that's an infrastructure correction (rich text
+            # containing many common words). With the old stopword
+            # set, query-token "if" or "ever" would 1-token-match
+            # this episode's summary.
+            store.add(
+                title="INFRASTRUCTURE GROUND-TRUTH correction",
+                summary=(
+                    "If the daemon ever needs to recover from a "
+                    "fabrication-class incident, the audit log keeps "
+                    "ground truth even when raw memory drifts."
+                ),
+                participants=["Maez"],
+                source_memory_ids=["raw-infra"],
+                source_kind="raw_observation",
+            )
+            brief = build_lived_recall_brief(
+                "i don't know if i can do this anymore",
+                episode_store=store,
+                graph=graph,
+            )
+            self.assertEqual(brief, "",
+                             "vulnerable existential query must NOT "
+                             "match infrastructure correction via "
+                             "single-token coincidence on 'if'")
+        finally:
+            cleanup()
+
+
+class LightStemmingMorphology(unittest.TestCase):
+    """Tokenise normalises common English morphological suffixes
+    (-s, -ed, -ing, -ly, -er, -est) so a query token ``talked`` and a
+    memory token ``talk`` match. This bridges the natural-text gap
+    where users use one tense while memories store another. Generic
+    rule (suffix-strip on words >= 5 chars), not domain-specific."""
+
+    def test_plural_normalises_to_singular(self):
+        from core.memory.lived_recall import _tokenize
+        self.assertEqual(_tokenize("memories"), _tokenize("memory"))
+        self.assertEqual(_tokenize("conversations"), _tokenize("conversation"))
+
+    def test_past_tense_normalises_to_root(self):
+        from core.memory.lived_recall import _tokenize
+        self.assertEqual(_tokenize("talked"), _tokenize("talk"))
+        self.assertEqual(_tokenize("learned"), _tokenize("learn"))
+
+    def test_progressive_normalises_to_root(self):
+        from core.memory.lived_recall import _tokenize
+        self.assertEqual(_tokenize("learning"), _tokenize("learn"))
+
+    def test_short_words_not_stemmed(self):
+        # "the", "is", etc. are stopwords already; but for non-stopword
+        # short words, suffix-strip would over-fold ("ate" → "at" etc.)
+        # so we only stem tokens >= 5 characters.
+        from core.memory.lived_recall import _tokenize
+        self.assertEqual(_tokenize("cat"), ["cat"])
+        self.assertEqual(_tokenize("cats"), ["cats"])  # 4 chars, not stemmed
+
+    def test_unsafe_ing_strip_avoided(self):
+        """Aggressive ``-ing`` stripping over-folds short verbs into
+        roots that collide with other senses (e.g. ``"missing"`` →
+        ``"miss"`` would match a query ``"i miss her"`` even though
+        ``missing rationale`` and the verb-of-grief are unrelated).
+        The 3-char-suffix rule keeps the safe stems and rejects
+        the collision-prone ones."""
+        from core.memory.lived_recall import _stem
+        # Safe: result is 5+ chars
+        self.assertEqual(_stem("learning"), "learn")
+        self.assertEqual(_stem("thinking"), "think")
+        # Unsafe: result would be 4 chars; left intact to avoid
+        # semantic collisions
+        self.assertEqual(_stem("missing"), "missing")
+        self.assertEqual(_stem("calling"), "calling")
+
+    def test_morphology_query_matches_memory(self):
+        """A query in past tense should match a memory using infinitive."""
+        from core.memory.lived_recall import build_lived_recall_brief
+        store, graph, cleanup = _stores()
+        try:
+            store.add(
+                title="we talk about continuity",
+                summary="rohit and maez talk about continuity often",
+                participants=["Rohit"],
+                source_memory_ids=["raw-talk"],
+                source_kind="raw_observation",
+            )
+            brief = build_lived_recall_brief(
+                "what did we talked about regarding continuity",
+                episode_store=store,
+                graph=graph,
+            )
+            self.assertNotEqual(brief, "")
+            self.assertIn("talk", brief.lower())
+        finally:
+            cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()

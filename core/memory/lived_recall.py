@@ -46,71 +46,60 @@ if TYPE_CHECKING:
     from core.memory.relationship_graph import RelationshipGraph
     from core.memory.working_self import GoalHierarchy
 
-# Tokens that carry no signal for keyword overlap scoring. Conservative —
-# only the most common English stopwords plus interrogatives.
+# Tokens that carry no signal for keyword overlap scoring. Curated
+# subset of standard English stopwords (NLTK-style, language-level
+# data — not Maez-specific). The earlier conservative set leaked
+# common short words like ``ever / if / much / so / today`` through
+# the tokeniser, and they then produced 1-token false matches between
+# unrelated queries and rich text (the 2026-04-29 night natural-text
+# probe found existential queries like ``"i don't know if i can do
+# this anymore"`` matching infrastructure-correction memories via
+# the single token ``if``). Expanding to a richer English stopword
+# set fixes that root cause.
 _STOPWORDS: frozenset[str] = frozenset(
     {
-        "a",
-        "an",
-        "the",
-        "and",
-        "or",
-        "but",
-        "of",
-        "to",
-        "in",
-        "on",
-        "at",
-        "for",
-        "with",
-        "by",
-        "from",
-        "as",
-        "is",
-        "are",
-        "was",
-        "were",
-        "be",
-        "been",
-        "being",
-        "do",
-        "does",
-        "did",
-        "have",
-        "has",
-        "had",
-        "i",
-        "you",
-        "he",
-        "she",
-        "it",
-        "we",
-        "they",
-        "what",
-        "where",
-        "when",
-        "why",
-        "how",
-        "who",
-        "any",
-        "some",
-        "this",
-        "that",
-        "these",
-        "those",
-        "my",
-        "your",
-        "his",
-        "her",
-        "our",
-        "their",
-        "me",
-        "us",
-        "them",
-        "had",
-        "ok",
-        "no",
-        "yes",
+        # articles + basic conjunctions
+        "a", "an", "the", "and", "or", "but", "nor", "so",
+        # prepositions
+        "of", "to", "in", "on", "at", "for", "with", "by", "from",
+        "as", "into", "onto", "upon", "about", "above", "below",
+        "over", "under", "out", "off", "up", "down", "through",
+        "between", "among",
+        # auxiliary + linking verbs
+        "is", "are", "was", "were", "be", "been", "being", "am",
+        "do", "does", "did", "doing", "have", "has", "had", "having",
+        "can", "could", "should", "would", "will", "shall", "may",
+        "might", "must", "ought", "need",
+        # pronouns
+        "i", "me", "my", "mine", "myself",
+        "you", "your", "yours", "yourself", "yourselves",
+        "he", "him", "his", "himself",
+        "she", "her", "hers", "herself",
+        "it", "its", "itself",
+        "we", "us", "our", "ours", "ourselves",
+        "they", "them", "their", "theirs", "themselves",
+        # interrogatives + demonstratives
+        "what", "where", "when", "why", "how", "who", "whom", "whose",
+        "which", "this", "that", "these", "those",
+        # quantifiers + degree
+        "any", "some", "all", "many", "much", "more", "most", "few",
+        "less", "least", "every", "each", "no", "none", "any",
+        "very", "really", "quite", "just", "only", "also", "too",
+        "one", "two", "ones",  # numerals as common bridge tokens
+        # common adverbs that bridge unrelated text
+        "still", "even", "again", "back", "next", "ever", "never",
+        "now", "then", "today", "tomorrow", "yesterday", "soon",
+        "later", "early", "always", "often", "sometimes", "usually",
+        "lately", "recently",
+        # conditionals + connectors
+        "if", "else", "though", "although", "because", "since",
+        "while", "until", "unless", "whether", "either", "neither",
+        # contractions split-tokens (apostrophe stripped by regex)
+        "don", "doesn", "didn", "isn", "aren", "wasn", "weren",
+        "won", "wouldn", "couldn", "shouldn", "ain",
+        # filler / informal
+        "ok", "okay", "yes", "yeah", "yep", "nope", "uh", "um", "huh",
+        "lol", "lmao", "rofl", "btw",
     }
 )
 
@@ -142,9 +131,57 @@ _FORBIDDEN_PRESENT_TENSE = ("currently", "right now", "is happening")
 _TOKEN_RE = re.compile(r"[A-Za-z]+")
 
 
+# Light morphology normalisation: strip common English suffixes so
+# tense / number / -er-form variants of the same root match. Tokens
+# below ``_STEM_MIN_LEN`` characters are NOT stemmed because short
+# words over-fold dangerously ("ate" → "at", "bed" → "b"). The list
+# is ordered longest-suffix-first so ``-ies → -y`` runs before
+# ``-s → ∅``.
+_STEM_MIN_LEN = 5
+_STEM_RULES: tuple[tuple[str, str], ...] = (
+    ("ies", "y"),
+    ("ing", ""),
+    ("ed", ""),
+    ("est", ""),
+    ("er", ""),
+    ("ly", ""),
+    ("es", ""),
+    ("s", ""),
+)
+
+
+def _stem(token: str) -> str:
+    """Return a normalised root form of ``token``. Generic English
+    suffix-strip — not domain-specific. Tokens shorter than
+    ``_STEM_MIN_LEN`` are returned unchanged.
+
+    Suffix-length-dependent threshold: 3+ character suffixes
+    (``-ing``, ``-est``, ``-ies``) require the resulting stem to
+    be at least 5 chars; shorter suffixes (``-ed``, ``-es``, ``-er``,
+    ``-ly``, ``-s``) only need 4. Reason: aggressive ``-ing``
+    stripping over-folds common English verbs into shorter roots
+    that collide with semantically-different verbs (e.g.
+    ``"missing"`` → ``"miss"`` would falsely match a query about
+    the verb "to miss"). The bigger-stem rule keeps the safe
+    cases (``learning`` → ``learn``) and rejects the unsafe ones
+    (``missing`` stays ``missing``)."""
+    if len(token) < _STEM_MIN_LEN:
+        return token
+    for suffix, replacement in _STEM_RULES:
+        if not token.endswith(suffix):
+            continue
+        result_len = len(token) - len(suffix) + len(replacement)
+        net_strip = len(suffix) - len(replacement)
+        # Bigger nets need longer remaining stems to be safe.
+        min_result = 5 if net_strip >= 3 else 4
+        if result_len >= min_result:
+            return token[: len(token) - len(suffix)] + replacement
+    return token
+
+
 def _tokenize(text: str) -> list[str]:
     return [
-        t.lower()
+        _stem(t.lower())
         for t in _TOKEN_RE.findall(text or "")
         if t.lower() not in _STOPWORDS and len(t) > 1
     ]
@@ -630,6 +667,33 @@ def build_lived_recall_brief(
                 object_label=obj,
             )
         )
+
+    # Relationship-mode fallback: when the query is relationship-shaped
+    # (e.g. "what do you care about", "what does our bond mean") AND
+    # no ``cares_about`` edge passed the keyword gate, seed the edge
+    # pool with all active ``cares_about`` edges at low score so the
+    # relationship-mode floor can surface them. Real bonded
+    # relationship queries rarely have specific keyword overlap with
+    # the durable owner-preference edges that answer them — the
+    # 2026-04-29 night natural-text probe showed the existing path
+    # depended on stopword coincidences (e.g. ``"about"`` bridging
+    # query and edge). Honouring the design intent of relationship
+    # mode: when Maez is asked what you care about, the cares_about
+    # hierarchy IS the answer, regardless of token coincidence.
+    if _classify_query_mode(query) == "relationship" and not any(
+        s.edge.get("relation") == "cares_about" for s in scored_edges
+    ):
+        for edge, subj, obj in _all_active_edges_with_labels(graph):
+            if edge.get("relation") != "cares_about":
+                continue
+            scored_edges.append(_ScoredEdge(
+                # Score = 1: enough to qualify for the relationship-
+                # mode floor, low enough to lose to any genuine
+                # keyword-matched candidate that might also be
+                # present.
+                score=1, edge=edge,
+                subject_label=subj, object_label=obj,
+            ))
 
     # Note: there is intentionally NO early-return here even when both
     # pools are empty. Temporal-mode queries can still produce a brief

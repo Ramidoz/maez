@@ -734,5 +734,53 @@ class TestGoalRelevanceNoiseTokenFilter(unittest.TestCase):
         self.assertEqual(a, b)
 
 
+class TestOpenLoopGoalScopePrefixStripped(unittest.TestCase):
+    """Open-loop goal text must NOT carry a leading scope-tag wrapper
+    like ``(project ledger) ...`` — that prefix is display-voice
+    scaffolding (added by ``episode_builder._build_followup_doc_episode``
+    so the brief reads as ledger-scoped). It pollutes goal-alignment
+    math because every open_loop goal carries the same prefix tokens
+    ``project / ledger`` which then mildly match every project-ledger
+    episode. Stripping a generic leading parenthesised-tag is a
+    syntactic rule, not a project-ledger-specific hardcode."""
+
+    def test_leading_parenthesised_tag_stripped(self):
+        store, _, cleanup = _stores()
+        try:
+            store.add(
+                title="Project open loop: example",
+                summary="example summary",
+                participants=[],
+                source_memory_ids=["raw-x"],
+                source_kind="followup_doc",
+                open_loop="(project ledger) Example Title Without Prefix",
+            )
+            h = assemble_goals(episode_store=store)
+            loops = h.by_source(GOAL_SOURCE_OPEN_LOOP)
+            self.assertEqual(len(loops), 1)
+            self.assertEqual(loops[0].text,
+                             "Example Title Without Prefix")
+        finally:
+            cleanup()
+
+    def test_no_prefix_leaves_text_unchanged(self):
+        store, _, cleanup = _stores()
+        try:
+            store.add(
+                title="Open loop: x",
+                summary="x summary",
+                participants=[],
+                source_memory_ids=["raw-y"],
+                source_kind="raw_observation",
+                open_loop="resolve the migration plan",
+            )
+            h = assemble_goals(episode_store=store)
+            loops = h.by_source(GOAL_SOURCE_OPEN_LOOP)
+            self.assertEqual(len(loops), 1)
+            self.assertEqual(loops[0].text, "resolve the migration plan")
+        finally:
+            cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()
