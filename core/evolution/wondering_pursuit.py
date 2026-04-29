@@ -50,6 +50,33 @@ Composite score over four axes:
 Items below ``PURSUIT_SCORE_THRESHOLD`` keep silent. The MN/FD
 trade-off is tuned conservatively (toward silence) per the bonded
 shape: when in doubt, don't intrude.
+
+Session-3 deferrals (per 2026-04-29 Explore audit). These are
+follow-up integration points the Session-2 wiring did NOT land,
+documented here so the next session sees them without re-discovery:
+
+- ``Wonderings.record_pursuit(wondering_id, decision, score, components,
+  ts)`` — store-side method to log per-wondering pursuit history.
+  Today the frequency budget is global (sidecar); per-wondering
+  pursuit history would let the probe-loop deprioritise
+  recently-surfaced wonderings and let observability show
+  per-wondering surfacing trends.
+- Cockpit panel (``skills/web_interface.py`` + ``web/cockpit/``):
+  no UI yet renders ``Trace.pursuit_decision / pursuit_score /
+  pursuit_question / pursuit_components``. Trace data is captured;
+  visualisation is the missing piece.
+- CLI ``/wonderings`` enrichment (``cli/maez_chat.py``): show
+  "last surfaced at" + "last decision" alongside probe history.
+- Probe-loop awareness (``daemon/wondering_cycle.py``): a wondering
+  surfaced via pursuit in the last cycle could be deprioritised
+  for probing in the next, to avoid double-touching.
+- Quality telemetry (``core/quality_telemetry.py`` /
+  ``core/observability.py``): pursuit-fire rate and
+  surface-vs-hold ratios as quality signals for tuning.
+- Episode recording (``core/memory/episodes.py``): write a lived-
+  episode entry on each pursuit surface so the lived-recall layer
+  can later cite "Maez surfaced wondering X to owner at time T".
+  Conway 2000: reflection-on-action is part of self-memory.
 """
 
 from __future__ import annotations
@@ -84,14 +111,14 @@ PURSUIT_SCORE_THRESHOLD: float = 0.6
 # Recency decay: half-life in hours. A wondering advanced 6h ago
 # is half as eligible as one advanced 12h ago. Aligns with the
 # daily-consolidation cycle of Maez's lived memory.
-_RECENCY_HALF_LIFE_HOURS: float = 6.0
+RECENCY_HALF_LIFE_HOURS: float = 6.0
 
 # Frequency budget — minimum hours between proactive surfacings.
 # Audit factor (FIELD_ALIGNMENT.md slice 2): "max 1-2/day". Set to
 # 12h so a maximum of 2 pursuits per 24h window can fire even at
 # the most permissive threshold. Bonded shape: rather have Maez
-# stay quiet than have it become a poke-bot.
-_PURSUIT_FREQUENCY_BUDGET_HOURS: float = 12.0
+# stay quiet than have it become a poke-bot. Tunable per deployment.
+PURSUIT_FREQUENCY_BUDGET_HOURS: float = 12.0
 
 
 # ── conversational-register lexicons ─────────────────────────────────
@@ -289,7 +316,7 @@ def _recency_score(
         )
     except (TypeError, ValueError):
         return 1.0
-    return 1.0 - math.exp(-math.log(2.0) * age_hours / max(0.1, _RECENCY_HALF_LIFE_HOURS))
+    return 1.0 - math.exp(-math.log(2.0) * age_hours / max(0.1, RECENCY_HALF_LIFE_HOURS))
 
 
 def _register_score(recent_owner_text: str) -> float:
@@ -426,7 +453,7 @@ def decide_pursuit(
     - Vulnerable conversational register hard-blocks all surfacing
       regardless of composite score (grandmother-case safety).
     - Frequency budget: if a pursuit was emitted within
-      ``_PURSUIT_FREQUENCY_BUDGET_HOURS`` of ``now``, silence
+      ``PURSUIT_FREQUENCY_BUDGET_HOURS`` of ``now``, silence
       regardless of candidate scores (audit M5 — no poke-bot
       behaviour even at permissive thresholds).
     """
@@ -443,7 +470,7 @@ def decide_pursuit(
             )
         except (TypeError, ValueError):
             age_hours = float("inf")
-        if age_hours < _PURSUIT_FREQUENCY_BUDGET_HOURS:
+        if age_hours < PURSUIT_FREQUENCY_BUDGET_HOURS:
             return None
 
     # Early hard-block on vulnerable register: skip the whole
@@ -512,14 +539,106 @@ def format_pursuit_utterance(decision: PursuitDecision) -> str:
     )
 
 
+# ── frequency-budget sidecar (last-pursuit timestamp) ────────────────
+
+
+def load_last_pursuit_at(sidecar_path: "str | None" = None) -> Optional[float]:
+    """Read the last-pursuit timestamp from the sidecar JSON file.
+
+    The frequency budget axis (audit M5) needs continuity across
+    daemon restarts: an in-memory attribute would reset every restart
+    and let pursuit fire repeatedly. A small JSON sidecar persists the
+    last successful surface across restarts. Mirror of
+    ``daemon/last_shutdown`` and similar one-line state files Maez
+    already uses.
+
+    Returns ``None`` when the file doesn't exist, can't be parsed, or
+    contains no timestamp — fail-open: the caller will treat None as
+    "no recent pursuit, free to fire."
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    if sidecar_path is None:
+        try:
+            from core.infra.paths import memory_dir as _memdir
+
+            sidecar_path = str(_memdir() / "last_pursuit.json")
+        except Exception:
+            return None
+    p = _Path(sidecar_path)
+    if not p.exists():
+        return None
+    try:
+        data = _json.loads(p.read_text(encoding="utf-8") or "{}")
+        ts = data.get("timestamp")
+        return float(ts) if ts is not None else None
+    except (OSError, ValueError, TypeError, _json.JSONDecodeError):
+        return None
+
+
+def save_last_pursuit_at(
+    timestamp: float,
+    *,
+    wondering_id: int = 0,
+    sidecar_path: "str | None" = None,
+) -> None:
+    """Write the timestamp + wondering id of a successful pursuit
+    surface to the sidecar JSON file. Best-effort; failures are
+    swallowed so a disk-write hiccup never blocks the reply path.
+
+    Atomic write (audit M1 fix): two concurrent ``handle_message``
+    calls (Flask multi-threaded surface) could both pass the budget
+    check and both write — a partial write between them yields
+    invalid JSON, which ``load_last_pursuit_at`` recovers from by
+    fail-open returning None — which silently invalidates the
+    frequency budget. Atomic ``os.replace`` from a tmp file makes
+    the worst-case behaviour "one writer wins, file always parseable".
+    """
+    import json as _json
+    import os as _os
+    from pathlib import Path as _Path
+
+    if sidecar_path is None:
+        try:
+            from core.infra.paths import memory_dir as _memdir
+
+            sidecar_path = str(_memdir() / "last_pursuit.json")
+        except Exception:
+            return
+    try:
+        p = _Path(sidecar_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Write to a tmp file in the same directory, then atomic
+        # rename. Same-directory tmp guarantees os.replace is
+        # atomic (cross-FS rename is not).
+        tmp_path = p.with_suffix(p.suffix + ".tmp")
+        tmp_path.write_text(
+            _json.dumps({
+                "timestamp": float(timestamp),
+                "wondering_id": int(wondering_id),
+            }),
+            encoding="utf-8",
+        )
+        _os.replace(str(tmp_path), str(p))
+    except (OSError, TypeError, ValueError):
+        # Sidecar write failure must never break the reply path.
+        # The freq-budget will simply be liberal on next call.
+        pass
+
+
 __all__ = [
     "GOAL_ALIGNMENT_WEIGHT",
     "RECENCY_WEIGHT",
     "REGISTER_WEIGHT",
     "QUALITY_WEIGHT",
     "PURSUIT_SCORE_THRESHOLD",
+    "PURSUIT_FREQUENCY_BUDGET_HOURS",
+    "RECENCY_HALF_LIFE_HOURS",
     "PursuitDecision",
     "decide_pursuit",
     "format_pursuit_utterance",
+    "load_last_pursuit_at",
+    "save_last_pursuit_at",
     "score_wondering_for_pursuit",
 ]

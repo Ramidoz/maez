@@ -152,7 +152,8 @@ _BIRTH_GATED_PATHS = {MAEZ_ROOT / 'docs' / 'birth_book'}
 # File patterns to skip
 SKIP_EXTENSIONS = {'.pyc', '.db', '.log', '.pid', '.bak', '.bak2'}
 SKIP_FILES = {'.gitignore', 'realtimesst.log', 'package-lock.json',
-              'last_shutdown', 'pending_actions.json', 'maez.pid'}
+              'last_shutdown', 'pending_actions.json', 'maez.pid',
+              'last_pursuit.json'}
 
 # Paths to index (relative globs)
 INDEX_PYTHON = ['core/*.py', 'daemon/*.py', 'memory/*.py',

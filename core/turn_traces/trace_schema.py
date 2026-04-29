@@ -114,6 +114,17 @@ class Trace:
     # ``assemble_goals`` returns a non-empty hierarchy. Conway 2000 +
     # Park 2023 — observability for goal-driven retrieval (Session 3).
     working_self_goals: list[str] = field(default_factory=list)
+    # Wondering-pursuit decision for this turn (Slice 2 of post-audit
+    # work). ``pursuit_decision`` is one of ``"surface"`` / ``"hold"`` /
+    # ``""`` (not run). When pursuit was evaluated, the remaining fields
+    # carry the score, the wondering question (truncated), and the
+    # per-axis component scores (goal / recency / register / quality)
+    # so the trace answers "did Maez decide to surface a wondering
+    # this turn, and why?". Lai et al. 2024 framework + Conway 2000.
+    pursuit_decision: str = ""
+    pursuit_score: float = 0.0
+    pursuit_question: str = ""
+    pursuit_components: dict[str, float] = field(default_factory=dict)
     tool_calls: list[ToolCall] = field(default_factory=list)
     audit: AuditInfo = field(default_factory=AuditInfo)
     final_text_excerpt: str = ""

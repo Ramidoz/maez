@@ -65,9 +65,14 @@ class TraceCarriesWorkingSelfGoals(unittest.TestCase):
 class DaemonImportsWorkingSelf(unittest.TestCase):
     def test_imports_assemble_goals(self):
         self.assertIn(
-            "from core.memory.working_self import assemble_goals",
+            "assemble_goals",
             _DAEMON_SRC,
             "Session 3 wiring requires importing assemble_goals.",
+        )
+        self.assertRegex(
+            _DAEMON_SRC,
+            r"from core\.memory\.working_self import [^\n]*assemble_goals",
+            "assemble_goals must be imported from core.memory.working_self",
         )
 
 

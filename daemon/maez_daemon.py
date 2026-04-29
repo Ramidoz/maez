@@ -103,7 +103,13 @@ from core.model_config import PRIMARY_MODEL as MODEL  # single source of truth �
 from core.memory.episodes import EpisodeStore
 from core.memory.relationship_graph import RelationshipGraph
 from core.memory.lived_recall import build_lived_recall_brief
-from core.memory.working_self import assemble_goals
+from core.memory.working_self import GoalHierarchy, assemble_goals
+from core.evolution.wondering_pursuit import (
+    decide_pursuit,
+    format_pursuit_utterance,
+    load_last_pursuit_at,
+    save_last_pursuit_at,
+)
 from core.turn_traces import (
     AuditInfo,
     Trace,
@@ -1658,6 +1664,66 @@ class MaezDaemon:
         except Exception as _strip_exc:
             logger.debug("tool-call-leak strip skipped: %s", _strip_exc)
 
+        # Slice 2 Session 2 — Wondering-Pursuit. Optionally append a
+        # proactive utterance BEFORE the audit pass so any LLM-authored
+        # wondering content gets screened for fabrication / self-claim
+        # leaks via the same audit gate that screens the synthesis
+        # reply (audit B1 fix from 2026-04-29 review). The wondering
+        # question is LLM-authored by ``daemon/wondering_cycle.py``
+        # and stored in SQLite verbatim; treating it as untrusted text
+        # at the surface boundary is the only honest path. Lai et al.
+        # 2024 (arxiv 2410.12361) framework + Conway 2000 working-self
+        # priors; Maez-specific safety: vulnerable-register hard-block
+        # is primary, frequency budget across daemon restart via
+        # sidecar at ``memory/last_pursuit.json``.
+        #
+        # Two gates, both must pass:
+        #   1. ``MAEZ_WONDERING_PURSUIT=1`` env knob (default OFF —
+        #      brand-new path, opt-in until probe-validated).
+        #   2. ``identity.proactive_messages()`` policy — bonded shape
+        #      requires explicit operator opt-in via per-user policy.
+        #
+        # Tri-state outcome on the trace (audit M2 fix):
+        # ``surface`` (utterance appended), ``hold`` (evaluated but
+        # threshold or hard-block held silent), ``errored`` (evaluation
+        # raised — distinguish from legitimate hold for observability).
+        # Failure is silent at the reply level: any exception leaves
+        # the reply untouched and synthesis continues.
+        _pursuit_enabled = os.environ.get("MAEZ_WONDERING_PURSUIT", "0") == "1"
+        _pursuit_decision = None
+        _pursuit_evaluated = False
+        _pursuit_error: "str | None" = None
+        if _pursuit_enabled:
+            try:
+                from core.memory import identity as _identity_mod
+
+                if _identity_mod.proactive_messages():
+                    from core.evolution.wonderings import (
+                        get_store as _get_w_store,
+                    )
+
+                    _w_store = _get_w_store()
+                    _open_wonderings = _w_store.list_open(limit=10) or []
+                    _pursuit_decision = decide_pursuit(
+                        _open_wonderings,
+                        goals=_goals if _goals is not None else GoalHierarchy(),
+                        recent_owner_text=text,
+                        last_pursuit_at=load_last_pursuit_at(),
+                    )
+                    _pursuit_evaluated = True
+                    if _pursuit_decision is not None:
+                        _utterance = format_pursuit_utterance(_pursuit_decision)
+                        if _utterance:
+                            reply = f"{reply}\n\n{_utterance}"
+                            save_last_pursuit_at(
+                                time.time(),
+                                wondering_id=_pursuit_decision.wondering_id,
+                            )
+            except Exception as _pursuit_exc:
+                logger.debug("wondering-pursuit evaluation failed: %s", _pursuit_exc)
+                _pursuit_decision = None
+                _pursuit_error = str(_pursuit_exc)[:200]
+
         # 2026-04-23 memory-integrity contract: audit BEFORE store + return.
         # See core/safety/audited_output.py for the full invariant.
         # `transcript` is the caller's Jarvis tool-use transcript if a
@@ -1691,6 +1757,27 @@ class MaezDaemon:
                 _trace.audit = AuditInfo(ran=False, error=str(_aud_exc)[:200])
             except Exception:
                 pass
+
+        # Tri-state pursuit trace capture (audit M2 fix). The earlier
+        # version recorded "hold" on every error path, conflating
+        # evaluator-returned-None (legitimate hold) with
+        # evaluator-raised-exception (errored). Now distinguished:
+        #   - surface  : pursuit fired, utterance appended
+        #   - hold     : pursuit evaluated, returned None
+        #   - errored  : pursuit raised — observability sees the failure
+        #   - ""       : pursuit not run (env disabled)
+        try:
+            if _pursuit_decision is not None:
+                _trace.pursuit_decision = "surface"
+                _trace.pursuit_score = float(_pursuit_decision.proactive_score)
+                _trace.pursuit_question = _pursuit_decision.wondering_question[:200]
+                _trace.pursuit_components = dict(_pursuit_decision.components)
+            elif _pursuit_error is not None:
+                _trace.pursuit_decision = "errored"
+            elif _pursuit_enabled and _pursuit_evaluated:
+                _trace.pursuit_decision = "hold"
+        except Exception as _trace_pursuit_exc:
+            logger.debug("trace pursuit capture skipped: %s", _trace_pursuit_exc)
 
         self.memory.store_telegram(f"the owner ({source}): {text}\nMaez: {reply}")
         self._ws_broadcast({"type": "message_reply", "text": reply})
