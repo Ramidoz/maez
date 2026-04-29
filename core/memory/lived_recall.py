@@ -266,6 +266,47 @@ class _ScoredEdge:
     object_label: str
 
 
+# Maximal Marginal Relevance (Carbonell & Goldstein 1998) — diversity
+# refinement applied when the working-self goal-only path lifts items.
+# Live spin observation (2026-04-29): all five ``cares_about``-derived
+# OWNER PREFERENCE episodes surfaced together on every reflective query
+# because they share boilerplate vocabulary, so each goal aligned
+# similarly with all of them.
+#
+# MMR breaks the cluster by penalising candidates whose Jaccard
+# token-overlap with already-selected items is high. λ=0.7 keeps
+# relevance dominant; the diversity term is a corrector, not the
+# primary sort axis.
+_MMR_LAMBDA = 0.7
+
+
+def _episode_text_for_similarity(s: _ScoredEpisode) -> str:
+    return f"{s.episode.get('title', '')} {s.episode.get('summary', '')}"
+
+
+def _edge_text_for_similarity(s: _ScoredEdge) -> str:
+    relation = s.edge.get("relation", "")
+    return f"{s.subject_label} {relation} {s.object_label}"
+
+
+def _pool_item_text(item) -> str:
+    if isinstance(item, _ScoredEpisode):
+        return _episode_text_for_similarity(item)
+    if isinstance(item, _ScoredEdge):
+        return _edge_text_for_similarity(item)
+    return ""
+
+
+def _token_jaccard(a_text: str, b_text: str) -> float:
+    """Jaccard similarity of tokenised texts, in [0, 1]. Returns 0
+    when either side has no content tokens."""
+    a = set(_tokenize(a_text))
+    b = set(_tokenize(b_text))
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
 # ── episode scoring ──────────────────────────────────────────────────
 
 
@@ -573,11 +614,56 @@ def build_lived_recall_brief(
     selected_past_episodes: list[_ScoredEpisode] = []
     selected_graph_beliefs: list[_ScoredEdge] = []
 
+    # MMR is applied only when the working-self path is active
+    # (``goals`` non-empty). Without goals the contract is unchanged:
+    # top-N by score within each section pool, just like Session 1.
+    use_mmr = goals is not None and not goals.is_empty
+
     def _take(pool: list, selected: list, floor: int) -> None:
         nonlocal budget
         n = min(floor, len(pool), budget)
+        if not use_mmr:
+            for _ in range(n):
+                selected.append(pool.pop(0))
+                budget -= 1
+            return
+        # MMR selection: first pick is highest-score (pool already
+        # sorted desc); subsequent picks balance score against
+        # similarity to already-selected items.
+        if n == 0:
+            return
+        first = pool.pop(0)
+        selected.append(first)
+        budget -= 1
+        n -= 1
         for _ in range(n):
-            selected.append(pool.pop(0))
+            if not pool:
+                break
+            best_idx = 0
+            best_mmr = -float("inf")
+            for i, candidate in enumerate(pool):
+                cand_text = _pool_item_text(candidate)
+                # Cross-pool similarity: a candidate's diversity is
+                # measured against every item already chosen across
+                # all sections, not just within this pool. That stops
+                # a near-duplicate slipping in just because a
+                # different section was filled first.
+                sim_max = 0.0
+                for chosen in (
+                    selected_open_loops
+                    + selected_past_episodes
+                    + selected_graph_beliefs
+                ):
+                    sim = _token_jaccard(cand_text, _pool_item_text(chosen))
+                    if sim > sim_max:
+                        sim_max = sim
+                mmr = _MMR_LAMBDA * candidate.score - (1 - _MMR_LAMBDA) * sim_max * (
+                    candidate.score or 1
+                )
+                if mmr > best_mmr:
+                    best_mmr = mmr
+                    best_idx = i
+            selected.append(pool.pop(best_idx))
             budget -= 1
 
     _take(open_loop_pool, selected_open_loops, floors["open_loops"])

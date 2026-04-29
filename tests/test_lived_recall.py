@@ -1049,5 +1049,119 @@ class GoalsGapFixesAreApplied(unittest.TestCase):
             cleanup()
 
 
+class WorkingSelfDiversityViaMMR(unittest.TestCase):
+    """Diversity refinement (Carbonell & Goldstein 1998 — Maximal
+    Marginal Relevance). Live spin observation: when the goal-only
+    path lifts items, the surfaced set tended to cluster on
+    near-duplicate ``OWNER PREFERENCE`` core-derived episodes
+    because each ``cares_about`` goal aligns similarly across all
+    of them. MMR breaks the cluster by penalising candidates whose
+    text Jaccard-overlaps with already-picked items.
+
+    MMR is gated on ``goals`` being non-empty so the
+    ``goals=None`` → byte-identical contract from Session 2 is
+    preserved for callers that haven't opted in.
+    """
+
+    def _seed_clustered_owner_prefs_plus_one_diverse(self, store):
+        # Five OWNER PREFERENCE near-duplicates — they share heavy
+        # boilerplate ("owner preference rule") plus a distinctive
+        # tag (alpha/beta/gamma/...).
+        for tag in ("alpha", "beta", "gamma", "delta", "epsilon"):
+            store.add(
+                title=f"owner preference rule {tag}",
+                summary=f"rohit prefers {tag} approach",
+                participants=["Rohit"],
+                source_memory_ids=[f"raw-{tag}"],
+                source_kind="raw_observation",
+                importance=4,
+            )
+        # Distinctive episode: same boilerplate (so it scores
+        # identically — same goal alignment, same keyword overlap)
+        # but distinctive content tokens (openrgb / installer / usb).
+        store.add(
+            title="owner preference rule openrgb",
+            summary="openrgb installer usb issue surfaced",
+            participants=["Maez"],
+            source_memory_ids=["raw-openrgb"],
+            source_kind="raw_observation",
+            importance=4,
+        )
+
+    def test_mmr_lifts_diverse_item_above_near_duplicate(self):
+        """A diverse item should appear in the brief alongside one
+        of the near-duplicates, not be displaced by a second
+        near-duplicate."""
+        from core.memory.lived_recall import build_lived_recall_brief
+        from core.memory.working_self import (
+            GOAL_SOURCE_CARES_ABOUT,
+            Goal,
+            GoalHierarchy,
+        )
+
+        store, graph, cleanup = _stores()
+        try:
+            self._seed_clustered_owner_prefs_plus_one_diverse(store)
+            goals = GoalHierarchy(goals=(
+                Goal(
+                    text="owner preference rule",
+                    source=GOAL_SOURCE_CARES_ABOUT,
+                    weight=0.95,
+                ),
+            ))
+            # Query has equal keyword overlap with all six episodes
+            # (each contains "owner preference" in its title), so
+            # all six score identically. Goal alignment is also equal
+            # across all six (each contains the goal text fully).
+            # The ONLY differentiator is text similarity between
+            # candidates. Tests MMR's diversity term in isolation.
+            brief = build_lived_recall_brief(
+                "owner preference",
+                episode_store=store,
+                graph=graph,
+                max_items=2,
+                goals=goals,
+            )
+            self.assertNotEqual(brief, "")
+            self.assertIn("openrgb", brief.lower(),
+                          "MMR should lift the diverse openrgb item over "
+                          "a second near-duplicate when scores are tied")
+        finally:
+            cleanup()
+
+    def test_mmr_disabled_when_goals_none(self):
+        """Without goals, behavior must match the pre-MMR top-by-score
+        path. Regression guard for the Session-2 contract."""
+        from core.memory.lived_recall import build_lived_recall_brief
+
+        store, graph, cleanup = _stores()
+        try:
+            self._seed_clustered_owner_prefs_plus_one_diverse(store)
+            # max_items=2 with no goals — should pick top 2 by score
+            # within section-floor allocation. With near-identical
+            # scores across the OWNER PREFERENCE cluster, the openrgb
+            # episode might or might not surface depending on the
+            # tie-break — but the brief should NOT be empty and the
+            # behaviour should be deterministic (same call → same
+            # result).
+            brief_a = build_lived_recall_brief(
+                "owner preference openrgb",
+                episode_store=store,
+                graph=graph,
+                max_items=2,
+            )
+            brief_b = build_lived_recall_brief(
+                "owner preference openrgb",
+                episode_store=store,
+                graph=graph,
+                max_items=2,
+            )
+            self.assertEqual(brief_a, brief_b,
+                             "deterministic without goals")
+            self.assertNotEqual(brief_a, "")
+        finally:
+            cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()
