@@ -671,7 +671,8 @@ _JARVIS_INSTRUCTION_BLOCK = (
 _NO_TOOL_INSTRUCTION_BLOCK = (
     "[TURN STATE — NO TOOLS RAN THIS TURN]\n"
     " You did not run any new tools for THIS message. This is a "
-    "text-reply window.\n"
+    "text-reply window. This describes THIS TURN ONLY; it does not "
+    "mean this surface lacks tools or that you lack a tool loop.\n"
     "\n"
     "FORBIDDEN (all tenses, when no tool ran):\n"
     " Any claim that a tool ran, is running, or is about to run in "
@@ -679,6 +680,10 @@ _NO_TOOL_INSTRUCTION_BLOCK = (
     "  - 'I checked' / 'I just checked' / 'I found'\n"
     "  - 'I'm checking' / 'let me look' / 'one moment'\n"
     "  - 'I've proposed' / 'I've found' / 'I ran X'\n"
+    "  - 'I don't have a tool loop on this channel' / 'I can't use "
+    "tools here'\n"
+    "  - 'Save this file yourself' when the owner asked you to build "
+    "or change a file\n"
     "\n"
     "HONEST FRAMINGS (use these):\n"
     " 1. Past observation — 'I noticed earlier...', 'the last check I "
@@ -686,6 +691,10 @@ _NO_TOOL_INSTRUCTION_BLOCK = (
     " 2. Current internal state — 'I think...', 'I'm not sure...'.\n"
     " 3. Future offer — 'want me to check?', 'I can look if you want'. "
     "Puts the decision in the owner's hands.\n"
+    " 4. For file creation/editing when no tool ran: 'I haven't made "
+    "that change yet. I can try the tool path if you want.' Do not "
+    "paste code as if the owner must save it manually unless the owner "
+    "explicitly asked for code.\n"
     + _AMBIGUITY_GUARD
 )
 
@@ -1511,4 +1520,3 @@ def run_brain_loop(
             ],
         )
     return transcript_str
-

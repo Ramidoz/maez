@@ -14,7 +14,7 @@ Scope rules (per the Slice 2 plan):
 
 - Trace files are UTC-dated; selection globs ``logs/traces/*.jsonl`` and
   sorts by mtime-newest-first. NEVER assume today's local date.
-- Seven deterministic checks (see ``CHECKS`` below). No semantic judge.
+- Eight deterministic checks (see ``CHECKS`` below). No semantic judge.
 - ``stale_claims`` compares narrow infrastructure claims against live
   ground truth (model endpoint, systemd service state, feature flags)
   and only fails when a known runtime fact is contradicted.
@@ -47,6 +47,7 @@ DEFAULT_REPORT_DIR = REPO_ROOT / "logs" / "trace_harness"
 DEFAULT_LATEST_N = 50
 DEFAULT_LATENCY_WARN_MS = 30_000
 DEFAULT_OWNER_SURFACES = {"UI", "telegram_surface", "web", "voice", "owner_bridge"}
+DEFAULT_TOOL_CAPABLE_SURFACES = {"telegram_surface"}
 HARNESS_VERSION = 1
 
 logger = logging.getLogger("maez.trace_harness")
@@ -295,6 +296,65 @@ def check_timeout_honesty(
     return []
 
 
+_TOOL_ACCESS_DENIAL_RE = re.compile(
+    r"\b("
+    r"(?:i\s+)?(?:do\s+not|don't|can(?:not|'t))\s+"
+    r"(?:have|use|access|run)\s+(?:a\s+)?(?:tool\s+loop|tools?)"
+    r"(?:\s+(?:on|in)\s+(?:this\s+)?(?:channel|surface|chat|window|turn|context))?"
+    r"|(?:this\s+)?(?:channel|surface|chat|window)\s+"
+    r"(?:does\s+not|doesn't)\s+have\s+(?:a\s+)?(?:tool\s+loop|tools?)"
+    r"|i\s+can't\s+write\s+(?:the\s+)?file\s+directly"
+    r")\b",
+    re.IGNORECASE,
+)
+_MANUAL_SAVE_RE = re.compile(
+    r"\b(save|copy)\s+it\s+to\s+/(?:home|tmp|var|etc)\b",
+    re.IGNORECASE,
+)
+
+
+def check_tool_access_self_denial(
+    trace: dict,
+    *,
+    file: str,
+    line: int,
+    tool_capable_surfaces: set[str] | None = None,
+) -> list[Finding]:
+    """Tool-capable owner surfaces must not deny the existence of
+    their tool path.
+
+    The no-tool prompt means "no tool ran for this message", not "this
+    channel has no tool loop". This catches the observed failure where
+    Maez replied with code and told the owner to save it manually
+    instead of truthfully saying it had not made the change yet.
+
+    Narrow by surface so a plain synthesis-only UI endpoint is not
+    falsely failed for saying it lacks direct file-write tools. Today
+    Telegram is the trace-backed tool-capable surface; web joins this
+    set after its direct trace/tool-call parity lands.
+    """
+    surface = trace.get("surface", "")
+    capable = tool_capable_surfaces or DEFAULT_TOOL_CAPABLE_SURFACES
+    if surface not in capable:
+        return []
+    excerpt = trace.get("final_text_excerpt") or ""
+    m = _TOOL_ACCESS_DENIAL_RE.search(excerpt) or _MANUAL_SAVE_RE.search(excerpt)
+    if not m:
+        return []
+    return [_finding(
+        trace, file, line,
+        verdict="FAIL", check="tool_access_self_denial",
+        json_path="final_text_excerpt",
+        matched_value=m.group(0),
+        reason=(
+            f"surface={surface!r} is tool-capable, but the final reply "
+            "denied tool access or pushed manual file saving. It should "
+            "say no tool ran this turn, offer the tool path, or report a "
+            "specific denied/pending/error tool result."
+        ),
+    )]
+
+
 _VISION_CLAIM_RE = re.compile(
     r"\b(llama-server-vision|vision\s+(?:server|service|pipeline)|"
     r"screen\s+(?:perception|observation))\b",
@@ -412,6 +472,7 @@ CHECKS = (
     "latency",
     "nonterminating_tool",
     "timeout_honesty",
+    "tool_access_self_denial",
     "stale_claims",
 )
 
@@ -555,6 +616,9 @@ def run(
         ))
         findings.extend(check_nonterminating_tool(trace, file=sf, line=sl))
         findings.extend(check_timeout_honesty(trace, file=sf, line=sl))
+        findings.extend(check_tool_access_self_denial(
+            trace, file=sf, line=sl,
+        ))
         findings.extend(check_stale_claims(
             trace, file=sf, line=sl, ground_truth=ground_truth,
         ))

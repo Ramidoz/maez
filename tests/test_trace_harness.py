@@ -4,7 +4,7 @@
 """Slice-2 deterministic trace harness contract tests.
 
 Pins:
-- The seven deterministic checks each emit a finding when violated and
+- The deterministic checks each emit a finding when violated and
   emit nothing on a clean trace.
 - Every finding carries provenance: trace_id, file, line, json_path,
   matched_value, reason. No exceptions.
@@ -308,6 +308,61 @@ class TimeoutHonestyCheck(unittest.TestCase):
         self.assertEqual(findings[0].verdict, "FAIL")
 
 
+class ToolAccessSelfDenialCheck(unittest.TestCase):
+    """A tool-capable surface must not convert "no tools ran this turn"
+    into "I have no tool loop here."
+    """
+
+    def test_telegram_tool_loop_denial_fails(self):
+        from scripts.validate.trace_harness import check_tool_access_self_denial
+
+        t = _trace(
+            surface="telegram_surface",
+            final_excerpt=(
+                "I haven't built it yet. I don't have a tool loop on this "
+                "channel to write the file directly."
+            ),
+        )
+        findings = check_tool_access_self_denial(t, file="x", line=1)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].verdict, "FAIL")
+        self.assertEqual(findings[0].check, "tool_access_self_denial")
+        self.assertIn("tool-capable", findings[0].reason)
+
+    def test_manual_save_instruction_on_telegram_fails(self):
+        from scripts.validate.trace_harness import check_tool_access_self_denial
+
+        t = _trace(
+            surface="telegram_surface",
+            final_excerpt="Here is the code. Save it to /home/rohit/maez/ui/x.html.",
+        )
+        findings = check_tool_access_self_denial(t, file="x", line=1)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].verdict, "FAIL")
+        self.assertIn("Save it to /home", findings[0].matched_value)
+
+    def test_honest_no_tool_turn_passes(self):
+        from scripts.validate.trace_harness import check_tool_access_self_denial
+
+        t = _trace(
+            surface="telegram_surface",
+            final_excerpt=(
+                "I haven't made that change yet. I can try the tool path "
+                "if you want."
+            ),
+        )
+        self.assertEqual(check_tool_access_self_denial(t, file="x", line=1), [])
+
+    def test_synthesis_only_surface_not_failed(self):
+        from scripts.validate.trace_harness import check_tool_access_self_denial
+
+        t = _trace(
+            surface="UI",
+            final_excerpt="I don't have a tool loop on this channel.",
+        )
+        self.assertEqual(check_tool_access_self_denial(t, file="x", line=1), [])
+
+
 class StaleClaimsCheck(unittest.TestCase):
     """Runtime ground-truth-backed stale-claim detection."""
 
@@ -452,6 +507,7 @@ class FindingProvenance(unittest.TestCase):
             check_stale_claims,
             check_terminal_state,
             check_timeout_honesty,
+            check_tool_access_self_denial,
         )
 
         ALL_CHECKS = [
@@ -485,6 +541,14 @@ class FindingProvenance(unittest.TestCase):
                 _trace(
                     tool_calls=[{"name": "x", "args_summary": "y", "status": "timeout"}],
                     final_excerpt="completed successfully",
+                ),
+                {"file": "f", "line": 9},
+            ),
+            (
+                check_tool_access_self_denial,
+                _trace(
+                    surface="telegram_surface",
+                    final_excerpt="I don't have a tool loop on this channel.",
                 ),
                 {"file": "f", "line": 9},
             ),

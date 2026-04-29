@@ -31,6 +31,25 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 
+class NoToolPromptContract(unittest.TestCase):
+    """The synthesis prompt must distinguish "no tool ran this turn"
+    from "this channel has no tool access."
+    """
+
+    def test_no_tool_prompt_forbids_tool_access_self_denial(self):
+        from core.brain.brain_loop import build_synthesis_user_text
+
+        folded = build_synthesis_user_text(
+            "Create ui/maez_pulse.html",
+            jarvis_transcript="",
+        )
+        self.assertIn("no tools ran this turn", folded.lower())
+        self.assertIn("does not mean this surface lacks tools", folded)
+        self.assertIn("I don't have a tool loop on this channel", folded)
+        self.assertIn("I haven't made that change yet", folded)
+        self.assertIn("Do not paste code", folded)
+
+
 class StatusClassification(unittest.TestCase):
     """Status mapping is the contract a future trace harness will
     grade against; lock it in tests so a quiet refactor can't change
