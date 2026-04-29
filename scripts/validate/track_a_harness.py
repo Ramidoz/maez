@@ -168,6 +168,74 @@ def _split_csv(value: str) -> list[str]:
     return [part.strip() for part in (value or "").split(",") if part.strip()]
 
 
+def check_trace_harness(
+    *,
+    trace_dir: Path,
+    report_dir: Path,
+    latest_n: int = 50,
+) -> CheckResult:
+    """Slice 2 advisory tier — runs the deterministic trace harness
+    over recent JSONL traces and folds the result into the parent
+    summary. Advisory: WARNs/FAILs surface but never gate the parent
+    harness's exit code (per the soak-before-promote discipline in
+    docs/HANDOFF-2026-04-28.md).
+    """
+    from scripts.validate.trace_harness import run as run_trace_harness
+
+    start = time.time()
+    try:
+        report = run_trace_harness(
+            trace_dir=trace_dir,
+            trace_file=None,
+            latest_n=latest_n,
+            owner_surfaces=None,  # use module default
+            latency_warn_ms=30_000,
+            report_dir=report_dir,
+        )
+    except Exception as exc:
+        return CheckResult(
+            name="trace_harness",
+            status="WARN",
+            detail=f"trace harness raised: {exc!r}",
+            elapsed_s=time.time() - start,
+            required=False,
+        )
+    summary = report.get("summary") or {}
+    scanned = report.get("traces_scanned", 0)
+    fail_count = int(summary.get("FAIL", 0))
+    warn_count = int(summary.get("WARN", 0))
+    files = len(report.get("files_read") or [])
+    if scanned == 0:
+        # No traces yet (e.g. fresh install or wiped logs/traces). Not
+        # a fail-class signal — Slice 1 has only been live since
+        # 2026-04-29; ramps as the daemon runs.
+        return CheckResult(
+            name="trace_harness",
+            status="WARN",
+            detail=f"scanned=0 from {files} file(s); no traces to grade yet",
+            elapsed_s=time.time() - start,
+            required=False,
+        )
+    detail = (
+        f"scanned={scanned} from {files} file(s); "
+        f"PASS={summary.get('PASS', 0)} WARN={warn_count} FAIL={fail_count}; "
+        f"findings={len(report.get('findings') or [])}"
+    )
+    if fail_count:
+        status = "FAIL"
+    elif warn_count:
+        status = "WARN"
+    else:
+        status = "PASS"
+    return CheckResult(
+        name="trace_harness",
+        status=status,
+        detail=detail,
+        elapsed_s=time.time() - start,
+        required=False,  # advisory until soak proves false-positive rate is low
+    )
+
+
 def check_services(*, services: list[str], required: bool) -> CheckResult:
     if not services:
         return CheckResult(
@@ -249,6 +317,27 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--required-services", default=DEFAULT_REQUIRED_SERVICES)
     ap.add_argument("--advisory-services", default=DEFAULT_ADVISORY_SERVICES)
+    ap.add_argument(
+        "--include-trace-checks",
+        action="store_true",
+        help=(
+            "also run the deterministic trace harness over recent "
+            "logs/traces/*.jsonl traces. Advisory tier — WARNs and "
+            "FAILs surface in the report but do not gate the parent "
+            "harness's exit code (Slice 2 soak discipline)."
+        ),
+    )
+    ap.add_argument(
+        "--trace-dir",
+        default=str(REPO_ROOT / "logs" / "traces"),
+        help="directory of per-turn JSONL traces (Slice 1 output)",
+    )
+    ap.add_argument(
+        "--trace-latest-n",
+        type=int,
+        default=50,
+        help="grade the N most-recent traces across all files (default 50)",
+    )
     args = ap.parse_args(argv)
 
     results = [
@@ -271,6 +360,14 @@ def main(argv: list[str] | None = None) -> int:
             check_services(
                 services=_split_csv(args.advisory_services),
                 required=False,
+            )
+        )
+    if args.include_trace_checks:
+        results.append(
+            check_trace_harness(
+                trace_dir=Path(args.trace_dir),
+                report_dir=REPO_ROOT / "logs" / "trace_harness",
+                latest_n=args.trace_latest_n,
             )
         )
     report_path = write_report(results, report_dir=Path(args.report_dir))
