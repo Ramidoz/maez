@@ -241,7 +241,11 @@ class TelegramAdapter(BasePlatformAdapter):
         self._webhook_mode: bool = False
         self._mention_patterns = self._compile_mention_patterns()
         self._reply_to_mode: str = getattr(config, 'reply_to_mode', 'first') or 'first'
-        self._disable_link_previews: bool = self._coerce_bool_extra("disable_link_previews", False)
+        # Default off for Maez: evidence URLs (API endpoints, docs,
+        # trace links) should stay as plain text. Telegram otherwise
+        # turns JSON/API links into document-preview cards, which looks
+        # like Maez sent an attachment.
+        self._disable_link_previews: bool = self._coerce_bool_extra("disable_link_previews", True)
         # Buffer rapid/album photo updates so Telegram image bursts are handled
         # as a single MessageEvent instead of self-interrupting multiple turns.
         self._media_batch_delay_seconds = float(os.getenv("HERMES_TELEGRAM_MEDIA_BATCH_DELAY_SECONDS", "0.8"))

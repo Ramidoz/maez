@@ -175,6 +175,27 @@ class BuildTelegramAdapter(unittest.TestCase):
         # Platform auto-detected by the subclass
         self.assertEqual(adapter.platform, Platform.TELEGRAM)
 
+    def test_link_previews_disabled_by_default(self):
+        adapter = build_telegram_adapter(
+            token="fake_token", authorized_users=[42], daemon=_FakeDaemon(),
+        )
+
+        self.assertTrue(adapter._disable_link_previews)
+        self.assertTrue(adapter._link_preview_kwargs())
+
+    def test_link_previews_can_be_reenabled_by_config(self):
+        cfg = PlatformConfig(
+            enabled=True,
+            token="fake_token",
+            extra={"authorized_users": [42], "disable_link_previews": False},
+        )
+        from skills.surface.telegram_adapter import TelegramAdapter
+
+        adapter = TelegramAdapter(cfg)
+
+        self.assertFalse(adapter._disable_link_previews)
+        self.assertEqual(adapter._link_preview_kwargs(), {})
+
 
 if __name__ == "__main__":
     unittest.main()
