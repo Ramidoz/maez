@@ -61,6 +61,19 @@ class ToolPlannerManifestContract(unittest.TestCase):
         self.assertIn("Do NOT answer with code for", src)
         self.assertIn("prose without write_any_file is not action", src)
 
+    def test_manifest_contains_endpoint_discovery_rule(self):
+        src = (_REPO / "core" / "brain" / "brain_loop.py").read_text()
+        self.assertIn("LOCAL-ENDPOINT DISCOVERY RULE", src)
+        self.assertIn("do\nnot guess the port", src)
+        self.assertIn("inspect\nthe route definitions", src)
+        self.assertIn("active listeners", src)
+        self.assertIn("prefer a same-origin relative fetch", src)
+        self.assertIn("hardcoded localhost ports", src)
+        self.assertIn("pivot to route\ndiscovery", src)
+        self.assertNotIn("LOCAL SERVICE MAP", src)
+        self.assertNotIn("maez-web Flask/cockpit backend: http://127.0.0.1:11437", src)
+        self.assertNotIn("GPU stats endpoint: http://127.0.0.1:11437/api/v1/gpu", src)
+
 
 class StatusClassification(unittest.TestCase):
     """Status mapping is the contract a future trace harness will
