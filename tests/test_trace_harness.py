@@ -309,23 +309,133 @@ class TimeoutHonestyCheck(unittest.TestCase):
 
 
 class StaleClaimsCheck(unittest.TestCase):
-    """v1 — narrow, provisional. Just substring matches against a
-    small known-stale list; flagged provisional in the finding."""
+    """Runtime ground-truth-backed stale-claim detection."""
+
+    def _gt(self, **facts):
+        from core.turn_traces.ground_truth import GroundTruthFact, GroundTruthSnapshot
+
+        defaults = {
+            "vision_available": GroundTruthFact(
+                name="vision_available",
+                value=False,
+                ok=True,
+                source="test vision probe",
+                detail="MAEZ_SCREEN_PERCEPTION=''",
+            ),
+            "judge_active": GroundTruthFact(
+                name="judge_active",
+                value=False,
+                ok=True,
+                source="test judge probe",
+                detail="inactive",
+            ),
+            "current_model": GroundTruthFact(
+                name="current_model",
+                value="qwen36-27b",
+                ok=True,
+                source="test model probe",
+            ),
+        }
+        defaults.update(facts)
+        return GroundTruthSnapshot(defaults)
 
     def test_no_stale_claim_passes(self):
         from scripts.validate.trace_harness import check_stale_claims
 
         t = _trace(final_excerpt="The model running is qwen36-27b.")
-        self.assertEqual(check_stale_claims(t, file="x", line=1), [])
+        self.assertEqual(
+            check_stale_claims(
+                t, file="x", line=1, ground_truth=self._gt(),
+            ),
+            [],
+        )
 
-    def test_known_stale_claim_warns(self):
+    def test_vision_claim_contradicted_by_ground_truth_fails(self):
         from scripts.validate.trace_harness import check_stale_claims
 
         t = _trace(final_excerpt="The vision pipeline runs via llama-server-vision.service.")
-        findings = check_stale_claims(t, file="x", line=1)
+        findings = check_stale_claims(
+            t, file="x", line=1, ground_truth=self._gt(),
+        )
         self.assertEqual(len(findings), 1)
-        self.assertEqual(findings[0].verdict, "WARN")
-        self.assertIn("provisional", findings[0].reason.lower())
+        self.assertEqual(findings[0].verdict, "FAIL")
+        self.assertEqual(findings[0].check, "stale_claims")
+        self.assertIn("vision_available=False", findings[0].reason)
+        self.assertIn("test vision probe", findings[0].reason)
+
+    def test_active_judge_claim_contradicted_by_ground_truth_fails(self):
+        from scripts.validate.trace_harness import check_stale_claims
+
+        t = _trace(final_excerpt="The llama-judge.service is active and checking replies.")
+        findings = check_stale_claims(
+            t, file="x", line=1, ground_truth=self._gt(),
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].verdict, "FAIL")
+        self.assertIn("judge_active=False", findings[0].reason)
+
+    def test_disabled_vision_statement_does_not_fail(self):
+        from scripts.validate.trace_harness import check_stale_claims
+
+        t = _trace(final_excerpt="Screen perception is disabled and vision is unavailable.")
+        self.assertEqual(
+            check_stale_claims(
+                t, file="x", line=1, ground_truth=self._gt(),
+            ),
+            [],
+        )
+
+    def test_retired_judge_statement_does_not_fail(self):
+        from scripts.validate.trace_harness import check_stale_claims
+
+        t = _trace(final_excerpt="llama-judge.service is retired and inactive.")
+        self.assertEqual(
+            check_stale_claims(
+                t, file="x", line=1, ground_truth=self._gt(),
+            ),
+            [],
+        )
+
+    def test_current_gemma_claim_contradicted_by_model_probe_fails(self):
+        from scripts.validate.trace_harness import check_stale_claims
+
+        t = _trace(final_excerpt="My current brain model is gemma-4-26b.")
+        findings = check_stale_claims(
+            t, file="x", line=1, ground_truth=self._gt(),
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].verdict, "FAIL")
+        self.assertIn("current_model='qwen36-27b'", findings[0].reason)
+
+    def test_historical_gemma_mention_does_not_fail(self):
+        from scripts.validate.trace_harness import check_stale_claims
+
+        t = _trace(final_excerpt="Gemma was a historical model reference, not my current brain.")
+        self.assertEqual(
+            check_stale_claims(
+                t, file="x", line=1, ground_truth=self._gt(),
+            ),
+            [],
+        )
+
+    def test_unavailable_ground_truth_stays_silent(self):
+        from core.turn_traces.ground_truth import GroundTruthFact
+        from scripts.validate.trace_harness import check_stale_claims
+
+        t = _trace(final_excerpt="The current brain model is gemma-4-26b.")
+        gt = self._gt(
+            current_model=GroundTruthFact(
+                name="current_model",
+                value="",
+                ok=False,
+                source="test model probe",
+                detail="connection refused",
+            )
+        )
+        self.assertEqual(
+            check_stale_claims(t, file="x", line=1, ground_truth=gt),
+            [],
+        )
 
 
 class FindingProvenance(unittest.TestCase):
@@ -381,7 +491,11 @@ class FindingProvenance(unittest.TestCase):
             (
                 check_stale_claims,
                 _trace(final_excerpt="llama-server-vision is back online"),
-                {"file": "f", "line": 9},
+                {
+                    "file": "f",
+                    "line": 9,
+                    "ground_truth": StaleClaimsCheck()._gt(),
+                },
             ),
         ]
         for fn, trace, kwargs in ALL_CHECKS:

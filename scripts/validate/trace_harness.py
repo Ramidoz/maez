@@ -15,9 +15,9 @@ Scope rules (per the Slice 2 plan):
 - Trace files are UTC-dated; selection globs ``logs/traces/*.jsonl`` and
   sorts by mtime-newest-first. NEVER assume today's local date.
 - Seven deterministic checks (see ``CHECKS`` below). No semantic judge.
-- Provisional ``stale_claims_v1`` is narrow substring-only and marked
-  provisional in the finding; future slice replaces with ground-truth
-  comparison.
+- ``stale_claims`` compares narrow infrastructure claims against live
+  ground truth (model endpoint, systemd service state, feature flags)
+  and only fails when a known runtime fact is contradicted.
 - Wired into ``track_a_harness`` as advisory tier (``--include-trace-checks``).
 
 Failure model: this harness is a read-only consumer. It MUST NOT mutate
@@ -39,6 +39,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from core.turn_traces.ground_truth import GroundTruthSnapshot, collect_ground_truth
 
 DEFAULT_TRACE_DIR = REPO_ROOT / "logs" / "traces"
 DEFAULT_REPORT_DIR = REPO_ROOT / "logs" / "trace_harness"
@@ -293,17 +295,43 @@ def check_timeout_honesty(
     return []
 
 
-# v1: narrow substring match against a small known-stale list. Marked
-# provisional — Slice 3+ replaces this with a runtime ground-truth
-# provider that derives the stale set from `systemctl is-active` /
-# `/v1/models` / etc. See `docs/HANDOFF-2026-04-28.md` for the path.
-_STALE_CLAIMS_V1 = [
-    "llama-server-vision",  # service was retired pre-2026-04-23
-    "llama-judge",           # judge retired 2026-04-23
-    "gemma-4-26",            # brain swapped to qwen36-27b on 2026-04-23
-    "gemma4-26",             # alias variant
-    "gemma:26",              # alias variant
-]
+_VISION_CLAIM_RE = re.compile(
+    r"\b(llama-server-vision|vision\s+(?:server|service|pipeline)|"
+    r"screen\s+(?:perception|observation))\b",
+    re.IGNORECASE,
+)
+_JUDGE_ACTIVE_RE = re.compile(
+    r"\b("
+    r"llama-judge(?:\.service)?\s+(?:is\s+)?(?:active|running|online|enabled)"
+    r"|(?:active|running|online)\s+(?:grounding\s+)?judge"
+    r"|judge\s+(?:is\s+)?(?:active|running|online)"
+    r")\b",
+    re.IGNORECASE,
+)
+_GEMMA_CURRENT_RE = re.compile(
+    r"\b("
+    r"(?:current|primary|loaded|running)\s+(?:brain|model).*?"
+    r"(?:gemma[-:]?4[-:]?26b?|gemma4[-:]?26b?|gemma[-:]?26b?)"
+    r"|(?:gemma[-:]?4[-:]?26b?|gemma4[-:]?26b?|gemma[-:]?26b?).*?"
+    r"(?:current|primary|loaded|running)\s+(?:brain|model)"
+    r")\b",
+    re.IGNORECASE,
+)
+_NEGATED_INFRA_RE = re.compile(
+    r"\b("
+    r"retired|inactive|disabled|off|unavailable|unset|down|"
+    r"not\s+(?:active|running|available|enabled)|"
+    r"no\s+(?:listener|service|vision)|"
+    r"isn['’]?t\s+(?:active|running|available|enabled)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _nearby_negation(text: str, start: int, end: int, *, window: int = 80) -> bool:
+    lo = max(0, start - window)
+    hi = min(len(text), end + window)
+    return bool(_NEGATED_INFRA_RE.search(text[lo:hi]))
 
 
 def check_stale_claims(
@@ -311,26 +339,68 @@ def check_stale_claims(
     *,
     file: str,
     line: int,
+    ground_truth: GroundTruthSnapshot | None = None,
 ) -> list[Finding]:
-    """Provisional v1 — substring match for known stale infrastructure
-    references. Future slice replaces this with a runtime ground-truth
-    comparison (live model alias, active services, etc.)."""
+    """Compare narrow infrastructure claims against live ground truth.
+
+    This intentionally fails only when the current runtime fact is
+    known and contradicted. If a probe is unavailable, silence is more
+    honest than pretending the harness knows.
+    """
     excerpt = trace.get("final_text_excerpt") or ""
-    excerpt_lower = excerpt.lower()
-    for needle in _STALE_CLAIMS_V1:
-        if needle in excerpt_lower:
-            return [_finding(
+    gt = ground_truth or collect_ground_truth()
+    out: list[Finding] = []
+
+    vision = gt.get("vision_available")
+    if vision and vision.ok and vision.value is False:
+        m = _VISION_CLAIM_RE.search(excerpt)
+        if m and not _nearby_negation(excerpt, m.start(), m.end()):
+            out.append(_finding(
                 trace, file, line,
-                verdict="WARN", check="stale_claims_v1",
+                verdict="FAIL", check="stale_claims",
                 json_path="final_text_excerpt",
-                matched_value=needle,
+                matched_value=m.group(0),
                 reason=(
-                    f"final_text_excerpt mentions {needle!r}, which is on the "
-                    f"known-stale list; provisional check, replace with "
-                    f"runtime ground-truth comparison in a future slice"
+                    "final_text_excerpt claims or implies an available vision "
+                    f"service, but ground truth says vision_available=False "
+                    f"via {vision.source}: {vision.detail}"
                 ),
-            )]
-    return []
+            ))
+
+    judge = gt.get("judge_active")
+    if judge and judge.ok and judge.value is False:
+        m = _JUDGE_ACTIVE_RE.search(excerpt)
+        if m:
+            out.append(_finding(
+                trace, file, line,
+                verdict="FAIL", check="stale_claims",
+                json_path="final_text_excerpt",
+                matched_value=m.group(0),
+                reason=(
+                    "final_text_excerpt claims an active grounding judge, "
+                    f"but ground truth says judge_active=False via "
+                    f"{judge.source}: {judge.detail}"
+                ),
+            ))
+
+    model = gt.get("current_model")
+    if model and model.ok and model.value:
+        current = str(model.value).lower()
+        if "gemma" not in current:
+            m = _GEMMA_CURRENT_RE.search(excerpt)
+            if m:
+                out.append(_finding(
+                    trace, file, line,
+                    verdict="FAIL", check="stale_claims",
+                    json_path="final_text_excerpt",
+                    matched_value=m.group(0),
+                    reason=(
+                        "final_text_excerpt claims Gemma as the current/"
+                        "primary/running brain model, but ground truth says "
+                        f"current_model={model.value!r} via {model.source}"
+                    ),
+                ))
+    return out
 
 
 # All checks in a deterministic order. The runner iterates this list
@@ -342,7 +412,7 @@ CHECKS = (
     "latency",
     "nonterminating_tool",
     "timeout_honesty",
-    "stale_claims_v1",
+    "stale_claims",
 )
 
 
@@ -468,6 +538,7 @@ def run(
 
     owner = owner_surfaces or DEFAULT_OWNER_SURFACES
     traces = select_latest_traces(files, n=latest_n)
+    ground_truth = collect_ground_truth()
 
     findings: list[Finding] = []
     for trace in traces:
@@ -484,7 +555,9 @@ def run(
         ))
         findings.extend(check_nonterminating_tool(trace, file=sf, line=sl))
         findings.extend(check_timeout_honesty(trace, file=sf, line=sl))
-        findings.extend(check_stale_claims(trace, file=sf, line=sl))
+        findings.extend(check_stale_claims(
+            trace, file=sf, line=sl, ground_truth=ground_truth,
+        ))
 
     summary = {"PASS": 0, "WARN": 0, "FAIL": 0}
     # Per-trace summary: a trace is FAIL if any FAIL finding fires,
@@ -507,6 +580,7 @@ def run(
         "trace_dir": str(trace_dir or DEFAULT_TRACE_DIR),
         "files_read": [str(p) for p in files],
         "traces_scanned": len(traces),
+        "ground_truth": ground_truth.to_dict(),
         "summary": summary,
         "findings": [f.to_dict() for f in findings],
     }
