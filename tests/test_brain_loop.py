@@ -57,6 +57,9 @@ class ConversationalGate(unittest.TestCase):
             "What's Rs.2,00,000 in USD?",
             "What is the current INR to USD exchange rate?",
             "Convert ₹200000 to USD today",
+            "What is 300 euros in usd?",
+            "What is €300 in dollars?",
+            "Convert 20 pounds to yen",
         ):
             self.assertTrue(_should_run_jarvis_loop(text),
                 f"expected live-data loop to run: {text!r}")

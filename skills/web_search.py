@@ -295,7 +295,9 @@ def needs_web_search(text: str) -> bool:
         'update on', 'trending', 'breaking', 'score',
         'search the web', 'search for', 'google',
         'exchange rate', 'currency', 'convert', 'usd', 'inr',
-        'rupee', 'rupees', '₹',
+        'eur', 'gbp', 'cad', 'aud', 'jpy', 'cny',
+        'rupee', 'rupees', 'euro', 'euros', 'dollar', 'dollars',
+        'pound', 'pounds', 'yen', '₹', '€', '£', '¥',
     ]
     text_lower = text.lower()
     return any(t in text_lower for t in triggers)

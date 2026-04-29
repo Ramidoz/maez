@@ -65,10 +65,14 @@ class ToolPlannerManifestContract(unittest.TestCase):
         src = (_REPO / "core" / "brain" / "brain_loop.py").read_text()
         self.assertIn("fetch_url", src)
         self.assertIn("'fetch_url'", src)
+        self.assertIn("convert_currency", src)
+        self.assertIn("'convert_currency'", src)
         self.assertIn("Volatile numeric facts", src)
         self.assertIn("exchange rates", src)
         self.assertIn("currency conversions", src)
         self.assertIn("require live evidence", src)
+        self.assertIn("Use this FIRST for currency conversions", src)
+        self.assertIn("3-letter ISO currency codes", src)
         self.assertIn("do NOT answer from\n  training memory", src)
 
     def test_manifest_contains_endpoint_discovery_rule(self):

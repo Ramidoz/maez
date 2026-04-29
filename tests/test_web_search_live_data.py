@@ -13,6 +13,9 @@ class LiveDataSearchTriggers(unittest.TestCase):
             "What's Rs.2,00,000 in USD?",
             "What is the current INR to USD exchange rate?",
             "Convert ₹200000 to dollars today",
+            "What is 300 euros in usd?",
+            "What is €300 in dollars?",
+            "Convert 20 pounds to yen",
         ):
             with self.subTest(text=text):
                 self.assertTrue(needs_web_search(text))

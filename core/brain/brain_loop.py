@@ -185,7 +185,8 @@ _SYSTEM_NOUN_RE = _jarvis_re.compile(
     r'command|cmd|shell|bash|terminal|package|install|apt|snap|pip|npm|'
     r'git|commit|branch|repo|repository|node|python|ubuntu|kernel|'
     r'network|port|url|endpoint|api|http|https|curl|wget|run|check|'
-    r'currency|exchange|rate|rates|usd|inr|eur|gbp|rupee|rupees|rs\.?|₹|'
+    r'currency|exchange|rate|rates|usd|inr|eur|gbp|cad|aud|jpy|cny|'
+    r'rupee|rupees|euro|euros|dollar|dollars|pound|pounds|yen|rs\.?|₹|€|£|¥|'
     r'show\s+me|list\s+files|what.?s\s+running|status|health)\b',
     _jarvis_re.IGNORECASE,
 )
@@ -476,7 +477,12 @@ TOOLS YOU CAN USE (your body, your hands — these run on the owner's machine):
    facts like exchange rates, current prices, weather, scores, or stock
    quotes. Do not paste a Python/curl command for the owner to run when
    fetch_url can read the URL directly.
-7. lookup_proposal {"proposal_id":<int>,"reason":"<why>"}
+7. convert_currency {"amount":300,"from_currency":"EUR","to_currency":"USD","reason":"convert with live FX rate"}
+   Deterministically fetch a live daily FX rate and calculate the
+   conversion. Use this FIRST for currency conversions and exchange-rate
+   questions. Do not use web snippets or training memory for currency math
+   when this tool can answer directly.
+8. lookup_proposal {"proposal_id":<int>,"reason":"<why>"}
    Look up a proposal by ID from Maez's own evolution + dream stores.
    Use this FIRST when the owner asks about any numbered proposal,
    candidate, or self-edit (e.g. "what is proposal #25?", "tell me
@@ -505,6 +511,8 @@ Example: {"cmd":"flatpak install flathub org.openrgb.OpenRGB -y","reason":"insta
           "plain_english":"Install OpenRGB — the app that controls your PC's RGB lighting. Coming from the Flathub app store, sandboxed and easy to remove."}
 - read_file / search_files: MUST include "path" or "pattern".
 - web_search: MUST include a non-empty "query".
+- convert_currency: MUST include "amount", "from_currency", and
+  "to_currency" using 3-letter ISO currency codes such as EUR, USD, INR.
 - fetch_url: MUST include a non-empty "url" (must start with http:// or https://). Fetches and returns stripped text content of a web page — use when a web_search snippet isn't enough and you need the actual install guide, README, or documentation page.
 A call with missing params will be rejected at the gate, not sent to the owner.
 
@@ -524,6 +532,9 @@ Rules:
   require live evidence. Use web_search and/or fetch_url first. If live
   lookup fails, say you could not get a current value; do NOT answer from
   training memory or old cached estimates.
+- For currency conversion specifically, use convert_currency first. If
+  the owner writes common names/symbols ("euros", "rupees", "$", "₹"),
+  normalize them to ISO codes before calling the tool.
 - Prefer run_shell for any real system action. It's the most capable tool.
 - the owner asking you to do something IS authorization. Don't ask "should I?" — do it, then tell him what you did.
 - If a command fails, try to fix it and retry. Pivot if the first approach doesn't work.
@@ -907,6 +918,7 @@ def run_brain_loop(
         'run_shell', 'write_any_file',
         # Read-only — still supported as direct actions
         'query_system', 'read_file', 'search_files', 'web_search', 'fetch_url',
+        'convert_currency',
         'lookup_proposal',
         # Legacy aliases — delegate to run_shell / write_any_file internally
         'run_readonly_command', 'run_safe_command',

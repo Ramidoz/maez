@@ -296,7 +296,7 @@ ACTION_TIERS = {
     'run_shell': 2,
     'write_any_file': 2,
     # Pure read-only tools — Lane 0 always.
-    'web_search': 0, 'fetch_url': 0,
+    'web_search': 0, 'fetch_url': 0, 'convert_currency': 0,
     'read_file': 0, 'search_files': 0, 'query_system': 0,
     'lookup_proposal': 0,
     # Soul + memory tools — Lane 0; soul_editor has its own per-section guard.
@@ -1195,6 +1195,95 @@ class ActionEngine:
             return raw or "(no text content)"
         except Exception as e:
             return f"fetch_url error: {e}"
+
+    def convert_currency(
+        self,
+        amount: float,
+        from_currency: str,
+        to_currency: str,
+        reasoning: str,
+    ) -> ActionResult:
+        """Tier 0: Deterministic live currency conversion."""
+        return self._execute_action(
+            "convert_currency",
+            {
+                "amount": amount,
+                "from_currency": from_currency,
+                "to_currency": to_currency,
+            },
+            reasoning,
+            tier=0,
+        )
+
+    def _do_convert_currency(
+        self,
+        amount=1,
+        from_currency: str = "",
+        to_currency: str = "",
+        **_ignored,
+    ) -> str:
+        """Fetch a live daily FX rate and compute the conversion.
+
+        Uses Frankfurter's no-key public API by default. The endpoint is
+        configurable through MAEZ_FX_API_BASE so the provider can be
+        changed without code if the service moves or a local/self-hosted
+        provider is preferred.
+        """
+        try:
+            amount_f = float(str(amount).replace(",", ""))
+        except Exception:
+            return f"invalid amount: {amount!r}"
+
+        src = str(from_currency or "").strip().upper()
+        dst = str(to_currency or "").strip().upper()
+        if not src or not dst:
+            return "missing currency code"
+        if src == dst:
+            return f"{amount_f:.2f} {src} = {amount_f:.2f} {dst} (same currency)"
+
+        api_base = os.environ.get(
+            "MAEZ_FX_API_BASE",
+            "https://api.frankfurter.dev/v2/rates",
+        ).rstrip("/")
+        try:
+            import urllib.parse as _urllib_parse
+            import urllib.request as _urllib_req
+
+            query = _urllib_parse.urlencode({"base": src, "quotes": dst})
+            url = f"{api_base}?{query}"
+            req = _urllib_req.Request(
+                url,
+                headers={"User-Agent": "Maez/1.0 currency-converter"},
+            )
+            with _urllib_req.urlopen(req, timeout=10) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+
+            if isinstance(payload, list):
+                row = payload[0] if payload else {}
+                rate = row.get("rate")
+                date = row.get("date")
+                base = row.get("base", src)
+                quote = row.get("quote", dst)
+            elif isinstance(payload, dict):
+                rates = payload.get("rates") or {}
+                rate = rates.get(dst) or rates.get(dst.upper())
+                date = payload.get("date")
+                base = payload.get("base", src)
+                quote = dst
+            else:
+                return "currency conversion error: unexpected API response"
+
+            if rate is None:
+                return f"currency conversion error: no {src}->{dst} rate in response"
+
+            rate_f = float(rate)
+            converted = amount_f * rate_f
+            return (
+                f"{amount_f:,.2f} {base} = {converted:,.2f} {quote} "
+                f"(rate {rate_f:.6g}, date {date or 'unknown'}, source {api_base})"
+            )
+        except Exception as e:
+            return f"currency conversion error: {e}"
 
     # ------------------------------------------------------------------ #
     #  TIER 1 — Autonomous (deferred 30s)                                  #
