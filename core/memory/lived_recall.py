@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from core.memory.episodes import EpisodeStore
     from core.memory.relationship_graph import RelationshipGraph
+    from core.memory.working_self import GoalHierarchy
 
 # Tokens that carry no signal for keyword overlap scoring. Conservative —
 # only the most common English stopwords plus interrogatives.
@@ -285,14 +286,47 @@ _META_QUERY_KEYWORDS = frozenset({
 _META_QUERY_REFLECTION_BONUS = 3
 
 
-def _score_episode(query_tokens: set[str], ep: dict) -> int:
-    haystack_tokens = set(_tokenize(ep.get("title", "") + " " + ep.get("summary", "")))
+# Goal-alignment bonus scale. Goal relevance is in [0, 1]; multiplying
+# by 3 produces an integer bonus in {0, 1, 2, 3}. Calibration: typical
+# keyword-overlap scores for matched items are 1–3, so a strong direct
+# match (4+) still beats a fully goal-aligned but weakly matched item
+# (1+3=4 → still loses by ≥1). Among items with comparable keyword
+# overlap, goal alignment becomes the deciding factor — Conway 2000's
+# working-self modulating retrieval. Tunable here, NOT per-call: a
+# stable scalar keeps brief composition reproducible across surfaces.
+_GOAL_ALIGNMENT_BONUS_SCALE = 3
+
+
+def _goal_alignment_bonus(haystack_text: str, goals: "GoalHierarchy | None") -> int:
+    """Return an integer bonus reflecting how well ``haystack_text``
+    aligns with the current goal hierarchy. Zero when ``goals`` is
+    ``None`` or empty — preserving keyword-only behaviour for callers
+    that haven't opted in."""
+    if goals is None or goals.is_empty:
+        return 0
+    # Lazy import: working_self is a peer module; avoid creating an
+    # import cycle if the import order changes in the future.
+    from core.memory.working_self import goal_relevance
+
+    rel = goal_relevance(haystack_text, goals)
+    return int(round(_GOAL_ALIGNMENT_BONUS_SCALE * rel))
+
+
+def _score_episode(
+    query_tokens: set[str],
+    ep: dict,
+    *,
+    goals: "GoalHierarchy | None" = None,
+) -> int:
+    haystack_text = ep.get("title", "") + " " + ep.get("summary", "")
+    haystack_tokens = set(_tokenize(haystack_text))
     score = len(query_tokens & haystack_tokens)
     if (
         ep.get("source_kind") == "reflection"
         and (query_tokens & _META_QUERY_KEYWORDS)
     ):
         score += _META_QUERY_REFLECTION_BONUS
+    score += _goal_alignment_bonus(haystack_text, goals)
     return score
 
 
@@ -301,9 +335,14 @@ def _score_edge(
     edge: dict,
     subject_label: str,
     object_label: str,
+    *,
+    goals: "GoalHierarchy | None" = None,
 ) -> int:
-    haystack_tokens = set(_tokenize(f"{subject_label} {edge.get('relation', '')} {object_label}"))
-    return len(query_tokens & haystack_tokens)
+    haystack_text = f"{subject_label} {edge.get('relation', '')} {object_label}"
+    haystack_tokens = set(_tokenize(haystack_text))
+    score = len(query_tokens & haystack_tokens)
+    score += _goal_alignment_bonus(haystack_text, goals)
+    return score
 
 
 # ── graph traversal helpers ──────────────────────────────────────────
@@ -396,6 +435,7 @@ def build_lived_recall_brief(
     episode_store: "EpisodeStore",
     graph: "RelationshipGraph",
     max_items: int = 6,
+    goals: "GoalHierarchy | None" = None,
 ) -> str:
     """Return a compact, evidence-backed lived recall brief, or an
     empty string when nothing matches.
@@ -406,6 +446,13 @@ def build_lived_recall_brief(
     and open loops. A *live state unavailable* note is appended when
     the query asks about current system state — the graph layer
     never substitutes for live perception.
+
+    When ``goals`` is supplied (Conway 2000 working-self), each scored
+    item gets an additive bonus proportional to its alignment with the
+    goal hierarchy. Goal alignment is additive — it never lifts a
+    zero-keyword-overlap item into the brief. ``goals=None`` (default)
+    or an empty ``GoalHierarchy`` preserves the keyword-only path
+    exactly.
     """
     if not query or not query.strip():
         return ""
@@ -414,24 +461,33 @@ def build_lived_recall_brief(
         return ""
 
     # ── score and rank items ────────────────────────────────────────
+    # Score gate: items must clear keyword-overlap on their own merits;
+    # only after that gate is passed does the goal-alignment bonus
+    # apply. This prevents an aligned-but-off-topic item from leaking
+    # into a brief on goal alignment alone (the test
+    # ``test_unrelated_goals_do_not_pollute_brief`` enforces this).
     scored_episodes: list[_ScoredEpisode] = []
     for ep in episode_store.list_active() or []:
-        score = _score_episode(query_tokens, ep)
-        if score > 0:
-            scored_episodes.append(_ScoredEpisode(score=score, episode=ep))
+        keyword_score = _score_episode(query_tokens, ep)
+        if keyword_score <= 0:
+            continue
+        score = _score_episode(query_tokens, ep, goals=goals)
+        scored_episodes.append(_ScoredEpisode(score=score, episode=ep))
 
     scored_edges: list[_ScoredEdge] = []
     for edge, subj, obj in _all_active_edges_with_labels(graph):
-        score = _score_edge(query_tokens, edge, subj, obj)
-        if score > 0:
-            scored_edges.append(
-                _ScoredEdge(
-                    score=score,
-                    edge=edge,
-                    subject_label=subj,
-                    object_label=obj,
-                )
+        keyword_score = _score_edge(query_tokens, edge, subj, obj)
+        if keyword_score <= 0:
+            continue
+        score = _score_edge(query_tokens, edge, subj, obj, goals=goals)
+        scored_edges.append(
+            _ScoredEdge(
+                score=score,
+                edge=edge,
+                subject_label=subj,
+                object_label=obj,
             )
+        )
 
     # Note: there is intentionally NO early-return here even when both
     # pools are empty. Temporal-mode queries can still produce a brief

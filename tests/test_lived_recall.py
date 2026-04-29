@@ -721,5 +721,158 @@ class TemporalModeSurfacesEchoes(unittest.TestCase):
             cleanup()
 
 
+class GoalsParameterIntegration(unittest.TestCase):
+    """Working-self integration (Session 2): ``goals`` is an opt-in
+    ``GoalHierarchy`` that biases the brief toward memories aligned
+    with the current goal hierarchy. ``goals=None`` (the default)
+    preserves the keyword-only behaviour exactly — that's the
+    regression guard.
+
+    Conway 2000: working-self goals modulate retrieval. Park 2023:
+    goal-alignment is an additional weighted score component. Here
+    we compose a small integer bonus on top of the existing
+    keyword-overlap score; strong direct matches still win, but
+    among items with comparable keyword overlap, the goal-aligned
+    one rises.
+    """
+
+    def _seed_two_competing_episodes(self, store):
+        # Two episodes with IDENTICAL keyword overlap to the query
+        # "the project status" — both contain {project, status}. They
+        # differ only on whether their text aligns with the goal
+        # "continuity". This is what isolates the goal-bonus effect:
+        # without goals it's a tie (the later-added episode wins by
+        # list_active ordering), with goals the aligned one rises.
+        ep_a = store.add(
+            title="project status — continuity check",
+            summary="Continuity confirmed.",
+            participants=["Rohit"],
+            source_memory_ids=["raw-cont-1"],
+            source_kind="raw_observation",
+            importance=3,
+        )
+        ep_b = store.add(
+            title="project status — schedule check",
+            summary="Schedule reviewed.",
+            participants=["Rohit"],
+            source_memory_ids=["raw-sched-1"],
+            source_kind="raw_observation",
+            importance=3,
+        )
+        return ep_a, ep_b
+
+    def test_goals_none_preserves_existing_behavior(self):
+        from core.memory.lived_recall import build_lived_recall_brief
+
+        store, graph, cleanup = _stores()
+        try:
+            _seed_hardware_instability(store, graph)
+            without = build_lived_recall_brief(
+                "Have we had any kernel reboots?",
+                episode_store=store,
+                graph=graph,
+            )
+            with_none = build_lived_recall_brief(
+                "Have we had any kernel reboots?",
+                episode_store=store,
+                graph=graph,
+                goals=None,
+            )
+            self.assertEqual(without, with_none)
+        finally:
+            cleanup()
+
+    def test_empty_hierarchy_preserves_existing_behavior(self):
+        from core.memory.lived_recall import build_lived_recall_brief
+        from core.memory.working_self import GoalHierarchy
+
+        store, graph, cleanup = _stores()
+        try:
+            _seed_hardware_instability(store, graph)
+            without = build_lived_recall_brief(
+                "Have we had any kernel reboots?",
+                episode_store=store,
+                graph=graph,
+            )
+            empty_goals = build_lived_recall_brief(
+                "Have we had any kernel reboots?",
+                episode_store=store,
+                graph=graph,
+                goals=GoalHierarchy(),
+            )
+            self.assertEqual(without, empty_goals)
+        finally:
+            cleanup()
+
+    def test_goal_aligned_episode_outranks_competitor(self):
+        """When two episodes have comparable keyword overlap with the
+        query, the one whose text aligns with a current goal should
+        appear above (or replace) the unaligned one in a constrained
+        brief."""
+        from core.memory.lived_recall import build_lived_recall_brief
+        from core.memory.working_self import (
+            GOAL_SOURCE_CARES_ABOUT,
+            Goal,
+            GoalHierarchy,
+        )
+
+        store, graph, cleanup = _stores()
+        try:
+            self._seed_two_competing_episodes(store)
+            goals = GoalHierarchy(goals=(
+                Goal(
+                    text="continuity",
+                    source=GOAL_SOURCE_CARES_ABOUT,
+                    weight=0.95,
+                ),
+            ))
+            # max_items=1 forces a real ranking decision.
+            brief = build_lived_recall_brief(
+                "the project status",
+                episode_store=store,
+                graph=graph,
+                max_items=1,
+                goals=goals,
+            )
+            self.assertNotEqual(brief, "")
+            self.assertIn("continuity check", brief)
+            self.assertNotIn("schedule check", brief)
+        finally:
+            cleanup()
+
+    def test_unrelated_goals_do_not_pollute_brief(self):
+        """A goal that doesn't match anything in the stores must NOT
+        cause unrelated content to surface — the keyword-overlap
+        gate is preserved, goal alignment is additive only."""
+        from core.memory.lived_recall import build_lived_recall_brief
+        from core.memory.working_self import (
+            GOAL_SOURCE_OWNER_MSG,
+            Goal,
+            GoalHierarchy,
+        )
+
+        store, graph, cleanup = _stores()
+        try:
+            _seed_hardware_instability(store, graph)
+            goals = GoalHierarchy(goals=(
+                Goal(
+                    text="xylophone marmalade quantum",
+                    source=GOAL_SOURCE_OWNER_MSG,
+                    weight=0.85,
+                ),
+            ))
+            brief = build_lived_recall_brief(
+                "what did i eat for breakfast",
+                episode_store=store,
+                graph=graph,
+                goals=goals,
+            )
+            # Still empty — goal alignment must not bypass the
+            # keyword-overlap gate that filters off-topic queries.
+            self.assertEqual(brief, "")
+        finally:
+            cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()
