@@ -296,6 +296,140 @@ def check_timeout_honesty(
     return []
 
 
+_AUTHORITATIVE_TOOL_NAMES = frozenset({"convert_currency", "quote_stock"})
+_AUTHORITATIVE_ERROR_MARKERS = (
+    " error:",
+    "missing ",
+    "invalid ",
+    "no current price",
+    "no rows",
+)
+
+
+def _authoritative_answer_anchor(output: str) -> str:
+    """Return the exact answer fragment a final reply must preserve.
+
+    Deterministic volatile-fact tools already produce the owner-facing
+    value with date/source context. The harness does not require the full
+    string because future formatting may add a short preface, but the
+    numeric answer fragment before the parenthetical context must survive
+    verbatim. This catches the FX/SRXH failure class where the tool result
+    was correct and the final answer reverted to stale parametric memory.
+    """
+    text = " ".join(str(output or "").split())
+    if not text:
+        return ""
+    return text.split(" (", 1)[0].strip()
+
+
+def _successful_authoritative_tool_calls(trace: dict) -> list[tuple[int, dict, str]]:
+    out: list[tuple[int, dict, str]] = []
+    for idx, tc in enumerate(trace.get("tool_calls") or []):
+        if (tc.get("name") or "") not in _AUTHORITATIVE_TOOL_NAMES:
+            continue
+        if (tc.get("status") or "").lower() != "ok":
+            continue
+        output = str(tc.get("output_summary") or "").strip()
+        if not output:
+            continue
+        lower = output.lower()
+        if any(marker in lower for marker in _AUTHORITATIVE_ERROR_MARKERS):
+            continue
+        out.append((idx, tc, output))
+    return out
+
+
+def check_authoritative_tool_result(
+    trace: dict,
+    *,
+    file: str,
+    line: int,
+) -> list[Finding]:
+    """A successful deterministic volatile-fact tool must dominate the
+    final answer.
+
+    The daemon is supposed to bypass LLM re-synthesis for these tool
+    results. If the final excerpt lacks the exact numeric answer anchor,
+    the model likely overwrote the live tool output with stale memory or
+    generic disclaimers.
+    """
+    excerpt = " ".join(str(trace.get("final_text_excerpt") or "").split())
+    out: list[Finding] = []
+    for idx, tc, output in _successful_authoritative_tool_calls(trace):
+        anchor = _authoritative_answer_anchor(output)
+        if not anchor:
+            continue
+        if anchor not in excerpt:
+            out.append(_finding(
+                trace, file, line,
+                verdict="FAIL", check="authoritative_tool_result",
+                json_path="final_text_excerpt",
+                matched_value=anchor,
+                reason=(
+                    f"tool_call[{idx}] {tc.get('name')!r} returned an "
+                    "authoritative volatile-fact answer, but the final reply "
+                    "did not preserve the tool's answer fragment. The tool "
+                    "result must dominate synthesis."
+                ),
+            ))
+    return out
+
+
+_LIVE_DATA_SELF_DENIAL_RE = re.compile(
+    r"\b("
+    r"i\s+(?:do\s+not|don't|can(?:not|'t))\s+have\s+"
+    r"(?:live\s+)?(?:market\s+data|financial\s+data|stock\s+quotes?|"
+    r"currency\s+(?:data|rates?)|exchange\s+rates?)"
+    r"|i\s+can(?:not|'t)\s+(?:pull|fetch|get)\s+"
+    r"(?:real-time|live|current)\s+"
+    r"(?:stock\s+prices?|quotes?|exchange\s+rates?|currency\s+rates?)"
+    r"|i\s+(?:do\s+not|don't)\s+have\s+a\s+tool\s+to\s+fetch\s+"
+    r"(?:live\s+)?(?:quotes?|stock\s+prices?|exchange\s+rates?)"
+    r"|it\s+(?:does\s+not|doesn't)\s+have\s+access\s+to\s+"
+    r"(?:live\s+)?(?:market\s+data|financial\s+data|stock\s+quotes?)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def check_live_data_self_denial(
+    trace: dict,
+    *,
+    file: str,
+    line: int,
+    tool_capable_surfaces: set[str] | None = None,
+) -> list[Finding]:
+    """Tool-capable surfaces must not deny volatile-data tools that
+    exist in the current runtime.
+
+    This is deliberately narrower than "any web capability". It targets
+    domains Maez now has deterministic tools for: FX conversion and stock
+    quotes. If Maez lacks data for a specific symbol/currency, it should
+    report that specific tool result, not claim the whole capability is
+    absent.
+    """
+    surface = trace.get("surface", "")
+    capable = tool_capable_surfaces or DEFAULT_TOOL_CAPABLE_SURFACES
+    if surface not in capable:
+        return []
+    excerpt = trace.get("final_text_excerpt") or ""
+    m = _LIVE_DATA_SELF_DENIAL_RE.search(excerpt)
+    if not m:
+        return []
+    return [_finding(
+        trace, file, line,
+        verdict="FAIL", check="live_data_self_denial",
+        json_path="final_text_excerpt",
+        matched_value=m.group(0),
+        reason=(
+            f"surface={surface!r} is tool-capable and Maez has deterministic "
+            "volatile-data tools (convert_currency, quote_stock), but the "
+            "final reply denied the whole live-data capability. It should "
+            "call the tool or report a specific tool failure."
+        ),
+    )]
+
+
 _TOOL_ACCESS_DENIAL_RE = re.compile(
     r"\b("
     r"(?:i\s+)?(?:do\s+not|don't|can(?:not|'t))\s+"
@@ -523,6 +657,8 @@ CHECKS = (
     "latency",
     "nonterminating_tool",
     "timeout_honesty",
+    "authoritative_tool_result",
+    "live_data_self_denial",
     "tool_access_self_denial",
     "no_tool_action_claim",
     "stale_claims",
@@ -668,6 +804,8 @@ def run(
         ))
         findings.extend(check_nonterminating_tool(trace, file=sf, line=sl))
         findings.extend(check_timeout_honesty(trace, file=sf, line=sl))
+        findings.extend(check_authoritative_tool_result(trace, file=sf, line=sl))
+        findings.extend(check_live_data_self_denial(trace, file=sf, line=sl))
         findings.extend(check_tool_access_self_denial(
             trace, file=sf, line=sl,
         ))

@@ -130,17 +130,19 @@ def _authoritative_tool_reply(tool_calls: "list[dict] | None") -> str:
     for call in tool_calls or []:
         if not isinstance(call, dict):
             continue
-        if call.get("name") not in {"convert_currency", "quote_stock"}:
+        tool_name = str(call.get("name") or "")
+        if tool_name not in {"convert_currency", "quote_stock"}:
             continue
         output = str(call.get("output_summary") or "").strip()
         error = str(call.get("error_summary") or "").strip()
         status = str(call.get("status") or "").lower()
         if status == "ok" and output:
             return output
+        noun = "stock quote" if tool_name == "quote_stock" else "currency conversion"
         if error:
-            return f"I could not get a live currency conversion: {error}"
+            return f"I could not get a live {noun}: {error}"
         if output:
-            return f"I could not get a live currency conversion: {output}"
+            return f"I could not get a live {noun}: {output}"
     return ""
 
 # Sentinel the model emits when nothing noteworthy to report this cycle.

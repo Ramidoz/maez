@@ -308,6 +308,114 @@ class TimeoutHonestyCheck(unittest.TestCase):
         self.assertEqual(findings[0].verdict, "FAIL")
 
 
+class AuthoritativeToolResultCheck(unittest.TestCase):
+    """Deterministic volatile-fact tools must dominate final synthesis."""
+
+    def test_currency_tool_answer_missing_from_final_fails(self):
+        from scripts.validate.trace_harness import check_authoritative_tool_result
+
+        t = _trace(
+            tool_calls=[
+                {
+                    "name": "convert_currency",
+                    "args_summary": '{"amount": 300, "from_currency": "EUR", "to_currency": "USD"}',
+                    "status": "ok",
+                    "output_summary": (
+                        "300.00 EUR = 350.82 USD (rate 1.1694, date "
+                        "2026-04-29, source https://api.frankfurter.dev/v2/rates)"
+                    ),
+                }
+            ],
+            final_excerpt="300 EUR is approximately $327 USD based on current exchange rates.",
+        )
+        findings = check_authoritative_tool_result(t, file="x", line=1)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].verdict, "FAIL")
+        self.assertEqual(findings[0].check, "authoritative_tool_result")
+        self.assertIn("300.00 EUR = 350.82 USD", findings[0].matched_value)
+
+    def test_stock_tool_answer_present_in_final_passes(self):
+        from scripts.validate.trace_harness import check_authoritative_tool_result
+
+        t = _trace(
+            tool_calls=[
+                {
+                    "name": "quote_stock",
+                    "args_summary": '{"symbol": "SRXH"}',
+                    "status": "ok",
+                    "output_summary": (
+                        "SRXH.US = 0.1154 USD (as of 2026-04-29 18:08:32; "
+                        "source https://stooq.com/q/l/?s=srxh.us&f=sd2t2ohlcv&h&e=csv)"
+                    ),
+                }
+            ],
+            final_excerpt=(
+                "SRXH.US = 0.1154 USD (as of 2026-04-29 18:08:32; "
+                "source https://stooq.com/q/l/?s=srxh.us&f=sd2t2ohlcv&h&e=csv)"
+            ),
+        )
+        self.assertEqual(check_authoritative_tool_result(t, file="x", line=1), [])
+
+    def test_error_output_does_not_require_answer_anchor(self):
+        from scripts.validate.trace_harness import check_authoritative_tool_result
+
+        t = _trace(
+            tool_calls=[
+                {
+                    "name": "quote_stock",
+                    "args_summary": '{"symbol": "BAD"}',
+                    "status": "ok",
+                    "output_summary": "stock quote error: no current price for BAD",
+                }
+            ],
+            final_excerpt="I could not get a live quote: no current price for BAD.",
+        )
+        self.assertEqual(check_authoritative_tool_result(t, file="x", line=1), [])
+
+
+class LiveDataSelfDenialCheck(unittest.TestCase):
+    """Tool-capable surfaces must not deny current-data tools that exist."""
+
+    def test_stock_quote_capability_denial_fails_on_telegram(self):
+        from scripts.validate.trace_harness import check_live_data_self_denial
+
+        examples = [
+            "I don't have live market data. I don't have a tool to fetch live quotes.",
+            "It doesn't have access to live financial data feeds or stock quotes.",
+        ]
+        for final_excerpt in examples:
+            with self.subTest(final_excerpt=final_excerpt):
+                t = _trace(
+                    surface="telegram_surface",
+                    final_excerpt=final_excerpt,
+                )
+                findings = check_live_data_self_denial(t, file="x", line=1)
+                self.assertEqual(len(findings), 1)
+                self.assertEqual(findings[0].verdict, "FAIL")
+                self.assertEqual(findings[0].check, "live_data_self_denial")
+
+    def test_specific_tool_failure_passes(self):
+        from scripts.validate.trace_harness import check_live_data_self_denial
+
+        t = _trace(
+            surface="telegram_surface",
+            final_excerpt=(
+                "I tried the quote tool, but it returned no current price "
+                "for BAD. I should not guess."
+            ),
+        )
+        self.assertEqual(check_live_data_self_denial(t, file="x", line=1), [])
+
+    def test_synthesis_only_surface_not_failed(self):
+        from scripts.validate.trace_harness import check_live_data_self_denial
+
+        t = _trace(
+            surface="UI",
+            final_excerpt="I don't have live market data in this text-only endpoint.",
+        )
+        self.assertEqual(check_live_data_self_denial(t, file="x", line=1), [])
+
+
 class ToolAccessSelfDenialCheck(unittest.TestCase):
     """A tool-capable surface must not convert "no tools ran this turn"
     into "I have no tool loop here."
@@ -563,9 +671,11 @@ class FindingProvenance(unittest.TestCase):
 
     def test_every_check_emits_full_provenance(self):
         from scripts.validate.trace_harness import (
+            check_authoritative_tool_result,
             check_audit_required,
             check_hash_invariant,
             check_latency,
+            check_live_data_self_denial,
             check_nonterminating_tool,
             check_no_tool_action_claim,
             check_stale_claims,
@@ -605,6 +715,29 @@ class FindingProvenance(unittest.TestCase):
                 _trace(
                     tool_calls=[{"name": "x", "args_summary": "y", "status": "timeout"}],
                     final_excerpt="completed successfully",
+                ),
+                {"file": "f", "line": 9},
+            ),
+            (
+                check_authoritative_tool_result,
+                _trace(
+                    tool_calls=[
+                        {
+                            "name": "convert_currency",
+                            "args_summary": "{}",
+                            "status": "ok",
+                            "output_summary": "300.00 EUR = 350.82 USD (rate 1.1694)",
+                        }
+                    ],
+                    final_excerpt="300 EUR is about $327.",
+                ),
+                {"file": "f", "line": 9},
+            ),
+            (
+                check_live_data_self_denial,
+                _trace(
+                    surface="telegram_surface",
+                    final_excerpt="I don't have a tool to fetch live quotes.",
                 ),
                 {"file": "f", "line": 9},
             ),
