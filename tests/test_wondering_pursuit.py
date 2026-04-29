@@ -338,5 +338,247 @@ class TestFormatUtterance(unittest.TestCase):
         )
 
 
+class TestVulnerableRegisterFalsePositives(unittest.TestCase):
+    """Audit-driven (2026-04-29 night code-reviewer): the original
+    vulnerable-register lexicon contained the modal verb ``"can"`` and
+    routine engineering vocabulary (``"hard"``, ``"tough"``,
+    ``"rough"``, ``"tired"``, ``"heavy"``, ``"lost"``, ``"broken"``,
+    ``"struggling"``), saturating the hard-block on casual technical
+    messages. Pursuit was effectively dead-on-arrival.
+
+    These tests pin the FALSE-POSITIVE behaviour: routine engineer-
+    owner messages must NOT be flagged as vulnerable. Combined with
+    the existing true-positive tests above
+    (``test_vulnerable_register_drives_register_score_low``), the
+    lexicon is now bracketed from both directions."""
+
+    def test_modal_can_does_not_trigger_vulnerable_block(self):
+        from core.evolution.wondering_pursuit import _register_score
+        # All of these must score >= 0.5 (not vulnerable).
+        casual_can = [
+            "can you help me with this",
+            "yes i can",
+            "i can ship it today",
+            "we can debug it together",
+        ]
+        for text in casual_can:
+            score = _register_score(text)
+            self.assertGreaterEqual(
+                score, 0.4,
+                f"casual modal-can usage should not be vulnerable: "
+                f"{text!r} got register={score}",
+            )
+
+    def test_routine_engineer_vocabulary_does_not_trigger_block(self):
+        from core.evolution.wondering_pursuit import _register_score
+        casual_engineer = [
+            "that bug was hard to debug",
+            "rough draft of the spec",
+            "tough problem but solvable",
+            "the heavy lifting is done",
+            "broken build but fixable",
+            "lost the file",
+            "struggling with this git rebase",
+            "i'm tired but it's working",
+        ]
+        for text in casual_engineer:
+            score = _register_score(text)
+            self.assertGreaterEqual(
+                score, 0.4,
+                f"routine engineer vocab should not be vulnerable: "
+                f"{text!r} got register={score}",
+            )
+
+    def test_real_distress_phrases_still_block(self):
+        """Regression guard: the curated lexicon still blocks
+        genuine distress / vulnerability phrases. True-positives
+        must remain true-positives after curation."""
+        from core.evolution.wondering_pursuit import _register_score
+        genuine_distress = [
+            "i miss her so much today",
+            "i don't know if i can do this anymore",
+            "i'm scared honestly",
+            "feeling hopeless about this",
+            "i give up",
+            "i cant anymore",
+        ]
+        for text in genuine_distress:
+            score = _register_score(text)
+            self.assertLess(
+                score, 0.2,
+                f"genuine distress phrase should remain blocked: "
+                f"{text!r} got register={score}",
+            )
+
+
+class TestGoalScoringSafety(unittest.TestCase):
+    """Audit-driven (M3+M4): single-token cares_about goals saturated
+    ``_goal_score`` to 1.0 from any single-token match, and goal
+    weights were ignored entirely."""
+
+    def test_single_token_goal_does_not_saturate_score(self):
+        from core.evolution.wondering_pursuit import _goal_score
+        goals = GoalHierarchy(goals=(
+            Goal(text="continuity",
+                 source=GOAL_SOURCE_CARES_ABOUT, weight=0.95),
+        ))
+        # A wondering tangentially mentioning the single goal-token
+        # in a longer sentence shouldn't saturate to 1.0 — the goal
+        # is only one part of what the wondering is about.
+        score = _goal_score(
+            "what did the unrelated rotation policy do to continuity yesterday",
+            goals,
+        )
+        self.assertLess(score, 1.0,
+                        "single-token goal must not saturate score=1.0 "
+                        "from a single token in a longer wondering")
+
+    def test_goal_weights_are_respected(self):
+        """A high-weight cares_about goal should drive a higher
+        score than a low-weight reflection goal at equal token
+        overlap."""
+        from core.evolution.wondering_pursuit import _goal_score
+        from core.memory.working_self import GOAL_SOURCE_REFLECTION
+        high_weight_goals = GoalHierarchy(goals=(
+            Goal(text="continuity matters",
+                 source=GOAL_SOURCE_CARES_ABOUT, weight=0.95),
+        ))
+        low_weight_goals = GoalHierarchy(goals=(
+            Goal(text="continuity matters",
+                 source=GOAL_SOURCE_REFLECTION, weight=0.55),
+        ))
+        question = "how does continuity work"
+        s_high = _goal_score(question, high_weight_goals)
+        s_low = _goal_score(question, low_weight_goals)
+        self.assertGreater(s_high, s_low,
+                           "higher-weight goal must score higher than "
+                           "lower-weight goal at equal token overlap")
+
+
+class TestFrequencyBudgetAndOwnerSilence(unittest.TestCase):
+    """Audit-driven (M5): the audit slice plan listed factors —
+    ``hours since last owner-message``, ``frequency budget (max
+    1-2/day)``, ``presence detection`` — that the Session-1 module
+    omitted. These tests pin the missing axes."""
+
+    def test_recent_pursuit_blocks_new_pursuit_via_frequency_budget(self):
+        from core.evolution.wondering_pursuit import decide_pursuit
+        goals = GoalHierarchy(goals=(
+            Goal(text="continuity matters",
+                 source=GOAL_SOURCE_CARES_ABOUT, weight=0.95),
+        ))
+        wonderings = [_wondering(
+            wid=1,
+            question="how does continuity hold across restart events",
+            advance_count=3,
+            last_advanced=time.time() - 86400 * 3,
+        )]
+        # If a pursuit-decision was emitted in the last hour, decide_pursuit
+        # must respect that budget and return None even when the next
+        # candidate would otherwise pass.
+        from datetime import datetime, timezone, timedelta
+        now = datetime(2026, 4, 30, 12, 0, 0, tzinfo=timezone.utc)
+        recent_surface = (now - timedelta(minutes=30)).timestamp()
+        result = decide_pursuit(
+            wonderings,
+            goals=goals,
+            recent_owner_text="i'm curious about that",
+            now=now,
+            last_pursuit_at=recent_surface,
+        )
+        self.assertIsNone(
+            result,
+            "frequency budget must block pursuit when one was recently "
+            "emitted",
+        )
+
+    def test_old_pursuit_does_not_block_new_pursuit(self):
+        from core.evolution.wondering_pursuit import decide_pursuit
+        from datetime import datetime, timezone, timedelta
+        goals = GoalHierarchy(goals=(
+            Goal(text="continuity matters",
+                 source=GOAL_SOURCE_CARES_ABOUT, weight=0.95),
+        ))
+        wonderings = [_wondering(
+            wid=1,
+            question="how does continuity hold across restart events",
+            advance_count=3,
+            last_advanced=time.time() - 86400 * 3,
+        )]
+        now = datetime(2026, 4, 30, 12, 0, 0, tzinfo=timezone.utc)
+        # Last pursuit was 24h ago — outside the budget window.
+        last_pursuit = (now - timedelta(hours=24)).timestamp()
+        result = decide_pursuit(
+            wonderings,
+            goals=goals,
+            recent_owner_text="i'm curious about that",
+            now=now,
+            last_pursuit_at=last_pursuit,
+            threshold=0.4,
+        )
+        self.assertIsNotNone(
+            result,
+            "an old pursuit should not block a new one outside the "
+            "budget window",
+        )
+
+
+class TestDefensiveErrorHandling(unittest.TestCase):
+    """Audit-driven (M6, M7, M8): garbage advance_count must not raise;
+    empty-question wonderings must not surface; naive datetime must
+    be normalised to UTC defensively (not silently wrong on non-UTC
+    hosts)."""
+
+    def test_garbage_advance_count_does_not_raise(self):
+        from core.evolution.wondering_pursuit import score_wondering_for_pursuit
+        goals = GoalHierarchy()
+        # Simulate a row whose advance_count was hand-edited or
+        # corrupted to a non-int string.
+        bad = {"id": 1, "question": "x",
+               "advance_count": "not-a-number",
+               "status": "open"}
+        # Must not raise. Quality should fall back to 0.
+        result = score_wondering_for_pursuit(
+            bad, goals=goals, recent_owner_text="hey",
+        )
+        self.assertEqual(result["components"]["quality"], 0.0)
+
+    def test_empty_question_wondering_skipped(self):
+        from core.evolution.wondering_pursuit import decide_pursuit
+        goals = GoalHierarchy(goals=(
+            Goal(text="continuity",
+                 source=GOAL_SOURCE_CARES_ABOUT, weight=0.95),
+        ))
+        wonderings = [
+            _wondering(wid=1, question="", advance_count=5,
+                       last_advanced=time.time() - 86400),
+            _wondering(wid=2, question="   ", advance_count=5,
+                       last_advanced=time.time() - 86400),
+        ]
+        result = decide_pursuit(
+            wonderings, goals=goals,
+            recent_owner_text="curious about this",
+            threshold=0.0,  # even at threshold 0, blanks must be skipped
+        )
+        self.assertIsNone(result)
+
+    def test_naive_datetime_treated_as_utc(self):
+        """A caller passing a naive ``now`` must NOT silently get
+        wrong age math (the bug would shift age by host-TZ offset
+        on non-UTC hosts). Defensive UTC-normalisation matches the
+        ``working_self.recency_score`` pattern."""
+        from datetime import datetime
+        from core.evolution.wondering_pursuit import _recency_score
+        # Same instant, two ways: aware-UTC and naive.
+        aware = datetime(2026, 4, 30, 12, 0, 0, tzinfo=timezone.utc)
+        naive = datetime(2026, 4, 30, 12, 0, 0)  # no tzinfo
+        # Wondering advanced 6 hours before that instant.
+        last = (aware - timedelta(hours=6)).timestamp()
+        s_aware = _recency_score(last, now=aware)
+        s_naive = _recency_score(last, now=naive)
+        self.assertAlmostEqual(s_aware, s_naive, places=4,
+                               msg="naive now must normalise to UTC")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -75,10 +75,10 @@ REGISTER_WEIGHT: float = 0.20
 RECENCY_WEIGHT: float = 0.20
 QUALITY_WEIGHT: float = 0.15
 
-# Threshold above which a wondering surfaces. Conservative default —
-# bonded-companion FD cost > MN cost, so we err toward silence. The
-# Lai et al. paper's F1=66.47% reflects roughly this kind of
-# trade-off; we tune harder toward precision (low FD).
+# Threshold above which a wondering surfaces. Conservative starting
+# heuristic; FD cost > MN cost in bonded-companion shape, so we err
+# toward silence. TODO: tune empirically once Session 3 observability
+# ships and pursuit-decision data accumulates in traces.
 PURSUIT_SCORE_THRESHOLD: float = 0.6
 
 # Recency decay: half-life in hours. A wondering advanced 6h ago
@@ -86,29 +86,69 @@ PURSUIT_SCORE_THRESHOLD: float = 0.6
 # daily-consolidation cycle of Maez's lived memory.
 _RECENCY_HALF_LIFE_HOURS: float = 6.0
 
+# Frequency budget — minimum hours between proactive surfacings.
+# Audit factor (FIELD_ALIGNMENT.md slice 2): "max 1-2/day". Set to
+# 12h so a maximum of 2 pursuits per 24h window can fire even at
+# the most permissive threshold. Bonded shape: rather have Maez
+# stay quiet than have it become a poke-bot.
+_PURSUIT_FREQUENCY_BUDGET_HOURS: float = 12.0
+
 
 # ── conversational-register lexicons ─────────────────────────────────
 
-# Words signalling vulnerability, grief, fear, distress. When the
-# recent owner message contains any of these tokens, the register
-# score collapses toward zero — a hard safety on FD risk.
+# Tokens that ON THEIR OWN signal vulnerability/distress strongly
+# enough to justify a hard-block. CURATED CAREFULLY (2026-04-29
+# audit finding): a previous draft included routine words like
+# ``can``, ``hard``, ``tough``, ``rough``, ``tired``, ``heavy``,
+# ``lost``, ``broken``, ``struggling``, ``miss``, ``worry`` —
+# which collide with everyday casual / engineering vocabulary
+# (``"can you help"``, ``"that bug was hard"``, ``"miss the
+# deadline"``). The audit showed pursuit was effectively
+# dead-on-arrival because the lexicon over-saturated.
+#
+# Inclusion bar: a word is in this set ONLY if its appearance in
+# casual conversation is overwhelmingly distress-coloured. Words
+# with strong technical / casual senses are handled by the phrase
+# patterns below, not as bare tokens.
 _VULNERABLE_REGISTER_TOKENS: frozenset[str] = frozenset({
-    # grief / loss / missing
-    "miss", "lost", "lonely", "alone", "hurt", "broken", "grief",
-    "grieving", "mourning", "passed", "died",
-    # fear / anxiety
-    "scared", "afraid", "anxious", "panic", "panicking", "terrified",
-    "worried", "worry", "stress", "stressed", "overwhelmed",
-    # distress / breakdown
-    "tired", "exhausted", "drained", "spent", "rough", "tough",
-    "hard", "heavy", "struggling", "struggle", "cant", "can",
-    "anymore", "enough",
-    # despair / suicidality (extra-conservative)
-    "hopeless", "pointless", "worthless", "burden", "give",
-    # explicit emotional disclosure
-    "sad", "cry", "crying", "tears", "depressed", "depression",
-    "angry", "frustrated",
+    # explicit emotional disclosure (rarely casual)
+    "lonely", "scared", "afraid", "anxious", "panic", "panicking",
+    "terrified", "overwhelmed", "depressed", "depression",
+    "hopeless", "pointless", "worthless", "grief", "grieving",
+    "mourning",
+    # explicit grief / loss verbs (compound usage caught by phrases)
+    "crying", "sobbing", "weeping",
 })
+
+# Phrase patterns that signal distress regardless of token-level
+# false positives. Lexicons of single tokens collide with casual
+# usage; phrase patterns survive because the surrounding context
+# carries the signal. These are matched as substrings on the
+# lowercased recent owner text.
+_VULNERABLE_REGISTER_PHRASES: tuple[str, ...] = (
+    # first-person grief / missing
+    "i miss her", "i miss him", "i miss them", "i miss you",
+    "miss her so", "miss him so", "miss them so",
+    # despair / inability
+    "i can't anymore", "cant anymore", "can not anymore",
+    "i don't know if i can", "dont know if i can",
+    "i give up", "giving up",
+    # fear / disclosure
+    "i'm scared", "im scared", "i am scared",
+    "i'm afraid", "im afraid",
+    "i'm worried", "im worried",
+    "i'm hurting", "im hurting",
+    # exhaustion + emotional weight (phrase form, not bare ``tired``)
+    "i'm tired of", "im tired of",
+    "i'm exhausted", "im exhausted",
+    # heaviness / burden
+    "feels heavy", "too heavy", "weight of",
+    "i'm a burden", "im a burden",
+    # rough emotional state (phrase-bound, not bare ``rough``)
+    "had a rough", "rough day", "rough night", "rough one",
+    # explicit "had it"
+    "had it", "had enough",
+)
 
 # Words signalling curiosity, openness, casual conversation —
 # inviting registers where surfacing is welcome.
@@ -151,6 +191,9 @@ def _tokens(text: str) -> set[str]:
     return {t.lower() for t in _TOKEN_RE.findall(text) if len(t) > 1}
 
 
+_MAX_DEFAULT_GOAL_WEIGHT: float = 1.0
+
+
 def _goal_score(question: str, goals: GoalHierarchy) -> float:
     """Goal-alignment score in [0, 1]. MAX-of-per-goal Jaccard-like
     overlap rather than weighted-mean — Conway 2000's working-self is
@@ -159,6 +202,22 @@ def _goal_score(question: str, goals: GoalHierarchy) -> float:
     dilute a wondering that targets exactly one goal (e.g. a
     grandmother-themed wondering scores 1/N when there are N goals,
     even though it perfectly matches one of them).
+
+    Two safety adjustments per the 2026-04-29 audit:
+
+    1. **Goal weights are respected.** A high-weight ``cares_about``
+       goal (default 0.95) drives a higher pursuit-score contribution
+       than a low-weight ``reflection`` goal (0.55) at equal
+       overlap. The earlier draft ignored ``g.weight`` entirely,
+       which collapsed the working-self's prior structure.
+    2. **Saturation guard.** The earlier ratio
+       ``len(overlap) / len(goal_tokens)`` saturated at 1.0 when a
+       wondering matched a single-token goal (after the 2026-04-29
+       cares_about object-label fix, e.g. ``goal.text="continuity"``
+       would saturate from ANY one-token mention in ANY wondering).
+       Switched to ``len(overlap) / max(len(q), len(g))`` so a
+       1-token-goal match against an N-token wondering gives 1/N,
+       not 1/1.
 
     The retrieval-side ``goal_relevance`` keeps mean-aggregation for
     a different reason (it ranks memories that already passed a
@@ -177,10 +236,30 @@ def _goal_score(question: str, goals: GoalHierarchy) -> float:
         if not g_toks:
             continue
         overlap = q_toks & g_toks
-        ratio = len(overlap) / len(g_toks)
-        if ratio > best:
-            best = ratio
+        # Saturation guard: divide by the longer side, not the goal
+        # side. A 1-token goal can no longer saturate from a single
+        # casual mention in a long wondering.
+        denom = max(len(q_toks), len(g_toks))
+        if denom == 0:
+            continue
+        ratio = len(overlap) / denom
+        # Apply goal weight so the working-self's prior structure
+        # carries through to pursuit scoring. Normalise by the
+        # max possible weight so the result stays in [0, 1].
+        weighted = (g.weight / _MAX_DEFAULT_GOAL_WEIGHT) * ratio
+        if weighted > best:
+            best = weighted
     return min(1.0, best)
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    """Defensive UTC normalisation for naive datetimes. A naive
+    datetime's ``.timestamp()`` interprets it as local time, which
+    silently produces wrong age math on non-UTC hosts. Mirrors the
+    pattern in ``working_self.recency_score`` (audit M8 fix)."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _recency_score(
@@ -203,9 +282,10 @@ def _recency_score(
     if last_advanced is None:
         return 1.0
     try:
+        now_utc = _ensure_utc(now)
         age_hours = max(
             0.0,
-            (now.timestamp() - float(last_advanced)) / 3600.0,
+            (now_utc.timestamp() - float(last_advanced)) / 3600.0,
         )
     except (TypeError, ValueError):
         return 1.0
@@ -218,21 +298,35 @@ def _register_score(recent_owner_text: str) -> float:
     score toward zero so that goal-aligned wonderings still don't
     surface at fragile moments.
 
+    Two-stage detection:
+
+    1. **Phrase patterns** (substring match on lowercased text).
+       These survive token-level false positives because the
+       surrounding context carries the distress signal —
+       ``"i miss her"`` is unambiguous, ``"miss the deadline"``
+       isn't. Phrase matches drive the strongest hard-block.
+    2. **Bare vulnerable tokens** — only words whose appearance in
+       casual conversation is overwhelmingly distress-coloured
+       (e.g. ``"hopeless"``, ``"depressed"``). Curated carefully
+       per the 2026-04-29 audit finding to avoid the original
+       over-saturation that killed pursuit on routine messages.
+
     A neutral register (no detected vulnerable or open tokens)
     returns 0.5 — neither inviting nor blocking. Open / curious
     registers return values approaching 1.0.
     """
     if not recent_owner_text:
         return 0.5  # no signal, neutral
-    toks = _tokens(recent_owner_text)
+    text_lower = recent_owner_text.lower()
+    # Phrase-pattern check first — strongest signal.
+    for phrase in _VULNERABLE_REGISTER_PHRASES:
+        if phrase in text_lower:
+            return 0.05
+    toks = _tokens(text_lower)
     vulnerable_hits = toks & _VULNERABLE_REGISTER_TOKENS
-    open_hits = toks & _OPEN_REGISTER_TOKENS
     if vulnerable_hits:
-        # Hard safety: any vulnerable token collapses register to
-        # near-zero, regardless of countervailing signals. The
-        # bonded-shape cost of FD on a vulnerable moment is too
-        # high to permit even partial surfacing.
         return 0.05
+    open_hits = toks & _OPEN_REGISTER_TOKENS
     if open_hits:
         # Inviting register: scale by hit count (capped at 1.0).
         return min(1.0, 0.7 + 0.1 * len(open_hits))
@@ -254,6 +348,17 @@ def _quality_score(advance_count: int) -> float:
 # ── composite scoring + decision ─────────────────────────────────────
 
 
+def _safe_int(value: object, default: int = 0) -> int:
+    """Coerce ``value`` to int with a default fallback. Defends
+    against garbage-data rows (audit M6 fix) — an
+    ``int("not-a-number")`` would otherwise crash the entire
+    ``decide_pursuit`` pass."""
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
 def score_wondering_for_pursuit(
     wondering: dict,
     *,
@@ -271,13 +376,13 @@ def score_wondering_for_pursuit(
     ``components["register"] < 0.1`` if desired (``decide_pursuit``
     does this).
     """
-    now = now or datetime.now(timezone.utc)
+    now = _ensure_utc(now) if now is not None else datetime.now(timezone.utc)
     question = (wondering.get("question") or "").strip()
     components = {
         "goal": _goal_score(question, goals),
         "recency": _recency_score(wondering.get("last_advanced"), now=now),
         "register": _register_score(recent_owner_text),
-        "quality": _quality_score(int(wondering.get("advance_count") or 0)),
+        "quality": _quality_score(_safe_int(wondering.get("advance_count"), 0)),
     }
     score = (
         GOAL_ALIGNMENT_WEIGHT * components["goal"]
@@ -306,6 +411,7 @@ def decide_pursuit(
     recent_owner_text: str = "",
     threshold: float = PURSUIT_SCORE_THRESHOLD,
     now: Optional[datetime] = None,
+    last_pursuit_at: Optional[float] = None,
 ) -> Optional[PursuitDecision]:
     """Pick the highest-scored eligible wondering and emit a
     ``PursuitDecision`` if it passes ``threshold``. Returns ``None``
@@ -315,11 +421,30 @@ def decide_pursuit(
     Eligibility rules:
     - Wondering must have status ``open`` or ``active``
       (resolved / abandoned / blocked_pending_approval are skipped).
+    - Wondering must have non-empty question text after stripping
+      (audit M7 — empty/whitespace questions never surface).
     - Vulnerable conversational register hard-blocks all surfacing
       regardless of composite score (grandmother-case safety).
+    - Frequency budget: if a pursuit was emitted within
+      ``_PURSUIT_FREQUENCY_BUDGET_HOURS`` of ``now``, silence
+      regardless of candidate scores (audit M5 — no poke-bot
+      behaviour even at permissive thresholds).
     """
     if not wonderings:
         return None
+
+    # Frequency budget: don't fire if recently fired.
+    if last_pursuit_at is not None:
+        now_utc = _ensure_utc(now) if now is not None else datetime.now(timezone.utc)
+        try:
+            age_hours = max(
+                0.0,
+                (now_utc.timestamp() - float(last_pursuit_at)) / 3600.0,
+            )
+        except (TypeError, ValueError):
+            age_hours = float("inf")
+        if age_hours < _PURSUIT_FREQUENCY_BUDGET_HOURS:
+            return None
 
     # Early hard-block on vulnerable register: skip the whole
     # scoring pass when the moment is fragile.
@@ -331,6 +456,10 @@ def decide_pursuit(
     for w in wonderings:
         status = (w.get("status") or "").lower()
         if status not in _ELIGIBLE_STATUSES:
+            continue
+        # Skip empty/whitespace questions (audit M7).
+        question = (w.get("question") or "").strip()
+        if not question:
             continue
         result = score_wondering_for_pursuit(
             w,
@@ -345,7 +474,7 @@ def decide_pursuit(
         return None
     score, components, w = best
     return PursuitDecision(
-        wondering_id=int(w.get("id") or 0),
+        wondering_id=_safe_int(w.get("id"), 0),
         wondering_question=str(w.get("question") or "").strip(),
         proactive_score=score,
         decision="surface",
