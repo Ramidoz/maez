@@ -1065,7 +1065,7 @@ class ActionEngine:
         """Tier 0: Read any file under /home/rohit."""
         return self._execute_action("read_file", {"path": path}, reasoning, tier=0)
 
-    def _do_read_file(self, path: str) -> str:
+    def _do_read_file(self, path: str, **_ignored) -> str:
         # Session 11z: reads are an inalienable right. Only enforce
         # the /home/rohit/ boundary — covenant paths are readable.
         p = Path(path).resolve()

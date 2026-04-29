@@ -207,6 +207,27 @@ class DaemonHandleMessageContract(unittest.TestCase):
                 break
         self.assertTrue(found, "handle_message not found in maez_daemon.py")
 
+    def test_handle_message_keeps_tool_transcript_out_of_owner_text(self):
+        """Tool transcripts are synthesis context, not owner messages.
+
+        If adapters fold Jarvis/no-tool instructions into `text`, memory,
+        web-search, traces, and lived recall all treat internal scaffolding
+        as something the owner actually said. handle_message must instead
+        receive clean owner text and append transcript context as a system
+        message.
+        """
+        src = (_REPO / "daemon" / "maez_daemon.py").read_text()
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "handle_message":
+                body_src = ast.get_source_segment(src, node) or ""
+                self.assertIn("Tool transcripts are synthesis context", body_src)
+                self.assertIn('"role": "system"', body_src)
+                self.assertIn("_JARVIS_INSTRUCTION_BLOCK", body_src)
+                self.assertNotIn("build_synthesis_user_text(", body_src)
+                return
+        self.fail("handle_message not found in maez_daemon.py")
+
     def test_handle_message_ordering_strip_then_audit_then_store(self):
         """2026-04-23 Commit 7b invariant: stored == audited == displayed.
 

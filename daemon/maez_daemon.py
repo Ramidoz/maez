@@ -1503,6 +1503,26 @@ class MaezDaemon:
             messages.extend(history_to_messages(chat_history))
         except Exception as _hist_exc:
             logger.debug("chat_history threading skipped: %s", _hist_exc)
+        # Tool transcripts are synthesis context, not owner text. Earlier
+        # Telegram routing spliced this block into `text`, which polluted
+        # memory/search with internal instructions and made follow-up turns
+        # like "Proceed" lose the real action request. Keep owner text clean
+        # and give the model tool-state as a system note instead.
+        if transcript and transcript.strip():
+            try:
+                from core.brain_loop import _JARVIS_INSTRUCTION_BLOCK
+
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            f"{transcript}\n\n"
+                            f"{_JARVIS_INSTRUCTION_BLOCK}"
+                        ),
+                    }
+                )
+            except Exception as _tool_ctx_exc:
+                logger.debug("tool transcript context skipped: %s", _tool_ctx_exc)
         # ADR 0019 Phase 6 — lived recall brief. Built from the user's
         # text (the message they just sent), injected as a system note
         # AFTER chat_history threading and BEFORE premise_flag so the

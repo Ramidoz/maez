@@ -109,16 +109,15 @@ class WebGatedByFlagAndOwner(unittest.TestCase):
                       "under an owner_bridge check so public/guest "
                       "users do NOT trigger the owner's tool loop.")
 
-    def test_transcript_folded_via_build_synthesis_user_text(self):
-        """When a transcript comes back non-empty, the web caller
-        must fold it into the synthesis prompt using the same helper
-        maez_adapter.py uses for Telegram — so framing is identical
-        across surfaces."""
+    def test_transcript_added_as_system_context(self):
+        """When a transcript comes back non-empty, the web caller must
+        add it as system context. Folding tool scaffolding into user
+        text pollutes memory/search/trace with non-owner instructions."""
         src = (_REPO / "skills" / "web_interface.py").read_text()
-        self.assertIn("build_synthesis_user_text", src,
-                      "web /chat should fold brain_loop transcript "
-                      "via core.brain_loop.build_synthesis_user_text "
-                      "for cross-surface parity.")
+        self.assertIn("_JARVIS_INSTRUCTION_BLOCK", src)
+        self.assertIn('"role": "system"', src)
+        self.assertIn("not folded into the owner's user text", src)
+        self.assertNotIn("build_synthesis_user_text", src)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from pathlib import Path
 from typing import Optional
+
+_REPO = Path(__file__).resolve().parents[1]
 
 from skills.surface import (
     MessageEvent, Platform, PlatformConfig, SessionSource, build_session_key,
@@ -95,10 +98,12 @@ class HandlerRouting(unittest.TestCase):
         )
         result = asyncio.run(handler(event))
         self.assertEqual(result, "I heard you")
-        # Handler wraps the user text with the brain_loop's synthesis
-        # instructions (HARD INSTRUCTION when tools ran, NO-TOOL block
-        # when nothing ran). The original text must still be present.
-        self.assertIn("ping", daemon.last_text or "")
+        # Handler must keep owner text clean. Tool/no-tool scaffolding
+        # belongs in transcript/system context, not in the text that
+        # memory/search/trace treat as the owner's message.
+        self.assertEqual(daemon.last_text, "ping")
+        self.assertNotIn("TURN STATE", daemon.last_text or "")
+        self.assertNotIn("JARVIS TRANSCRIPT", daemon.last_text or "")
         self.assertEqual(daemon.last_source, SURFACE_NAME)
 
     def test_empty_text_returns_none(self):
@@ -148,6 +153,13 @@ class HandlerRouting(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertNotIn("Maelstrom", result,
             f"audit did not rewrite fabrication: {result!r}")
+
+    def test_adapter_does_not_fold_tool_scaffolding_into_owner_text(self):
+        src = (_REPO / "skills" / "surface" / "maez_adapter.py").read_text()
+        self.assertNotIn("build_synthesis_user_text", src)
+        self.assertNotIn("synthesis_text", src)
+        self.assertIn("text,", src)
+        self.assertIn("transcript=jarvis_transcript", src)
 
 
 class BuildTelegramAdapter(unittest.TestCase):

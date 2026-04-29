@@ -390,16 +390,6 @@ class MaezMessageHandler:
                 jarvis_transcript = ""
                 jarvis_tool_calls = []
 
-            # Fold the brain-loop transcript into the user-text seen by
-            # the synthesis call.
-            try:
-                from core.brain_loop import build_synthesis_user_text
-                synthesis_text = build_synthesis_user_text(
-                    text, jarvis_transcript,
-                )
-            except Exception:
-                synthesis_text = text
-
             # Synthesis stage — daemon.handle_message does the final text
             # reply with registry + residue + self-model blocks injected.
             # 2026-04-23 memory-integrity contract (Commit 1): the audit
@@ -412,7 +402,7 @@ class MaezMessageHandler:
                 reply = await loop.run_in_executor(
                     None,
                     lambda: self.daemon.handle_message(
-                        synthesis_text,
+                        text,
                         SURFACE_NAME,
                         transcript=jarvis_transcript or "",
                         chat_history=chat_history,

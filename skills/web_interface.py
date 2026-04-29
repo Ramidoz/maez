@@ -2702,9 +2702,10 @@ def chat():
 
     # 2026-04-23 Commit 5: opt-in web body parity. When enabled, the
     # owner-bridge /chat turn first runs a brain-loop iteration via
-    # the daemon's /internal/brain_loop endpoint. If any tools ran,
-    # their transcript gets folded into the synthesis prompt (same
-    # shape as telegram_surface's maez_adapter). Gated by env so the
+    # the daemon's /internal/brain_loop endpoint. Tool transcripts are
+    # added as system context, not folded into the owner's user text.
+    # This preserves clean memory/search/trace inputs while still
+    # giving synthesis the real tool results. Gated by env so the
     # default /chat behavior is unchanged — flip MAEZ_WEB_TOOL_LOOP=1
     # on the maez-web service to turn it on. Public/guest path is
     # NEVER routed through this — tool execution is owner-only.
@@ -2732,29 +2733,22 @@ def chat():
                     "web /chat: brain_loop ran (%d chars of transcript)",
                     len(jarvis_transcript_web),
                 )
-                # Fold transcript into the synthesis prompt using the
-                # same helper maez_adapter uses, so the LLM gets the
-                # same Jarvis-transcript framing as Telegram.
                 try:
-                    from core.brain_loop import build_synthesis_user_text
-                    synthesis_prompt = build_synthesis_user_text(
-                        message, jarvis_transcript_web,
+                    from core.brain_loop import _JARVIS_INSTRUCTION_BLOCK
+
+                    messages_list.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                f"{jarvis_transcript_web}\n\n"
+                                f"{_JARVIS_INSTRUCTION_BLOCK}"
+                            ),
+                        }
                     )
-                    # Replace the trailing user turn in messages_list
-                    # with the transcript-folded version so the single
-                    # LLM call below sees the real tool output.
-                    if (messages_list
-                            and messages_list[-1].get("role") == "user"):
-                        messages_list[-1]["content"] = synthesis_prompt
-                    else:
-                        messages_list.append({
-                            "role": "user",
-                            "content": synthesis_prompt,
-                        })
-                except Exception as _fold_exc:
+                except Exception as _ctx_exc:
                     logger.debug(
-                        "web /chat: transcript fold failed, using "
-                        "plain user text: %s", _fold_exc,
+                        "web /chat: transcript context failed, using "
+                        "plain user text: %s", _ctx_exc,
                     )
         except Exception as _bl_exc:
             logger.debug(
