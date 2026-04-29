@@ -338,6 +338,45 @@ _META_QUERY_REFLECTION_BONUS = 3
 _GOAL_ALIGNMENT_BONUS_SCALE = 3
 
 
+def _alignment_noise_tokens() -> frozenset[str]:
+    """Tokens that appear in nearly every Maez memory AND every
+    working-self goal, so they carry no alignment signal — they're
+    noise. Pulled dynamically from the identity layer so a future
+    deployment with a different owner name doesn't carry a stale
+    Rohit-shaped filter. Live-spin diagnosis (2026-04-29): the
+    OWNER PREFERENCE-monotony observed during the goal-only path
+    was rooted in name-coincidence, not real content alignment.
+    """
+    out: set[str] = {"maez"}
+    try:
+        from core.memory import identity as _id
+
+        for name in (_id.display_name(), _id.user_profile_id()):
+            if not name:
+                continue
+            for tok in _TOKEN_RE.findall(name):
+                t = tok.lower()
+                if len(t) > 1:
+                    out.add(t)
+    except Exception:
+        # Identity layer unavailable (e.g. tests). Fall back to the
+        # universal-only set; noise filter still helps via "maez".
+        pass
+    return frozenset(out)
+
+
+# Cache the noise-token set per-process. Identity rarely changes
+# inside a daemon's lifetime; recomputing per item is wasteful.
+_NOISE_TOKENS_CACHE: "frozenset[str] | None" = None
+
+
+def _cached_noise_tokens() -> frozenset[str]:
+    global _NOISE_TOKENS_CACHE
+    if _NOISE_TOKENS_CACHE is None:
+        _NOISE_TOKENS_CACHE = _alignment_noise_tokens()
+    return _NOISE_TOKENS_CACHE
+
+
 def _goal_alignment_bonus(
     haystack_text: str,
     goals: "GoalHierarchy | None",
@@ -353,6 +392,10 @@ def _goal_alignment_bonus(
     intersect with the supplied set — Gap 2 fix from the 2026-04-29
     spin: an episode that is itself the source of an open_loop goal
     must not get a self-referential bonus from its own goal-text.
+
+    Noise tokens (the canonical owner name + ``"maez"``) are filtered
+    from the alignment math so name-coincidence doesn't fake
+    alignment.
     """
     if goals is None or goals.is_empty:
         return 0
@@ -364,6 +407,7 @@ def _goal_alignment_bonus(
         haystack_text,
         goals,
         exclude_evidence_ids=exclude_evidence_ids,
+        noise_tokens=_cached_noise_tokens(),
     )
     return int(round(_GOAL_ALIGNMENT_BONUS_SCALE * rel))
 

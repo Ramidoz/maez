@@ -667,5 +667,69 @@ class TestScoreMemoryExcludesEvidence(unittest.TestCase):
         self.assertEqual(s_excluded, 0.0)
 
 
+class TestGoalRelevanceNoiseTokenFilter(unittest.TestCase):
+    """Universal anchor tokens (the owner's name, "maez") appear in
+    every memory and every working-self goal-text, so they carry no
+    alignment signal — they're noise. Filtering them via the
+    ``noise_tokens`` parameter prevents the goal-only path from
+    being dominated by name-coincidence (the 2026-04-29 live-spin
+    diagnosis explaining why every reflective query surfaced the
+    same 5 OWNER PREFERENCE items)."""
+
+    def test_noise_tokens_filtered_from_both_sides(self):
+        # Goal text contains noise tokens + one signal token.
+        # Memory text contains ONLY the noise tokens.
+        # Without filter: would partially overlap (false positive).
+        # With filter: noise stripped → no real overlap → 0.
+        goals = GoalHierarchy(goals=(
+            Goal(
+                text="rohit cares maez continuity",
+                source=GOAL_SOURCE_CARES_ABOUT,
+                weight=0.95,
+            ),
+        ))
+        memory_only_names = "rohit and maez talked together"
+        unfiltered = goal_relevance(memory_only_names, goals)
+        filtered = goal_relevance(
+            memory_only_names,
+            goals,
+            noise_tokens=("rohit", "maez"),
+        )
+        self.assertGreater(unfiltered, 0.0,
+                           "without filter, names create false alignment")
+        self.assertEqual(filtered, 0.0,
+                         "with filter, name-only memory has no alignment")
+
+    def test_noise_filter_preserves_real_alignment(self):
+        # Memory has both names AND a content token that matches a
+        # signal-bearing goal token. After filtering, real alignment
+        # via the signal token still scores.
+        goals = GoalHierarchy(goals=(
+            Goal(
+                text="rohit cares maez continuity",
+                source=GOAL_SOURCE_CARES_ABOUT,
+                weight=0.95,
+            ),
+        ))
+        memory = "the project's continuity must be preserved"
+        filtered = goal_relevance(
+            memory,
+            goals,
+            noise_tokens=("rohit", "maez"),
+        )
+        # With "rohit" and "maez" filtered, goal tokens reduce to
+        # {cares, continuity}. Memory has "continuity". Overlap = 1
+        # of 2 → ratio 0.5. Single-goal weighted-mean → 0.5.
+        self.assertAlmostEqual(filtered, 0.5, places=2)
+
+    def test_noise_filter_default_empty_preserves_old_behavior(self):
+        goals = GoalHierarchy(goals=(
+            Goal(text="alpha beta", source=GOAL_SOURCE_WANTS, weight=0.5),
+        ))
+        a = goal_relevance("alpha beta", goals)
+        b = goal_relevance("alpha beta", goals, noise_tokens=())
+        self.assertEqual(a, b)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1163,5 +1163,99 @@ class WorkingSelfDiversityViaMMR(unittest.TestCase):
             cleanup()
 
 
+class GoalAlignmentNoiseFiltering(unittest.TestCase):
+    """Live-spin diagnosis: every cares_about goal contains ``rohit``
+    and ``maez``, and every Maez memory contains ``rohit`` and ``maez``,
+    so token-overlap alignment fires on name-coincidence even when
+    content is unrelated. ``lived_recall`` should pull noise tokens
+    dynamically from the identity layer and filter them from
+    ``goal_relevance``."""
+
+    def test_name_only_memory_does_not_goal_align(self):
+        from core.memory.lived_recall import build_lived_recall_brief
+        from core.memory.working_self import (
+            GOAL_SOURCE_CARES_ABOUT,
+            Goal,
+            GoalHierarchy,
+        )
+
+        store, graph, cleanup = _stores()
+        try:
+            # Episode whose ONLY tokens shared with the cares_about
+            # goal are ``rohit`` and ``maez`` — name-coincidence,
+            # no real content alignment.
+            store.add(
+                title="rohit told maez lunch happened",
+                summary="Rohit and Maez chatted while eating sandwiches.",
+                participants=["Rohit"],
+                source_memory_ids=["raw-name-only"],
+                source_kind="raw_observation",
+            )
+            goals = GoalHierarchy(goals=(
+                Goal(
+                    text="Rohit cares deeply for truthful continuity inside Maez",
+                    source=GOAL_SOURCE_CARES_ABOUT,
+                    weight=0.95,
+                ),
+            ))
+            # Query has zero non-stopword overlap with the episode →
+            # keyword gate fails. The only path for the episode to
+            # surface is via goal-alignment. With name-token filtering,
+            # this episode has no real alignment with the goal → must
+            # NOT surface.
+            brief = build_lived_recall_brief(
+                "describe your inner architecture",
+                episode_store=store,
+                graph=graph,
+                goals=goals,
+            )
+            self.assertEqual(brief, "",
+                             "name-only memory must not goal-align")
+        finally:
+            cleanup()
+
+    def test_real_content_alignment_still_surfaces(self):
+        """Regression guard for Gap 1: legitimate content alignment
+        (continuity goal + continuity memory) must still surface
+        even after name-filtering removes the rohit/maez tokens."""
+        from core.memory.lived_recall import build_lived_recall_brief
+        from core.memory.working_self import (
+            GOAL_SOURCE_CARES_ABOUT,
+            Goal,
+            GoalHierarchy,
+        )
+
+        store, graph, cleanup = _stores()
+        try:
+            store.add(
+                title="continuity practice notes",
+                summary=(
+                    "Maez's continuity has held across the development "
+                    "trajectory; structural optimizations remain priorities."
+                ),
+                participants=["Maez"],
+                source_memory_ids=["raw-cont"],
+                source_kind="reflection",
+                importance=4,
+            )
+            goals = GoalHierarchy(goals=(
+                Goal(
+                    text="Rohit cares about continuity in Maez",
+                    source=GOAL_SOURCE_CARES_ABOUT,
+                    weight=0.95,
+                ),
+            ))
+            brief = build_lived_recall_brief(
+                "do you believe you have grown since then",
+                episode_store=store,
+                graph=graph,
+                goals=goals,
+            )
+            self.assertNotEqual(brief, "")
+            self.assertIn("continuity", brief.lower())
+        finally:
+            cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()

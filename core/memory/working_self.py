@@ -423,6 +423,7 @@ def goal_relevance(
     *,
     embedder: Optional[Callable[[str, str], float]] = None,
     exclude_evidence_ids: Sequence[str] = (),
+    noise_tokens: Sequence[str] = (),
 ) -> float:
     """Score how aligned a memory is to the current goal hierarchy.
 
@@ -445,11 +446,21 @@ def goal_relevance(
     episode against unrelated queries (Gap 2 fix from the 2026-04-29
     live spin).
 
+    ``noise_tokens`` are stripped from BOTH the memory text and each
+    goal's text before overlap is computed. Use case: the canonical
+    owner name and ``"maez"`` itself appear in nearly every memory
+    AND every working-self goal, so they carry no alignment signal
+    — they're noise. Filtering them prevents name-coincidence from
+    faking alignment (post-2026-04-29 live-spin diagnosis: the
+    diversity refinement insight that the actual root of OWNER
+    PREFERENCE monotony was generic-name token contamination).
+
     Empty hierarchy → 0.0 (no goal context to align with).
     """
     if goals.is_empty:
         return 0.0
-    mem_toks = _tokenize(memory_text)
+    noise_set = {t.lower() for t in noise_tokens} if noise_tokens else set()
+    mem_toks = _tokenize(memory_text) - noise_set
     if not mem_toks:
         return 0.0
     exclude_set = set(exclude_evidence_ids) if exclude_evidence_ids else set()
@@ -475,7 +486,7 @@ def goal_relevance(
     for g in goals.goals:
         if exclude_set and (set(g.evidence_ids) & exclude_set):
             continue
-        goal_toks = _tokenize(g.text)
+        goal_toks = _tokenize(g.text) - noise_set
         if not goal_toks:
             continue
         overlap = mem_toks & goal_toks
@@ -575,6 +586,7 @@ def score_memory(
     now: Optional[datetime] = None,
     embedder: Optional[Callable[[str, str], float]] = None,
     exclude_evidence_ids: Sequence[str] = (),
+    noise_tokens: Sequence[str] = (),
 ) -> float:
     """Composite Park 2023 + Conway 2000 retrieval score for one memory.
 
@@ -614,6 +626,7 @@ def score_memory(
         goals,
         embedder=embedder,
         exclude_evidence_ids=exclude_evidence_ids,
+        noise_tokens=noise_tokens,
     )
     total_w = (
         weights.recency + weights.tier + weights.relevance + weights.goal
