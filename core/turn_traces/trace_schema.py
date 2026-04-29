@@ -107,6 +107,13 @@ class Trace:
     user_text: str = ""
     memory_ids: list[str] = field(default_factory=list)
     lived_recall_ids: list[str] = field(default_factory=list)
+    # Working-self goal hierarchy assembled at this turn. Each entry is
+    # a compact ``"source: text"`` label (e.g.
+    # ``"cares_about: Rohit cares about truthful continuity"``). Empty
+    # by default; populated when ``MAEZ_WORKING_SELF`` is enabled and
+    # ``assemble_goals`` returns a non-empty hierarchy. Conway 2000 +
+    # Park 2023 — observability for goal-driven retrieval (Session 3).
+    working_self_goals: list[str] = field(default_factory=list)
     tool_calls: list[ToolCall] = field(default_factory=list)
     audit: AuditInfo = field(default_factory=AuditInfo)
     final_text_excerpt: str = ""

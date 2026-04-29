@@ -103,6 +103,7 @@ from core.model_config import PRIMARY_MODEL as MODEL  # single source of truth â
 from core.memory.episodes import EpisodeStore
 from core.memory.relationship_graph import RelationshipGraph
 from core.memory.lived_recall import build_lived_recall_brief
+from core.memory.working_self import assemble_goals
 from core.turn_traces import (
     AuditInfo,
     Trace,
@@ -1562,6 +1563,38 @@ class MaezDaemon:
         # enabled, set to "0" for fast rollback if it degrades chat
         # quality. Build-time exceptions are caught silently; synthesis
         # must continue regardless of the lived layer's health.
+        # Session 3 of working-self arc: assemble the current goal
+        # hierarchy and pass it through to the lived-recall builder.
+        # Conway 2000 working-self modulates retrieval; Park 2023 adds
+        # goal-alignment as a fourth scoring component. Gated by
+        # MAEZ_WORKING_SELF â€” DEFAULT DISABLED (opposite of
+        # MAEZ_LIVED_RECALL): this path is brand new, not yet
+        # probe-validated against regression. Operator opts in by
+        # setting "1". Failure is silent: the lived brief still
+        # builds without goals.
+        _goals = None
+        if os.environ.get("MAEZ_WORKING_SELF", "0") == "1":
+            try:
+                _goals = assemble_goals(
+                    episode_store=self.lived_episodes,
+                    graph=self.lived_graph,
+                    wants=getattr(self, "wants", None),
+                    recent_owner_text=text,
+                )
+            except Exception as _goals_exc:
+                logger.debug("working-self goal assembly failed: %s", _goals_exc)
+                _goals = None
+        # Trace: capture the assembled goals as compact "source: text"
+        # labels so the JSONL turn record answers "what did the
+        # working self believe was the focus?" An empty/None hierarchy
+        # leaves the field at its default empty list.
+        try:
+            if _goals is not None and not _goals.is_empty:
+                _trace.working_self_goals = [
+                    f"{g.source}: {g.text}" for g in _goals.goals
+                ]
+        except Exception as _trace_goals_exc:
+            logger.debug("trace working_self_goals capture skipped: %s", _trace_goals_exc)
         _lived_brief = ""
         if os.environ.get("MAEZ_LIVED_RECALL", "1") != "0":
             try:
@@ -1570,6 +1603,7 @@ class MaezDaemon:
                     episode_store=self.lived_episodes,
                     graph=self.lived_graph,
                     max_items=6,
+                    goals=_goals,
                 )
             except Exception as _lived_exc:
                 logger.debug("lived recall brief build failed: %s", _lived_exc)
