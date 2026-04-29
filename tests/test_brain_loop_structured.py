@@ -61,6 +61,16 @@ class ToolPlannerManifestContract(unittest.TestCase):
         self.assertIn("Do NOT answer with code for", src)
         self.assertIn("prose without write_any_file is not action", src)
 
+    def test_manifest_allows_fetch_url_for_live_numeric_facts(self):
+        src = (_REPO / "core" / "brain" / "brain_loop.py").read_text()
+        self.assertIn("fetch_url", src)
+        self.assertIn("'fetch_url'", src)
+        self.assertIn("Volatile numeric facts", src)
+        self.assertIn("exchange rates", src)
+        self.assertIn("currency conversions", src)
+        self.assertIn("require live evidence", src)
+        self.assertIn("do NOT answer from\n  training memory", src)
+
     def test_manifest_contains_endpoint_discovery_rule(self):
         src = (_REPO / "core" / "brain" / "brain_loop.py").read_text()
         self.assertIn("LOCAL-ENDPOINT DISCOVERY RULE", src)

@@ -185,6 +185,7 @@ _SYSTEM_NOUN_RE = _jarvis_re.compile(
     r'command|cmd|shell|bash|terminal|package|install|apt|snap|pip|npm|'
     r'git|commit|branch|repo|repository|node|python|ubuntu|kernel|'
     r'network|port|url|endpoint|api|http|https|curl|wget|run|check|'
+    r'currency|exchange|rate|rates|usd|inr|eur|gbp|rupee|rupees|rs\.?|₹|'
     r'show\s+me|list\s+files|what.?s\s+running|status|health)\b',
     _jarvis_re.IGNORECASE,
 )
@@ -469,7 +470,13 @@ TOOLS YOU CAN USE (your body, your hands — these run on the owner's machine):
    find -name pattern, max depth 5.
 5. web_search      {"query":"<search query relevant to the owner's current question>"}
    Real DuckDuckGo search. Use this whenever you need facts you don't have.
-6. lookup_proposal {"proposal_id":<int>,"reason":"<why>"}
+6. fetch_url       {"url":"https://...","reason":"<why>","max_chars":3000}
+   Fetch and strip a specific web page/API URL. Use after web_search when
+   snippets are not enough, or when the owner asks for volatile numeric
+   facts like exchange rates, current prices, weather, scores, or stock
+   quotes. Do not paste a Python/curl command for the owner to run when
+   fetch_url can read the URL directly.
+7. lookup_proposal {"proposal_id":<int>,"reason":"<why>"}
    Look up a proposal by ID from Maez's own evolution + dream stores.
    Use this FIRST when the owner asks about any numbered proposal,
    candidate, or self-edit (e.g. "what is proposal #25?", "tell me
@@ -512,6 +519,11 @@ Rules:
 - If the question is conversation/opinion/recall and needs no real data → write DONE immediately.
 - Never speculate or fabricate. If you don't know, USE web_search or run_shell.
 - web_search returns short snippets. If you need the full install guide, README, or PPA instructions from a URL you saw in search results, use fetch_url on that URL before proposing commands.
+- Volatile numeric facts (exchange rates, currency conversions, current
+  prices, stocks, crypto, weather, sports scores, "today/current/latest")
+  require live evidence. Use web_search and/or fetch_url first. If live
+  lookup fails, say you could not get a current value; do NOT answer from
+  training memory or old cached estimates.
 - Prefer run_shell for any real system action. It's the most capable tool.
 - the owner asking you to do something IS authorization. Don't ask "should I?" — do it, then tell him what you did.
 - If a command fails, try to fix it and retry. Pivot if the first approach doesn't work.
@@ -894,7 +906,7 @@ def run_brain_loop(
         # Session 11z primitives — the only two that really matter
         'run_shell', 'write_any_file',
         # Read-only — still supported as direct actions
-        'query_system', 'read_file', 'search_files', 'web_search',
+        'query_system', 'read_file', 'search_files', 'web_search', 'fetch_url',
         'lookup_proposal',
         # Legacy aliases — delegate to run_shell / write_any_file internally
         'run_readonly_command', 'run_safe_command',

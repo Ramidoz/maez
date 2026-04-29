@@ -52,6 +52,15 @@ class ConversationalGate(unittest.TestCase):
             self.assertTrue(_should_run_jarvis_loop(text),
                 f"expected loop to run: {text!r}")
 
+    def test_volatile_numeric_questions_run_loop(self):
+        for text in (
+            "What's Rs.2,00,000 in USD?",
+            "What is the current INR to USD exchange rate?",
+            "Convert ₹200000 to USD today",
+        ):
+            self.assertTrue(_should_run_jarvis_loop(text),
+                f"expected live-data loop to run: {text!r}")
+
 
 class EarlyReturns(unittest.TestCase):
     def test_no_action_engine_returns_empty(self):
