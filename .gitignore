@@ -94,3 +94,10 @@ logs/iphone_shortcuts_status.md
 
 # Runtime evolution candidates DB — schema regenerates on startup
 evolution/*.db
+
+# Obsidian: ignore per-window state + transient cache,
+# keep the shared config (graph colors, plugin settings, hotkeys)
+# so the vault behaves consistently across machines.
+docs/.obsidian/workspace*
+docs/.obsidian/cache
+docs/.obsidian/app.json
