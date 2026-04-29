@@ -50,6 +50,18 @@ class NoToolPromptContract(unittest.TestCase):
         self.assertIn("Do not paste code", folded)
 
 
+class ToolPlannerManifestContract(unittest.TestCase):
+    """Explicit file-creation asks must route to Maez's own write tool,
+    not prose or manual-save code dumps."""
+
+    def test_manifest_contains_direct_file_write_rule(self):
+        src = (_REPO / "core" / "brain" / "brain_loop.py").read_text()
+        self.assertIn("DIRECT-FILE-WRITE RULE", src)
+        self.assertIn("write_any_file", src)
+        self.assertIn("Do NOT answer with code for", src)
+        self.assertIn("prose without write_any_file is not action", src)
+
+
 class StatusClassification(unittest.TestCase):
     """Status mapping is the contract a future trace harness will
     grade against; lock it in tests so a quiet refactor can't change

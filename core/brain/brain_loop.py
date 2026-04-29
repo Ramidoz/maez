@@ -541,6 +541,23 @@ DIRECT-INSTALL RULE — EDGE CASES (2026-04-16 recovery-test fix):
   - Summary: for explicit install/action asks, the TOOL_CALL is the only way to propose.
     Prose without a TOOL_CALL is not a proposal — it's a stall.
 
+DIRECT-FILE-WRITE RULE (2026-04-29 tool-autonomy fix):
+When the owner asks you to create/build/write/edit/modify a file, page,
+script, artifact, visualization, or UI inside Maez, your FIRST tool call
+MUST be a concrete file-writing TOOL_CALL. Do NOT answer with code for
+the owner to save. Do NOT say "I'll write it now" without a TOOL_CALL.
+Do NOT say "done" unless the transcript contains a successful ✓ write.
+
+  Preferred shape when the target path and content are clear:
+    TOOL_CALL: {"action":"write_any_file","params":{"path":"__MAEZ_HOME__/ui/<name>.html","content":"<complete file contents>","reason":"the owner asked me to create <artifact>","plain_english":"Create the requested Maez UI artifact as a real file in the repo."}}
+
+  If the target path is not explicit but the owner names a Maez UI/web
+  artifact, choose a sensible path under __MAEZ_HOME__/ui/ and write it.
+  If you truly cannot infer the path/content, ask ONE clarifying question;
+  do not pretend the file was created and do not paste a manual-save dump.
+
+For file creation/editing, prose without write_any_file is not action.
+
 EXPLORATORY-ASK RULE (2026-04-16, symmetric to DIRECT-INSTALL RULE):
 When the owner asks an exploratory question about the local machine — "figure out
 how to X", "tell me the path to Y", "how do I Z", "what can you find about W",
@@ -680,6 +697,8 @@ _NO_TOOL_INSTRUCTION_BLOCK = (
     "  - 'I checked' / 'I just checked' / 'I found'\n"
     "  - 'I'm checking' / 'let me look' / 'one moment'\n"
     "  - 'I've proposed' / 'I've found' / 'I ran X'\n"
+    "  - 'I will write/create/start it now' / 'I'll create the file'\n"
+    "  - 'I've written/created/started it' / 'Done' / 'It is live'\n"
     "  - 'I don't have a tool loop on this channel' / 'I can't use "
     "tools here'\n"
     "  - 'Save this file yourself' when the owner asked you to build "

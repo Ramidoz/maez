@@ -363,6 +363,69 @@ class ToolAccessSelfDenialCheck(unittest.TestCase):
         self.assertEqual(check_tool_access_self_denial(t, file="x", line=1), [])
 
 
+class NoToolActionClaimCheck(unittest.TestCase):
+    """No-tool turns may offer action later, but must not claim or
+    promise action now."""
+
+    def test_no_tool_write_promise_fails(self):
+        from scripts.validate.trace_harness import check_no_tool_action_claim
+
+        t = _trace(
+            surface="telegram_surface",
+            tool_calls=[],
+            final_excerpt=(
+                "I will write the file now. I'll create a small Python "
+                "bridge script and then write the HTML."
+            ),
+        )
+        findings = check_no_tool_action_claim(t, file="x", line=1)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].verdict, "FAIL")
+        self.assertEqual(findings[0].check, "no_tool_action_claim")
+        self.assertIn("tool_calls=[]", findings[0].reason)
+
+    def test_no_tool_completion_claim_fails(self):
+        from scripts.validate.trace_harness import check_no_tool_action_claim
+
+        t = _trace(
+            surface="telegram_surface",
+            tool_calls=[],
+            final_excerpt="Done. Open http://127.0.0.1:8765 to see it.",
+        )
+        findings = check_no_tool_action_claim(t, file="x", line=1)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].matched_value.lower(), "done")
+
+    def test_tool_backed_action_claim_passes(self):
+        from scripts.validate.trace_harness import check_no_tool_action_claim
+
+        t = _trace(
+            surface="telegram_surface",
+            tool_calls=[
+                {
+                    "name": "write_any_file",
+                    "args_summary": "/home/rohit/maez/ui/maez_pulse.html",
+                    "status": "ok",
+                }
+            ],
+            final_excerpt="Done. I created ui/maez_pulse.html.",
+        )
+        self.assertEqual(check_no_tool_action_claim(t, file="x", line=1), [])
+
+    def test_future_offer_passes(self):
+        from scripts.validate.trace_harness import check_no_tool_action_claim
+
+        t = _trace(
+            surface="telegram_surface",
+            tool_calls=[],
+            final_excerpt=(
+                "I haven't made that change yet. I can try the tool path "
+                "if you want."
+            ),
+        )
+        self.assertEqual(check_no_tool_action_claim(t, file="x", line=1), [])
+
+
 class StaleClaimsCheck(unittest.TestCase):
     """Runtime ground-truth-backed stale-claim detection."""
 
@@ -504,6 +567,7 @@ class FindingProvenance(unittest.TestCase):
             check_hash_invariant,
             check_latency,
             check_nonterminating_tool,
+            check_no_tool_action_claim,
             check_stale_claims,
             check_terminal_state,
             check_timeout_honesty,
@@ -549,6 +613,15 @@ class FindingProvenance(unittest.TestCase):
                 _trace(
                     surface="telegram_surface",
                     final_excerpt="I don't have a tool loop on this channel.",
+                ),
+                {"file": "f", "line": 9},
+            ),
+            (
+                check_no_tool_action_claim,
+                _trace(
+                    surface="telegram_surface",
+                    tool_calls=[],
+                    final_excerpt="I will write the file now.",
                 ),
                 {"file": "f", "line": 9},
             ),
