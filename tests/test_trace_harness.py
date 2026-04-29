@@ -275,6 +275,96 @@ class NonterminatingToolCheck(unittest.TestCase):
         self.assertEqual(check_nonterminating_tool(t, file="x", line=1), [])
 
 
+class RepeatedToolCallCheck(unittest.TestCase):
+    """Brain-loop dedup contract: identical (name, args_summary) pairs
+    short-circuit after the first execution. The harness's catch-net
+    fires when the same tool fires ≥3 times in one trace — observed
+    historically as the 2026-04-20 disk-fixation pattern where the
+    model kept re-proposing the same git log call."""
+
+    def test_clean_trace_passes(self):
+        from scripts.validate.trace_harness import check_repeated_tool_call
+
+        t = _trace(tool_calls=[
+            {"name": "run_shell", "args_summary": "ls /tmp", "status": "ok"},
+            {"name": "run_shell", "args_summary": "df -h", "status": "ok"},
+            {"name": "read_file", "args_summary": "/etc/hostname", "status": "ok"},
+        ])
+        self.assertEqual(check_repeated_tool_call(t, file="x", line=1), [])
+
+    def test_two_repeats_below_threshold_passes(self):
+        """Two identical calls is noise (transient retry), not loop."""
+        from scripts.validate.trace_harness import check_repeated_tool_call
+
+        t = _trace(tool_calls=[
+            {"name": "run_shell", "args_summary": "git log -3", "status": "ok"},
+            {"name": "run_shell", "args_summary": "git log -3", "status": "ok"},
+        ])
+        self.assertEqual(check_repeated_tool_call(t, file="x", line=1), [])
+
+    def test_three_repeats_fails_with_full_provenance(self):
+        from scripts.validate.trace_harness import check_repeated_tool_call
+
+        t = _trace(tool_calls=[
+            {"name": "run_shell", "args_summary": "git log -3", "status": "ok"},
+            {"name": "run_shell", "args_summary": "git log -3", "status": "ok"},
+            {"name": "run_shell", "args_summary": "git log -3", "status": "ok"},
+        ])
+        findings = check_repeated_tool_call(t, file="logs/traces/x.jsonl", line=42)
+        self.assertEqual(len(findings), 1)
+        f = findings[0]
+        self.assertEqual(f.verdict, "FAIL")
+        self.assertEqual(f.check, "repeated_tool_call")
+        self.assertEqual(f.file, "logs/traces/x.jsonl")
+        self.assertEqual(f.line, 42)
+        self.assertIn("git log -3", f.matched_value)
+        self.assertIn("× 3", f.matched_value)
+        self.assertIn("dedup", f.reason.lower())
+
+    def test_denied_loop_also_fails(self):
+        """A loop of denied calls is still loop-shaped — the model is
+        re-proposing despite the gate; that's the same regression class."""
+        from scripts.validate.trace_harness import check_repeated_tool_call
+
+        t = _trace(tool_calls=[
+            {"name": "run_shell", "args_summary": "rm -rf /", "status": "denied"},
+            {"name": "run_shell", "args_summary": "rm -rf /", "status": "denied"},
+            {"name": "run_shell", "args_summary": "rm -rf /", "status": "denied"},
+        ])
+        findings = check_repeated_tool_call(t, file="x", line=1)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].verdict, "FAIL")
+
+    def test_different_args_with_same_name_passes(self):
+        """Same tool, different args = legitimate work, not a loop."""
+        from scripts.validate.trace_harness import check_repeated_tool_call
+
+        t = _trace(tool_calls=[
+            {"name": "read_file", "args_summary": "/a", "status": "ok"},
+            {"name": "read_file", "args_summary": "/b", "status": "ok"},
+            {"name": "read_file", "args_summary": "/c", "status": "ok"},
+            {"name": "read_file", "args_summary": "/d", "status": "ok"},
+        ])
+        self.assertEqual(check_repeated_tool_call(t, file="x", line=1), [])
+
+    def test_threshold_kwarg_overrides_default(self):
+        from scripts.validate.trace_harness import check_repeated_tool_call
+
+        t = _trace(tool_calls=[
+            {"name": "run_shell", "args_summary": "ls", "status": "ok"},
+            {"name": "run_shell", "args_summary": "ls", "status": "ok"},
+        ])
+        # Default threshold=3 → no finding; lower to 2 → finding fires.
+        self.assertEqual(
+            check_repeated_tool_call(t, file="x", line=1, threshold=3),
+            [],
+        )
+        self.assertEqual(
+            len(check_repeated_tool_call(t, file="x", line=1, threshold=2)),
+            1,
+        )
+
+
 class TimeoutHonestyCheck(unittest.TestCase):
     """If a tool timed out, the final excerpt must NOT claim success."""
 

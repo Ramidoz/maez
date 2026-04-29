@@ -252,6 +252,59 @@ def check_nonterminating_tool(
     return out
 
 
+def check_repeated_tool_call(
+    trace: dict,
+    *,
+    file: str,
+    line: int,
+    threshold: int = 3,
+) -> list[Finding]:
+    """Flag tool dedup-loop regressions.
+
+    The brain loop has internal dedup at ``core.brain.brain_loop``:
+    every ``(action, primary-param)`` pair gets recorded in
+    ``_seen_keys`` and re-proposals short-circuit with an
+    ``ALREADY_RAN`` injection. When that guard slipped on 2026-04-20
+    the disk-fixation regression manifested as the same ``git log``
+    running four times in twelve seconds.
+
+    This check is the harness-side catch-net: if the same
+    ``(name, args_summary)`` tuple appears at or above ``threshold``
+    times in a single trace's ``tool_calls``, the dedup contract was
+    bypassed somewhere — either the brain loop's guard regressed or
+    a surface ran multiple loops without sharing state.
+
+    Threshold default 3 — two repeats are noise (model retried after
+    a transient error), three is loop-shaped. Status is ignored on
+    purpose: a denied-then-retried-and-denied-again loop is also a
+    failure even though no execution happened.
+    """
+    counts: dict[tuple[str, str], list[int]] = {}
+    for idx, tc in enumerate(trace.get("tool_calls") or []):
+        key = (tc.get("name") or "?", tc.get("args_summary") or "")
+        counts.setdefault(key, []).append(idx)
+    out: list[Finding] = []
+    for (name, args), indices in counts.items():
+        if len(indices) < threshold:
+            continue
+        # First duplicate index pins the json_path; the matched_value
+        # carries the full count so the finding is self-contained.
+        first_idx = indices[0]
+        out.append(_finding(
+            trace, file, line,
+            verdict="FAIL", check="repeated_tool_call",
+            json_path=f"tool_calls[{first_idx}].args_summary",
+            matched_value=f"{name} × {len(indices)} :: {args[:200]}",
+            reason=(
+                f"tool {name!r} was called {len(indices)} times in this trace "
+                f"with the same args_summary; brain-loop dedup contract "
+                f"says identical (action, primary-param) pairs short-circuit "
+                f"after the first execution"
+            ),
+        ))
+    return out
+
+
 # Phrases that suggest a final reply claimed success after a timeout.
 # Narrow on purpose — false positives here are worse than false
 # negatives, since a wrong FAIL erodes trust in the harness.
@@ -656,6 +709,7 @@ CHECKS = (
     "terminal_state",
     "latency",
     "nonterminating_tool",
+    "repeated_tool_call",
     "timeout_honesty",
     "authoritative_tool_result",
     "live_data_self_denial",
@@ -803,6 +857,7 @@ def run(
             trace, file=sf, line=sl, warn_ms=latency_warn_ms,
         ))
         findings.extend(check_nonterminating_tool(trace, file=sf, line=sl))
+        findings.extend(check_repeated_tool_call(trace, file=sf, line=sl))
         findings.extend(check_timeout_honesty(trace, file=sf, line=sl))
         findings.extend(check_authoritative_tool_result(trace, file=sf, line=sl))
         findings.extend(check_live_data_self_denial(trace, file=sf, line=sl))
