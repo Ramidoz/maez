@@ -1366,6 +1366,65 @@ class LightStemmingMorphology(unittest.TestCase):
         self.assertEqual(_stem("missing"), "missing")
         self.assertEqual(_stem("calling"), "calling")
 
+    def test_diminutive_bridges_to_formal_via_shared_prefix(self):
+        """Common-sense morphological match: ``grandma`` and
+        ``grandmother`` share the 6-char prefix ``grandm`` — they
+        should be treated as the same token. Generic syntactic rule
+        (shared prefix length >= 6), not a hardcoded grandma alias.
+        Bridges other diminutive↔formal pairs that share a long
+        prefix automatically (e.g. ``develop`` / ``development``,
+        ``organi`` / ``organization``).
+
+        Test seed is constructed so the ONLY potential bridge between
+        query and memory is ``grandma``/``grandmother`` — no other
+        token coincidence (e.g. via ``talk``) can pass the gate."""
+        from core.memory.lived_recall import build_lived_recall_brief
+        store, graph, cleanup = _stores()
+        try:
+            store.add(
+                title="grandmother story",
+                summary="grandmother's story is foundational",
+                participants=["Rohit"],
+                source_memory_ids=["raw-gm"],
+                source_kind="raw_observation",
+            )
+            brief = build_lived_recall_brief(
+                "tell me about grandma",
+                episode_store=store,
+                graph=graph,
+            )
+            self.assertNotEqual(brief, "",
+                                "grandma query must match grandmother memory "
+                                "via shared 6-char prefix 'grandm'")
+            self.assertIn("grandmother", brief.lower())
+        finally:
+            cleanup()
+
+    def test_short_shared_prefix_does_not_over_bridge(self):
+        """``mission`` and ``missing`` share only 5 chars (``missi``
+        then diverge); they must NOT be treated as the same token —
+        the threshold is 6+ chars to keep semantic discrimination."""
+        from core.memory.lived_recall import build_lived_recall_brief
+        store, graph, cleanup = _stores()
+        try:
+            store.add(
+                title="rationale",
+                summary="missing rationale was the cause of the audit failure",
+                participants=["Maez"],
+                source_memory_ids=["raw-miss"],
+                source_kind="raw_observation",
+            )
+            brief = build_lived_recall_brief(
+                "what's the mission",
+                episode_store=store,
+                graph=graph,
+            )
+            self.assertEqual(brief, "",
+                             "5-char shared prefix must NOT bridge "
+                             "semantically distinct tokens")
+        finally:
+            cleanup()
+
     def test_morphology_query_matches_memory(self):
         """A query in past tense should match a memory using infinitive."""
         from core.memory.lived_recall import build_lived_recall_brief

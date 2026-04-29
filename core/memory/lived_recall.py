@@ -179,12 +179,39 @@ def _stem(token: str) -> str:
     return token
 
 
+# Shared-prefix bridge length. Tokens longer than this contribute
+# their N-char prefix as an extra matching key, so morphologically
+# related forms with diminutive roots (``grandma`` / ``grandmother``,
+# ``develop`` / ``development``, ``organi`` / ``organization``) bridge
+# without hardcoded aliases. 6 chars is the safety threshold that
+# blocks shorter coincidental prefix matches like ``mission`` /
+# ``missing`` (which share only 5 chars: ``missi`` then diverge).
+_PREFIX_BRIDGE_LEN = 6
+
+
 def _tokenize(text: str) -> list[str]:
-    return [
-        _stem(t.lower())
-        for t in _TOKEN_RE.findall(text or "")
-        if t.lower() not in _STOPWORDS and len(t) > 1
-    ]
+    """Tokenise ``text`` into normalised content tokens.
+
+    Each token contributes itself plus, when length > 6, its 6-char
+    prefix as an additional matching key. This bridges diminutive↔
+    formal English pairs that share a long common prefix (e.g.
+    ``grandma`` / ``grandmother`` both contribute ``grandm``) without
+    a hand-curated alias table.
+    """
+    out: list[str] = []
+    for raw in _TOKEN_RE.findall(text or ""):
+        low = raw.lower()
+        if low in _STOPWORDS or len(low) <= 1:
+            continue
+        stemmed = _stem(low)
+        out.append(stemmed)
+        # Add the 6-char prefix as a bridge key when the (post-stem)
+        # token is meaningfully longer than the bridge. This pulls
+        # ``grandma`` (7) and ``grandmother`` (after stem,
+        # ``grandmoth``, 9) into a shared ``grandm`` matching key.
+        if len(stemmed) > _PREFIX_BRIDGE_LEN:
+            out.append(stemmed[:_PREFIX_BRIDGE_LEN])
+    return out
 
 
 def _is_live_state_query(query: str) -> bool:
