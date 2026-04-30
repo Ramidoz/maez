@@ -548,33 +548,22 @@ def _score_edge(
 # ── graph traversal helpers ──────────────────────────────────────────
 
 
-def _all_active_edges_with_labels(graph) -> list[tuple[dict, str, str]]:
-    """Return (edge_dict, subject_label, object_label) for every active
-    edge. Reaches into the graph's SQLite directly because v1 doesn't
-    expose a list-edges API on the public surface."""
-    import sqlite3
-
+def _all_active_edges_with_labels(
+    graph,
+    *,
+    at_time: "str | None" = None,
+) -> list[tuple[dict, str, str]]:
+    """Return (edge_dict, subject_label, object_label) for every
+    active edge. Slice 4: now uses the graph's public
+    ``list_active`` method instead of reaching into SQLite directly
+    — encapsulation cleanup that also unlocks ``at_time=`` queries
+    for "what was true at time T?" temporal recall.
+    """
+    rows = graph.list_active(at_time=at_time)
     out: list[tuple[dict, str, str]] = []
-    with sqlite3.connect(graph._path) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT e.*, "
-            "       s.label AS subject_label, "
-            "       o.label AS object_label "
-            "FROM edges e "
-            "JOIN nodes s ON s.id = e.subject_id "
-            "JOIN nodes o ON o.id = e.object_id "
-            "WHERE e.status = 'active'"
-        ).fetchall()
-    for row in rows:
-        d = dict(row)
+    for d in rows:
         subject_label = d.pop("subject_label")
         object_label = d.pop("object_label")
-        # Mirror RelationshipGraph._row_to_dict's JSON fields.
-        import json
-
-        d["source_episode_ids"] = json.loads(d.pop("source_episode_ids_json"))
-        d["source_memory_ids"] = json.loads(d.pop("source_memory_ids_json"))
         out.append((d, subject_label, object_label))
     return out
 

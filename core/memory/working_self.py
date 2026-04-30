@@ -172,31 +172,23 @@ def _goals_from_cares_about(graph: Any, *, max_per_source: int) -> list[Goal]:
         return []
     out: list[Goal] = []
     try:
-        # Match the pattern used in lived_recall._all_active_edges_with_labels:
-        # the public surface doesn't expose list-edges, so dip into SQLite
-        # directly. Read-only.
-        import sqlite3
-
-        with sqlite3.connect(graph._path) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT e.id, e.relation, "
-                "       s.label AS subject_label, "
-                "       o.label AS object_label, "
-                "       e.created_at, "
-                "       e.source_episode_ids_json, "
-                "       e.source_memory_ids_json "
-                "FROM edges e "
-                "JOIN nodes s ON s.id = e.subject_id "
-                "JOIN nodes o ON o.id = e.object_id "
-                "WHERE e.status = 'active' AND e.relation = 'cares_about' "
-                "ORDER BY e.created_at DESC"
-            ).fetchall()
+        # Slice 4: use the graph's public ``list_active`` method
+        # instead of reaching into SQLite directly. Encapsulation
+        # cleanup; the public API now also makes a future
+        # ``at_time=...`` query trivially available here for
+        # historical-self reasoning ("what did Rohit care about
+        # 3 months ago?").
+        all_active = graph.list_active()
     except Exception:
         return []
-    import json as _json
-    for row in rows[:max_per_source]:
-        d = dict(row)
+    # Filter to cares_about + sort newest-first (matching the
+    # previous ORDER BY created_at DESC).
+    rows = sorted(
+        (e for e in all_active if e.get("relation") == "cares_about"),
+        key=lambda e: e.get("created_at") or "",
+        reverse=True,
+    )
+    for d in rows[:max_per_source]:
         # Goal text = object_label only (what's cared about), NOT the
         # synthesized "<subject> cares about <object>" sentence.
         # Reason (2026-04-29 natural-language probe finding): the
@@ -209,18 +201,13 @@ def _goals_from_cares_about(graph: Any, *, max_per_source: int) -> list[Goal]:
         # ``source=GOAL_SOURCE_CARES_ABOUT``; including it in the
         # text is redundant noise. Keeping just the object_label
         # focuses alignment on what the goal is *about*.
-        text = (d["object_label"] or "").strip()
+        text = (d.get("object_label") or "").strip()
         if not text:
             continue
-        try:
-            ep_ids = _json.loads(d.get("source_episode_ids_json") or "[]")
-        except Exception:
-            ep_ids = []
-        try:
-            mem_ids = _json.loads(d.get("source_memory_ids_json") or "[]")
-        except Exception:
-            mem_ids = []
-        evidence = tuple(str(x) for x in (ep_ids + mem_ids) if x)
+        # ``list_active`` already decodes the JSON evidence lists.
+        ep_ids = d.get("source_episode_ids") or []
+        mem_ids = d.get("source_memory_ids") or []
+        evidence = tuple(str(x) for x in (list(ep_ids) + list(mem_ids)) if x)
         out.append(Goal(
             text=text,
             source=GOAL_SOURCE_CARES_ABOUT,

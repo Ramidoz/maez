@@ -282,8 +282,11 @@ class RelationshipGraphEvidenceRequired(unittest.TestCase):
             valid_to="2026-12-31T23:59:59Z",
         )
         e = self.g.get_edge(eid)
-        self.assertEqual(e["valid_from"], "2026-04-01T00:00:00Z")
-        self.assertEqual(e["valid_to"], "2026-12-31T23:59:59Z")
+        # Slice 4 audit M1 fix: timestamps are canonicalised to
+        # ``+00:00`` form on entry so string comparison is sound.
+        # Round-trip preserves the instant, not the source format.
+        self.assertEqual(e["valid_from"], "2026-04-01T00:00:00+00:00")
+        self.assertEqual(e["valid_to"], "2026-12-31T23:59:59+00:00")
 
 
 class RelationshipGraphSupersedePreservesOld(unittest.TestCase):

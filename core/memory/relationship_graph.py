@@ -69,6 +69,39 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _canonicalise_iso(value: Optional[str], *, field_name: str) -> Optional[str]:
+    """Parse an ISO-8601 string and re-emit it in the canonical
+    ``+00:00`` UTC form so string comparison is sound. Audit M1+M2
+    fix from 2026-04-29: naive ``str`` comparison silently misordered
+    ``Z``-suffixed vs ``+00:00`` vs naive timestamps. Now every
+    timestamp that crosses the API boundary is normalised at entry.
+
+    Raises ``ValueError`` on malformed input — caller error, not
+    silent corruption (audit M2).
+
+    Naive timestamps are interpreted as UTC for backward-compat with
+    the existing ``_now_iso`` shape, which is timespec-second UTC.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    # Python 3.11+ ``datetime.fromisoformat`` accepts ``Z`` suffix.
+    # On 3.10 we'd need a polyfill; Maez requires 3.12 so this is safe.
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError(
+            f"{field_name}: not a valid ISO-8601 timestamp: {text!r}"
+        ) from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat(timespec="seconds")
+
+
 class RelationshipGraph:
     """Append-only temporal relationship graph backed by SQLite (v1).
 
@@ -81,6 +114,16 @@ class RelationshipGraph:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as c:
             c.executescript(_SCHEMA)
+            # Slice 4 backfill: pre-temporal-windows edges had
+            # ``valid_from = NULL``. Adopt ``created_at`` as the
+            # implicit lower bound so temporal queries can answer
+            # "what was true at time T?" against the historical
+            # record. Idempotent — ``WHERE valid_from IS NULL``
+            # only updates rows that haven't been migrated yet.
+            c.execute(
+                "UPDATE edges SET valid_from = created_at "
+                "WHERE valid_from IS NULL"
+            )
 
     def _connect(self) -> sqlite3.Connection:
         c = sqlite3.connect(str(self._path))
@@ -127,6 +170,23 @@ class RelationshipGraph:
             )
         now = _now_iso()
         edge_id = f"e-{uuid.uuid4().hex[:12]}"
+        # Slice 4: canonicalise + validate temporal bounds. Audit
+        # M1+M2 fix (every timestamp crossing the API enters in the
+        # same +00:00 form so string comparison is sound). Audit
+        # essential-#8 fix (no logical contradictions like
+        # ``valid_to <= valid_from`` get stored).
+        valid_from = _canonicalise_iso(valid_from, field_name="valid_from")
+        valid_to = _canonicalise_iso(valid_to, field_name="valid_to")
+        if valid_from is None:
+            # Default to ``created_at`` so temporal queries can
+            # always answer about every edge.
+            valid_from = now
+        if valid_to is not None and valid_to <= valid_from:
+            raise ValueError(
+                f"valid_to ({valid_to}) must be strictly after "
+                f"valid_from ({valid_from}); half-open interval "
+                f"[valid_from, valid_to) requires valid_to > valid_from"
+            )
         with self._connect() as c:
             c.execute(
                 "INSERT INTO edges ("
@@ -193,6 +253,81 @@ class RelationshipGraph:
                 (bound, now, old_edge_id),
             )
         return new_edge_id
+
+    def list_active(self, *, at_time: Optional[str] = None) -> list[dict]:  # noqa: C901
+        """Return active edges, joined with their subject + object
+        labels.
+
+        - ``at_time=None`` (default): edges with ``status='active'``
+          — what is true NOW. Mirrors the original lived_recall
+          direct-SQL pattern but as the canonical public method.
+        - ``at_time=<ISO-8601 string>``: edges that were active at
+          that timestamp, regardless of current status. Half-open
+          interval semantics ``[valid_from, valid_to)``: at the
+          supersede boundary, the successor edge is the active one.
+          Closes the audit gap "what did Rohit care about three
+          months ago?" (Zep / Graphiti temporal-validity pattern).
+          Malformed ``at_time`` raises ``ValueError`` (audit M2);
+          ``Z`` / naive / ``+00:00`` forms all canonicalise to the
+          same instant (audit M1).
+
+        Each returned dict carries the edge fields plus
+        ``subject_label`` and ``object_label`` for display, with
+        ``source_episode_ids`` and ``source_memory_ids`` decoded
+        from JSON.
+        """
+        with self._connect() as c:
+            base_sql = (
+                "SELECT e.*, "
+                "       s.label AS subject_label, "
+                "       o.label AS object_label "
+                "FROM edges e "
+                "JOIN nodes s ON s.id = e.subject_id "
+                "JOIN nodes o ON o.id = e.object_id "
+            )
+            if at_time is None:
+                rows = c.execute(
+                    base_sql + "WHERE e.status = 'active'"
+                ).fetchall()
+            else:
+                # Audit M1+M2: canonicalise + validate at function
+                # entry so the predicate operates on the same
+                # +00:00 form the stored timestamps now use.
+                at_time_canonical = _canonicalise_iso(
+                    at_time, field_name="at_time"
+                )
+                rows = c.execute(
+                    base_sql
+                    + "WHERE (e.valid_from IS NULL OR e.valid_from <= ?) "
+                    + "  AND (e.valid_to IS NULL OR e.valid_to > ?)",
+                    (at_time_canonical, at_time_canonical),
+                ).fetchall()
+        out: list[dict] = []
+        for row in rows:
+            d = dict(row)
+            subject_label = d.pop("subject_label")
+            object_label = d.pop("object_label")
+            # Audit N1: defensive per-row JSON decode. One corrupt
+            # cell shouldn't break the whole query for every other
+            # caller. Empty list is the fail-open semantic here.
+            try:
+                d["source_episode_ids"] = json.loads(
+                    d.pop("source_episode_ids_json")
+                )
+            except (json.JSONDecodeError, TypeError):
+                d.pop("source_episode_ids_json", None)
+                d["source_episode_ids"] = []
+            try:
+                d["source_memory_ids"] = json.loads(
+                    d.pop("source_memory_ids_json")
+                )
+            except (json.JSONDecodeError, TypeError):
+                d.pop("source_memory_ids_json", None)
+                d["source_memory_ids"] = []
+            d["subject_label"] = subject_label
+            d["object_label"] = object_label
+            out.append(d)
+        return out
 
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> dict:

@@ -1477,54 +1477,63 @@ def _read_lived_episodes(db_path):
     return out
 
 
-def _read_lived_edges(db_path):
-    import json as _json
+def _read_lived_edges(db_path, *, at_time=None):
+    """Read graph edges for the cockpit, optionally filtered by
+    temporal validity (Slice 4: ``at_time`` lets the panel ask
+    "what beliefs was Maez holding on 2026-04-15?"). When
+    ``at_time`` is None the behaviour is unchanged: status='active'
+    edges. When supplied, edges are filtered by half-open interval
+    ``[valid_from, valid_to)``, and node-kind columns come from a
+    second JOIN to keep the same response shape.
+    """
     import os as _os
-    import sqlite3 as _sq
 
     if not _os.path.exists(db_path):
         return []
     try:
+        from core.memory.relationship_graph import RelationshipGraph
+
+        graph = RelationshipGraph(db_path)
+        edges = graph.list_active(at_time=at_time)
+    except ValueError:
+        # Malformed at_time — surface as 400-equivalent (empty list);
+        # the route can choose to return 400 if it cares.
+        return []
+    except Exception:
+        return []
+    # Re-fetch node kinds (RelationshipGraph.list_active doesn't
+    # currently return them; preserve existing cockpit shape).
+    import sqlite3 as _sq
+    try:
         c = _sq.connect(db_path, timeout=1.5)
         c.row_factory = _sq.Row
-        rows = c.execute(
-            "SELECT e.*, s.label AS subject_label, "
-            "       s.kind AS subject_kind, "
-            "       o.label AS object_label, "
-            "       o.kind AS object_kind "
-            "FROM edges e "
-            "JOIN nodes s ON s.id = e.subject_id "
-            "JOIN nodes o ON o.id = e.object_id "
-            "WHERE e.status = 'active' "
-            "ORDER BY e.created_at DESC LIMIT 50"
+        node_rows = c.execute(
+            "SELECT id, label, kind FROM nodes"
         ).fetchall()
         c.close()
     except Exception:
-        return []
+        node_rows = []
+    kind_by_id = {r["id"]: r["kind"] for r in node_rows}
+    label_to_kind = {r["label"]: r["kind"] for r in node_rows}
     out = []
-    for r in rows:
-        d = dict(r)
-        out.append(
-            {
-                "id": d.get("id"),
-                "subject_label": d.get("subject_label"),
-                "subject_kind": d.get("subject_kind"),
-                "relation": d.get("relation"),
-                "object_label": d.get("object_label"),
-                "object_kind": d.get("object_kind"),
-                "confidence": d.get("confidence"),
-                "status": d.get("status"),
-                "valid_from": d.get("valid_from"),
-                "valid_to": d.get("valid_to"),
-                "source_episode_ids": _json.loads(
-                    d.get("source_episode_ids_json") or "[]"
-                ),
-                "source_memory_ids": _json.loads(
-                    d.get("source_memory_ids_json") or "[]"
-                ),
-                "created_at": d.get("created_at"),
-            }
-        )
+    for d in edges[:50]:  # cap at 50 to match the legacy SQL LIMIT
+        out.append({
+            "id": d.get("id"),
+            "subject_label": d.get("subject_label"),
+            "subject_kind": kind_by_id.get(d.get("subject_id"))
+                or label_to_kind.get(d.get("subject_label")),
+            "relation": d.get("relation"),
+            "object_label": d.get("object_label"),
+            "object_kind": kind_by_id.get(d.get("object_id"))
+                or label_to_kind.get(d.get("object_label")),
+            "confidence": d.get("confidence"),
+            "status": d.get("status"),
+            "valid_from": d.get("valid_from"),
+            "valid_to": d.get("valid_to"),
+            "source_episode_ids": d.get("source_episode_ids", []),
+            "source_memory_ids": d.get("source_memory_ids", []),
+            "created_at": d.get("created_at"),
+        })
     return out
 
 
@@ -1696,10 +1705,28 @@ def api_lived_memory_episodes():
 
 @app.route("/api/v1/lived-memory/graph")
 def api_lived_memory_graph():
-    """Just the relationship graph edges, for the relationship-belief
-    pane in the cockpit."""
-    edges = _read_lived_edges(_LIVED_GRAPH_DB_PATH)
-    return jsonify({"edges": edges, "count": len(edges)})
+    """Relationship graph edges for the cockpit's belief panel.
+
+    Slice 4: optional ``?at_time=<ISO-8601>`` filters by temporal
+    validity. ``at_time=2026-04-15T00:00:00+00:00`` returns the
+    beliefs Maez was holding on that date; default returns
+    currently-active beliefs. Malformed ``at_time`` → 400."""
+    at_time = request.args.get("at_time") or None
+    if at_time:
+        # Validate before hitting the store so we can return 400
+        # rather than swallow into an empty list.
+        try:
+            from core.memory.relationship_graph import _canonicalise_iso
+
+            _canonicalise_iso(at_time, field_name="at_time")
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+    edges = _read_lived_edges(_LIVED_GRAPH_DB_PATH, at_time=at_time)
+    return jsonify({
+        "edges": edges,
+        "count": len(edges),
+        "at_time": at_time,
+    })
 
 
 @app.route("/api/v1/lived-memory/echoes")
