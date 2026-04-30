@@ -91,6 +91,25 @@ def audit_assistant_text(
     if not text or not text.strip():
         return text
 
+    # Slice 6 — Canary token leakage detection (CaMeL adaptation).
+    # Any canary token registered in the active store that appears
+    # in the reply is a fabrication / memory-bleeding signal. Strip
+    # the token from the reply AND record the leak event for
+    # cockpit / CLI observability. Runs FIRST (audit M2 fix) so
+    # leaks are detected against the raw model output, not against
+    # a post-guard rewrite that might have already mangled the
+    # canary as part of a fenced-block scrub. Fail-open: any
+    # failure in the canary path leaves the reply untouched.
+    try:
+        from core.safety.canaries import scrub_canary_leakage
+        text = scrub_canary_leakage(text, surface=surface)
+    except Exception as exc:
+        logger.warning(
+            "audit_assistant_text: canary scrub raised on %s "
+            "(continuing without strip): %s",
+            surface, exc,
+        )
+
     # Output-side command guard: any fenced block or inline backtick
     # span that contains a command the covenant gate would refuse gets
     # replaced with a plain-language refusal. Runs before the self-claim

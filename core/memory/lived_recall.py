@@ -575,8 +575,26 @@ def _format_evidence(*, episode_id: str = "", source_memory_ids: list[str] | Non
     parts = []
     if episode_id:
         parts.append(f"ep:{episode_id}")
-    if source_memory_ids:
-        parts.append("sources: " + ", ".join(source_memory_ids))
+    sources: list[str] = list(source_memory_ids or [])
+    # Slice 6 — canary injection. When the canary store is active,
+    # register a fresh canary and embed it as a fake source-id in
+    # this evidence marker. The model has no way to know the
+    # token; if it appears in the reply, that's a memory-bleeding
+    # / fabrication signal. The audit pipeline at the surface
+    # boundary detects + strips. Best-effort: any failure leaves
+    # the evidence string unchanged (canary-based defense is
+    # additive, not load-bearing).
+    try:
+        from core.safety.canaries import active_store as _canary_store
+
+        store = _canary_store()
+        if store is not None:
+            canary = store.register_canary(context="brief:lived_recall")
+            sources.append(canary)
+    except Exception:
+        pass
+    if sources:
+        parts.append("sources: " + ", ".join(sources))
     return " | ".join(parts)
 
 

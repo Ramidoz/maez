@@ -5755,6 +5755,51 @@ def api_debug_wonderings():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/debug/canary-leaks")
+def api_debug_canary_leaks():
+    """Canary-token leak events (Slice 6 — fabrication / memory-
+    bleeding detection observability).
+
+    Returns recent leak events newest-first, plus a summary of
+    currently-active canaries. Each leak is a fabrication signal:
+    Maez paraphrased an internal canary token (which the model
+    has no way to know except by paraphrasing context) into a
+    user-facing reply. The audit pipeline strips the token; this
+    endpoint gives the cockpit a way to surface the trend.
+
+    Optional ``?limit=N`` clamps to ``[1, 200]`` (default 50).
+    """
+    if not _debug_auth_ok():
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        limit = max(1, min(200, int(request.args.get("limit", 50))))
+    except ValueError:
+        limit = 50
+    try:
+        from core.safety.canaries import active_store
+
+        store = active_store()
+        if store is None:
+            return jsonify({
+                "leaks": [],
+                "leak_count": 0,
+                "active_canaries": 0,
+                "checked_at": _utcnow_iso(),
+                "note": "canary store not initialised in this process",
+            })
+        leaks = store.recent_leaks(limit=limit)
+        active = store.active_canaries()
+        return jsonify({
+            "leaks": leaks,
+            "leak_count": len(leaks),
+            "active_canaries": len(active),
+            "checked_at": _utcnow_iso(),
+        })
+    except Exception as e:
+        logger.warning("debug /api/debug/canary-leaks failed: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/debug/trace-labels")
 def api_debug_trace_labels():
     """Owner-supplied trace labels (Slice 5 — labelled corpus

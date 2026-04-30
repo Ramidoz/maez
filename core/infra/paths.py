@@ -150,6 +150,15 @@ def trace_labels_db() -> Path:
     return memory_dir() / "trace_labels.db"
 
 
+def canaries_db() -> Path:
+    """Sqlite DB for canary tokens (Slice 6 — defense-in-depth).
+    Each canary is a unique randomly-generated string injected into
+    context positions where the model shouldn't echo it. Detected
+    leakage in the final reply is a fabrication / memory-bleeding
+    signal. Gitignored, local-only."""
+    return memory_dir() / "canaries.db"
+
+
 # ── training + models (often on a separate volume) ─────────────────────
 def training_dir() -> Path:
     return home() / "training"

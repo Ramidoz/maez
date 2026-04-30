@@ -310,6 +310,19 @@ class MaezDaemon:
             _lived_dir = Path("/home/rohit/maez/memory")
         self.lived_episodes = EpisodeStore(str(_lived_dir / "lived_episodes.db"))
         self.lived_graph = RelationshipGraph(str(_lived_dir / "lived_graph.db"))
+        # Slice 6 — Canary tokens. Initialise the process-active
+        # store at startup so brief composers can register canaries
+        # for memory-bleeding detection. Tests bypass this by
+        # explicitly setting their own store.
+        try:
+            from core.safety.canaries import init_default_active_store
+
+            init_default_active_store()
+        except Exception as _canary_init_exc:
+            logger.debug(
+                "canary store init skipped (continuing without "
+                "fabrication-detection): %s", _canary_init_exc,
+            )
         # Session 11m: pass daemon ref so the Telegram bot can signal
         # "the owner is talking" and defer our next reasoning cycle.
         self._rohit_active_until = 0.0
