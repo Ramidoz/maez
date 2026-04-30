@@ -97,7 +97,15 @@ class EvaluationReason:
 class CapabilityEvaluation:
     """Structured result of evaluating one match. Step 4 (proposal
     generation) reads ``reasons`` to compose the consent card text
-    and ``decision`` to gate whether to propose at all."""
+    and ``decision`` to gate whether to propose at all.
+
+    ``matched_signals`` and ``matched_terms`` are carried through
+    from the originating ``CapabilityMatch`` so downstream consumers
+    can show *why* the match fired without re-running the matcher.
+    Without this preservation, the proposal stage would have to
+    fabricate evidence or omit it — both bad for the consent card's
+    credibility surface.
+    """
     capability_id: str
     title: str
     match_score: float
@@ -110,6 +118,8 @@ class CapabilityEvaluation:
     exact_phrase_ratification: bool
     hardware_snapshot: dict
     entry: object | None  # CapabilityEntry; loose to avoid cycle
+    matched_signals: list[str] = field(default_factory=list)
+    matched_terms: list[str] = field(default_factory=list)
 
 
 # ── reason builders ────────────────────────────────────────────────
@@ -142,12 +152,19 @@ def _evaluate_entry(
     match_score: float,
     manual: ManualLoadResult,
     hardware: dict,
+    matched_signals: list[str] | None = None,
+    matched_terms: list[str] | None = None,
 ) -> CapabilityEvaluation:
     """Evaluate one entry against manual + hardware context.
 
     Internal helper — public callers use ``evaluate_match`` /
     ``evaluate_matches``. Pure function on its inputs (no
     self_knowledge call here; caller resolves the snapshot).
+
+    ``matched_signals`` / ``matched_terms`` are carried verbatim
+    onto the resulting ``CapabilityEvaluation`` so the proposal
+    stage can surface match evidence without re-running the
+    matcher.
     """
     reasons: list[EvaluationReason] = []
     missing_prereqs: list[str] = []
@@ -324,6 +341,8 @@ def _evaluate_entry(
         exact_phrase_ratification=entry.covenant.exact_phrase_ratification,
         hardware_snapshot=dict(hardware),
         entry=entry,
+        matched_signals=list(matched_signals) if matched_signals else [],
+        matched_terms=list(matched_terms) if matched_terms else [],
     )
 
 
@@ -364,10 +383,14 @@ def evaluate_match(
             exact_phrase_ratification=False,
             hardware_snapshot=dict(hardware),
             entry=None,
+            matched_signals=list(match.matched_signals or []),
+            matched_terms=list(match.matched_terms or []),
         )
     evaluation = _evaluate_entry(
         match.entry, match_score=match.score,
         manual=manual, hardware=hardware,
+        matched_signals=match.matched_signals,
+        matched_terms=match.matched_terms,
     )
     _record_telemetry(evaluation)
     return evaluation

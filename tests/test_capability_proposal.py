@@ -536,5 +536,125 @@ class TestProposalFraming(unittest.TestCase):
         )
 
 
+class TestEvidencePreservationInProposal(unittest.TestCase):
+    """Patch (2026-04-30): proposal must surface matched_signals /
+    matched_terms from the evaluation. When evidence is absent the
+    'Matched because:' line is omitted rather than fabricated."""
+
+    def _make_eligible_with_evidence(self, entry, *, signals, terms,
+                                     score: float = 0.5):
+        from core.capability_evaluator import (
+            CapabilityEvaluation, EvaluationReason,
+        )
+        return CapabilityEvaluation(
+            capability_id=entry.capability_id,
+            title=entry.title,
+            match_score=score,
+            decision="eligible",
+            reasons=[EvaluationReason(
+                code="ok", severity="info",
+                message="(test fixture)", evidence={},
+            )],
+            missing_prerequisites=[],
+            external_prerequisites=list(entry.external_prerequisites),
+            covenant_touch=entry.covenant.covenant_touch,
+            consent_card_required=entry.covenant.consent_card_required,
+            exact_phrase_ratification=entry.covenant.exact_phrase_ratification,
+            hardware_snapshot={},
+            entry=entry,
+            matched_signals=signals,
+            matched_terms=terms,
+        )
+
+    def test_proposal_includes_matched_signals_and_terms(self):
+        from core.capability_proposal import generate_proposals
+        from core.capability_manual import load_manual
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_entry(root, "alpha")
+            manual = load_manual(root)
+            entry = manual.find_by_id("alpha")
+            ev = self._make_eligible_with_evidence(
+                entry,
+                signals=["user wants something",
+                         "user asked X"],
+                terms=["wants", "x"],
+            )
+            proposals = generate_proposals("test query", [ev])
+        p = proposals[0]
+        self.assertEqual(
+            p.matched_signals,
+            ["user wants something", "user asked X"],
+        )
+        self.assertEqual(p.matched_terms, ["wants", "x"])
+
+    def test_card_text_includes_matched_because_when_evidence_present(self):
+        from core.capability_proposal import generate_proposals
+        from core.capability_manual import load_manual
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_entry(root, "alpha")
+            manual = load_manual(root)
+            entry = manual.find_by_id("alpha")
+            ev = self._make_eligible_with_evidence(
+                entry,
+                signals=["user requests synthesis across many days"],
+                terms=["synthesis", "days"],
+            )
+            proposals = generate_proposals("q", [ev])
+        text = proposals[0].card_plain_english
+        self.assertIn("Matched because", text)
+        # The actual signal text appears in the card — not a
+        # fabricated paraphrase.
+        self.assertIn(
+            "user requests synthesis across many days", text,
+        )
+
+    def test_card_text_omits_matched_because_when_evidence_empty(self):
+        """No fabrication: when matched_signals AND matched_terms
+        are both empty, the 'Matched because:' line MUST be absent
+        from the card text. The proposal cannot claim evidence it
+        doesn't have."""
+        from core.capability_proposal import generate_proposals
+        from core.capability_manual import load_manual
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_entry(root, "alpha")
+            manual = load_manual(root)
+            entry = manual.find_by_id("alpha")
+            ev = self._make_eligible_with_evidence(
+                entry, signals=[], terms=[],
+            )
+            proposals = generate_proposals("q", [ev])
+        text = proposals[0].card_plain_english
+        self.assertNotIn("Matched because", text)
+
+    def test_card_text_falls_back_to_terms_when_only_terms_present(self):
+        """Phrase-hit-only matches produce empty matched_signals
+        but non-empty matched_terms. The card should still surface
+        SOMETHING — token-level overlap — rather than fabricating
+        a signal sentence."""
+        from core.capability_proposal import generate_proposals
+        from core.capability_manual import load_manual
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_entry(root, "alpha")
+            manual = load_manual(root)
+            entry = manual.find_by_id("alpha")
+            ev = self._make_eligible_with_evidence(
+                entry, signals=[], terms=["foo", "bar", "baz"],
+            )
+            proposals = generate_proposals("q", [ev])
+        text = proposals[0].card_plain_english
+        # Some kind of matched-because surface is expected.
+        self.assertIn("Matched because", text)
+        # But the specific token content should appear.
+        self.assertIn("foo", text)
+
+
 if __name__ == "__main__":
     unittest.main()

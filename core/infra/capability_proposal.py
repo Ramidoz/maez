@@ -156,6 +156,34 @@ def _first_substantive_paragraph(body: str) -> str:
     return ""
 
 
+_MAX_EVIDENCE_SIGNALS_IN_CARD = 3
+
+
+def _format_match_evidence(
+    matched_signals: list[str],
+    matched_terms: list[str],
+) -> str:
+    """Render a one-line "Matched because:" surface from evidence.
+    Returns empty string when neither signals nor terms exist —
+    never fabricates evidence to fill silence.
+
+    Prefers signals (the gap_signals that actually matched) over
+    terms (the token-level overlaps). Caps at 3 signals to keep
+    the card readable.
+    """
+    if matched_signals:
+        signals = matched_signals[:_MAX_EVIDENCE_SIGNALS_IN_CARD]
+        bullets = "\n".join(f"  - {s}" for s in signals)
+        return f"Matched because:\n{bullets}"
+    if matched_terms:
+        # Token-only fallback: phrase-hit-only matches end up here
+        # in v1; v1.5 semantic matching may surface different
+        # evidence shapes through this same field.
+        terms = ", ".join(matched_terms[:6])
+        return f"Matched because of overlap on: {terms}"
+    return ""
+
+
 # ── card text composition ─────────────────────────────────────────
 
 
@@ -166,18 +194,35 @@ def _compose_card_plain_english(
     body_excerpt: str,
     covenant_touch: str,
     decision: str,
+    matched_signals: list[str] | None = None,
+    matched_terms: list[str] | None = None,
 ) -> str:
     """Owner-facing explanation. Load-bearing social contract:
-    must frame as PROPOSAL, not as already-installed capability."""
+    must frame as PROPOSAL, not as already-installed capability.
+
+    When ``matched_signals`` or ``matched_terms`` are non-empty,
+    surfaces a "Matched because:" line so the owner can verify
+    the match was sensible. When empty (e.g. evaluator built
+    without match evidence), the line is omitted rather than
+    fabricating evidence — consent-card credibility surface.
+    """
     lead = (
         f"This is a proposal to acquire **{title}** — it is "
         "**not yet installed**, and nothing happens unless you "
         "approve via the consent card."
     )
     why = (
-        f"\n\nWhy this came up: you said *\"{felt_limitation}\"*, "
-        "and this manual entry's gap signals matched."
+        f"\n\nWhy this came up: you said *\"{felt_limitation}\"*."
     )
+
+    # Match evidence — only render when actual evidence exists.
+    # Empty evidence = silently omit. Never fabricate.
+    evidence_line = _format_match_evidence(
+        matched_signals or [], matched_terms or [],
+    )
+    if evidence_line:
+        why += f"\n\n{evidence_line}"
+
     if body_excerpt:
         why += f"\n\nWhat it does: {body_excerpt}"
     impact = ""
@@ -259,6 +304,8 @@ def _make_proposal(
         body_excerpt=body_excerpt,
         covenant_touch=evaluation.covenant_touch,
         decision=evaluation.decision,
+        matched_signals=list(evaluation.matched_signals),
+        matched_terms=list(evaluation.matched_terms),
     )
     payload = _compose_card_action_payload(
         felt_limitation=felt_limitation,
@@ -278,8 +325,8 @@ def _make_proposal(
         title=evaluation.title,
         source="manual",
         match_score=evaluation.match_score,
-        matched_signals=[],  # not threaded through the evaluator yet
-        matched_terms=[],
+        matched_signals=list(evaluation.matched_signals),
+        matched_terms=list(evaluation.matched_terms),
         evaluation_decision=evaluation.decision,
         evaluation_reasons=[
             {

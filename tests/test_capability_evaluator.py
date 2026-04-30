@@ -585,5 +585,67 @@ class TestRealManualSmoke(unittest.TestCase):
             self.assertIn(ev.decision, {"eligible", "defer", "reject"})
 
 
+class TestEvidencePreservation(unittest.TestCase):
+    """Patch (2026-04-30): evaluator must carry matched_signals
+    and matched_terms through from CapabilityMatch so the proposal
+    stage doesn't have to fabricate or omit match evidence."""
+
+    def test_evaluator_preserves_matched_signals_from_match(self):
+        from core.capability_evaluator import evaluate_match
+        from core.capability_gap_matcher import CapabilityMatch
+        from core.capability_manual import load_manual
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_entry(root, "alpha")
+            manual = load_manual(root)
+            entry = manual.find_by_id("alpha")
+            match = CapabilityMatch(
+                capability_id=entry.capability_id,
+                title=entry.title,
+                score=0.5,
+                matched_signals=[
+                    "user wants something",
+                    "user mentioned X",
+                ],
+                matched_terms=["wants", "mentioned"],
+                status=entry.status,
+                source_path=entry.source_path,
+                entry=entry,
+            )
+            ev = evaluate_match(match, manual=manual, hardware={})
+        self.assertEqual(
+            ev.matched_signals,
+            ["user wants something", "user mentioned X"],
+        )
+        self.assertEqual(ev.matched_terms, ["wants", "mentioned"])
+
+    def test_evaluator_default_matched_signals_empty_when_match_empty(self):
+        """A match with empty evidence produces an evaluation with
+        empty evidence — never fabricated."""
+        from core.capability_evaluator import evaluate_match
+        from core.capability_gap_matcher import CapabilityMatch
+        from core.capability_manual import load_manual
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_entry(root, "alpha")
+            manual = load_manual(root)
+            entry = manual.find_by_id("alpha")
+            match = CapabilityMatch(
+                capability_id=entry.capability_id,
+                title=entry.title,
+                score=0.5,
+                matched_signals=[],
+                matched_terms=[],
+                status=entry.status,
+                source_path=entry.source_path,
+                entry=entry,
+            )
+            ev = evaluate_match(match, manual=manual, hardware={})
+        self.assertEqual(ev.matched_signals, [])
+        self.assertEqual(ev.matched_terms, [])
+
+
 if __name__ == "__main__":
     unittest.main()
