@@ -498,11 +498,32 @@ class ChatSession:
         table.add_column("status", width=22)
         table.add_column("adv", width=4)
         table.add_column("defer", width=5)
+        # Slice 2 Session 3 — pursuit history per wondering. ``surf``
+        # is total proactive surfacings; ``last surf`` is hours since
+        # the most recent surface (or '·' if never).
+        table.add_column("surf", width=5)
+        table.add_column("last surf", width=10)
         table.add_column("question")
+        import time as _time
         for w in rows:
+            pursuit_count = w.get("pursuit_count") or 0
+            last_pursuit_at = w.get("last_pursuit_at")
+            if last_pursuit_at:
+                age_h = max(0.0, (_time.time() - float(last_pursuit_at)) / 3600.0)
+                if age_h < 1:
+                    last_surf = f"{int(age_h * 60)}m ago"
+                elif age_h < 24:
+                    last_surf = f"{age_h:.1f}h ago"
+                else:
+                    last_surf = f"{age_h / 24:.1f}d ago"
+            else:
+                last_surf = "·"
             table.add_row(
                 str(w["id"]), w["status"], str(w["advance_count"]),
-                str(w["deferral_count"]), (w["question"] or "")[:80],
+                str(w["deferral_count"]),
+                str(pursuit_count) if pursuit_count else "·",
+                last_surf,
+                (w["question"] or "")[:80],
             )
         console.print(Panel(table, title="wonderings", border_style="dim", expand=False))
         # Show probes for the most recent open/active wondering

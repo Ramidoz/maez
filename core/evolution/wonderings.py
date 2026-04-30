@@ -209,6 +209,52 @@ class Wonderings:
                 )
                 """
             )
+            # Slice 2 Session 3 — wondering-pursuit history table +
+            # parent-wondering counter columns. Idempotent migration
+            # safe across concurrent processes (audit B2 fix): the
+            # PRAGMA-then-ALTER pattern races between two processes
+            # both observing the column missing. Per-process RLock
+            # doesn't cover cross-process access (daemon + CLI +
+            # web surface can all hit the same DB at boot). Wrap the
+            # ALTERs in try/except OperationalError so the second
+            # process's "duplicate column" raise is benign.
+            existing_cols = {
+                row[1]
+                for row in c.execute(
+                    "PRAGMA table_info(wonderings)"
+                ).fetchall()
+            }
+            if "last_pursuit_at" not in existing_cols:
+                try:
+                    c.execute("ALTER TABLE wonderings ADD COLUMN last_pursuit_at REAL")
+                except sqlite3.OperationalError as exc:
+                    # "duplicate column name" means another process
+                    # raced ahead and already added it — that's the
+                    # success state.
+                    if "duplicate column" not in str(exc).lower():
+                        raise
+            if "pursuit_count" not in existing_cols:
+                try:
+                    c.execute(
+                        "ALTER TABLE wonderings "
+                        "ADD COLUMN pursuit_count INTEGER NOT NULL DEFAULT 0"
+                    )
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS wondering_pursuits (
+                    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                    wondering_id      INTEGER NOT NULL
+                                        REFERENCES wonderings(id),
+                    decided_at        REAL NOT NULL,
+                    decision          TEXT NOT NULL,
+                    score             REAL,
+                    components_json   TEXT
+                )
+                """
+            )
             c.execute(
                 "CREATE INDEX IF NOT EXISTS ix_wonderings_status "
                 "ON wonderings (status, last_advanced)"
@@ -216,6 +262,10 @@ class Wonderings:
             c.execute(
                 "CREATE INDEX IF NOT EXISTS ix_probes_wid "
                 "ON wondering_probes (wondering_id, created_at)"
+            )
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS ix_pursuits_wid "
+                "ON wondering_pursuits (wondering_id, decided_at)"
             )
 
     # ── CRUD ──────────────────────────────────────────────────────────
@@ -275,10 +325,153 @@ class Wonderings:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    # Probe-loop awareness window: a wondering surfaced via pursuit
+    # within this many seconds is deprioritised by ``pick_next`` so
+    # the owner doesn't get double-touched (proactive surface PLUS
+    # probe-loop card) on the same topic in adjacent cycles. Sourced
+    # from the working-self ``RECENCY_HALF_LIFE_HOURS`` so the two
+    # channels share a coherent pacing — single source of truth
+    # (audit M2 fix: the previous draft duplicated the constant in
+    # two files, courting drift on tuning).
+    @classmethod
+    def _pursuit_probe_cooldown_seconds(cls) -> float:
+        from core.evolution.wondering_pursuit import RECENCY_HALF_LIFE_HOURS
+
+        return RECENCY_HALF_LIFE_HOURS * 3600.0
+
     def pick_next(self) -> Optional[dict]:
-        """Fair-rotation pick: open/active, oldest last_advanced first."""
-        opens = self.list_open(limit=1)
-        return opens[0] if opens else None
+        """Fair-rotation pick: open/active, deprioritising any
+        wondering surfaced via pursuit within
+        ``_PURSUIT_PROBE_COOLDOWN_SECONDS``. Among non-cooled-down
+        candidates, oldest ``last_advanced`` first.
+
+        Slice-2-Session-3 awareness: if a wondering was just surfaced
+        proactively, the probe-loop should let it rest for a window
+        before advancing it again. Without this, the same wondering
+        can be surfaced AND have a probe card queued in adjacent
+        reasoning cycles — both produce owner-visible touchpoints,
+        and the doubling is intrusive."""
+        with self._lock, self._conn() as c:
+            cooldown_threshold = time.time() - self._pursuit_probe_cooldown_seconds()
+            # First try non-cooled-down candidates.
+            rows = c.execute(
+                "SELECT * FROM wonderings "
+                "WHERE status IN ('open', 'active') "
+                "  AND (last_pursuit_at IS NULL OR last_pursuit_at < ?) "
+                "ORDER BY COALESCE(last_advanced, created_at) ASC LIMIT 1",
+                (cooldown_threshold,),
+            ).fetchall()
+            if rows:
+                return dict(rows[0])
+            # Fallback: every eligible wondering is in cooldown.
+            # Return the one whose pursuit is OLDEST (least recently
+            # surfaced), so we don't starve forever.
+            rows = c.execute(
+                "SELECT * FROM wonderings "
+                "WHERE status IN ('open', 'active') "
+                "ORDER BY COALESCE(last_pursuit_at, created_at) ASC LIMIT 1",
+            ).fetchall()
+            return dict(rows[0]) if rows else None
+
+    # ── pursuit history (Slice 2 Session 3) ──────────────────────────
+
+    def record_pursuit(
+        self,
+        wondering_id: int,
+        *,
+        decision: str,
+        score: float = 0.0,
+        components: Optional[dict] = None,
+    ) -> Optional[int]:
+        """Record a single pursuit decision against ``wondering_id``.
+
+        ``decision`` is one of ``"surface"`` / ``"hold"`` / ``"errored"``
+        (matching the trace tri-state). All three write a history row;
+        only ``surface`` updates the parent wondering's
+        ``last_pursuit_at`` and ``pursuit_count`` columns — those
+        fields track *successful surfacings* for probe-loop
+        deprioritisation, not all evaluations.
+
+        Skips silently when ``wondering_id`` doesn't exist (defensive
+        — a stale id from the daemon must not raise into the reply
+        path). Returns the new history-row id on success, else None.
+        """
+        import json as _json
+
+        with self._lock, self._conn() as c:
+            # Defensive: confirm the parent exists. Skip silently
+            # otherwise — better than a foreign-key crash.
+            row = c.execute(
+                "SELECT id FROM wonderings WHERE id = ?",
+                (wondering_id,),
+            ).fetchone()
+            if row is None:
+                # Stale id from the daemon — could be a real bug
+                # (concurrent resolve / abandon, wrong DB path).
+                # Warn but don't raise into the reply path
+                # (audit M3 fix).
+                logger.warning(
+                    "record_pursuit skipped — wondering #%d not found",
+                    wondering_id,
+                )
+                return None
+            comps_json = (
+                _json.dumps(dict(components)) if components else None
+            )
+            cur = c.execute(
+                "INSERT INTO wondering_pursuits "
+                "(wondering_id, decided_at, decision, score, components_json) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    wondering_id,
+                    time.time(),
+                    str(decision),
+                    float(score),
+                    comps_json,
+                ),
+            )
+            history_id = cur.lastrowid
+            if str(decision) == "surface":
+                c.execute(
+                    "UPDATE wonderings "
+                    "SET last_pursuit_at = ?, pursuit_count = pursuit_count + 1 "
+                    "WHERE id = ?",
+                    (time.time(), wondering_id),
+                )
+            return history_id
+
+    def recent_pursuits(
+        self,
+        wondering_id: int,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Return the most recent pursuit-decision rows for the given
+        wondering, newest-first. Each row carries
+        ``components`` (decoded from JSON; an empty dict on failure).
+        """
+        import json as _json
+
+        with self._lock, self._conn() as c:
+            rows = c.execute(
+                "SELECT * FROM wondering_pursuits "
+                "WHERE wondering_id = ? "
+                "ORDER BY id DESC LIMIT ?",
+                (wondering_id, limit),
+            ).fetchall()
+        out: list[dict] = []
+        for r in rows:
+            d = dict(r)
+            comps_raw = d.pop("components_json", None) or "{}"
+            try:
+                d["components"] = _json.loads(comps_raw)
+            except _json.JSONDecodeError:
+                logger.warning(
+                    "malformed components_json on pursuit row #%d",
+                    d.get("id"),
+                )
+                d["components"] = {}
+            out.append(d)
+        return out
 
     def record_probe(
         self,

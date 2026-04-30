@@ -5728,6 +5728,79 @@ def api_debug_wonderings():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/debug/pursuit-decisions")
+def api_debug_pursuit_decisions():
+    """Wondering-pursuit decision history (Slice 2 Session 3).
+
+    Returns the most recent pursuit decisions across all wonderings,
+    newest first, joined with the parent question text. Each row
+    carries: ``wid`` (wondering id), ``question`` (truncated),
+    ``decided_at`` (epoch float), ``decision`` (surface/hold/errored),
+    ``score``, ``components`` (per-axis breakdown).
+
+    Optional ``?wid=N`` filters to one wondering. Optional
+    ``?limit=N`` clamps to ``[1, 100]`` (default 50)."""
+    if not _debug_auth_ok():
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        limit = max(1, min(100, int(request.args.get("limit", 50))))
+    except ValueError:
+        limit = 50
+    wid_filter = request.args.get("wid")
+    try:
+        wid_int = int(wid_filter) if wid_filter else None
+    except ValueError:
+        wid_int = None
+    try:
+        from core.wonderings import get_store
+        import json as _json
+        import sqlite3 as _sq
+
+        store = get_store()
+        with _sq.connect(str(store.db_path)) as conn:
+            conn.row_factory = _sq.Row
+            if wid_int is not None:
+                rows = conn.execute(
+                    "SELECT p.id, p.wondering_id, p.decided_at, "
+                    "       p.decision, p.score, p.components_json, "
+                    "       w.question "
+                    "FROM wondering_pursuits p "
+                    "LEFT JOIN wonderings w ON w.id = p.wondering_id "
+                    "WHERE p.wondering_id = ? "
+                    "ORDER BY p.id DESC LIMIT ?",
+                    (wid_int, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT p.id, p.wondering_id, p.decided_at, "
+                    "       p.decision, p.score, p.components_json, "
+                    "       w.question "
+                    "FROM wondering_pursuits p "
+                    "LEFT JOIN wonderings w ON w.id = p.wondering_id "
+                    "ORDER BY p.id DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+        decisions = []
+        for r in rows:
+            d = dict(r)
+            comps_raw = d.pop("components_json", None) or "{}"
+            try:
+                d["components"] = _json.loads(comps_raw)
+            except _json.JSONDecodeError:
+                d["components"] = {}
+            d["wid"] = d.pop("wondering_id")
+            d["question"] = (d.get("question") or "")[:200]
+            decisions.append(d)
+        return jsonify({
+            "decisions": decisions,
+            "count": len(decisions),
+            "checked_at": _utcnow_iso(),
+        })
+    except Exception as e:
+        logger.warning("debug /api/debug/pursuit-decisions failed: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/debug/wondering-events")
 def api_debug_wondering_events():
     """Last N `| wondering |` lines from cognition.log, parsed into dicts.

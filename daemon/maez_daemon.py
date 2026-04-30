@@ -1693,6 +1693,7 @@ class MaezDaemon:
         _pursuit_decision = None
         _pursuit_evaluated = False
         _pursuit_error: "str | None" = None
+        _pursuit_w_store = None  # captured for record_pursuit below
         if _pursuit_enabled:
             try:
                 from core.memory import identity as _identity_mod
@@ -1702,8 +1703,8 @@ class MaezDaemon:
                         get_store as _get_w_store,
                     )
 
-                    _w_store = _get_w_store()
-                    _open_wonderings = _w_store.list_open(limit=10) or []
+                    _pursuit_w_store = _get_w_store()
+                    _open_wonderings = _pursuit_w_store.list_open(limit=10) or []
                     _pursuit_decision = decide_pursuit(
                         _open_wonderings,
                         goals=_goals if _goals is not None else GoalHierarchy(),
@@ -1723,6 +1724,42 @@ class MaezDaemon:
                 logger.debug("wondering-pursuit evaluation failed: %s", _pursuit_exc)
                 _pursuit_decision = None
                 _pursuit_error = str(_pursuit_exc)[:200]
+        # Slice 2 Session 3: record the surface decision in the
+        # wonderings store + emit a lived episode (ADR 0019
+        # alignment — proactive surfaces are high-signal moments
+        # that future reflection should be able to cite). Both are
+        # best-effort; failures must not break the reply path.
+        if _pursuit_w_store is not None and _pursuit_decision is not None:
+            try:
+                _pursuit_w_store.record_pursuit(
+                    _pursuit_decision.wondering_id,
+                    decision="surface",
+                    score=_pursuit_decision.proactive_score,
+                    components=dict(_pursuit_decision.components),
+                )
+            except Exception as _record_exc:
+                logger.debug("record_pursuit (surface) failed: %s", _record_exc)
+            try:
+                # Lived-episode emission — ``source_kind="pursuit_surface"``
+                # so the lived-recall layer can later surface "Maez
+                # surfaced wondering X to owner at time T" as
+                # episode-shaped evidence. Conway 2000: reflection-
+                # on-action is part of self-memory.
+                self.lived_episodes.add(
+                    title=f"Surfaced wondering #{_pursuit_decision.wondering_id}",
+                    summary=_pursuit_decision.wondering_question[:500],
+                    participants=["Maez"],
+                    source_memory_ids=[
+                        f"pursuit-{_pursuit_decision.wondering_id}-{int(time.time())}",
+                    ],
+                    source_kind="pursuit_surface",
+                    importance=3,
+                )
+            except Exception as _ep_exc:
+                logger.debug(
+                    "pursuit-surface episode emission failed: %s",
+                    _ep_exc,
+                )
 
         # 2026-04-23 memory-integrity contract: audit BEFORE store + return.
         # See core/safety/audited_output.py for the full invariant.
