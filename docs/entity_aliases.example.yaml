@@ -1,0 +1,47 @@
+# Owner-curated entity aliases — EXAMPLE FILE.
+#
+# Step 5g of the capability acquisition pipeline. Seeds the entity
+# index (memory/entity_index.db) with canonical names and the
+# nicknames / shortenings the owner uses for them, so that bare-name
+# queries like "how is Maya?" resolve to the right canonical entity
+# instead of being missed by the deterministic extractor.
+#
+# This committed file is FIXTURE ONLY. Real owner-private aliases
+# go in config/entity_aliases.local.yaml (gitignored). Copy this
+# file to that path and edit before running:
+#
+#   cp docs/entity_aliases.example.yaml config/entity_aliases.local.yaml
+#   $EDITOR config/entity_aliases.local.yaml
+#   python -m core.memory.entity_alias_seed --dry-run
+#   python -m core.memory.entity_alias_seed --write
+#
+# Schema:
+#   entities:
+#     - canonical_name: "<full display name>"     # required
+#       kind: "person | place | project | ..."    # required, free-form
+#       aliases: ["short", "nickname"]            # optional
+#       notes: "free-form context"                # optional
+#
+# Ambiguity is allowed and surfaced honestly: if the same alias
+# (e.g. "Sam") maps to two entities, find_entities() returns both
+# at confidence 0.5 each rather than picking one. Add a more
+# specific alias to disambiguate, or accept the split-confidence
+# behaviour for ambiguous queries.
+
+entities:
+  - canonical_name: "Sample Person One"
+    kind: "person"
+    aliases:
+      - "Sample"
+    notes: "Replace with a real entity in your local file."
+
+  - canonical_name: "Sample Place"
+    kind: "place"
+    aliases:
+      - "the city"
+
+  - canonical_name: "Sample Project"
+    kind: "project"
+    aliases:
+      - "the project"
+      - "v1 work"

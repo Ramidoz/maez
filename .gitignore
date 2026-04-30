@@ -53,6 +53,11 @@ config/reddit_subs.yaml
 config/soul.local.md
 config/soul.md
 
+# Owner-curated entity alias seed — Step 5g. Local file holds real
+# names; only the example fixture (docs/entity_aliases.example.yaml)
+# is committed.
+config/entity_aliases.local.yaml
+
 # Working docs, intimate narratives, in-progress follow-ups — stay local
 docs/REBUILD_PLAN_*.md
 docs/TASK_TREEMAP.md
