@@ -102,16 +102,40 @@ The restore script must be tested in isolation, not by actually restoring the li
 
 The owner is expected to run a restoration drill on test data at least quarterly to verify the backup actually works. A backup that has never been tested is not a backup.
 
-## Implementation status (2026-04-30)
+## Implementation status (2026-04-30 — v1 shipped)
 
-Not yet shipped. Estimated one focused session:
+Landed:
 
-- `scripts/backup.sh` — the rsync snapshot script.
-- `scripts/backup_prune.sh` — retention enforcement.
-- `scripts/restore_from_backup.sh` — restoration with integrity checks.
-- A systemd timer + service for the 6-hour cadence.
-- `tests/test_hardware_backup.py` — verifies backup + restore round-trip on synthetic state.
-- `docs/GETTING_STARTED.md` update — operator instructions for choosing a backup destination and configuring encryption.
+- `scripts/backup/` package — `inventory.py`, `backup.py`,
+  `restore.py`, `restore_writer.py`, plus `__main__.py` and
+  `restore_cli.py` entry points.
+- `scripts/backup/backup_state_manifest.json` — single source of
+  truth for what gets backed up; classifies entries by type
+  (sqlite_db / directory / file / glob / secret_file).
+- `scripts/backup.sh` + `scripts/restore_from_backup.sh` — shell
+  wrappers for systemd / interactive use.
+- `scripts/maez-backup.template.service` +
+  `scripts/maez-backup.template.timer` — systemd templates with
+  `__MAEZ_HOME__` / `__MAEZ_USER__` placeholders.
+- `tests/test_hardware_backup.py` — 20 tests covering the v1 spec
+  (inventory resolution, SQLite-safe round-trip, atomic
+  in-progress staging, manifest sha256 verification, restore
+  pre-restore rollback, coma core-memory writer with mocked
+  MemoryManager, secret opt-in path).
+- `docs/GETTING_STARTED.md` operator instructions for setup and
+  restore.
+
+**v1 explicitly excludes (deferred to v1.1+):**
+
+- Encryption automation (owner picks LUKS / age / gpg manually).
+- Quarterly restore-drill scheduling.
+- NAS / offsite propagation.
+- Heartbeat-based automatic failure-vs-pause detection (the
+  ``--reason`` flag is owner-driven).
+- Cockpit UI for backup status (`logs/last_backup.json` exists; a
+  cockpit reader is a follow-up).
+- Backup-prune retention enforcement (`scripts/backup_prune.sh`)
+  — manual cleanup until the prune script lands in v1.1.
 
 ## Related decisions
 

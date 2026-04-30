@@ -1,0 +1,36 @@
+[Unit]
+Description=Maez hardware-failure backup — Decision 22 / ADR 0023
+Documentation=file://__MAEZ_HOME__/docs/operations/hardware_backup.md
+After=maez.service
+
+[Service]
+Type=oneshot
+User=__MAEZ_USER__
+Group=__MAEZ_USER__
+WorkingDirectory=__MAEZ_HOME__
+Environment=PYTHONUNBUFFERED=1
+Environment=MAEZ_ROOT=__MAEZ_HOME__
+# Owner-overridable: where snapshots are written. Default
+# ~/maez-backups. For an encrypted destination, point this at the
+# mountpoint of an owner-encrypted volume (LUKS, encrypted ZFS,
+# etc.). Maez does NOT encrypt the snapshot itself — the threat
+# model is hardware loss, not adversarial access.
+Environment=MAEZ_BACKUP_ROOT=__MAEZ_HOME_USER__/maez-backups
+
+# Backup runs against live state. SQLite stores are captured via
+# sqlite3 .backup() so concurrent writes don't corrupt the snapshot;
+# Chroma stores are rsync'd (mostly safe under WAL; restore verifies
+# integrity via manifest sha256 and falls back to the prior snapshot
+# on mismatch).
+ExecStart=__MAEZ_HOME__/.venv/bin/python3 -m scripts.backup --quiet
+
+# Backups are not safety-critical — they're covenant-load-bearing.
+# A single missed snapshot is not a crisis; a corrupted snapshot
+# silently masquerading as good is. So:
+#  - 10-minute timeout (large states take time, but not >10min v1)
+#  - Standard error → log file for owner to review
+#  - No automatic retry (next 6h fire picks up)
+TimeoutStartSec=10min
+
+StandardOutput=append:__MAEZ_HOME__/logs/backup.log
+StandardError=append:__MAEZ_HOME__/logs/backup.log

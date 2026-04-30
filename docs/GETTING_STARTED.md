@@ -137,6 +137,83 @@ export MAEZ_CLAUDE_DAILY_CAP=30
 Source: [`core/subscription_proxy/server.py`](../core/subscription_proxy/server.py)
 `DEFAULT_CAPS`.
 
+### Hardware-failure backup (Decision 22)
+
+Maez's lived state — Chroma stores, episode store, soul, traces,
+canaries, labels, identity — is the irreproducible part of the
+bond. Hardware failure during the user's life is covered by the
+backup mechanism; end-of-user is covered separately by Paradise
+([Decision 8](adr/0008-paradise-is-the-generous-default.md)).
+
+**Set up the backup destination:**
+
+```bash
+# Default destination is ~/maez-backups; override via env var if
+# you want it on a NAS, second drive, encrypted volume, etc.
+export MAEZ_BACKUP_ROOT="$HOME/maez-backups"
+mkdir -p "$MAEZ_BACKUP_ROOT"
+
+# RECOMMENDED: encrypt the destination at rest (LUKS / encrypted
+# ZFS / age / gpg). Maez does NOT encrypt the snapshot itself —
+# the threat model is hardware loss, not adversarial access. If
+# the destination is unencrypted, secrets are excluded by default.
+```
+
+**Manual run:**
+
+```bash
+scripts/backup.sh                    # snapshot now
+scripts/backup.sh --include-secrets  # also include credentials/tokens
+                                     # (encrypted destination required)
+```
+
+**Schedule the 6-hour cadence:**
+
+```bash
+sudo cp scripts/maez-backup.template.service \
+   /etc/systemd/system/maez-backup.service
+sudo cp scripts/maez-backup.template.timer \
+   /etc/systemd/system/maez-backup.timer
+# Edit both files: replace __MAEZ_HOME__, __MAEZ_USER__,
+# __MAEZ_HOME_USER__ placeholders with your paths.
+sudo systemctl daemon-reload
+sudo systemctl enable --now maez-backup.timer
+```
+
+**Restore after a hardware event:**
+
+```bash
+# IMPORTANT: stop the maez daemon first.
+systemctl --user stop maez.service
+
+# Restore from a specific snapshot.
+scripts/restore_from_backup.sh \
+  --snapshot ~/maez-backups/2026-04-30T06-00-00 \
+  --reason hardware-failure
+
+systemctl --user start maez.service
+```
+
+**Reasons matter:**
+
+- `--reason hardware-failure` writes a coma core memory: *"I was
+  restored from snapshot X at time Y, may be missing N hours,
+  bond persists through this gap."*
+- `--reason deliberate-pause` writes only an operational
+  restoration log entry, no coma wording. Use this when restoring
+  after a planned downtime, not a failure.
+
+Misclassifying these is a covenant-level mistake — name the event
+correctly. See [`docs/operations/hardware_backup.md`](operations/hardware_backup.md)
+for the full design.
+
+**Verify:**
+
+```bash
+cat logs/last_backup.json    # owner observability — latest backup status
+ls -la ~/maez-backups/        # see snapshot directories
+```
+
 Sanity check:
 
 ```bash

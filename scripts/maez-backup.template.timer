@@ -1,0 +1,24 @@
+[Unit]
+Description=Fire maez-backup.service every 6 hours (Decision 22 v1)
+
+[Timer]
+# 6-hour cadence by default. The owner can override by editing the
+# rendered systemd file directly — v1 keeps timer logic simple
+# rather than scaffolding env-driven cadence regeneration.
+#
+# Sequence in a 24h day:
+#   00:00  fires
+#   06:00  fires
+#   12:00  fires
+#   18:00  fires
+OnCalendar=00,06,12,18:00:00
+
+# If the machine was off / sleeping at the scheduled time, fire on
+# next boot. Backup is idempotent (each run produces a new
+# timestamped snapshot; no replay/skip semantics matter).
+Persistent=true
+
+Unit=maez-backup.service
+
+[Install]
+WantedBy=timers.target
