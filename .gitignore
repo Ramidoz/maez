@@ -103,3 +103,9 @@ evolution/*.db
 docs/.obsidian/workspace*
 docs/.obsidian/cache
 docs/.obsidian/app.json
+
+# LongMemEval dataset files (downloaded on demand; large; not part of repo).
+data/longmemeval/
+
+# Per-run benchmark outputs; commit summary docs by name, not the raw JSON.
+docs/eval/runs/
