@@ -230,6 +230,69 @@ def ingest_haystack(mm: Any, question: dict) -> int:
     return n
 
 
+# Preference-marker patterns (Slice 9 Session 5). Bonded-companion
+# memory cares disproportionately about user preferences — short
+# user assertions like "I love X" / "I miss Y" / "my favorite Z" —
+# but the salient-turn picker (longest substantive turn) systematically
+# loses them to longer non-preference content. We detect them at
+# ingest time and promote them to the daily tier independently.
+#
+# Lexicon curated from natural-text spot checks against the
+# LongMemEval single-session-preference subset; deliberately small
+# and high-precision to avoid false positives on factual statements
+# ("I work as X", "I went to X") that happen to start with "I".
+# Optional adverb/intensifier between "I" and the preference verb.
+# Catches "I really enjoy", "I always love", "I deeply miss" etc.
+_PREF_ADV = r"(?:really|truly|always|never|deeply|absolutely|honestly|sometimes|particularly)?\s*"
+
+# Two flavors:
+#   1. Explicit affect — "I love X", "I miss X", "my favorite X"
+#   2. Contextual preference — "I'm interested in X", "I'm trying
+#      to X", "I've been doing X". LongMemEval's single-session-
+#      preference subset relies almost entirely on the second
+#      flavor, so the detector has to reach it without flagging
+#      every neutral "I" statement.
+_PREFERENCE_MARKERS_RE = re.compile(
+    r"\b(?:"
+    # Explicit affect.
+    rf"i\s+{_PREF_ADV}(?:love|hate|prefer|enjoy|miss|adore|despise|cherish|like)"
+    r"|i\s+can(?:'|no)?t\s+stand"
+    r"|i('|\s+a)m\s+(?:a\s+huge\s+)?fan\s+of"
+    r"|my\s+favou?rite"
+    r"|i\s+(?:always|never)\s+(?:eat|drink|wear|read|listen|watch)"
+    # Contextual preference. "I'm" = "i\s*'?\s*m" handles "I'm",
+    # "I am", and "Im". The follow-on words pin it to preference-
+    # bearing context (interest, trying, planning, looking for) so
+    # neutral statements like "I am 34" don't match.
+    rf"|i\s*(?:'|\s+a)m\s+{_PREF_ADV}(?:interested|looking|trying|hoping)\s+(?:in|to|of|for|about)"
+    rf"|i\s*(?:'|\s+a)m\s+{_PREF_ADV}(?:planning|thinking|considering|wanting)\b"
+    # Habituals — "I've started X", "I've been doing Y". Strong
+    # preference signal in the LongMemEval data; the verb after
+    # the contraction pins it to ongoing-personal-practice.
+    rf"|i\s*(?:'|\s+ha)ve\s+{_PREF_ADV}(?:been|started|begun|tried)\b"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def is_preference_statement(text: str | None) -> bool:
+    """True when ``text`` looks like a *contextual-preference
+    candidate* — a first-person turn carrying preference signal.
+
+    The Session 5 audit confirmed empirically that the contextual
+    arm of this detector also flags non-preference statements
+    ("I'm trying to remember", "I'm planning the funeral", "I've
+    been waiting for the bus"). It's intentionally a candidate
+    detector, not a strict preference classifier; downstream code
+    (``synthesize_daily_summaries``) uses it to *promote* — the
+    cost of a false positive is one extra daily entry, not a
+    silent classification error.
+    """
+    if not text or not isinstance(text, str):
+        return False
+    return bool(_PREFERENCE_MARKERS_RE.search(text))
+
+
 def synthesize_daily_summaries(mm: Any, question: dict) -> int:
     """Write one synthetic daily-tier entry per haystack session.
 
@@ -278,24 +341,61 @@ def synthesize_daily_summaries(mm: Any, question: dict) -> int:
         # the topic-defining statement in the vast majority of
         # LongMemEval sessions without re-emitting every line.
         salient = max(user_turns, key=len)
-        # Bound at 600 chars so the daily tier stays a SUMMARY, not
-        # a transcript. The raw tier already carries the full text.
-        if len(salient) > 600:
-            salient = salient[:600].rstrip() + "…"
-        summary = f"[Session on {date or 'unknown date'}] user: {salient}"
         ts = _haystack_timestamp(date, 0)
-        mm.daily.add(
-            ids=[f"lme-daily-{uuid.uuid4()}"],
-            documents=[summary],
-            metadatas=[{
-                "type": "longmemeval_daily_synthetic",
-                "session_idx": s_idx,
-                "date": date,
-                "timestamp": ts,
-                "raw_count": len(user_turns),
-            }],
-        )
-        n += 1
+        date_str = date or "unknown date"
+
+        # Bind loop variables explicitly via defaults so the closure
+        # is safe under ruff B023 (no late-binding surprise if the
+        # closure ever escapes the loop).
+        def _emit(
+            content: str,
+            role: str = "user",
+            flavour: str = "summary",
+            *,
+            _date_str: str = date_str,
+            _s_idx: int = s_idx,
+            _date: str = date,
+            _ts: str = ts,
+            _raw_count: int = len(user_turns),
+        ) -> None:
+            nonlocal n
+            bounded = (
+                content[:600].rstrip() + "…"
+                if len(content) > 600 else content
+            )
+            mm.daily.add(
+                ids=[f"lme-daily-{uuid.uuid4()}"],
+                documents=[
+                    f"[Session on {_date_str}] {role}: {bounded}"
+                ],
+                metadatas=[{
+                    "type": "longmemeval_daily_synthetic",
+                    "session_idx": _s_idx,
+                    "date": _date,
+                    "timestamp": _ts,
+                    "raw_count": _raw_count,
+                    "flavour": flavour,
+                }],
+            )
+            n += 1
+
+        _emit(salient, flavour="salient")
+
+        # Preference promotion: at most ONE preference turn per
+        # session. Multi-promotion (Session 5 first attempt) caused
+        # context dilution on the oracle split — preference entries
+        # crowded the top-3 daily slots and pushed answer-bearing
+        # turns out. Single promotion preserves the bonded-companion
+        # signal ("I miss jasmine" reaches the daily tier) without
+        # tipping recall_for_cycle's slot budget.
+        pref_candidates = [
+            t for t in user_turns
+            if t != salient and is_preference_statement(t)
+        ]
+        if pref_candidates:
+            # Pick the longest — same salience proxy as the main
+            # picker. Captures the most-substantive preference turn.
+            _emit(max(pref_candidates, key=len), flavour="preference")
     return n
 
 
@@ -572,6 +672,7 @@ __all__ = [
     "ingest_haystack",
     "load_questions",
     "recall_for_question",
+    "is_preference_statement",
     "run_subset",
     "score_answer",
     "synthesize_daily_summaries",

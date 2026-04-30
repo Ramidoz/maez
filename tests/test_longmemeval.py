@@ -861,5 +861,183 @@ class TestSonnetJudge(unittest.TestCase):
             gen("PROMPT")
 
 
+class TestPreferenceDetector(unittest.TestCase):
+    """Slice 9 Session 5: preference-aware promotion. Preference
+    statements ('I like X') were below half on the recall floor
+    (0.49–0.53) because the salient-turn picker prefers longer
+    substantive content; preferences are short and structural.
+    Detector lifts them out of that competition."""
+
+    def test_detects_first_person_preference_markers(self):
+        from core.eval.longmemeval import is_preference_statement
+
+        positives = [
+            # Explicit affect.
+            "I love sourdough bread.",
+            "i like vanilla over chocolate",
+            "I prefer mornings to evenings.",
+            "I can't stand cilantro.",
+            "I hate the smell of eucalyptus.",
+            "I really enjoy long walks.",
+            "I miss the smell of jasmine.",
+            "my favorite city is kyoto.",
+            # Contextual preference (LongMemEval pattern — discovered
+            # by inspecting the single-session-preference subset).
+            "I'm interested in the Halloween-themed events.",
+            "I'm particularly interested in deep learning.",
+            "I'm looking for some recommendations.",
+            "I'm trying to reduce my sugar intake.",
+            "I've started making my own flavored creamer with almond milk.",
+            "I've been experimenting with different types of granola.",
+            "I'm planning another theme park weekend.",
+        ]
+        for text in positives:
+            self.assertTrue(
+                is_preference_statement(text),
+                f"missed preference: {text!r}",
+            )
+
+    def test_does_not_flag_factual_statements(self):
+        from core.eval.longmemeval import is_preference_statement
+
+        negatives = [
+            "I went to the store yesterday.",
+            "I am 34 years old.",
+            "I work as a software engineer.",
+            "the weather today is overcast.",
+            "we have a meeting tomorrow at 9am.",
+        ]
+        for text in negatives:
+            self.assertFalse(
+                is_preference_statement(text),
+                f"false positive: {text!r}",
+            )
+
+    def test_handles_empty_and_unicode(self):
+        from core.eval.longmemeval import is_preference_statement
+
+        self.assertFalse(is_preference_statement(""))
+        self.assertFalse(is_preference_statement(None))
+        # Emojified preference still counts.
+        self.assertTrue(is_preference_statement("I love coffee ☕"))
+
+
+class TestPreferenceAwareSynthesis(unittest.TestCase):
+    """Daily-tier synthesis must keep preferences even when a longer
+    non-preference turn would otherwise win the salience pick."""
+
+    def test_short_preference_beats_longer_unrelated_turn(self):
+        from core.eval.longmemeval import (
+            IsolatedMemoryHarness,
+            synthesize_daily_summaries,
+        )
+
+        q = {
+            "question_id": "synth-pref-1",
+            "question": "x",
+            "answer": "y",
+            "haystack_session_ids": [0],
+            "haystack_dates": ["2026-04-01"],
+            "haystack_sessions": [[
+                {"role": "user",
+                 "content": "I really love jasmine — it reminds me "
+                            "of my grandmother."},
+                {"role": "user",
+                 "content": "anyway today I had to take the car in "
+                            "for service, the alternator was making "
+                            "a weird noise on the way home and the "
+                            "mechanic said it'll be ready by friday "
+                            "afternoon if the parts come in on time"},
+            ]],
+        }
+        with IsolatedMemoryHarness() as h:
+            synthesize_daily_summaries(h.mm, q)
+            docs = h.mm.daily.get(include=["documents"])["documents"]
+        joined = " ".join(docs)
+        self.assertIn("jasmine", joined,
+                      "preference statement was crowded out")
+
+    def test_promotion_capped_at_one_per_session(self):
+        """Audit-pinned invariant. Five preference turns in one
+        session must produce EXACTLY one preference daily entry,
+        not five — multi-promotion was tried in Session 5 and
+        rejected for context dilution. The cap is the slice's
+        load-bearing finding; a future refactor must not silently
+        revert it."""
+        from core.eval.longmemeval import (
+            IsolatedMemoryHarness,
+            synthesize_daily_summaries,
+        )
+
+        q = {
+            "question_id": "synth-cap-pin",
+            "question": "x",
+            "answer": "y",
+            "haystack_session_ids": [0],
+            "haystack_dates": ["2026-04-01"],
+            "haystack_sessions": [[
+                {"role": "user",
+                 "content": "anyway today the alternator started "
+                            "making a weird grinding noise on the "
+                            "drive home from the airport so I had "
+                            "to take the car in for service which "
+                            "should be ready by friday afternoon"},
+                {"role": "user", "content": "I love sourdough bread."},
+                {"role": "user", "content": "I miss the smell of jasmine."},
+                {"role": "user", "content": "I'm interested in pottery."},
+                {"role": "user", "content": "my favorite city is kyoto."},
+                {"role": "user", "content": "I prefer dark roast coffee."},
+            ]],
+        }
+        with IsolatedMemoryHarness() as h:
+            n = synthesize_daily_summaries(h.mm, q)
+            metas = h.mm.daily.get(include=["metadatas"])["metadatas"]
+        self.assertEqual(
+            n, 2,
+            f"expected exactly 1 salient + 1 preference (n=2); got n={n}",
+        )
+        flavours = sorted(m.get("flavour") for m in metas)
+        self.assertEqual(
+            flavours, ["preference", "salient"],
+            f"expected [salient, preference]; got {flavours!r}",
+        )
+
+    def test_preference_and_salient_can_coexist(self):
+        """When a session has both a preference and a longer non-
+        preference turn, BOTH should reach the daily tier (the
+        preference promoted, the longer turn picked normally)."""
+        from core.eval.longmemeval import (
+            IsolatedMemoryHarness,
+            synthesize_daily_summaries,
+        )
+
+        q = {
+            "question_id": "synth-pref-2",
+            "question": "x",
+            "answer": "y",
+            "haystack_session_ids": [0],
+            "haystack_dates": ["2026-04-01"],
+            "haystack_sessions": [[
+                {"role": "user",
+                 "content": "I prefer dark roast."},
+                {"role": "user",
+                 "content": "got an email from accounting this "
+                            "morning about the Q2 budget review, "
+                            "they want all expense reports in by "
+                            "the 15th and finance will sign off by "
+                            "the 22nd assuming nothing slips"},
+            ]],
+        }
+        with IsolatedMemoryHarness() as h:
+            n = synthesize_daily_summaries(h.mm, q)
+            docs = h.mm.daily.get(include=["documents"])["documents"]
+        joined = " ".join(docs)
+        # Both substrates must reach the daily tier.
+        self.assertIn("dark roast", joined)
+        self.assertIn("budget review", joined)
+        # And both produce daily entries (n >= 2).
+        self.assertGreaterEqual(n, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
