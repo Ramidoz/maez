@@ -272,9 +272,16 @@ def score_answer(reference: str, prediction: str) -> float:
     surface?" — the true ceiling needs a model judge, deferred to
     Session 2.
     """
-    if not isinstance(prediction, str) or not prediction:
+    # Some LongMemEval answers are numeric — coerce to str defensively.
+    if prediction is None:
         return 0.0
-    if not isinstance(reference, str) or not reference:
+    prediction = str(prediction)
+    if not prediction:
+        return 0.0
+    if reference is None:
+        return 0.0
+    reference = str(reference)
+    if not reference:
         return 0.0
     ref = _toks(reference)
     if not ref:
@@ -291,10 +298,16 @@ def score_answer(reference: str, prediction: str) -> float:
 
 
 def _result_record(
-    question: dict, surfaced: list[str], score: float, elapsed: float
+    question: dict,
+    surfaced: list[str],
+    score: float,
+    elapsed: float,
+    *,
+    with_surfaced: bool = False,
+    judge_score: int | None = None,
 ) -> dict:
     surfaced_text = "\n".join(surfaced)
-    return {
+    rec = {
         "question_id": question.get("question_id"),
         "question_type": question.get("question_type"),
         "answer": question.get("answer"),
@@ -302,33 +315,136 @@ def _result_record(
         "surfaced_chars": len(surfaced_text),
         "elapsed_s": round(elapsed, 3),
     }
+    if with_surfaced:
+        rec["surfaced"] = surfaced_text
+    if judge_score is not None:
+        rec["judge_score"] = judge_score
+    return rec
 
 
 def run_subset(
-    questions_path: str | Path, *, limit: int = 10
+    questions_path: str | Path,
+    *,
+    limit: int = 10,
+    with_judge: bool = False,
+    with_surfaced: bool = False,
+    question_ids: set[str] | None = None,
 ) -> list[dict]:
-    """Load + run ``limit`` questions through the full isolated
-    pipeline. Each question gets its own harness so cross-question
-    contamination is impossible.
+    """Load + run questions through the full isolated pipeline.
 
-    Returns one record per question with score + timings.
+    Each question gets its own harness so cross-question contamination
+    is impossible.
+
+    Args:
+        limit: cap on records produced. ``0`` returns ``[]``.
+        with_judge: if True, call the local-LLM judge per question
+            and stamp ``judge_score`` (0/1 or None on backend error)
+            on each record. Adds latency.
+        with_surfaced: include the raw surfaced text in each record
+            (useful for offline judge runs and debugging; bloats the
+            JSON output).
+        question_ids: if provided, only run the questions whose
+            ``question_id`` is in this set — lets callers stratify
+            across types without writing a separate driver.
     """
     questions = load_questions(questions_path)
-    # limit < 1 → run nothing (explicit, not a silent floor of 1).
     n = max(0, int(limit))
     if n == 0:
         return []
+    if question_ids is not None:
+        questions = [q for q in questions if q.get("question_id") in question_ids]
+    judge_fn = None
+    backend_was_set = False
+    saved_backend: str | None = None
+    if with_judge:
+        import os
+
+        from core.eval.judge import judge_answer as _judge
+
+        # Scope MAEZ_LLM_BACKEND override to the run only — leaving
+        # it process-wide would pollute any subsequent test that
+        # reads the env var (the audit caught this).
+        saved_backend = os.environ.get("MAEZ_LLM_BACKEND")
+        if saved_backend is None:
+            os.environ["MAEZ_LLM_BACKEND"] = "llamacpp"
+            backend_was_set = True
+
+        judge_model = _resolve_judge_model()
+
+        def judge_fn(*, question, reference, prediction):
+            return _judge(
+                question=question, reference=reference,
+                prediction=prediction, model=judge_model,
+            )
     results: list[dict] = []
-    for q in questions[:n]:
-        t0 = time.monotonic()
-        with IsolatedMemoryHarness() as h:
-            ingest_haystack(h.mm, q)
-            surfaced = recall_for_question(h.mm, q.get("question") or "")
-        elapsed = time.monotonic() - t0
-        prediction = "\n".join(surfaced)
-        score = score_answer(q.get("answer") or "", prediction)
-        results.append(_result_record(q, surfaced, score, elapsed))
+    try:
+        for q in questions[:n]:
+            t0 = time.monotonic()
+            with IsolatedMemoryHarness() as h:
+                ingest_haystack(h.mm, q)
+                surfaced = recall_for_question(h.mm, q.get("question") or "")
+            elapsed = time.monotonic() - t0
+            prediction = "\n".join(surfaced)
+            score = score_answer(q.get("answer") or "", prediction)
+            judge_score: int | None = None
+            if judge_fn is not None:
+                judge_score = judge_fn(
+                    question=q.get("question") or "",
+                    reference=q.get("answer") or "",
+                    prediction=prediction,
+                )
+            results.append(_result_record(
+                q, surfaced, score, elapsed,
+                with_surfaced=with_surfaced,
+                judge_score=judge_score,
+            ))
+    finally:
+        if backend_was_set:
+            import os as _os
+
+            _os.environ.pop("MAEZ_LLM_BACKEND", None)
     return results
+
+
+def _resolve_judge_model() -> str:
+    """Look up the local llama-server's loaded model name. Tries the
+    OpenAI-canonical ``data[].id`` shape first, then llama-server's
+    legacy ``models[].name``. Logs a WARNING and falls back to the
+    historical default if neither is available — silent fallback was
+    flagged in the Slice 9 Session 2 audit.
+    """
+    import os as _os
+
+    override = _os.environ.get("MAEZ_LONGMEMEVAL_JUDGE_MODEL")
+    if override:
+        return override
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(
+            "http://127.0.0.1:8080/v1/models", timeout=5
+        ) as r:
+            payload = json.load(r)
+        # OpenAI canonical: {"data": [{"id": ...}]}
+        data = payload.get("data") or []
+        if data and isinstance(data[0], dict) and data[0].get("id"):
+            return str(data[0]["id"])
+        # llama-server legacy: {"models": [{"name": ...}]}
+        models = payload.get("models") or []
+        if models and isinstance(models[0], dict) and models[0].get("name"):
+            return str(models[0]["name"])
+    except Exception as e:
+        logger.warning(
+            "longmemeval judge: model lookup failed (%s); "
+            "falling back to 'qwen36-27b' — set "
+            "MAEZ_LONGMEMEVAL_JUDGE_MODEL to override.", e,
+        )
+        return "qwen36-27b"
+    logger.warning(
+        "longmemeval judge: /v1/models payload had no usable "
+        "model entry; falling back to 'qwen36-27b'."
+    )
+    return "qwen36-27b"
 
 
 __all__ = [

@@ -107,5 +107,6 @@ docs/.obsidian/app.json
 # LongMemEval dataset files (downloaded on demand; large; not part of repo).
 data/longmemeval/
 
-# Per-run benchmark outputs; commit summary docs by name, not the raw JSON.
-docs/eval/runs/
+# Per-run benchmark outputs: ignore raw JSON (large + per-machine),
+# but commit md / txt summaries and sample-ID lists by name.
+docs/eval/runs/*.json

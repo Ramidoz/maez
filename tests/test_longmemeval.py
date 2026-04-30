@@ -329,5 +329,242 @@ class TestAuditFixes(unittest.TestCase):
         self.assertIn("falcon", docs)
 
 
+class TestLocalJudge(unittest.TestCase):
+    """Local-LLM-as-judge — Session 2 deliverable. Replaces the
+    token-overlap recall floor with a binary correctness label so
+    aggregate numbers are comparable to the published GPT-4o judge.
+
+    Tests stub the generate function so they're hermetic — no live
+    llama-server required."""
+
+    def test_judge_correct_returns_one(self):
+        from core.eval.judge import judge_answer
+
+        def fake(_prompt, **_kw):
+            return "CORRECT — the prediction names the cat."
+
+        score = judge_answer(
+            question="What pet does the user have?",
+            reference="a tabby cat named Marble",
+            prediction="The user has a tabby cat named Marble.",
+            generate_fn=fake,
+        )
+        self.assertEqual(score, 1)
+
+    def test_judge_incorrect_returns_zero(self):
+        from core.eval.judge import judge_answer
+
+        def fake(_prompt, **_kw):
+            return "INCORRECT — no mention of a cat."
+
+        score = judge_answer(
+            question="What pet does the user have?",
+            reference="a tabby cat named Marble",
+            prediction="They mentioned the weather.",
+            generate_fn=fake,
+        )
+        self.assertEqual(score, 0)
+
+    def test_judge_treats_unparseable_as_zero(self):
+        """A judge that responds with garbage must NOT be counted as
+        correct — failing closed is the safe direction for an eval
+        report."""
+        from core.eval.judge import judge_answer
+
+        def fake(_prompt, **_kw):
+            return "uhh I'm not sure honestly"
+
+        score = judge_answer(
+            question="x", reference="y", prediction="z",
+            generate_fn=fake,
+        )
+        self.assertEqual(score, 0)
+
+    def test_judge_handles_empty_prediction(self):
+        """Empty prediction is unambiguously zero — no generate call
+        needed."""
+        from core.eval.judge import judge_answer
+
+        called = {"n": 0}
+
+        def fake(_prompt, **_kw):
+            called["n"] += 1
+            return "CORRECT"
+
+        score = judge_answer(
+            question="x", reference="y", prediction="",
+            generate_fn=fake,
+        )
+        self.assertEqual(score, 0)
+        self.assertEqual(called["n"], 0)
+
+    def test_judge_recovers_from_generate_failure(self):
+        """A backend timeout must not crash the eval driver — return
+        None so run_subset can log the skip and continue."""
+        from core.eval.judge import judge_answer
+
+        def fake(_prompt, **_kw):
+            raise RuntimeError("backend timed out")
+
+        score = judge_answer(
+            question="x", reference="y", prediction="z",
+            generate_fn=fake,
+        )
+        self.assertIsNone(score)
+
+
+class TestRunSubsetAdvanced(unittest.TestCase):
+    """Integration coverage for run_subset's with_judge / with_surfaced
+    / question_ids paths — added after Session 2 audits flagged that
+    the closure that builds judge_fn was untested."""
+
+    def _make_two_question_file(self, td: str) -> Path:
+        q1 = _mini_question()
+        q2 = dict(_mini_question())
+        q2["question_id"] = "synth-002"
+        q2["haystack_sessions"] = [
+            [{"role": "user", "content": "I saw a falcon in the park."}]
+        ]
+        q2["haystack_dates"] = ["2026-04-20"]
+        p = Path(td) / "qs.json"
+        p.write_text(json.dumps([q1, q2]))
+        return p
+
+    def test_question_ids_filter_runs_only_matched(self):
+        from core.eval.longmemeval import run_subset
+
+        with tempfile.TemporaryDirectory() as td:
+            p = self._make_two_question_file(td)
+            out = run_subset(p, limit=10, question_ids={"synth-002"})
+        ids = [r["question_id"] for r in out]
+        self.assertEqual(ids, ["synth-002"])
+
+    def test_with_surfaced_includes_recalled_text(self):
+        from core.eval.longmemeval import run_subset
+
+        with tempfile.TemporaryDirectory() as td:
+            p = self._make_two_question_file(td)
+            out = run_subset(p, limit=1, with_surfaced=True)
+        self.assertIn("surfaced", out[0])
+        self.assertNotIn("surfaced", {})  # sanity for the assertion below
+        # Without with_surfaced the field must NOT be present.
+        with tempfile.TemporaryDirectory() as td:
+            p = self._make_two_question_file(td)
+            out2 = run_subset(p, limit=1)
+        self.assertNotIn("surfaced", out2[0])
+
+    def test_with_judge_calls_judge_and_stamps_score(self):
+        """End-to-end: with_judge=True must build the judge_fn closure
+        and stamp judge_score on each record. Patches the underlying
+        judge_answer to keep the test hermetic."""
+        from unittest.mock import patch
+
+        from core.eval import longmemeval as lme
+
+        seen_calls = []
+
+        def fake_judge(*, question, reference, prediction, model=None):
+            seen_calls.append((question, reference, prediction, model))
+            return 1
+
+        with tempfile.TemporaryDirectory() as td:
+            p = self._make_two_question_file(td)
+            with patch.object(lme, "_resolve_judge_model",
+                              return_value="test-model"), \
+                 patch("core.eval.judge.judge_answer", new=fake_judge):
+                out = lme.run_subset(p, limit=1, with_judge=True)
+        self.assertEqual(out[0]["judge_score"], 1)
+        self.assertEqual(len(seen_calls), 1)
+        self.assertEqual(seen_calls[0][3], "test-model")
+
+    def test_with_judge_restores_env_var_on_exit(self):
+        """Audit fix: MAEZ_LLM_BACKEND override must be scoped to the
+        run, never leak to subsequent tests."""
+        import os
+        from unittest.mock import patch
+
+        from core.eval import longmemeval as lme
+
+        os.environ.pop("MAEZ_LLM_BACKEND", None)
+        with tempfile.TemporaryDirectory() as td:
+            p = self._make_two_question_file(td)
+            with patch.object(lme, "_resolve_judge_model",
+                              return_value="m"), \
+                 patch("core.eval.judge.judge_answer",
+                       return_value=0):
+                lme.run_subset(p, limit=1, with_judge=True)
+        self.assertNotIn("MAEZ_LLM_BACKEND", os.environ)
+
+
+class TestModelResolution(unittest.TestCase):
+    """The fallback path was silent before the audit; tests pin both
+    the OpenAI-canonical lookup and the fallback warning behavior."""
+
+    def test_resolves_from_openai_data_shape(self):
+        from unittest.mock import patch
+
+        from core.eval import longmemeval as lme
+
+        class FakeResp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self):
+                return json.dumps(
+                    {"data": [{"id": "openai-canonical-model"}]}
+                ).encode()
+
+        # urllib's json.load takes a file-like object; provide read().
+        def fake_urlopen(url, timeout=5):
+            return FakeResp()
+
+        # Patch json.load so it sees our fake response cleanly.
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             patch("json.load",
+                   return_value={"data": [{"id": "openai-canonical-model"}]}):
+            self.assertEqual(
+                lme._resolve_judge_model(),
+                "openai-canonical-model",
+            )
+
+    def test_falls_back_when_lookup_fails(self):
+        from unittest.mock import patch
+
+        from core.eval import longmemeval as lme
+
+        with patch("urllib.request.urlopen",
+                   side_effect=RuntimeError("no server")):
+            # Falls back to the historical default rather than raising.
+            self.assertEqual(lme._resolve_judge_model(), "qwen36-27b")
+
+
+class TestJudgeRegexLoose(unittest.TestCase):
+    """Audit fix: judge regex was strict prefix-only; markdown-bold
+    or prefixed verdicts were silently scored INCORRECT."""
+
+    def test_markdown_bold_verdict_is_parsed(self):
+        from core.eval.judge import judge_answer
+
+        def fake(_p, **_kw):
+            return "**CORRECT** — the prediction names the cat."
+
+        score = judge_answer(
+            question="x", reference="y", prediction="z",
+            generate_fn=fake,
+        )
+        self.assertEqual(score, 1)
+
+    def test_prefixed_verdict_is_parsed(self):
+        from core.eval.judge import judge_answer
+
+        def fake(_p, **_kw):
+            return "Verdict: INCORRECT — no match."
+
+        score = judge_answer(
+            question="x", reference="y", prediction="z",
+            generate_fn=fake,
+        )
+        self.assertEqual(score, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

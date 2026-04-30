@@ -24,17 +24,25 @@ from statistics import mean
 
 def _aggregate_by_type(results: list[dict]) -> dict:
     by_type: dict[str, list[float]] = defaultdict(list)
+    by_type_judge: dict[str, list[int]] = defaultdict(list)
     for r in results:
-        by_type[str(r.get("question_type") or "unknown")].append(
-            float(r.get("score") or 0.0)
-        )
-    return {
-        qtype: {
+        qt = str(r.get("question_type") or "unknown")
+        by_type[qt].append(float(r.get("score") or 0.0))
+        js = r.get("judge_score")
+        if js is not None:
+            by_type_judge[qt].append(int(js))
+    out: dict = {}
+    for qtype in sorted(by_type):
+        scores = by_type[qtype]
+        agg = {
             "n": len(scores),
             "mean_score": round(mean(scores), 4) if scores else 0.0,
         }
-        for qtype, scores in sorted(by_type.items())
-    }
+        if by_type_judge.get(qtype):
+            agg["judge_n"] = len(by_type_judge[qtype])
+            agg["judge_accuracy"] = round(mean(by_type_judge[qtype]), 4)
+        out[qtype] = agg
+    return out
 
 
 def _format_report(results: list[dict], aggregate: dict) -> str:
@@ -45,16 +53,33 @@ def _format_report(results: list[dict], aggregate: dict) -> str:
     ]
     if results:
         scores = [float(r.get("score") or 0.0) for r in results]
+        judges = [int(r["judge_score"]) for r in results
+                  if r.get("judge_score") is not None]
         lines += [
             f"Mean score (token-overlap lower bound): {mean(scores):.4f}",
-            "",
-            "## By question type",
-            "",
-            "| type | n | mean score |",
-            "|---|---|---|",
         ]
-        for qtype, agg in aggregate.items():
-            lines.append(f"| {qtype} | {agg['n']} | {agg['mean_score']} |")
+        if judges:
+            lines.append(
+                f"Judge accuracy ({len(judges)} judged): {mean(judges):.4f}"
+            )
+        lines += ["", "## By question type", ""]
+        if judges:
+            lines += [
+                "| type | n | mean score | judge n | judge accuracy |",
+                "|---|---|---|---|---|",
+            ]
+            for qtype, agg in aggregate.items():
+                lines.append(
+                    f"| {qtype} | {agg['n']} | {agg['mean_score']} | "
+                    f"{agg.get('judge_n', '-')} | "
+                    f"{agg.get('judge_accuracy', '-')} |"
+                )
+        else:
+            lines += ["| type | n | mean score |", "|---|---|---|"]
+            for qtype, agg in aggregate.items():
+                lines.append(
+                    f"| {qtype} | {agg['n']} | {agg['mean_score']} |"
+                )
     lines += ["", "## Notes", ""]
     lines += [
         "- Score is a token-overlap heuristic, NOT the official GPT-4o judge.",
@@ -86,6 +111,22 @@ def main(argv: list[str] | None = None) -> int:
         "--json-out", type=str, default=None,
         help="Optional path for the per-question JSON results.",
     )
+    parser.add_argument(
+        "--judge", action="store_true",
+        help="Run the local-LLM judge on each question. "
+             "Requires llama-server reachable via core.routing.llm_client.",
+    )
+    parser.add_argument(
+        "--with-surfaced", action="store_true",
+        help="Include the raw surfaced recall text in --json-out "
+             "records (bloats the file; useful for offline judging).",
+    )
+    parser.add_argument(
+        "--ids-from", type=str, default=None,
+        help="Optional path to a newline-delimited list of "
+             "question_ids to restrict the run to (post-load filter; "
+             "limit still caps).",
+    )
     args = parser.parse_args(argv)
 
     qpath = Path(args.questions)
@@ -100,8 +141,38 @@ def main(argv: list[str] | None = None) -> int:
 
     from core.eval.longmemeval import run_subset
 
+    ids: set[str] | None = None
+    if args.ids_from:
+        ids_path = Path(args.ids_from)
+        if not ids_path.is_file():
+            print(
+                f"--ids-from file not found: {ids_path}", file=sys.stderr,
+            )
+            return 2
+        ids = {
+            line.strip() for line in ids_path.read_text().splitlines()
+            if line.strip()
+        }
+        if not ids:
+            print(
+                f"--ids-from file is empty: {ids_path}", file=sys.stderr,
+            )
+            return 2
+        if args.limit < len(ids):
+            print(
+                f"--ids-from has {len(ids)} ids but --limit is "
+                f"{args.limit}; results will be truncated to {args.limit}. "
+                "Pass a higher --limit to keep the stratified sample.",
+                file=sys.stderr,
+            )
     try:
-        results = run_subset(qpath, limit=args.limit)
+        results = run_subset(
+            qpath,
+            limit=args.limit,
+            with_judge=args.judge,
+            with_surfaced=args.with_surfaced,
+            question_ids=ids,
+        )
     except ValueError as e:
         print(f"failed to load/run questions: {e}", file=sys.stderr)
         return 2
