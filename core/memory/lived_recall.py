@@ -37,15 +37,175 @@ into the live response paths once Phase 8 probes prove a lift.
 
 from __future__ import annotations
 
+import logging
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from core.memory.entity_index import EntityIndex
     from core.memory.episodes import EpisodeStore
     from core.memory.relationship_graph import RelationshipGraph
     from core.memory.working_self import GoalHierarchy
+
+logger = logging.getLogger(__name__)
+
+
+# ── Step-5i: optional entity-query expansion ──────────────────────
+#
+# Behind ``MAEZ_ENTITY_EXPANSION`` (truthy in {1, true, yes, on}),
+# the lived recall composer queries the entity index and appends an
+# ``ENTITY EXPANSION`` section at the end of the brief. Default off.
+# Fail-closed: any exception in the expansion path drops the
+# section and returns the unchanged brief.
+
+_ENTITY_EXPANSION_FLAG = "MAEZ_ENTITY_EXPANSION"
+_ENTITY_EXPANSION_TRUTHY: frozenset[str] = frozenset({
+    "1", "true", "yes", "on",
+})
+
+_ENTITY_EXPANSION_TOP_ENTITIES = 3
+_ENTITY_EXPANSION_TOP_SESSIONS_PER_ENTITY = 5
+_ENTITY_EXPANSION_SECTION_BYTE_CAP = 500
+
+# Process-lifetime cache for the lazily-constructed default index.
+# Reset to None in tests that exercise the construction-failure
+# fail-closed path.
+_cached_entity_ix: "EntityIndex | None" = None
+
+
+def _entity_expansion_enabled() -> bool:
+    """Truthy iff env var is set to one of the allowlist values
+    after stripping whitespace and lowercasing. Strict set membership
+    means '=1\\n' (with a stray newline) and '=yes' both work, but
+    '=maybe' does not."""
+    raw = os.environ.get(_ENTITY_EXPANSION_FLAG, "").strip().lower()
+    return raw in _ENTITY_EXPANSION_TRUTHY
+
+
+def _get_default_entity_ix():
+    """Lazy + cached. Construction failures bubble up to the
+    fail-closed try/except in the recall composer."""
+    global _cached_entity_ix
+    if _cached_entity_ix is None:
+        from core.memory.entity_index import EntityIndex
+        _cached_entity_ix = EntityIndex()
+    return _cached_entity_ix
+
+
+def _format_entity_expansion_section(
+    expansion, ix: "EntityIndex",
+) -> str:
+    """Render the ENTITY EXPANSION section. Caller has already
+    confirmed the expansion has matched entities. Caps are applied
+    here (top-3 entities × top-5 sessions per entity, ~500 byte
+    section size) so a runaway index can't bloat the prompt."""
+    matches = expansion.matched_entities
+    if not matches:
+        return ""
+
+    # Sort by confidence DESC; tie-break by mention count DESC.
+    enriched = []
+    for m in matches:
+        try:
+            mention_count = len(ix.list_mentions(m.entity_id))
+        except Exception:
+            mention_count = 0
+        enriched.append((m, mention_count))
+    enriched.sort(
+        key=lambda pair: (pair[0].confidence, pair[1]),
+        reverse=True,
+    )
+    enriched = enriched[:_ENTITY_EXPANSION_TOP_ENTITIES]
+
+    lines: list[str] = ["=== ENTITY EXPANSION ==="]
+    any_session_emitted = False
+    for m, _count in enriched:
+        try:
+            mentions = ix.list_mentions(m.entity_id)
+        except Exception:
+            mentions = []
+        # list_mentions returns ORDER BY observed_at DESC; take
+        # distinct session_ids preserving order, capped at 5.
+        seen: list[str] = []
+        for row in mentions:
+            sid = row.get("session_id")
+            if sid and sid not in seen:
+                seen.append(sid)
+                if len(seen) >= _ENTITY_EXPANSION_TOP_SESSIONS_PER_ENTITY:
+                    break
+        if seen:
+            any_session_emitted = True
+        sessions_str = ", ".join(seen) if seen else "(no sessions)"
+        lines.append(
+            f"- {m.canonical_name} [conf {m.confidence:.1f}]: "
+            f"{sessions_str}"
+        )
+
+    # An expansion with matches but zero session_ids across the
+    # board has nothing useful to surface — suppress entirely so
+    # we don't emit a section that's just headers and bullets
+    # pointing at nothing.
+    if not any_session_emitted:
+        return ""
+
+    # Compose the explanation from the top-N actually rendered, not
+    # from QueryExpansion.explanation — the latter names every
+    # matched entity which would push us over the section cap and
+    # also conflict with the top-3 truncation rule.
+    rendered_names = [m.canonical_name for m, _ in enriched]
+    total_matches = len(matches)
+    if total_matches > len(rendered_names):
+        explanation = (
+            f"Explanation: top {len(rendered_names)} of "
+            f"{total_matches} matched entities; remainder truncated."
+        )
+    else:
+        explanation = (
+            f"Explanation: matched {total_matches} "
+            f"entit{'y' if total_matches == 1 else 'ies'}."
+        )
+    lines.append(explanation)
+
+    section = "\n".join(lines)
+    if len(section) > _ENTITY_EXPANSION_SECTION_BYTE_CAP:
+        # Truncate at the cap on a line boundary, append an
+        # honest-truncation marker. Cheap safety belt for a
+        # runaway index; well-bounded data never trips it.
+        truncated = section[: _ENTITY_EXPANSION_SECTION_BYTE_CAP]
+        last_nl = truncated.rfind("\n")
+        if last_nl > 0:
+            truncated = truncated[:last_nl]
+        section = truncated + "\n…(truncated)"
+    return section
+
+
+def _maybe_entity_expansion(
+    query: str, ix: "EntityIndex | None",
+) -> str:
+    """Compute the ENTITY EXPANSION section when the flag is on
+    and matches exist. Returns the empty string when disabled, no
+    matches, or anything fails — the recall composer concatenates
+    unconditionally."""
+    if not _entity_expansion_enabled():
+        return ""
+    try:
+        if ix is None:
+            ix = _get_default_entity_ix()
+        from core.memory.entity_index import expand_query
+
+        expansion = expand_query(query, ix=ix)
+        if not expansion.matched_entities:
+            return ""
+        return _format_entity_expansion_section(expansion, ix)
+    except Exception as e:  # noqa: BLE001 — fail-closed by contract
+        logger.debug(
+            "lived_recall: entity-expansion fail-closed: %s", e,
+        )
+        return ""
+
 
 # Tokens that carry no signal for keyword overlap scoring. Curated
 # subset of standard English stopwords (NLTK-style, language-level
@@ -645,6 +805,7 @@ def build_lived_recall_brief(
     max_items: int = 6,
     goals: "GoalHierarchy | None" = None,
     reference_time: "datetime | None" = None,
+    ix: "EntityIndex | None" = None,
 ) -> str:
     """Return a compact, evidence-backed lived recall brief, or an
     empty string when nothing matches.
@@ -667,6 +828,15 @@ def build_lived_recall_brief(
         return ""
     query_tokens = set(_tokenize(query))
     if not query_tokens:
+        # Step-5i: keyword recall has no shot, but entity expansion
+        # might still have a match (the substrate is exactly for
+        # short queries the tokenizer drops). Try expansion alone.
+        expansion_only = _maybe_entity_expansion(query, ix)
+        if expansion_only:
+            return "\n".join([
+                "=== LIVED RECALL — EVIDENCE-BACKED ===",
+                expansion_only,
+            ])
         return ""
 
     # ── score and rank items ────────────────────────────────────────
@@ -943,13 +1113,26 @@ def build_lived_recall_brief(
     # an empty store + a "now"-flavored query would produce a brief
     # that fabricates the existence of a memory layer it doesn't
     # have.
-    if not sections:
+    # Step-5i — optional entity expansion. Off by default; appended
+    # at the very end so existing v1.2/v1.3 sections come first.
+    # Fail-closed inside _maybe_entity_expansion: any exception
+    # there returns the empty string and the brief is unchanged.
+    # Computed BEFORE the empty-sections check so an entity-only
+    # query (no keyword overlap with stored episodes) can still
+    # produce a brief from the expansion alone — that is exactly
+    # the case the substrate is meant to rescue.
+    expansion_section = _maybe_entity_expansion(query, ix)
+
+    if not sections and not expansion_section:
         return ""
 
     # Live-state guard. Only appended when the brief already carries
     # content for the guard to qualify — never as a standalone
     # claim.
-    if _is_live_state_query(query):
+    if sections and _is_live_state_query(query):
         sections.append("- Live state: unavailable from graph (check perception layer)")
+
+    if expansion_section:
+        sections.append(expansion_section)
 
     return "\n".join(["=== LIVED RECALL — EVIDENCE-BACKED ===", *sections])
