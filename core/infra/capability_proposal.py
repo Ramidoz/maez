@@ -257,10 +257,18 @@ def _compose_card_action_payload(
     manual_source_path: str | None,
     acquisition: str,
     plain_english: str,
+    proposal_id: str,
 ) -> dict:
     """Build the create_card-compatible payload. Keys must match
-    PendingCardStore.create_card kwargs exactly so a future Step 4b
-    can invoke create_card(**payload)."""
+    PendingCardStore.create_card kwargs exactly so Step 4b can
+    invoke ``create_card(**payload)``.
+
+    ``proposal_id`` is threaded into ``params`` (Step 4b post-review
+    fix) so the queue's ``proposal_id`` field can be populated when
+    the action handler runs from a real card approval — without
+    this, the real card path drops the link from queue row back to
+    originating proposal.
+    """
     return {
         "action": "capability.acquire",
         "params": {
@@ -268,6 +276,7 @@ def _compose_card_action_payload(
             "source": source,
             "manual_source_path": manual_source_path or "",
             "acquisition": acquisition,
+            "proposal_id": proposal_id,
         },
         "reason": (
             f"operator-driven gap match: {felt_limitation!r}"
@@ -307,6 +316,11 @@ def _make_proposal(
         matched_signals=list(evaluation.matched_signals),
         matched_terms=list(evaluation.matched_terms),
     )
+    # proposal_id is generated BEFORE the payload so it can be
+    # threaded into payload['params'] — that's the only path by
+    # which the queue's proposal_id field gets populated through
+    # real card approval. (Step 4b post-review fix.)
+    proposal_id = "prop-" + secrets.token_hex(8)
     payload = _compose_card_action_payload(
         felt_limitation=felt_limitation,
         capability_id=evaluation.capability_id,
@@ -314,9 +328,8 @@ def _make_proposal(
         manual_source_path=manual_source_path,
         acquisition=getattr(entry, "acquisition", "self-dev"),
         plain_english=plain,
+        proposal_id=proposal_id,
     )
-
-    proposal_id = "prop-" + secrets.token_hex(8)
     return CapabilityProposal(
         proposal_id=proposal_id,
         created_at=time.time(),

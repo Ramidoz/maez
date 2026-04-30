@@ -950,9 +950,26 @@ class DecisionPipeline:
                 message="Card was already resolved before execution could start.",
                 card=fresh,
             )
+        # Enrich params for actions whose handlers need the surrounding
+        # card metadata (request_id / reason / plain_english). The
+        # default _execute_action contract passes only card.action +
+        # card.params, which loses metadata that lives on the card
+        # row itself. capability.acquire's handler stores
+        # card_request_id, reason, and plain_english into the
+        # acquisition queue for the audit trail — without enrichment
+        # those queue fields would be NULL on real-card approvals.
+        # (Step 4b post-review fix.)
+        execute_params = dict(card.params or {})
+        if card.action == "capability.acquire":
+            execute_params.setdefault("card_request_id", card.request_id)
+            if card.reason is not None:
+                execute_params.setdefault("reason", card.reason)
+            if card.plain_english is not None:
+                execute_params.setdefault("plain_english", card.plain_english)
         try:
             result = self.action_engine._execute_action(
-                card.action, card.params, f"card:{card.request_id}", tier=0
+                card.action, execute_params,
+                f"card:{card.request_id}", tier=0,
             )
             ok = bool(getattr(result, "success", False))
             out = str(getattr(result, "output", "") or "")

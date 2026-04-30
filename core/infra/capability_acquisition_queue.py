@@ -218,36 +218,53 @@ def enqueue(queue: AcquisitionQueue, **kwargs: Any) -> str:
 # ── action handler ─────────────────────────────────────────────────
 
 
-_MANUAL_DIR_NAME = "maez_manual"
+def _repo_manual_root() -> Path:
+    """Resolve the canonical manual root for this Maez install:
+    ``<repo>/docs/maez_manual``. Anchoring on the actual repo root
+    prevents an attacker from creating ``/tmp/docs/maez_manual/``
+    and slipping a fake entry through."""
+    try:
+        from core import paths as _paths
+        return (_paths.home() / "docs" / "maez_manual").resolve()
+    except Exception:
+        # Defensive fallback — if core.paths is unavailable, refuse
+        # the broad ancestor match by returning a non-existent path.
+        return Path("/dev/null/docs/maez_manual")
 
 
 def _is_path_inside_manual(path_str: str) -> bool:
-    """True iff ``path_str`` resolves to a file under
+    """True iff ``path_str`` resolves to a file under THIS REPO's
     ``docs/maez_manual/``. Path-traversal-safe: uses
     ``Path.resolve()`` so ``..`` segments are normalized before
-    the containment check."""
+    the containment check.
+
+    Anchored on the repo's manual root specifically — any other
+    ``docs/maez_manual`` directory anywhere on the filesystem is
+    rejected. (Step 4b post-review fix: the previous version
+    accepted any ancestor matching ``docs/maez_manual``.)
+    """
     if not path_str:
         return False
     try:
         candidate = Path(path_str).resolve()
     except (OSError, ValueError):
         return False
-    # Walk up the candidate's parents looking for a docs/maez_manual
-    # ancestor.
-    for ancestor in candidate.parents:
-        if ancestor.name == _MANUAL_DIR_NAME and ancestor.parent.name == "docs":
-            return candidate.is_file()
-    return False
+    if not candidate.is_file():
+        return False
+    manual_root = _repo_manual_root()
+    try:
+        candidate.relative_to(manual_root)
+        return True
+    except ValueError:
+        return False
 
 
-def _read_manual_acquisition(manual_source_path: str) -> str | None:
-    """Read the ``acquisition`` field from the manual entry's
-    front-matter. Returns None if the file isn't a valid manual
-    entry."""
+def _load_manual_entry(manual_source_path: str):
+    """Load the manual entry at ``manual_source_path``. Returns None
+    if the file isn't a valid manual entry (handler will refuse)."""
     try:
         from core.capability_manual import load_capability
-        entry = load_capability(manual_source_path)
-        return entry.acquisition
+        return load_capability(manual_source_path)
     except Exception as e:
         logger.debug(
             "capability_acquisition_queue: load_capability failed: %s", e,
@@ -293,16 +310,27 @@ def handle_capability_acquire(
             "under docs/maez_manual/ or doesn't exist"
         )
 
-    acquisition = params.get("acquisition")
-    actual = _read_manual_acquisition(manual_source_path)
-    if actual is None:
+    # Load the manual entry once and verify BOTH capability_id and
+    # acquisition match. Without the capability_id check, a stale
+    # or tampered card could enqueue a different capability while
+    # pointing at a real manual entry. (Step 4b post-review fix.)
+    entry = _load_manual_entry(manual_source_path)
+    if entry is None:
         raise ValueError(
             f"could not read manual entry at {manual_source_path}"
         )
-    if acquisition != actual:
+    if entry.capability_id != capability_id:
+        raise ValueError(
+            f"capability_id param {capability_id!r} does not match "
+            f"manual entry's {entry.capability_id!r} — possible "
+            "stale/tampered card"
+        )
+    acquisition = params.get("acquisition")
+    if acquisition != entry.acquisition:
         raise ValueError(
             f"acquisition param {acquisition!r} does not match "
-            f"manual entry's {actual!r} — possible stale/tampered card"
+            f"manual entry's {entry.acquisition!r} — possible "
+            "stale/tampered card"
         )
 
     queue = AcquisitionQueue(queue_path)

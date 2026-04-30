@@ -491,5 +491,222 @@ class TestEndToEndProposalToQueue(unittest.TestCase):
         self.assertIn("no code", output.lower())
 
 
+class TestRepoAnchoredManualPath(unittest.TestCase):
+    """Patch (Step 4b post-review): manual_source_path containment
+    must be anchored on the repo's docs/maez_manual root, not any
+    docs/maez_manual ancestor anywhere on the filesystem."""
+
+    def test_external_docs_maez_manual_rejected(self):
+        from core.capability_acquisition_queue import handle_capability_acquire
+
+        with tempfile.TemporaryDirectory() as td:
+            # Build a fake docs/maez_manual outside the repo.
+            fake = (Path(td) / "docs" / "maez_manual")
+            fake.mkdir(parents=True)
+            fake_entry = fake / "fake.md"
+            fake_entry.write_text(
+                "---\n"
+                "capability_id: fake\ntitle: Fake\nstatus: stable\n"
+                "gap_signals:\n  - 'x'\n"
+                "prerequisites: []\nexternal_prerequisites: []\n"
+                "acquisition: self-dev\n"
+                "covenant:\n  consent-card-required: true\n"
+                "  exact-phrase-ratification: false\n"
+                "  covenant-touch: low\n"
+                "conflicts_with: []\nreference_papers: []\n"
+                "implementation_files: []\n"
+                "---\nbody\n",
+            )
+            params = _enqueue_kwargs(
+                capability_id="fake",
+                manual_source_path=str(fake_entry),
+            )
+            with self.assertRaises(ValueError):
+                handle_capability_acquire(
+                    params, queue_path=Path(td) / "queue.db",
+                )
+
+
+class TestCapabilityIdMismatchRejected(unittest.TestCase):
+    """Patch: handler must verify params['capability_id'] equals
+    the manual entry's capability_id. Otherwise a stale/tampered
+    card could enqueue 'foo' with a path pointing at a different
+    entry."""
+
+    def test_capability_id_mismatch_rejected(self):
+        from core.capability_acquisition_queue import handle_capability_acquire
+
+        with tempfile.TemporaryDirectory() as td:
+            params = _enqueue_kwargs(
+                # claim capability_id='ghost' but path points at RLM
+                capability_id="ghost",
+                manual_source_path=str(
+                    _REPO / "docs" / "maez_manual"
+                    / "recursive-context-engine.md"
+                ),
+                acquisition="self-dev",
+            )
+            with self.assertRaises(ValueError):
+                handle_capability_acquire(
+                    params, queue_path=Path(td) / "queue.db",
+                )
+
+
+class TestProposalIdPropagatesThroughCardPayload(unittest.TestCase):
+    """Patch: Step 4 proposal generator must include proposal_id
+    in card_action_payload['params'] so it survives the real card
+    path. Without this, queue rows have null proposal_id even
+    though the proposal had one."""
+
+    def test_proposal_id_in_card_payload_params(self):
+        from core.capability_proposal import generate_proposals
+        from core.capability_evaluator import (
+            CapabilityEvaluation, EvaluationReason,
+        )
+        from core.capability_manual import load_manual
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "alpha.md").write_text(
+                "---\n"
+                "capability_id: alpha\ntitle: Alpha\nstatus: stable\n"
+                "gap_signals:\n  - 'x'\n"
+                "prerequisites: []\nexternal_prerequisites: []\n"
+                "acquisition: self-dev\n"
+                "covenant:\n  consent-card-required: true\n"
+                "  exact-phrase-ratification: false\n"
+                "  covenant-touch: low\n"
+                "conflicts_with: []\nreference_papers: []\n"
+                "implementation_files: []\n"
+                "---\nbody\n",
+            )
+            manual = load_manual(root)
+            entry = manual.find_by_id("alpha")
+            ev = CapabilityEvaluation(
+                capability_id=entry.capability_id,
+                title=entry.title,
+                match_score=0.5, decision="eligible",
+                reasons=[EvaluationReason(
+                    code="ok", severity="info",
+                    message="(test)", evidence={},
+                )],
+                missing_prerequisites=[],
+                external_prerequisites=[],
+                covenant_touch=entry.covenant.covenant_touch,
+                consent_card_required=entry.covenant.consent_card_required,
+                exact_phrase_ratification=entry.covenant.exact_phrase_ratification,
+                hardware_snapshot={},
+                entry=entry,
+                matched_signals=["x"],
+                matched_terms=[],
+            )
+            proposals = generate_proposals("q", [ev])
+        params = proposals[0].card_action_payload["params"]
+        self.assertIn("proposal_id", params)
+        self.assertEqual(params["proposal_id"], proposals[0].proposal_id)
+
+
+class TestRealApprovalPathEnrichesParams(unittest.TestCase):
+    """Patch (the load-bearing one): DecisionPipeline._on_approve
+    calls action_engine._execute_action(card.action, card.params,
+    ...) — dropping card.reason / card.plain_english /
+    card.request_id. Real-card approvals would land queue rows
+    missing those fields. Patch must enrich params for
+    capability.acquire before execution."""
+
+    def test_card_metadata_lands_in_queue_row_via_real_approval(self):
+        from unittest.mock import MagicMock, patch as mock_patch
+
+        from core.actions.action_engine import ActionEngine
+        from core.capability_acquisition_queue import AcquisitionQueue
+        from core.decision.decision_pipeline import DecisionPipeline
+        from core.decision.pending_cards import CardRecord
+
+        # Build a CardRecord that mimics one created from a real
+        # proposal — params lacks card_request_id / reason /
+        # plain_english (those live on the card row itself).
+        with tempfile.TemporaryDirectory() as td:
+            q_path = Path(td) / "queue.db"
+            params_only = {
+                "capability_id": "recursive-context-engine",
+                "source": "manual",
+                "manual_source_path": str(
+                    _REPO / "docs" / "maez_manual"
+                    / "recursive-context-engine.md"
+                ),
+                "acquisition": "self-dev",
+                "proposal_id": "prop-test123456",
+            }
+            card = CardRecord(
+                request_id="card-test-req-id",
+                created_at=1.0, updated_at=1.0, status="approved",
+                action="capability.acquire",
+                params=params_only,
+                reason="operator-driven gap match: 'test query'",
+                plain_english="Test plain english from card.",
+            )
+
+            # Fake card_store + audit_log so DecisionPipeline can
+            # be constructed minimally. .approve must return our
+            # real CardRecord (not a fresh MagicMock) so the
+            # downstream enrichment path sees the original metadata.
+            store = MagicMock()
+            store.approve.return_value = card
+            store.mark_running.return_value = card
+            store.mark_done.return_value = card
+            store.mark_failed.return_value = card
+            store.get.return_value = card
+            audit_log = MagicMock()
+            audit_log.record_outcome.return_value = None
+
+            engine = ActionEngine.__new__(ActionEngine)
+            # _execute_action needs a logger and a few attrs; the
+            # method itself is what we test.
+            engine.memory = None
+            engine._covenant_gate = lambda action, params: None
+            engine._log_action = MagicMock()
+
+            pipeline = DecisionPipeline.__new__(DecisionPipeline)
+            pipeline.card_store = store
+            pipeline.audit_log = audit_log
+            pipeline.action_engine = engine
+            pipeline.renderer = None  # for any send_resolution path
+
+            # Patch the queue's default path so the test queue is used.
+            # Also stub will-I check to never refuse (the real check
+            # imports core.will_i which is harmless but unrelated).
+            with mock_patch(
+                "core.infra.capability_acquisition_queue."
+                "_default_queue_path",
+                return_value=q_path,
+            ), mock_patch.object(
+                pipeline, "_will_i_check", return_value=None,
+            ):
+                cls = MagicMock()
+                cls.source = "test"
+                cls.reasoning = "test approval"
+                cls.intent_category = None
+                cls.lane = 2
+                pipeline._on_approve(card, cls, user_id="test-owner")
+
+            queue = AcquisitionQueue(q_path)
+            rows = queue.list_all()
+
+        self.assertEqual(len(rows), 1, f"expected 1 queue row; got: {rows!r}")
+        row = rows[0]
+        self.assertEqual(
+            row["card_request_id"], "card-test-req-id",
+            "card.request_id must propagate into queue row",
+        )
+        self.assertEqual(
+            row["reason"], "operator-driven gap match: 'test query'",
+            "card.reason must propagate into queue row",
+        )
+        self.assertEqual(
+            row["plain_english"], "Test plain english from card.",
+            "card.plain_english must propagate into queue row",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
