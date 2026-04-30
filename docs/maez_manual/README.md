@@ -40,6 +40,11 @@ reference_papers:
 implementation_files:
   - path/to/code/if-already-shipped.py
 superseded_by: # optional, for deprecated entries; must resolve to a real capability_id
+
+# Optional hardware constraints (read by the capability_evaluator).
+# Omit if the capability has no specific hardware floor.
+min_vram_mb: 0  # FREE VRAM (not total) needed at acquisition time. Capabilities that don't load a new model (e.g. RLM-style overlays) should declare 0 or omit.
+min_context_window: 0  # context-window tokens the loaded brain must offer.
 ---
 
 # Title
