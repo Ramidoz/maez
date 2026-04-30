@@ -21,17 +21,25 @@ gap_signals:
   - "natural-language signal Maez matches against its felt limitations"
   - "another signal — be specific; vague signals fire too often"
 prerequisites:
-  - other-capability-ids-required-first
+  # Capability IDs that MUST exist as other manual entries.
+  - other-capability-id-required-first
+external_prerequisites:
+  # Capabilities Maez relies on that live in the codebase, not in
+  # the manual. Loader treats these as known-shipped — no warning
+  # if they're absent from the manual.
+  - working-self
+  - lived-memory-architecture
 acquisition: self-dev | peer-fetch | owner-install | external-service
 covenant:
-  - consent-card-required: true
-  - exact-phrase-ratification: false
-  - covenant-touch: low | medium | high
+  consent-card-required: true
+  exact-phrase-ratification: false
+  covenant-touch: low | medium | high
 conflicts_with: []
 reference_papers:
   - "Author et al. (Year), arxiv:NNNN.NNNNN — short why-it-matters"
 implementation_files:
   - path/to/code/if-already-shipped.py
+superseded_by: # optional, for deprecated entries; must resolve to a real capability_id
 ---
 
 # Title

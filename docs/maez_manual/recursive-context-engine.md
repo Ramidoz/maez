@@ -8,15 +8,16 @@ gap_signals:
   - "Maez surfaces 'context too long' or truncates synthesis mid-output"
   - "user asks 'what happened across this whole period' rather than 'what did I say about X'"
   - "Maez attempts a synthesis that requires holding 100k+ tokens in context simultaneously"
-prerequisites:
+prerequisites: []
+external_prerequisites:
   - working-self
   - letta-style-introspection
   - claude-tier-or-equivalent-deep-call
 acquisition: self-dev
 covenant:
-  - consent-card-required: true
-  - exact-phrase-ratification: false
-  - covenant-touch: medium
+  consent-card-required: true
+  exact-phrase-ratification: false
+  covenant-touch: medium
 conflicts_with: []
 reference_papers:
   - "Zhang, Kraska, Khattab (2025), arxiv:2512.24601 — Recursive Language Models. Core paper. The 'paradigm of 2026' framing."

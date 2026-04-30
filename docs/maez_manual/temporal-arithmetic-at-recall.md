@@ -7,14 +7,15 @@ gap_signals:
   - "user asks 'how long after Y did Z happen?' and Maez can't compute the duration"
   - "user asks 'before X happened, what did I say about Y?' — temporal precondition reasoning fails"
   - "LongMemEval temporal-reasoning category scores below 0.6 under judge"
-prerequisites:
+prerequisites: []
+external_prerequisites:
   - lived-memory-architecture
   - haystack-date-preserving-ingest
 acquisition: self-dev
 covenant:
-  - consent-card-required: true
-  - exact-phrase-ratification: false
-  - covenant-touch: low
+  consent-card-required: true
+  exact-phrase-ratification: false
+  covenant-touch: low
 conflicts_with: []
 reference_papers:
   - "Zep / Graphiti (2024) — temporal validity windows on graph edges (already adapted in Slice 4)"

@@ -7,14 +7,15 @@ gap_signals:
   - "answer requires synthesizing evidence from two or more separately-recalled sessions"
   - "Maez finds session A and session B individually but can't connect them as being about the same entity"
   - "LongMemEval multi-session-reasoning category scores below 0.6 under judge"
-prerequisites:
+prerequisites: []
+external_prerequisites:
   - lived-memory-architecture
   - relationship-graph-store
 acquisition: self-dev
 covenant:
-  - consent-card-required: true
-  - exact-phrase-ratification: false
-  - covenant-touch: medium
+  consent-card-required: true
+  exact-phrase-ratification: false
+  covenant-touch: medium
 conflicts_with: []
 reference_papers:
   - "Zep (2024) — Graphiti pattern. Per-edge time-bounds + cross-session entity index"
