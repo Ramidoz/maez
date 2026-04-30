@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -643,6 +644,7 @@ def build_lived_recall_brief(
     graph: "RelationshipGraph",
     max_items: int = 6,
     goals: "GoalHierarchy | None" = None,
+    reference_time: "datetime | None" = None,
 ) -> str:
     """Return a compact, evidence-backed lived recall brief, or an
     empty string when nothing matches.
@@ -839,11 +841,42 @@ def build_lived_recall_brief(
         budget -= 1
 
     # ── emit in canonical section order ─────────────────────────────
+    # Temporal annotation (Step 5c): when the query is shaped like a
+    # temporal question ("when did X?", "how long after Y?"), append
+    # a short factual annotation to past-episode and open-loop lines
+    # so the answering layer has computed dates instead of raw token
+    # evidence. Off for non-temporal queries — annotation is layered
+    # on top of selection, never changes ranking.
+    from core.memory.temporal_arithmetic import (
+        annotate_recall_item, is_temporal_question,
+    )
+
+    _temporal_q = is_temporal_question(query)
+    _ref_time = reference_time
+    if _temporal_q and _ref_time is None:
+        from datetime import timezone
+
+        _ref_time = datetime.now(timezone.utc)
+
+    def _maybe_annotate_episode_line(line: str, ep: dict) -> str:
+        if not _temporal_q:
+            return line
+        ts_str = ep.get("occurred_at") or ep.get("created_at")
+        if not ts_str:
+            return line
+        try:
+            ev = datetime.fromisoformat(ts_str)
+        except (TypeError, ValueError):
+            return line
+        return annotate_recall_item(line, ev, _ref_time)
+
     sections: list[str] = []
     for s in selected_open_loops:
-        sections.append(_format_open_loop(s.episode))
+        line = _format_open_loop(s.episode)
+        sections.append(_maybe_annotate_episode_line(line, s.episode))
     for s in selected_past_episodes:
-        sections.append(_format_past_episode(s.episode))
+        line = _format_past_episode(s.episode)
+        sections.append(_maybe_annotate_episode_line(line, s.episode))
     for s in selected_graph_beliefs:
         sections.append(_format_graph_belief(s.edge, s.subject_label, s.object_label))
 
