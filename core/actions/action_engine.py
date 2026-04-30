@@ -818,7 +818,13 @@ class ActionEngine:
                 )
 
         try:
-            method = getattr(self, f"_do_{action}", None)
+            # Special-case dotted action names (e.g. "capability.acquire")
+            # that don't map to valid Python identifiers via the
+            # default _do_<action> dispatch convention.
+            if action == "capability.acquire":
+                method = self._do_capability_acquire
+            else:
+                method = getattr(self, f"_do_{action}", None)
             if not method:
                 raise ValueError(f"Unknown action: {action}")
             output = method(**params)
@@ -955,6 +961,29 @@ class ActionEngine:
             {"path": path, "content": content, "reason": reason},
             reason, tier=0,
         )
+
+    def _do_capability_acquire(self, **params) -> str:
+        """Action handler for ``capability.acquire`` (Step 4b).
+
+        Records APPROVED INTENT into the capability-acquisition queue.
+        Does NOT fetch code, install dependencies, modify files, or
+        run network calls. The owner-visible message declares
+        non-installation explicitly so the cockpit / approval surface
+        cannot mislead.
+
+        Step 5 (later, separate slice) consumes the queue for actual
+        integration, gated by additional consent at that time.
+
+        Validation per
+        ``core.capability_acquisition_queue.handle_capability_acquire``:
+          • capability_id required
+          • source must be 'manual' in v1
+          • manual_source_path must resolve under docs/maez_manual/
+          • acquisition must match the manual entry's declared value
+        """
+        from core.capability_acquisition_queue import handle_capability_acquire
+
+        return handle_capability_acquire(params)
 
     def _do_write_any_file(self, path: str, content: str, reason: str = "") -> str:
         p = Path(path).resolve()

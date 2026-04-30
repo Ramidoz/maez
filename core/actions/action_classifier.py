@@ -399,6 +399,19 @@ def classify_action(action: str, params: dict) -> ClassificationResult:
             reason=f"legacy high-risk action: {action}",
         )
 
+    # Capability-acquisition intent (Step 4b). Records intent into a
+    # durable queue; does NOT fetch code, install, or modify files.
+    # Owner approval is REQUIRED — Lane 2 routes through audit + card.
+    if action == 'capability.acquire':
+        return ClassificationResult(
+            category=IntentCategory.SYSTEM_MODIFICATION,
+            lane=2,
+            reason=(
+                "capability acquisition intent (queues approved "
+                "intent only; no code fetch or install)"
+            ),
+        )
+
     return ClassificationResult(
         category=IntentCategory.SYSTEM_MODIFICATION,
         lane=2,
