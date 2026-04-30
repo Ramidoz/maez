@@ -654,5 +654,153 @@ class TestLastBackupLog(unittest.TestCase):
             self.assertEqual(log["status"], "success")
 
 
+class TestDrillHelpers(unittest.TestCase):
+    """Drill is the bridge from 'backup code exists' to 'backup is
+    covenant-load-bearing.' Test the helpers using synthetic state;
+    the live execution is a separate concern that runs once before
+    the slice is declared done."""
+
+    def test_check_free_space_passes_when_enough(self):
+        from scripts.backup.drill import check_free_space
+
+        with tempfile.TemporaryDirectory() as td:
+            # Need 100 bytes; tmpdir has GB. Always passes.
+            ok, free, needed = check_free_space(
+                Path(td), required_bytes=100,
+            )
+        self.assertTrue(ok)
+        self.assertGreaterEqual(free, needed)
+
+    def test_check_free_space_fails_when_insufficient(self):
+        from scripts.backup.drill import check_free_space
+
+        with tempfile.TemporaryDirectory() as td:
+            # Demand petabytes — guaranteed to exceed any real disk.
+            ok, free, needed = check_free_space(
+                Path(td), required_bytes=10**18,
+            )
+        self.assertFalse(ok)
+        self.assertLess(free, needed)
+
+    def test_estimate_state_size(self):
+        from scripts.backup.drill import estimate_state_size
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _make_synthetic_state(root)
+            size = estimate_state_size(root)
+        self.assertGreater(size, 0)
+
+    def test_compare_files_byte_identical(self):
+        from scripts.backup.drill import compare_files
+
+        with tempfile.TemporaryDirectory() as td:
+            a = Path(td) / "a.txt"
+            b = Path(td) / "b.txt"
+            a.write_text("identical")
+            b.write_text("identical")
+            self.assertTrue(compare_files(a, b))
+
+    def test_compare_files_detects_drift(self):
+        from scripts.backup.drill import compare_files
+
+        with tempfile.TemporaryDirectory() as td:
+            a = Path(td) / "a.txt"
+            b = Path(td) / "b.txt"
+            a.write_text("first")
+            b.write_text("second")
+            self.assertFalse(compare_files(a, b))
+
+    def test_sqlite_row_count(self):
+        from scripts.backup.drill import sqlite_row_count
+
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "x.db"
+            con = sqlite3.connect(db)
+            con.executescript(
+                "CREATE TABLE t (k INTEGER PRIMARY KEY);"
+                "INSERT INTO t VALUES (1), (2), (3), (4);"
+            )
+            con.commit()
+            con.close()
+            self.assertEqual(sqlite_row_count(db, "t"), 4)
+
+    def test_sqlite_row_count_missing_table_returns_none(self):
+        from scripts.backup.drill import sqlite_row_count
+
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "x.db"
+            con = sqlite3.connect(db)
+            con.executescript("CREATE TABLE t (k INTEGER);")
+            con.commit()
+            con.close()
+            self.assertIsNone(sqlite_row_count(db, "no_such_table"))
+
+    def test_drill_report_shape(self):
+        """A drill report is a structured JSON document. Test that
+        the shape matches what an operator / cockpit would consume."""
+        from scripts.backup.drill import build_drill_report
+
+        report = build_drill_report(
+            source_root="/home/rohit/maez",
+            backup_root="/var/tmp/maez-backup-drill",
+            snapshot_path="/var/tmp/maez-backup-drill/snap",
+            checks=[
+                {"name": "manifest_verified", "status": "pass",
+                 "detail": "23 files"},
+                {"name": "core_count_match",  "status": "pass",
+                 "detail": "expected=12 actual=12"},
+                {"name": "lived_episode_count_match", "status": "fail",
+                 "detail": "expected=523 actual=520"},
+            ],
+        )
+        for k in ("timestamp", "source_root", "backup_root",
+                 "snapshot_path", "overall_status", "checks",
+                 "drill_version"):
+            self.assertIn(k, report)
+        self.assertEqual(report["overall_status"], "fail")
+
+    def test_drill_overall_status_pass_when_all_pass(self):
+        from scripts.backup.drill import build_drill_report
+
+        report = build_drill_report(
+            source_root="/x", backup_root="/y", snapshot_path="/z",
+            checks=[
+                {"name": "a", "status": "pass", "detail": ""},
+                {"name": "b", "status": "pass", "detail": ""},
+            ],
+        )
+        self.assertEqual(report["overall_status"], "pass")
+
+    def test_drill_overall_status_pass_with_skips(self):
+        """A skip means the comparison wasn't meaningful (e.g. the
+        source file didn't exist), not a verification failure.
+        Skips must not flip overall_status to fail."""
+        from scripts.backup.drill import build_drill_report
+
+        report = build_drill_report(
+            source_root="/x", backup_root="/y", snapshot_path="/z",
+            checks=[
+                {"name": "a", "status": "pass", "detail": ""},
+                {"name": "b", "status": "skip", "detail": "n/a"},
+                {"name": "c", "status": "pass", "detail": ""},
+            ],
+        )
+        self.assertEqual(report["overall_status"], "pass")
+
+    def test_drill_overall_status_fail_on_any_failure(self):
+        from scripts.backup.drill import build_drill_report
+
+        report = build_drill_report(
+            source_root="/x", backup_root="/y", snapshot_path="/z",
+            checks=[
+                {"name": "a", "status": "pass", "detail": ""},
+                {"name": "b", "status": "fail", "detail": "broken"},
+                {"name": "c", "status": "skip", "detail": "n/a"},
+            ],
+        )
+        self.assertEqual(report["overall_status"], "fail")
+
+
 if __name__ == "__main__":
     unittest.main()

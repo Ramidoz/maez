@@ -1,0 +1,126 @@
+{
+  "backup_root": "/home/rohit/maez-backup-drill",
+  "checks": [
+    {
+      "detail": "128002674688 bytes free under /home/rohit/maez-backup-drill",
+      "name": "free_space_check",
+      "status": "pass"
+    },
+    {
+      "detail": "478542943 bytes in 0.58s",
+      "name": "backup_succeeded",
+      "status": "pass"
+    },
+    {
+      "detail": "356 files verified",
+      "name": "snapshot_manifest_verified",
+      "status": "pass"
+    },
+    {
+      "detail": "reason=hardware-failure write_coma=False",
+      "name": "hf_no_coma.restore_succeeded",
+      "status": "pass"
+    },
+    {
+      "detail": "MemoryManager() instantiated cleanly",
+      "name": "hf_no_coma.memory_manager_opens",
+      "status": "pass"
+    },
+    {
+      "detail": "source=48 restored=48",
+      "name": "hf_no_coma.core_count_match",
+      "status": "pass"
+    },
+    {
+      "detail": "core=48 keys=['core', 'daily', 'raw']",
+      "name": "hf_no_coma.recall_for_cycle_non_empty",
+      "status": "pass"
+    },
+    {
+      "detail": "source=26 restored=26",
+      "name": "hf_no_coma.lived_episode_count_match",
+      "status": "pass"
+    },
+    {
+      "detail": "byte-identical",
+      "name": "hf_no_coma.identity_yaml_match",
+      "status": "pass"
+    },
+    {
+      "detail": "source=355 restored=355",
+      "name": "hf_no_coma.memory_audit_log_db_row_count",
+      "status": "pass"
+    },
+    {
+      "detail": "source=15 restored=15",
+      "name": "hf_no_coma.memory_identity_ledger_db_row_count",
+      "status": "pass"
+    },
+    {
+      "detail": "source=0 restored=0",
+      "name": "hf_no_coma.memory_wants_db_row_count",
+      "status": "pass"
+    },
+    {
+      "detail": "drill correctly skipped coma write",
+      "name": "hf_no_coma.no_coma_written",
+      "status": "pass"
+    },
+    {
+      "detail": "reason=deliberate-pause write_coma=True",
+      "name": "pause.restore_succeeded",
+      "status": "pass"
+    },
+    {
+      "detail": "MemoryManager() instantiated cleanly",
+      "name": "pause.memory_manager_opens",
+      "status": "pass"
+    },
+    {
+      "detail": "source=48 restored=48",
+      "name": "pause.core_count_match",
+      "status": "pass"
+    },
+    {
+      "detail": "core=48 keys=['core', 'daily', 'raw']",
+      "name": "pause.recall_for_cycle_non_empty",
+      "status": "pass"
+    },
+    {
+      "detail": "source=26 restored=26",
+      "name": "pause.lived_episode_count_match",
+      "status": "pass"
+    },
+    {
+      "detail": "byte-identical",
+      "name": "pause.identity_yaml_match",
+      "status": "pass"
+    },
+    {
+      "detail": "source=355 restored=355",
+      "name": "pause.memory_audit_log_db_row_count",
+      "status": "pass"
+    },
+    {
+      "detail": "source=15 restored=15",
+      "name": "pause.memory_identity_ledger_db_row_count",
+      "status": "pass"
+    },
+    {
+      "detail": "source=0 restored=0",
+      "name": "pause.memory_wants_db_row_count",
+      "status": "pass"
+    },
+    {
+      "detail": "drill correctly skipped coma write",
+      "name": "pause.no_coma_written",
+      "status": "pass"
+    }
+  ],
+  "drill_version": 1,
+  "duration_seconds": 2.851,
+  "overall_status": "pass",
+  "snapshot_path": "/home/rohit/maez-backup-drill/snapshot/2026-04-30T18-09-58",
+  "source_root": "/home/rohit/maez",
+  "timestamp": "2026-04-30T18-10-01"
+}
