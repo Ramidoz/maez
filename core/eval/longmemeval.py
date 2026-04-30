@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import tempfile
 import time
 import uuid
@@ -229,19 +230,120 @@ def ingest_haystack(mm: Any, question: dict) -> int:
     return n
 
 
+def synthesize_daily_summaries(mm: Any, question: dict) -> int:
+    """Write one synthetic daily-tier entry per haystack session.
+
+    Closes the consolidation fidelity gap flagged in Slice 9
+    Session 2 (multi-session 0.20, temporal 0.00 under the judge).
+    The daemon's ``recall_for_cycle`` reads core+daily+raw — feeding
+    it raw only systematically under-represents what Maez sees at
+    synthesis time.
+
+    The synthesis is **deterministic, no-LLM**: each session's
+    longest substantive user turn is bounded at 600 chars,
+    prefixed with the session date, and stored as a daily-tier
+    document. The production consolidator uses an LLM to compress;
+    for benchmark fidelity we keep the substrate (user-asserted
+    facts surface in the daily tier) without paying the LLM cost
+    or introducing model variance into the eval.
+
+    **Caller contract**: this writes structurally-different
+    metadata than the production consolidator
+    (``type='longmemeval_daily_synthetic'`` vs
+    ``'daily_consolidation'``). It is **only** safe to call inside
+    an ``IsolatedMemoryHarness`` — calling it against the live
+    ``mm.daily`` collection would mix benchmark fixtures with
+    real summaries.
+
+    Returns the number of daily entries written.
+    """
+    sessions: Iterable[list[dict]] = question.get("haystack_sessions") or []
+    dates: list[str] = list(question.get("haystack_dates") or [])
+    n = 0
+    for s_idx, session in enumerate(sessions):
+        date = dates[s_idx] if s_idx < len(dates) else ""
+        # Pick the most substantive user turn — highest signal-to-
+        # length, avoids dumping every turn verbatim (tested:
+        # full-dump tripled surfaced text and pushed answer-bearing
+        # lines past the judge's 4000-char window).
+        user_turns = [
+            (t.get("content") or "").strip()
+            for t in session
+            if (t.get("role") or "").lower() == "user"
+            and (t.get("content") or "").strip()
+        ]
+        if not user_turns:
+            continue
+        # Salience proxy: longest substantive user turn. Captures
+        # the topic-defining statement in the vast majority of
+        # LongMemEval sessions without re-emitting every line.
+        salient = max(user_turns, key=len)
+        # Bound at 600 chars so the daily tier stays a SUMMARY, not
+        # a transcript. The raw tier already carries the full text.
+        if len(salient) > 600:
+            salient = salient[:600].rstrip() + "…"
+        summary = f"[Session on {date or 'unknown date'}] user: {salient}"
+        ts = _haystack_timestamp(date, 0)
+        mm.daily.add(
+            ids=[f"lme-daily-{uuid.uuid4()}"],
+            documents=[summary],
+            metadatas=[{
+                "type": "longmemeval_daily_synthetic",
+                "session_idx": s_idx,
+                "date": date,
+                "timestamp": ts,
+                "raw_count": len(user_turns),
+            }],
+        )
+        n += 1
+    return n
+
+
 def recall_for_question(mm: Any, query: str) -> list[str]:
     """Run the daemon's recall path and return the surfaced text
-    fragments (raw + daily + core contents). Mirrors
-    ``recall_for_cycle`` so we measure what Maez would actually see
-    at synthesis time."""
+    fragments (core+daily+raw contents). Mirrors ``recall_for_cycle``
+    so we measure what Maez would actually see at synthesis time.
+
+    Near-duplicates across tiers are deduplicated by content
+    fingerprint — a daily synthetic summary often overlaps with the
+    raw entries it was built from, and double-counting bloats the
+    judge prompt past its truncation window without adding signal.
+    """
     bundle = mm.recall_for_cycle(query)
     out: list[str] = []
+    seen: set[str] = set()
+    # Walk core→daily→raw so a synthetic daily summary keeps
+    # priority over the raw turn it was built from; later
+    # duplicates are dropped.
     for tier in ("core", "daily", "raw"):
         for entry in bundle.get(tier) or []:
             content = entry.get("content") or entry.get("document") or ""
-            if content:
-                out.append(content)
+            if not content:
+                continue
+            fp = _dedup_fingerprint(content)
+            if fp in seen:
+                continue
+            seen.add(fp)
+            out.append(content)
     return out
+
+
+# Strip the synthetic-daily prefix BEFORE fingerprinting so a
+# synthetic summary built from a raw turn gets the same fingerprint
+# as the underlying turn — that's the redundancy we mean to dedup.
+_SYNTH_PREFIX_RE = re.compile(
+    r"^\[Session on [^\]]+\]\s*", re.IGNORECASE,
+)
+
+
+def _dedup_fingerprint(content: str) -> str:
+    """Return a stable fingerprint used by ``recall_for_question``
+    to suppress daily-vs-raw redundancy. Length-prefixed and
+    prefix-stripped so two entries that differ only by the daily
+    synthesis decoration collide as intended."""
+    body = _SYNTH_PREFIX_RE.sub("", content or "", count=1)
+    alphanum = "".join(c.lower() for c in body if c.isalnum())
+    return f"{len(alphanum)}|{alphanum[:120]}"
 
 
 def _toks(text: str) -> set[str]:
@@ -382,6 +484,7 @@ def run_subset(
             t0 = time.monotonic()
             with IsolatedMemoryHarness() as h:
                 ingest_haystack(h.mm, q)
+                synthesize_daily_summaries(h.mm, q)
                 surfaced = recall_for_question(h.mm, q.get("question") or "")
             elapsed = time.monotonic() - t0
             prediction = "\n".join(surfaced)
@@ -454,4 +557,5 @@ __all__ = [
     "recall_for_question",
     "run_subset",
     "score_answer",
+    "synthesize_daily_summaries",
 ]

@@ -566,5 +566,210 @@ class TestJudgeRegexLoose(unittest.TestCase):
         self.assertEqual(score, 0)
 
 
+class TestSynthesizeDailySummaries(unittest.TestCase):
+    """Slice 9 Session 3: closing the consolidation fidelity gap.
+    The daemon's recall_for_cycle reads core+daily+raw; the benchmark
+    was previously feeding raw only, depressing multi-session and
+    temporal scores."""
+
+    def test_writes_one_daily_per_session(self):
+        from core.eval.longmemeval import (
+            IsolatedMemoryHarness,
+            ingest_haystack,
+            synthesize_daily_summaries,
+        )
+
+        q = _mini_question()
+        with IsolatedMemoryHarness() as h:
+            ingest_haystack(h.mm, q)
+            n = synthesize_daily_summaries(h.mm, q)
+            daily_count = h.mm.daily.count()
+        # _mini_question has 2 sessions → 2 synthetic dailies.
+        self.assertEqual(n, 2)
+        self.assertEqual(daily_count, 2)
+
+    def test_daily_summary_content_is_user_substantive(self):
+        """The synthetic summary must contain user-turn content
+        verbatim — that's the substrate recall_for_cycle needs to
+        surface for multi-session reasoning."""
+        from core.eval.longmemeval import (
+            IsolatedMemoryHarness,
+            ingest_haystack,
+            synthesize_daily_summaries,
+        )
+
+        q = _mini_question()
+        with IsolatedMemoryHarness() as h:
+            ingest_haystack(h.mm, q)
+            synthesize_daily_summaries(h.mm, q)
+            got = h.mm.daily.get(include=["documents"])
+        joined = " ".join(got["documents"] or [])
+        # The pet evidence was a user turn — must reach the daily tier.
+        self.assertIn("Marble", joined)
+
+    def test_daily_metadata_carries_session_date(self):
+        """Daily entries are dated to their session_idx's haystack
+        date — temporal-reasoning recall depends on this."""
+        from core.eval.longmemeval import (
+            IsolatedMemoryHarness,
+            ingest_haystack,
+            synthesize_daily_summaries,
+        )
+
+        q = _mini_question()
+        with IsolatedMemoryHarness() as h:
+            ingest_haystack(h.mm, q)
+            synthesize_daily_summaries(h.mm, q)
+            got = h.mm.daily.get(include=["metadatas"])
+        dates = {m.get("date") for m in (got["metadatas"] or [])}
+        self.assertIn("2026-04-01", dates)
+        self.assertIn("2026-04-10", dates)
+
+    def test_run_subset_consolidates_by_default(self):
+        """End-to-end: run_subset must trigger daily synthesis between
+        ingest and recall so the recall layer sees a daily tier."""
+        from core.eval.longmemeval import run_subset
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "qs.json"
+            p.write_text(json.dumps([_mini_question()]))
+            results = run_subset(p, limit=1, with_surfaced=True)
+        # Surfaced text must include at least the daily-tier reach
+        # (the user-turn content), proving the daily layer surfaced.
+        self.assertIn("Marble", results[0]["surfaced"])
+
+
+class TestSession3AuditFixes(unittest.TestCase):
+    """Pins behavior the Session 3 audit found unchecked: dedup
+    actually firing across the synthetic-prefix gap, and the
+    salience picker preferring the longest substantive turn."""
+
+    def test_dedup_collapses_synthetic_and_raw_for_same_turn(self):
+        """The fingerprint must strip the '[Session on …] user: '
+        prefix so a synthetic daily summary built from a raw turn
+        matches that raw turn — otherwise the dedup is a no-op
+        (the failure mode the Session 3 audit caught)."""
+        from core.eval.longmemeval import _dedup_fingerprint
+
+        raw = "user: I just adopted a tabby cat named Marble."
+        synthetic = (
+            "[Session on 2026-04-01] user: I just adopted "
+            "a tabby cat named Marble."
+        )
+        self.assertEqual(
+            _dedup_fingerprint(raw),
+            _dedup_fingerprint(synthetic),
+        )
+
+    def test_dedup_keeps_genuinely_different_entries(self):
+        """Two entries that share a long common prefix but diverge
+        late must NOT collide (length-prefixed fingerprint guards
+        against this)."""
+        from core.eval.longmemeval import _dedup_fingerprint
+
+        a = "On Monday I went to the store and bought a kettle."
+        b = "On Monday I went to the store and bought a hammer."
+        self.assertNotEqual(_dedup_fingerprint(a), _dedup_fingerprint(b))
+
+    def test_salience_picker_prefers_longest_substantive_turn(self):
+        """Two user turns in one session: the longer one must win
+        (audit found this was not pinned)."""
+        from core.eval.longmemeval import (
+            IsolatedMemoryHarness,
+            synthesize_daily_summaries,
+        )
+
+        q = {
+            "question_id": "synth-pick",
+            "question": "x",
+            "answer": "y",
+            "haystack_session_ids": [0],
+            "haystack_dates": ["2026-04-01"],
+            "haystack_sessions": [[
+                {"role": "user", "content": "ok"},
+                {"role": "user",
+                 "content": "I have a vintage espresso machine"
+                            " from 1962."},
+            ]],
+        }
+        with IsolatedMemoryHarness() as h:
+            synthesize_daily_summaries(h.mm, q)
+            got = h.mm.daily.get(include=["documents"])
+        joined = " ".join(got["documents"] or [])
+        self.assertIn("vintage espresso machine", joined)
+        # The "ok" turn is too short — must not be the picked turn.
+        self.assertNotEqual(joined.strip(),
+                            "[Session on 2026-04-01] user: ok")
+
+    def test_synthesis_caps_at_600_chars(self):
+        from core.eval.longmemeval import (
+            IsolatedMemoryHarness,
+            synthesize_daily_summaries,
+        )
+
+        long_text = "x" * 1500
+        q = {
+            "question_id": "synth-cap",
+            "question": "x",
+            "answer": "y",
+            "haystack_session_ids": [0],
+            "haystack_dates": ["2026-04-01"],
+            "haystack_sessions": [[
+                {"role": "user", "content": long_text},
+            ]],
+        }
+        with IsolatedMemoryHarness() as h:
+            synthesize_daily_summaries(h.mm, q)
+            doc = h.mm.daily.get(include=["documents"])["documents"][0]
+        # Full substring won't fit; bounded form must be present.
+        self.assertLess(len(doc), 1000)
+        self.assertTrue(doc.endswith("…"),
+                        f"truncation marker missing: {doc[-20:]!r}")
+
+    def test_recall_dedup_actually_drops_duplicates(self):
+        """End-to-end pin: recall_for_question MUST drop a synthetic
+        daily entry whose fingerprint matches a raw entry. Removing
+        the dedup block should fail this test."""
+        from core.eval.longmemeval import (
+            IsolatedMemoryHarness,
+            ingest_haystack,
+            recall_for_question,
+            synthesize_daily_summaries,
+        )
+
+        q = _mini_question()
+        with IsolatedMemoryHarness() as h:
+            ingest_haystack(h.mm, q)
+            synthesize_daily_summaries(h.mm, q)
+            surfaced = recall_for_question(h.mm, q["question"])
+        # Marble appears in raw AND in the synthetic daily summary;
+        # post-dedup it must show up exactly once.
+        marble_count = sum(1 for s in surfaced if "Marble" in s)
+        self.assertEqual(
+            marble_count, 1,
+            f"dedup did not collapse synthetic+raw: surfaced={surfaced!r}",
+        )
+
+    def test_empty_haystack_writes_no_daily_entries(self):
+        from core.eval.longmemeval import (
+            IsolatedMemoryHarness,
+            synthesize_daily_summaries,
+        )
+
+        q = {
+            "question_id": "synth-empty",
+            "question": "x",
+            "answer": "y",
+            "haystack_session_ids": [],
+            "haystack_dates": [],
+            "haystack_sessions": [],
+        }
+        with IsolatedMemoryHarness() as h:
+            n = synthesize_daily_summaries(h.mm, q)
+            count = h.mm.daily.count()
+        self.assertEqual(n, 0)
+        self.assertEqual(count, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
