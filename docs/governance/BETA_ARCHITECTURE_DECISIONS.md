@@ -1044,4 +1044,4 @@ When a decision in this document becomes code, add a *"Implementation"* subsecti
 
 ---
 
-*Last updated: 2026-04-15, during the documentation phase following Track A items #1 and #2.*
+*Last updated: 2026-04-30 — Decisions 19–22 (capability access manual, self-evaluating acquisition pipeline, body shape per Maez, hardware-failure backup) appended after the design conversation that surfaced them. Prior update: 2026-04-15, during the documentation phase following Track A items #1 and #2.*
