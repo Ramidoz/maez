@@ -124,6 +124,19 @@ tail -f logs/cognition.log                 # cycle scoring + fixation detection
 tail -f logs/subscription_proxy.log        # if you opted into cloud routing
 ```
 
+If you use the subscription proxy and **aren't** on a Claude 5× Max
+plan, override the per-hour / per-day Claude caps to match your
+plan before the proxy starts — the in-repo defaults assume 5× Max
+headroom (60 hourly / 200 daily):
+
+```bash
+export MAEZ_CLAUDE_HOURLY_CAP=10   # base plan: stay well under Anthropic's actual limit
+export MAEZ_CLAUDE_DAILY_CAP=30
+```
+
+Source: [`core/subscription_proxy/server.py`](../core/subscription_proxy/server.py)
+`DEFAULT_CAPS`.
+
 Sanity check:
 
 ```bash

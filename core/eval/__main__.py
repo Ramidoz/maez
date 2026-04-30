@@ -113,8 +113,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--judge", action="store_true",
-        help="Run the local-LLM judge on each question. "
-             "Requires llama-server reachable via core.routing.llm_client.",
+        help="Run the LLM judge on each question. "
+             "Default provider is local (llama-server); pass "
+             "--judge-provider sonnet/opus/haiku to route through "
+             "the subscription proxy instead.",
+    )
+    parser.add_argument(
+        "--judge-provider",
+        choices=("local", "sonnet", "opus", "haiku", "gpt-4o", "gpt-5"),
+        default="local",
+        help="Which LLM judges the answers. 'local' = llama-server "
+             "via llm_client; 'sonnet'/'opus'/'haiku' route through "
+             "the Claude subscription via claude_tier; 'gpt-4o'/"
+             "'gpt-5' route through OpenAI. GPT-4o matches the "
+             "judge used in the published LongMemEval paper.",
     )
     parser.add_argument(
         "--with-surfaced", action="store_true",
@@ -172,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
             with_judge=args.judge,
             with_surfaced=args.with_surfaced,
             question_ids=ids,
+            judge_provider=args.judge_provider,
         )
     except ValueError as e:
         print(f"failed to load/run questions: {e}", file=sys.stderr)

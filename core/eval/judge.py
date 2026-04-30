@@ -127,4 +127,45 @@ def judge_answer(
     return 0 if m.group(1).upper() == "INCORRECT" else 1
 
 
-__all__ = ["judge_answer"]
+def build_sonnet_generate_fn(
+    *, call_fn=None, model: str = "sonnet",
+    caller: str = "longmemeval-judge",
+):
+    """Return a generate-shaped callable that delegates to
+    ``core.routing.claude_tier.call`` so the LongMemEval judge can
+    cross-check its local Qwen verdicts against Sonnet/Opus.
+
+    The returned function matches the contract
+    ``judge_answer.generate_fn`` expects:
+    ``(prompt: str, *, model=None, temperature=0.0, max_tokens=80,
+    timeout_s=60.0) -> str``.
+
+    ``call_fn`` is injectable for tests; production callers leave it
+    None and get the real ``claude_tier.call``.
+    """
+    if call_fn is None:
+        from core.routing.claude_tier import call as _claude_call
+
+        call_fn = _claude_call
+
+    def _generate(
+        prompt,
+        *,
+        model: str | None = None,  # noqa: ARG001 — fixed at closure time
+        temperature: float = 0.0,  # noqa: ARG001 — proxy decides
+        max_tokens: int = 80,  # noqa: ARG001 — proxy decides
+        timeout_s: float = 60.0,
+    ) -> str:
+        reply = call_fn(
+            prompt=prompt,
+            model=model_at_close,
+            caller=caller,
+            timeout_s=timeout_s,
+        )
+        return getattr(reply, "reply", "") or ""
+
+    model_at_close = model
+    return _generate
+
+
+__all__ = ["build_sonnet_generate_fn", "judge_answer"]

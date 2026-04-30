@@ -431,6 +431,7 @@ def run_subset(
     with_judge: bool = False,
     with_surfaced: bool = False,
     question_ids: set[str] | None = None,
+    judge_provider: str = "local",
 ) -> list[dict]:
     """Load + run questions through the full isolated pipeline.
 
@@ -457,26 +458,42 @@ def run_subset(
         questions = [q for q in questions if q.get("question_id") in question_ids]
     judge_fn = None
     backend_was_set = False
-    saved_backend: str | None = None
     if with_judge:
         import os
 
-        from core.eval.judge import judge_answer as _judge
+        from core.eval.judge import (
+            build_sonnet_generate_fn,
+            judge_answer as _judge,
+        )
 
-        # Scope MAEZ_LLM_BACKEND override to the run only — leaving
-        # it process-wide would pollute any subsequent test that
-        # reads the env var (the audit caught this).
-        saved_backend = os.environ.get("MAEZ_LLM_BACKEND")
-        if saved_backend is None:
-            os.environ["MAEZ_LLM_BACKEND"] = "llamacpp"
-            backend_was_set = True
+        provider = (judge_provider or "local").strip().lower()
+        if provider == "local":
+            # Scope MAEZ_LLM_BACKEND override to the run only —
+            # process-wide leak would pollute subsequent tests
+            # (Session 2 audit).
+            if os.environ.get("MAEZ_LLM_BACKEND") is None:
+                os.environ["MAEZ_LLM_BACKEND"] = "llamacpp"
+                backend_was_set = True
+            judge_model = _resolve_judge_model()
 
-        judge_model = _resolve_judge_model()
+            def judge_fn(*, question, reference, prediction):
+                return _judge(
+                    question=question, reference=reference,
+                    prediction=prediction, model=judge_model,
+                )
+        elif provider in {"sonnet", "opus", "haiku", "gpt-4o", "gpt-5"}:
+            tier_gen = build_sonnet_generate_fn(model=provider)
 
-        def judge_fn(*, question, reference, prediction):
-            return _judge(
-                question=question, reference=reference,
-                prediction=prediction, model=judge_model,
+            def judge_fn(*, question, reference, prediction):
+                return _judge(
+                    question=question, reference=reference,
+                    prediction=prediction, generate_fn=tier_gen,
+                )
+        else:
+            raise ValueError(
+                f"unknown judge_provider {provider!r}; "
+                "expected one of: local, sonnet, opus, haiku, "
+                "gpt-4o, gpt-5"
             )
     results: list[dict] = []
     try:

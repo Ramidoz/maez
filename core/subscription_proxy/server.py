@@ -82,13 +82,21 @@ def _cap(adapter_name: str, kind: str, default: int) -> int:
 
 
 # Defaults chosen for Rohit's single-user scenario.
-#   Subscription backends: tight caps (Max 5× quota is shared with
-#     Rohit's interactive Claude Code use).
+#   Subscription backends: caps sized for the Claude 5× Max plan.
+#     Operators on the base plan should override via env vars
+#     (MAEZ_CLAUDE_HOURLY_CAP / MAEZ_CLAUDE_DAILY_CAP) to avoid
+#     hitting Anthropic's actual rate limits — see
+#     docs/GETTING_STARTED.md for setup notes.
 #   API backends: looser caps (user pays per-token, so backpressure
 #     comes from spend, not call count; we still cap to prevent runaway
 #     loops, but an order of magnitude higher).
 DEFAULT_CAPS = {
-    "claude":       {"hourly": 10,  "daily": 30},    # subscription
+    # Claude subscription: bumped 2026-04-30 to reflect Rohit's 5×
+    # Max plan headroom — old defaults (10/30) were sized for the
+    # base plan and were the bottleneck on the LongMemEval Sonnet
+    # judge run. Override per-deploy via MAEZ_CLAUDE_HOURLY_CAP /
+    # MAEZ_CLAUDE_DAILY_CAP env vars if needed.
+    "claude":       {"hourly": 60,  "daily": 200},   # subscription (5× Max)
     "gemini":       {"hourly": 10,  "daily": 30},    # subscription
     "openrouter":   {"hourly": 30,  "daily": 100},   # paid API
     "openai":       {"hourly": 30,  "daily": 100},   # paid API

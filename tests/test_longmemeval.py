@@ -771,5 +771,95 @@ class TestSession3AuditFixes(unittest.TestCase):
         self.assertEqual(count, 0)
 
 
+class TestSonnetJudge(unittest.TestCase):
+    """Slice 9 Session 4: Sonnet judge via claude_tier so the local
+    Qwen judge can be cross-checked against a stronger calibrator."""
+
+    def test_sonnet_judge_wraps_claude_tier_call(self):
+        """The Sonnet judge constructs a generate-style closure over
+        ``claude_tier.call`` so existing ``judge_answer`` consumes it
+        unchanged."""
+        from core.eval.judge import build_sonnet_generate_fn
+
+        captured = {}
+
+        class FakeReply:
+            def __init__(self, text): self.reply = text
+
+        def fake_call(*, prompt, system_prompt=None, model="sonnet",
+                      caller=None, timeout_s=None):
+            captured["model"] = model
+            captured["prompt"] = prompt
+            captured["caller"] = caller
+            return FakeReply("CORRECT — match.")
+
+        gen = build_sonnet_generate_fn(call_fn=fake_call, model="sonnet")
+        out = gen("PROMPT", model=None, temperature=0.0,
+                  max_tokens=80, timeout_s=30.0)
+        self.assertEqual(out, "CORRECT — match.")
+        self.assertEqual(captured["model"], "sonnet")
+        self.assertEqual(captured["prompt"], "PROMPT")
+        # Caller MUST be tagged so trajectory logs are attributable
+        # to the eval, not the unlabeled sentinel.
+        self.assertIn("longmemeval", str(captured["caller"]).lower())
+
+    def test_run_subset_with_sonnet_provider_e2e(self):
+        """End-to-end: run_subset(judge_provider='sonnet') must build
+        the Sonnet generate_fn, call it for each question, and stamp
+        judge_score on each record. The Session 2 audit fix
+        (env-var scoping) must not run for the sonnet path — there's
+        no MAEZ_LLM_BACKEND change to make."""
+        import os
+        from unittest.mock import patch
+
+        from core.eval import longmemeval as lme
+
+        os.environ.pop("MAEZ_LLM_BACKEND", None)
+        # Stub claude_tier.call so the test never touches the proxy.
+
+        class FakeReply:
+            reply = "CORRECT — match."
+
+        def fake_call(*, prompt, system_prompt=None, model="sonnet",
+                      caller=None, timeout_s=None):
+            return FakeReply()
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "qs.json"
+            p.write_text(json.dumps([_mini_question()]))
+            with patch("core.routing.claude_tier.call", new=fake_call):
+                out = lme.run_subset(
+                    p, limit=1, with_judge=True,
+                    judge_provider="sonnet",
+                )
+        self.assertEqual(out[0]["judge_score"], 1)
+        # Sonnet path must NOT touch the local-llm backend env var.
+        self.assertNotIn("MAEZ_LLM_BACKEND", os.environ)
+
+    def test_run_subset_rejects_unknown_judge_provider(self):
+        from core.eval import longmemeval as lme
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "qs.json"
+            p.write_text(json.dumps([_mini_question()]))
+            with self.assertRaises(ValueError):
+                lme.run_subset(
+                    p, limit=1, with_judge=True,
+                    judge_provider="not-a-real-provider",
+                )
+
+    def test_sonnet_judge_propagates_failures(self):
+        """A claude_tier exception must surface so judge_answer can
+        return None — failing closed at the eval layer."""
+        from core.eval.judge import build_sonnet_generate_fn
+
+        def fake_call(**_kw):
+            raise RuntimeError("proxy unavailable")
+
+        gen = build_sonnet_generate_fn(call_fn=fake_call, model="sonnet")
+        with self.assertRaises(RuntimeError):
+            gen("PROMPT")
+
+
 if __name__ == "__main__":
     unittest.main()
