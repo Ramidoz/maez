@@ -96,7 +96,7 @@ DEFAULT_CAPS = {
     # base plan and were the bottleneck on the LongMemEval Sonnet
     # judge run. Override per-deploy via MAEZ_CLAUDE_HOURLY_CAP /
     # MAEZ_CLAUDE_DAILY_CAP env vars if needed.
-    "claude":       {"hourly": 60,  "daily": 200},   # subscription (5× Max)
+    "claude":       {"hourly": 120, "daily": 400},   # subscription (5× Max + topup)
     "gemini":       {"hourly": 10,  "daily": 30},    # subscription
     "openrouter":   {"hourly": 30,  "daily": 100},   # paid API
     "openai":       {"hourly": 30,  "daily": 100},   # paid API

@@ -5,12 +5,12 @@
 | split / judge | n judged | mean recall floor | judge accuracy |
 |---|---|---|---|
 | oracle / Qwen3-27B | 30 | 0.699 | 0.767 |
-| oracle / Sonnet 4.5 | 26 | 0.699 | **0.808** |
+| oracle / Sonnet 4.5 | 30 | 0.699 | **0.800** |
 | S / Qwen3-27B | 30 | 0.728 | 0.700 |
-| S / Sonnet 4.5 | 28 | 0.728 | **0.607** |
+| S / Sonnet 4.5 | 30 | 0.728 | **0.633** |
 
 **Headline cite-able number for the public-launch README:**
-**LongMemEval-S, Sonnet 4.5 judge, 28/30 stratified questions: 0.607.**
+**LongMemEval-S, Sonnet 4.5 judge, 30/30 stratified questions: 0.633.**
 
 This is a defensible field-comparable number. It's the
 *hardest* setting we tested (full distractor sessions, stronger
@@ -36,22 +36,25 @@ signal during development; cite the Sonnet numbers in any public
 claim. The 0.10 S-split delta is the calibration drift that
 matters.
 
-## Per-type matrix (judge accuracy, with judged-coverage)
-
-Format: `accuracy (n judged of 5)`. A coverage drop from 5 means
-the proxy returned 429 for that question and `judge_answer`
-returned None — those are excluded from the mean rather than
-counted as failures. The 6 missing judgments are listed in the
-JSON artifacts; they're not biased toward any single type.
+## Per-type matrix (judge accuracy, full 30/30 coverage)
 
 | type | oracle Qwen | oracle Sonnet | S Qwen | S Sonnet |
 |---|---|---|---|---|
-| single-session-assistant | 1.00 (5/5) | 1.00 (5/5) | 1.00 (5/5) | 1.00 (3/5) |
-| single-session-user | 1.00 (5/5) | 1.00 (4/5) | 1.00 (5/5) | 1.00 (5/5) |
-| knowledge-update | 0.80 (5/5) | 1.00 (5/5) | 0.80 (5/5) | 0.80 (5/5) |
-| single-session-preference | 0.80 (5/5) | 0.80 (5/5) | 0.80 (5/5) | 0.60 (5/5) |
-| multi-session | 0.40 (5/5) | 0.67 (3/5) | 0.20 (5/5) | 0.40 (5/5) |
-| temporal-reasoning | 0.00 (5/5) | 0.25 (4/5) | 0.40 (5/5) | 0.00 (5/5) |
+| single-session-assistant | 1.00 | 1.00 | 1.00 | 1.00 |
+| single-session-user | 1.00 | 1.00 | 1.00 | 1.00 |
+| knowledge-update | 0.80 | 1.00 | 0.80 | 0.80 |
+| single-session-preference | 0.80 | 0.80 | 0.80 | 0.60 |
+| multi-session | 0.40 | 0.60 | 0.20 | 0.40 |
+| temporal-reasoning | 0.00 | 0.40 | 0.40 | 0.00 |
+
+All cells are 5/5 judged. The original Sonnet runs lost 6
+questions to the rolling-hour cap (2 in S, 4 in oracle); a
+follow-up gap-fill pass on 2026-04-30 — after the Anthropic
+budget topup — recovered the missing judgments. Per-question
+records merged into
+[`runs/longmemeval_s_sonnet30_full_2026-04-30.json`](runs/longmemeval_s_sonnet30_full_2026-04-30.json)
+and
+[`runs/longmemeval_oracle_sonnet30_full_2026-04-30.json`](runs/longmemeval_oracle_sonnet30_full_2026-04-30.json).
 
 **Read across:** single-session is at ceiling everywhere.
 Knowledge-update and preference are stable. **Multi-session and
@@ -66,8 +69,8 @@ is real and gets worse with realistic noise.
 
 A defensible launch claim:
 
-> Maez scores 0.607 on LongMemEval-S (Sonnet 4.5 judge,
-> 28-question stratified sample) — strong on single-session
+> Maez scores 0.633 on LongMemEval-S (Sonnet 4.5 judge,
+> 30-question stratified sample) — strong on single-session
 > recall (1.00), weak on multi-session reasoning (0.40) and
 > temporal reasoning (0.00). Sessions 5+ target the temporal and
 > multi-session gaps directly.
@@ -81,24 +84,17 @@ What we *cannot* claim:
   They appear under both judges, on both splits, in both
   Sessions 3 and 4. They're real.
 
-## Six judge calls hit the rate limit
+## Rate-limit history (resolved)
 
-Of 60 Sonnet calls planned (30 S + 30 oracle), 6 failed with HTTP
-429 (proxy hourly cap). The S run completed 28/30 and the oracle
-run completed 26/30. The ones that failed are listed in the JSON
-artifacts — they're not biased toward any particular question
-type (mix of multi-session, temporal, single-session-assistant,
-abstention).
-
-The proxy's per-hour Claude cap was bumped from 10 to 60 mid-
-session ([`server.py`](../../core/subscription_proxy/server.py))
-to reflect Rohit's 5× Max plan headroom. The two runs together
-landed exactly at the new cap because they overlapped within the
-same rolling hour.
-
-The 6 missing judgments could be re-run to plug the gaps; the
-delta they would make to the reported means is small (~0.02–0.03
-at most given binary 0/1 verdicts and N=30 cohort sizes).
+The original Sonnet runs hit the proxy's per-hour cap exactly
+once (60 calls in 60 minutes). 6 of 60 judgments returned None.
+After Rohit topped up the Claude budget, the cap was bumped to
+120 hourly / 400 daily and a follow-up pass plugged the 6 gaps:
+S run is now 30/30, oracle 30/30. The recovered judgments moved
+the S mean from 0.607 → **0.633** and the oracle mean from 0.808
+→ **0.800** — within the 0.02–0.03 envelope predicted at the
+time. Numbers cited above and in the public-launch README are
+the full-coverage values.
 
 ## What's still weak
 
@@ -148,10 +144,10 @@ starting the proxy. The default in
 ## Citation update
 
 > Maez, *LongMemEval baseline* (2026-04-30):
-> S-split, Sonnet 4.5 judge, 28-question stratified sample:
-> **0.607**.
-> Oracle split, Sonnet 4.5 judge, 26-question stratified sample:
-> **0.808**.
+> S-split, Sonnet 4.5 judge, 30-question stratified sample:
+> **0.633**.
+> Oracle split, Sonnet 4.5 judge, 30-question stratified sample:
+> **0.800**.
 > Single-session at ceiling; multi-session 0.40, temporal 0.00
 > under stress. Cross-judge calibration (Sonnet vs local Qwen)
 > within 10 points across both splits — local judge is reliable
