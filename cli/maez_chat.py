@@ -265,6 +265,8 @@ class ChatSession:
             "/route": self.cmd_show_route,
             "/wonder": self.cmd_wonder,
             "/wonderings": self.cmd_wonderings,
+            "/label": self.cmd_label,
+            "/labels": self.cmd_labels,
             "/clear": self.cmd_clear,
             "/quit": self.cmd_quit,
             "/q": self.cmd_quit,
@@ -335,6 +337,9 @@ class ChatSession:
             ("/deep",           "re-enable thinking mode for the next turn"),
             ("/wonder <q>",     "seed a wondering for the daemon to explore"),
             ("/wonderings",     "list open + recent wonderings and probes"),
+            ("/label <id> <good|bad> [-- note]",
+                                "label a trace turn for KTO-shaped feedback"),
+            ("/labels",         "show recent trace labels + counts"),
             ("/clear",          "clear screen"),
             ("/quit, /q",       "exit"),
         ]
@@ -550,6 +555,139 @@ class ChatSession:
                     title=f"recent probes · wondering #{focus['id']}",
                     border_style="dim", expand=False,
                 ))
+
+    def cmd_label(self, arg: str):
+        """``/label <trace_id> <good|bad> [--kind axis] [--note "text"]``
+        — pin a binary KTO-shaped label to a specific chat turn.
+        Slice 5 annotation surface; feeds the labelled-corpus
+        foundation the audit identified for owner-feedback training.
+
+        Re-labelling the same ``(trace_id, kind)`` updates rather
+        than duplicates. Quotes work via shlex parsing, so notes
+        with embedded spaces don't need escaping."""
+        import shlex
+        import sqlite3 as _sq
+        from core.feedback.labels import LabelStore
+
+        # Audit M1+M2: shlex-based parser. Handles quoted notes,
+        # both flag orderings, and surfaces unknown flags as a
+        # usage error instead of silently dropping tokens.
+        try:
+            tokens = shlex.split(arg)
+        except ValueError as exc:
+            console.print(f"[red]parse error: {exc}[/red]")
+            return
+        if len(tokens) < 2:
+            console.print(
+                "[dim red]usage:[/dim red] "
+                "/label <trace_id> <good|bad> [--kind axis] [--note text]"
+            )
+            return
+        trace_id, label = tokens[0].strip(), tokens[1].strip().lower()
+        rest = tokens[2:]
+        kind = "overall"
+        note: "str | None" = None
+        i = 0
+        while i < len(rest):
+            tok = rest[i]
+            if tok == "--kind" and i + 1 < len(rest):
+                kind = rest[i + 1].strip().lower() or "overall"
+                i += 2
+            elif tok == "--note" and i + 1 < len(rest):
+                note = rest[i + 1]
+                i += 2
+            elif tok == "--":
+                # Legacy form: everything after `--` is the note.
+                note = " ".join(rest[i + 1:])
+                break
+            elif tok.startswith("--"):
+                console.print(
+                    f"[red]unknown flag: {tok}[/red]  "
+                    f"[dim](use --kind / --note)[/dim]"
+                )
+                return
+            else:
+                # Bare positional token after the label — treat as
+                # the note (legacy convenience). Take rest of tokens
+                # joined so multi-word notes don't drop tokens.
+                note = " ".join(rest[i:])
+                break
+        # Audit Explore #1: warn (don't block) when the trace_id
+        # doesn't appear in any recent JSONL — owner can still
+        # label, but a typo gets flagged immediately rather than
+        # silently joining to nothing downstream.
+        from core.feedback.labels import trace_id_exists_in_jsonl
+
+        if not trace_id_exists_in_jsonl(trace_id):
+            console.print(
+                f"[yellow]warning:[/yellow] trace_id "
+                f"[bold]{trace_id}[/bold] not found in recent JSONL "
+                f"— labelling anyway (typo? old trace?)"
+            )
+        # Audit M3: catch DB errors (race, schema mismatch) plus the
+        # validation ValueError so the REPL never crashes on a label.
+        try:
+            store = LabelStore()
+            row_id = store.add_label(
+                trace_id=trace_id, label=label, kind=kind, note=note,
+            )
+        except ValueError as exc:
+            console.print(f"[red]label rejected: {exc}[/red]")
+            return
+        except _sq.DatabaseError as exc:
+            console.print(f"[red]label store error: {exc}[/red]")
+            return
+        ind = "✓" if label == "good" else "✗"
+        console.print(
+            f"[green]labelled[/green] [dim]#{row_id}[/dim] "
+            f"trace=[bold]{trace_id}[/bold] "
+            f"{ind} {label} kind=[dim]{kind}[/dim]"
+            + (f" note=[dim]{note}[/dim]" if note else "")
+        )
+
+    def cmd_labels(self, _: str):
+        """Show recent trace labels + per-label / per-kind counts."""
+        from core.feedback.labels import LabelStore
+
+        store = LabelStore()
+        rows = store.recent(limit=15)
+        stats = store.stats()
+        if not rows:
+            console.print(
+                "[dim](no trace labels yet — "
+                "/label <trace_id> good|bad to seed one)[/dim]"
+            )
+            return
+        table = Table(show_header=True, header_style="bold",
+                      box=None, padding=(0, 1))
+        table.add_column("when", width=20)
+        table.add_column("trace", width=12)
+        table.add_column("label", width=6)
+        table.add_column("kind", width=10)
+        table.add_column("note", overflow="fold")
+        for r in rows:
+            ts = (r.get("created_at") or "")[:19]
+            ind = "✓" if r["label"] == "good" else "✗"
+            table.add_row(
+                ts,
+                (r["trace_id"] or "")[:12],
+                f"{ind} {r['label']}",
+                (r.get("kind") or "overall"),
+                (r.get("note") or "")[:80],
+            )
+        console.print(Panel(
+            table, title="trace labels (recent)",
+            border_style="dim", expand=False,
+        ))
+        # Stats row.
+        stats_line = (
+            f"[bold]total[/bold] {stats.get('total', 0)} · "
+            f"[green]good[/green] {stats.get('good', 0)} · "
+            f"[red]bad[/red] {stats.get('bad', 0)}"
+        )
+        if stats.get("latest_at"):
+            stats_line += f" · [dim]latest {stats['latest_at']}[/dim]"
+        console.print(stats_line)
 
     def cmd_clear(self, _: str):
         console.clear()

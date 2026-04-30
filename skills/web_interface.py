@@ -5755,6 +5755,44 @@ def api_debug_wonderings():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/debug/trace-labels")
+def api_debug_trace_labels():
+    """Owner-supplied trace labels (Slice 5 — labelled corpus
+    observability). Returns recent labels + aggregate stats. The
+    cockpit can render a rolling list of which turns the owner
+    marked good/bad and at what cadence — useful both for
+    accountability ("what's been getting flagged?") and for
+    spot-checking the eventual KTO training corpus.
+
+    Optional ``?trace_id=X`` filters to one trace; ``?limit=N``
+    clamps to ``[1, 100]`` (default 50).
+    """
+    if not _debug_auth_ok():
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        limit = max(1, min(100, int(request.args.get("limit", 50))))
+    except ValueError:
+        limit = 50
+    trace_filter = request.args.get("trace_id")
+    try:
+        from core.feedback.labels import LabelStore
+
+        store = LabelStore()
+        if trace_filter:
+            rows = store.labels_for_trace(trace_filter.strip())[:limit]
+        else:
+            rows = store.recent(limit=limit)
+        return jsonify({
+            "labels": rows,
+            "count": len(rows),
+            "stats": store.stats(),
+            "checked_at": _utcnow_iso(),
+        })
+    except Exception as e:
+        logger.warning("debug /api/debug/trace-labels failed: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/debug/pursuit-decisions")
 def api_debug_pursuit_decisions():
     """Wondering-pursuit decision history (Slice 2 Session 3).

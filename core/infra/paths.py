@@ -142,6 +142,14 @@ def wonderings_db() -> Path:
     return memory_dir() / "wonderings.db"
 
 
+def trace_labels_db() -> Path:
+    """Sqlite DB for owner-supplied labels on chat traces (Slice 5).
+    Foundation for KTO-style preference training: each label is a
+    binary thumbs-up / thumbs-down (plus optional category + note)
+    pinned to a specific ``trace_id``. Gitignored, local-only."""
+    return memory_dir() / "trace_labels.db"
+
+
 # ── training + models (often on a separate volume) ─────────────────────
 def training_dir() -> Path:
     return home() / "training"
