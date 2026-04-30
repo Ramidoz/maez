@@ -267,6 +267,7 @@ class ChatSession:
             "/wonderings": self.cmd_wonderings,
             "/label": self.cmd_label,
             "/labels": self.cmd_labels,
+            "/memory": self.cmd_memory,
             "/clear": self.cmd_clear,
             "/quit": self.cmd_quit,
             "/q": self.cmd_quit,
@@ -340,6 +341,7 @@ class ChatSession:
             ("/label <id> <good|bad> [-- note]",
                                 "label a trace turn for KTO-shaped feedback"),
             ("/labels",         "show recent trace labels + counts"),
+            ("/memory [query]", "memory introspection: stats + recent core/episodes; with arg, token-overlap search"),
             ("/clear",          "clear screen"),
             ("/quit, /q",       "exit"),
         ]
@@ -688,6 +690,93 @@ class ChatSession:
         if stats.get("latest_at"):
             stats_line += f" · [dim]latest {stats['latest_at']}[/dim]"
         console.print(stats_line)
+
+    def cmd_memory(self, arg: str):
+        """``/memory [query]`` — Letta-style introspection over the
+        lived memory layer. No args: stats summary + recent core +
+        recent episodes. With args: token-overlap search across
+        core+daily."""
+        from core.agent_tools.memory_view import (
+            list_recent_core,
+            list_recent_episodes,
+            memory_stats,
+            search_memories,
+            summarize_for_prompt,
+        )
+        from core import paths as _paths
+        from core.memory.episodes import EpisodeStore
+
+        # Reuse the singleton MM if one is cached on this chat;
+        # otherwise lazy-build + cache so repeated /memory calls
+        # don't spawn fresh Chroma clients.
+        mm = getattr(self, "_memory_view_mm", None)
+        if mm is None:
+            from memory.memory_manager import MemoryManager
+            mm = MemoryManager()
+            self._memory_view_mm = mm
+        ep_store = getattr(self, "_memory_view_eps", None)
+        if ep_store is None:
+            ep_store = EpisodeStore(
+                str(_paths.memory_dir() / "lived_episodes.db")
+            )
+            self._memory_view_eps = ep_store
+        query = (arg or "").strip()
+        if query:
+            results = search_memories(mm, query=query, limit=10)
+            if not results:
+                console.print(f"[dim](no matches for '{query}')[/dim]")
+                return
+            table = Table(show_header=True, header_style="bold",
+                          box=None, padding=(0, 1))
+            table.add_column("id", width=12)
+            table.add_column("content", overflow="fold")
+            for r in results:
+                table.add_row(
+                    (r.get("id") or "")[:12],
+                    (r.get("content") or "")[:200],
+                )
+            console.print(Panel(
+                table, title=f"memory search: '{query}'",
+                border_style="dim", expand=False,
+            ))
+            return
+        stats = memory_stats(mm, ep_store)
+        console.print(Text.from_markup(summarize_for_prompt(mm, ep_store)))
+        cores = list_recent_core(mm, limit=5)
+        if cores:
+            t = Table(show_header=True, header_style="bold",
+                      box=None, padding=(0, 1))
+            t.add_column("when", width=20)
+            t.add_column("source", width=18)
+            t.add_column("content", overflow="fold")
+            for c in cores:
+                meta = c.get("metadata") or {}
+                ts = (meta.get("timestamp") or meta.get("created_at") or "")[:19]
+                t.add_row(
+                    ts,
+                    (meta.get("source") or "")[:18],
+                    (c.get("content") or "")[:160],
+                )
+            console.print(Panel(
+                t, title="recent core memories",
+                border_style="dim", expand=False,
+            ))
+        eps = list_recent_episodes(ep_store, limit=5)
+        if eps:
+            t = Table(show_header=True, header_style="bold",
+                      box=None, padding=(0, 1))
+            t.add_column("id", width=14)
+            t.add_column("title", overflow="fold")
+            for e in eps:
+                t.add_row(
+                    str(e.get("id") or "")[:14],
+                    (e.get("title") or e.get("summary") or "")[:120],
+                )
+            console.print(Panel(
+                t, title="recent active episodes",
+                border_style="dim", expand=False,
+            ))
+        _ = stats  # already rendered via summary
 
     def cmd_clear(self, _: str):
         console.clear()

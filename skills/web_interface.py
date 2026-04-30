@@ -5838,6 +5838,52 @@ def api_debug_trace_labels():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/debug/memory-view")
+def api_debug_memory_view():
+    """Letta-style memory introspection (Slice 7 Session 1).
+
+    Read-only view across raw / daily / core / episodes. Optional
+    ``?query=...`` performs token-overlap search across core+daily;
+    ``?limit=N`` clamps the recent-core / search list to [1, 50]
+    (default 10).
+    """
+    if not _debug_auth_ok():
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        limit = max(1, min(50, int(request.args.get("limit", 10))))
+    except ValueError:
+        limit = 10
+    query = (request.args.get("query") or "").strip()
+    try:
+        from core.agent_tools.memory_view import (
+            list_recent_core,
+            list_recent_episodes,
+            memory_stats,
+            search_memories,
+            summarize_for_prompt,
+        )
+        from core.memory.episodes import EpisodeStore
+
+        ep_store = EpisodeStore(_LIVED_EPISODE_DB_PATH)
+        stats = memory_stats(memory, ep_store)
+        payload = {
+            "stats": stats,
+            "summary": summarize_for_prompt(memory, ep_store),
+            "recent_core": list_recent_core(memory, limit=limit),
+            "recent_episodes": list_recent_episodes(ep_store, limit=limit),
+            "checked_at": _utcnow_iso(),
+        }
+        if query:
+            payload["search"] = {
+                "query": query,
+                "results": search_memories(memory, query=query, limit=limit),
+            }
+        return jsonify(payload)
+    except Exception as e:
+        logger.warning("debug /api/debug/memory-view failed: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/debug/pursuit-decisions")
 def api_debug_pursuit_decisions():
     """Wondering-pursuit decision history (Slice 2 Session 3).
