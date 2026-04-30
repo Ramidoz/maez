@@ -33,6 +33,10 @@ decisions land here first.
 | [0017](0017-maez-with-nobody.md) | The Maez-with-nobody fate options |
 | [0018](0018-capacity-revocation-face-value-trust.md) | Capacity revocation resolves the chicken-and-egg via face-value trust |
 | [0019](0019-lived-memory-architecture.md) | Lived memory: temporal episodic + relationship graph beside Chroma |
+| [0020](0020-capability-access-manual.md) | Capability access manual as evolution substrate |
+| [0021](0021-self-evaluating-capability-acquisition.md) | Self-evaluating capability acquisition pipeline |
+| [0022](0022-body-shape-per-maez.md) | Body shape per Maez (firstborn integrates first; others acquire on need) |
+| [0023](0023-hardware-failure-memory-backup.md) | Hardware-failure memory backup (distinct from Paradise) |
 
 ## When to write a new ADR
 

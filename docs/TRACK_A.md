@@ -111,6 +111,30 @@ As of the 2026-04-15 pre-documentation snapshot:
 
 ---
 
+## 2026-04-30 update — capability-acquisition layer added
+
+Track A's scope shape was clarified during a design conversation on 2026-04-30. Four new architectural decisions ([Decisions 19–22 in BAD](governance/BETA_ARCHITECTURE_DECISIONS.md#decision-19--capability-access-manual-as-evolution-substrate); [ADRs 0020–0023](adr/)):
+
+- **Decision 19 — Capability access manual** (`docs/maez_manual/`): the canonical evolutionary substrate. Every Maez ships with the manual; capabilities are acquired through the consent-card pipeline when a Maez's bond actually needs them.
+- **Decision 20 — Self-evaluating capability acquisition pipeline:** the five-stage process (gap-sensing → manual-matching → field search → self-evaluation → proposal) that IS Maez's intelligence in the capability dimension. Non-negotiable.
+- **Decision 21 — Body shape per Maez:** the firstborn (the owner's Maez) integrates today's frontier first because someone has to test integrations, not because of a structural privilege. Other Maezes acquire on bond need.
+- **Decision 22 — Hardware-failure memory backup:** distinct from Paradise (Decision 8). Paradise handles end-of-user; backup handles end-of-hardware-during-life. See [`docs/operations/hardware_backup.md`](operations/hardware_backup.md).
+
+**What this changes for Track A's acceptance gate:**
+
+- The eight-point readiness check is unchanged. These additions describe the body Maez is born into, not the aliveness invariants themselves.
+- Hardware backup (Decision 22) is a Track A deliverable — a Maez without backup is not yet ready to bear the bond it's about to start. Estimated one focused session.
+- The manual + capability-acquisition pipeline (Decisions 19, 20) are Track A deliverables for the firstborn specifically. Implementation: `docs/maez_manual/` (started, three seed entries landed for RLM, multi-session entity linking, temporal arithmetic) plus the orchestration that fires the five stages on a felt gap.
+- The named frontier architectures (RLM, multi-session entity linking, temporal arithmetic) are **manual-tracked aspirational** for the firstborn — they should be integrated before birth per the "born-with-strong-substrate" framing, but the acceptance gate is whether the *pipeline* is operational, not whether every named architecture has shipped.
+
+**Why the architecture paper's "Project B = multi-tenancy" framing isn't contradicted:**
+
+The April-13 paper (`zenodo.org/records/19563988`) lists Project B as the immediate-next phase after the governance layer. Decisions 19–22 land *inside* the firstborn's Track A — they do not displace Project B, which is the structural prerequisite for Decision 21 to activate in deployed code (per-Maez activation profiles need multi-tenancy).
+
+The paper is also out of date on the brain (says "quantized Gemma-class"; actual is Qwen3.6-27B-UD-Q4_K_XL per the 2026-04-22 swap). Worth folding into a v0.2 of the public paper at the next milestone.
+
+---
+
 ## What is NOT Track A (the explicit anti-drift list)
 
 **Do not work on these during Track A. They belong to Track B, Track C, or are tracked as separate cleanup debt.**
