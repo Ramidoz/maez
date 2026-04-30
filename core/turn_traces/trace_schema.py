@@ -115,12 +115,16 @@ class Trace:
     # Park 2023 — observability for goal-driven retrieval (Session 3).
     working_self_goals: list[str] = field(default_factory=list)
     # Wondering-pursuit decision for this turn (Slice 2 of post-audit
-    # work). ``pursuit_decision`` is one of ``"surface"`` / ``"hold"`` /
-    # ``""`` (not run). When pursuit was evaluated, the remaining fields
-    # carry the score, the wondering question (truncated), and the
-    # per-axis component scores (goal / recency / register / quality)
-    # so the trace answers "did Maez decide to surface a wondering
-    # this turn, and why?". Lai et al. 2024 framework + Conway 2000.
+    # work). ``pursuit_decision`` is one of ``"surface"`` /
+    # ``"hold"`` / ``"errored"`` / ``""`` (not run). When pursuit
+    # was evaluated, the remaining fields carry the score, the
+    # wondering question (truncated), and the per-axis component
+    # scores (goal / recency / register / quality) so the trace
+    # answers "did Maez decide to surface a wondering this turn,
+    # and why?". Lai et al. 2024 framework + Conway 2000.
+    # ``"errored"`` distinguishes evaluator-raised from legitimate-
+    # hold (audit M2 fix from Session 2) so observability never
+    # misreports a failure path as a hold.
     pursuit_decision: str = ""
     pursuit_score: float = 0.0
     pursuit_question: str = ""

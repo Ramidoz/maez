@@ -51,32 +51,39 @@ Items below ``PURSUIT_SCORE_THRESHOLD`` keep silent. The MN/FD
 trade-off is tuned conservatively (toward silence) per the bonded
 shape: when in doubt, don't intrude.
 
-Session-3 deferrals (per 2026-04-29 Explore audit). These are
-follow-up integration points the Session-2 wiring did NOT land,
-documented here so the next session sees them without re-discovery:
+Status of Session-3 deferrals (audit-driven, updated 2026-04-29):
 
-- ``Wonderings.record_pursuit(wondering_id, decision, score, components,
-  ts)`` — store-side method to log per-wondering pursuit history.
-  Today the frequency budget is global (sidecar); per-wondering
-  pursuit history would let the probe-loop deprioritise
-  recently-surfaced wonderings and let observability show
-  per-wondering surfacing trends.
-- Cockpit panel (``skills/web_interface.py`` + ``web/cockpit/``):
-  no UI yet renders ``Trace.pursuit_decision / pursuit_score /
-  pursuit_question / pursuit_components``. Trace data is captured;
-  visualisation is the missing piece.
-- CLI ``/wonderings`` enrichment (``cli/maez_chat.py``): show
-  "last surfaced at" + "last decision" alongside probe history.
-- Probe-loop awareness (``daemon/wondering_cycle.py``): a wondering
-  surfaced via pursuit in the last cycle could be deprioritised
-  for probing in the next, to avoid double-touching.
-- Quality telemetry (``core/quality_telemetry.py`` /
-  ``core/observability.py``): pursuit-fire rate and
-  surface-vs-hold ratios as quality signals for tuning.
-- Episode recording (``core/memory/episodes.py``): write a lived-
-  episode entry on each pursuit surface so the lived-recall layer
-  can later cite "Maez surfaced wondering X to owner at time T".
-  Conway 2000: reflection-on-action is part of self-memory.
+LANDED:
+- ``Wonderings.record_pursuit(wondering_id, decision, score,
+  components)`` — landed in ``core/evolution/wonderings.py``;
+  daemon calls it on surface decisions.
+- CLI ``/wonderings`` enrichment — ``surf`` + ``last surf`` columns
+  landed in ``cli/maez_chat.py``.
+- Probe-loop awareness — landed in ``Wonderings.pick_next``
+  (sourced from ``RECENCY_HALF_LIFE_HOURS`` so two-channel pacing
+  shares one source-of-truth).
+- Episode recording on pursuit surface — landed in daemon
+  (``source_kind="pursuit_surface"``). Conway 2000 reflection-on-
+  action.
+- Cockpit API endpoint ``/api/debug/pursuit-decisions`` — landed
+  in ``skills/web_interface.py``. Returns recent decisions joined
+  with parent wondering question.
+
+STILL DEFERRED (orthogonal, documented here so the next slice
+doesn't have to re-discover):
+- Cockpit UI panel: the API endpoint is queryable, but no
+  ``web/cockpit/*.jsx`` component renders it yet.
+- Quality telemetry rollup (``core/cognition/quality_telemetry.py``):
+  pursuit-fire rate, surface-vs-hold ratios, score distribution
+  for threshold tuning. Today this data lives in
+  ``wondering_pursuits`` table + Trace JSONL but isn't aggregated
+  into the operator-visible rollup.
+- ``decide_pursuit`` return-type richness: today returns
+  ``Optional[PursuitDecision]`` and conflates "no candidates",
+  "frequency-blocked", "register-blocked", "below-threshold" all
+  into None. The daemon's tri-state classification (surface /
+  hold / errored) covers the high-level cases; a richer return
+  taxonomy would help the cockpit show *why* a hold happened.
 """
 
 from __future__ import annotations
@@ -124,18 +131,16 @@ PURSUIT_FREQUENCY_BUDGET_HOURS: float = 12.0
 # ── conversational-register lexicons ─────────────────────────────────
 
 # Tokens that ON THEIR OWN signal vulnerability/distress strongly
-# enough to justify a hard-block. CURATED CAREFULLY (2026-04-29
-# audit finding): a previous draft included routine words like
-# ``can``, ``hard``, ``tough``, ``rough``, ``tired``, ``heavy``,
-# ``lost``, ``broken``, ``struggling``, ``miss``, ``worry`` —
-# which collide with everyday casual / engineering vocabulary
-# (``"can you help"``, ``"that bug was hard"``, ``"miss the
-# deadline"``). The audit showed pursuit was effectively
-# dead-on-arrival because the lexicon over-saturated.
+# enough to justify a hard-block. Curated carefully (2026-04-29
+# audit findings): false positives on engineering vocab were the
+# original bug; a fresh-eyes audit then exposed the OPPOSITE bug —
+# critical safety phrases like ``"i want to die"``, ``"kill
+# myself"``, ``"why bother"`` were NOT blocked. Both directions
+# matter for the bonded-companion safety promise.
 #
 # Inclusion bar: a word is in this set ONLY if its appearance in
 # casual conversation is overwhelmingly distress-coloured. Words
-# with strong technical / casual senses are handled by the phrase
+# with technical / casual senses are handled by the phrase
 # patterns below, not as bare tokens.
 _VULNERABLE_REGISTER_TOKENS: frozenset[str] = frozenset({
     # explicit emotional disclosure (rarely casual)
@@ -145,18 +150,60 @@ _VULNERABLE_REGISTER_TOKENS: frozenset[str] = frozenset({
     "mourning",
     # explicit grief / loss verbs (compound usage caught by phrases)
     "crying", "sobbing", "weeping",
+    # safety-critical (audit B1 fix — fresh-eyes pass exposed
+    # these were missing entirely)
+    "suicidal", "numb",
 })
 
 # Phrase patterns that signal distress regardless of token-level
 # false positives. Lexicons of single tokens collide with casual
 # usage; phrase patterns survive because the surrounding context
-# carries the signal. These are matched as substrings on the
-# lowercased recent owner text.
+# carries the signal. Matched as substrings on the lowercased
+# recent owner text.
+#
+# Two pools: the safety-critical pool comes first (suicidal
+# ideation, self-harm, despair) and is documented separately so
+# any future curator understands the bar — these are NEVER soft-
+# blocked, NEVER weighted, NEVER negotiable. The second pool is
+# everyday vulnerable contexts (grief, fear, exhaustion).
+_SAFETY_CRITICAL_PHRASES: tuple[str, ...] = (
+    # suicidal ideation
+    "kill myself", "kill my self",
+    "i want to die", "wanting to die",
+    "i wish i was dead", "i wish i were dead", "wish i was dead",
+    "wish i were dead",
+    "better off dead", "better off without me",
+    "end my life", "end it all",
+    "no point in living",
+    "don't want to be here", "dont want to be here",
+    # self-harm
+    "i hate myself", "hate myself",
+    "hurting myself", "self harm", "self-harm",
+    # despair phrases that previously slipped through via
+    # function-word open-register inflation (``why bother`` →
+    # 0.80 OPEN was the worst case)
+    "why bother", "what's the point", "whats the point",
+    "no one cares",
+    "nothing matters",
+    # inability / collapse
+    "can't go on", "cant go on",
+    "i can't take it", "cant take it",
+    "i can't cope", "cant cope",
+    "falling apart", "having a breakdown",
+    # numbness / emptiness (phrase-bound — bare ``empty``/``numb``
+    # are too casual to block alone, but the phrase form is
+    # unambiguous)
+    "i feel empty", "feel numb", "i'm numb", "im numb",
+    # explicit collapse-state phrasing
+    "feeling like shit", "i'm done", "im done",
+)
+
 _VULNERABLE_REGISTER_PHRASES: tuple[str, ...] = (
     # first-person grief / missing
     "i miss her", "i miss him", "i miss them", "i miss you",
     "miss her so", "miss him so", "miss them so",
-    # despair / inability
+    # despair / inability (the everyday-vulnerable pool, not the
+    # safety-critical one)
     "i can't anymore", "cant anymore", "can not anymore",
     "i don't know if i can", "dont know if i can",
     "i give up", "giving up",
@@ -165,24 +212,28 @@ _VULNERABLE_REGISTER_PHRASES: tuple[str, ...] = (
     "i'm afraid", "im afraid",
     "i'm worried", "im worried",
     "i'm hurting", "im hurting",
-    # exhaustion + emotional weight (phrase form, not bare ``tired``)
+    # exhaustion + emotional weight
     "i'm tired of", "im tired of",
     "i'm exhausted", "im exhausted",
     # heaviness / burden
     "feels heavy", "too heavy", "weight of",
     "i'm a burden", "im a burden",
-    # rough emotional state (phrase-bound, not bare ``rough``)
+    # rough emotional state
     "had a rough", "rough day", "rough night", "rough one",
     # explicit "had it"
     "had it", "had enough",
 )
 
-# Words signalling curiosity, openness, casual conversation —
-# inviting registers where surfacing is welcome.
+# Words signalling curiosity, openness — inviting registers where
+# surfacing is welcome. Audit M5 fix: dropped high-frequency
+# function words (``what``, ``how``, ``why``, ``hey``, ``let``,
+# ``think``) that were inflating register on routine factual
+# questions AND actively scoring despair phrases as inviting.
+# Remaining tokens are ones that genuinely signal "I am curious /
+# inviting your input."
 _OPEN_REGISTER_TOKENS: frozenset[str] = frozenset({
     "curious", "wondering", "wonder", "thinking", "interesting",
-    "hey", "tell", "explain", "describe", "what", "how", "why",
-    "let", "think", "share",
+    "tell", "explain", "describe", "share",
 })
 
 # Token regex matching the lived_recall convention.
@@ -218,7 +269,18 @@ def _tokens(text: str) -> set[str]:
     return {t.lower() for t in _TOKEN_RE.findall(text) if len(t) > 1}
 
 
-_MAX_DEFAULT_GOAL_WEIGHT: float = 1.0
+def _max_default_goal_weight() -> float:
+    """Source-of-truth for the goal-weight ceiling. Audit M1 fix:
+    the previous draft hardcoded 1.0 but the actual ceiling of
+    ``working_self._DEFAULT_SOURCE_WEIGHTS`` is 0.95 (cares_about),
+    so perfect alignment with a cares_about goal could never
+    saturate ``_goal_score`` to 1.0 — composite saturation analysis
+    was off by ~5%. Reading the source-of-truth dynamically means
+    a future re-tuning of the working-self priors automatically
+    updates the pursuit ceiling too."""
+    from core.memory.working_self import _DEFAULT_SOURCE_WEIGHTS
+
+    return max(_DEFAULT_SOURCE_WEIGHTS.values())
 
 
 def _goal_score(question: str, goals: GoalHierarchy) -> float:
@@ -257,6 +319,7 @@ def _goal_score(question: str, goals: GoalHierarchy) -> float:
     q_toks = _ws_tokenize(question)
     if not q_toks:
         return 0.0
+    max_weight = _max_default_goal_weight() or 1.0
     best = 0.0
     for g in goals.goals:
         g_toks = _ws_tokenize(g.text)
@@ -272,8 +335,10 @@ def _goal_score(question: str, goals: GoalHierarchy) -> float:
         ratio = len(overlap) / denom
         # Apply goal weight so the working-self's prior structure
         # carries through to pursuit scoring. Normalise by the
-        # max possible weight so the result stays in [0, 1].
-        weighted = (g.weight / _MAX_DEFAULT_GOAL_WEIGHT) * ratio
+        # actual ceiling (read dynamically from working_self) so
+        # the result stays in [0, 1] AND saturates at 1.0 on
+        # perfect cares_about alignment.
+        weighted = (g.weight / max_weight) * ratio
         if weighted > best:
             best = weighted
     return min(1.0, best)
@@ -345,7 +410,13 @@ def _register_score(recent_owner_text: str) -> float:
     if not recent_owner_text:
         return 0.5  # no signal, neutral
     text_lower = recent_owner_text.lower()
-    # Phrase-pattern check first — strongest signal.
+    # Safety-critical phrase check FIRST — these can never be soft-
+    # blocked or weighted. Audit B1 fix: the previous draft missed
+    # ``"kill myself"``, ``"i want to die"``, ``"why bother"`` etc.
+    for phrase in _SAFETY_CRITICAL_PHRASES:
+        if phrase in text_lower:
+            return 0.0
+    # Everyday-vulnerable phrase check.
     for phrase in _VULNERABLE_REGISTER_PHRASES:
         if phrase in text_lower:
             return 0.05
@@ -521,20 +592,57 @@ def _build_rationale(components: dict) -> str:
 # ── phrasing (How-to-Assist) ─────────────────────────────────────────
 
 
+# Maximum chars for the question fragment within the utterance.
+# The wrapper template adds ~80 chars; total utterance stays under
+# ~400 chars so it doesn't dominate the conversational turn.
+_UTTERANCE_QUESTION_MAX_CHARS: int = 280
+
+# Control characters to strip from utterances. Wonderings come from
+# generated text + owner-supplied input; pasted text can carry
+# newlines, tabs, bell, backspace. Audit M4 fix: the pursuit
+# utterance is appended directly to the assistant reply, so any
+# control char lands in chat unsanitised.
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+_TRAILING_PUNCT_RE = re.compile(r"[?.]+$")
+
+
 def format_pursuit_utterance(decision: PursuitDecision) -> str:
     """Phrase a surface-decision as a natural conversational opener.
 
     Lai et al.'s pattern is question-based ("Would you need my help
-    to schedule a meeting...?"). For Maez's bonded-companion shape we
-    soften further: a brief first-person statement of what Maez has
-    been holding, ending with an invitation. Compact (one sentence,
-    under 400 chars) so it doesn't dominate the turn.
+    to schedule a meeting...?"). For Maez's bonded-companion shape
+    we soften further: a brief first-person statement of what Maez
+    has been holding, ending with an invitation.
+
+    Hardened (audit M3+M4 fix):
+
+    - Length-capped at ``_UTTERANCE_QUESTION_MAX_CHARS`` so a 1+ KB
+      pasted-text wondering can't dominate the reply.
+    - Control characters (``\\n``, ``\\t``, ``\\x07`` etc.) are
+      collapsed to single spaces before the question is embedded
+      — the utterance lands in a chat surface where unsanitised
+      control chars would corrupt the rendering.
+    - Repeated trailing ``?``/``.`` are stripped via regex (the
+      previous ``rstrip("?").rstrip(".")`` only stripped one of
+      each, so ``"why??"`` became ``"why?"`` not ``"why"``).
     """
-    q = decision.wondering_question.strip().rstrip("?").rstrip(".")
-    if not q:
+    raw = decision.wondering_question or ""
+    # Sanitise control chars first so trim/strip operates on clean
+    # text. Collapse internal whitespace runs to single spaces
+    # so multiline inputs read as one sentence.
+    cleaned = _CONTROL_CHAR_RE.sub(" ", raw)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return ""
+    # Truncate the question fragment first, THEN strip trailing
+    # punctuation that may have moved.
+    if len(cleaned) > _UTTERANCE_QUESTION_MAX_CHARS:
+        cleaned = cleaned[:_UTTERANCE_QUESTION_MAX_CHARS].rstrip() + "…"
+    cleaned = _TRAILING_PUNCT_RE.sub("", cleaned).strip()
+    if not cleaned:
         return ""
     return (
-        f"I've been holding a question: {q}. "
+        f"I've been holding a question: {cleaned}. "
         f"If you've got space, I'd love to think it through with you."
     )
 
@@ -542,39 +650,79 @@ def format_pursuit_utterance(decision: PursuitDecision) -> str:
 # ── frequency-budget sidecar (last-pursuit timestamp) ────────────────
 
 
+def _default_sidecar_path() -> "str | None":
+    """Resolve the default sidecar path. Audit M2 fix: relocated
+    from ``memory/last_pursuit.json`` to ``daemon/last_pursuit.json``
+    — daemon-runtime state belongs in ``daemon/``, mirroring
+    ``daemon/last_shutdown`` and similar one-line state files. The
+    previous location mixed retrievable lived memory with
+    transient runtime state."""
+    try:
+        from core.infra.paths import home as _home
+
+        return str(_home() / "daemon" / "last_pursuit.json")
+    except Exception:
+        return None
+
+
+def _legacy_sidecar_path() -> "str | None":
+    """The pre-audit-M2 location. Read-only fallback so a deployment
+    that has been running with the old path doesn't silently lose
+    its frequency-budget continuity on first restart after the
+    move. Writes always go to the new location; the legacy file
+    can be deleted manually any time."""
+    try:
+        from core.infra.paths import memory_dir as _memdir
+
+        return str(_memdir() / "last_pursuit.json")
+    except Exception:
+        return None
+
+
 def load_last_pursuit_at(sidecar_path: "str | None" = None) -> Optional[float]:
     """Read the last-pursuit timestamp from the sidecar JSON file.
 
-    The frequency budget axis (audit M5) needs continuity across
-    daemon restarts: an in-memory attribute would reset every restart
-    and let pursuit fire repeatedly. A small JSON sidecar persists the
+    The frequency budget axis needs continuity across daemon
+    restarts: an in-memory attribute would reset every restart and
+    let pursuit fire repeatedly. A small JSON sidecar persists the
     last successful surface across restarts. Mirror of
     ``daemon/last_shutdown`` and similar one-line state files Maez
     already uses.
 
-    Returns ``None`` when the file doesn't exist, can't be parsed, or
-    contains no timestamp — fail-open: the caller will treat None as
-    "no recent pursuit, free to fire."
+    Returns ``None`` when the file doesn't exist, can't be parsed,
+    or contains no timestamp — fail-open: the caller will treat
+    None as "no recent pursuit, free to fire."
+
+    On the default path (audit M2 fix), reads the new
+    ``daemon/last_pursuit.json`` location; if missing, falls back
+    to the legacy ``memory/last_pursuit.json`` so an in-flight
+    deployment doesn't lose budget continuity on the move.
     """
     import json as _json
     from pathlib import Path as _Path
 
-    if sidecar_path is None:
+    candidates: list[str] = []
+    if sidecar_path is not None:
+        candidates.append(sidecar_path)
+    else:
+        primary = _default_sidecar_path()
+        if primary:
+            candidates.append(primary)
+        legacy = _legacy_sidecar_path()
+        if legacy and legacy not in candidates:
+            candidates.append(legacy)
+    for path in candidates:
+        p = _Path(path)
+        if not p.exists():
+            continue
         try:
-            from core.infra.paths import memory_dir as _memdir
-
-            sidecar_path = str(_memdir() / "last_pursuit.json")
-        except Exception:
-            return None
-    p = _Path(sidecar_path)
-    if not p.exists():
-        return None
-    try:
-        data = _json.loads(p.read_text(encoding="utf-8") or "{}")
-        ts = data.get("timestamp")
-        return float(ts) if ts is not None else None
-    except (OSError, ValueError, TypeError, _json.JSONDecodeError):
-        return None
+            data = _json.loads(p.read_text(encoding="utf-8") or "{}")
+            ts = data.get("timestamp")
+            if ts is not None:
+                return float(ts)
+        except (OSError, ValueError, TypeError, _json.JSONDecodeError):
+            continue
+    return None
 
 
 def save_last_pursuit_at(
@@ -600,11 +748,8 @@ def save_last_pursuit_at(
     from pathlib import Path as _Path
 
     if sidecar_path is None:
-        try:
-            from core.infra.paths import memory_dir as _memdir
-
-            sidecar_path = str(_memdir() / "last_pursuit.json")
-        except Exception:
+        sidecar_path = _default_sidecar_path()
+        if sidecar_path is None:
             return
     try:
         p = _Path(sidecar_path)

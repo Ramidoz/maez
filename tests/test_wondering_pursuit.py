@@ -580,5 +580,235 @@ class TestDefensiveErrorHandling(unittest.TestCase):
                                msg="naive now must normalise to UTC")
 
 
+class TestCriticalSafetyPhrasesBlockSurfacing(unittest.TestCase):
+    """Audit-driven (2026-04-29 Session-1 fresh-eyes pass): the
+    grandmother-case safety promise — that vulnerable owner messages
+    must HARD-BLOCK proactive surfacing regardless of goal alignment
+    — was broken on the messages where it matters most. The previous
+    lexicon was tuned against engineer-vocab false positives but
+    never re-tested against critical safety true positives like
+    suicidal ideation, self-harm, despair. Worse: ``what / how /
+    why`` were in the OPEN lexicon, so phrases like ``"why bother"``
+    and ``"what's the point"`` actively scored as INVITING.
+
+    These tests pin the safety-critical inputs end-to-end through
+    ``decide_pursuit`` AND directly through ``_register_score``.
+    The bonded-companion shape REQUIRES every one of these to
+    return register < 0.1 and ``decide_pursuit`` to return None."""
+
+    _CRITICAL_PHRASES = [
+        # suicidal ideation
+        "kill myself",
+        "i want to die",
+        "i wish i was dead",
+        "i wish i were dead",
+        "wish i was dead",
+        "better off dead",
+        "better off without me",
+        "end my life",
+        "end it all",
+        "no point in living",
+        "don't want to be here",
+        "dont want to be here",
+        # self-harm
+        "i hate myself",
+        "hate myself",
+        "hurting myself",
+        "self harm",
+        # despair (the why/what/how phrases that previously scored OPEN)
+        "why bother",
+        "what's the point",
+        "whats the point",
+        "no one cares",
+        "nothing matters",
+        # inability / collapse
+        "can't go on",
+        "cant go on",
+        "i can't take it",
+        "cant take it",
+        "i can't cope",
+        "cant cope",
+        "falling apart",
+        "having a breakdown",
+        # numbness / emptiness (phrase-bound — bare "empty"/"numb"
+        # is too casual to block alone)
+        "i feel empty",
+        "feel numb",
+        "i'm numb",
+        "im numb",
+        # explicit lethal phrasing
+        "feeling like shit",
+        "i'm done",
+        "im done",
+    ]
+
+    def test_critical_phrases_collapse_register(self):
+        from core.evolution.wondering_pursuit import _register_score
+
+        for phrase in self._CRITICAL_PHRASES:
+            score = _register_score(phrase)
+            self.assertLess(
+                score, 0.1,
+                f"safety-critical phrase must hard-block register: "
+                f"{phrase!r} got {score:.2f}",
+            )
+
+    def test_critical_phrases_block_pursuit_end_to_end(self):
+        """End-to-end: even with a strongly goal-aligned wondering,
+        a safety-critical owner message must produce decide_pursuit
+        → None."""
+        from core.evolution.wondering_pursuit import decide_pursuit
+
+        goals = GoalHierarchy(goals=(
+            Goal(text="continuity",
+                 source=GOAL_SOURCE_CARES_ABOUT, weight=0.95),
+        ))
+        wonderings = [_wondering(
+            wid=1,
+            question="how does continuity hold across daemon restart",
+            advance_count=4,
+            last_advanced=time.time() - 86400 * 3,
+        )]
+        for phrase in self._CRITICAL_PHRASES:
+            result = decide_pursuit(
+                wonderings, goals=goals,
+                recent_owner_text=phrase,
+                threshold=0.4,  # permissive — the test is whether
+                                # the register hard-block still fires
+            )
+            self.assertIsNone(
+                result,
+                f"safety-critical phrase must block pursuit: {phrase!r}",
+            )
+
+
+class TestGoalScoreSaturationCeiling(unittest.TestCase):
+    """Audit M1: ``_MAX_DEFAULT_GOAL_WEIGHT`` was hardcoded to 1.0
+    but the actual ceiling of ``working_self._DEFAULT_SOURCE_WEIGHTS``
+    is 0.95 (cares_about). After the fix, perfect alignment with a
+    cares_about goal must produce ``_goal_score == 1.0``, not 0.95."""
+
+    def test_perfect_cares_about_alignment_saturates_to_one(self):
+        from core.evolution.wondering_pursuit import _goal_score
+        # Single goal with single token; wondering with same single
+        # token. Maximum possible alignment. Must saturate to 1.0.
+        goals = GoalHierarchy(goals=(
+            Goal(text="continuity",
+                 source=GOAL_SOURCE_CARES_ABOUT, weight=0.95),
+        ))
+        score = _goal_score("continuity", goals)
+        self.assertAlmostEqual(score, 1.0, places=2,
+                               msg="perfect alignment with a cares_about "
+                                   "goal must saturate to 1.0 — the goal-"
+                                   "weight ceiling must bind to the actual "
+                                   "max in working_self, not a hardcoded 1.0")
+
+
+class TestUtteranceFormattingHardening(unittest.TestCase):
+    """Audit M3+M4: ``format_pursuit_utterance`` had no length cap
+    and no control-char sanitization. A pasted-text wondering of
+    1+ KB would be appended verbatim to the reply. Newlines, tabs,
+    bell/backspace would land in chat unsanitised."""
+
+    def test_long_question_truncated(self):
+        from core.evolution.wondering_pursuit import (
+            PursuitDecision, format_pursuit_utterance,
+        )
+        long_q = "x" * 1500
+        d = PursuitDecision(
+            wondering_id=1, wondering_question=long_q,
+            proactive_score=0.7, decision="surface",
+            rationale="", components={},
+        )
+        u = format_pursuit_utterance(d)
+        self.assertLess(len(u), 400,
+                        "utterance must be capped at ~400 chars")
+
+    def test_control_chars_sanitised(self):
+        from core.evolution.wondering_pursuit import (
+            PursuitDecision, format_pursuit_utterance,
+        )
+        d = PursuitDecision(
+            wondering_id=1,
+            wondering_question="why\n\nthis\thappen??\x07\x08",
+            proactive_score=0.7, decision="surface",
+            rationale="", components={},
+        )
+        u = format_pursuit_utterance(d)
+        for ch in ("\n", "\t", "\x07", "\x08", "\r"):
+            self.assertNotIn(ch, u,
+                             f"control char {ch!r} must be sanitised "
+                             f"out of the surface utterance")
+
+    def test_repeated_trailing_punctuation_stripped(self):
+        from core.evolution.wondering_pursuit import (
+            PursuitDecision, format_pursuit_utterance,
+        )
+        d = PursuitDecision(
+            wondering_id=1,
+            wondering_question="why does this happen??",
+            proactive_score=0.7, decision="surface",
+            rationale="", components={},
+        )
+        u = format_pursuit_utterance(d)
+        # No "??" inside the utterance — should be cleanly stripped.
+        self.assertNotIn("??", u)
+        self.assertNotIn("..", u)
+
+
+class TestBuildRationaleStability(unittest.TestCase):
+    """Audit m6 (was 19): ``_build_rationale`` had no tests. Cockpit
+    + traces parse this string downstream; the format must be stable."""
+
+    def test_rationale_format_is_stable_top_two(self):
+        from core.evolution.wondering_pursuit import _build_rationale
+
+        rationale = _build_rationale({
+            "goal": 0.9, "recency": 0.5,
+            "register": 0.3, "quality": 0.1,
+        })
+        # Top 2 by score, semicolon-separated, two-decimal format.
+        self.assertEqual(rationale, "goal=0.90; recency=0.50")
+
+    def test_rationale_handles_empty_components(self):
+        from core.evolution.wondering_pursuit import _build_rationale
+        # Should not raise; returns empty or harmless string.
+        out = _build_rationale({})
+        self.assertIsInstance(out, str)
+
+
+class TestDefaultThresholdBehaviour(unittest.TestCase):
+    """Audit m4 (was m13): the default ``PURSUIT_SCORE_THRESHOLD``
+    path was never exercised — every test passed an explicit
+    ``threshold=`` kwarg. Locks the documented default behaviour
+    so future tuning is a deliberate change."""
+
+    def test_default_threshold_holds_on_low_aligned_wondering(self):
+        from core.evolution.wondering_pursuit import decide_pursuit
+        # Wondering that doesn't pass the documented default.
+        # No goal alignment, no recent owner-msg signal.
+        goals = GoalHierarchy(goals=(
+            Goal(text="continuity",
+                 source=GOAL_SOURCE_CARES_ABOUT, weight=0.95),
+        ))
+        wonderings = [_wondering(
+            wid=1,
+            question="completely unrelated topic",
+            advance_count=0,
+            last_advanced=None,
+        )]
+        result = decide_pursuit(
+            wonderings, goals=goals,
+            recent_owner_text="hi",
+            # No threshold= kwarg — default 0.6.
+        )
+        self.assertIsNone(
+            result,
+            "default threshold must hold on a clearly low-aligned "
+            "wondering; this test guards against accidental default "
+            "drift in future tuning",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

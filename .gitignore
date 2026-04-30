@@ -69,6 +69,7 @@ memory/last_briefing.txt
 memory/perception_cache.json
 memory/last_consolidation.txt
 memory/last_pursuit.json
+daemon/last_pursuit.json
 memory/*.tmp
 # Birth-phase tracking — per-instance runtime state. See
 # core/memory/birth.py. Tracking this in git would cause fire_birth()
