@@ -1,0 +1,54 @@
+Maez — session snapshot
+
+BUILD: Sessions auto
+DATE: 2026-05-01
+AGENT: Claude
+HEAD: cda2888
+COMMITS_SINCE: 12 hours ago
+COMMIT_COUNT: 14
+TEST_FUNCTIONS: 2098
+
+========================================
+WHAT CHANGED TODAY
+========================================
+
+- 2026-05-01 18:06 — cda2888e3 (Maez): feat(memory): tag face enrollment as observed tool event (Step 5x.D.D)
+- 2026-05-01 18:00 — 6adb06786 (Maez): test(memory): guard provenance write-path bypasses (Step 5x.D.C)
+- 2026-05-01 17:35 — b0da79bd9 (Maez): feat(memory): daily consolidation lineage (Step 5x.E)
+- 2026-05-01 17:12 — 92723e1a6 (Maez): feat(memory): wire raw promotion through ancestor gate (Step 5x.D.B1)
+- 2026-05-01 16:52 — 843437cec (Maez): feat(memory): promotion gate + ancestor lineage (Step 5x.D.A)
+- 2026-05-01 16:39 — 9bfe4ba0a (Maez): feat(memory): surface untrusted-tier in recall prompt (Step 5x.C)
+- 2026-05-01 16:30 — b8a5db4da (Maez): feat(memory): tag external_web + system ingress (Step 5x.B Pass 2a)
+- 2026-05-01 16:11 — 87a53180a (Maez): feat(memory): tag hot-path memory writes with provenance (Step 5x.B Pass 1)
+- 2026-05-01 15:56 — 6feb4fc31 (Maez): feat(memory): add provenance metadata schema (Step 5x.A)
+- 2026-05-01 15:42 — ca235f335 (Maez): feat(probe): MSEL natural-text probe sweep (pre-5x baseline)
+- 2026-05-01 14:59 — abb1a28e6 (Maez): docs(agents): remove stale recent-state commit pointer
+- 2026-05-01 14:34 — bf0d83ced (Maez): docs(agents): AGENTS.md onboarding for Codex (and any agent) at repo root
+- 2026-05-01 13:19 — 9d5702b7b (Maez): docs(research): correct research memo — grep BAD before claiming gaps
+- 2026-05-01 12:21 — ed3a85f3e (Maez): docs(research): research memo 2026-05-01 — 13 searches, 7 deep-reads
+
+========================================
+PRODUCTION STATE
+========================================
+
+- maez.service: active (PID 420893)
+- maez-web.service: active (PID 407301)
+- maez-watchdog.service: active (PID 3498)
+- maez-subscription-proxy.service: active (PID 2660953)
+- llama-server.service: active (PID 216175)
+- lived episodes: 29
+- private thoughts (count only): 0
+- wonderings: 8
+- inner residue events (count only): 3
+- entity index entries: 38
+- entity mentions: 65
+- entity aliases: 5
+- fast-conversation turns: 35
+
+========================================
+NEXT SESSION PRIORITIES
+========================================
+
+- Read latest handoff: docs/HANDOFF-2026-05-01.md
+- Track A anchor: docs/TRACK_A.md
+- Run the substrate observation greps from HANDOFF-2026-05-01.md if present
