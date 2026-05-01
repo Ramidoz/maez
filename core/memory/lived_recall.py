@@ -249,6 +249,47 @@ def _merge_literal_and_semantic(
     return merged, semantic_hits
 
 
+_QUERY_EXCERPT_CAP = 60
+
+
+def _log_expansion_fired(
+    *,
+    query: str,
+    expansion,
+    resolution,
+    rendered_entities,
+) -> None:
+    """Single structured INFO log line so live daemon journals
+    can be grepped for substrate behaviour. Without this, the
+    expansion path is invisible: tonight's journal had no
+    evidence of the substrate firing on real Telegram messages
+    even with the flag on."""
+    n_literal = len(expansion.matched_entities) if expansion else 0
+    n_semantic = (
+        len(resolution.resolved_entities)
+        if resolution is not None else 0
+    )
+    n_unique = len(rendered_entities)
+    canonicals = sorted(
+        e.canonical_name for e in rendered_entities
+    )
+    semantic_phrases = (
+        list(resolution.matched_phrases)
+        if resolution is not None else []
+    )
+    excerpt = (query or "")[:_QUERY_EXCERPT_CAP]
+    if len(query or "") > _QUERY_EXCERPT_CAP:
+        excerpt = excerpt[:_QUERY_EXCERPT_CAP - 1] + "…"
+    logger.info(
+        "entity_expansion fired "
+        "n_literal_entities=%d n_semantic_entities=%d "
+        "n_unique_entities=%d entity_canonicals=%s "
+        "semantic_phrases=%s query_excerpt=%r",
+        n_literal, n_semantic, n_unique,
+        canonicals, semantic_phrases, excerpt,
+    )
+
+
 def _maybe_entity_expansion(
     query: str,
     ix: "EntityIndex | None",
@@ -313,11 +354,27 @@ def _maybe_entity_expansion(
             merged = _MergedExpansion()
             merged.matched_entities = merged_entities
             merged.explanation = ""
-            return _format_entity_expansion_section(merged, ix)
+            section = _format_entity_expansion_section(merged, ix)
+            if section:
+                _log_expansion_fired(
+                    query=query,
+                    expansion=expansion,
+                    resolution=resolution,
+                    rendered_entities=merged_entities,
+                )
+            return section
 
         if not expansion.matched_entities:
             return ""
-        return _format_entity_expansion_section(expansion, ix)
+        section = _format_entity_expansion_section(expansion, ix)
+        if section:
+            _log_expansion_fired(
+                query=query,
+                expansion=expansion,
+                resolution=None,
+                rendered_entities=expansion.matched_entities,
+            )
+        return section
     except Exception as e:  # noqa: BLE001 — fail-closed by contract
         logger.debug(
             "lived_recall: entity-expansion fail-closed: %s", e,
