@@ -13,6 +13,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from pathlib import Path
 
 import chromadb
@@ -23,6 +24,128 @@ from core.birth import memory_phase_tag as _memory_phase_tag
 logger = logging.getLogger("maez")
 
 BASE_DB = Path("/home/rohit/maez/memory/db")
+
+
+# ── Step 5x.A — Memory provenance schema ────────────────────────────
+#
+# Two orthogonal axes added to every (newly tagged) memory entry:
+#
+#   provenance_source — *where the content came from* (lineage). NOT
+#       to be conflated with the existing freeform ``source`` field on
+#       core memories, which already carries values like
+#       ``reasoning`` / ``promotion`` / ``baseline_update`` /
+#       ``soul_evolution`` / ``calendar_summary`` /
+#       ``infrastructure_correction_*``. Both fields coexist.
+#
+#   trust_tier — *how much weight should later reasoning give it*
+#       (lineage trust). Orthogonal to the existing ``integrity``
+#       field, which captures corruption/fabrication status. A memory
+#       can be high-integrity and untrusted (e.g. a perfectly stored
+#       claude_tier response) — the two answer different questions.
+#
+# 5x.A is metadata-only:
+#   - Untagged writes (both kwargs ``None``) write no new keys; legacy
+#     entries remain byte/metadata-compatible.
+#   - Tagged writes persist the strings ``provenance_source`` and
+#     ``trust_tier`` in metadata.
+#   - When ``provenance_source`` is supplied without ``trust_tier``,
+#     ``default_tier_for`` derives the conservative default.
+#
+# Recall behavior is UNCHANGED in 5x.A. Surfacing/filtering arrives in
+# 5x.C and 5x.D. Derived-memory ancestor lineage (worst-ancestor tier)
+# arrives in 5x.D.
+
+
+class ProvenanceSource(str, Enum):
+    """Where a memory entry's content originated.
+
+    Orthogonal to the existing freeform ``source`` field; do not
+    conflate the two."""
+
+    INTROSPECTION = "introspection"
+    USER_UTTERANCE = "user_utterance"
+    TOOL_OBSERVATION = "tool_observation"
+    EXTERNAL_WEB = "external_web"
+    CLAUDE_TIER_RESPONSE = "claude_tier_response"
+    SYSTEM = "system"
+
+
+class TrustTier(str, Enum):
+    """How much later reasoning should weight a memory's lineage.
+
+    Orthogonal to ``integrity``; ``integrity`` answers "is this
+    corrupted?", ``trust_tier`` answers "where does this come from?"."""
+
+    COVENANT = "covenant"
+    LIVED = "lived"
+    OBSERVED = "observed"
+    UNTRUSTED = "untrusted"
+
+
+_DEFAULT_TIER_BY_SOURCE: dict[ProvenanceSource, TrustTier] = {
+    ProvenanceSource.INTROSPECTION: TrustTier.LIVED,
+    ProvenanceSource.USER_UTTERANCE: TrustTier.LIVED,
+    ProvenanceSource.TOOL_OBSERVATION: TrustTier.OBSERVED,
+    ProvenanceSource.EXTERNAL_WEB: TrustTier.UNTRUSTED,
+    ProvenanceSource.CLAUDE_TIER_RESPONSE: TrustTier.UNTRUSTED,
+    ProvenanceSource.SYSTEM: TrustTier.COVENANT,
+}
+
+
+def _coerce_provenance_source(value) -> ProvenanceSource:
+    """Accept either a ``ProvenanceSource`` enum or its string value;
+    raise ``ValueError`` for unknown strings (typo guard)."""
+    if isinstance(value, ProvenanceSource):
+        return value
+    try:
+        return ProvenanceSource(value)
+    except ValueError as exc:
+        valid = ", ".join(s.value for s in ProvenanceSource)
+        raise ValueError(
+            f"unknown provenance_source {value!r}; expected one of: "
+            f"{valid}"
+        ) from exc
+
+
+def _coerce_trust_tier(value) -> TrustTier:
+    """Accept either a ``TrustTier`` enum or its string value; raise
+    ``ValueError`` for unknown strings (typo guard)."""
+    if isinstance(value, TrustTier):
+        return value
+    try:
+        return TrustTier(value)
+    except ValueError as exc:
+        valid = ", ".join(t.value for t in TrustTier)
+        raise ValueError(
+            f"unknown trust_tier {value!r}; expected one of: {valid}"
+        ) from exc
+
+
+def default_tier_for(provenance_source) -> TrustTier:
+    """Return the conservative default :class:`TrustTier` for a given
+    :class:`ProvenanceSource`. Accepts the enum or the string value.
+    Raises ``ValueError`` on unknown sources."""
+    src = _coerce_provenance_source(provenance_source)
+    return _DEFAULT_TIER_BY_SOURCE[src]
+
+
+def _provenance_metadata(provenance_source, trust_tier) -> dict:
+    """Resolve the ``provenance_source`` / ``trust_tier`` write-through
+    metadata for a single store call.
+
+    Returns an empty dict when both kwargs are ``None`` (legacy /
+    unmigrated path; recall behavior unchanged)."""
+    if provenance_source is None and trust_tier is None:
+        return {}
+    extra: dict = {}
+    if provenance_source is not None:
+        src = _coerce_provenance_source(provenance_source)
+        extra["provenance_source"] = src.value
+        if trust_tier is None:
+            extra["trust_tier"] = _DEFAULT_TIER_BY_SOURCE[src].value
+    if trust_tier is not None:
+        extra["trust_tier"] = _coerce_trust_tier(trust_tier).value
+    return extra
 
 # ── Topic Router ──
 
@@ -343,8 +466,20 @@ class MemoryManager:
     # ------------------------------------------------------------------ #
 
     def store(self, content: str, cycle: int, snapshot: dict | None = None,
-              metadata: dict | None = None) -> str:
-        """Store a reasoning cycle output with its full perception snapshot."""
+              metadata: dict | None = None, *,
+              provenance_source=None, trust_tier=None) -> str:
+        """Store a reasoning cycle output with its full perception snapshot.
+
+        ``provenance_source`` / ``trust_tier`` are the Step 5x.A
+        provenance kwargs. Both default to ``None`` (legacy /
+        unmigrated path; no provenance keys written). Validation
+        errors raise before any Chroma write so callers can recover."""
+        # 5x.A: validate provenance kwargs BEFORE the empty-content
+        # short-circuit so typos are surfaced even on no-op writes.
+        provenance_extra = _provenance_metadata(
+            provenance_source, trust_tier
+        )
+
         if not content or content == "(empty response)":
             return ""
 
@@ -359,6 +494,7 @@ class MemoryManager:
         }
         if metadata:
             doc_metadata.update(metadata)
+        doc_metadata.update(provenance_extra)
 
         # Tag with topic wing
         doc_metadata["wing"] = _topic_router.detect_wing(content)
@@ -385,18 +521,31 @@ class MemoryManager:
         logger.info("Raw stored: %s (cycle %d, %d chars)", memory_id[:8], cycle, len(doc_text))
         return memory_id
 
-    def store_telegram(self, content: str) -> str:
-        """Store a Telegram exchange in the raw archive."""
+    def store_telegram(self, content: str, *,
+                       provenance_source=None, trust_tier=None) -> str:
+        """Store a Telegram exchange in the raw archive.
+
+        ``provenance_source`` / ``trust_tier`` are the Step 5x.A
+        provenance kwargs (see :func:`_provenance_metadata`)."""
+        provenance_extra = _provenance_metadata(
+            provenance_source, trust_tier
+        )
         if not content:
             return ""
         memory_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
+        meta = {
+            "cycle": -1,
+            "timestamp": now,
+            "type": "telegram_exchange",
+            "wing": _topic_router.detect_wing(content),
+            "memory_phase": _memory_phase_tag(),
+        }
+        meta.update(provenance_extra)
         self.raw.add(
             ids=[memory_id],
             documents=[content],
-            metadatas=[{"cycle": -1, "timestamp": now, "type": "telegram_exchange",
-                        "wing": _topic_router.detect_wing(content),
-                        "memory_phase": _memory_phase_tag()}],
+            metadatas=[meta],
         )
         logger.info("Raw stored (telegram): %s (%d chars)", memory_id[:8], len(content))
         return memory_id
@@ -564,20 +713,33 @@ class MemoryManager:
     #  TIER 3 — Core Memories                                              #
     # ------------------------------------------------------------------ #
 
-    def store_core(self, content: str, source: str = "reasoning") -> str:
-        """Store a significant long-term observation as a core memory."""
+    def store_core(self, content: str, source: str = "reasoning", *,
+                   provenance_source=None, trust_tier=None) -> str:
+        """Store a significant long-term observation as a core memory.
+
+        The existing freeform ``source`` field (``reasoning`` /
+        ``promotion`` / ``baseline_update`` / ``soul_evolution`` /
+        etc.) is preserved unchanged for backwards compatibility.
+        ``provenance_source`` / ``trust_tier`` are the Step 5x.A
+        provenance kwargs and live in separate metadata keys; do
+        NOT conflate them with the freeform ``source`` field."""
+        provenance_extra = _provenance_metadata(
+            provenance_source, trust_tier
+        )
         memory_id = f"core-{uuid.uuid4().hex[:12]}"
         now = datetime.now(timezone.utc).isoformat()
 
+        meta = {
+            "timestamp": now,
+            "source": source,
+            "type": "core_memory",
+            "memory_phase": _memory_phase_tag(),
+        }
+        meta.update(provenance_extra)
         self.core.add(
             ids=[memory_id],
             documents=[content],
-            metadatas=[{
-                "timestamp": now,
-                "source": source,
-                "type": "core_memory",
-                "memory_phase": _memory_phase_tag(),
-            }],
+            metadatas=[meta],
         )
         logger.info("Core memory stored: %s (%d chars)", memory_id, len(content))
         return memory_id
