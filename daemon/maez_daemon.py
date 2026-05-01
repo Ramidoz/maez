@@ -1640,6 +1640,9 @@ class MaezDaemon:
         # inside ambient_prompt_block so per-turn cost is bounded.
         # Gated by ``MAEZ_AMBIENT_BRIEF`` (default on, "0" disables)
         # so the env var pattern matches MAEZ_LIVED_RECALL.
+        # Step 5v: declared at function scope so the response log
+        # below can reference its size without re-pulling.
+        _ambient_block = ""
         if os.environ.get("MAEZ_AMBIENT_BRIEF", "1") != "0":
             try:
                 from core.memory.ambient_format import ambient_prompt_block
@@ -1853,6 +1856,37 @@ class MaezDaemon:
                 _trace.pursuit_decision = "hold"
         except Exception as _trace_pursuit_exc:
             logger.debug("trace pursuit capture skipped: %s", _trace_pursuit_exc)
+
+        # Step 5v — single structured log line per chat turn.
+        # Captures what reached the prompt (lived_brief / ambient
+        # block sizes) alongside the response shape so journal-grep
+        # can answer "did the substrate help?" across many turns
+        # without re-running the prompt assembly. Mirrors the
+        # _log_expansion_fired shape from Step 5q for greppability.
+        # Reply is post-canary-scrub + post-protected-command-scrub
+        # at this point; 60-char excerpt is safe for journalctl.
+        try:
+            _reply_excerpt = (reply or "")[:60]
+            if len(reply or "") > 60:
+                _reply_excerpt = _reply_excerpt[:59] + "…"
+            _user_excerpt = (text or "")[:60]
+            if len(text or "") > 60:
+                _user_excerpt = _user_excerpt[:59] + "…"
+            logger.info(
+                "chat_turn handled "
+                "source=%s len_user=%d len_lived_brief=%d "
+                "len_ambient_block=%d len_reply=%d "
+                "user_excerpt=%r reply_excerpt=%r",
+                source,
+                len(text or ""),
+                len(_lived_brief or ""),
+                len(_ambient_block or ""),
+                len(reply or ""),
+                _user_excerpt,
+                _reply_excerpt,
+            )
+        except Exception as _log_exc:
+            logger.debug("chat_turn log line failed: %s", _log_exc)
 
         self.memory.store_telegram(f"the owner ({source}): {text}\nMaez: {reply}")
         self._ws_broadcast({"type": "message_reply", "text": reply})
