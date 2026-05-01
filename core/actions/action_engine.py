@@ -1021,7 +1021,20 @@ class ActionEngine:
         if not results["documents"]:
             return f"Memory {memory_id} not found in raw archive"
         content = results["documents"][0]
-        core_id = self.memory.store_core(f"[Promoted: {reason}] {content}", source="promotion")
+        # 5x.D.B1: explicit raw-memory promotion — cite the source raw
+        # ID via promoted_from so the 5x.D.A ancestor gate runs. If the
+        # cited raw row is trust_tier=untrusted, store_core raises
+        # PromotionBlocked, which _execute_action surfaces as a failed
+        # ActionResult. Owner override (allow_untrusted_ancestors) is
+        # NOT exposed here — the existing action surface has no opt-in
+        # primitive, and inventing one would be scope creep for this
+        # slice. A blocked promotion is the intended behavior until
+        # an explicit override action lands.
+        core_id = self.memory.store_core(
+            f"[Promoted: {reason}] {content}",
+            source="promotion",
+            promoted_from=[memory_id],
+        )
         return f"Promoted to core: {core_id}"
 
     def write_soul_note(self, note: str) -> ActionResult:
@@ -1085,6 +1098,17 @@ class ActionEngine:
     def _do_update_baseline(self, observation: str) -> str:
         if not self.memory:
             return "No memory manager"
+        # 5x.D.B1: NOT wired through the ancestor gate. Unlike
+        # _do_promote_to_core_memory, baseline_update has no concrete
+        # source memory_id — the observation is synthesized from a
+        # retrieval window, not a single raw row. Wiring this through
+        # the gate requires a retrieval-context-ancestry design
+        # (cite ALL contributing raw IDs, per the 5x.D.A reviewer's
+        # forward-look on partial-citation undermining worst-wins).
+        # That work is deferred to a later 5x.D.B slice. The absence
+        # of `promoted_from` here is intentional, not oversight —
+        # do not "fix" it by passing a stub or single ID, which would
+        # re-open the gate-bypass surface.
         core_id = self.memory.store_core(
             f"[Baseline observation] {observation}", source="baseline_update"
         )
