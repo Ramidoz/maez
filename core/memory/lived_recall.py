@@ -42,6 +42,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -182,13 +183,90 @@ def _format_entity_expansion_section(
     return section
 
 
+def _default_semantic_mappings_path() -> Path:
+    """``config/entity_semantics.local.yaml`` under the maez root.
+    Returns the path even when it doesn't exist; the loader handles
+    absent files via the fail-closed branch."""
+    try:
+        from core import paths as _paths
+        return _paths.home() / "config" / "entity_semantics.local.yaml"
+    except Exception:
+        return Path("config/entity_semantics.local.yaml")
+
+
+def _try_load_default_semantic_mappings():
+    """Lazy + fail-closed default-config loader for the semantic
+    resolver. Missing config or parse errors return None so the
+    expansion path falls back to literal-only without surfacing
+    noise in the brief."""
+    path = _default_semantic_mappings_path()
+    if not path.exists():
+        return None
+    try:
+        from core.memory.entity_semantic_resolver import (
+            load_semantic_mappings,
+        )
+        return load_semantic_mappings(path)
+    except Exception as e:  # noqa: BLE001 — fail-closed
+        logger.debug(
+            "lived_recall: semantic-mapping config load failed "
+            "(%s); proceeding with literal-only expansion",
+            e,
+        )
+        return None
+
+
+def _merge_literal_and_semantic(
+    expansion, resolution, ix,
+):
+    """Return ``(matched_entities, explanation)`` for the merged
+    section. Dedupe by ``entity_id``; on collision, keep the
+    higher confidence and prefer the literal ``matched_via`` since
+    canonical/alias hits are stronger evidence than a curated
+    semantic bridge.
+
+    The returned ``explanation`` names how each entity was
+    resolved so the operator can tell literal lift from semantic
+    lift in the brief without inspecting the index."""
+    by_id: dict[str, object] = {}
+    for m in expansion.matched_entities:
+        by_id[m.entity_id] = m
+    semantic_hits: list[str] = []
+    for m in resolution.resolved_entities:
+        prior = by_id.get(m.entity_id)
+        if prior is None:
+            by_id[m.entity_id] = m
+            semantic_hits.append(m.canonical_name)
+        else:
+            # Same entity; keep literal but bump confidence if
+            # the semantic mapping was more confident.
+            if m.confidence > getattr(prior, "confidence", 0.0):
+                # Replace with a copy carrying the higher
+                # confidence; the formatter only reads attrs.
+                prior.confidence = m.confidence  # type: ignore[attr-defined]
+
+    merged = list(by_id.values())
+    return merged, semantic_hits
+
+
 def _maybe_entity_expansion(
-    query: str, ix: "EntityIndex | None",
+    query: str,
+    ix: "EntityIndex | None",
+    *,
+    semantic_mappings=None,
 ) -> str:
     """Compute the ENTITY EXPANSION section when the flag is on
     and matches exist. Returns the empty string when disabled, no
     matches, or anything fails — the recall composer concatenates
-    unconditionally."""
+    unconditionally.
+
+    Step-5o: also runs the owner-curated semantic resolver so
+    queries that don't contain entity surfaces (e.g. "how is the
+    firstborn") can still surface the canonical entity (e.g.
+    Maez) when a curated mapping bridges the phrase. Resolution
+    is fail-closed at every step; missing config / missing
+    target / resolver crash all degrade gracefully to
+    literal-only expansion."""
     if not _entity_expansion_enabled():
         return ""
     try:
@@ -197,6 +275,46 @@ def _maybe_entity_expansion(
         from core.memory.entity_index import expand_query
 
         expansion = expand_query(query, ix=ix)
+
+        # Semantic pass — best-effort; never blocks the literal
+        # expansion. Caller-supplied mappings take precedence
+        # over the default config to keep tests deterministic.
+        if semantic_mappings is None:
+            semantic_mappings = _try_load_default_semantic_mappings()
+        if semantic_mappings:
+            try:
+                from core.memory.entity_semantic_resolver import (
+                    resolve_semantic_entities,
+                )
+                resolution = resolve_semantic_entities(
+                    query, ix=ix, mappings=semantic_mappings,
+                )
+            except Exception as e:  # noqa: BLE001 — fail-closed
+                logger.debug(
+                    "lived_recall: semantic resolution failed "
+                    "(%s); falling back to literal expansion",
+                    e,
+                )
+                resolution = None
+        else:
+            resolution = None
+
+        if resolution is not None and resolution.resolved_entities:
+            merged_entities, _ = _merge_literal_and_semantic(
+                expansion, resolution, ix,
+            )
+            if not merged_entities:
+                return ""
+            # Build a synthetic expansion shape the existing
+            # formatter consumes. matched_entities carries the
+            # union; the formatter handles ranking + caps.
+            class _MergedExpansion:
+                pass
+            merged = _MergedExpansion()
+            merged.matched_entities = merged_entities
+            merged.explanation = ""
+            return _format_entity_expansion_section(merged, ix)
+
         if not expansion.matched_entities:
             return ""
         return _format_entity_expansion_section(expansion, ix)
@@ -806,6 +924,7 @@ def build_lived_recall_brief(
     goals: "GoalHierarchy | None" = None,
     reference_time: "datetime | None" = None,
     ix: "EntityIndex | None" = None,
+    semantic_mappings: "list | None" = None,
 ) -> str:
     """Return a compact, evidence-backed lived recall brief, or an
     empty string when nothing matches.
@@ -831,7 +950,9 @@ def build_lived_recall_brief(
         # Step-5i: keyword recall has no shot, but entity expansion
         # might still have a match (the substrate is exactly for
         # short queries the tokenizer drops). Try expansion alone.
-        expansion_only = _maybe_entity_expansion(query, ix)
+        expansion_only = _maybe_entity_expansion(
+            query, ix, semantic_mappings=semantic_mappings,
+        )
         if expansion_only:
             return "\n".join([
                 "=== LIVED RECALL — EVIDENCE-BACKED ===",
@@ -1121,7 +1242,9 @@ def build_lived_recall_brief(
     # query (no keyword overlap with stored episodes) can still
     # produce a brief from the expansion alone — that is exactly
     # the case the substrate is meant to rescue.
-    expansion_section = _maybe_entity_expansion(query, ix)
+    expansion_section = _maybe_entity_expansion(
+        query, ix, semantic_mappings=semantic_mappings,
+    )
 
     if not sections and not expansion_section:
         return ""
