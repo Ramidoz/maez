@@ -129,6 +129,73 @@ def default_tier_for(provenance_source) -> TrustTier:
     return _DEFAULT_TIER_BY_SOURCE[src]
 
 
+# ── Step 5x.D — Promotion gate + ancestor lineage ───────────────────
+#
+# 5x.D closes the laundering vector the Zombie Agents threat model
+# named: a memory written from external_web/untrusted material can
+# ride a "promotion" pass into core memory, then look trusted because
+# the freeform ``source="promotion"`` and the core tier hide the
+# ancestor's lineage.
+#
+# The gate fires at ``MemoryManager.store_core``:
+#
+#   - ``promoted_from=None``  → fresh-write path; no change.
+#   - ``promoted_from=[ids…]`` → look up each ancestor's trust_tier;
+#     compute worst-ancestor; persist ``ancestor_tiers`` metadata;
+#     resulting core entry inherits worst-wins.
+#
+# Worst-of ordering (most → least trustworthy):
+#   covenant > lived > observed > untrusted
+#
+# Legacy ancestors (no trust_tier metadata; pre-5x.A material) are
+# rendered as ``"unknown"`` in the ancestor_tiers list and treated as
+# NON-DEGRADING in the worst-wins computation. Strict-block on legacy
+# would break every legitimate promotion of pre-5x material; the
+# threat we close is NEW untrusted ingress, not retroactive
+# uncertainty.
+
+
+class PromotionBlocked(Exception):
+    """Raised by ``MemoryManager.store_core`` when ``promoted_from``
+    cites at least one ancestor with ``trust_tier="untrusted"`` and
+    the caller did NOT pass ``allow_untrusted_ancestors=True``.
+
+    Catching is the caller's signal that the promotion needs explicit
+    owner authorization (or to be refused entirely)."""
+
+
+# Ordering of trust tiers from worst to best. The "worst-wins" rule
+# returns the leftmost tier that appears in any ancestor.
+_TRUST_TIER_ORDER: tuple[str, ...] = (
+    "untrusted",
+    "observed",
+    "lived",
+    "covenant",
+)
+
+
+def _ancestor_tier_label(meta: dict | None) -> str:
+    """Return the trust_tier label for an ancestor lookup, falling back
+    to ``"unknown"`` for pre-5x.A legacy entries."""
+    if not meta:
+        return "unknown"
+    tier = meta.get("trust_tier")
+    if not tier:
+        return "unknown"
+    return str(tier)
+
+
+def _worst_known_tier(tier_labels: list[str]) -> str | None:
+    """Worst-of computation. ``unknown`` ancestors are non-degrading
+    (skipped). Returns ``None`` when every label is unknown — the
+    caller writes ``trust_tier`` only when this returns a concrete
+    tier, preserving legacy-path None semantics."""
+    for tier in _TRUST_TIER_ORDER:
+        if tier in tier_labels:
+            return tier
+    return None
+
+
 def _provenance_metadata(provenance_source, trust_tier) -> dict:
     """Resolve the ``provenance_source`` / ``trust_tier`` write-through
     metadata for a single store call.
@@ -713,8 +780,51 @@ class MemoryManager:
     #  TIER 3 — Core Memories                                              #
     # ------------------------------------------------------------------ #
 
+    def _resolve_ancestor_metadata(
+        self, ids: list[str]
+    ) -> list[dict]:
+        """Return metadata dicts for the supplied ancestor IDs from
+        either the raw or core collection. Raises ``ValueError`` if
+        any ID cannot be resolved — promotion citations must be
+        verifiable.
+
+        Resolution order: raw first, then core. If a memory was
+        promoted into core but the original raw row still exists,
+        the raw lookup wins — this is correct because the raw row
+        is the original source-of-record and its trust_tier is what
+        a downstream gate should respect."""
+        if not ids:
+            raise ValueError(
+                "promoted_from must be a non-empty list of ancestor "
+                "memory IDs (or None for a fresh write)"
+            )
+        # Look in raw first (most ancestors live there); fall back
+        # to core for consolidation-of-cores.
+        raw_hits = self.raw.get(ids=list(ids), include=["metadatas"])
+        core_hits = self.core.get(ids=list(ids), include=["metadatas"])
+
+        by_id: dict[str, dict] = {}
+        for hit_ids, hit_metas in (
+            (raw_hits.get("ids", []), raw_hits.get("metadatas", [])),
+            (core_hits.get("ids", []), core_hits.get("metadatas", [])),
+        ):
+            for mid, meta in zip(hit_ids, hit_metas, strict=False):
+                # raw wins over core if (somehow) duplicated; this
+                # never happens in production but is deterministic.
+                by_id.setdefault(mid, meta or {})
+
+        missing = [mid for mid in ids if mid not in by_id]
+        if missing:
+            raise ValueError(
+                f"promoted_from cites unresolvable ancestor IDs: "
+                f"{missing}. Promotion citations must be verifiable."
+            )
+        return [by_id[mid] for mid in ids]
+
     def store_core(self, content: str, source: str = "reasoning", *,
-                   provenance_source=None, trust_tier=None) -> str:
+                   provenance_source=None, trust_tier=None,
+                   promoted_from: list[str] | None = None,
+                   allow_untrusted_ancestors: bool = False) -> str:
         """Store a significant long-term observation as a core memory.
 
         The existing freeform ``source`` field (``reasoning`` /
@@ -722,7 +832,79 @@ class MemoryManager:
         etc.) is preserved unchanged for backwards compatibility.
         ``provenance_source`` / ``trust_tier`` are the Step 5x.A
         provenance kwargs and live in separate metadata keys; do
-        NOT conflate them with the freeform ``source`` field."""
+        NOT conflate them with the freeform ``source`` field.
+
+        Step 5x.D — promotion gate:
+
+        ``promoted_from`` is a list of ancestor memory IDs (raw or
+        core). When supplied:
+
+          - Each ancestor's ``trust_tier`` is looked up.
+          - The resulting core entry inherits the worst-ancestor
+            tier (worst-wins; ``unknown`` legacy ancestors are
+            non-degrading).
+          - If any ancestor is ``trust_tier="untrusted"`` and
+            ``allow_untrusted_ancestors`` is False, raise
+            :class:`PromotionBlocked`. This is the laundering gate.
+          - If owner explicitly opts in via
+            ``allow_untrusted_ancestors=True``, the promotion
+            proceeds but the new core entry inherits ``untrusted``
+            so 5x.C surfaces it; promotion is not free.
+
+        Caller-supplied ``trust_tier`` is OVERRIDDEN by worst-wins
+        when ``promoted_from`` is supplied — a caller cannot launder
+        a tier by lying about it on a promotion. This applies in
+        both the worst-is-concrete branch (``trust_tier=worst``) and
+        the all-legacy branch (``trust_tier=None``).
+
+        Lineage authority: ``ancestor_tiers`` and ``promoted_from``
+        are the authoritative lineage trail. The ``provenance_source``
+        field on a promoted entry defaults to ``introspection`` and
+        describes Maez's curatorial act of promotion, NOT the
+        upstream content origin — the upstream lineage lives on the
+        ancestor rows. Future filters that need to know "did this
+        core memory descend from external_web?" must read
+        ``ancestor_tiers``, not ``provenance_source``."""
+        ancestor_extra: dict = {}
+        if promoted_from is not None:
+            ancestor_metas = self._resolve_ancestor_metadata(promoted_from)
+            ancestor_tier_labels = [
+                _ancestor_tier_label(m) for m in ancestor_metas
+            ]
+            worst = _worst_known_tier(ancestor_tier_labels)
+            if worst == "untrusted" and not allow_untrusted_ancestors:
+                raise PromotionBlocked(
+                    f"refusing to promote into core: at least one "
+                    f"ancestor in {promoted_from} carries "
+                    f"trust_tier='untrusted'. Pass "
+                    f"allow_untrusted_ancestors=True if the owner "
+                    f"has explicitly authorized this promotion. "
+                    f"ancestor_tiers={ancestor_tier_labels}"
+                )
+            # Worst-wins: ancestor lineage overrides any caller-
+            # supplied trust_tier (laundering guard).
+            if worst is not None:
+                trust_tier = worst
+                # Promotion is Maez's curatorial act, not external
+                # ingress — default the provenance source to
+                # introspection unless the caller set it explicitly.
+                if provenance_source is None:
+                    provenance_source = "introspection"
+            else:
+                # All-legacy promotion: every ancestor is legacy
+                # (no trust_tier metadata). Drop both provenance
+                # kwargs so the resulting core entry preserves
+                # legacy semantics fully (no trust_tier or
+                # provenance_source keys leak); only the lineage
+                # metadata below is added.
+                trust_tier = None
+                provenance_source = None
+            # Persist ancestor lineage as Chroma metadata. Lists are
+            # not primitive, so encode as comma-joined string per the
+            # same pattern as concept_tags.
+            ancestor_extra["ancestor_tiers"] = ",".join(ancestor_tier_labels)
+            ancestor_extra["promoted_from"] = ",".join(promoted_from)
+
         provenance_extra = _provenance_metadata(
             provenance_source, trust_tier
         )
@@ -736,6 +918,7 @@ class MemoryManager:
             "memory_phase": _memory_phase_tag(),
         }
         meta.update(provenance_extra)
+        meta.update(ancestor_extra)
         self.core.add(
             ids=[memory_id],
             documents=[content],
