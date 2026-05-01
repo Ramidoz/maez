@@ -683,6 +683,8 @@ class MaezDaemon:
                         f"Soul updated at {time.strftime('%Y-%m-%d %H:%M')}. "
                         f"Maez rewrote its own foundation.",
                         source="soul_evolution",
+                        provenance_source="introspection",
+                        trust_tier="lived",
                     )
                     # A-core #3 Step 6: log the soul change as a
                     # direct_edit event so it enters Maez's perception
@@ -866,24 +868,23 @@ class MaezDaemon:
             # owner-initiated exchanges from Maez-initiated messages.
             # Note: lives in the same `raw` collection as cycle thoughts
             # + telegram exchanges; the `type` metadata is what future
-            # filters/rerankers key on.
+            # filters/rerankers key on. Step 5x.B: routed through the
+            # public ``store()`` method (was a direct ``raw.add()``
+            # bypass) so the provenance schema applies; tagged
+            # introspection/lived because this is Maez's own
+            # audited self-emitted text.
             try:
-                import uuid as _uuid
-                from datetime import datetime as _dt, timezone as _tz
-
-                self.memory.raw.add(
-                    ids=[_uuid.uuid4().hex],
-                    documents=[result],
-                    metadatas=[
-                        {
-                            "type": "proactive_opinion",
-                            "surface": "daemon_proactive",
-                            "source_window_count": window_size,
-                            "sent_to_owner": True,
-                            "timestamp": _dt.now(_tz.utc).isoformat(),
-                            "cycle": self.cycle_count,
-                        }
-                    ],
+                self.memory.store(
+                    result,
+                    cycle=self.cycle_count,
+                    metadata={
+                        "type": "proactive_opinion",
+                        "surface": "daemon_proactive",
+                        "source_window_count": window_size,
+                        "sent_to_owner": True,
+                    },
+                    provenance_source="introspection",
+                    trust_tier="lived",
                 )
             except Exception as _store_exc:
                 logger.debug("proactive provenance store failed: %s", _store_exc)
@@ -1888,7 +1889,15 @@ class MaezDaemon:
         except Exception as _log_exc:
             logger.debug("chat_turn log line failed: %s", _log_exc)
 
-        self.memory.store_telegram(f"the owner ({source}): {text}\nMaez: {reply}")
+        # 5x.B Pass 1: stored as user_utterance/lived because the
+        # exchange is bond transcript. NOTE: the string carries both
+        # owner text and Maez reply — 5x.D should treat consolidations
+        # of this row as mixed-origin, not pure owner-verbatim.
+        self.memory.store_telegram(
+            f"the owner ({source}): {text}\nMaez: {reply}",
+            provenance_source="user_utterance",
+            trust_tier="lived",
+        )
         self._ws_broadcast({"type": "message_reply", "text": reply})
 
         # Trace harness Slice 1 — finalize and emit the trace before
@@ -2110,8 +2119,13 @@ class MaezDaemon:
         finally:
             self._ollama_lock.release()
 
-        # Store in memory
-        self.memory.store_telegram(f"the owner (voice): {text}\nMaez: {full_reply}")
+        # Store in memory. 5x.B Pass 1: user_utterance/lived; mixed-
+        # origin transcript (see 5x.D).
+        self.memory.store_telegram(
+            f"the owner (voice): {text}\nMaez: {full_reply}",
+            provenance_source="user_utterance",
+            trust_tier="lived",
+        )
         self._ws_broadcast({"type": "message_reply", "text": full_reply})
         return full_reply
 
@@ -2239,8 +2253,16 @@ class MaezDaemon:
                 # turn ([just arrived]) keeps the stored shape
                 # consistent with `_clean_exchange`'s parse expectation.
                 try:
+                    # 5x.B Pass 1: introspection/lived — `[just arrived]`
+                    # is a synthetic presence token, not owner text. The
+                    # entire stored row is Maez's morning monologue
+                    # triggered by owner presence; tagging this as
+                    # user_utterance would leak Maez-authored briefings
+                    # into 5x.D's "owner said X" filter.
                     self.memory.store_telegram(
-                        f"the owner (morning_briefing): [just arrived]\nMaez: {briefing}"
+                        f"the owner (morning_briefing): [just arrived]\nMaez: {briefing}",
+                        provenance_source="introspection",
+                        trust_tier="lived",
                     )
                 except Exception as _store_exc:
                     logger.debug(
@@ -2705,10 +2727,14 @@ class MaezDaemon:
 
         logger.info("Journal entry written for %s (%d chars)", date_str, len(entry))
 
-        # Also store the journal as a core memory
+        # Also store the journal as a core memory. 5x.B Pass 1:
+        # introspection/lived because the journal is Maez reflecting
+        # on the day, not an infrastructure write.
         self.memory.store_core(
             f"[Journal {date_str}] {summary[:500]}",
             source="nightly_journal",
+            provenance_source="introspection",
+            trust_tier="lived",
         )
 
         try:
@@ -3451,7 +3477,12 @@ class MaezDaemon:
                 }
                 mem_metadata.update(cog_metadata)
                 self.memory.store(
-                    full_thought, cycle=self.cycle_count, snapshot=snap, metadata=mem_metadata
+                    full_thought,
+                    cycle=self.cycle_count,
+                    snapshot=snap,
+                    metadata=mem_metadata,
+                    provenance_source="introspection",
+                    trust_tier="lived",
                 )
 
                 # Broadcast cycle end with thought to UI

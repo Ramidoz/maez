@@ -681,7 +681,12 @@ class MaezApp:
             # Store in memory
             if self.memory:
                 try:
-                    self.memory.store_telegram(f"the owner asked: {user_text}\nMaez replied: {reply}")
+                    # 5x.B Pass 1: bond transcript; mixed-origin (see 5x.D).
+                    self.memory.store_telegram(
+                        f"the owner asked: {user_text}\nMaez replied: {reply}",
+                        provenance_source="user_utterance",
+                        trust_tier="lived",
+                    )
                 except Exception:
                     pass
 

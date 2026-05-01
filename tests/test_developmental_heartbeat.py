@@ -45,8 +45,14 @@ class FakeMemory:
     def get_all_core(self):
         return list(self.core)
 
-    def store_core(self, content: str, source: str = "reasoning") -> str:
-        self.core.append({"content": content, "source": source})
+    def store_core(self, content: str, source: str = "reasoning", *,
+                   provenance_source=None, trust_tier=None) -> str:
+        self.core.append({
+            "content": content,
+            "source": source,
+            "provenance_source": provenance_source,
+            "trust_tier": trust_tier,
+        })
         return "core-test"
 
 

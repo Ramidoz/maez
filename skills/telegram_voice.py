@@ -827,7 +827,12 @@ class TelegramVoice:
                     )
 
                 if summary:
-                    self.memory.store_telegram(summary)
+                    # 5x.B Pass 1: Maez self-narrating card outcome.
+                    self.memory.store_telegram(
+                        summary,
+                        provenance_source="introspection",
+                        trust_tier="lived",
+                    )
         except Exception as e:
             logger.debug("card reply memory store failed: %s", e)
 
@@ -961,7 +966,12 @@ class TelegramVoice:
                             "No further automatic recovery attempted. "
                             "Waiting for the owner to choose a different direction."
                         )
-                        self.memory.store_telegram(summary_for_memory)
+                        # 5x.B Pass 1: Maez self-narrating recovery outcome.
+                        self.memory.store_telegram(
+                            summary_for_memory,
+                            provenance_source="introspection",
+                            trust_tier="lived",
+                        )
                     except Exception as e:
                         logger.debug("Fix 6 terminal memory store failed: %s", e)
                     # Fix 6 v3: expire orphan open cards in this chain.
@@ -1075,8 +1085,11 @@ class TelegramVoice:
                             except Exception as e:
                                 logger.debug("recovery reply send failed: %s", e)
                             try:
+                                # 5x.B Pass 1: Maez self-narrating recovery iteration.
                                 self.memory.store_telegram(
-                                    f"Maez recovery pass {depth}: {reply_text[:500]}"
+                                    f"Maez recovery pass {depth}: {reply_text[:500]}",
+                                    provenance_source="introspection",
+                                    trust_tier="lived",
                                 )
                             except Exception as e:
                                 logger.debug("recovery memory store failed: %s", e)
@@ -2771,7 +2784,12 @@ class TelegramVoice:
             response = await self._execute_intent(intent, update, context)
             if response:
                 await update.message.reply_text(response)
-                self.memory.store_telegram(f"the owner asked: {user_text}\nMaez replied: {response}")
+                # 5x.B Pass 1: bond transcript; mixed-origin (see 5x.D).
+                self.memory.store_telegram(
+                    f"the owner asked: {user_text}\nMaez replied: {response}",
+                    provenance_source="user_utterance",
+                    trust_tier="lived",
+                )
                 self._thread_last_active = _time.time()
                 return response
 
@@ -3235,7 +3253,12 @@ class TelegramVoice:
         # at the site where they queue the action — not parsed out of the
         # LLM's prose.
         self._detect_and_queue_action(user_text, reply)
-        self.memory.store_telegram(f"the owner asked: {user_text}\nMaez replied: {reply}")
+        # 5x.B Pass 1: bond transcript; mixed-origin (see 5x.D).
+        self.memory.store_telegram(
+            f"the owner asked: {user_text}\nMaez replied: {reply}",
+            provenance_source="user_utterance",
+            trust_tier="lived",
+        )
 
         return reply
 

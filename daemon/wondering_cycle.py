@@ -407,6 +407,8 @@ def _advance_one_locked(daemon, store, wondering, effective_deadline):
                         "type": "wondering_advance",
                         "wondering_id": wid,
                     },
+                    provenance_source="introspection",
+                    trust_tier="lived",
                 )
         except Exception as e:
             logger.debug("memory mirror of wondering failed: %s", e)

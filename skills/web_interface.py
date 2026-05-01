@@ -2846,7 +2846,12 @@ def chat():
 
     try:
         if owner_bridge:
-            memory.store_telegram(f"the owner asked: {message}\nMaez replied: {reply}")
+            # 5x.B Pass 1: bond transcript; mixed-origin (see 5x.D).
+            memory.store_telegram(
+                f"the owner asked: {message}\nMaez replied: {reply}",
+                provenance_source="user_utterance",
+                trust_tier="lived",
+            )
         elif user_key:
             store = UserProfileStore()
             store.add_conversation_memory(user_key, "user", message)

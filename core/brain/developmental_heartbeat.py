@@ -155,4 +155,15 @@ def record_if_absent(memory, evidence: HeartbeatEvidence, body: str) -> str | No
     """Store heartbeat as core memory unless today's source already exists."""
     if already_recorded(memory, evidence.date):
         return None
-    return memory.store_core(format_core_memory(body, evidence), source_for_date(evidence.date))
+    # 5x.B Pass 1: system/covenant. The `default_tier_for("system")`
+    # default is already `covenant`; the explicit pairing here is
+    # documentation that the heartbeat body is schema-derived from a
+    # canonical, deterministic source-of-record (today's evidence) —
+    # not free text — and therefore deserves the strongest tier even
+    # when 5x.D's lineage gate later constrains other system writes.
+    return memory.store_core(
+        format_core_memory(body, evidence),
+        source_for_date(evidence.date),
+        provenance_source="system",
+        trust_tier="covenant",
+    )
