@@ -196,6 +196,41 @@ def _worst_known_tier(tier_labels: list[str]) -> str | None:
     return None
 
 
+def _partition_consolidation_input(
+    items: list[dict],
+) -> tuple[list[dict], list[str], int, list[str]]:
+    """Step 5x.E — split incoming raw rows into a consolidation-input
+    set + filtered-untrusted count.
+
+    ``items`` is a list of dicts each carrying ``id``, ``content``,
+    and ``metadata`` (the metadata's ``trust_tier`` is consulted).
+
+    Returns ``(kept, kept_ids, filtered_untrusted_count, tier_labels)``.
+
+    Filter, not fail: rows whose ``trust_tier == "untrusted"`` are
+    excluded from the kept set so they never reach the consolidation
+    LLM. Failing the nightly job on the first untrusted row would
+    require owner intervention every time external_web ingest
+    happens; the laundering vector is closed by exclusion alone.
+
+    Tier labels mirror the 5x.D.A ancestor-resolution shape: legacy
+    rows (no ``trust_tier`` metadata) appear as ``"unknown"``."""
+    kept: list[dict] = []
+    kept_ids: list[str] = []
+    filtered_n = 0
+    tier_labels: list[str] = []
+    for item in items:
+        meta = item.get("metadata") or {}
+        tier = meta.get("trust_tier")
+        if tier == "untrusted":
+            filtered_n += 1
+            continue
+        kept.append(item)
+        kept_ids.append(item["id"])
+        tier_labels.append(_ancestor_tier_label(meta))
+    return kept, kept_ids, filtered_n, tier_labels
+
+
 def _provenance_metadata(provenance_source, trust_tier) -> dict:
     """Resolve the ``provenance_source`` / ``trust_tier`` write-through
     metadata for a single store call.
@@ -663,47 +698,72 @@ class MemoryManager:
         # alongside so we can mark_consolidated() in the scorer sidecar
         # once the LLM consolidation succeeds — closes the feedback
         # loop between consolidation and memory_scoring.promotion_score.
-        recent = []
-        recent_ids: list[str] = []
+        # 5x.E: also retain the full metadata dict per row so the
+        # partition helper can read trust_tier downstream.
+        candidates: list[dict] = []
         for i, meta in enumerate(results["metadatas"]):
             ts = meta.get("timestamp", "")
             if ts >= cutoff:
-                recent_ids.append(results["ids"][i])
-                recent.append({
+                candidates.append({
+                    "id": results["ids"][i],
                     "content": results["documents"][i],
-                    "cycle": meta.get("cycle", "?"),
-                    "timestamp": ts,
-                    "type": meta.get("type", "reasoning"),
+                    "metadata": meta,
                 })
 
         # If fewer than 10 memories found, expand window to 48 hours
-        if len(recent) < 10:
+        if len(candidates) < 10:
             expanded_cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
-            recent = []
-            recent_ids = []
+            candidates = []
             for i, meta in enumerate(results["metadatas"]):
                 ts = meta.get("timestamp", "")
                 if ts >= expanded_cutoff:
-                    recent_ids.append(results["ids"][i])
-                    recent.append({
+                    candidates.append({
+                        "id": results["ids"][i],
                         "content": results["documents"][i],
-                        "cycle": meta.get("cycle", "?"),
-                        "timestamp": ts,
-                        "type": meta.get("type", "reasoning"),
+                        "metadata": meta,
                     })
-            if len(recent) > len([]):  # only log if expansion helped
-                logger.info("Daily consolidation: expanded to 48h window, found %d memories", len(recent))
+            if candidates:
+                logger.info("Daily consolidation: expanded to 48h window, found %d memories", len(candidates))
 
-        if not recent:
+        if not candidates:
             logger.info("Daily consolidation: no memories since last consolidation")
             return None
 
-        logger.info("Daily consolidation: processing %d memories since last consolidation", len(recent))
+        # 5x.E: filter untrusted rows out of the consolidation input
+        # BEFORE the LLM sees them. Filter, not fail — see
+        # _partition_consolidation_input for rationale. Note: filtered
+        # untrusted IDs intentionally do NOT enter the scorer feedback
+        # loop below (recent_ids is post-filter survivors only). They
+        # are re-evaluated and re-filtered next nightly run; the
+        # promotion gate (5x.D.A) already prevents them from being
+        # promoted regardless of consolidated state, so re-evaluation
+        # is bounded-cost rather than a laundering surface.
+        kept, recent_ids, filtered_n, ancestor_tier_labels = (
+            _partition_consolidation_input(candidates)
+        )
+        if filtered_n:
+            logger.info(
+                "Daily consolidation: filtered %d untrusted raw rows "
+                "from input (Step 5x.E)", filtered_n,
+            )
+        if not kept:
+            logger.info(
+                "Daily consolidation: input empty after 5x.E filter "
+                "(every row was untrusted); skipping write"
+            )
+            return None
 
-        # Build consolidation prompt
+        logger.info("Daily consolidation: processing %d memories since last consolidation", len(kept))
+
+        # Build consolidation prompt from the filtered survivors only.
         memory_texts = []
-        for m in recent:
-            prefix = f"[Cycle {m['cycle']}, {m['timestamp']}, {m['type']}]"
+        for m in kept:
+            meta = m["metadata"]
+            prefix = (
+                f"[Cycle {meta.get('cycle', '?')}, "
+                f"{meta.get('timestamp', '')}, "
+                f"{meta.get('type', 'reasoning')}]"
+            )
             memory_texts.append(f"{prefix}\n{m['content']}")
 
         # 2026-04-23 Commit 7: dropped unused `raw_block` local (F841).
@@ -734,18 +794,55 @@ class MemoryManager:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         consolidation_id = f"daily-{today}-{uuid.uuid4().hex[:8]}"
 
+        # 5x.E: lineage on the daily entry. Worst-of-survivors becomes
+        # the daily's trust_tier; legacy preservation if every survivor
+        # is unknown. ancestor_tiers + promoted_from carry the full
+        # lineage trail (commas-joined per Chroma metadata-primitive
+        # constraint). filtered_untrusted_count records the visibility
+        # signal that the filter actually fired for this batch.
+        #
+        # ancestor IDs cap (M3 from 5x.E review): with batch_size=500
+        # and Chroma-style ids the comma-joined string can exceed 20kb
+        # which gets re-serialized on every daily-collection query.
+        # Keep the FIRST N ids inline + a "+remaining" sentinel so an
+        # operator sees the true count; daily query payloads stay
+        # bounded. Truth-of-lineage stays on the raw rows themselves
+        # (each survivor's metadata is unchanged).
+        worst = _worst_known_tier(ancestor_tier_labels)
+        _PROMOTED_FROM_INLINE_CAP = 50
+        if len(recent_ids) > _PROMOTED_FROM_INLINE_CAP:
+            promoted_from_str = (
+                ",".join(recent_ids[:_PROMOTED_FROM_INLINE_CAP])
+                + f",+{len(recent_ids) - _PROMOTED_FROM_INLINE_CAP}"
+            )
+        else:
+            promoted_from_str = ",".join(recent_ids)
+        daily_meta: dict = {
+            "date": today,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "raw_count": len(kept),
+            "type": "daily_consolidation",
+            "ancestor_tiers": ",".join(ancestor_tier_labels),
+            "promoted_from": promoted_from_str,
+            "promoted_from_count": len(recent_ids),
+            "filtered_untrusted_count": filtered_n,
+        }
+        if worst is not None:
+            daily_meta["trust_tier"] = worst
+            # Curatorial act — same default as 5x.D.A promotion path.
+            daily_meta["provenance_source"] = "introspection"
+        # else: every survivor is legacy → preserve the legacy
+        # semantics (no trust_tier / provenance_source keys).
         self.daily.add(
             ids=[consolidation_id],
             documents=[summary],
-            metadatas=[{
-                "date": today,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "raw_count": len(recent),
-                "type": "daily_consolidation",
-            }],
+            metadatas=[daily_meta],
         )
-        logger.info("Daily consolidation stored: %s (%d chars from %d raw memories)",
-                     consolidation_id, len(summary), len(recent))
+        logger.info(
+            "Daily consolidation stored: %s (%d chars from %d raw "
+            "memories, %d untrusted filtered)",
+            consolidation_id, len(summary), len(kept), filtered_n,
+        )
         self._save_last_consolidation()
 
         # Close the scorer feedback loop: mark each raw memory that went
