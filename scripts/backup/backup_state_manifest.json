@@ -34,6 +34,7 @@
     {"type": "sqlite_db", "path": "memory/subscription_proxy.db", "required": false, "comment": "Trajectory log of all claude-tier calls"},
     {"type": "sqlite_db", "path": "memory/temperament.db", "required": false, "comment": "Track A item #6 — 11/12-parameter temperament observations"},
     {"type": "sqlite_db", "path": "memory/wonderings.db", "required": false, "comment": "Wondering loop state (Slice 2)"},
+    {"type": "sqlite_db", "path": "memory/entity_index.db", "required": false, "comment": "MSEL entity index (Step 5e). Populated by extractor + alias seed + backfill + LLM batch. Gitignored runtime data with no other authoritative source."},
     {"type": "sqlite_db", "path": "core/memory/audit_log.db", "required": false, "comment": "Subpackage audit log; may be the same DB as memory/audit_log.db via shim"},
     {"type": "sqlite_db", "path": "core/memory/identity_ledger.db", "required": false},
     {"type": "sqlite_db", "path": "core/memory/pending_cards.db", "required": false},
@@ -63,6 +64,8 @@
     {"type": "file", "path": "config/policies.yaml", "required": false, "comment": "Per-owner policy overrides"},
     {"type": "file", "path": "config/user_profiles.yaml", "required": false},
     {"type": "file", "path": "config/reddit_subs.yaml", "required": false},
+    {"type": "file", "path": "config/entity_aliases.local.yaml", "required": false, "comment": "MSEL alias seed — owner-curated nicknames (Step 5g). Gitignored, lives nowhere else."},
+    {"type": "file", "path": "config/entity_semantics.local.yaml", "required": false, "comment": "MSEL semantic mappings — owner-language phrase → canonical entity (Step 5n). Gitignored, lives nowhere else."},
 
     {"type": "secret_file", "path": "config/credentials.json", "comment": "API credentials. Encrypted destination required."},
     {"type": "secret_file", "path": "config/token.json", "comment": "API tokens. Encrypted destination required."},

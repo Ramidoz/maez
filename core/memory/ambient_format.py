@@ -27,6 +27,88 @@ def _one_line(s: Any) -> str:
     return " ".join(s.split())
 
 
+def _humanize_signal_time(
+    signal_ts: str, reference_iso: str | None,
+) -> str:
+    """Render an ISO signal timestamp as a relative phrase against
+    the ambient block's own ``now`` reference.
+
+    Two-tier strategy:
+      • Sub-day deltas (the common case for live signals — focus
+        changed 30 min ago, arrived home 4 hours ago) get
+        minute/hour granularity here in this helper.
+      • Day+ deltas delegate to Step-5c's ``relative_time_phrase``
+        for consistency with the lived-recall surface, with
+        per-surface phrasing swap so "before question" reads as
+        "before now" in the ambient context.
+
+    Falls back to truncated ISO when inputs are unparseable or the
+    reference is missing — better to surface a literal timestamp
+    than fabricate a relative phrase. Silence on malformed input
+    is honest.
+    """
+    if not signal_ts or not isinstance(signal_ts, str):
+        return ""
+    try:
+        from datetime import timezone
+        ev = datetime.fromisoformat(signal_ts.replace("Z", "+00:00"))
+        if reference_iso:
+            ref = datetime.fromisoformat(
+                reference_iso.replace("Z", "+00:00"),
+            )
+        else:
+            return f"{signal_ts[:16]}Z"
+        if ev.tzinfo is None:
+            ev = ev.replace(tzinfo=timezone.utc)
+        if ref.tzinfo is None:
+            ref = ref.replace(tzinfo=timezone.utc)
+        delta_s = (ev - ref).total_seconds()
+        abs_s = abs(delta_s)
+        direction_past = delta_s <= 0
+        # Sub-day path: ambient signals typically arrive within
+        # the last hour or two; minute/hour granularity is what
+        # the model can act on.
+        if abs_s < 86400.0:
+            if abs_s < 60.0:
+                phrase = "just now"
+                return phrase if direction_past else "in seconds"
+            if abs_s < 3600.0:
+                minutes = max(1, int(round(abs_s / 60.0)))
+                unit = "minute" if minutes == 1 else "minutes"
+                return (
+                    f"{minutes} {unit} before now"
+                    if direction_past
+                    else f"in {minutes} {unit}"
+                )
+            hours = abs_s / 3600.0
+            if hours < 1.5:
+                return (
+                    "about 1 hour before now"
+                    if direction_past
+                    else "in about 1 hour"
+                )
+            hours_int = int(round(hours))
+            return (
+                f"about {hours_int} hours before now"
+                if direction_past
+                else f"in about {hours_int} hours"
+            )
+        # Day+ path delegates to the lived-recall surface's helper
+        # so multi-day signals share phrasing across the brief.
+        from core.memory.temporal_arithmetic import (
+            relative_time_phrase,
+        )
+        return relative_time_phrase(ev, ref).replace(
+            "before question", "before now",
+        ).replace(
+            "after question", "from now",
+        ).replace(
+            "same day as question", "today",
+        )
+    except (TypeError, ValueError, ImportError):
+        return f"{signal_ts[:16]}Z"
+
+
 def _format(ctx: dict[str, Any]) -> str:
     lines: list[str] = []
     # Today's date + resolved absolute paths — concrete facts the model
@@ -97,7 +179,15 @@ def _format(ctx: dict[str, Any]) -> str:
             s = f"note: {_one_line(data.get('text', ''))[:80]}"
         else:
             continue
-        shown.append(f"  • {s}  ({ts[:16]}Z)")
+        # Step 5s: render the timestamp as relative time (e.g.
+        # "about 4 hours before now") instead of a truncated ISO
+        # string. Reuses Step-5c's relative_time_phrase against
+        # the ambient block's own ``now`` reference, so the model
+        # gets something it can act on directly. Falls back to the
+        # truncated ISO when parsing fails — silence on malformed
+        # timestamps is honest.
+        when_str = _humanize_signal_time(ts, ctx.get("now"))
+        shown.append(f"  • {s}  ({when_str})")
     if shown:
         lines.append("Recent iPhone signals:")
         lines.extend(shown)
