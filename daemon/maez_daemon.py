@@ -1629,6 +1629,31 @@ class MaezDaemon:
                 _lived_brief = ""
         if _lived_brief:
             messages.append({"role": "system", "content": _lived_brief})
+
+        # Step 5r: inject ambient context (weather, active window,
+        # latest iPhone signals) into the chat prompt. The signal
+        # pipeline has been ingesting since 2026-04-18 (~80 daily
+        # files) and ``wondering_cycle`` already uses this same
+        # block — but the chat-message path didn't, so Telegram
+        # answers ran without knowing where the owner was or what
+        # they were doing. Single-block injection; cached for 60s
+        # inside ambient_prompt_block so per-turn cost is bounded.
+        # Gated by ``MAEZ_AMBIENT_BRIEF`` (default on, "0" disables)
+        # so the env var pattern matches MAEZ_LIVED_RECALL.
+        if os.environ.get("MAEZ_AMBIENT_BRIEF", "1") != "0":
+            try:
+                from core.memory.ambient_format import ambient_prompt_block
+                _ambient_block = ambient_prompt_block()
+                if _ambient_block:
+                    messages.append({
+                        "role": "system",
+                        "content": _ambient_block,
+                    })
+            except Exception as _amb_exc:
+                logger.debug(
+                    "ambient brief injection failed: %s", _amb_exc,
+                )
+
         # Trace: capture the evidence ids the lived brief surfaced.
         # An empty brief yields an empty list — silence is honest.
         try:
