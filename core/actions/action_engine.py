@@ -29,6 +29,11 @@ except Exception:
     BASE_DIR = Path("/home/rohit/maez")
 sys.path.insert(0, str(BASE_DIR))
 from memory.quality_tracker import QualityTracker
+# 5x.D.B2: audit-before-store invariant for LLM-authored core writes.
+# Imported at module load so test mocks can patch the symbol on the
+# action_engine namespace (mock.patch("core.actions.action_engine.
+# audit_assistant_text", ...)).
+from core.safety.audited_output import audit_assistant_text
 
 logger = logging.getLogger("maez")
 
@@ -1098,19 +1103,50 @@ class ActionEngine:
     def _do_update_baseline(self, observation: str) -> str:
         if not self.memory:
             return "No memory manager"
-        # 5x.D.B1: NOT wired through the ancestor gate. Unlike
-        # _do_promote_to_core_memory, baseline_update has no concrete
-        # source memory_id — the observation is synthesized from a
-        # retrieval window, not a single raw row. Wiring this through
-        # the gate requires a retrieval-context-ancestry design
-        # (cite ALL contributing raw IDs, per the 5x.D.A reviewer's
-        # forward-look on partial-citation undermining worst-wins).
-        # That work is deferred to a later 5x.D.B slice. The absence
-        # of `promoted_from` here is intentional, not oversight —
-        # do not "fix" it by passing a stub or single ID, which would
-        # re-open the gate-bypass surface.
+        # 5x.D.B2: this action is a FRESH introspection event, not a
+        # promotion. The LLM synthesizes a generalized observation
+        # over its reasoning window; there is no concrete recalled
+        # memory_id list to cite via `promoted_from`. Same shape as
+        # _emit_enrollment_core_memory (5x.D.D) — record the
+        # provenance pair (`introspection / lived`) without
+        # inventing ancestors.
+        #
+        # Because this writes LLM-authored text to core memory, the
+        # audit-before-store invariant applies: every other core-
+        # write LLM-text path (chat reply, voice reply, proactive_
+        # opinion, reasoning cycle) runs through audit_assistant_text
+        # before storage. This used to skip the audit; 5x.D.B2 closes
+        # that gap.
+        #
+        # audit_assistant_text fail-opens (returns the original text
+        # plus a warning log) on import / judge / exception failure.
+        # That contract matches the chat-reply path; consistency is
+        # load-bearing. Do NOT "harden" this into a raise without
+        # revisiting the chat-reply behavior at the same time.
+        #
+        # Out of scope: this fix audits CONTENT, not policy. Tier-0
+        # autonomy of the action itself (LLM can call update_baseline
+        # without covenant gate review of the DECISION) is a separate
+        # governance question, deferred.
+        #
+        # Also out of scope: through-quotation laundering. The audit
+        # checks claim-grounding ("did the LLM fabricate this?"), NOT
+        # source-trust ("where did the supporting recall come from?").
+        # If the LLM wraps an `external_web/untrusted` recalled fact
+        # verbatim into the observation, the audit passes (the claim
+        # IS grounded in the recall) and the baseline lands at
+        # `introspection/lived` without ever triggering 5x.D.A's
+        # ancestor gate (which only fires on `promoted_from`). Closing
+        # this would be a recall-trust->baseline gate, a separate
+        # slice. Do not assume "audited" means "safe-to-promote."
+        audited_observation = audit_assistant_text(
+            observation, surface="action_baseline_update",
+        )
         core_id = self.memory.store_core(
-            f"[Baseline observation] {observation}", source="baseline_update"
+            f"[Baseline observation] {audited_observation}",
+            source="baseline_update",
+            provenance_source="introspection",
+            trust_tier="lived",
         )
         return f"Baseline stored as core memory: {core_id}"
 
