@@ -95,17 +95,47 @@ def write_restoration_record(
             snapshot_timestamp=snapshot_timestamp,
             restore_timestamp=restore_timestamp,
         )
+        # 5x.B Pass 2a: system/covenant. Coma text is schema-derived
+        # from canonical timestamps (snapshot + restore); covenant is
+        # the strongest tier and survives 5x.D's lineage gate.
+        #
+        # The TypeError fallback chain accommodates test mocks with
+        # older signatures: (a) mocks predating Pass 2a that don't
+        # accept the provenance kwargs, (b) much older mocks that
+        # don't accept ``source=`` either. Each fallback emits a
+        # ``logger.warning`` so a SILENT covenant-tier degrade in
+        # production cannot happen unobserved — by 5x.D the system
+        # path is assumed reliable, and a quietly-degraded restore
+        # write would invalidate that assumption.
         try:
             core_id = mm.store_core(
                 text,
                 source=f"restoration_event_{restore_timestamp}",
+                provenance_source="system",
+                trust_tier="covenant",
             )
             result["core_memory_id"] = core_id
-        except TypeError:
-            # Test mocks may not accept the source kwarg; retry with
-            # positional content only.
-            core_id = mm.store_core(text)
-            result["core_memory_id"] = core_id
+        except TypeError as _exc:
+            logger.warning(
+                "restore_writer: store_core rejected provenance "
+                "kwargs (%s); retrying without — covenant tag will "
+                "not land on this row. Investigate the mm fixture "
+                "if this is production.", _exc,
+            )
+            try:
+                core_id = mm.store_core(
+                    text,
+                    source=f"restoration_event_{restore_timestamp}",
+                )
+                result["core_memory_id"] = core_id
+            except TypeError as _exc2:
+                logger.warning(
+                    "restore_writer: store_core rejected source kwarg "
+                    "(%s); retrying positional-only — both source and "
+                    "provenance will be missing on this row.", _exc2,
+                )
+                core_id = mm.store_core(text)
+                result["core_memory_id"] = core_id
 
     return result
 

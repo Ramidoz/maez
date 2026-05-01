@@ -44,7 +44,14 @@ class _FakeMemory:
     def __init__(self):
         self.calls = []  # list of (content, cycle, metadata) tuples
 
-    def store(self, content, cycle, snapshot=None, metadata=None):
+    def store(self, content, cycle, snapshot=None, metadata=None, *,
+              provenance_source=None, trust_tier=None):
+        # 5x.B Pass 2a: accept provenance kwargs so the production
+        # reddit_skill.persist call lands in the happy path; reddit
+        # is the canonical external_web/untrusted ingress. The
+        # provenance assertion lives in test_memory_provenance_pass2a;
+        # this fake preserves the existing 4-tuple shape so callers
+        # that unpack mem.calls keep working.
         self.calls.append((content, cycle, snapshot, metadata or {}))
         return f"raw-{len(self.calls)}"
 

@@ -163,6 +163,12 @@ class RedditSkill:
                     + (f", flair: {flair}" if flair else "")
                     + ")"
                 )
+                # 5x.B Pass 2a: the freeform `source` key below is
+                # descriptive ("reddit/r/<sub>") and routes topic
+                # filters; it is intentionally NOT the provenance
+                # enum. The provenance lineage rides on the separate
+                # `provenance_source`/`trust_tier` kwargs to store()
+                # below, so the two coexist without overload.
                 metadata = {
                     "type": "reddit_post",
                     "source": f"reddit/r/{sub_name}",
@@ -173,10 +179,17 @@ class RedditSkill:
                     "reddit_flair": flair,
                 }
                 try:
+                    # 5x.B Pass 2a: external_web/untrusted. This is
+                    # the canonical adversarial-content ingress per
+                    # the Zombie Agents threat model — promotion
+                    # into core or SFT must require ancestor opt-in
+                    # (5x.D), never the flat tag alone.
                     memory_manager.store(
                         doc,
                         cycle=cycle,
                         metadata=metadata,
+                        provenance_source="external_web",
+                        trust_tier="untrusted",
                     )
                     self._persisted_ids.add(pid)
                     written += 1

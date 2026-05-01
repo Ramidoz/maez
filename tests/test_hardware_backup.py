@@ -556,9 +556,16 @@ class TestRestoreWriter(unittest.TestCase):
         captured = []
 
         class FakeMM:
-            def store_core(self, content, source=None):
+            # 5x.B Pass 2a: accept provenance kwargs so the
+            # production restore_writer's first try-branch lands
+            # without falling through to the TypeError compat path.
+            def store_core(self, content, source=None, *,
+                           provenance_source=None, trust_tier=None):
                 captured.append({
-                    "content": content, "source": source,
+                    "content": content,
+                    "source": source,
+                    "provenance_source": provenance_source,
+                    "trust_tier": trust_tier,
                 })
                 return "core-fake-id"
 
@@ -585,7 +592,8 @@ class TestRestoreWriter(unittest.TestCase):
         captured_core = []
 
         class FakeMM:
-            def store_core(self, content, source=None):
+            def store_core(self, content, source=None, *,
+                           provenance_source=None, trust_tier=None):
                 captured_core.append(content)
                 return "x"
 
