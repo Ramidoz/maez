@@ -58,6 +58,11 @@ config/soul.md
 # is committed.
 config/entity_aliases.local.yaml
 
+# Owner-curated semantic entity mappings — Step 5n. Local file
+# holds owner-language phrase→entity bridges; only the example
+# fixture (docs/entity_semantics.example.yaml) is committed.
+config/entity_semantics.local.yaml
+
 # Working docs, intimate narratives, in-progress follow-ups — stay local
 docs/REBUILD_PLAN_*.md
 docs/TASK_TREEMAP.md

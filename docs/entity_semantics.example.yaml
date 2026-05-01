@@ -1,0 +1,50 @@
+# Owner-curated semantic entity mappings — EXAMPLE FILE.
+#
+# Step 5n of the capability acquisition pipeline. Bridges
+# owner-language phrases that DO NOT appear in episode text
+# ("the project", "the rig", "the office") to canonical entities
+# the index already knows about. The semantic resolver does NOT
+# create entities — it looks up existing ones.
+#
+# This committed file is FIXTURE ONLY. Real owner-private
+# mappings go in config/entity_semantics.local.yaml (gitignored).
+# Copy this file to that path and edit before running:
+#
+#   cp docs/entity_semantics.example.yaml \
+#      config/entity_semantics.local.yaml
+#   $EDITOR config/entity_semantics.local.yaml
+#
+# Schema:
+#   mappings:
+#     - phrase: "<exact phrase>"        # required, case-insensitive
+#       targets:                        # required, non-empty list
+#         - canonical_name: "<full name>" # required
+#           kind: "<kind>"                # required
+#         # add more targets when one phrase has multiple referents
+#       confidence: 1.0                 # optional, [0, 1], default 1.0
+#       notes: "free-form context"      # optional
+#
+# Matching is exact-phrase, case-insensitive, word-boundary —
+# "birth" will not match "birthday". Owner-curated.
+# Multiple targets per phrase are allowed (e.g. "the rig" → both
+# the GPU and the runtime); all surfacing targets get returned
+# with the mapping's confidence.
+
+mappings:
+  - phrase: "the example"
+    targets:
+      - canonical_name: "Sample Project"
+        kind: "project"
+    confidence: 1.0
+    notes: "Replace with a real semantic mapping in your local file."
+
+  - phrase: "the gear"
+    targets:
+      - canonical_name: "Sample Hardware"
+        kind: "hardware"
+      - canonical_name: "Sample Runtime"
+        kind: "software"
+    confidence: 0.9
+    notes: |
+      Multi-target example: one phrase, two targets. Both will be
+      surfaced when the phrase appears in a query.
