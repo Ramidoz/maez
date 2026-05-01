@@ -98,16 +98,50 @@ def enroll(name: str = "the owner") -> bool:
         sys.path.insert(0, '/home/rohit/maez')
         from memory.memory_manager import MemoryManager
         mm = MemoryManager()
-        mm.store_core(
-            f"Face enrollment: the owner's face enrolled on {time.strftime('%Y-%m-%d')} "
-            f"with {frame_count} reference frames. Maez can now recognize the owner by sight.",
-            source="face_enrollment",
+        _emit_enrollment_core_memory(
+            mm=mm, frame_count=frame_count, name=name,
         )
         print("Enrollment recorded in core memory")
     except Exception as e:
         print(f"Note: Could not store in ChromaDB: {e}")
 
     return True
+
+
+def _emit_enrollment_core_memory(*, mm, frame_count: int,
+                                 name: str = "the owner") -> str:
+    """Step 5x.D.D — record the enrollment as a core memory tagged
+    as a tool-observation observed-tier event.
+
+    This is a FRESH observed event, not a derivation of any existing
+    raw or core memory: the camera frames are sensor data, not
+    memory. ``promoted_from`` is therefore intentionally absent —
+    inventing a stub ancestor would falsely run through the 5x.D.A
+    promotion gate's worst-wins logic on a non-promotion. A future
+    agent reading this file: do NOT "fix" the absence by passing
+    ``promoted_from=[<something>]``; the design call here is that
+    no ancestor exists.
+
+    Tier choice (5x.D.D): ``observed`` (matches the default for
+    ``tool_observation`` per ``default_tier_for``). Face enrollment
+    is grounded in local sensor + embedding output; it deserves
+    trust above legacy/unknown but is NOT covenant law (the
+    heartbeat-tier reserved for schema-derived infrastructure
+    writes — see ``core/brain/developmental_heartbeat.py``).
+
+    Extracted as a thin helper so 5x.D.D's contract can be unit-
+    tested without spinning up the camera + ChromaDB stack."""
+    return mm.store_core(
+        f"Face enrollment: {name}'s face enrolled on "
+        f"{time.strftime('%Y-%m-%d')} with {frame_count} reference "
+        "frames. Maez can now recognize the owner by sight.",
+        source="face_enrollment",
+        # Sensor + embedding pipeline = tool observation. The
+        # default tier for tool_observation is `observed`; passing
+        # it explicitly here is documentation, not an override.
+        provenance_source="tool_observation",
+        trust_tier="observed",
+    )
 
 
 def load_enrollment() -> dict:
