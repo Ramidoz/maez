@@ -352,7 +352,18 @@ class MaezDaemon:
         self._rohit_active_until = 0.0
         self.telegram = TelegramVoice(self.memory, daemon=self)
         self.public_bot = MaezPublicBot()
-        self.actions = ActionEngine(memory=self.memory, telegram=self.telegram)
+        # 5x.F.B: pass `daemon=self` so ActionEngine handlers can
+        # read per-cycle state — specifically `_cycle_recall_context`
+        # for the through-quotation downgrade rule in
+        # `_do_update_baseline`. The back-reference creates a small
+        # circular reference (daemon -> ActionEngine -> daemon)
+        # which Python's GC handles fine; the daemon is a singleton
+        # so no leak risk in practice.
+        self.actions = ActionEngine(
+            memory=self.memory,
+            telegram=self.telegram,
+            daemon=self,
+        )
         # Session 11o: dream-state orchestration. Fires during idle time
         # (the owner AFK >30 min), runs pattern detection over recent raw
         # memories, stores novel insights as soul-note proposals for

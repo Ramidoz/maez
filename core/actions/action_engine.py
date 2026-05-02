@@ -34,6 +34,11 @@ from memory.quality_tracker import QualityTracker
 # action_engine namespace (mock.patch("core.actions.action_engine.
 # audit_assistant_text", ...)).
 from core.safety.audited_output import audit_assistant_text
+# 5x.F.B: through-quotation downgrade rule consults F.A's
+# has_untrusted predicate. Single source of truth — re-implementing
+# the iteration here would create drift if F.A's tier semantics ever
+# sharpen.
+from core.memory.cycle_recall_context import has_untrusted as _crc_has_untrusted
 
 logger = logging.getLogger("maez")
 
@@ -486,9 +491,17 @@ class ActionResult:
 
 
 class ActionEngine:
-    def __init__(self, memory=None, telegram=None):
+    def __init__(self, memory=None, telegram=None, daemon=None):
         self.memory = memory
         self.telegram = telegram
+        # 5x.F.B: optional back-reference to MaezDaemon so action
+        # handlers can read per-cycle state (specifically
+        # `_cycle_recall_context` for the through-quotation
+        # downgrade rule). Default None keeps non-daemon callers
+        # (tests, GUI, direct API) working unchanged — they fall
+        # through to current behavior in any handler that consults
+        # the daemon.
+        self.daemon = daemon
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         self._load_pending()
         logger.info("ActionEngine initialized (pending: %d)", len(self._pending))
@@ -1103,20 +1116,14 @@ class ActionEngine:
     def _do_update_baseline(self, observation: str) -> str:
         if not self.memory:
             return "No memory manager"
-        # 5x.D.B2: this action is a FRESH introspection event, not a
-        # promotion. The LLM synthesizes a generalized observation
-        # over its reasoning window; there is no concrete recalled
-        # memory_id list to cite via `promoted_from`. Same shape as
-        # _emit_enrollment_core_memory (5x.D.D) — record the
-        # provenance pair (`introspection / lived`) without
-        # inventing ancestors.
-        #
-        # Because this writes LLM-authored text to core memory, the
-        # audit-before-store invariant applies: every other core-
-        # write LLM-text path (chat reply, voice reply, proactive_
-        # opinion, reasoning cycle) runs through audit_assistant_text
-        # before storage. This used to skip the audit; 5x.D.B2 closes
-        # that gap.
+        # 5x.D.B2 + 5x.F.B: this action is a FRESH introspection event
+        # by default, but downgrades to untrusted under the
+        # any-untrusted-tips rule when the cycle's recall scope had
+        # untrusted material. See the comment block below for the
+        # full rationale. The audit-before-store invariant runs on
+        # both paths so the stored content is always the audited
+        # form (matches every other LLM-text core-write path: chat
+        # reply, voice reply, proactive_opinion, reasoning cycle).
         #
         # audit_assistant_text fail-opens (returns the original text
         # plus a warning log) on import / judge / exception failure.
@@ -1128,26 +1135,125 @@ class ActionEngine:
         # autonomy of the action itself (LLM can call update_baseline
         # without covenant gate review of the DECISION) is a separate
         # governance question, deferred.
-        #
-        # Also out of scope: through-quotation laundering. The audit
-        # checks claim-grounding ("did the LLM fabricate this?"), NOT
-        # source-trust ("where did the supporting recall come from?").
-        # If the LLM wraps an `external_web/untrusted` recalled fact
-        # verbatim into the observation, the audit passes (the claim
-        # IS grounded in the recall) and the baseline lands at
-        # `introspection/lived` without ever triggering 5x.D.A's
-        # ancestor gate (which only fires on `promoted_from`). Closing
-        # this would be a recall-trust->baseline gate, a separate
-        # slice. Do not assume "audited" means "safe-to-promote."
         audited_observation = audit_assistant_text(
             observation, surface="action_baseline_update",
         )
-        core_id = self.memory.store_core(
-            f"[Baseline observation] {audited_observation}",
-            source="baseline_update",
-            provenance_source="introspection",
-            trust_tier="lived",
+
+        # 5x.F.B — through-quotation downgrade rule.
+        #
+        # Read the cycle-scoped recall-context bag (built in F.A by
+        # the daemon's `_loop`). If any captured entry is
+        # `trust_tier="untrusted"`, store the resulting baseline as
+        # `untrusted` with full ancestry trail. Otherwise fall
+        # through to current 5x.D.B2 behavior.
+        #
+        # Why `allow_untrusted_ancestors=True` is NOT a backdoor:
+        # F.B's any-untrusted-tips rule IS the policy opt-in. The
+        # system explicitly authorizes routing the promotion through
+        # 5x.D.A's gate WITH the deliberate downgrade — the
+        # resulting core entry lands at `trust_tier="untrusted"`
+        # so 5x.C surfaces the warning at recall time. The
+        # downgrade is the safety; refusal would only block
+        # operationally without making Maez safer (the LLM's
+        # reasoning still happened, the worst-case-laundering would
+        # still be possible by other paths).
+        #
+        # Note on covenant+untrusted scope: there is no "covenant
+        # overrides untrusted" semantic. If the cycle's recall scope
+        # has covenant evidence AND any untrusted entry, the rule
+        # still fires — covenant evidence in scope does NOT sanitize
+        # untrusted material the LLM also saw. The any-untrusted-
+        # tips contract is conservative by design.
+        #
+        # Documented limitation: the bag is daemon-cycle-scoped only.
+        # `_do_update_baseline` called from non-daemon contexts
+        # (chat handler, GUI, direct API) sees no bag and falls
+        # through. F.B closes the daemon-cycle laundering surface
+        # first; a future slice can extend to chat-handler paths if
+        # observation shows it matters.
+        # `getattr` over direct attribute access — defends against
+        # construction paths that bypass `__init__` (e.g. tests using
+        # `ActionEngine.__new__(ActionEngine)` and setting attributes
+        # ad-hoc). Without this, F.B would AttributeError on those
+        # paths even though F.B's intent on missing daemon is "fall
+        # through cleanly." Same defensive pattern as `getattr` on
+        # the bag's optional `_cycle_recall_context` attribute.
+        daemon_ref = getattr(self, "daemon", None)
+        bag = None
+        if daemon_ref is not None:
+            bag = getattr(daemon_ref, "_cycle_recall_context", None)
+        if not isinstance(bag, dict):
+            bag = None
+
+        downgrade = False
+        promoted_from_arg = None
+        recall_count = 0
+        untrusted_count = 0
+        if bag is not None:
+            tiers_by_id = bag.get("tiers_by_id") or {}
+            recall_count = len(tiers_by_id)
+            untrusted_count = sum(
+                1 for t in tiers_by_id.values() if t == "untrusted"
+            )
+            # Decide via F.A's helper rather than re-iterating
+            # locally — single source of truth for the
+            # any-untrusted-tips predicate. If F.A's semantics ever
+            # sharpen (new tier name, threshold, etc.), this call
+            # site picks up the change automatically.
+            if _crc_has_untrusted(bag):
+                downgrade = True
+                # Sort for deterministic ordering — keeps the
+                # `promoted_from` Chroma metadata reproducible
+                # across runs (a future audit can diff two cycles'
+                # downgrades line-by-line). Note: 5x.E's daily-
+                # consolidation chose insertion-order for the
+                # different goal of preserving feed-in sequence;
+                # F.B chose alphabetical because the bag is a
+                # set (insertion-order isn't preserved anyway) and
+                # diff-readability is the load-bearing property
+                # for an audit log.
+                promoted_from_arg = sorted(bag.get("ids") or set())
+
+        # Structured observability log. Lives on the dedicated
+        # `maez.actions` logger so cockpit / log analysis can bucket
+        # by action without log-file grepping. Always fires (both
+        # downgrade and fall-through) so an operator sees the rate
+        # in production and can decide whether the rule is
+        # over-aggressive (high downgrade rate) or inert (low).
+        action_logger.info(
+            "baseline_update provenance downgraded=%s "
+            "untrusted_count=%d recall_count=%d",
+            downgrade, untrusted_count, recall_count,
         )
+
+        if downgrade:
+            core_id = self.memory.store_core(
+                f"[Baseline observation] {audited_observation}",
+                source="baseline_update",
+                provenance_source="introspection",
+                # trust_tier passed explicitly for self-documenting
+                # call-site readability. 5x.D.A's worst-wins gate
+                # is the actual source of truth and will compute
+                # the same value from ancestor lineage when
+                # promoted_from is set; this kwarg is documentation,
+                # not enforcement. (A future refactor that drops
+                # `promoted_from` would break the safety contract
+                # regardless — caught by the test suite, not by
+                # this redundant kwarg.)
+                trust_tier="untrusted",
+                promoted_from=promoted_from_arg,
+                # F.B's policy opt-in (see comment above): the
+                # rule itself is the deliberate authorization, not
+                # a per-call escape hatch.
+                allow_untrusted_ancestors=True,
+            )
+        else:
+            core_id = self.memory.store_core(
+                f"[Baseline observation] {audited_observation}",
+                source="baseline_update",
+                provenance_source="introspection",
+                trust_tier="lived",
+            )
         return f"Baseline stored as core memory: {core_id}"
 
     def read_file(self, path: str, reasoning: str) -> ActionResult:
