@@ -134,6 +134,123 @@ class CardRejectedProducer(_Base):
         self.assertEqual(hits[0].kind, "card_rejected")
 
 
+class ApprovedAndFailedProducer(_Base):
+    """REGRESSION GUARD for the gap surfaced by the drift report:
+    _on_approve's failure branch was writing only to audit_log.db,
+    not to consequence_memory. So when ``apt install openrgb`` was
+    approved and failed 80+ times historically, NONE of those
+    failures were learnable signal — Maez's planner had no memory
+    of "I tried this and it doesn't work," so the same proposal
+    kept resurfacing.
+
+    The fix wires _on_approve's failure path to write
+    CLASS_TOOL_FAILURE to consequence_memory, mirroring _on_deny's
+    existing CLASS_CARD_REJECTED write. This test asserts the
+    producer-side contract directly (the same shape
+    decision_pipeline writes) so the retrieval path that already
+    works for CLASS_CARD_REJECTED also works for the new
+    failures."""
+
+    def test_approve_then_failed_records_tool_failure(self):
+        """Direct producer smoke — call consequence_memory.record_event
+        the way decision_pipeline _on_approve's failure branch does
+        post-fix, verify retrieval."""
+        from core import consequence_memory as cm
+        cm.record_event(
+            kind=cm.CLASS_TOOL_FAILURE,
+            context="action=run_shell cmd='sudo apt install openrgb'",
+            outcome=(
+                "exit=100; stderr: E: Unable to locate package openrgb"
+            ),
+            surface="decision_pipeline",
+            tags=["run_shell", "sudo"],
+            extra={"request_id": "test-req-fail-001"},
+        )
+        rows = self.cm.recent(kind=self.cm.CLASS_TOOL_FAILURE)
+        self.assertEqual(len(rows), 1)
+        self.assertIn("openrgb", rows[0].context)
+        self.assertIn("Unable to locate", rows[0].outcome)
+        self.assertIn("run_shell", rows[0].tags)
+
+    def test_failure_surfaces_for_repeat_proposal(self):
+        """The whole point: later, when planner considers proposing
+        the same install again, retrieval should find the prior
+        failure so Maez doesn't re-propose blindly."""
+        from core import consequence_memory as cm
+        cm.record_event(
+            kind=cm.CLASS_TOOL_FAILURE,
+            context="action=run_shell cmd='sudo apt install openrgb'",
+            outcome="exit=100; stderr: E: Unable to locate package openrgb",
+            surface="decision_pipeline",
+            tags=["run_shell"],
+        )
+        hits = cm.relevant(
+            context_snippet="install openrgb for the lighting",
+        )
+        self.assertGreater(len(hits), 0)
+        self.assertEqual(hits[0].kind, "tool_failure")
+
+    def test_call_site_present_in_decision_pipeline(self):
+        """REGRESSION GUARD for reviewer M2: producer-shape tests
+        prove the contract but not that the call site EXISTS in
+        decision_pipeline._on_approve's failure branch. A future
+        refactor that deletes the new block would pass every
+        producer test silently. AST-parse asserts the call site
+        is present in the _on_approve method body."""
+        import ast
+        from pathlib import Path
+        path = (
+            Path(__file__).resolve().parent.parent
+            / "core" / "decision" / "decision_pipeline.py"
+        )
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        # Walk to find the _on_approve method.
+        on_approve_node = None
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.FunctionDef)
+                    and node.name == "_on_approve"):
+                on_approve_node = node
+                break
+        self.assertIsNotNone(
+            on_approve_node, "_on_approve method missing",
+        )
+        # Search the method body for a `record_event(kind=CLASS_
+        # TOOL_FAILURE, ...)` call. Any matching shape — positional
+        # or keyword arg — counts.
+        found = False
+        for n in ast.walk(on_approve_node):
+            if not isinstance(n, ast.Call):
+                continue
+            # Match `<...>.record_event(...)` calls.
+            func = n.func
+            if not (isinstance(func, ast.Attribute)
+                    and func.attr == "record_event"):
+                continue
+            # Look for `kind=CLASS_TOOL_FAILURE` in keyword args
+            # OR `<module>.CLASS_TOOL_FAILURE` as the kind kwarg
+            # value.
+            for kw in n.keywords:
+                if kw.arg != "kind":
+                    continue
+                val = kw.value
+                # Match `_cm.CLASS_TOOL_FAILURE` or
+                # `consequence_memory.CLASS_TOOL_FAILURE`.
+                if (isinstance(val, ast.Attribute)
+                        and val.attr == "CLASS_TOOL_FAILURE"):
+                    found = True
+                    break
+            if found:
+                break
+        self.assertTrue(
+            found,
+            "_on_approve must call record_event(kind=CLASS_TOOL_FAILURE) "
+            "on the approved-and-failed path. Without this, planner "
+            "loses the learning signal for repeat-failure patterns "
+            "(see drift-report investigation surfacing 95 historical "
+            "run_shell failures with no consequence_memory trail).",
+        )
+
+
 class MarkHeededRoundtrip(_Base):
     def test_heeded_flips_and_persists(self):
         from core.brain_loop import _record_tool_failure

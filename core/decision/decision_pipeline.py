@@ -1005,6 +1005,51 @@ class DecisionPipeline:
             if card.audit_request_id:
                 self.audit_log.record_outcome(card.audit_request_id, outcome="approved_and_failed", notes=err[:400])
 
+            # 2026-05-02 fix: record to consequence_memory so future
+            # planner cycles can retrieve the failure pattern via
+            # token-overlap and avoid re-proposing the same command.
+            # The equivalent block in `_on_deny` records CARD_REJECTED;
+            # this path was structurally missing the equivalent learning
+            # signal for approve-then-failed. Without it, an action
+            # approved-then-failed (e.g. `apt install <nonexistent-
+            # package>`) had NO learnable signal, so Maez's planner
+            # re-surfaced the same proposal cycle after cycle. Surfaced
+            # by drift-report investigation: 95 historical run_shell
+            # failures, dominated by repeated openrgb install attempts
+            # that had no consequence_memory trail. Silent on failure
+            # to keep card resolution robust.
+            try:
+                from core import consequence_memory as _cm
+                _action = getattr(card, "action", "unknown")
+                _params = getattr(card, "params", {}) or {}
+                _cmd = _params.get("cmd") if isinstance(_params, dict) else ""
+                _context = (
+                    f"action={_action} cmd={_cmd!r}"
+                    if _cmd else f"action={_action}"
+                )
+                _cm.record_event(
+                    kind=_cm.CLASS_TOOL_FAILURE,
+                    context=_context[:400],
+                    # 400-char outcome to match audit_log's truncation
+                    # (line ~1006 above) — same kind of "what went
+                    # wrong" string, same length budget.
+                    outcome=(err or "")[:400],
+                    feedback="",  # open for future enrichment
+                    surface="decision_pipeline",
+                    tags=[_action] + (
+                        [_cmd.strip().split()[0]]
+                        if _cmd and _cmd.strip().split() else []
+                    ),
+                    extra={"request_id": card.request_id},
+                )
+            except Exception as _cm_exc:
+                logger.warning(
+                    "consequence_memory record_event failed on card %s "
+                    "(approved_and_failed path) — pattern won't be "
+                    "available for future planner avoidance: %s",
+                    card.request_id, _cm_exc,
+                )
+
         # If this card was attached to a wondering, fill the deferred probe
         # with real output and return the wondering to active state. Failure
         # here must never break card resolution.
