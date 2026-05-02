@@ -2446,6 +2446,32 @@ class TelegramVoice:
             await self._process_message(update, context, user_text)
         finally:
             self._generating = False
+            # D20 Stage-1 — autonomous gap-sensing. Best-effort:
+            # detect a felt-capability-gap in the user's message;
+            # if one fires, the orchestrator creates a consent card
+            # in the cockpit. Fire-and-forget on a thread so the
+            # match → eval → propose → SQLite chain doesn't block
+            # the next user turn. The helper is fail-closed inside
+            # itself; an extra try/except here protects against
+            # asyncio.to_thread refusing the task. Cooldown gates
+            # duplicate cards across turns. chat_id mirrors the
+            # rest of this surface (user-id-as-chat-id) so the
+            # supersession bucket aligns with other card paths.
+            try:
+                from core.infra.capability_gap_detector import (
+                    maybe_fire_capability_proposal,
+                )
+                asyncio.create_task(asyncio.to_thread(
+                    maybe_fire_capability_proposal,
+                    user_text,
+                    chat_id=str(self.authorized_user),
+                    user_id=str(user_id),
+                ))
+            except Exception as _gap_e:
+                logger.debug(
+                    "gap_detector hook (post-message) failed: %s",
+                    _gap_e,
+                )
 
         # Check if an interrupt arrived during generation
         if not self._interrupt_queue.empty():
@@ -2457,6 +2483,25 @@ class TelegramVoice:
                 await self._process_message(update, context, new_text)
             finally:
                 self._generating = False
+                # D20 Stage-1 — same hook on the interrupt path.
+                # Same shape as the main hook: async fire-and-forget
+                # via asyncio.to_thread, chat_id aligned with the
+                # rest of this surface, fail-closed.
+                try:
+                    from core.infra.capability_gap_detector import (
+                        maybe_fire_capability_proposal,
+                    )
+                    asyncio.create_task(asyncio.to_thread(
+                        maybe_fire_capability_proposal,
+                        new_text,
+                        chat_id=str(self.authorized_user),
+                        user_id=str(user_id),
+                    ))
+                except Exception as _gap_e:
+                    logger.debug(
+                        "gap_detector hook (interrupt path) "
+                        "failed: %s", _gap_e,
+                    )
 
     async def _execute_intent(self, intent: str, update, context) -> str | None:
         """Execute a matched machine intent and return formatted response."""
