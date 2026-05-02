@@ -123,6 +123,20 @@ _SENTENCE_START_STOPWORDS: frozenset[str] = frozenset({
 # Capitalized token: starts with uppercase letter, followed by
 # lowercase or apostrophes / hyphens. "Maya", "O'Brien", "Smith-Jones".
 _CAP_TOKEN = re.compile(r"\b[A-Z][a-zA-Z'\-]*\b")
+# Any word-token (case-insensitive). Used by the matcher to also try
+# lowercase tokens against the case-insensitive find_entities index.
+# 2026-05-02: zero-fires investigation found _scan_query_for_matches
+# only seeded Capital-case tokens, so natural-text Telegram traffic
+# ("how is maez doing") never reached the data layer despite the
+# index being case-insensitive. Length ≥ 2 skips trivial single-letter
+# tokens that can't be entities.
+#
+# Unicode: \w with re.UNICODE catches diacritics ("josé" inside "did
+# josé call") that the older ASCII-only `[a-zA-Z]` class would have
+# silently dropped. normalize_entity_name does NFC-fold downstream so
+# the data-layer comparison sees the same form regardless of whether
+# the surface entered via canonical-store or natural query.
+_WORD_TOKEN = re.compile(r"\b\w[\w'\-]+\b", re.UNICODE)
 # Sentence-boundary detector. Permissive — false positives on
 # abbreviations are tolerated because the only consequence is that
 # the extractor checks one extra word against the stopword set.
@@ -580,16 +594,28 @@ def _scan_query_for_matches(
       1. Whole-query (catches an exact canonical match).
       2. Multi-word capitalized runs the extractor would emit
          (catches "Maya Ananthan" inside a longer query).
-      3. Each individual capitalized token (catches alias matches
-         like "Maya" — aliases are explicit user-supplied surfaces,
-         so single-token lookup against the alias table is safe;
-         it simply returns nothing when no alias is registered).
+      3. Each individual word-token, any case (catches lowercase
+         natural-text canonicals + aliases — production Telegram
+         traffic is overwhelmingly lowercase, e.g. "how is maez
+         doing"). The data layer's ``find_entities`` is the gate:
+         it does normalized exact lookup against canonical_name and
+         alias, returning [] for any token that isn't a registered
+         entity — no false-positive risk from feeding stopwords
+         through.
+
+    Explicit non-goal: multi-word LOWERCASE aliases (e.g. an alias
+    "the portfolio" registered against an entity) are not caught
+    when buried inside a longer query. Strategy 1 catches them only
+    when the alias *is* the whole query. The Capital-case extractor
+    handles capitalized n-gram aliases. A lowercase n-gram pass would
+    add cost for a precision case we don't need yet — defer until a
+    real entity exposes the gap.
     """
     seen: dict[str, EntityMatch] = {}
     candidates_to_try: list[str] = [query]
     for cand in extract_deterministic_entities(query):
         candidates_to_try.append(cand.surface)
-    for tok in _CAP_TOKEN.findall(query):
+    for tok in _WORD_TOKEN.findall(query):
         candidates_to_try.append(tok)
 
     for surface in candidates_to_try:

@@ -422,6 +422,84 @@ class TestExpandQuery(unittest.TestCase):
         self.assertTrue(len(out.explanation) > 0)
 
 
+class TestExpandQueryNaturalText(unittest.TestCase):
+    """REGRESSION GUARD: 2026-05-02 zero-fires investigation found
+    `_scan_query_for_matches` only fed Capital-case tokens to
+    `find_entities`. Natural Telegram traffic uses lowercase
+    ("how is maez doing"), so 1,190 messages over 7 days produced
+    zero `entity_expansion fired` log lines despite the substrate
+    being live. The data layer (`find_entities`) IS case-insensitive
+    on canonical / alias / normalized lookup; the bug was in candidate
+    surface generation. Tests cover each natural-text shape."""
+
+    def _ix_with_maez_and_rohit(self):
+        from core.memory.entity_index import EntityIndex
+        ix = EntityIndex(":memory:")
+        eid_maez = ix.upsert_entity(
+            "Maez", kind="project", aliases=["the Maez"],
+        )
+        eid_rohit = ix.upsert_entity("Rohit", kind="person")
+        return ix, eid_maez, eid_rohit
+
+    def test_lowercase_canonical_in_natural_question(self):
+        from core.memory.entity_index import expand_query
+        ix, eid_maez, _ = self._ix_with_maez_and_rohit()
+        out = expand_query("how is maez doing today", ix=ix)
+        self.assertIn(
+            eid_maez, [e.entity_id for e in out.matched_entities],
+            "lowercase canonical 'maez' inside a natural question "
+            "must match — production traffic is overwhelmingly lowercase",
+        )
+
+    def test_lowercase_alias_in_natural_question(self):
+        from core.memory.entity_index import expand_query
+        ix, eid_maez, _ = self._ix_with_maez_and_rohit()
+        out = expand_query("any update from the maez today?", ix=ix)
+        self.assertIn(eid_maez, [e.entity_id for e in out.matched_entities])
+
+    def test_lowercase_canonical_with_punctuation(self):
+        from core.memory.entity_index import expand_query
+        ix, eid_maez, _ = self._ix_with_maez_and_rohit()
+        out = expand_query("maez? what's going on", ix=ix)
+        self.assertIn(eid_maez, [e.entity_id for e in out.matched_entities])
+
+    def test_multiple_lowercase_entities(self):
+        from core.memory.entity_index import expand_query
+        ix, eid_maez, eid_rohit = self._ix_with_maez_and_rohit()
+        out = expand_query("did rohit ask maez anything", ix=ix)
+        ids = [e.entity_id for e in out.matched_entities]
+        self.assertIn(eid_maez, ids)
+        self.assertIn(eid_rohit, ids)
+
+    def test_capital_case_still_works(self):
+        """Make sure adding lowercase support doesn't regress the
+        existing capital-case path."""
+        from core.memory.entity_index import expand_query
+        ix, eid_maez, _ = self._ix_with_maez_and_rohit()
+        out = expand_query("how is Maez doing today", ix=ix)
+        self.assertIn(eid_maez, [e.entity_id for e in out.matched_entities])
+
+    def test_stopwords_alone_dont_match(self):
+        """Don't false-positive on common short tokens like 'a', 'is',
+        'how' — they shouldn't get fed to find_entities and silently
+        bind to some unrelated entity."""
+        from core.memory.entity_index import expand_query
+        ix, _, _ = self._ix_with_maez_and_rohit()
+        out = expand_query("how is it doing today", ix=ix)
+        self.assertEqual(out.matched_entities, [])
+
+    def test_unicode_lowercase_diacritic(self):
+        """Reviewer follow-up: ASCII-only `[a-zA-Z]` would drop
+        lowercase diacritics. \\w with re.UNICODE picks them up so an
+        entity registered with non-ASCII letters reaches the data
+        layer regardless of whether the surface arrived capitalized."""
+        from core.memory.entity_index import EntityIndex, expand_query
+        ix = EntityIndex(":memory:")
+        eid = ix.upsert_entity("José", kind="person")
+        out = expand_query("did josé call today", ix=ix)
+        self.assertIn(eid, [e.entity_id for e in out.matched_entities])
+
+
 # ── side-effect freedom ──────────────────────────────────────────
 
 
