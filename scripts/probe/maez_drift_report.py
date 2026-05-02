@@ -124,9 +124,17 @@ COGNITION_VAGUE_WARN = 0.6
 
 QUALITY_APPROVAL_CRITICAL = 0.4
 QUALITY_APPROVAL_WARN = 0.6
-# Reference: memory/quality_tracker.py:236 — `if approval_rate
-# < 0.4 and total >= 3 → soul note`. CRITICAL matches that
-# threshold; WARN is the band below the comfort floor.
+# Threshold inheritance note: numbers were originally chosen to
+# mirror memory/quality_tracker.py:236 which uses a different
+# metric (approved/decided where outcomes are approved+cancelled
+# +rejected). The audit_log.db population has no `cancelled`
+# class at all — cockpit cards don't get auto-cancelled — so the
+# denominator is structurally smaller and approval rates trend
+# higher. Production reads ~98% which is far above WARN, so
+# 0.4/0.6 are not actively wrong but they aren't re-baselined for
+# the new metric either. TODO: re-baseline once 90 days of
+# audit_log data accumulates and the empirical distribution is
+# stable.
 
 QUALITY_MIN_DECIDED = 5
 # Production's soul-note trigger uses `total >= 3`; 5 is a
@@ -158,32 +166,74 @@ class CognitionResult:
     classification: str  # OK | WARN | CRITICAL | INSUFFICIENT_DATA
 
 
+# Recognized outcome strings the probe maps explicitly. Anything
+# else is captured in QualityResult.unknown_outcomes so the
+# operator can see what the probe is dropping. Particularly:
+# `refused_by_will` is a Maez-side refusal (decision_pipeline
+# refused on covenant/will-I grounds without owner ever seeing
+# the card). It's a real non-approval but currently doesn't
+# weight the rate; surfacing the count keeps the operator
+# informed.
+_RECOGNIZED_OUTCOMES = frozenset({
+    "approved_and_ran",
+    "approved_and_failed",
+    "rohit_rejected",
+})
+
+
 @dataclass
 class QualityResult:
-    """Quality stream metrics. ``approval_rate`` is computed
-    EXACTLY as ``memory/quality_tracker.py:187-191`` does it:
+    """Quality stream metrics — owner approval rate from
+    audit_log.db (the cockpit / decision-pipeline approval
+    surface, where the operator actually decides today).
 
-        decided = approved + cancelled + rejected
-        approval_rate = approved / decided if decided > 0 else 0.0
+    G.A.1 fix: the original G.A read quality.db, which only sees
+    ActionEngine's internal lifecycle outcomes. Cockpit approvals
+    write to audit_log.db with a different vocabulary
+    (``approved_and_ran`` / ``approved_and_failed`` /
+    ``rohit_rejected``). Reading the wrong DB produced 0
+    approved across 459 Tier-2 actions despite the operator
+    actively approving via cockpit (302 decisions in 30 days
+    against the corrected DB).
 
-    `executed` is intentionally EXCLUDED — it represents Tier-0
-    auto-execution that didn't go through owner decision-making,
-    so it's not part of "what fraction of owner-presented options
-    did they approve?" Mirror this so the probe's classification
-    and the soul-note trigger fire on the same metric.
+        decided = approved_count + rejected_count
+        approval_rate = approved_count / decided
+            if decided > 0 else 0.0
 
-    ``executed_count`` is surfaced separately as informational
-    (the daemon's auto-action volume; useful but not part of
-    approval rate).
+    Outcome mapping (audit_log → probe):
+
+        approved_and_ran    → approved_count (decision was approve;
+                              action ran successfully)
+        approved_and_failed → approved_count (decision was approve;
+                              action failed downstream — execution-
+                              side problem, not approval-side)
+        rohit_rejected      → rejected_count
+        anything else / NULL → pending_count (informational; not
+                              part of approval rate)
+
+    ``approved_and_failed_count`` surfaced separately as an
+    execution-failure signal that's distinct from approval rate.
+    ``pending_count`` is informational.
     """
-    total_actions: int
     approval_rate: float
     decided_actions: int
     approved_count: int
-    cancelled_count: int
+    approved_and_failed_count: int
     rejected_count: int
-    executed_count: int
+    pending_count: int
     classification: str
+    # M1 from G.A.1 review: capture outcomes the probe doesn't
+    # explicitly recognize. Surfaced in human + JSON output so an
+    # operator sees gaps rather than silently losing them.
+    # Particularly: ``refused_by_will`` (decision_pipeline.py:615)
+    # is a Maez-side refusal — a real non-approval the operator
+    # would want to know about.
+    unknown_outcomes: dict = field(default_factory=dict)
+    # 7-day rolling rate alongside the 30-day primary so a recent
+    # regime shift surfaces within days, not within a month. Set
+    # to None when there's insufficient recent data.
+    recent_approval_rate: float | None = None
+    recent_decided_actions: int = 0
 
 
 @dataclass
@@ -287,87 +337,150 @@ def classify_cognition(cycles: list[CycleEntry]) -> CognitionResult:
 # ── quality.db classifier ───────────────────────────────────────────
 
 
-def classify_quality(db_path: Path,
-                     *, window_days: int = 30) -> QualityResult:
-    """Read action_outcomes from quality.db within the window and
-    classify approval rate using the production formula from
-    ``memory/quality_tracker.py:187-191``.
+def classify_approval(db_path: Path,
+                      *, window_days: int = 30) -> QualityResult:
+    """Read audit_log.db within the window and classify owner
+    approval rate from the cockpit/decision-pipeline surface.
 
-    Approval rate is computed against DECIDED actions only —
-    ``approved / (approved + cancelled + rejected)``. Auto-executed
-    Tier-0 actions are NOT part of the rate (they didn't pass
-    through owner decision-making). This means the probe's
-    classification fires on the same metric as the daemon's own
-    soul-note trigger.
+    G.A.1 corrects the original G.A which read the wrong DB.
+    See the QualityResult docstring for the outcome mapping +
+    rationale.
 
     INSUFFICIENT_DATA when ``decided < QUALITY_MIN_DECIDED`` —
-    a fresh deploy or a workload of only auto-actions will have
-    almost no decided actions even with high total volume; we
-    don't claim health from a tiny owner-decision sample."""
+    a fresh deploy or a quiet period will have few owner
+    decisions; we don't claim health from a tiny sample."""
     if not db_path.exists():
         return QualityResult(
-            total_actions=0, approval_rate=0.0,
+            approval_rate=0.0,
             decided_actions=0, approved_count=0,
-            cancelled_count=0, rejected_count=0,
-            executed_count=0,
+            approved_and_failed_count=0, rejected_count=0,
+            pending_count=0,
             classification="INSUFFICIENT_DATA",
         )
     cutoff = time.time() - window_days * 86400.0
+    cutoff_recent = time.time() - 7 * 86400.0
     try:
         con = sqlite3.connect(db_path)
+        # outcome_ts is set when a card resolves; ts is when the
+        # audit row was created. Pending cards have outcome_ts NULL
+        # so we filter on (outcome_ts >= cutoff) for resolved rows
+        # and count NULL-outcome rows separately as pending if
+        # their proposal ts is recent.
         cur = con.execute(
-            "SELECT outcome, COUNT(*) FROM action_outcomes "
-            "WHERE proposed_at >= ? "
+            "SELECT outcome, COUNT(*) FROM audit_log "
+            "WHERE outcome IS NOT NULL "
+            "AND outcome_ts >= ? "
             "GROUP BY outcome",
             (cutoff,),
         )
-        rows = cur.fetchall()
+        decided_rows = cur.fetchall()
+        # 7-day rolling window for regime-shift detection — a
+        # recent collapse in approval rate surfaces within days
+        # rather than being averaged out by a month of healthy
+        # data ahead of the dip.
+        recent_cur = con.execute(
+            "SELECT outcome, COUNT(*) FROM audit_log "
+            "WHERE outcome IS NOT NULL "
+            "AND outcome_ts >= ? "
+            "GROUP BY outcome",
+            (cutoff_recent,),
+        )
+        recent_rows = recent_cur.fetchall()
+        # Count pending (NULL outcome) cards proposed within the
+        # window. Informational only — not part of approval rate.
+        pending_n = con.execute(
+            "SELECT COUNT(*) FROM audit_log "
+            "WHERE outcome IS NULL AND ts >= ?",
+            (cutoff,),
+        ).fetchone()[0]
         con.close()
     except sqlite3.Error:
         return QualityResult(
-            total_actions=0, approval_rate=0.0,
+            approval_rate=0.0,
             decided_actions=0, approved_count=0,
-            cancelled_count=0, rejected_count=0,
-            executed_count=0,
+            approved_and_failed_count=0, rejected_count=0,
+            pending_count=0,
             classification="INSUFFICIENT_DATA",
         )
 
-    counts = {row[0] or "": int(row[1]) for row in rows}
-    total = sum(counts.values())
-    approved_n = counts.get("approved", 0)
-    cancelled_n = counts.get("cancelled", 0)
-    rejected_n = counts.get("rejected", 0)
-    executed_n = counts.get("executed", 0)
-    decided = approved_n + cancelled_n + rejected_n
+    counts = {row[0] or "": int(row[1]) for row in decided_rows}
+    approved_ran = counts.get("approved_and_ran", 0)
+    approved_failed = counts.get("approved_and_failed", 0)
+    rejected_n = counts.get("rohit_rejected", 0)
+    approved_n = approved_ran + approved_failed
+    decided = approved_n + rejected_n
+    # M1 from G.A.1 review: outcomes the probe doesn't explicitly
+    # map. Includes Maez-side refusals (refused_by_will), expirations,
+    # errors, and any future strings. Surface these so the operator
+    # sees what the probe is dropping rather than silently losing
+    # them.
+    unknown = {
+        outcome: count
+        for outcome, count in counts.items()
+        if outcome not in _RECOGNIZED_OUTCOMES
+    }
+
+    # 7-day rolling rate (only computed if there's enough decided
+    # data in the window — otherwise None to signal "no recent
+    # regime to compare against").
+    recent_counts = {row[0] or "": int(row[1]) for row in recent_rows}
+    recent_approved = (
+        recent_counts.get("approved_and_ran", 0)
+        + recent_counts.get("approved_and_failed", 0)
+    )
+    recent_rejected = recent_counts.get("rohit_rejected", 0)
+    recent_decided = recent_approved + recent_rejected
+    recent_rate: float | None = None
+    if recent_decided >= QUALITY_MIN_DECIDED:
+        recent_rate = recent_approved / recent_decided
 
     if decided < QUALITY_MIN_DECIDED:
         return QualityResult(
-            total_actions=total, approval_rate=0.0,
+            approval_rate=0.0,
             decided_actions=decided,
             approved_count=approved_n,
-            cancelled_count=cancelled_n,
+            approved_and_failed_count=approved_failed,
             rejected_count=rejected_n,
-            executed_count=executed_n,
+            pending_count=int(pending_n),
             classification="INSUFFICIENT_DATA",
+            unknown_outcomes=unknown,
+            recent_approval_rate=recent_rate,
+            recent_decided_actions=recent_decided,
         )
     rate = approved_n / decided
 
-    if rate < QUALITY_APPROVAL_CRITICAL:
+    # Classification fires CRITICAL only when BOTH the 30-day
+    # primary AND the 7-day recent rate agree. This avoids
+    # 7-day-noise alerts during legitimately quiet periods AND
+    # avoids 30-day-stickiness hiding a recent collapse. WARN
+    # fires on either being concerning.
+    primary_critical = rate < QUALITY_APPROVAL_CRITICAL
+    primary_warn = rate < QUALITY_APPROVAL_WARN
+    recent_critical = (
+        recent_rate is not None and recent_rate < QUALITY_APPROVAL_CRITICAL
+    )
+    recent_warn = (
+        recent_rate is not None and recent_rate < QUALITY_APPROVAL_WARN
+    )
+
+    if primary_critical and recent_critical:
         cls = "CRITICAL"
-    elif rate < QUALITY_APPROVAL_WARN:
+    elif primary_critical or primary_warn or recent_critical or recent_warn:
         cls = "WARN"
     else:
         cls = "OK"
 
     return QualityResult(
-        total_actions=total,
         approval_rate=rate,
         decided_actions=decided,
         approved_count=approved_n,
-        cancelled_count=cancelled_n,
+        approved_and_failed_count=approved_failed,
         rejected_count=rejected_n,
-        executed_count=executed_n,
+        pending_count=int(pending_n),
         classification=cls,
+        unknown_outcomes=unknown,
+        recent_approval_rate=recent_rate,
+        recent_decided_actions=recent_decided,
     )
 
 
@@ -436,30 +549,34 @@ def compute_overall_verdict(classifications: list[str]) -> str:
 def build_report(
     *,
     cognition_log: Path,
-    quality_db: Path,
+    audit_log_db: Path,
     window_hours: int = 24,
     quality_window_days: int = 30,
     source_label: str | None = None,
 ) -> DriftReport:
     """Read all three streams, classify each, return composite
-    report. Window controls cognition.log lookback; quality has
-    its own window because the soul-note trigger uses 30 days."""
+    report.
+
+    G.A.1: ``audit_log_db`` parameter (was ``quality_db`` in
+    original G.A). The drift report now reads from audit_log.db,
+    the cockpit/decision-pipeline approval surface where owner
+    decisions actually land. See QualityResult docstring."""
     cog_text = ""
     if cognition_log.exists():
         try:
-            # G.A: read full log; window-by-time is a future
-            # refinement once the log volume justifies it. Today
-            # the file is 11MB and this is fast enough.
+            # Read full log; window-by-time is a future refinement
+            # once the log volume justifies it. Today the file is
+            # 11MB and this is fast enough.
             cog_text = cognition_log.read_text(errors="replace")
         except OSError:
             cog_text = ""
-        # Apply window: cognition.log lines start with
-        # "YYYY-MM-DD HH:MM:SS"; filter by ts >= now - window_hours.
         cog_text = _filter_cognition_window(cog_text, window_hours)
 
     cycles = parse_cognition_lines(cog_text)
     cognition = classify_cognition(cycles)
-    quality = classify_quality(quality_db, window_days=quality_window_days)
+    quality = classify_approval(
+        audit_log_db, window_days=quality_window_days,
+    )
     liveness = classify_liveness(cognition_log)
     overall = compute_overall_verdict([
         cognition.classification,
@@ -556,22 +673,50 @@ def format_human(report: DriftReport) -> str:
         f"  fixation_rate:       {report.cognition.fixation_rate:.1%}",
         f"  vague_rate:          {report.cognition.vague_rate:.1%}",
         "",
-        "action quality (quality.db):",
+        "owner approval (audit_log.db):",
         f"  classification:      {report.quality.classification}",
-        f"  total_actions:       {report.quality.total_actions}",
         f"  decided_actions:     {report.quality.decided_actions} "
-        "(approved + cancelled + rejected)",
+        "(approved + rejected)",
         f"  approval_rate:       {report.quality.approval_rate:.1%} "
-        "(approved / decided)",
-        f"  approved_count:      {report.quality.approved_count}",
-        f"  cancelled_count:     {report.quality.cancelled_count}",
+        "(approved / decided, last "
+        f"{report.quality_window_days} days)",
+    ]
+    if report.quality.recent_approval_rate is not None:
+        lines.append(
+            f"  recent_approval:     "
+            f"{report.quality.recent_approval_rate:.1%} "
+            f"(last 7 days, n={report.quality.recent_decided_actions})"
+        )
+    else:
+        lines.append(
+            "  recent_approval:     -- (insufficient 7d data)"
+        )
+    lines.extend([
+        f"  approved_count:      {report.quality.approved_count} "
+        f"(of which {report.quality.approved_and_failed_count} "
+        "failed downstream)",
         f"  rejected_count:      {report.quality.rejected_count}",
-        f"  executed_count:      {report.quality.executed_count} "
-        "(auto-executed Tier-0; not part of approval rate)",
+        f"  pending_count:       {report.quality.pending_count} "
+        "(unresolved cards in window; informational)",
+    ])
+    # M1 from G.A.1 review: surface unrecognized outcomes loudly
+    # (e.g., refused_by_will, expired, error, future strings) so
+    # the operator sees what the probe is dropping.
+    if report.quality.unknown_outcomes:
+        lines.append(
+            f"  unknown_outcomes:    "
+            f"{dict(report.quality.unknown_outcomes)}"
+        )
+        lines.append(
+            "    NOTE: above outcomes aren't classified as "
+            "approved/rejected — see source code's "
+            "_RECOGNIZED_OUTCOMES set"
+        )
+    lines.extend([
         "",
         "liveness (cognition.log mtime):",
         f"  classification:      {report.liveness.classification}",
-    ]
+    ])
     if report.liveness.last_write_secs_ago is not None:
         lines.append(
             f"  last write:          "
@@ -610,8 +755,13 @@ def main(argv: list[str] | None = None) -> int:
         default=_REPO_ROOT / "logs" / "cognition.log",
     )
     ap.add_argument(
-        "--quality-db", type=Path,
-        default=_REPO_ROOT / "memory" / "quality.db",
+        "--audit-log-db", type=Path,
+        default=_REPO_ROOT / "memory" / "audit_log.db",
+        help=(
+            "audit_log.db path (default: memory/audit_log.db). "
+            "G.A.1 corrected the source — was reading quality.db "
+            "which has the wrong observability semantic."
+        ),
     )
     ap.add_argument(
         "--window-hours", type=int, default=24,
@@ -629,7 +779,7 @@ def main(argv: list[str] | None = None) -> int:
 
     report = build_report(
         cognition_log=args.cognition_log,
-        quality_db=args.quality_db,
+        audit_log_db=args.audit_log_db,
         window_hours=args.window_hours,
         quality_window_days=args.quality_window_days,
     )

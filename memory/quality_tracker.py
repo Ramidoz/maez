@@ -44,6 +44,53 @@ def _default_quality_db_path() -> str:
 DB_PATH = _default_quality_db_path()
 
 
+def _approval_rate_from_audit_log(days: int) -> Optional[float]:
+    """G.A.2: read owner approval rate from audit_log.db (where
+    cockpit/decision-pipeline approvals actually land), not from
+    quality.db (which only sees ActionEngine internal lifecycle
+    outcomes).
+
+    Returns the rate as a float in [0.0, 1.0], or None when the
+    audit_log is missing / empty / has fewer than 3 decided rows
+    in the window. ``format_insight_for_soul`` falls back to
+    quality.db's rate on None to preserve the function's working
+    contract during fresh deploys.
+
+    Outcome mapping mirrors scripts/probe/maez_drift_report.py
+    (G.A.1 commit): approved_and_ran + approved_and_failed →
+    approved; rohit_rejected → rejected. Other outcomes
+    (refused_by_will, expired, etc.) are ignored for rate
+    computation."""
+    try:
+        from core import paths as _paths
+        audit_db = _paths.memory_dir() / "audit_log.db"
+    except Exception:
+        audit_db = "/home/rohit/maez/memory/audit_log.db"
+    if not os.path.exists(audit_db):
+        return None
+    cutoff = time.time() - days * 86400.0
+    try:
+        with sqlite3.connect(audit_db) as con:
+            rows = con.execute(
+                "SELECT outcome, COUNT(*) FROM audit_log "
+                "WHERE outcome IS NOT NULL AND outcome_ts >= ? "
+                "GROUP BY outcome",
+                (cutoff,),
+            ).fetchall()
+    except sqlite3.Error:
+        return None
+    counts = {(o or ""): int(n) for o, n in rows}
+    approved = (
+        counts.get("approved_and_ran", 0)
+        + counts.get("approved_and_failed", 0)
+    )
+    rejected = counts.get("rohit_rejected", 0)
+    decided = approved + rejected
+    if decided < 3:
+        return None
+    return approved / decided
+
+
 class QualityTracker:
     """SQLite-backed tracker for Maez's action outcomes."""
 
@@ -226,16 +273,42 @@ class QualityTracker:
         return "\n".join(lines)
 
     def format_insight_for_soul(self, days: int = 30) -> Optional[str]:
-        """Generate a soul note if there's a meaningful pattern. Returns None if nothing."""
+        """Generate a soul note if there's a meaningful pattern. Returns None if nothing.
+
+        G.A.2 fix: ``approval_rate`` was originally read from this
+        module's own ``get_stats`` which queries quality.db.
+        Cockpit/decision-pipeline approvals don't write there —
+        they write to ``memory/audit_log.db``. The original code
+        therefore always saw 0% approval and either fired the
+        soul-note constantly OR not at all (depending on
+        ``total >= 3`` evaluation against quality.db's executed
+        rows). Either way, Maez's self-reflection was reading the
+        wrong source. This pulls the approval-rate signal from
+        the right place; ``top_ignored_types`` continues to read
+        from quality.db because that's the correct source for
+        per-action-type rejection patterns at the ActionEngine
+        layer.
+        """
         stats = self.get_stats(days)
+        # Override approval_rate with the audit_log-derived value.
+        # `total` here is for the existing >=3 / >=20 thresholds
+        # (action volume); the rate itself comes from the right DB.
+        approval_rate = _approval_rate_from_audit_log(days)
+        if approval_rate is None:
+            # Fall back to quality.db rate when audit_log is
+            # unavailable / empty — preserves the function's
+            # working contract during deploys where audit_log
+            # hasn't accumulated yet.
+            approval_rate = stats['approval_rate']
+
         if stats['total'] < 3:
             return None
 
         insights = []
 
-        if stats['approval_rate'] < 0.4 and stats['total'] >= 3:
+        if approval_rate < 0.4 and stats['total'] >= 3:
             insights.append(
-                f"My action approval rate is {stats['approval_rate']*100:.0f}% "
+                f"My action approval rate is {approval_rate*100:.0f}% "
                 f"over {days} days. I am proposing too many actions the owner "
                 f"doesn't want. I should raise my threshold."
             )
@@ -248,9 +321,9 @@ class QualityTracker:
                     f"the situation is clearly severe."
                 )
 
-        if stats['approval_rate'] > 0.8 and stats['total'] >= 20:
+        if approval_rate > 0.8 and stats['total'] >= 20:
             insights.append(
-                f"My approval rate is {stats['approval_rate']*100:.0f}% "
+                f"My approval rate is {approval_rate*100:.0f}% "
                 f"over {days} days. the owner trusts my judgment."
             )
 

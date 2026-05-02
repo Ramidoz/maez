@@ -229,10 +229,31 @@ class CognitionWindowFilterTests(unittest.TestCase):
 # ── quality.db classifier ───────────────────────────────────────────
 
 
-class QualityClassifierTests(unittest.TestCase):
+class ApprovalClassifierTests(unittest.TestCase):
+    """G.A.1: drift report's approval stream now reads
+    audit_log.db (where the cockpit/decision-pipeline approval
+    flow records owner decisions), NOT quality.db (which only
+    tracks ActionEngine's internal lifecycle).
+
+    The original G.A read quality.db and saw 0 approved outcomes
+    over 459 Tier-2 actions — because cockpit approvals never
+    write to quality.db. They write to audit_log.db with outcomes
+    like ``approved_and_ran`` / ``approved_and_failed`` /
+    ``rohit_rejected``. Production data: 297 cockpit approvals
+    + 6 rejections in 30 days → ~98% approval, not 0%.
+
+    Outcome mapping (audit_log → probe):
+      ``approved_and_ran``    → approved (decision was approve;
+                                action ran successfully)
+      ``approved_and_failed`` → approved (decision was approve;
+                                execution failed downstream)
+      ``rohit_rejected``      → rejected
+      anything else (NULL, deferred, …) → not counted in rate
+    """
+
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="maez_drift_test_")
-        self.db_path = Path(self.tmpdir) / "quality.db"
+        self.db_path = Path(self.tmpdir) / "audit_log.db"
         self._init_schema()
 
     def tearDown(self):
@@ -240,115 +261,198 @@ class QualityClassifierTests(unittest.TestCase):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def _init_schema(self):
-        """Mirror memory/quality_tracker.py's schema."""
+        """Mirror memory/audit_log.db's schema (subset — only the
+        fields the probe reads)."""
         con = sqlite3.connect(self.db_path)
         con.execute("""
-            CREATE TABLE action_outcomes (
-                action_id       TEXT PRIMARY KEY,
-                tier            INTEGER NOT NULL,
-                action_type     TEXT NOT NULL,
-                reasoning       TEXT,
-                parameters      TEXT,
-                proposed_at     REAL NOT NULL,
-                outcome         TEXT,
-                resolved_at     REAL,
-                rohit_feedback  TEXT,
-                screen_activity TEXT,
-                focus_level     TEXT
+            CREATE TABLE audit_log (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id  TEXT NOT NULL,
+                ts          REAL NOT NULL,
+                action      TEXT,
+                outcome     TEXT,
+                outcome_ts  REAL
             )
         """)
         con.commit()
         con.close()
 
     def _insert_outcomes(self, outcomes: list[str]):
-        """Insert N rows with proposed_at = now, varying outcomes."""
+        """Insert N rows with outcome_ts = now, varying outcomes."""
         now = time.time()
         con = sqlite3.connect(self.db_path)
         for i, outcome in enumerate(outcomes):
             con.execute(
-                "INSERT INTO action_outcomes (action_id, tier, "
-                "action_type, proposed_at, outcome, resolved_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (f"a-{i}", 0, "test", now - i, outcome, now - i + 0.01),
+                "INSERT INTO audit_log "
+                "(request_id, ts, action, outcome, outcome_ts) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (f"req-{i}", now - i, "test_action", outcome, now - i),
             )
         con.commit()
         con.close()
 
     def test_high_approval_classifies_ok(self):
-        """Production formula: approval_rate = approved / (approved
-        + cancelled + rejected). 8 approved, 1 cancelled, 1 rejected
-        → 8/10 = 80% → OK."""
-        from scripts.probe.maez_drift_report import classify_quality
+        """8 approved (5 ran + 3 failed) + 1 rejected → 8/9 ≈ 89% → OK."""
+        from scripts.probe.maez_drift_report import classify_approval
         self._insert_outcomes(
-            ["approved"] * 8 + ["cancelled", "rejected"]
+            ["approved_and_ran"] * 5
+            + ["approved_and_failed"] * 3
+            + ["rohit_rejected"]
         )
-        result = classify_quality(self.db_path, window_days=30)
+        result = classify_approval(self.db_path, window_days=30)
         self.assertEqual(result.classification, "OK")
-        self.assertEqual(result.approval_rate, 0.8)
-        self.assertEqual(result.decided_actions, 10)
+        self.assertGreater(result.approval_rate, 0.8)
+        self.assertEqual(result.decided_actions, 9)
+        self.assertEqual(result.approved_count, 8)
+        self.assertEqual(result.rejected_count, 1)
+
+    def test_approved_and_failed_counts_as_approved(self):
+        """REGRESSION GUARD: ``approved_and_failed`` means the
+        owner approved; the action FAILED downstream. From the
+        approval-rate perspective (did the owner approve?), it's
+        an approval. Probe must count it as such."""
+        from scripts.probe.maez_drift_report import classify_approval
+        self._insert_outcomes(
+            ["approved_and_failed"] * 10 + ["rohit_rejected"]
+        )
+        result = classify_approval(self.db_path, window_days=30)
+        # 10 approved (all failed downstream) / 11 decided ≈ 91%.
+        self.assertGreater(result.approval_rate, 0.9)
+        self.assertEqual(result.classification, "OK")
+        # Expose the failure count separately so an operator sees
+        # the execution-side problem distinctly from the approval-
+        # side metric.
+        self.assertEqual(result.approved_and_failed_count, 10)
 
     def test_low_approval_classifies_critical(self):
-        """approval_rate < 0.4 → CRITICAL. Mirrors the soul-note
-        trigger at quality_tracker.py:236 (which also uses the
-        approved/decided ratio, not approved/total)."""
-        from scripts.probe.maez_drift_report import classify_quality
-        # 3 approved / 7 cancelled / 3 rejected → 3/13 ≈ 23%.
+        """approval_rate < 0.4 → CRITICAL. 3 approved / 10 rejected
+        → 3/13 ≈ 23%."""
+        from scripts.probe.maez_drift_report import classify_approval
         self._insert_outcomes(
-            ["approved"] * 3 + ["cancelled"] * 7 + ["rejected"] * 3
+            ["approved_and_ran"] * 3 + ["rohit_rejected"] * 10
         )
-        result = classify_quality(self.db_path, window_days=30)
+        result = classify_approval(self.db_path, window_days=30)
         self.assertEqual(result.classification, "CRITICAL")
         self.assertLess(result.approval_rate, 0.4)
 
     def test_mid_approval_classifies_warn(self):
-        from scripts.probe.maez_drift_report import classify_quality
-        # 5 approved / 5 cancelled → 50% → WARN (between 0.4 and 0.6).
+        from scripts.probe.maez_drift_report import classify_approval
         self._insert_outcomes(
-            ["approved"] * 5 + ["cancelled"] * 5
+            ["approved_and_ran"] * 5 + ["rohit_rejected"] * 5
         )
-        result = classify_quality(self.db_path, window_days=30)
+        result = classify_approval(self.db_path, window_days=30)
         self.assertEqual(result.classification, "WARN")
 
-    def test_executed_excluded_from_approval_rate(self):
-        """REGRESSION GUARD: production formula EXCLUDES executed
-        from both numerator and denominator. A daemon doing 100
-        auto-actions + 8 approved + 2 cancelled is NOT a 91%
-        approval rate — it's 80% (8/10), and the 100 executed are
-        surfaced separately as informational. Without this test
-        the probe would report a different metric than the
-        soul-note trigger fires on (the BLOCKER from G.A review)."""
-        from scripts.probe.maez_drift_report import classify_quality
-        self._insert_outcomes(
-            ["executed"] * 100 + ["approved"] * 8 + ["cancelled"] * 2
-        )
-        result = classify_quality(self.db_path, window_days=30)
-        self.assertEqual(result.total_actions, 110)
-        self.assertEqual(result.executed_count, 100)
-        self.assertEqual(result.decided_actions, 10)
-        self.assertEqual(result.approval_rate, 0.8)
-        self.assertEqual(result.classification, "OK")
-
     def test_low_decided_volume_classifies_insufficient(self):
-        """N decided < QUALITY_MIN_DECIDED (5) → INSUFFICIENT_DATA.
-        100 executed + 2 approved is NOT a basis for judging
-        approval rate — owner has only made 2 decisions."""
-        from scripts.probe.maez_drift_report import classify_quality
-        self._insert_outcomes(
-            ["executed"] * 100 + ["approved"] * 2
-        )
-        result = classify_quality(self.db_path, window_days=30)
+        """Fewer than QUALITY_MIN_DECIDED owner decisions →
+        INSUFFICIENT_DATA. Don't claim health from a tiny sample."""
+        from scripts.probe.maez_drift_report import classify_approval
+        self._insert_outcomes(["approved_and_ran"] * 2)
+        result = classify_approval(self.db_path, window_days=30)
         self.assertEqual(result.classification, "INSUFFICIENT_DATA")
         self.assertEqual(result.decided_actions, 2)
 
+    def test_unresolved_cards_excluded_from_decided_count(self):
+        """REGRESSION GUARD: pending cards (outcome IS NULL) MUST
+        NOT be counted toward the decided population — they
+        haven't been decided. Production audit_log has 52 such
+        rows (355 total - 303 with outcome)."""
+        from scripts.probe.maez_drift_report import classify_approval
+        # Insert 6 decided + 50 unresolved.
+        self._insert_outcomes(
+            ["approved_and_ran"] * 5 + ["rohit_rejected"]
+        )
+        # Now insert 50 with NULL outcome.
+        now = time.time()
+        con = sqlite3.connect(self.db_path)
+        for i in range(50):
+            con.execute(
+                "INSERT INTO audit_log "
+                "(request_id, ts, action, outcome, outcome_ts) "
+                "VALUES (?, ?, ?, NULL, NULL)",
+                (f"req-pending-{i}", now - i, "test_action"),
+            )
+        con.commit()
+        con.close()
+        result = classify_approval(self.db_path, window_days=30)
+        # Only 6 decided; 50 pending excluded.
+        self.assertEqual(result.decided_actions, 6)
+        # Approval rate computed against 6, not 56.
+        self.assertAlmostEqual(result.approval_rate, 5 / 6, places=2)
+
     def test_missing_db_returns_insufficient(self):
-        """A missing quality.db isn't a CRITICAL — it's a no-data
-        case (e.g., fresh deploy). Operator sees the gap, not a
-        false alarm."""
-        from scripts.probe.maez_drift_report import classify_quality
-        result = classify_quality(
-            Path("/nonexistent/quality.db"), window_days=30,
+        """Missing audit_log.db isn't CRITICAL — it's no-data
+        (e.g., fresh deploy). Operator sees the gap, not a false
+        alarm."""
+        from scripts.probe.maez_drift_report import classify_approval
+        result = classify_approval(
+            Path("/nonexistent/audit_log.db"), window_days=30,
         )
         self.assertEqual(result.classification, "INSUFFICIENT_DATA")
+
+    def test_unknown_outcomes_surfaced_not_dropped(self):
+        """REGRESSION GUARD for M1 from G.A.1 review: outcomes the
+        probe doesn't recognize (`refused_by_will`, future strings)
+        must NOT silently disappear. They surface in
+        ``unknown_outcomes`` so the operator sees what the probe
+        is dropping."""
+        from scripts.probe.maez_drift_report import classify_approval
+        self._insert_outcomes(
+            ["approved_and_ran"] * 5
+            + ["rohit_rejected"]
+            + ["refused_by_will"] * 3
+            + ["expired"] * 2
+        )
+        result = classify_approval(self.db_path, window_days=30)
+        # Recognized outcomes drive the rate.
+        self.assertEqual(result.approved_count, 5)
+        self.assertEqual(result.rejected_count, 1)
+        self.assertEqual(result.decided_actions, 6)
+        # Unknown outcomes are surfaced.
+        self.assertEqual(
+            result.unknown_outcomes,
+            {"refused_by_will": 3, "expired": 2},
+        )
+
+    def test_recent_window_falls_through_to_warn_on_recent_dip(self):
+        """REGRESSION GUARD for the 7-day window: a recent
+        approval-rate dip should surface as WARN even if the
+        30-day primary still looks OK. The combined classifier
+        only fires CRITICAL when both windows agree."""
+        from scripts.probe.maez_drift_report import classify_approval
+        # Old data (>7 days ago) shows healthy approval.
+        # Recent data (<7 days) shows poor approval.
+        now = time.time()
+        old_ts = now - 20 * 86400  # 20 days ago
+        recent_ts = now - 1 * 86400  # 1 day ago
+        con = sqlite3.connect(self.db_path)
+        # 20 healthy approvals long ago.
+        for i in range(20):
+            con.execute(
+                "INSERT INTO audit_log "
+                "(request_id, ts, action, outcome, outcome_ts) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (f"old-{i}", old_ts, "x", "approved_and_ran", old_ts),
+            )
+        # 6 rejections recently (worse than 30-day average).
+        for i in range(8):
+            con.execute(
+                "INSERT INTO audit_log "
+                "(request_id, ts, action, outcome, outcome_ts) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (f"recent-{i}", recent_ts, "x",
+                 "rohit_rejected" if i < 6 else "approved_and_ran",
+                 recent_ts),
+            )
+        con.commit()
+        con.close()
+        result = classify_approval(self.db_path, window_days=30)
+        # Primary 30-day rate is 22/28 ≈ 79% (still OK on its own).
+        # Recent 7-day rate is 2/8 = 25% (CRITICAL on its own).
+        # Combined: not both-critical (primary is OK), so WARN.
+        self.assertEqual(result.classification, "WARN")
+        self.assertIsNotNone(result.recent_approval_rate)
+        self.assertLess(result.recent_approval_rate, 0.4)
 
 
 # ── liveness classifier ─────────────────────────────────────────────
@@ -455,11 +559,15 @@ class OutputShapeTests(unittest.TestCase):
                 classification="OK",
             ),
             quality=QualityResult(
-                total_actions=50, approval_rate=0.85,
+                approval_rate=0.85,
                 decided_actions=20, approved_count=17,
-                cancelled_count=5, rejected_count=2,
-                executed_count=30,
+                approved_and_failed_count=2,
+                rejected_count=3,
+                pending_count=10,
                 classification="OK",
+                unknown_outcomes={},
+                recent_approval_rate=0.9,
+                recent_decided_actions=10,
             ),
             liveness=LivenessResult(
                 last_write_secs_ago=60.0, classification="OK",
