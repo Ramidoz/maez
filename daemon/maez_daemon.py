@@ -45,6 +45,16 @@ try:
 except Exception:
     sys.path.insert(0, str(Path("/home/rohit/maez")))
 from memory.memory_manager import MemoryManager
+# 5x.F.A — cycle-scoped recall-context bag helpers. Hoisted to
+# module-top because (a) the import is cheap and Chroma-free per
+# the AST-parse isolation test, (b) F.A uses these at three sites
+# (__init__ safety net, _loop reset, post-recall capture), and
+# scattering local imports invited a future rename to break in
+# two places without breaking in the third.
+from core.memory.cycle_recall_context import (
+    capture as _crc_capture,
+    make_empty as _crc_empty,
+)
 from core.perception import snapshot as perception_snapshot, format_snapshot
 from skills.telegram_voice import TelegramVoice
 from skills.telegram_public import MaezPublicBot
@@ -297,6 +307,20 @@ class MaezDaemon:
         self.last_cycle_time = None
         self.system_prompt = self._load_soul()
         self.memory = MemoryManager()
+        # 5x.F.A — per-cycle recall-context bag. The authoritative
+        # reset happens at the top of each `_loop` iteration so the
+        # bag matches the cycle whose `recall_for_cycle` produced
+        # the LLM prompt. THIS init is a safety net only — for the
+        # narrow case where an external caller (a test, a future
+        # init-time handler) reaches code that reads
+        # `self._cycle_recall_context` before the first `_loop`
+        # iteration runs. Without this line, those callers would hit
+        # AttributeError. With it, they see an empty bag and
+        # gracefully fall through to the no-untrusted path. F.B's
+        # consumer in `_do_update_baseline` only fires from action
+        # execution paths that are inside `_loop`, so this safety
+        # net is conservative defense, not load-bearing.
+        self._cycle_recall_context = _crc_empty()
         # ADR 0019 Phase 6 — lived stores constructed once at daemon
         # init and reused across handle_message calls (re-opening the
         # SQLite stores on every request would hammer disk for nothing).
@@ -1068,6 +1092,22 @@ class MaezDaemon:
         else:
             context_query = system_state[:200]
         recalled = self.memory.recall_for_cycle(context_query)
+        # 5x.F.A — capture the recall scope into the per-cycle bag.
+        # No behavior change; F.B reads it. Wrapped in try/except so a
+        # malformed `recalled` shape can never break the reasoning
+        # loop (the bag's failure mode is empty, which falls through
+        # to current behavior in F.B's downgrade rule). `warning`
+        # not `debug` so a future schema regression that breaks
+        # `capture` lands a real signal in logs rather than going
+        # silent until F.B starts under-downgrading.
+        try:
+            _crc_capture(self._cycle_recall_context, recalled)
+        except Exception as _crc_exc:
+            logger.warning(
+                "cycle recall context capture failed (5x.F.A): %s; "
+                "F.B downgrade rule will see empty scope this cycle",
+                _crc_exc,
+            )
         memory_block = self.memory.format_for_prompt(recalled)
         stats = self.memory.memory_stats()
         if memory_block:
@@ -2874,6 +2914,23 @@ class MaezDaemon:
             cycle_start = time.time()
 
             logger.info("--- Cycle %d ---", self.cycle_count)
+
+            # 5x.F.A — reset the per-cycle recall-context bag at cycle
+            # top. Populated after `recall_for_cycle` (line ~1077);
+            # F.B will read it from `_do_update_baseline` to apply the
+            # any-untrusted-tips downgrade rule.
+            #
+            # ORDERING: reset MUST precede `execute_pending` below.
+            # Tier-0 `update_baseline` (per 5x.D.B1) fires same-cycle,
+            # so when F.B's consumer runs in this cycle it should see
+            # the freshly-empty bag, then the bag refills after
+            # `recall_for_cycle` later in the cycle. If a future
+            # maintainer "tidies" by moving the reset after
+            # `execute_pending`, prior-cycle untrusted IDs would
+            # persist into this cycle's first reads — silently
+            # over-downgrading. Don't reorder without revisiting
+            # F.B's invariant.
+            self._cycle_recall_context = _crc_empty()
 
             # Execute deferred actions from previous cycle
             tier1_results = self.actions.execute_pending()
