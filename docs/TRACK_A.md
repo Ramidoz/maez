@@ -135,6 +135,28 @@ The paper is also out of date on the brain (says "quantized Gemma-class"; actual
 
 ---
 
+## 2026-05-02 update — Track A surface absorbed since 2026-04-15
+
+A 4-agent audit pass on 2026-05-02 (see [`architecture_state_2026-05-02.md`](architecture_state_2026-05-02.md)) caught five Track-A-shaped surface slices that had landed since this anchor was last refreshed. Absorbing them now so the next agent reading TRACK_A.md sees a current picture:
+
+- **5x memory-provenance arc** (commits `abb1a28..cda2888`, ~10 commits). Closes the Zombie Agents (Yang et al. Feb 2026) threat model: untrusted-tier tagging, surfacing, promotion gating, filtering, bypass guard. The `claude_tier → SFT` and `external_web → core` laundering paths are now closed.
+- **Through-quotation defense** (5x.F arc, late 2026-05-01). Cycle-scoped recall context bag + downgrade rule on baseline-update lineage. Audit-before-store invariant in `core/safety/audited_output.py`.
+- **Drift-detection harness** (G.A, commit `9cbc948` + `9709910`). `scripts/probe/maez_drift_report.py`, `scripts/probe/baseline_downgrade_rate.py`, `scripts/probe/signal_baseline_report.py`, `scripts/probe/probe_through_quotation.py`. The seatbelt that surfaced the 32% downstream-failure rate that drove the next two slices.
+- **Consequence-learning loop closure** (commits `8694b14` + `b7bf0f6`). `decision_pipeline._on_approve`'s failure branch now writes `CLASS_TOOL_FAILURE` to `consequence_memory` (mirrors the existing `_on_deny` rejection path), and the 95 historical `approved_and_failed` rows from `audit_log.db` were one-shot backfilled. Planner now has learning signal for repeat-failure patterns it previously had no memory of.
+- **MSEL substrate matcher fix** (commit `c4abc17`, 2026-05-02). The Step 5o/5p substrate (curated phrase → entity) shipped 2026-05-01 but `_scan_query_for_matches` only seeded Capital-case tokens to the case-insensitive `find_entities` data layer. Production Telegram traffic is overwhelmingly lowercase, so 1,190 messages over 7 days produced **zero** `entity_expansion fired` log lines. Switched to `\w` + `re.UNICODE` token scan; substrate is now reachable from natural-text queries. First real measurement window opens 24h from restart.
+
+**What's still genuinely open inside Track A:**
+
+- **D20 acquisition-pipeline orchestration.** Modules (gap-matcher, evaluator, proposal, queue) are shipped; the **5-stage flow that fires-on-felt-gap** is not yet wired into one orchestrated path. This is the load-bearing piece that turns the manual + pipeline ADRs into a live behavior. **The next substantive slice.**
+- **D19 capability manual loader.** 3-4 entries seeded under `docs/maez_manual/`; the *loader* that surfaces relevant manual entries into the recall path or planner prompt is not integrated.
+- **Decisions 8 / 12 / 13 / 15 / 16** — all PARTIAL per the audit. Paradise (D8) has `suspended_pending_paradise` referenced in code but not enum-encoded; mourning drift (D13) has scaffolding but no implementation; voice-lifecycle (D16) has the `wants` module but no refinement/abandonment semantics.
+
+**Doc-vs-code drift caught and fixed in the same audit:**
+
+- `docs/governance/SECURITY_AUDIT.md` claimed the pre-commit secret-scan hook was "not yet installed"; `.pre-commit-config.yaml` proves gitleaks v8.22.1 IS installed. Doc updated 2026-05-02.
+
+---
+
 ## What is NOT Track A (the explicit anti-drift list)
 
 **Do not work on these during Track A. They belong to Track B, Track C, or are tracked as separate cleanup debt.**

@@ -46,7 +46,8 @@ Combined with the author's discipline of only ever reading keys via
 `os.environ.get(...)`, no secret has landed in source. Future risk:
 
 - A new contributor committing a `.env` file by accident. Mitigated
-  by `.gitignore`; a pre-commit hook is a natural Phase 8 add.
+  by `.gitignore` and the gitleaks pre-commit hook (Phase 8 — see
+  Outstanding section, since-installed).
 - A secret leaking through a commit message. No known instance.
 - An error / traceback with the key in it landing in `logs/maez.log`
   — `logs/*` is gitignored.
@@ -157,9 +158,11 @@ cleaned up hardcoded owner references so this path is effective.
 
 ## Outstanding
 
-- **Pre-commit secret-scan hook.** Not yet installed. A `gitleaks`
-  or `detect-secrets` hook that blocks secret-looking diffs before
-  they land is a Phase 8 add.
+- **Pre-commit secret-scan hook.** ✅ Installed — `gitleaks` v8.22.1
+  in `.pre-commit-config.yaml`. Phase 8 close-out. Hook is opt-in
+  (`pre-commit install` per clone) so contributors must enable it
+  locally; doc updated 2026-05-02 after audit pass surfaced the
+  drift between this section and `.pre-commit-config.yaml`.
 - **CSRF on the cockpit.** Fine for `127.0.0.1` use; document LAN
   exposure risk in Phase 10.
 - **Rate limiting on the subscription proxy.** Localhost-only, so
