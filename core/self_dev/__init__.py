@@ -773,6 +773,27 @@ def _cli_propose_tests(args) -> int:
         return 0
 
     if args.write:
+        # T1.8 (2026-05-04 audit) — covenant gate. Refuse to write
+        # without an explicit `--i-have-reviewed-the-diff` ack;
+        # print the proposed test code so the operator can read it
+        # and re-run with both flags. Self-dev cannot land code on
+        # disk autonomously even at the operator's request — the
+        # diff-review step is the rail.
+        if not getattr(args, "i_have_reviewed_the_diff", False):
+            print(
+                "-- proposed test code (covenant gate; "
+                "--write requires --i-have-reviewed-the-diff) --",
+                file=sys.stderr,
+            )
+            for line in p.test_code.splitlines():
+                print(f"  {line}")
+            print(
+                "\nrefuse: --write requires "
+                "--i-have-reviewed-the-diff. Read the diff above "
+                "and re-run with both flags to commit.",
+                file=sys.stderr,
+            )
+            return 4
         import os as _os
         dest = p.test_path or f"tests/test_{_os.path.basename(p.target_module).replace('.py','')}.py"
         # self-dev meta-review on e41a2db (concern #1): use the
@@ -952,6 +973,22 @@ def _build_argparser() -> argparse.ArgumentParser:
     pt.add_argument("--write", action="store_true",
                      help="write the proposed test file to disk "
                           "(dry-run by default, prints preview)")
+    # T1.8 (2026-05-04 audit) — covenant gate. --write must be
+    # paired with --i-have-reviewed-the-diff so generated test code
+    # cannot land on disk without an explicit ack from the operator
+    # that they've actually read the proposal. Run --write once
+    # without this flag to print the diff; re-run with both flags
+    # to commit.
+    pt.add_argument(
+        "--i-have-reviewed-the-diff",
+        action="store_true",
+        dest="i_have_reviewed_the_diff",
+        help=(
+            "Required co-flag for --write. Without it, --write "
+            "prints the proposed test code and refuses to write. "
+            "Re-run with this flag after reading the diff."
+        ),
+    )
     pt.add_argument("--force", action="store_true",
                      help="overwrite destination if it exists "
                           "(only relevant with --write)")

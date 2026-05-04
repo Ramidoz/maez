@@ -2362,6 +2362,30 @@ class TelegramVoice:
         if not user_text:
             return
 
+        # T1.11 (2026-05-04 audit) — fire gap-sense BEFORE the
+        # interceptor chain runs. The post-_process_message gap-sense
+        # hook (further down, in the finally:) only fires on the
+        # general-chat path; every interceptor early-return (offer-
+        # binding, card-reply, proposal, dream, web-search) skipped
+        # it, so D20 was blind to those messages. Cooldown inside
+        # maybe_fire_capability_proposal dedups against the later
+        # finally-block fire if both paths run for the same message.
+        try:
+            from core.infra.capability_gap_detector import (
+                maybe_fire_capability_proposal,
+            )
+            asyncio.create_task(asyncio.to_thread(
+                maybe_fire_capability_proposal,
+                user_text,
+                chat_id=str(self.authorized_user),
+                user_id=str(user_id),
+            ))
+        except Exception as _gap_e:
+            logger.debug(
+                "gap_detector hook (early, pre-interceptors) "
+                "failed: %s", _gap_e,
+            )
+
         # Interrupt detection — if currently generating, queue and return
         if self._generating:
             if self._interrupt_queue:
@@ -2369,11 +2393,15 @@ class TelegramVoice:
             logger.info("Telegram interrupt queued: %s", user_text[:60])
             return
 
+        # T1.12 (2026-05-04 audit) — initialize the interrupt queue
+        # BEFORE flipping `_generating` so there is no window where a
+        # concurrent message sees `_generating=True` with a stale or
+        # None `_interrupt_queue`. Pure asyncio shouldn't preempt the
+        # gap today, but the order is the principled invariant — any
+        # future `await` introduced between these lines becomes safe.
+        self._interrupt_queue = asyncio.Queue()
         self._generating = True
         logger.info("Telegram message from the owner: %s", user_text[:100])
-
-        # Initialize interrupt queue for this generation
-        self._interrupt_queue = asyncio.Queue()
 
         # 2026-04-16 offer-binding: track the most recent non-affirmative
         # user text so a later pending offer can use it as its query.
