@@ -341,37 +341,6 @@ class PendingCardStore:
         now = time.time()
         state_hash = compute_state_hash(state_fields)
 
-        # Supersede any existing open/deferred card in this chat. Without
-        # this, a Telegram conversation can accumulate multiple pending
-        # proposals — each new turn generates a new card, the old one
-        # lingers until the 5-minute stale-binding window expires, and
-        # the user sees repeated "I proposed X — waiting for your
-        # go-ahead" templates for cards that are already obsolete.
-        # One active card per chat is the cleaner contract.
-        # Observed 2026-04-20: 3 stale-card expirations inside a 90s
-        # window during an active Telegram conversation (cards
-        # f472165d, e3a1ebf2, d9a328d5 expired at 15:33:51–15:34:08).
-        if chat_id:
-            try:
-                with self._conn() as _conn:
-                    _superseded = _conn.execute(
-                        "SELECT request_id FROM pending_cards "
-                        "WHERE chat_id = ? AND status IN (?, ?)",
-                        (chat_id, CardStatus.OPEN.value,
-                         CardStatus.DEFERRED.value),
-                    ).fetchall()
-                for _row in _superseded:
-                    try:
-                        self.expire(
-                            _row["request_id"],
-                            reason="superseded by new proposal in same chat",
-                        )
-                    except CardStoreError:
-                        pass
-            except Exception:
-                # Never let supersession failure block card creation.
-                pass
-
         # Pull classification
         if classification is None:
             intent_category = None
@@ -407,6 +376,34 @@ class PendingCardStore:
             answers = dict(getattr(audit_verdict, "answers", {}) or {})
 
         with self._conn() as conn:
+            # T1.1: supersession and INSERT are one SQLite write
+            # transaction. BEGIN IMMEDIATE serializes concurrent
+            # same-chat creators before either can observe/insert,
+            # closing the old SELECT -> expire() -> INSERT race.
+            conn.execute("BEGIN IMMEDIATE")
+            if chat_id:
+                conn.execute(
+                    """
+                    UPDATE pending_cards
+                    SET status = ?,
+                        updated_at = ?,
+                        resolved_at = ?,
+                        resolved_via = ?,
+                        resolution_notes = ?
+                    WHERE chat_id = ?
+                      AND status IN (?, ?)
+                    """,
+                    (
+                        CardStatus.EXPIRED.value,
+                        now,
+                        now,
+                        "system",
+                        "superseded by new proposal in same chat",
+                        chat_id,
+                        CardStatus.OPEN.value,
+                        CardStatus.DEFERRED.value,
+                    ),
+                )
             conn.execute(
                 """
                 INSERT INTO pending_cards (

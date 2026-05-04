@@ -499,13 +499,13 @@ class TestFrequencyBudgetAndOwnerSilence(unittest.TestCase):
             Goal(text="continuity matters",
                  source=GOAL_SOURCE_CARES_ABOUT, weight=0.95),
         ))
+        now = datetime(2026, 4, 30, 12, 0, 0, tzinfo=timezone.utc)
         wonderings = [_wondering(
             wid=1,
             question="how does continuity hold across restart events",
             advance_count=3,
-            last_advanced=time.time() - 86400 * 3,
+            last_advanced=(now - timedelta(days=3)).timestamp(),
         )]
-        now = datetime(2026, 4, 30, 12, 0, 0, tzinfo=timezone.utc)
         # Last pursuit was 24h ago — outside the budget window.
         last_pursuit = (now - timedelta(hours=24)).timestamp()
         result = decide_pursuit(

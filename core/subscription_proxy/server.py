@@ -22,6 +22,7 @@ on this machine can already invoke the same CLIs.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -112,6 +113,16 @@ DEFAULT_CAPS = {
     "xai":          {"hourly": 30,  "daily": 100},   # paid API
     "ollama_cloud": {"hourly": 30,  "daily": 100},   # paid API
 }
+
+_BUDGET_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _budget_lock(adapter_name: str) -> asyncio.Lock:
+    lock = _BUDGET_LOCKS.get(adapter_name)
+    if lock is None:
+        lock = asyncio.Lock()
+        _BUDGET_LOCKS[adapter_name] = lock
+    return lock
 
 
 # ── sqlite sidecar ─────────────────────────────────────────────────────
@@ -385,51 +396,53 @@ async def chat_completions(request: Request):
     adapter = _route(model_in)
     caller = request.headers.get("x-maez-caller", "unknown")
 
-    # Budget gates (per-adapter)
-    h_cap = _cap(adapter.name, "hourly",
-                  DEFAULT_CAPS.get(adapter.name, {}).get("hourly", 1000))
-    d_cap = _cap(adapter.name, "daily",
-                  DEFAULT_CAPS.get(adapter.name, {}).get("daily", 10000))
-    hour_used = _count_calls(adapter=adapter.name, seconds=3600)
-    if hour_used >= h_cap:
-        raise HTTPException(
-            429,
-            f"{adapter.name}: hourly cap reached ({hour_used}/{h_cap})",
-        )
-    day_used = _count_calls(adapter=adapter.name, seconds=86400)
-    if day_used >= d_cap:
-        raise HTTPException(
-            429,
-            f"{adapter.name}: daily cap reached ({day_used}/{d_cap})",
-        )
-
-    t0 = time.time()
     result: Optional[CallResult] = None
-    error_msg = ""
-    try:
-        result = await adapter.call(
-            prompt=prompt, system_prompt=system_prompt, model=model_in,
-        )
-    except Exception as e:
-        error_msg = str(e)
-        logger.warning(
-            "%s call failed (caller=%s): %s", adapter.name, caller, e,
-        )
+    async with _budget_lock(adapter.name):
+        # T1.5: the budget gate, adapter call, and budget tick are one
+        # per-adapter critical section. Otherwise two concurrent calls
+        # can both observe N remaining budget before either records.
+        h_cap = _cap(adapter.name, "hourly",
+                     DEFAULT_CAPS.get(adapter.name, {}).get("hourly", 1000))
+        d_cap = _cap(adapter.name, "daily",
+                     DEFAULT_CAPS.get(adapter.name, {}).get("daily", 10000))
+        hour_used = _count_calls(adapter=adapter.name, seconds=3600)
+        if hour_used >= h_cap:
+            raise HTTPException(
+                429,
+                f"{adapter.name}: hourly cap reached ({hour_used}/{h_cap})",
+            )
+        day_used = _count_calls(adapter=adapter.name, seconds=86400)
+        if day_used >= d_cap:
+            raise HTTPException(
+                429,
+                f"{adapter.name}: daily cap reached ({day_used}/{d_cap})",
+            )
+
+        t0 = time.time()
+        try:
+            result = await adapter.call(
+                prompt=prompt, system_prompt=system_prompt, model=model_in,
+            )
+        except Exception as e:
+            error_msg = str(e)
+            logger.warning(
+                "%s call failed (caller=%s): %s", adapter.name, caller, e,
+            )
+            _record(
+                adapter=adapter.name, caller=caller, model=model_in,
+                model_used=None, prompt=prompt, reply="",
+                input_toks=None, output_toks=None,
+                duration_s=time.time() - t0, status="error", error=error_msg,
+            )
+            raise HTTPException(502, f"{adapter.name} failed: {error_msg}")
+
+        duration_s = time.time() - t0
         _record(
             adapter=adapter.name, caller=caller, model=model_in,
-            model_used=None, prompt=prompt, reply="",
-            input_toks=None, output_toks=None,
-            duration_s=time.time() - t0, status="error", error=error_msg,
+            model_used=result.model_used, prompt=prompt, reply=result.reply,
+            input_toks=result.input_toks, output_toks=result.output_toks,
+            duration_s=duration_s, status="ok",
         )
-        raise HTTPException(502, f"{adapter.name} failed: {error_msg}")
-
-    duration_s = time.time() - t0
-    _record(
-        adapter=adapter.name, caller=caller, model=model_in,
-        model_used=result.model_used, prompt=prompt, reply=result.reply,
-        input_toks=result.input_toks, output_toks=result.output_toks,
-        duration_s=duration_s, status="ok",
-    )
 
     # Fallback token estimation if adapter didn't provide counts
     ptoks = result.input_toks or max(1, len(prompt) // 4)
