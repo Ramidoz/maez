@@ -63,12 +63,27 @@ from typing import Optional
 
 logger = logging.getLogger("maez.consequence_memory")
 
-DB_PATH = Path(
-    os.environ.get(
-        "MAEZ_CONSEQUENCE_MEMORY_DB",
-        "/home/rohit/maez/memory/consequence_memory.db",
-    )
-)
+def _default_db_path() -> Path:
+    """Resolve through `core.infra.paths` so a non-default install
+    location gets the right DB path. Env-override
+    `MAEZ_CONSEQUENCE_MEMORY_DB` still wins."""
+    override = os.environ.get("MAEZ_CONSEQUENCE_MEMORY_DB")
+    if override:
+        return Path(override)
+    try:
+        from core.infra import paths as _paths
+        return _paths.memory_dir() / "consequence_memory.db"
+    except Exception:
+        # Self-anchored fallback if paths.py is unavailable mid-
+        # import. core/learning/consequence_memory.py → repo root
+        # is parents[2].
+        return (
+            Path(__file__).resolve().parents[2]
+            / "memory" / "consequence_memory.db"
+        )
+
+
+DB_PATH = _default_db_path()
 
 # Known classes — the producer-side code imports these constants
 # rather than passing raw strings, so typos are caught at import time.

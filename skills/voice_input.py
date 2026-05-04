@@ -39,8 +39,17 @@ class VoiceTranscriber:
         try:
             from faster_whisper import WhisperModel
             logger.info("Loading Whisper base.en (CPU)...")
+            try:
+                from core.infra import paths as _paths
+                _whisper_root = str(_paths.models_dir() / "whisper")
+            except Exception:
+                from pathlib import Path as _Path
+                _whisper_root = str(
+                    _Path(__file__).resolve().parent.parent
+                    / "models" / "whisper"
+                )
             self._model = WhisperModel("base.en", device="cpu", compute_type="int8",
-                                        download_root="/home/rohit/maez/models/whisper")
+                                        download_root=_whisper_root)
             self._initialized = True
             logger.info("Whisper ready (CPU)")
             return True

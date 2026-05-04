@@ -76,7 +76,14 @@ logger = logging.getLogger("maez.baseline_observations")
 
 # DB path: env var override for tests; production default lives
 # alongside the other immune-memory stores under ``memory/``.
-_DEFAULT_DB_PATH = "/home/rohit/maez/memory/baseline_observations.db"
+try:
+    from core.infra import paths as _paths
+    _DEFAULT_DB_PATH = str(_paths.memory_dir() / "baseline_observations.db")
+except Exception:
+    _DEFAULT_DB_PATH = str(
+        Path(__file__).resolve().parents[2]
+        / "memory" / "baseline_observations.db"
+    )
 
 
 def _db_path() -> Path:

@@ -14,9 +14,11 @@ import sys
 import urllib.request
 import urllib.error
 
-sys.path.insert(0, '/home/rohit/maez')
+from pathlib import Path as _Path
+_MAEZ_HOME_PATH = _Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_MAEZ_HOME_PATH))
 from dotenv import load_dotenv
-load_dotenv('/home/rohit/maez/config/.env')
+load_dotenv(str(_MAEZ_HOME_PATH / "config" / ".env"))
 
 ZONE_ID = os.environ.get('CLOUDFLARE_ZONE_ID', '')
 API_TOKEN = os.environ.get('CLOUDFLARE_API_TOKEN', '')

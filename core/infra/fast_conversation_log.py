@@ -49,7 +49,10 @@ try:
     from core.paths import memory_dir as _memory_dir
     DEFAULT_DB_PATH = str(_memory_dir() / 'fast_conversation_log.db')
 except Exception:
-    DEFAULT_DB_PATH = '/home/rohit/maez/memory/fast_conversation_log.db'
+    DEFAULT_DB_PATH = str(
+        Path(__file__).resolve().parents[2]
+        / "memory" / "fast_conversation_log.db"
+    )
 
 
 class FastConversationLog:

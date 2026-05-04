@@ -34,7 +34,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Optional
 
-_MAEZ_HOME = Path("/home/rohit/maez")
+try:
+    from core.infra import paths as _paths
+    _MAEZ_HOME = _paths.home()
+except Exception:
+    _MAEZ_HOME = Path(__file__).resolve().parents[2]
 _COGNITION_LOG = _MAEZ_HOME / "logs" / "cognition.log"
 _WONDERINGS_DB = _MAEZ_HOME / "memory" / "wonderings.db"
 

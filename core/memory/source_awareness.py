@@ -101,7 +101,7 @@ try:
     MAEZ_ROOT = _home()
     MAP_PATH = _memory_dir() / "source_awareness.json"
 except Exception:
-    MAEZ_ROOT = Path("/home/rohit/maez")
+    MAEZ_ROOT = Path(__file__).resolve().parents[2]
     MAP_PATH = MAEZ_ROOT / "memory" / "source_awareness.json"
 SCHEMA_VERSION = "1.0"
 

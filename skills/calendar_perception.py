@@ -34,8 +34,15 @@ from typing import Any, Optional
 
 logger = logging.getLogger("maez")
 
-TOKEN_PATH = '/home/rohit/maez/config/token.json'
-CREDS_PATH = '/home/rohit/maez/config/credentials.json'
+try:
+    from core.infra import paths as _paths
+    TOKEN_PATH = str(_paths.config_dir() / "token.json")
+    CREDS_PATH = str(_paths.config_dir() / "credentials.json")
+except Exception:
+    from pathlib import Path as _Path
+    _CFG_FALLBACK = _Path(__file__).resolve().parent.parent / "config"
+    TOKEN_PATH = str(_CFG_FALLBACK / "token.json")
+    CREDS_PATH = str(_CFG_FALLBACK / "credentials.json")
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
 
 LOOKAHEAD_HOURS = 8

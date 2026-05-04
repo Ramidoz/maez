@@ -40,7 +40,10 @@ try:
     from core.paths import memory_dir as _memory_dir
     _STATE_PATH = _memory_dir() / "approval_sessions.json"
 except Exception:
-    _STATE_PATH = Path("/home/rohit/maez/memory/approval_sessions.json")
+    _STATE_PATH = (
+        Path(__file__).resolve().parents[2]
+        / "memory" / "approval_sessions.json"
+    )
 _lock = threading.Lock()
 
 _DEFAULT_DURATION_SECONDS = 3600  # 1 hour

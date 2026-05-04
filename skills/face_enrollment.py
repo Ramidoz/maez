@@ -23,7 +23,15 @@ logger = logging.getLogger(__name__)
 
 CAMERA_INDEX = 0
 NUM_ENROLLMENT_FRAMES = 20
-ENROLLMENT_PATH = '/home/rohit/maez/models/face/rohit_embeddings.pkl'
+try:
+    from core.infra import paths as _paths
+    ENROLLMENT_PATH = str(_paths.models_dir() / "face" / "rohit_embeddings.pkl")
+except Exception:
+    from pathlib import Path as _Path
+    ENROLLMENT_PATH = str(
+        _Path(__file__).resolve().parent.parent
+        / "models" / "face" / "rohit_embeddings.pkl"
+    )
 CAPTURE_INTERVAL = 0.5
 
 
@@ -95,7 +103,8 @@ def enroll(name: str = "the owner") -> bool:
     print(f"Saved to: {ENROLLMENT_PATH}")
 
     try:
-        sys.path.insert(0, '/home/rohit/maez')
+        from pathlib import Path as _Path
+        sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
         from memory.memory_manager import MemoryManager
         mm = MemoryManager()
         _emit_enrollment_core_memory(

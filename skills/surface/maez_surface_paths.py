@@ -19,7 +19,10 @@ def _default_surface_root() -> Path:
         from core.paths import memory_dir as _memory_dir
         return _memory_dir() / "surface"
     except Exception:
-        return Path("/home/rohit/maez/memory/surface")
+        return (
+            Path(__file__).resolve().parent.parent.parent
+            / "memory" / "surface"
+        )
 
 
 _MAEZ_SURFACE_ROOT = _default_surface_root()

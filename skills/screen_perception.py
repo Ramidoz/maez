@@ -389,7 +389,8 @@ def test():
 
 if __name__ == '__main__':
     import sys
-    sys.path.insert(0, '/home/rohit/maez')
+    from pathlib import Path as _Path
+    sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
     logging.basicConfig(level=logging.DEBUG)
     success = test()
     sys.exit(0 if success else 1)

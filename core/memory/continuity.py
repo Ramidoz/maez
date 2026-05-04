@@ -68,8 +68,9 @@ try:
     CAPSULE_PATH = _memory_dir() / "continuity_capsule.json"
     ARCHIVE_DIR = _memory_dir() / "continuity_archive"
 except Exception:
-    CAPSULE_PATH = Path("/home/rohit/maez/memory/continuity_capsule.json")
-    ARCHIVE_DIR = Path("/home/rohit/maez/memory/continuity_archive")
+    _MAEZ_MEMORY_FALLBACK = Path(__file__).resolve().parents[2] / "memory"
+    CAPSULE_PATH = _MAEZ_MEMORY_FALLBACK / "continuity_capsule.json"
+    ARCHIVE_DIR = _MAEZ_MEMORY_FALLBACK / "continuity_archive"
 CAPSULE_VERSION = "1.0"
 
 

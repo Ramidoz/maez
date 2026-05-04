@@ -34,8 +34,14 @@ import yaml
 
 logger = logging.getLogger("maez.router")
 
-CONFIG_PATH = Path("/home/rohit/maez/config/user_profiles.yaml")
-TRAJECTORY_DIR = Path("/home/rohit/maez/logs/trajectories")
+try:
+    from core.infra import paths as _paths
+    CONFIG_PATH = _paths.config_dir() / "user_profiles.yaml"
+    TRAJECTORY_DIR = _paths.logs_dir() / "trajectories"
+except Exception:
+    _MAEZ_HOME_FALLBACK = Path(__file__).resolve().parent.parent
+    CONFIG_PATH = _MAEZ_HOME_FALLBACK / "config" / "user_profiles.yaml"
+    TRAJECTORY_DIR = _MAEZ_HOME_FALLBACK / "logs" / "trajectories"
 TRAJECTORY_LOCK = threading.Lock()
 
 MODEL_SONNET = "claude-sonnet-4-6"

@@ -84,8 +84,9 @@ try:
     SOUL_PATH = _paths.soul_combined_path()
     BACKUP_DIR = _paths.config_dir()  # backups live beside soul.md
 except Exception:
-    SOUL_PATH = Path("/home/rohit/maez/config/soul.md")
-    BACKUP_DIR = Path("/home/rohit/maez/config")
+    _MAEZ_HOME_FALLBACK = Path(__file__).resolve().parents[2]
+    SOUL_PATH = _MAEZ_HOME_FALLBACK / "config" / "soul.md"
+    BACKUP_DIR = _MAEZ_HOME_FALLBACK / "config"
 
 
 # ── protected content guards ─────────────────────────────────────────

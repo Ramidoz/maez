@@ -24,7 +24,15 @@ import uuid
 
 logger = logging.getLogger("maez")
 
-DB_PATH = '/home/rohit/maez/memory/followup.db'
+try:
+    from core.infra import paths as _paths
+    DB_PATH = str(_paths.memory_dir() / "followup.db")
+except Exception:
+    from pathlib import Path as _Path
+    DB_PATH = str(
+        _Path(__file__).resolve().parent.parent
+        / "memory" / "followup.db"
+    )
 
 
 class FollowUpQueue:

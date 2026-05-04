@@ -41,7 +41,7 @@ try:
     from core import paths as _paths
     _MAEZ_HOME = _paths.home()
 except Exception:
-    _MAEZ_HOME = Path("/home/rohit/maez")
+    _MAEZ_HOME = Path(__file__).resolve().parents[2]
 
 # ── static schedules (from daemon source constants) ────────────────────
 

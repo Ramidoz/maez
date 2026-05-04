@@ -118,7 +118,14 @@ def _write_soul_insight(analysis: dict, action_engine):
     # the new note goes in and captures the delta.
     try:
         from pathlib import Path
-        soul_path = Path('/home/rohit/maez/config/soul.md')
+        try:
+            from core.infra import paths as _paths
+            soul_path = _paths.config_dir() / "soul.md"
+        except Exception:
+            soul_path = (
+                Path(__file__).resolve().parent.parent
+                / "config" / "soul.md"
+            )
         if soul_path.exists():
             existing = soul_path.read_text()
             fingerprint = (
@@ -182,7 +189,8 @@ def get_weaknesses(memory_manager) -> list:
 
 if __name__ == '__main__':
     import sys
-    sys.path.insert(0, '/home/rohit/maez')
+    from pathlib import Path as _Path
+    sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
     logging.basicConfig(level=logging.INFO)
     from memory.memory_manager import MemoryManager
     mm = MemoryManager()

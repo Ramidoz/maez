@@ -24,7 +24,14 @@ from typing import Any
 
 logger = logging.getLogger("maez.iphone")
 
-SIGNALS_DIR = Path("/home/rohit/maez/logs/signals")
+try:
+    from core.infra import paths as _paths
+    SIGNALS_DIR = _paths.logs_dir() / "signals"
+except Exception:
+    SIGNALS_DIR = (
+        Path(__file__).resolve().parent.parent
+        / "logs" / "signals"
+    )
 SIGNALS_LOCK = threading.Lock()
 MAX_SIGNAL_BYTES = 64 * 1024  # reject oversized payloads
 

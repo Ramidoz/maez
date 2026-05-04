@@ -14,7 +14,14 @@ from typing import Optional
 import requests
 from dotenv import load_dotenv
 
-load_dotenv('/home/rohit/maez/config/.env')
+try:
+    from core.infra import paths as _paths
+    load_dotenv(str(_paths.env_file()))
+except Exception:
+    from pathlib import Path as _Path
+    load_dotenv(str(
+        _Path(__file__).resolve().parent.parent / "config" / ".env"
+    ))
 logger = logging.getLogger('maez.github')
 
 

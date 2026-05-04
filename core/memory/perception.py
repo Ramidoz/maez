@@ -10,6 +10,7 @@ import json
 import subprocess
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import TypedDict
 
 import psutil
@@ -182,7 +183,10 @@ try:
     from core.paths import memory_dir as _memory_dir
     _PERCEPTION_CACHE_PATH = str(_memory_dir() / "perception_cache.json")
 except Exception:
-    _PERCEPTION_CACHE_PATH = "/home/rohit/maez/memory/perception_cache.json"
+    _PERCEPTION_CACHE_PATH = str(
+        Path(__file__).resolve().parents[2]
+        / "memory" / "perception_cache.json"
+    )
 
 
 def _persist_cache(snap: "PerceptionSnapshot") -> None:

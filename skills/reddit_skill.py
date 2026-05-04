@@ -32,7 +32,17 @@ _DEFAULT_SUBREDDITS = [
 
 def _load_subreddits() -> list:
     """Load per-user subreddit list from config. Defaults to generic if absent."""
-    config_dir = Path(os.environ.get("MAEZ_CONFIG_DIR", "/home/rohit/maez/config"))
+    _override = os.environ.get("MAEZ_CONFIG_DIR")
+    if _override:
+        config_dir = Path(_override)
+    else:
+        try:
+            from core.infra import paths as _paths
+            config_dir = _paths.config_dir()
+        except Exception:
+            config_dir = (
+                Path(__file__).resolve().parent.parent / "config"
+            )
     user_path = config_dir / "reddit_subs.yaml"
     template_path = config_dir / "reddit_subs.template.yaml"
     for path in (user_path, template_path):

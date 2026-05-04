@@ -46,7 +46,7 @@ try:
     from core import paths as _paths
     _REPO_ROOT = _paths.home()
 except Exception:
-    _REPO_ROOT = Path("/home/rohit/maez")
+    _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 # ── configuration ─────────────────────────────────────────────────────

@@ -45,6 +45,7 @@ import json
 import logging
 import os
 import re
+from pathlib import Path
 import sqlite3
 from dataclasses import dataclass
 from typing import Optional
@@ -52,9 +53,16 @@ from typing import Optional
 logger = logging.getLogger("maez.premise_audit")
 
 # Default DB locations — overridable per-call so tests can supply
-# fixture databases without monkey-patching.
-_DEFAULT_CARDS_DB = "/home/rohit/maez/memory/pending_cards.db"
-_DEFAULT_AUDIT_DB = "/home/rohit/maez/memory/audit_log.db"
+# fixture databases without monkey-patching. Routed through
+# core.paths so non-default install locations resolve correctly.
+try:
+    from core.infra import paths as _paths
+    _DEFAULT_CARDS_DB = str(_paths.memory_dir() / "pending_cards.db")
+    _DEFAULT_AUDIT_DB = str(_paths.memory_dir() / "audit_log.db")
+except Exception:
+    _MAEZ_MEMORY = Path(__file__).resolve().parents[2] / "memory"
+    _DEFAULT_CARDS_DB = str(_MAEZ_MEMORY / "pending_cards.db")
+    _DEFAULT_AUDIT_DB = str(_MAEZ_MEMORY / "audit_log.db")
 
 # Recent-window for premise lookup. The owner's claim almost always
 # refers to something within the last few days; we don't need to scan

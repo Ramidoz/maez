@@ -16,11 +16,12 @@ from pathlib import Path
 
 import psutil
 
-sys.path.insert(0, str(Path("/home/rohit/maez")))
+_MAEZ_HOME_PATH = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_MAEZ_HOME_PATH))
 from skills.dev_notifier import send_dev
 
 # --- Config ---
-LOG_PATH = Path("/home/rohit/maez/logs/claude_watcher.log")
+LOG_PATH = _MAEZ_HOME_PATH / "logs" / "claude_watcher.log"
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 POLL_INTERVAL = 15
@@ -180,7 +181,7 @@ def run():
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
-    load_dotenv(Path("/home/rohit/maez/config/.env"))
+    load_dotenv(_MAEZ_HOME_PATH / "config" / ".env")
 
     _lock_fd = acquire_lock()
     run()

@@ -86,6 +86,6 @@ def default_writer() -> TraceWriter:
 
             base = Path(_home()) / "logs" / "traces"
         except Exception:
-            base = Path("/home/rohit/maez/logs/traces")
+            base = Path(__file__).resolve().parents[2] / "logs" / "traces"
         _default_writer_singleton = TraceWriter(base)
     return _default_writer_singleton

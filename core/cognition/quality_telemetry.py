@@ -44,7 +44,7 @@ try:
     _FAB_DB = _paths.memory_dir() / "fabrication_log.db"
     _RECALL_DB = _paths.memory_dir() / "recall_stats.db"
 except Exception:
-    _MAEZ_HOME = Path("/home/rohit/maez")
+    _MAEZ_HOME = Path(__file__).resolve().parents[2]
     _COG_LOG = _MAEZ_HOME / "logs" / "cognition.log"
     _FAB_DB = _MAEZ_HOME / "memory" / "fabrication_log.db"
     _RECALL_DB = _MAEZ_HOME / "memory" / "recall_stats.db"

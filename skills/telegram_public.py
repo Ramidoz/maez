@@ -31,7 +31,13 @@ from dotenv import load_dotenv
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-load_dotenv('/home/rohit/maez/config/.env')
+try:
+    from core.infra import paths as _paths
+    _MAEZ_HOME_PATH = _paths.home()
+except Exception:
+    from pathlib import Path as _Path
+    _MAEZ_HOME_PATH = _Path(__file__).resolve().parent.parent
+load_dotenv(str(_MAEZ_HOME_PATH / "config" / ".env"))
 logger = logging.getLogger('maez.public')
 
 
@@ -42,7 +48,7 @@ class UserProfileStore:
 
     def __init__(self):
         self.client = chromadb.PersistentClient(
-            '/home/rohit/maez/memory/db/public_users',
+            str(_MAEZ_HOME_PATH / "memory" / "db" / "public_users"),
             settings=Settings(anonymized_telemetry=False),
         )
         self.profiles = self.client.get_or_create_collection('user_profiles')

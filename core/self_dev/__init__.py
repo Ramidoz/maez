@@ -38,6 +38,7 @@ import argparse
 import json
 import logging
 import re
+from pathlib import Path
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
@@ -197,7 +198,7 @@ try:
     from core import paths as _paths
     _REPO_ROOT = str(_paths.home())
 except Exception:
-    _REPO_ROOT = "/home/rohit/maez"
+    _REPO_ROOT = str(Path(__file__).resolve().parents[2])
 
 # Single-commit refs like "HEAD", "abc1234", "main" — accept `show`
 # diff. Ranges like "HEAD~1..HEAD" — accept `diff` between endpoints.

@@ -51,7 +51,10 @@ def _default_self_dev_db() -> str:
         from core.paths import memory_dir as _memory_dir
         return str(_memory_dir() / "self_dev.db")
     except Exception:
-        return "/home/rohit/maez/memory/self_dev.db"
+        return str(
+            Path(__file__).resolve().parents[2]
+            / "memory" / "self_dev.db"
+        )
 
 
 DB_PATH = Path(_default_self_dev_db())

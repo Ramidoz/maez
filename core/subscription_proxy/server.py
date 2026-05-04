@@ -66,12 +66,21 @@ ADAPTERS: list[Adapter] = [
     ClaudeCliAdapter(),
 ]
 
-DB_PATH = Path(
-    os.environ.get(
-        "MAEZ_SUBSCRIPTION_PROXY_DB",
-        "/home/rohit/maez/memory/subscription_proxy.db",
-    )
-)
+def _default_proxy_db_path() -> Path:
+    override = os.environ.get("MAEZ_SUBSCRIPTION_PROXY_DB")
+    if override:
+        return Path(override)
+    try:
+        from core.infra import paths as _paths
+        return _paths.memory_dir() / "subscription_proxy.db"
+    except Exception:
+        return (
+            Path(__file__).resolve().parents[2]
+            / "memory" / "subscription_proxy.db"
+        )
+
+
+DB_PATH = _default_proxy_db_path()
 
 
 def _cap(adapter_name: str, kind: str, default: int) -> int:

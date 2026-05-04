@@ -22,13 +22,19 @@ from typing import Optional
 logger = logging.getLogger("maez")
 
 CAMERA_INDEX = 0
-MODEL_PATH = '/home/rohit/maez/models/blaze_face.tflite'
+try:
+    from core.infra import paths as _paths
+    _MODELS_DIR = _paths.models_dir()
+except Exception:
+    from pathlib import Path as _Path
+    _MODELS_DIR = _Path(__file__).resolve().parent.parent / "models"
+MODEL_PATH = str(_MODELS_DIR / "blaze_face.tflite")
 MIN_CONFIDENCE = 0.6
 FRAMES_TO_CHECK = 5
 PRESENCE_THRESHOLD = 2
 
 # Face recognition
-ENROLLMENT_PATH = '/home/rohit/maez/models/face/rohit_embeddings.pkl'
+ENROLLMENT_PATH = str(_MODELS_DIR / "face" / "rohit_embeddings.pkl")
 RECOGNITION_THRESHOLD = 0.55  # lower = stricter
 
 # Persistent face detector — initialized once, reused forever

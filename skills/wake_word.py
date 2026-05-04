@@ -41,7 +41,13 @@ CHANNELS = 1
 CHUNK_MS = 80
 CHUNK_SAMPLES = int(SAMPLE_RATE * CHUNK_MS / 1000)  # 1280
 
-VERIFIER_PATH = "/home/rohit/maez/models/wakeword/hey_maez_verifier.pkl"
+try:
+    from core.infra import paths as _paths
+    _MODELS_ROOT = _paths.models_dir()
+except Exception:
+    from pathlib import Path as _Path
+    _MODELS_ROOT = _Path(__file__).resolve().parent.parent / "models"
+VERIFIER_PATH = str(_MODELS_ROOT / "wakeword" / "hey_maez_verifier.pkl")
 FIFINE_NODE = 'alsa_input.usb-3142_fifine_Microphone-00.analog-stereo'
 
 ENERGY_THRESHOLD = 0.02       # RMS above this = voice activity
@@ -141,17 +147,18 @@ def _load_verifier():
 
 def _load_whisper():
     from faster_whisper import WhisperModel
+    _whisper_root = str(_MODELS_ROOT / "whisper")
     try:
         model = WhisperModel(
             "small.en", device="cuda", compute_type="float16",
-            download_root="/home/rohit/maez/models/whisper",
+            download_root=_whisper_root,
         )
         logger.info("Whisper small.en loaded (GPU/CUDA)")
     except Exception as e:
         logger.warning("Whisper GPU failed (%s), falling back to CPU", e)
         model = WhisperModel(
             "small.en", device="cpu", compute_type="int8",
-            download_root="/home/rohit/maez/models/whisper",
+            download_root=_whisper_root,
         )
         logger.info("Whisper small.en loaded (CPU fallback)")
     return model

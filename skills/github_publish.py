@@ -19,10 +19,14 @@ from dotenv import load_dotenv
 # current primary brain, not hardcoded "gemma4:26b".
 from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
 
-load_dotenv('/home/rohit/maez/config/.env')
+try:
+    from core.infra import paths as _paths
+    MAEZ_ROOT = str(_paths.home())
+except Exception:
+    from pathlib import Path as _Path
+    MAEZ_ROOT = str(_Path(__file__).resolve().parent.parent)
+load_dotenv(f'{MAEZ_ROOT}/config/.env')
 logger = logging.getLogger("maez")
-
-MAEZ_ROOT = '/home/rohit/maez'
 REPO_NAME = 'maez'
 
 

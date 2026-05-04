@@ -16,11 +16,12 @@ from pathlib import Path
 import requests
 import sys
 
-sys.path.insert(0, str(Path("/home/rohit/maez")))
+_MAEZ_HOME_PATH = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_MAEZ_HOME_PATH))
 from skills.dev_notifier import send_service_card
 
 # --- Config ---
-LOG_PATH = Path("/home/rohit/maez/logs/maez_watchdog.log")
+LOG_PATH = _MAEZ_HOME_PATH / "logs" / "maez_watchdog.log"
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 POLL_INTERVAL = 60  # seconds

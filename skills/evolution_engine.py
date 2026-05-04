@@ -32,7 +32,12 @@ from typing import Optional
 
 logger = logging.getLogger("maez")
 
-MAEZ_ROOT = '/home/rohit/maez'
+try:
+    from core.infra import paths as _paths
+    MAEZ_ROOT = str(_paths.home())
+except Exception:
+    from pathlib import Path as _Path
+    MAEZ_ROOT = str(_Path(__file__).resolve().parent.parent)
 STAGING_DIR = f'{MAEZ_ROOT}/staging'
 BACKUP_DIR = f'{MAEZ_ROOT}/evolution/backups'
 EVOLUTION_LOG = f'{MAEZ_ROOT}/logs/evolution.log'
@@ -315,8 +320,8 @@ def format_morning_report(summary: dict) -> str:
 class EvolutionTracker:
     """Tracks deployed improvements and auto-reverts if quality drops."""
 
-    def __init__(self, db_path: str = '/home/rohit/maez/memory/evolution_track.db'):
-        self.db_path = db_path
+    def __init__(self, db_path: Optional[str] = None):
+        self.db_path = db_path or f'{MAEZ_ROOT}/memory/evolution_track.db'
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         with self._conn() as conn:
             conn.execute("""
@@ -435,7 +440,7 @@ IMMEDIATE_HEALTH_TIMEOUT = 60
 LOCK_TIMEOUT_SECONDS = 900
 V1_ALLOWED_TARGET = "core/cognition_quality.py"
 
-EVOLUTION_DB = '/home/rohit/maez/memory/evolution_track.db'
+EVOLUTION_DB = f'{MAEZ_ROOT}/memory/evolution_track.db'
 
 
 def _rail_conn():

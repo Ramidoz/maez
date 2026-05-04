@@ -34,6 +34,7 @@ import json as _json
 import logging
 import re as _re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from core import llm_client as _llm_client
 
@@ -650,7 +651,7 @@ def _render_tool_manifest() -> str:
         from core.paths import home as _paths_home
         _maez_home = str(_paths_home())
     except Exception:
-        _maez_home = "/home/rohit/maez"
+        _maez_home = str(Path(__file__).resolve().parents[2])
     try:
         import os as _os
         _user_home = _os.path.expanduser("~") or "/home/rohit"
@@ -1107,7 +1108,10 @@ def run_brain_loop(
                     from core.paths import memory_dir as _maez_mem
                     _db = str(_maez_mem() / "audit_log.db")
                 except Exception:
-                    _db = "/home/rohit/maez/memory/audit_log.db"
+                    _db = str(
+                        Path(__file__).resolve().parents[2]
+                        / "memory" / "audit_log.db"
+                    )
                 _since = _rtime.time() - 600  # last 10 minutes
                 _rc = _sq3.connect(_db, timeout=10.0)
                 _rc.row_factory = _sq3.Row

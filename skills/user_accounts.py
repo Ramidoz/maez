@@ -17,9 +17,15 @@ from typing import Optional
 
 logger = logging.getLogger("maez")
 
-DB_PATH = '/home/rohit/maez/memory/users.db'
+try:
+    from core.infra import paths as _paths
+    _MAEZ_HOME_PATH = _paths.home()
+except Exception:
+    from pathlib import Path as _Path
+    _MAEZ_HOME_PATH = _Path(__file__).resolve().parent.parent
+DB_PATH = str(_MAEZ_HOME_PATH / "memory" / "users.db")
 PRIVATE_OWNER_PROFILE_ID = "private_owner"
-ENV_PATH = '/home/rohit/maez/config/.env'
+ENV_PATH = str(_MAEZ_HOME_PATH / "config" / ".env")
 
 try:
     import bcrypt
@@ -328,7 +334,7 @@ class UserAccounts:
             import chromadb
             from chromadb.config import Settings
             client = chromadb.PersistentClient(
-                '/home/rohit/maez/memory/db/public_users',
+                str(_MAEZ_HOME_PATH / "memory" / "db" / "public_users"),
                 settings=Settings(anonymized_telemetry=False),
             )
             profiles = client.get_or_create_collection("user_profiles")

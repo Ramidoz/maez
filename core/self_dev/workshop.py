@@ -50,7 +50,10 @@ def _default_workshop_db() -> str:
         from core.paths import memory_dir as _memory_dir
         return str(_memory_dir() / "workshop.db")
     except Exception:
-        return "/home/rohit/maez/memory/workshop.db"
+        return str(
+            Path(__file__).resolve().parents[2]
+            / "memory" / "workshop.db"
+        )
 
 
 DB_PATH = Path(_default_workshop_db())
@@ -72,9 +75,18 @@ DEFAULT_CONTEXT_TURNS = int(
 # Where @-mentioned paths are resolved from. Anything trying to escape
 # this root (via .. or an absolute path outside it) is refused — we
 # don't want a user message with "@/etc/shadow" to leak anything.
-_REPO_ROOT = Path(os.environ.get(
-    "MAEZ_WORKSHOP_REPO_ROOT", "/home/rohit/maez",
-))
+def _default_workshop_repo_root() -> str:
+    override = os.environ.get("MAEZ_WORKSHOP_REPO_ROOT")
+    if override:
+        return override
+    try:
+        from core.paths import home as _home
+        return str(_home())
+    except Exception:
+        return str(Path(__file__).resolve().parents[2])
+
+
+_REPO_ROOT = Path(_default_workshop_repo_root())
 
 # Maximum size of a single @-expanded file. Larger files are
 # truncated with a visible note rather than blowing the context
@@ -547,7 +559,10 @@ def _default_workshop_backup_dir() -> str:
         from core.paths import home as _home
         return str(_home() / "workshop" / "backups")
     except Exception:
-        return "/home/rohit/maez/workshop/backups"
+        return str(
+            Path(__file__).resolve().parents[2]
+            / "workshop" / "backups"
+        )
 
 
 _APPLY_BACKUP_DIR = Path(_default_workshop_backup_dir())

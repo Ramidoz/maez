@@ -30,7 +30,7 @@ try:
 
     load_dotenv(_env_file())
 except Exception:
-    load_dotenv(Path("/home/rohit/maez/config/.env"))
+    load_dotenv(Path(__file__).resolve().parent.parent / "config" / ".env")
 
 import asyncio
 
@@ -43,7 +43,7 @@ try:
 
     sys.path.insert(0, str(_maez_home()))
 except Exception:
-    sys.path.insert(0, str(Path("/home/rohit/maez")))
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from memory.memory_manager import MemoryManager
 # 5x.F.A — cycle-scoped recall-context bag helpers. Hoisted to
 # module-top because (a) the import is cheap and Chroma-free per
@@ -101,7 +101,7 @@ try:
 
     BASE_DIR = _paths_home()
 except Exception:
-    BASE_DIR = Path("/home/rohit/maez")
+    BASE_DIR = Path(__file__).resolve().parent.parent
 SOUL_PATH = BASE_DIR / "config" / "soul.md"
 LOG_PATH = BASE_DIR / "logs" / "maez.log"
 MEMORY_DIR = BASE_DIR / "memory"
@@ -331,7 +331,7 @@ class MaezDaemon:
 
             _lived_dir = _mem_dir()
         except Exception:
-            _lived_dir = Path("/home/rohit/maez/memory")
+            _lived_dir = Path(__file__).resolve().parent.parent / "memory"
         self.lived_episodes = EpisodeStore(str(_lived_dir / "lived_episodes.db"))
         self.lived_graph = RelationshipGraph(str(_lived_dir / "lived_graph.db"))
         # Slice 6 — Canary tokens. Initialise the process-active
@@ -1986,7 +1986,7 @@ class MaezDaemon:
             from datetime import datetime as _dt
 
             client = chromadb.PersistentClient(
-                path="/home/rohit/maez/memory/db/public_users",
+                path=str(BASE_DIR / "memory" / "db" / "public_users"),
                 settings=Settings(anonymized_telemetry=False),
             )
             col = client.get_or_create_collection("user_conversations")
