@@ -16,8 +16,13 @@ Policy:
     than the generation prompt (creation).
   - Few-shot examples pulled from fabrication_memory.db at call
     site and passed in.
-  - Fails open on any error: LLM unavailable, JSON parse failure,
-    timeout — all return []. Judge must never block a response.
+  - **R1 contract (2026-05-04 symphony audit):** distinguish
+    `clean audit != unavailable audit`. Transport / parse failures
+    raise JudgeUnavailable with an error_class field; the caller
+    decides whether to skip-with-mode-tag or rewrite. Returning [] is
+    reserved for "judge ran successfully and found no ungrounded
+    claims." Earlier policy (swallow all errors as []) collapsed those
+    two states and produced a 7-day silent honesty-rail outage.
   - Stateless. No side effects. No imports of self_claim_audit's
     regex modules.
 """
@@ -51,7 +56,58 @@ from core.model_config import (
     JUDGE_MODEL as _JUDGE_MODEL,
     JUDGE_CHAT_KWARGS as _JUDGE_CHAT_KWARGS,
 )
-_JUDGE_TIMEOUT_S = float(os.environ.get("MAEZ_JUDGE_TIMEOUT_S", "30"))
+# R1 (2026-05-04 symphony audit, S2 finding F1): the previous 30s
+# default produced audit_log.latency_ms=21692 on the wmctrl incident
+# — the daemon waited on retries of an unreachable judge while the
+# owner watched. Fail-loud only matters if the failure is fast.
+_JUDGE_TIMEOUT_S = float(os.environ.get("MAEZ_JUDGE_TIMEOUT_S", "5"))
+
+
+class JudgeUnavailable(Exception):
+    """Raised when the grounding judge cannot run (transport failure,
+    timeout, malformed response, etc.). Distinguished from "judge ran
+    clean and found no ungrounded claims" (which still returns []).
+
+    The `error_class` attribute records the failure subtype for
+    diagnosis without changing the public mode tag callers see:
+        refused      — connection refused / DNS / unreachable
+        timeout      — read or connect timeout exceeded
+        http_5xx     — judge endpoint returned 5xx
+        bad_response — non-JSON / wrong-shape response body
+
+    R1 contract: callers (self_claim_audit) catch this and emit
+    mode='judge_unavailable', not mode='noop'.
+    """
+
+    def __init__(self, message: str, *, error_class: str):
+        super().__init__(message)
+        self.error_class = error_class
+
+
+def _classify_exception(e: BaseException) -> str:
+    """Map a transport/parse exception to one of the JudgeUnavailable
+    error_class strings. Lives at module scope so tests can pin the
+    classifier shape directly."""
+    import socket
+    if isinstance(e, (ConnectionRefusedError, ConnectionError)):
+        return "refused"
+    if isinstance(e, (TimeoutError, socket.timeout)):
+        return "timeout"
+    if isinstance(e, urllib.error.HTTPError):
+        if 500 <= getattr(e, "code", 0) < 600:
+            return "http_5xx"
+        return "bad_response"
+    if isinstance(e, urllib.error.URLError):
+        # Wraps connect errors that aren't ConnectionRefusedError on
+        # all platforms (e.g. DNS failure raises URLError(reason=
+        # gaierror)). Treat as 'refused'-class for caller policy.
+        reason = getattr(e, "reason", None)
+        if isinstance(reason, (TimeoutError, socket.timeout)):
+            return "timeout"
+        return "refused"
+    if isinstance(e, (json.JSONDecodeError, KeyError, IndexError, ValueError)):
+        return "bad_response"
+    return "bad_response"
 
 
 def _call_dedicated_judge(prompt: str) -> str:
@@ -219,29 +275,28 @@ def _build_judge_prompt(
 
 
 def _parse_judge_output(output: Any) -> list[dict]:
-    """Extract the `ungrounded` list from judge output. Returns [] on
-    any failure (fail-open by module policy).
+    """Extract the `ungrounded` list from judge output.
+
+    R1 contract (2026-05-04): the empty list is reserved for the
+    case where the judge ran AND returned a parseable response with
+    `ungrounded=[]`. Any malformed / non-JSON / wrong-shape response
+    raises ValueError so judge() can convert it to
+    JudgeUnavailable(error_class='bad_response'). Earlier behavior
+    swallowed every parse failure as `[]` and produced silent honesty-
+    rail outage.
 
     Extraction strategy (self-dev review on 418e6a8, concern #1
     corrected the earlier greedy-regex approach):
-      1. Try json.loads on the stripped output as-is. Covers models
-         that emit clean JSON.
+      1. Try json.loads on the stripped output as-is.
       2. If that fails, walk every '{' position and try to decode
          using json.JSONDecoder's raw_decode, which greedily parses
-         the longest valid JSON object starting at that index. First
-         successful decode wins.
-
-    This tolerates preambles (`<think>...</think>` blocks, quoted
-    examples with braces, reasoning prose) WITHOUT being fooled by
-    a stray '{' character into spanning to the wrong terminator.
-    If parsing still fails after all '{' positions, logs at WARNING
-    so parse-failure rate is observable in production (was silent
-    under the old implementation)."""
+         the longest valid JSON object starting at that index.
+    """
     if not output or not isinstance(output, str):
-        return []
+        raise ValueError("judge output empty or non-string")
     stripped = output.strip()
     if not stripped:
-        return []
+        raise ValueError("judge output blank after strip")
 
     obj = None
     # Strategy 1: parse the whole string as-is
@@ -268,12 +323,18 @@ def _parse_judge_output(output: Any) -> list[dict]:
             "grounding_judge: could not parse judge output (head=%r)",
             stripped[:200],
         )
-        return []
+        raise ValueError(
+            f"could not extract JSON from judge output (head={stripped[:80]!r})"
+        )
     if not isinstance(obj, dict):
-        return []
+        raise ValueError(
+            f"judge output JSON was not an object (got {type(obj).__name__})"
+        )
     ungrounded = obj.get("ungrounded")
     if not isinstance(ungrounded, list):
-        return []
+        raise ValueError(
+            "judge output JSON missing 'ungrounded' list"
+        )
     return [u for u in ungrounded if isinstance(u, dict) and u.get("text")]
 
 
@@ -286,30 +347,39 @@ def judge(
     model: str = _MODEL_DEFAULT,
 ) -> list[dict]:
     """Run the grounding judge. Returns a list of flag dicts
-    {text, reason, rewrite}. Never raises — all failures return [].
+    {text, reason, rewrite}.
+
+    R1 contract (2026-05-04): `clean audit != unavailable audit`.
+        - Empty text → returns [] (clean, nothing to audit).
+        - Healthy judge with no findings → returns [] (clean).
+        - Healthy judge with findings → returns list of flag dicts.
+        - Transport / parse / timeout failure → raises JudgeUnavailable
+          with `error_class` set. Caller decides whether to skip
+          (mode='judge_unavailable') or fail-closed.
+
+    Earlier behavior (swallow-all-as-empty-list) collapsed clean and
+    unavailable into the same return shape and produced a 7-day silent
+    honesty-rail outage when the dedicated judge service was retired.
 
     Note: when _JUDGE_BASE_URL is configured (dedicated judge
     endpoint, the default since 2026-04-21), the `model` parameter
     is ignored — the dedicated llama-server was started with a
     specific model alias and routes everything there. `model`
     takes effect only in the fallback path where no dedicated
-    endpoint is set. self-dev review on 418e6a8 (concern #2)
-    flagged this silent drop; kept the parameter for the fallback
-    path but documented the behavior.
+    endpoint is set.
     """
     if not text or not text.strip():
         return []
+    # _build_judge_prompt failures are caller-facing bugs (never
+    # transient), so we let them surface as their natural exception
+    # type rather than masking as JudgeUnavailable.
+    prompt = _build_judge_prompt(
+        text=text,
+        signals_present=signals_present or [],
+        signals_absent=signals_absent or [],
+        few_shots=few_shots or [],
+    )
     try:
-        # self-dev review on 418e6a8 (concern #3): _build_judge_prompt
-        # was outside the try block; any future exception in it (large
-        # few_shots list, unusual text encoding) would propagate and
-        # violate the module's "never raises / fails open" invariant.
-        prompt = _build_judge_prompt(
-            text=text,
-            signals_present=signals_present or [],
-            signals_absent=signals_absent or [],
-            few_shots=few_shots or [],
-        )
         if _JUDGE_BASE_URL:
             # Dedicated judge llama-server — fast path, small model.
             output = _call_dedicated_judge(prompt)
@@ -328,7 +398,26 @@ def judge(
                 options={"temperature": _TEMP, "num_predict": _MAX_TOKENS},
             )
             output = getattr(resp.message, "content", "") or ""
+    except JudgeUnavailable:
+        # Already classified by an inner caller; let it propagate.
+        raise
     except Exception as e:
-        logger.debug("judge LLM call failed: %s", e)
-        return []
-    return _parse_judge_output(output)
+        ec = _classify_exception(e)
+        logger.debug(
+            "judge LLM transport failure (%s): %s", ec, e,
+        )
+        raise JudgeUnavailable(str(e), error_class=ec) from e
+
+    # Parse phase: if the judge responded but its body is non-JSON or
+    # wrong-shape, that is an "unavailable" outcome — the audit cannot
+    # confidently classify, and the caller must NOT collapse this into
+    # 'clean'. Earlier behavior swallowed parse errors silently.
+    try:
+        return _parse_judge_output(output)
+    except Exception as e:
+        logger.debug(
+            "judge response parse failed (bad_response): %s", e,
+        )
+        raise JudgeUnavailable(
+            f"parse failed: {e}", error_class="bad_response",
+        ) from e

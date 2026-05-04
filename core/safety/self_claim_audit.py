@@ -39,6 +39,17 @@ from typing import Optional
 logger = logging.getLogger("maez.self_claim_audit")
 _cog_logger = logging.getLogger("maez.cognition")
 
+# R1 (2026-05-04 symphony audit, S2 finding F1): when grounding_judge
+# raises JudgeUnavailable, log at WARNING (not DEBUG) with cooldown so
+# operators see the degradation without the 1821-lines/7d spam the
+# silent-DEBUG approach produced. Cooldown also gates the
+# capability_degraded consequence_memory write.
+_JUDGE_UNAVAILABLE_COOLDOWN_S = float(os.environ.get(
+    "MAEZ_JUDGE_UNAVAILABLE_COOLDOWN_S", "900",  # 15 minutes
+))
+_judge_unavailable_last_warning_ts: float = 0.0
+_judge_unavailable_recent_count: int = 0
+
 # Ensure cognition.log's FileHandler is attached. Daemon gets this for free
 # via core.cognition_quality at startup; CLI/web surfaces don't.
 try:
@@ -220,6 +231,71 @@ def _count_sentences(text: str) -> int:
 
 # ── judge → Flag list ──────────────────────────────────────────────────
 
+def _record_judge_unavailable(*, error_class: str, detail: str) -> None:
+    """R1 (2026-05-04 symphony audit): cooldown'd surface for
+    judge-unavailable events.
+
+    Inside the cooldown window, only the in-process counter is
+    incremented; outside it, we emit a WARNING log line and write a
+    capability_degraded row to consequence_memory so Maez itself can
+    notice "my grounding judge is down" via its own learning loop
+    instead of needing an operator to scrape journalctl.
+
+    Cooldown is 15min by default — long enough to avoid the
+    1821-lines/7d DEBUG spam the previous fail-open produced, short
+    enough that a real outage produces ~96 surface events/day.
+    """
+    global _judge_unavailable_last_warning_ts, _judge_unavailable_recent_count
+    import time as _time
+    now = _time.time()
+    _judge_unavailable_recent_count += 1
+
+    in_cooldown = (
+        _judge_unavailable_last_warning_ts > 0.0
+        and (now - _judge_unavailable_last_warning_ts)
+            < _JUDGE_UNAVAILABLE_COOLDOWN_S
+    )
+    if in_cooldown:
+        # Counter still increments; log/consequence-memory don't
+        # fire again until the cooldown elapses.
+        return
+
+    # First fire after cooldown elapsed (or first fire ever).
+    _judge_unavailable_last_warning_ts = now
+    suppressed = max(_judge_unavailable_recent_count - 1, 0)
+    _judge_unavailable_recent_count = 0
+    suppressed_note = (
+        f" (+ {suppressed} suppressed during cooldown)"
+        if suppressed else ""
+    )
+    logger.warning(
+        "self_claim_audit: grounding judge unavailable "
+        "(error_class=%s) — audit disabled until judge recovers%s. "
+        "detail: %s",
+        error_class, suppressed_note, detail[:200],
+    )
+
+    # consequence_memory write — best-effort, must not raise.
+    try:
+        from core import consequence_memory as _cm
+        _cm.note_tool_failure(
+            request_id=f"judge_unavailable_{int(now)}",
+            tool="grounding_judge",
+            surface="self_claim_audit",
+            outcome=(
+                f"capability_degraded: judge unavailable "
+                f"(error_class={error_class}); "
+                f"audit ran in fail-open mode this turn"
+            ),
+            class_label="capability_degraded",
+        )
+    except Exception:
+        # Some installations expose note_tool_failure under a
+        # different name; degrade silently rather than break the
+        # audit path. The WARNING above is the load-bearing surface.
+        pass
+
+
 def _find_flags(
     text: str,
     signals_present: Optional[list] = None,
@@ -237,7 +313,10 @@ def _find_flags(
         from core import grounding_judge as _judge_mod
         from core import fabrication_memory as _fab_mem
     except Exception as e:
-        logger.debug("judge import failed (no flags): %s", e)
+        logger.warning(
+            "self_claim_audit: judge import failed — "
+            "audit disabled this turn (%s)", e,
+        )
         return [], False
 
     sp = list(signals_present or [])
@@ -249,8 +328,25 @@ def _find_flags(
             signals_absent=sa,
             few_shots=_fab_mem.few_shots_for(signals_absent=sa, k=3),
         )
+    except _judge_mod.JudgeUnavailable as e:
+        # R1 (2026-05-04): distinguish "judge ran clean" from "judge
+        # could not run". WARNING + cooldown so operators see the
+        # degradation without the 1821-lines/7d DEBUG spam, plus a
+        # cooldown'd capability_degraded consequence_memory row so
+        # Maez itself can surface "my grounding judge is down."
+        _record_judge_unavailable(
+            error_class=getattr(e, "error_class", "unknown"),
+            detail=str(e),
+        )
+        return [], False
     except Exception as e:
-        logger.debug("judge call failed (no flags): %s", e)
+        # Any other shape — defensive. Log as WARNING (not DEBUG) so
+        # the failure is observable, but keep the same fail-open
+        # return contract as JudgeUnavailable above.
+        _record_judge_unavailable(
+            error_class="unexpected",
+            detail=f"{type(e).__name__}: {e}",
+        )
         return [], False
 
     flags: list[Flag] = []

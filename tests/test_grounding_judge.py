@@ -72,13 +72,23 @@ class JudgeOutputParsing(unittest.TestCase):
         flags = _parse_judge_output('{"ungrounded": []}')
         self.assertEqual(flags, [])
 
-    def test_fails_open_on_parse_error(self):
-        """Unparseable LLM output returns [] — no flags, not a crash.
-        Judge must never block a response."""
+    def test_raises_on_parse_error(self):
+        """Unparseable LLM output now RAISES (was: returns []).
+
+        R1 (2026-05-04 symphony audit, S2 finding F1): the empty list
+        is reserved for "judge ran cleanly with no findings." Parse
+        failure must surface as ValueError so judge() can convert it
+        to JudgeUnavailable(error_class='bad_response'). Earlier
+        behavior swallowed parse failures as `[]` and produced a
+        7-day silent honesty-rail outage.
+        """
         from core.grounding_judge import _parse_judge_output
-        self.assertEqual(_parse_judge_output("not json"), [])
-        self.assertEqual(_parse_judge_output(""), [])
-        self.assertEqual(_parse_judge_output(None), [])
+        with self.assertRaises(ValueError):
+            _parse_judge_output("not json")
+        with self.assertRaises(ValueError):
+            _parse_judge_output("")
+        with self.assertRaises(ValueError):
+            _parse_judge_output(None)
 
     def test_extracts_json_from_preamble(self):
         """Local LLMs often wrap JSON in prose. Parser must find the
@@ -188,19 +198,26 @@ class JudgeCallsLLM(unittest.TestCase):
             )
             self.assertEqual(len(flags), 1)
 
-    def test_judge_returns_empty_on_llm_failure(self):
-        """Endpoint call raises → judge returns [] (fail-open)."""
+    def test_judge_raises_on_llm_failure(self):
+        """Endpoint call raises → judge raises JudgeUnavailable
+        (was: returns [], collapsing 'unavailable' into 'clean').
+
+        R1 (2026-05-04 symphony audit, S2 finding F1): the load-
+        bearing invariant is `clean audit != unavailable audit`.
+        Earlier behavior collapsed both into [] and produced a
+        silent 7-day honesty-rail outage when the dedicated judge
+        was retired."""
         from core import grounding_judge
 
         with patch("core.grounding_judge._call_dedicated_judge",
                    side_effect=RuntimeError("judge-endpoint down")):
-            flags = grounding_judge.judge(
-                text="anything",
-                signals_present=[],
-                signals_absent=[],
-                few_shots=[],
-            )
-            self.assertEqual(flags, [])
+            with self.assertRaises(grounding_judge.JudgeUnavailable):
+                grounding_judge.judge(
+                    text="anything",
+                    signals_present=[],
+                    signals_absent=[],
+                    few_shots=[],
+                )
 
 
 if __name__ == "__main__":
