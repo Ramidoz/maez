@@ -386,74 +386,84 @@ def apply_section_replace(proposal: Proposal) -> tuple[bool, str]:
 
     Returns ``(ok, message)``. On any guard trip, ok is False and the
     soul.md file is UNCHANGED.
+
+    T1.7 (2026-05-04 audit): the entire RMW sequence runs under
+    ``soul_loader._lock`` so it can't race with
+    ``soul_loader.append_to_local`` (which acquires the same
+    lock). Without this, a dream-cycle append landing between our
+    ``load()`` (step 1) and our ``os.replace()`` (step 6) would
+    be silently clobbered — one of two writes lost.
     """
-    try:
-        doc = load()
-    except Exception as e:
-        return False, f"reload failed: {e!r}"
+    # T1.7: serialize against soul_loader's other writers.
+    from core.evolution import soul_loader as _sl
+    with _sl._lock:
+        try:
+            doc = load()
+        except Exception as e:
+            return False, f"reload failed: {e!r}"
 
-    target = doc.find_section(proposal.target_name)
-    if target is None:
-        return False, f"target section not found at apply time: {proposal.target_name!r}"
+        target = doc.find_section(proposal.target_name)
+        if target is None:
+            return False, f"target section not found at apply time: {proposal.target_name!r}"
 
-    if target.body != proposal.old_body:
-        return False, (
-            f"stale proposal — current body of {proposal.target_name!r} has "
-            f"changed since the proposal was generated. refusing to write."
-        )
-
-    # Build the new full text by swapping this section's body
-    new_sections = []
-    for s in doc.sections:
-        if s is target:
-            new_sections.append(
-                Section(
-                    name=s.name,
-                    header_line=s.header_line,
-                    body=proposal.new_body,
-                    start_line=s.start_line,
-                    end_line=s.end_line,
-                )
-            )
-        else:
-            new_sections.append(s)
-    new_doc = SoulDocument(
-        preamble=doc.preamble,
-        sections=new_sections,
-        source_path=doc.source_path,
-    )
-    new_text = new_doc.to_text()
-
-    # Verify required phrases still present in the full serialized file
-    for required in PROTECTED_PHRASES_REQUIRED:
-        if required not in new_text:
+        if target.body != proposal.old_body:
             return False, (
-                f"protected phrase {required!r} is missing from the "
-                f"proposed full soul.md — refusing to write."
+                f"stale proposal — current body of {proposal.target_name!r} has "
+                f"changed since the proposal was generated. refusing to write."
             )
 
-    # Backup + atomic write
-    try:
-        bak = _backup_path()
-        shutil.copy2(SOUL_PATH, bak)
-    except Exception as e:
-        return False, f"backup failed: {e!r} — soul.md NOT modified"
-
-    try:
-        tmp = SOUL_PATH.with_suffix(".md.tmp")
-        tmp.write_text(new_text)
-        os.replace(tmp, SOUL_PATH)
-    except Exception as e:
-        return False, (
-            f"atomic write failed: {e!r} — backup is at {bak}. "
-            f"soul.md is in an unknown state; manual inspection advised."
+        # Build the new full text by swapping this section's body
+        new_sections = []
+        for s in doc.sections:
+            if s is target:
+                new_sections.append(
+                    Section(
+                        name=s.name,
+                        header_line=s.header_line,
+                        body=proposal.new_body,
+                        start_line=s.start_line,
+                        end_line=s.end_line,
+                    )
+                )
+            else:
+                new_sections.append(s)
+        new_doc = SoulDocument(
+            preamble=doc.preamble,
+            sections=new_sections,
+            source_path=doc.source_path,
         )
+        new_text = new_doc.to_text()
 
-    logger.info(
-        "soul_editor: section %r replaced (backup=%s, %d → %d body chars)",
-        proposal.target_name, bak.name, len(proposal.old_body), len(proposal.new_body),
-    )
-    return True, (
-        f"section {proposal.target_name!r} replaced. "
-        f"backup at {bak.name}. daemon soul watcher will hot-reload within 10s."
-    )
+        # Verify required phrases still present in the full serialized file
+        for required in PROTECTED_PHRASES_REQUIRED:
+            if required not in new_text:
+                return False, (
+                    f"protected phrase {required!r} is missing from the "
+                    f"proposed full soul.md — refusing to write."
+                )
+
+        # Backup + atomic write
+        try:
+            bak = _backup_path()
+            shutil.copy2(SOUL_PATH, bak)
+        except Exception as e:
+            return False, f"backup failed: {e!r} — soul.md NOT modified"
+
+        try:
+            tmp = SOUL_PATH.with_suffix(".md.tmp")
+            tmp.write_text(new_text)
+            os.replace(tmp, SOUL_PATH)
+        except Exception as e:
+            return False, (
+                f"atomic write failed: {e!r} — backup is at {bak}. "
+                f"soul.md is in an unknown state; manual inspection advised."
+            )
+
+        logger.info(
+            "soul_editor: section %r replaced (backup=%s, %d → %d body chars)",
+            proposal.target_name, bak.name, len(proposal.old_body), len(proposal.new_body),
+        )
+        return True, (
+            f"section {proposal.target_name!r} replaced. "
+            f"backup at {bak.name}. daemon soul watcher will hot-reload within 10s."
+        )

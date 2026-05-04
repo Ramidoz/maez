@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import threading
 import re as _re
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -299,7 +300,16 @@ class ConversationController:
         # later than the Telegram thread).
         self._pipeline_getter = pipeline_getter
 
-        # Ephemeral per-chat state, keyed by (channel, chat_id)
+        # Ephemeral per-chat state, keyed by (channel, chat_id).
+        #
+        # T1.2 (2026-05-04 audit) — these mutable dicts are read /
+        # written by sync methods invoked from an async event loop
+        # plus a separate Telegram polling thread. RLock guards
+        # every access path so concurrent set/pop/get can't corrupt
+        # the dict state. Reentrant so methods that call other
+        # locked methods (e.g. consume_offer_approval -> clear_offer)
+        # don't self-deadlock.
+        self._offers_lock = threading.RLock()
         self._offers: dict[tuple[str, str], dict] = {}
         self._last_probes: dict[tuple[str, str], dict] = {}
         self._last_user_text: dict[tuple[str, str], str] = {}
@@ -650,19 +660,21 @@ class ConversationController:
     def get_offer(self, channel: str, chat_id: str) -> Optional[dict]:
         """Return live offer dict or None. Silently clears on TTL expiry."""
         import time as _time
-        offer = self._offers.get((channel, chat_id))
-        if offer is None:
-            return None
-        set_at = float(offer.get("set_at", 0))
-        if (_time.time() - set_at) > self._OFFER_TTL_SECONDS:
-            self._offers.pop((channel, chat_id), None)
-            return None
-        return offer
+        with self._offers_lock:
+            offer = self._offers.get((channel, chat_id))
+            if offer is None:
+                return None
+            set_at = float(offer.get("set_at", 0))
+            if (_time.time() - set_at) > self._OFFER_TTL_SECONDS:
+                self._offers.pop((channel, chat_id), None)
+                return None
+            return offer
 
     def set_offer(self, channel: str, chat_id: str, offer: dict) -> None:
         """Store a pending offer for (channel, chat_id). Overwrites any
         existing offer — callers are expected to check first if they care."""
-        self._offers[(channel, chat_id)] = offer
+        with self._offers_lock:
+            self._offers[(channel, chat_id)] = offer
 
     def clear_offer(
         self,
@@ -672,7 +684,8 @@ class ConversationController:
         reason: str = "",
     ) -> Optional[dict]:
         """Remove and return any stored offer. reason goes to debug log."""
-        offer = self._offers.pop((channel, chat_id), None)
+        with self._offers_lock:
+            offer = self._offers.pop((channel, chat_id), None)
         if offer is not None and reason:
             logger.debug(
                 "offer binding: cleared offer for (%s,%s) reason=%s",
@@ -819,7 +832,8 @@ class ConversationController:
             self.clear_offer(channel, chat_id, reason="empty_query")
             return "none", None
         # Pop and return — caller owns the fire
-        self._offers.pop((channel, chat_id), None)
+        with self._offers_lock:
+            self._offers.pop((channel, chat_id), None)
         return "fire", offer
 
     # ════════════════════════════════════════════════════════ #
