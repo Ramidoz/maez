@@ -176,8 +176,16 @@ def _recent_activity() -> dict[str, str]:
 
 def describe() -> dict[str, Any]:
     """Return a structured snapshot of what Maez has on this system.
-    Regenerated each call — reflects current state, not import-time."""
-    return {
+    Regenerated each call — reflects current state, not import-time.
+
+    R2 (2026-05-04 symphony audit): now also includes a `body`
+    sub-dict from core.infra.body_capabilities. That sub-dict carries
+    runtime-verifiable facts (binaries on PATH, env vars,
+    localhost-service reach, X-session reach, sudo path) that are
+    NOT capturable from the systemd-level introspection above and
+    were the root of the wmctrl-class self-knowledge gap.
+    """
+    snapshot: dict[str, Any] = {
         "modules": _list_modules(),
         "services": _list_services(),
         "schedules": dict(_STATIC_SCHEDULES),
@@ -186,6 +194,17 @@ def describe() -> dict[str, Any]:
         "memory_counts": _memory_counts(),
         "home": str(_MAEZ_HOME),
     }
+    # Body-truth probe — composed in via TTL-cached helper so per-call
+    # cost is dominated by the cheap probes (subprocess only on cache
+    # miss). Defensive import: if the body_capabilities module is
+    # unimportable for any reason, the registry still returns a
+    # complete dict — body block just shows as unavailable.
+    try:
+        from core.infra import body_capabilities as _bc
+        snapshot["body"] = _bc.body_capabilities()
+    except Exception as e:
+        snapshot["body"] = {"_unavailable": f"body_capabilities probe failed: {e}"}
+    return snapshot
 
 
 def prompt_snippet() -> str:
@@ -220,6 +239,51 @@ def prompt_snippet() -> str:
         if mc else ""
     )
 
+    # Body-truth block — composed from the snapshot's `body` sub-dict
+    # if present. Keeps the block compact: only enumerates UNAVAILABLE
+    # capabilities + the desktop-session reach status, because those are
+    # the load-bearing facts for the wmctrl class. Listing every
+    # available binary would inflate the snippet without changing
+    # behaviour.
+    body_line = ""
+    body = d.get("body") or {}
+    if body and "_unavailable" not in body:
+        binaries_d = body.get("binaries") or {}
+        absent_binaries = sorted(
+            name for name, present in binaries_d.items() if not present
+        )
+        services_reach = body.get("services") or {}
+        absent_services = sorted(
+            key for key, ok in services_reach.items() if not ok
+        )
+        desktop_reachable = bool(body.get("desktop_session_reachable", False))
+        sudo_ok = bool(body.get("sudo_passwordless", False))
+        body_lines = ["Body-truth (runtime-verified, NOT training-time):"]
+        if absent_binaries:
+            body_lines.append(
+                f"  Binaries NOT installed on this body: "
+                f"{', '.join(absent_binaries)}. "
+                "Do NOT suggest commands that require these."
+            )
+        if absent_services:
+            body_lines.append(
+                f"  Localhost services NOT reachable: "
+                f"{', '.join(absent_services)}. "
+                "Do NOT claim capabilities backed by these."
+            )
+        body_lines.append(
+            f"  Desktop session reachable: "
+            f"{'yes' if desktop_reachable else 'NO'} "
+            f"(env DISPLAY={body.get('env', {}).get('DISPLAY') or '(unset)'}). "
+            "If NO, do NOT offer X-tools (xdotool, wmctrl) even if installed."
+        )
+        body_lines.append(
+            f"  Sudo without password: "
+            f"{'available' if sudo_ok else 'NOT available'}. "
+            "Match install/system commands to this state."
+        )
+        body_line = "\n".join(body_lines) + "\n"
+
     base = (
         "# CAPABILITIES (source of truth for self-description)\n"
         f"Modules on disk: {modules}.\n"
@@ -232,13 +296,16 @@ def prompt_snippet() -> str:
         f"Last evolution db write: {ev}. Last dream db write: {dr}. "
         f"Last cognition log write: {cog}.\n"
         + (f"{mem_line}\n" if mem_line else "")
+        + (body_line if body_line else "")
         + "INSTRUCTION: If the user asks about a module, feature, schedule, "
         "or service NOT listed above, respond with honest uncertainty "
         "(\"I don't have that recorded\" / \"I can't verify that\"). "
         "Do NOT invent names, paths, version numbers, or postcondition "
         "details (memory counts, percentages, 'I ran X and it did Y') "
         "that aren't grounded in this list or in a real tool output "
-        "from this turn.\n"
+        "from this turn. If a tool/binary appears in 'Body-truth' "
+        "above as NOT installed or NOT reachable, refuse to suggest "
+        "or run it.\n"
     )
 
     # Append immune-memory block if there's anything to report. Kept
