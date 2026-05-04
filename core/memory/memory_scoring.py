@@ -47,12 +47,23 @@ import logging
 import math
 import re
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("maez.memory_scoring")
+
+# T2.D (2026-05-04 15-agent audit): SQLite connections opened with
+# ``check_same_thread=False`` (intentional — recall is logged from
+# any thread that touches the memory subsystem). Add an explicit
+# module-scope lock to serialize the connect-execute-commit
+# sequences across threads. Mirrors T1.2 / T1.7 (commit ce3e308)
+# and the sibling lock in ``baseline_observations._write_lock``.
+# Independent from ``baseline_observations._write_lock`` —
+# unrelated write paths must not contend.
+_write_lock: threading.Lock = threading.Lock()
 
 from core import paths as _paths  # noqa: E402
 
@@ -198,64 +209,68 @@ def record_recall(
     corrupt anything."""
     if not memory_id:
         return
-    db = _ensure_db()
-    if db is None:
-        return
-    try:
-        ts = now if now is not None else time.time()
-        day = time.strftime("%Y-%m-%d", time.gmtime(ts))
-        qhash = _hash_query(query) if query else ""
-
-        cur = db.execute(
-            "SELECT recall_count, max_relevance, query_hashes, recall_days, "
-            "concept_tags, last_recalled_at, consolidated FROM recall_stats "
-            "WHERE memory_id = ?",
-            (memory_id,),
-        )
-        row = cur.fetchone()
-
-        if row is None:
-            hashes = qhash
-            days = day
-            tags_str = ",".join(concept_tags or [])
-            db.execute(
-                "INSERT INTO recall_stats (memory_id, recall_count, max_relevance, "
-                "query_hashes, recall_days, concept_tags, last_recalled_at, consolidated) "
-                "VALUES (?, 1, ?, ?, ?, ?, ?, 0)",
-                (memory_id, float(relevance), hashes, days, tags_str, ts),
-            )
-        else:
-            rc, mr, hashes_s, days_s, tags_s, _last, _cons = row
-            # Update bounded lists
-            hashes_list = [h for h in hashes_s.split(",") if h]
-            if qhash and qhash not in hashes_list:
-                hashes_list.append(qhash)
-                if len(hashes_list) > _MAX_QUERY_HASHES:
-                    hashes_list = hashes_list[-_MAX_QUERY_HASHES:]
-            days_list = [d for d in days_s.split(",") if d]
-            if day not in days_list:
-                days_list.append(day)
-                if len(days_list) > _MAX_RECALL_DAYS:
-                    days_list = days_list[-_MAX_RECALL_DAYS:]
-            new_mr = max(float(mr), float(relevance))
-            new_tags = tags_s
-            if concept_tags and not new_tags:
-                new_tags = ",".join(concept_tags)
-            db.execute(
-                "UPDATE recall_stats SET recall_count = ?, max_relevance = ?, "
-                "query_hashes = ?, recall_days = ?, concept_tags = ?, "
-                "last_recalled_at = ? WHERE memory_id = ?",
-                (rc + 1, new_mr, ",".join(hashes_list), ",".join(days_list),
-                 new_tags, ts, memory_id),
-            )
-        db.commit()
-    except Exception as e:
-        logger.debug("record_recall failed (ignored): %s", e)
-    finally:
+    # T2.D: wrap the entire connect-mutate-commit sequence so two
+    # concurrent ``record_recall`` calls cannot interleave SELECT/
+    # UPDATE on the same ``memory_id`` and lose increments.
+    with _write_lock:
+        db = _ensure_db()
+        if db is None:
+            return
         try:
-            db.close()
-        except Exception:
-            pass
+            ts = now if now is not None else time.time()
+            day = time.strftime("%Y-%m-%d", time.gmtime(ts))
+            qhash = _hash_query(query) if query else ""
+
+            cur = db.execute(
+                "SELECT recall_count, max_relevance, query_hashes, recall_days, "
+                "concept_tags, last_recalled_at, consolidated FROM recall_stats "
+                "WHERE memory_id = ?",
+                (memory_id,),
+            )
+            row = cur.fetchone()
+
+            if row is None:
+                hashes = qhash
+                days = day
+                tags_str = ",".join(concept_tags or [])
+                db.execute(
+                    "INSERT INTO recall_stats (memory_id, recall_count, max_relevance, "
+                    "query_hashes, recall_days, concept_tags, last_recalled_at, consolidated) "
+                    "VALUES (?, 1, ?, ?, ?, ?, ?, 0)",
+                    (memory_id, float(relevance), hashes, days, tags_str, ts),
+                )
+            else:
+                rc, mr, hashes_s, days_s, tags_s, _last, _cons = row
+                # Update bounded lists
+                hashes_list = [h for h in hashes_s.split(",") if h]
+                if qhash and qhash not in hashes_list:
+                    hashes_list.append(qhash)
+                    if len(hashes_list) > _MAX_QUERY_HASHES:
+                        hashes_list = hashes_list[-_MAX_QUERY_HASHES:]
+                days_list = [d for d in days_s.split(",") if d]
+                if day not in days_list:
+                    days_list.append(day)
+                    if len(days_list) > _MAX_RECALL_DAYS:
+                        days_list = days_list[-_MAX_RECALL_DAYS:]
+                new_mr = max(float(mr), float(relevance))
+                new_tags = tags_s
+                if concept_tags and not new_tags:
+                    new_tags = ",".join(concept_tags)
+                db.execute(
+                    "UPDATE recall_stats SET recall_count = ?, max_relevance = ?, "
+                    "query_hashes = ?, recall_days = ?, concept_tags = ?, "
+                    "last_recalled_at = ? WHERE memory_id = ?",
+                    (rc + 1, new_mr, ",".join(hashes_list), ",".join(days_list),
+                     new_tags, ts, memory_id),
+                )
+            db.commit()
+        except Exception as e:
+            logger.debug("record_recall failed (ignored): %s", e)
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
 
 
 def get_stats(memory_id: str) -> RecallStats:
@@ -300,22 +315,25 @@ def mark_consolidated(memory_id: str) -> None:
     once a memory has been summarized into daily/core. Never raises."""
     if not memory_id:
         return
-    db = _ensure_db()
-    if db is None:
-        return
-    try:
-        db.execute(
-            "UPDATE recall_stats SET consolidated = 1 WHERE memory_id = ?",
-            (memory_id,),
-        )
-        db.commit()
-    except Exception as e:
-        logger.debug("mark_consolidated failed (ignored): %s", e)
-    finally:
+    # T2.D: same lock as record_recall — serializes write-side
+    # access to recall_stats across threads.
+    with _write_lock:
+        db = _ensure_db()
+        if db is None:
+            return
         try:
-            db.close()
-        except Exception:
-            pass
+            db.execute(
+                "UPDATE recall_stats SET consolidated = 1 WHERE memory_id = ?",
+                (memory_id,),
+            )
+            db.commit()
+        except Exception as e:
+            logger.debug("mark_consolidated failed (ignored): %s", e)
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
 
 
 # ── promotion score ───────────────────────────────────────────────────

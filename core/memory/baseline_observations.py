@@ -67,12 +67,25 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("maez.baseline_observations")
+
+# T2.C (2026-05-04 15-agent audit): SQLite connections in this
+# module are opened with ``check_same_thread=False`` (intentional —
+# ``record_observation`` is invoked from any of cognition,
+# action-engine, and Telegram surfaces, all on different threads).
+# That flag is correct; what was missing was the explicit lock
+# that makes it safe. Mirrors the T1.2 / T1.7 pattern from commit
+# ce3e308 (``ConversationController._offers_lock`` /
+# ``soul_loader._lock``). Module-scope and independent from
+# ``memory_scoring._write_lock`` — coupling unrelated write paths
+# would create artificial contention.
+_write_lock: threading.Lock = threading.Lock()
 
 # DB path: env var override for tests; production default lives
 # alongside the other immune-memory stores under ``memory/``.
@@ -359,8 +372,14 @@ def record_observation(
         # sqlite3's context manager only commits/rolls back; it does
         # NOT close the connection. Wrap explicitly so file
         # descriptors are released deterministically.
+        #
+        # T2.C: ``_write_lock`` serializes the
+        # connect-execute-commit triple across threads. The SQLite
+        # connection is opened with ``check_same_thread=False`` so
+        # the thread-local check is off; the lock is what makes
+        # that safe.
         has_untrusted = 1 if untrusted_ids else 0
-        with contextlib.closing(_connect()) as con:
+        with _write_lock, contextlib.closing(_connect()) as con:
             cur = con.execute(
                 "INSERT INTO baseline_observations ("
                 "ts, observation, audited_observation, surface, "

@@ -3306,7 +3306,15 @@ class TelegramVoice:
         except Exception as e:
             logger.error("Telegram reasoning failed: %s", e)
             full_reply = f"Reasoning error: {e}"
-            reply = full_reply
+            # T2.A (2026-05-04 audit): the terminal-fallback branch
+            # was sending reply_text() WITHOUT going through the
+            # honesty-audit gate. The b672a2d AST regression guard
+            # passed because the success path above audits — but
+            # the fallback string can echo exception text /
+            # canary triggers. Route through the same gate as the
+            # success path. Mirror of the b672a2d (T1.13)
+            # audit-routing pattern.
+            reply = _audit_telegram_reply(full_reply, surface="telegram_text")
             await update.message.reply_text(reply)
             return reply
 

@@ -278,6 +278,26 @@ def _max_jaccard(text: str, recent_texts: list[str]) -> float:
     return best
 
 
+def _vague_label_dedup_key(label: str) -> str:
+    """Canonical dedup key for cognition labels.
+
+    T2.B (2026-05-04 15-agent audit): ``classify()`` had a raw
+    ``labels == ['vague']`` comparison and a ``dict.fromkeys``
+    dedup that quietly assumed labels were already case- and
+    whitespace-canonical. Both checks broke if a future code
+    change introduced a label like ``'Vague'`` or ``' vague '``.
+
+    Lifting the comparison into a named helper makes the dedup
+    invariant explicit. A regression guard pins this function's
+    existence in source so a refactor can't silently inline it
+    back into ``classify()``.
+
+    Returns ``label`` case-folded and stripped — the canonical
+    form used for both equality checks and dedup-key sets.
+    """
+    return (label or "").strip().casefold()
+
+
 def classify(text: str, recent_topics: list[str] = None,
              recent_texts: list[str] = None) -> dict:
     """Classify a thought into multi-label categories.
