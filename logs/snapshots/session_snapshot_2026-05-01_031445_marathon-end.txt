@@ -1,0 +1,72 @@
+Maez — session snapshot
+
+BUILD: Sessions marathon-end
+DATE: 2026-05-01
+AGENT: Claude
+HEAD: 413225f
+COMMITS_SINCE: 20 hours ago
+COMMIT_COUNT: 32
+TEST_FUNCTIONS: 2028
+
+========================================
+WHAT CHANGED TODAY
+========================================
+
+- 2026-05-01 03:10 — 413225f77 (Maez): feat(daemon + tooling): chat-turn log + session snapshot generator (Steps 5v/5w)
+- 2026-05-01 02:53 — 318050925 (Maez): feat(memory + tooling): three small slices (Steps 5s/5t/5u)
+- 2026-05-01 02:29 — 3ba2dd775 (Maez): feat(daemon): inject ambient context into chat handler (Step 5r)
+- 2026-05-01 02:23 — 97932fbc6 (Maez): docs(handoff): 2026-05-01 — MSEL substrate complete and live
+- 2026-05-01 02:04 — 1ce97e036 (Maez): feat(memory): structured observability log when entity expansion fires (Step 5q)
+- 2026-05-01 01:44 — 6ce1433fd (Maez): feat(memory): semantic-mapping suggester + auditor (Step 5p)
+- 2026-04-30 22:13 — c4d232230 (Maez): feat(memory): wire semantic resolver into entity expansion (Step 5o)
+- 2026-04-30 21:54 — e56ce476e (Maez): feat(memory): semantic entity resolver (Step 5n)
+- 2026-04-30 21:39 — 942eb47c4 (Maez): feat(memory): offline LLM entity extraction batch (Step 5m)
+- 2026-04-30 21:33 — b3d185a60 (Maez): feat(memory): deterministic alias-candidate suggester (Step 5l)
+- 2026-04-30 21:15 — ae2fd9835 (Maez): feat(memory): synthetic proof harness for entity-expansion pipeline (Step 5k)
+- 2026-04-30 21:05 — 711f7724d (Maez): feat(measurement): lightweight entity-expansion A/B (Step 5j)
+- 2026-04-30 18:27 — 5fd06aebe (Maez): feat(memory): optional entity-query expansion in lived recall (Step 5i)
+- 2026-04-30 18:12 — f02ddf3bb (Maez): feat(memory): alias-aware entity backfill (Step 5h)
+- 2026-04-30 18:01 — 963f32351 (Maez): feat(memory): owner-curated entity alias seeding (Step 5g)
+- 2026-04-30 17:37 — 1e4269cf2 (Maez): feat(memory): deterministic entity-index backfill from lived episodes (Step 5f)
+- 2026-04-30 17:28 — b381b36ca (Maez): feat(memory): entity index sidecar + deterministic query expansion (Step 5e)
+- 2026-04-30 17:19 — 7bbcdbd0b (Maez): feat(capability_pipeline): activation registry + completion lifecycle (Step 5d)
+- 2026-04-30 16:47 — b61723489 (Maez): feat(temporal_arithmetic): annotate recall items with relative time (Step 5c)
+- 2026-04-30 16:37 — dc38a792d (Maez): feat(capability_pipeline): integration planner (Step 5a)
+- 2026-04-30 16:27 — 13b3f446e (Maez): fix(capability_pipeline): four Step-4b post-review patches
+- 2026-04-30 16:18 — 159062f6a (Maez): feat(capability_acquisition_queue): non-installing acquire action (Step 4b)
+- 2026-04-30 16:08 — 1cb7e10b6 (Maez): fix(capability_pipeline): preserve match evidence through evaluator into proposal
+- 2026-04-30 16:00 — 3449ee1b7 (Maez): feat(capability_proposal): proposal generator (Step 4 of capability pipeline)
+- 2026-04-30 15:47 — d7a6b5a75 (Maez): feat(capability_evaluator): self-evaluator (Step 3 of capability pipeline)
+- 2026-04-30 15:34 — cf0f91539 (Maez): feat(capability_gap_matcher): lexical match-gap (Step 2 of capability pipeline)
+- 2026-04-30 15:15 — b85532deb (Maez): feat(capability_manual): manual loader + validator (Step 1 of capability pipeline)
+- 2026-04-30 13:24 — 47983f1ad (Maez): feat(infra): self_knowledge — VRAM / model / context introspection (Step 0 of capability pipeline)
+- 2026-04-30 13:10 — 66e8f0f40 (Maez): feat(backup): live drill — Decision 22 v1 covenant-load-bearing-correct
+- 2026-04-30 12:58 — eecac0fb9 (Maez): feat(backup): Decision 22 v1 — hardware-failure backup + restore
+- 2026-04-30 12:32 — 8ef6b5412 (Maez): docs(governance): update BAD footer to reflect Decisions 19-22 land date
+- 2026-04-30 12:24 — 3233be338 (Maez): docs(governance): Decisions 19-22 — capability-acquisition layer + hardware backup
+
+========================================
+PRODUCTION STATE
+========================================
+
+- maez.service: active (PID 420893)
+- maez-web.service: active (PID 407301)
+- maez-watchdog.service: active (PID 3498)
+- maez-subscription-proxy.service: active (PID 2660953)
+- llama-server.service: active (PID 216175)
+- lived episodes: 26
+- private thoughts (count only): 0
+- wonderings: 8
+- inner residue events (count only): 3
+- entity index entries: 38
+- entity mentions: 65
+- entity aliases: 5
+- fast-conversation turns: 35
+
+========================================
+NEXT SESSION PRIORITIES
+========================================
+
+- Read latest handoff: docs/HANDOFF-2026-05-01.md
+- Track A anchor: docs/TRACK_A.md
+- Run the substrate observation greps from HANDOFF-2026-05-01.md if present
