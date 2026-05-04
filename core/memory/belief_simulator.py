@@ -375,24 +375,34 @@ def simulate_owner_pushback(
         evidence_ids: list[str] = []
         seen_ids: set[str] = set()
 
-        def _add_ids(ids: list[str]) -> None:
-            for i in ids:
-                if i and i not in seen_ids:
-                    seen_ids.add(i)
-                    evidence_ids.append(i)
-
+        # ACTION-Hi-2: previously _add_ids was a nested function
+        # capturing seen_ids/evidence_ids from the enclosing loop.
+        # ruff B023 flagged the closure-over-loop-variable pattern;
+        # the inline form is identical in behaviour and removes the
+        # closure entirely, so a future refactor that lifts the
+        # call site out of the iteration can't accidentally bind
+        # all closures to the LAST iteration's lists.
         for edge in edges_list:
             if _matches_any_keyword(_edge_text(edge), pattern.evidence_keywords):
                 matched_edges.append(edge)
-                _add_ids(_ids_from_edge(edge))
+                for _i in _ids_from_edge(edge):
+                    if _i and _i not in seen_ids:
+                        seen_ids.add(_i)
+                        evidence_ids.append(_i)
         for ep in loops_list:
             if _matches_any_keyword(_episode_text(ep), pattern.evidence_keywords):
                 matched_episodes.append(ep)
-                _add_ids(_ids_from_episode(ep))
+                for _i in _ids_from_episode(ep):
+                    if _i and _i not in seen_ids:
+                        seen_ids.add(_i)
+                        evidence_ids.append(_i)
         for echo in echoes_list:
             if _matches_any_keyword(_echo_text(echo), pattern.evidence_keywords):
                 matched_echoes.append(echo)
-                _add_ids(_ids_from_echo(echo))
+                for _i in _ids_from_echo(echo):
+                    if _i and _i not in seen_ids:
+                        seen_ids.add(_i)
+                        evidence_ids.append(_i)
 
         # Threshold: ≥2 distinct evidence ITEMS (not IDs — an edge
         # citing 3 source memory IDs still counts as 1 item, because
