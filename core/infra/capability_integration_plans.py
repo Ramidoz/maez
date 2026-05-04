@@ -94,6 +94,68 @@ class IntegrationPlanStore:
         con.row_factory = sqlite3.Row
         return con
 
+    def claim(
+        self,
+        *,
+        queue_id: str,
+        capability_id: str,
+    ) -> str | None:
+        """T2.3/T2.4 (2026-05-04 audit) — atomically claim a queue_id
+        for planning. Returns a fresh plan_id if THIS caller won the
+        race, or None if another concurrent poller already claimed it.
+
+        Closes the SELECT-then-INSERT window where two concurrent
+        poll_and_plan invocations both observed
+        ``get_by_queue_id(queue_id) is None`` and both proceeded
+        to call the (expensive) planner. The UNIQUE constraint on
+        queue_id makes the loser's INSERT fail; we catch
+        IntegrityError and return None so the loser skips the row.
+
+        Status is set to ``claimed`` so the row is visible in
+        list_all() but excluded from list_pending_review() (which
+        filters on plan_status='draft'). The follow-up upsert
+        moves it to draft once the planner completes.
+        """
+        if not queue_id:
+            raise ValueError("queue_id is required")
+        plan_id = "plan-" + uuid4().hex[:12]
+        now = time.time()
+        with self._connect() as con:
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                con.execute(
+                    "INSERT INTO integration_plans "
+                    "(plan_id, queue_id, capability_id, "
+                    "created_at, updated_at, plan_status, "
+                    "plan_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (plan_id, queue_id, capability_id,
+                     now, now, "claimed", "{}"),
+                )
+                con.commit()
+                return plan_id
+            except sqlite3.IntegrityError:
+                con.rollback()
+                return None
+
+    def release_claim(self, *, queue_id: str) -> bool:
+        """Drop a claim placeholder row if it's still in 'claimed'
+        status — i.e. the planner failed (or returned None) and we
+        want the next poll tick to retry. Returns True iff a row
+        was actually deleted. Never touches non-claimed rows
+        (draft / needs_field_search etc) so this is safe to call
+        in any post-claim error path."""
+        if not queue_id:
+            return False
+        with self._connect() as con:
+            cur = con.execute(
+                "DELETE FROM integration_plans "
+                "WHERE queue_id = ? AND plan_status = 'claimed'",
+                (queue_id,),
+            )
+            con.commit()
+            return cur.rowcount > 0
+
     def upsert(
         self,
         *,
@@ -222,6 +284,19 @@ def poll_and_plan(
         queue_id = row["id"]
         if plans.get_by_queue_id(queue_id) is not None:
             continue
+        # T2.3/T2.4 (2026-05-04 audit) — atomically claim the row
+        # before calling the (slow) planner. If a concurrent poller
+        # got there first, claim() returns None and we skip — saving
+        # the wasted plan_next() call AND the duplicate-row
+        # IntegrityError on the final upsert.
+        capability_id_hint = str(
+            row.get("capability_id") or "unknown"
+        )
+        claimed = plans.claim(
+            queue_id=queue_id, capability_id=capability_id_hint,
+        )
+        if claimed is None:
+            continue
         try:
             plan = plan_next(
                 queue, queue_id=queue_id, manual_root=manual_root,
@@ -232,8 +307,16 @@ def poll_and_plan(
                 "queue_id=%s: %s",
                 queue_id, e,
             )
+            # Release the claim so the next tick can retry. Without
+            # this, a one-off planner glitch would permanently block
+            # this queue_id from ever being planned.
+            plans.release_claim(queue_id=queue_id)
             continue
         if plan is None:
+            # Same logic as the exception branch — claim must be
+            # released so the next tick can retry once the upstream
+            # condition (e.g. missing manual entry) is fixed.
+            plans.release_claim(queue_id=queue_id)
             continue
         try:
             plan_status = (

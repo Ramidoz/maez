@@ -998,7 +998,50 @@ class MaezDaemon:
         return text
 
     def _write_pid(self):
-        """Write PID file for process management."""
+        """Write PID file for process management.
+
+        T2.1 (2026-05-04 audit) — if a PID file already exists,
+        liveness-check the recorded PID via ``os.kill(pid, 0)``
+        before overwriting. Signal 0 raises ``ProcessLookupError``
+        (or ``OSError``) if the process is gone. Without this, a
+        stale PID file from a SIGKILLed parent (no atexit cleanup)
+        made the daemon look running when it wasn't, blocking the
+        next start. We log a WARNING for the dead PID and overwrite.
+        We do NOT auto-overwrite a live PID — that would be hostile
+        to a legitimate second daemon — but we still proceed and
+        log loud at WARNING so the operator sees the collision.
+        """
+        try:
+            if PID_FILE.exists():
+                raw = PID_FILE.read_text().strip()
+                try:
+                    prior_pid = int(raw)
+                except ValueError:
+                    logger.warning(
+                        "PID file %s held non-integer %r; overwriting",
+                        PID_FILE, raw,
+                    )
+                    prior_pid = None
+                if prior_pid is not None and prior_pid != os.getpid():
+                    try:
+                        os.kill(prior_pid, 0)
+                    except (ProcessLookupError, OSError) as e:
+                        logger.warning(
+                            "Stale/dead PID %d in %s (liveness probe: "
+                            "%s); overwriting with current PID %d",
+                            prior_pid, PID_FILE, e, os.getpid(),
+                        )
+                    else:
+                        logger.warning(
+                            "PID %d in %s appears LIVE; overwriting "
+                            "anyway with current PID %d — investigate "
+                            "if a second daemon is running",
+                            prior_pid, PID_FILE, os.getpid(),
+                        )
+        except OSError as e:
+            logger.warning(
+                "PID file %s read failed (%s); overwriting", PID_FILE, e,
+            )
         PID_FILE.write_text(str(os.getpid()))
         logger.info("PID %d written to %s", os.getpid(), PID_FILE)
 
@@ -2593,7 +2636,18 @@ class MaezDaemon:
             time.sleep(min(10.0, startup_delay - slept))
             slept += 10.0
 
+        # T2.6 (2026-05-04 audit) — bounded exponential backoff on
+        # exception. Previously every failed tick still slept the
+        # full 3600s before retry AND the log line included only
+        # the exception message (not its class), so an operator
+        # never saw what was actually breaking.
+        _BACKOFF_SEED_S = 60.0
+        _BACKOFF_CAP_S = 3600.0
+        _NORMAL_INTERVAL_S = 3600.0
+        backoff_s = _BACKOFF_SEED_S
+
         while self.running:
+            tick_failed = False
             try:
                 from core.infra.capability_acquisition_queue import (
                     AcquisitionQueue,
@@ -2612,15 +2666,28 @@ class MaezDaemon:
                 for plan_id in new_plan_ids:
                     self._surface_integration_plan_card(plans, plan_id)
             except Exception as e:
+                tick_failed = True
                 logger.warning(
-                    "Capability planning loop tick failed: %s", e,
+                    "Capability planning loop tick failed: "
+                    "%s: %s — backing off %.0fs",
+                    type(e).__name__, e, backoff_s,
                 )
 
-            # Hourly tick, sleeping in 60s increments so shutdown
-            # remains responsive.
+            # On success, reset backoff and use the normal hourly
+            # interval. On failure, sleep the current backoff then
+            # double it (capped at 3600s) for the next failure.
+            if tick_failed:
+                next_sleep = backoff_s
+                backoff_s = min(backoff_s * 2.0, _BACKOFF_CAP_S)
+            else:
+                backoff_s = _BACKOFF_SEED_S
+                next_sleep = _NORMAL_INTERVAL_S
+
+            # Sleep in 60s (or smaller) increments so shutdown
+            # remains responsive even during a long backoff.
             slept = 0.0
-            while slept < 3600.0 and self.running:
-                time.sleep(min(60.0, 3600.0 - slept))
+            while slept < next_sleep and self.running:
+                time.sleep(min(60.0, next_sleep - slept))
                 slept += 60.0
 
         logger.info("Capability planning thread stopped.")
@@ -3180,6 +3247,17 @@ class MaezDaemon:
                             if self._last_departure_time is not None:
                                 absence_secs = time.time() - self._last_departure_time
                             self._last_absence_duration = absence_secs
+                            # T2.5 (2026-05-04 audit) — clear the
+                            # departure stamp now that we've consumed
+                            # it. Otherwise a stale departure time
+                            # leaks into the NEXT arrival's absence
+                            # calc if presence-detection ever fires
+                            # two arrivals without an intervening
+                            # explicit departure (e.g. a brief face-
+                            # detection dropout that does not produce
+                            # just_left=True). Clean slate for the
+                            # next departure-detection cycle.
+                            self._last_departure_time = None
 
                             # Suppress greetings within 2 minutes of daemon start
                             startup_grace = True

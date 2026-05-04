@@ -26,8 +26,11 @@ Path categories:
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger("maez.paths")
 
 # Derive the default install root from this file's own location rather
 # than hardcoding a path. `core/infra/paths.py` sits three levels below
@@ -210,6 +213,15 @@ def ensure_dirs() -> None:
     global _ENSURED
     if _ENSURED:
         return
+    # T2.2 (2026-05-04 audit) — surface OSError at WARNING. Previously
+    # any mkdir failure was silently swallowed (`except OSError: pass`)
+    # so the original error never reached the logs; downstream code
+    # then failed with a confusing "no such file" instead of the real
+    # cause (permissions, read-only mount, ENOSPC, etc.). After
+    # collecting failures we re-raise the first one — every existing
+    # caller expected the dirs to exist on return, so failing loud
+    # is the safer contract than the silent partial-success it had.
+    failures: list[tuple[Path, OSError]] = []
     for d in (
         home(), config_dir(), data_dir(), cache_dir(),
         memory_dir(), memory_db_dir(),
@@ -218,9 +230,18 @@ def ensure_dirs() -> None:
     ):
         try:
             d.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass  # non-fatal; caller will see the issue on actual access
+        except OSError as e:
+            logger.warning(
+                "ensure_dirs: mkdir failed for %s: %s", d, e,
+            )
+            failures.append((d, e))
     _ENSURED = True
+    if failures:
+        path, err = failures[0]
+        raise OSError(
+            f"ensure_dirs: {len(failures)} dir(s) could not be created; "
+            f"first failure {path}: {err}"
+        ) from err
 
 
 # ── diagnostics ────────────────────────────────────────────────────────
