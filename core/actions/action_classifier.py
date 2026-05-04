@@ -213,11 +213,36 @@ _SENSITIVE_PATH_RE = re.compile(
 )
 
 # Maez self-modification — anything touching Maez's own brain/body.
+# T1.10 (2026-05-04): expanded to cover core/safety/, core/decision/,
+# core/brain/, key infra surfaces, identity config, and to trigger
+# on editor / in-place-edit / dd-write commands targeting any
+# `maez`-named directory or file (catches relative paths like
+# `vim daemon/maez_daemon.py` from the maez root).
 _SELF_MOD_RE = re.compile(
-    r'(maez_daemon|action_engine|evolution_engine|llama[-_.]server|'
+    r'('
+    # Existing keyword + path patterns
+    r'maez_daemon|action_engine|evolution_engine|llama[-_.]server|'
     r'maez\.service|maez-web\.service|maez-watchdog|'
-    r'HARD\s+CONSTRAINTS|TRUST\s+COVENANT|config/soul\.md|'
-    r'memory/db|memory/quality_tracker)',
+    r'HARD\s+CONSTRAINTS|TRUST\s+COVENANT|'
+    r'config/soul\.md|config/soul\.local\.md|config/soul\.base\.md|'
+    r'config/identity\.yaml|'
+    r'memory/db|memory/quality_tracker|'
+    # Core surfaces newly enumerated
+    r'core/safety/|core/decision/decision_pipeline|core/decision/pending_cards|'
+    r'core/brain/brain_loop|core/brain/conversation_controller|'
+    r'core/actions/action_classifier|core/actions/action_engine|'
+    r'core/self_dev/|core/infra/paths|core/infra/capability_registry|'
+    r'core/subscription_proxy/server|'
+    # Editor / in-place-edit / dd-write commands targeting any
+    # path that includes "maez" — catches relative-path bypasses
+    # like `vim daemon/maez_daemon.py` from inside the maez root.
+    r'\b(?:vim|nvim|vi|nano|gedit|emacs|pico|joe|kate|code|subl|'
+    r'mousepad|tee|sed\s+-i|dd\s+(?:of|if)=)\b[^\n]*?(?:'
+    r'maez|/home/[^/]+/maez|core/(?:safety|decision|brain|self_dev|'
+    r'infra|actions|cognition|memory|evolution|learning|routing)|'
+    r'config/(?:soul|identity)|daemon/maez_daemon|'
+    r'skills/(?:telegram_voice|web_interface|claude_router|self_mod_dialog))'
+    r')',
     re.IGNORECASE,
 )
 

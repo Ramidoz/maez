@@ -265,9 +265,19 @@ def select_backend(decision: PolicyDecision) -> BackendSelection:
                 backend=local, name=local.name,
                 reason=f'effective=local; local available [{decision.rule_fired}]',
             )
+        # T1.6: when the policy enforces LOCAL-only and local is
+        # unavailable, callers MUST be able to distinguish "policy
+        # forbids cloud" from "transient unavailability". Without
+        # policy_denied=True, the fast-reply retry path silently
+        # promoted the call to cloud (skills/fast_reply_prototype.py
+        # downgrade), bypassing the policy gate. Cloud fallback in
+        # the LOCAL-only case is a privacy-violation in the
+        # maez_local_only scope. policy_denied makes the refusal
+        # explicit so retry logic can respect it.
         return BackendSelection(
             backend=None, name='none',
             reason=f'effective=local; local unavailable [{decision.rule_fired}]',
+            policy_denied=True,
         )
 
     if eff == POLICY_CLOUD:

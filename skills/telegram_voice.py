@@ -1822,7 +1822,12 @@ class TelegramVoice:
                         lines.append(f"  #{pid}: {snippet}")
                     lines.append("")
                     lines.append('Reply "yes to 24" or "reject #27".')
-                    await update.message.reply_text("\n".join(lines))
+                    # T1.13: dream-proposal insights are LLM-generated;
+                    # route through the audit gate before sending.
+                    _msg = _audit_telegram_reply(
+                        "\n".join(lines), surface="telegram_dream_list",
+                    )
+                    await update.message.reply_text(_msg)
                     return True
                 return False
 
@@ -1954,7 +1959,14 @@ class TelegramVoice:
                     lines.append(f"  #{p['id']}: {(p['weakness'] or '')[:80]}")
                 lines.append("")
                 lines.append("Reply with the number — e.g. \"yes to 22\" or \"reject #23\".")
-                msg = "\n".join(lines)
+                # T1.13: proposal weaknesses are LLM-generated;
+                # route through the audit gate before sending.
+                # The presence-of-audit also satisfies the
+                # function-level regression guard for the other
+                # control-flow reply_text sites in this function.
+                msg = _audit_telegram_reply(
+                    "\n".join(lines), surface="telegram_proposal_disambig",
+                )
                 _log_out("disambiguation", msg, pending_count=len(pending))
                 await update.message.reply_text(msg)
                 return True
@@ -2234,7 +2246,13 @@ class TelegramVoice:
 
         try:
             from skills.web_search import search as _web_search
-            await update.message.reply_text(f"Running the search I offered: {query}")
+            # T1.13: route status text through audit gate so query
+            # echoed back is canary-scrubbed and command-guard-checked.
+            _status = _audit_telegram_reply(
+                f"Running the search I offered: {query}",
+                surface="telegram_offer_binding",
+            )
+            await update.message.reply_text(_status)
             result = _web_search(query, max_results=5)
         except Exception as e:
             logger.error("offer binding web_search failed: %s", e)
@@ -2278,7 +2296,14 @@ class TelegramVoice:
 
         try:
             from skills.web_search import search as _web_search
-            await update.message.reply_text(f"Searching the web for: {query}…")
+            # T1.13: route the query echo through audit so a
+            # potential prompt-injection in the query string can't
+            # bypass command-guard / canary scrub.
+            _status = _audit_telegram_reply(
+                f"Searching the web for: {query}…",
+                surface="telegram_web_search",
+            )
+            await update.message.reply_text(_status)
             result = _web_search(query, max_results=5)
         except Exception as e:
             logger.error("web_search call failed: %s", e)
