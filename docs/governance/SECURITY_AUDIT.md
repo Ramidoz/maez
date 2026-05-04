@@ -172,3 +172,52 @@ cleaned up hardcoded owner references so this path is effective.
   so a runaway caller can't drain the owner's subscription.
 
 None of these are blockers for v0.1.0-alpha.
+
+---
+
+## 2026-05-04 audit Tier-2 deferrals — load-bearing items that need their own slice
+
+The 2026-05-04 15-agent audit
+([`docs/audit_15agent_2026-05-04.md`](../audit_15agent_2026-05-04.md))
+Tier-2 mechanical track is fully closed across commits `acb57f3`,
+`534f504`, `cfcb266`, `13cee12`, `0566b03`. Four items were
+deliberately deferred to their own slices — recorded here so they
+don't get lost:
+
+1. **`/api/v1/*` unauthenticated + CORS `*` + no CSRF.** Today this
+   is conditional-only because Flask binds to `127.0.0.1`. Grep
+   for `0\.0\.0\.0` returns nothing in the cockpit path. Promotion
+   to Track-B (girlfriend + one friend) where cockpit may need LAN
+   reach will require a token-auth layer. Tracked here; design
+   decision deferred to Track-B planning.
+
+2. **Dream → soul audit-before-store.** Already in `docs/TRACK_A.md`
+   as architectural debt. Dream-cycle writes to soul.local.md without
+   passing through the same audit-before-store path that the chat /
+   action routes use. Closing this needs a small architectural slice
+   (audit-routing for the dream surface). Not load-bearing for
+   Track-A; promoted to its own slice for the post-Track-A polish
+   queue.
+
+3. **28 `TYPE_CHECKING` circular-import workarounds in
+   `core/memory/`.** The current import graph has ~28 `if
+   TYPE_CHECKING:` guards papering over circular refs between
+   episodes / relationship_graph / working_self / lived_recall. The
+   fix is a careful 1-2-session refactor that splits the type
+   surface from the runtime surface. Risk: a partial refactor
+   silently breaks the import graph at module-load time. Tracked
+   here as its own slice rather than rolled into mechanical
+   cleanup.
+
+4. **Hi-3 trust-tier 23-producer compliance audit.** The 5x memory
+   provenance arc is closed at the schema / store level, but 23
+   trajectory producers since `cda2888` haven't been individually
+   audited for compliance with the default-deny invariant. Closing
+   this is its own audit pass (similar shape to the original
+   15-agent code audit, scoped to trajectory producers). Tracked
+   here; queued for execution when Track-A audit-cleanup work is
+   otherwise quiescent.
+
+Each deferral is a real item — none is a permanent shrug. They
+move out of the Track-A audit-cleanup queue but stay on the
+post-Track-A hardening list.
