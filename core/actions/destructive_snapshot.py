@@ -16,9 +16,13 @@ Scope:
   - list_recent(days=7, *, root=...) → [manifest summaries]
   - restore(request_id, dry_run=True, *, root=...) → {mode, files}
 
-Shape coverage (MVP): git_checkout, git_restore, git_reset_hard, rm,
-truncate. Other destructive shapes (`mv -f`, `dd of=`, redirect `>`)
-are out of scope and will be added when observed.
+Shape coverage: git_checkout, git_restore, git_reset_hard, rm,
+truncate, mv_force (`mv -f` / `mv --force`), dd (`dd of=<path>`),
+and redirect (`> <path>` / `>> <path>`). The redirect detector
+ignores `/dev/null`, `/dev/stderr`, `/dev/stdout`, `&N` numeric
+descriptors, and shell-quoted `>` characters. Plain `mv` (no
+force flag) is not snapshotted because POSIX `mv` refuses to
+clobber by default.
 
 Safety policy:
   - Parse errors never raise — return is_destructive=False.
@@ -65,6 +69,22 @@ _RE_GIT_RESET_HARD = re.compile(
 # rm <flags> <paths> — non-flag tokens after rm are the paths
 _RE_RM = re.compile(r"(?<!\w)rm\b(?P<rest>.*)$")
 _RE_TRUNCATE = re.compile(r"(?<!\w)truncate\b(?P<rest>.*)$")
+# mv with -f / --force — destination is the LAST positional token.
+_RE_MV_FORCE = re.compile(
+    r"(?<!\w)mv\b(?=[^\n]*\s(?:-f\b|--force\b))(?P<rest>.+)$"
+)
+# dd with explicit of=<path>. We require of= to be present;
+# without it, dd writes to stdout and isn't destructive to a file.
+_RE_DD = re.compile(r"(?<!\w)dd\b(?P<rest>.+)$")
+_RE_DD_OF = re.compile(r"\bof=(?P<path>\S+)")
+
+# Real-file targets we do NOT want to snapshot when seen as the
+# right-hand side of `>`/`>>`. Stdout/stderr aliases and numeric
+# fd dups are not destructive to user data.
+_REDIRECT_SKIP_PATHS = {
+    "/dev/null", "/dev/stdout", "/dev/stderr",
+    "/dev/tty", "/dev/zero",
+}
 
 
 def _git_cwd(cmd: str) -> str | None:
@@ -86,6 +106,66 @@ def _resolve_paths(paths: list[str], base: str | None) -> list[str]:
         else:
             out.append(str(Path(base) / p))
     return out
+
+
+def _find_redirect_targets(cmd: str) -> list[str]:
+    """Scan cmd for `>` and `>>` redirections that point at a real
+    file path. Returns the destination paths (skipping /dev/null and
+    friends, numeric fd dups like `>&2`, and any `>` inside single
+    or double quotes). Best-effort — never raises."""
+    targets: list[str] = []
+    n = len(cmd)
+    i = 0
+    in_sq = False
+    in_dq = False
+    while i < n:
+        c = cmd[i]
+        if c == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if c == "'" and not in_dq:
+            in_sq = not in_sq
+            i += 1
+            continue
+        if c == '"' and not in_sq:
+            in_dq = not in_dq
+            i += 1
+            continue
+        if in_sq or in_dq:
+            i += 1
+            continue
+        if c == ">":
+            # `>>` consumes both chars; `>&N` is an fd dup, skip.
+            if i + 1 < n and cmd[i + 1] == ">":
+                i += 2
+            elif i + 1 < n and cmd[i + 1] == "&":
+                # >&2, >&1 — fd dup, not a path
+                i += 2
+                while i < n and (cmd[i].isdigit() or cmd[i] == "-"):
+                    i += 1
+                continue
+            else:
+                i += 1
+            # skip whitespace
+            while i < n and cmd[i] in " \t":
+                i += 1
+            # extract the destination token (until whitespace or
+            # next shell metachar)
+            start = i
+            while i < n and cmd[i] not in " \t\n;|&<>":
+                i += 1
+            tok = cmd[start:i].strip().strip('"').strip("'")
+            if not tok:
+                continue
+            if tok in _REDIRECT_SKIP_PATHS:
+                continue
+            # numeric fd target like `>2` is unusual but skip
+            if tok.startswith("&"):
+                continue
+            targets.append(tok)
+            continue
+        i += 1
+    return targets
 
 
 def classify(cmd: Any) -> dict:
@@ -184,6 +264,58 @@ def classify(cmd: Any) -> dict:
             "is_destructive": True,
             "shape": "truncate",
             "files": non_flags,
+        }
+
+    # mv -f / mv --force <src...> <dst>  (dst is last positional)
+    m = _RE_MV_FORCE.search(s)
+    if m:
+        try:
+            toks = shlex.split(m.group("rest"))
+        except ValueError:
+            return default
+        positional: list[str] = []
+        idx = 0
+        while idx < len(toks):
+            t = toks[idx]
+            if t in ("-t", "--target-directory"):
+                if idx + 1 < len(toks):
+                    positional.append(toks[idx + 1])
+                    idx += 2
+                    continue
+            if t.startswith("-"):
+                idx += 1
+                continue
+            positional.append(t)
+            idx += 1
+        if not positional:
+            return default
+        dst = positional[-1]
+        return {
+            "is_destructive": True,
+            "shape": "mv_force",
+            "files": [dst],
+        }
+
+    # dd if=... of=<path>
+    m = _RE_DD.search(s)
+    if m:
+        of_match = _RE_DD_OF.search(m.group("rest"))
+        if of_match:
+            of_path = of_match.group("path").strip().strip('"').strip("'")
+            if of_path and of_path not in _REDIRECT_SKIP_PATHS:
+                return {
+                    "is_destructive": True,
+                    "shape": "dd",
+                    "files": [of_path],
+                }
+
+    # redirect: cmd > path  /  cmd >> path
+    redirect_targets = _find_redirect_targets(s)
+    if redirect_targets:
+        return {
+            "is_destructive": True,
+            "shape": "redirect",
+            "files": redirect_targets,
         }
 
     return default

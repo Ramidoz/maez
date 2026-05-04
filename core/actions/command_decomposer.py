@@ -1,7 +1,7 @@
 # Copyright © 2026 Rohit Ananthan
 # Licensed under the GNU Affero General Public License v3.0 or later.
 # See LICENSE for full text.
-"""
+r"""
 Maez Command Decomposer — Session 11z Part 1.
 
 Parses a shell command string into a list of sub-commands so the
@@ -25,8 +25,10 @@ Supported shell structures:
     cmd1 ; cmd2
     cmd1 | cmd2
     cmd1 & cmd2
-    cmd1 $(cmd2)         — substitution is recursively decomposed
-    cmd1 `cmd2`          — backticks are recursively decomposed
+    cmd1 $(cmd2)         — POSIX substitution is recursively decomposed
+    cmd1 `cmd2`          — legacy backticks are recursively decomposed
+    cmd1 \`cmd2\`        — escaped backticks (one level), as used in
+                            nested double-quoted substitutions
     cmd1 <(cmd2)         — process substitution, ditto
     cmd1\ncmd2           — newline-separated
     heredocs (<<EOF ... EOF)  — the inner content is NOT decomposed
@@ -226,6 +228,23 @@ def _extract_substitutions(cmd: str) -> tuple[List[str], str]:
                 subs.append(cmd[i + 2:j - 1])
                 out.append('__SUB__')
                 i = j
+                continue
+        # \`...\` — escaped backticks (one level of escape, as bash
+        # uses inside double-quoted nested command substitutions like
+        #   "$( echo \`whoami\` )" or  "outer \`inner\` rest"
+        # Recognise the escaped opening before the plain-backtick
+        # branch so the unescaped scanner doesn't swallow the inner
+        # backslash-escape pair and walk past the closing delimiter.
+        if c == '\\' and i + 1 < n and cmd[i + 1] == '`':
+            j = i + 2
+            while j + 1 < n:
+                if cmd[j] == '\\' and cmd[j + 1] == '`':
+                    break
+                j += 1
+            if j + 1 < n and cmd[j] == '\\' and cmd[j + 1] == '`':
+                subs.append(cmd[i + 2:j])
+                out.append('__SUB__')
+                i = j + 2
                 continue
         # `...`
         if c == '`':
