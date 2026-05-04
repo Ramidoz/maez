@@ -841,6 +841,8 @@ class ActionEngine:
             # default _do_<action> dispatch convention.
             if action == "capability.acquire":
                 method = self._do_capability_acquire
+            elif action == "integration.review_plan":
+                method = self._do_integration_review_plan
             else:
                 method = getattr(self, f"_do_{action}", None)
             if not method:
@@ -1002,6 +1004,56 @@ class ActionEngine:
         from core.capability_acquisition_queue import handle_capability_acquire
 
         return handle_capability_acquire(params)
+
+    def _do_integration_review_plan(self, **params) -> str:
+        """Action handler for ``integration.review_plan`` (D20 Stage-5).
+
+        Surfaced when the daemon's hourly capability-planning loop
+        produces a draft integration plan from a queued acquisition.
+        On approval: transition the plan_status from 'draft' to
+        'plan_approved'. The actual implementation work (writing
+        proposed_files, adding proposed_tests, running them) is a
+        separate slice that consumes plan_approved rows.
+
+        Owner-visible message is intentionally explicit about the
+        non-implementation contract so the cockpit / approval
+        surface cannot mislead. The plan_id is the dedup key —
+        same shape as capability.acquire's contract with the queue.
+        """
+        plan_id = params.get("plan_id")
+        if not plan_id:
+            raise ValueError("plan_id is required for integration.review_plan")
+
+        from core.infra.capability_integration_plans import (
+            IntegrationPlanStore,
+        )
+        store = IntegrationPlanStore()
+        row = next(
+            (p for p in store.list_all() if p["plan_id"] == plan_id),
+            None,
+        )
+        if row is None:
+            raise ValueError(
+                f"plan_id={plan_id} not found in integration_plans store"
+            )
+        if row["plan_status"] != "draft":
+            return (
+                f"plan_id={plan_id} already at status="
+                f"{row['plan_status']!r} — no-op"
+            )
+        store.upsert(
+            queue_id=row["queue_id"],
+            capability_id=row["capability_id"],
+            plan_status="plan_approved",
+            plan_json=row["plan_json"],
+        )
+        return (
+            f"Plan {plan_id} approved (capability_id="
+            f"{row['capability_id']}). Plan transitioned: draft → "
+            f"plan_approved. Actual implementation (writing files, "
+            f"running tests) is a separate slice — nothing has been "
+            f"executed."
+        )
 
     def _do_write_any_file(self, path: str, content: str, reason: str = "") -> str:
         p = Path(path).resolve()

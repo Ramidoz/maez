@@ -2570,6 +2570,130 @@ class MaezDaemon:
 
         logger.info("Consolidation thread stopped.")
 
+    def _capability_planning_loop(self):
+        """D20 Stage-5 — hourly poller for the capability-acquisition
+        queue. Walks queued rows that don't yet have a draft
+        integration plan, calls the planner, persists the result,
+        and surfaces a PendingCard for owner review when one lands.
+
+        Hourly cadence (not every cycle): the queue fills slowly
+        because every entry requires a prior consent-card approval.
+        Hourly is responsive enough for human-review windows and
+        keeps the load on llama-server / disk negligible.
+        """
+        logger.info(
+            "Capability planning thread started (interval: 1h)"
+        )
+
+        # First tick after a short startup delay so the daemon's
+        # primary loops settle before this side-channel runs.
+        startup_delay = 60.0
+        slept = 0.0
+        while slept < startup_delay and self.running:
+            time.sleep(min(10.0, startup_delay - slept))
+            slept += 10.0
+
+        while self.running:
+            try:
+                from core.infra.capability_acquisition_queue import (
+                    AcquisitionQueue,
+                )
+                from core.infra.capability_integration_plans import (
+                    IntegrationPlanStore, poll_and_plan,
+                )
+
+                q = AcquisitionQueue()
+                plans = IntegrationPlanStore()
+                new_plan_ids = poll_and_plan(queue=q, plans=plans)
+
+                # For each freshly-persisted plan, surface a
+                # consent card so the owner can approve / reject
+                # the plan before any implementation work begins.
+                for plan_id in new_plan_ids:
+                    self._surface_integration_plan_card(plans, plan_id)
+            except Exception as e:
+                logger.warning(
+                    "Capability planning loop tick failed: %s", e,
+                )
+
+            # Hourly tick, sleeping in 60s increments so shutdown
+            # remains responsive.
+            slept = 0.0
+            while slept < 3600.0 and self.running:
+                time.sleep(min(60.0, 3600.0 - slept))
+                slept += 60.0
+
+        logger.info("Capability planning thread stopped.")
+
+    def _surface_integration_plan_card(self, plans, plan_id):
+        """Create a PendingCard for a draft integration plan so the
+        owner can review and approve it. Idempotent across hourly
+        cycles because PendingCardStore.create_card supersedes prior
+        open cards in the same chat_id, and because plans whose
+        status has moved past 'draft' are excluded by the poller's
+        skip-existing logic upstream."""
+        try:
+            row = next(
+                (p for p in plans.list_all() if p["plan_id"] == plan_id),
+                None,
+            )
+            if row is None:
+                return
+            plan_json = row.get("plan_json") or {}
+            cap_id = row.get("capability_id", "unknown")
+            summary = plan_json.get("summary", "")
+            files = plan_json.get("proposed_files") or []
+            tests = plan_json.get("proposed_tests") or []
+            risks = plan_json.get("risks") or []
+            plain = (
+                f"Integration plan ready for review: **{cap_id}**\n\n"
+                f"Summary: {summary}\n"
+                f"Proposed files: {len(files)}  ·  "
+                f"proposed tests: {len(tests)}  ·  "
+                f"risks flagged: {len(risks)}\n\n"
+                f"Approve to mark plan_approved (no code change yet — "
+                f"implementation is a separate slice). Deny to discard."
+            )
+            from core.decision.pending_cards import PendingCardStore
+            store = PendingCardStore()
+            try:
+                from core.identity import (
+                    user_profile_id as _owner_user_id,
+                )
+                owner = _owner_user_id()
+            except Exception:
+                owner = "owner"
+            # Per-plan chat_id so PendingCardStore's chat-scoped
+            # supersession doesn't steamroll concurrent draft plans.
+            # Without this, two draft plans in the same hourly tick
+            # would race (second card supersedes first) and only the
+            # latest would be actionable. user_id stays the owner so
+            # `/pending` and cockpit lookups continue to find these.
+            plan_bucket = f"capability_plan:{plan_id}"
+            store.create_card(
+                action="integration.review_plan",
+                params={
+                    "plan_id": plan_id,
+                    "queue_id": row["queue_id"],
+                    "capability_id": cap_id,
+                },
+                reason="capability-acquisition Stage 5 plan",
+                plain_english=plain,
+                chat_id=plan_bucket,
+                user_id=str(owner),
+            )
+            logger.info(
+                "capability_integration_plans: surfaced card for "
+                "plan_id=%s capability_id=%s",
+                plan_id, cap_id,
+            )
+        except Exception as e:
+            logger.warning(
+                "capability_integration_plans: surface_card failed "
+                "for plan_id=%s: %s",
+                plan_id, e,
+            )
+
     def _nightly_journal_loop(self):
         """Write a daily journal entry to PROGRESS.md at 11:00 PM local time."""
         logger.info("Journal thread started (target: 23:00 local)")
@@ -3913,6 +4037,17 @@ class MaezDaemon:
             target=self._nightly_journal_loop, daemon=True, name="journal"
         )
         journal_thread.start()
+
+        # D20 Stage-5: hourly capability-acquisition planner poller.
+        # Walks the queue, generates integration plans, surfaces
+        # them for owner review via PendingCard. Failure-isolated
+        # in its own thread so a planner exception never affects
+        # the reasoning loop or consolidation.
+        planning_thread = threading.Thread(
+            target=self._capability_planning_loop,
+            daemon=True, name="capability-planning",
+        )
+        planning_thread.start()
 
         # Start proposal worker thread
         try:

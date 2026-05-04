@@ -1149,6 +1149,42 @@ class DecisionPipeline:
                 "rejection not persisted; planner may re-propose this action",
                 card.request_id, _cm_exc,
             )
+
+        # D20 Stage-5 — when an integration.review_plan card is
+        # denied, propagate the denial to the plans store so
+        # `list_pending_review` no longer surfaces it. Without
+        # this hook the plan would stay at status='draft' forever:
+        # the next hourly poll would skip it (existing plan), and
+        # the cockpit's pending-review filter would lie.
+        if getattr(card, "action", None) == "integration.review_plan":
+            try:
+                from core.infra.capability_integration_plans import (
+                    IntegrationPlanStore,
+                )
+                plan_id = (
+                    (getattr(card, "params", {}) or {}).get("plan_id")
+                )
+                if plan_id:
+                    _store = IntegrationPlanStore()
+                    _existing = next(
+                        (p for p in _store.list_all()
+                         if p["plan_id"] == plan_id),
+                        None,
+                    )
+                    if _existing and _existing["plan_status"] == "draft":
+                        _store.upsert(
+                            queue_id=_existing["queue_id"],
+                            capability_id=_existing["capability_id"],
+                            plan_status="plan_rejected",
+                            plan_json=_existing["plan_json"],
+                        )
+            except Exception as _plan_exc:
+                logger.debug(
+                    "integration_plans deny-propagation failed for "
+                    "card %s: %s",
+                    card.request_id, _plan_exc,
+                )
+
         if self.renderer:
             self.renderer.send_resolution(card)
         return PipelineResult(
