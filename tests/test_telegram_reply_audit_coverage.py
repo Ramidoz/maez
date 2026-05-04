@@ -75,21 +75,21 @@ _AUDIT_BYPASS_ALLOWLIST: dict[str, str] = {
     "_handle_approve_evolution": "/approve_evolution — author-written confirm",
     "_handle_reject_evolution": "/reject_evolution — author-written confirm",
     "_handle_evolution_log": "/evolution_log — author-written log rendering",
-    "_handle_dreams": "/dreams — author-written list rendering of dream proposals",
+    # Codex audit 2026-05-04: removed from allowlist and promoted to
+    # _AUDIT_REQUIRED_FUNCTIONS — these handlers render Maez-generated
+    # content (insight, unified_diff, proposed_new_body, candidate
+    # rationale, weakness, evidence) and were a residual T1.13 hole.
+    #   _handle_dreams, _handle_edit_proposals, _handle_show_edit,
+    #   _handle_train_proposals, _handle_show_train,
+    #   _handle_proposals, _handle_show
     "_handle_apply_dream": "/apply_dream — author-written confirmation",
     "_handle_reject_dream": "/reject_dream — author-written confirmation",
-    "_handle_edit_proposals": "/edit_proposals — author-written list rendering",
-    "_handle_show_edit": "/show_edit — author-written diff rendering of stored proposal",
     "_handle_apply_edit": "/apply_edit — author-written apply confirm",
     "_handle_reject_edit": "/reject_edit — author-written reject confirm",
-    "_handle_train_proposals": "/train_proposals — author-written list rendering",
-    "_handle_show_train": "/show_train — author-written training-pair rendering",
     "_handle_approve_train": "/approve_train — author-written confirm",
     "_handle_reject_train": "/reject_train — author-written confirm",
     "_handle_adapter_status": "/adapter_status — author-written adapter-state rendering",
     "_handle_rollback_adapter": "/rollback_adapter — author-written confirm",
-    "_handle_proposals": "/proposals — author-written list rendering",
-    "_handle_show": "/show — author-written proposal rendering",
     "_handle_apply": "/apply — author-written apply confirm",
     "_handle_reject": "/reject — author-written reject confirm",
     "_handle_cog_analyze": "/cog_analyze — author-written cognition analysis",
@@ -117,6 +117,20 @@ _AUDIT_REQUIRED_FUNCTIONS: set[str] = {
     # audit happens; the AST heuristic doesn't cross function
     # boundaries. They're covered transitively by
     # `test_every_reply_site_is_audited_or_allowlisted` instead.
+    #
+    # Plus 7 dynamic-content renderers added by the Codex 2026-05-04
+    # audit. These render Maez-generated content (insight,
+    # unified_diff, proposed_new_body, candidate rationale,
+    # weakness, evidence) — exactly the surface the honesty guard
+    # is for. Were previously allowlisted as "author-written" which
+    # is wrong: the proposal/candidate text is Maez output.
+    "_handle_dreams",
+    "_handle_edit_proposals",
+    "_handle_show_edit",
+    "_handle_train_proposals",
+    "_handle_show_train",
+    "_handle_proposals",
+    "_handle_show",
     "_try_dream_proposal_intent",
     "_try_web_search_intent",
     "_try_offer_binding_intent",

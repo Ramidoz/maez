@@ -3660,7 +3660,10 @@ class TelegramVoice:
             # the command arrives at the bot with underscores intact.
             lines.append(f"  `/apply_dream {pid}`  ·  `/reject_dream {pid}`")
             lines.append("")
-        await update.message.reply_text("\n".join(lines))
+        body = "\n".join(lines)
+        await update.message.reply_text(
+            _audit_telegram_reply(body, surface="telegram/dreams")
+        )
 
     async def _handle_apply_dream(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Apply a dream proposal: append to soul.md via action_engine."""
@@ -3739,7 +3742,10 @@ class TelegramVoice:
                 f"  /show_edit {pid}  ·  /apply_edit {pid}  ·  /reject_edit {pid}"
             )
             lines.append("")
-        await update.message.reply_text("\n".join(lines))
+        body = "\n".join(lines)
+        await update.message.reply_text(
+            _audit_telegram_reply(body, surface="telegram/edit_proposals")
+        )
 
     async def _handle_show_edit(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -3780,7 +3786,9 @@ class TelegramVoice:
             f"```\n{diff}\n```\n\n"
             f"/apply_edit {prop_id}  ·  /reject_edit {prop_id}"
         )
-        await update.message.reply_text(body)
+        await update.message.reply_text(
+            _audit_telegram_reply(body, surface="telegram/show_edit")
+        )
 
     async def _handle_apply_edit(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -3864,7 +3872,10 @@ class TelegramVoice:
                 f"  /show_train {pid}  ·  /approve_train {pid}  ·  /reject_train {pid}"
             )
             lines.append("")
-        await update.message.reply_text("\n".join(lines))
+        body = "\n".join(lines)
+        await update.message.reply_text(
+            _audit_telegram_reply(body, surface="telegram/train_proposals")
+        )
 
     async def _handle_show_train(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -3900,7 +3911,9 @@ class TelegramVoice:
             f"Status: {prop.get('status', '?')}\n\n"
             f"/approve_train {prop_id}  ·  /reject_train {prop_id}"
         )
-        await update.message.reply_text(body)
+        await update.message.reply_text(
+            _audit_telegram_reply(body, surface="telegram/show_train")
+        )
 
     async def _handle_approve_train(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -4055,7 +4068,10 @@ class TelegramVoice:
                          'weak': '\u274c', 'unknown': '\u26aa'}.get(u, '')
                 w = (r[2] or '')[:60]
                 lines.append(f"  [{r[0]}] {r[1]:11s} {emoji} {u:10s} {w}")
-            await update.message.reply_text('\n'.join(lines))
+            body = '\n'.join(lines)
+            await update.message.reply_text(
+                _audit_telegram_reply(body, surface="telegram/proposals")
+            )
         except Exception as e:
             await update.message.reply_text(f"Error: {e}")
 
@@ -4089,7 +4105,10 @@ class TelegramVoice:
                 f"Direction sane:  {u.get('direction_sane')}",
                 f"Change minimal:  {u.get('change_minimal')}",
             ]
-            await update.message.reply_text('\n'.join(lines))
+            body = '\n'.join(lines)
+            await update.message.reply_text(
+                _audit_telegram_reply(body, surface="telegram/show")
+            )
         except Exception as e:
             await update.message.reply_text(f"Error: {e}")
 
