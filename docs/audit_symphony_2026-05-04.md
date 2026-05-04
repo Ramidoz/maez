@@ -15,6 +15,139 @@
 
 ---
 
+## Codex gatekeeper corrections (2026-05-04, post-cdb68e5)
+
+Per the structural rule (Codex reviews every audit before triage), Codex
+reviewed cdb68e5 and **passed it with errata**. Four findings were
+overstated by the parallel agents and propagated into the synthesis
+unchecked. Each correction below has been independently re-verified
+against the live host before being written here. **Read this section as
+authoritative when it conflicts with the original findings below.**
+
+### Correction 1 — F3 (Web `/chat` skips audit gate) — RETRACTED
+
+**Original claim (S3 BLOCKER B3, F3 in severity table):** *"`web_interface.py:2805-2812` sends the reply with no audit call."*
+
+**Verified ground truth:** `skills/web_interface.py:2854-2855` calls
+`audit_assistant_text(reply, surface="web")` before persisting / sending
+the reply on the general `/chat` path. The S3 sub-agent looked at lines
+2805-2812 only, missed the audit call ~50 lines later, and the
+synthesis propagated the gap unchecked.
+
+**Status:** F3 is RETRACTED as a BLOCKER. The general `/chat` reply
+path IS audited. **Possible residual concern:** identity short-circuit
+or other early-return paths in `/chat` that bypass the audit before
+reaching line 2854. Reframed as **F3-narrow (MAJOR):** *audit possible
+early-return gaps in `/chat` (e.g. identity short-circuit) where the
+reply is sent before reaching `audit_assistant_text` at line 2854.*
+Verifying these gaps becomes a wave-2 R4 sub-task, not a top-10 finding.
+
+### Correction 2 — F9 (sudo BLOCKER) — DOWNGRADED
+
+**Original claim (S1 BLOCKER 2):** *"`sudo -n true` returns non-zero
+on this host (no NOPASSWD entry for `rohit`); maez.service has no TTY
+… every install attempt will hang and 120s-timeout."*
+
+**Verified ground truth:** `sudo -n true` returns exit code 0 on this
+host (NOPASSWD-equivalent path exists). `maez.service` runs
+`User=rohit`, so the daemon inherits whatever sudo path `rohit` has.
+The "every install will hang" claim is **unproven and likely wrong**.
+
+**Status:** F9 is DOWNGRADED from BLOCKER to MAJOR. The real concern is
+narrower: **F9-narrow (MAJOR):** *`_TOOL_MANIFEST`'s shell-cmd advice
+has no body-preflight for sudo / package-manager capability. The DIRECT-
+INSTALL RULE assumes apt is available without verification.* A body-
+truth probe (R2) should still verify before the prompt asserts
+"install via apt" — but the failure mode is "untested reach" not
+"confirmed outage". Wave-2 R2 must include a sudo/package-manager
+probe, but R2's priority isn't elevated by F9.
+
+### Correction 3 — DISPLAY/XAUTHORITY claim is stale, root cause restated
+
+**Original claim (multiple findings, including F14, F18, S2 #5, S1 — referenced
+across docs as "no DISPLAY in systemd"):** *"systemd unit has no
+`DISPLAY=:0` env var, so xdotool can't connect."*
+
+**Verified ground truth (`systemctl cat maez.service`):**
+
+```
+Environment="DISPLAY=:1"
+Environment="XAUTHORITY=/run/user/1000/gdm/Xauthority"
+```
+
+**The env IS present.** xdotool failures and `Error: Can't open display:
+(null)` lines are real, but the diagnosis "no DISPLAY in systemd" is
+wrong. The actual cause is **desktop reachability / X11 session auth**
+— either the X session on `:1` is not the active session at the time
+of the call, the XAUTHORITY file is locked / unreadable from the
+daemon's process context, or the GDM session is on a different display.
+
+**Status:** F14 (xdotool every owner message), F10 (top-10 #10), and
+the related S2/S1 root-cause sentences are **diagnostically corrected**
+without changing severity. The wmctrl-class is still real; the fix is
+session-auth investigation, not "set DISPLAY in the unit". R2's body
+probe must reach the *X session*, not just check whether `DISPLAY` is
+set in env.
+
+### Correction 4 — Raw-memory claim narrowed
+
+**Original claim (F11):** *"the failed tool output was NOT stored
+anywhere in raw memory"* and *"this incident has nothing in raw memory"*
+language in the S4 sub-report.
+
+**Verified ground truth:** Direct fulltext probe of
+`memory/db/raw/chroma.sqlite3` shows:
+- `"Run it yourself"` literal: 15 rows historically (broad match;
+  none verified as the 14:39 turn specifically)
+- `"command not found"`: 90 rows (other turns / cycle narrations)
+- `"Cant open display"`: 44 rows (other contexts)
+- `"Failed creating new xdo"` literal: 0 rows
+- An earlier cycle narration referencing planned `xdotool`/`wmctrl`
+  use is in raw memory (`"Firefox is consuming 79.6% CPU … I'll check
+  for unresponsive tabs via xdotool and wmctrl"`)
+
+**Narrowed claim (replaces F11):** *The 14:39 "Run it yourself" turn
+specifically — the explicit owner consent moment plus its failure
+output — is not stored as a `Raw stored (telegram)` row. Other Maez
+content mentioning xdotool/wmctrl (cycle narrations, prior turns)
+exists. The narrow gap is the consent-moment + failure-result invisibility
+to the lived corpus; the broader narrative "wmctrl never appears in raw
+memory" is wrong.*
+
+### Sequencing note from gatekeeper
+
+Codex confirmed the R1 → R2 → R3 → R4 → R5 sequencing. Wave-2 starts
+with R1 (grounding rail). One mechanism detail Codex caught that
+strengthens R1: *`grounding_judge.judge()` swallows connection failure
+and returns `[]`, so `self_claim_audit` reads "clean" not "judge
+unavailable".* This isn't only a "judge dead" finding — it's a
+**fail-open fail-mode** at the same shape as T1.3 (the `_card_store`
+silent-fail-open we closed earlier today). R1's design must distinguish
+"audit ran clean" from "audit could not run" at the call-site, not
+silently collapse them.
+
+### Gate decision
+
+PASS WITH ERRATA. Wave-2 work is authorized (sequential R1 → R5)
+**with the corrections above applied**. The downstream severity table
+should be read with these adjustments:
+- F3 → demoted to MAJOR (F3-narrow), scope reduced to early-return
+  audit-bypass paths in /chat
+- F9 → downgraded to MAJOR (F9-narrow), reframed as missing
+  body-preflight for sudo/pkg-manager
+- F10 / F14 / S2#5 / S1 root-cause for xdotool → diagnostic correction:
+  X-session auth/reachability, not "DISPLAY missing from unit"
+- F11 → narrowed: consent-moment + failure-result invisible to lived
+  corpus; not "wmctrl absent from raw entirely"
+
+**Adjusted top BLOCKER count:** 9 (F3 demoted; F9 demoted). The
+remaining 8 BLOCKERs (F1, F2, F4, F5, F6, F7, F8, F10) hold as written.
+F10 holds as a BLOCKER with the corrected diagnosis.
+
+---
+
+---
+
 ## Executive summary — top 10 findings
 
 Ranked across all four sub-tracks (S1 self-claim · S2 noise · S3 surface ·
