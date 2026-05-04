@@ -970,6 +970,31 @@ class ActionEngine:
             raise ShellCommandError(
                 stdout=out, stderr=err, returncode=result.returncode, cmd=cmd,
             )
+
+        # R3 (2026-05-04 symphony audit, S4 BLOCKERs F5+F6): the
+        # 14:39 "Run it yourself" wmctrl turn returned exit 0
+        # because every individual tool failure was absorbed by the
+        # composite cmd's `||` fallthroughs — but stdout named three
+        # failed tools. Returncode-only success keying recorded that
+        # turn as `execution_success=1`, which cascaded into a wrong
+        # audit_log outcome and a missed consequence_memory write.
+        # The detector scans for unambiguous failure markers and
+        # raises ShellCommandError so decision_pipeline routes the
+        # outcome through the failure branch.
+        from core.actions import shell_failure_detector as _sfd
+        sig = _sfd.detect_failures_in_output(
+            stdout=out, stderr=err, returncode=result.returncode, cmd=cmd,
+        )
+        if sig is not None:
+            # Synthesize a non-zero returncode for ShellCommandError so
+            # downstream consequence_memory.note_tool_failure receives
+            # exit!=0 (matching the existing failure-branch contract).
+            raise ShellCommandError(
+                stdout=out, stderr=err,
+                returncode=2,  # synthetic — distinguishable from real exits
+                cmd=cmd,
+            )
+
         if not out:
             return "(no output) exit=0"
         return out
