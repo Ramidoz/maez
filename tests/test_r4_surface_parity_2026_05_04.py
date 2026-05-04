@@ -181,6 +181,133 @@ class R4_FastPromptBodyTruthAware(unittest.TestCase):
             )
 
 
+class R4_IdentityReplyNoFalseBodyClaim(unittest.TestCase):
+    """REGRESSION GUARD (Codex 2026-05-04 review of d99602e):
+    skills/web_interface.py /chat identity short-circuit must NOT
+    contain the unconditional 'perceive his world' claim.
+
+    The audit wrapper is INSUFFICIENT for hand-written false
+    claims because audit_assistant_text falls open under
+    judge_unavailable / timeout, returning rewritten=False and
+    leaving the false claim intact. Verified empirically. The
+    structural fix is to never make the false claim in the source
+    string itself.
+    """
+
+    def test_perceive_his_world_phrase_removed_from_source(self):
+        path = REPO / "skills" / "web_interface.py"
+        src = path.read_text()
+        self.assertNotIn(
+            "perceive his world",
+            src,
+            "skills/web_interface.py must NOT contain the literal "
+            "'perceive his world' phrase — it is a false body "
+            "claim under the daemon's actual runtime (DISPLAY=:1, "
+            "X session unreachable). Audit wrapper does not save "
+            "this; structural fix only.",
+        )
+
+    def test_render_identity_reply_under_daemon_env_omits_perception_claim(self):
+        """Under daemon-equivalent env (DISPLAY=:1, X unreachable),
+        the rendered identity_reply must NOT claim desktop / world
+        / vision perception. Body-truth-aware rendering is the
+        contract: only signals actually reachable from the calling
+        process appear in the reply."""
+        from skills.web_interface import _render_identity_reply
+        from core.infra import body_capabilities as bc
+        from unittest import mock
+
+        # Simulate the daemon's environment: desktop NOT reachable,
+        # brain reachable.
+        fake_snap = {
+            "binaries": {
+                "wmctrl": False, "xdotool": True, "dbus-send": True,
+                "git": True, "curl": True, "sudo": True, "apt-get": True,
+            },
+            "env": {
+                "DISPLAY": ":1",
+                "XAUTHORITY": "/run/user/1000/gdm/Xauthority",
+                "DBUS_SESSION_BUS_ADDRESS": None,
+                "WAYLAND_DISPLAY": None,
+            },
+            "services": {
+                "brain_8080": True, "ollama_11434": False,
+                "daemon_11435": True, "daemon_ws_11436": True,
+                "web_11437": True, "proxy_11438": True,
+            },
+            "desktop_session_reachable": False,  # the load-bearing fact
+            "sudo_passwordless": True,
+            "probed_at": 0.0,
+        }
+        with mock.patch.object(bc, "body_capabilities",
+                               return_value=fake_snap):
+            reply_linked = _render_identity_reply(
+                display="Friend", linked_user=True,
+            )
+            reply_guest = _render_identity_reply(
+                display="Friend", linked_user=False,
+            )
+        for reply, label in [
+            (reply_linked, "linked"),
+            (reply_guest, "guest"),
+        ]:
+            self.assertNotIn(
+                "perceive", reply.lower(),
+                f"{label} identity_reply must not claim perception "
+                f"under daemon env (desktop unreachable); got {reply!r}",
+            )
+            self.assertNotIn(
+                "desktop", reply.lower(),
+                f"{label} identity_reply must not name desktop "
+                f"signal when desktop_session_reachable=False",
+            )
+            self.assertNotIn(
+                "vision", reply.lower(),
+                f"{label} identity_reply must not claim vision",
+            )
+            self.assertNotIn(
+                "world", reply.lower(),
+                f"{label} identity_reply must not claim 'perceive "
+                f"his world'-class language",
+            )
+
+    def test_render_identity_reply_includes_signals_when_reachable(self):
+        """When desktop IS reachable + brain reachable, the
+        sensor clause may name those signals — but only those, not
+        a blanket 'world' claim."""
+        from skills.web_interface import _render_identity_reply
+        from core.infra import body_capabilities as bc
+        from unittest import mock
+
+        fake_snap = {
+            "binaries": {},
+            "env": {
+                "DISPLAY": ":0",
+                "XAUTHORITY": "/run/user/1000/.Xauthority",
+                "DBUS_SESSION_BUS_ADDRESS": None,
+                "WAYLAND_DISPLAY": None,
+            },
+            "services": {"brain_8080": True},
+            "desktop_session_reachable": True,
+            "sudo_passwordless": True,
+            "probed_at": 0.0,
+        }
+        with mock.patch.object(bc, "body_capabilities",
+                               return_value=fake_snap):
+            reply = _render_identity_reply(
+                display="Owner", linked_user=True,
+            )
+        self.assertIn(
+            "desktop", reply.lower(),
+            "when desktop is actually reachable, the sensor "
+            "clause should name it",
+        )
+        # Still no broad-perception claim — names a specific signal.
+        self.assertNotIn(
+            "world", reply.lower(),
+        )
+
+
 class R4_R35HardeningWarning(unittest.TestCase):
     """REGRESSION GUARD (Codex R3.5 review note 2026-05-04): the
     daemon's recent_action_context exception path must log at

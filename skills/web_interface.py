@@ -99,6 +99,69 @@ def _is_private_owner_bridge(user_record: dict | None) -> bool:
     return bool(user_record and user_record.get("private_owner_bridge"))
 
 
+def _render_identity_reply(*, display: str, linked_user: bool) -> str:
+    """Render the /chat identity short-circuit reply.
+
+    R4 follow-up (Codex 2026-05-04 review of d99602e): the previous
+    inline string for linked_user contained an unconditional
+    perception claim of the form "I ... [verb-of-sensing] his
+    world ..." that is FALSE under the daemon's actual runtime
+    (DISPLAY=:1, X session unreachable).
+    Wrapping it in audit_assistant_text() is insufficient because
+    the audit's fall-open path on judge_unavailable returns
+    rewritten=False and the false claim passes through unchanged.
+    Verified empirically against the real audit code.
+
+    Structural fix: never make the false claim. The baseline
+    asserts only what is universally true regardless of body
+    state — Maez runs on the owner's machine, remembers
+    conversations across surfaces, doesn't forget between
+    sessions. An optional "Available signals: ..." clause is
+    appended ONLY when body_capabilities reports those signals
+    are actually reachable from this process — same shape as
+    core.infra.fast_prompt_builder.compact_identity().
+    """
+    if linked_user:
+        baseline = (
+            f"Hi {display}. I'm Maez — a persistent AI presence "
+            f"built by the owner. I run on his machine, remember "
+            f"every conversation we have across Telegram and the "
+            f"web, and don't forget between sessions. You and I "
+            f"have history — ask me anything."
+        )
+    else:
+        baseline = (
+            f"Hi {display}. I'm Maez — a persistent AI presence "
+            f"built by the owner. I run locally on his machine, "
+            f"and I remember every conversation we have. I don't "
+            f"forget between sessions. What's on your mind?"
+        )
+
+    # Body-truth-aware sensor clause. Mirrors compact_identity()'s
+    # shape: only name signals that are actually verifiable from
+    # the calling process. Probe failure → conservative shape (no
+    # clause). The clause is omitted entirely when no signals
+    # are reachable (the daemon's typical state today).
+    sensor_clause = ""
+    try:
+        from core.infra import body_capabilities as _bc
+        snap = _bc.body_capabilities()
+        env = snap.get("env") or {}
+        signals: list[str] = []
+        if env.get("DISPLAY") and snap.get("desktop_session_reachable"):
+            signals.append("desktop")
+        services = snap.get("services") or {}
+        if services.get("brain_8080"):
+            signals.append("memory")
+        if signals:
+            sensor_clause = (
+                f" Right now I can verify: {', '.join(signals)}."
+            )
+    except Exception:
+        sensor_clause = ""
+    return baseline + sensor_clause
+
+
 def _parse_owner_exchange(content: str, timestamp: str) -> list[dict]:
     text = (content or "").strip()
     if not text:
@@ -2621,19 +2684,9 @@ def chat():
         )
         msg_lower = message.lower().strip()
         if any(kw in msg_lower for kw in IDENTITY_KEYWORDS):
-            if linked_user:
-                identity_reply = (
-                    f"Hi {display}. I'm Maez — a persistent AI presence built by the owner. "
-                    f"I run on his machine, perceive his world, and remember every "
-                    f"conversation we have, across Telegram and the web. I don't "
-                    f"forget between sessions. You and I have history — ask me anything."
-                )
-            else:
-                identity_reply = (
-                    f"Hi {display}. I'm Maez — a persistent AI presence built by the owner. "
-                    f"I run locally on his machine, and I remember every conversation "
-                    f"we have. I don't forget between sessions. What's on your mind?"
-                )
+            identity_reply = _render_identity_reply(
+                display=display, linked_user=linked_user,
+            )
             # R4 (2026-05-04 symphony audit, S3 narrowed F3 per
             # Codex): the early-return identity-short-circuit path
             # was bypassing the main-path audit_assistant_text call
