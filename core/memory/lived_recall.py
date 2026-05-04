@@ -40,6 +40,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -75,6 +76,14 @@ _ENTITY_EXPANSION_SECTION_BYTE_CAP = 500
 # Reset to None in tests that exercise the construction-failure
 # fail-closed path.
 _cached_entity_ix: "EntityIndex | None" = None
+
+# T1.4 (2026-05-04 audit) — list_mentions() failures used to be
+# silently swallowed (`except Exception: mentions = []`), so
+# entity-index DB corruption produced an empty section that
+# looked identical to "no relevant entities". Counter + timestamp
+# surface failures so dashboards/operators can see when the
+# index is sick.
+_entity_expansion_failures: dict = {"count": 0, "last_ts": 0.0}
 
 
 def _entity_expansion_enabled() -> bool:
@@ -112,7 +121,14 @@ def _format_entity_expansion_section(
     for m in matches:
         try:
             mention_count = len(ix.list_mentions(m.entity_id))
-        except Exception:
+        except Exception as e:
+            _entity_expansion_failures["count"] += 1
+            _entity_expansion_failures["last_ts"] = time.time()
+            logger.warning(
+                "entity_expansion: list_mentions(%s) raised: %s "
+                "(total failures=%d) — entity dropped from ranking",
+                m.entity_id, e, _entity_expansion_failures["count"],
+            )
             mention_count = 0
         enriched.append((m, mention_count))
     enriched.sort(
@@ -126,7 +142,15 @@ def _format_entity_expansion_section(
     for m, _count in enriched:
         try:
             mentions = ix.list_mentions(m.entity_id)
-        except Exception:
+        except Exception as e:
+            _entity_expansion_failures["count"] += 1
+            _entity_expansion_failures["last_ts"] = time.time()
+            logger.warning(
+                "entity_expansion: list_mentions(%s) raised at "
+                "render: %s (total failures=%d) — sessions list "
+                "rendered as empty",
+                m.entity_id, e, _entity_expansion_failures["count"],
+            )
             mentions = []
         # list_mentions returns ORDER BY observed_at DESC; take
         # distinct session_ids preserving order, capped at 5.

@@ -29,6 +29,7 @@ from __future__ import annotations
 import json as _json
 import logging
 import threading
+import time
 import re as _re
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -300,6 +301,14 @@ class ConversationController:
         # later than the Telegram thread).
         self._pipeline_getter = pipeline_getter
 
+        # T1.3 (2026-05-04 audit) — pipeline_getter failures used to be
+        # logged at DEBUG and silently returned None, which made every
+        # honesty-guard caller fail-OPEN (steamroll the user's pending-
+        # card context). Track failures observably; has_awaiting_card
+        # uses these to fail CLOSED inside a short window.
+        self._card_store_failures: int = 0
+        self._card_store_last_failure_ts: Optional[float] = None
+
         # Ephemeral per-chat state, keyed by (channel, chat_id).
         #
         # T1.2 (2026-05-04 audit) — these mutable dicts are read /
@@ -362,26 +371,67 @@ class ConversationController:
     #  Pending-card view (layer: pending_card_view)             #
     # ════════════════════════════════════════════════════════ #
 
+    # T1.3 — within this many seconds of a pipeline_getter failure,
+    # honesty-critical callers (has_awaiting_card) fail CLOSED so the
+    # user's pending-card context is preserved.
+    _CARD_STORE_FAILURE_WINDOW_S = 30.0
+
     def _card_store(self) -> Any:
-        """Return the pending-card store from the pipeline, or None."""
+        """Return the pending-card store from the pipeline, or None.
+
+        T1.3 (2026-05-04 audit): on pipeline_getter failure we now log
+        at WARNING (not DEBUG) and bump a failure counter. The counter
+        plus timestamp let has_awaiting_card distinguish 'no pipeline
+        configured' (None forever) from 'lookup just failed' (None now,
+        try again later) — the latter must fail CLOSED for the honesty
+        guard, not silently fail-OPEN as before.
+        """
         pipe = self.pipeline
         if pipe is None and self._pipeline_getter is not None:
             try:
                 pipe = self._pipeline_getter()
             except Exception as e:
-                logger.debug("controller: pipeline_getter raised: %s", e)
+                self._card_store_failures += 1
+                self._card_store_last_failure_ts = time.time()
+                logger.warning(
+                    "controller: pipeline_getter raised: %s "
+                    "(failure #%d) — honesty guard will fail closed "
+                    "for the next %.0fs",
+                    e,
+                    self._card_store_failures,
+                    self._CARD_STORE_FAILURE_WINDOW_S,
+                )
                 pipe = None
         if pipe is None:
             return None
         return getattr(pipe, "card_store", None)
 
+    def _card_store_recently_failed(self) -> bool:
+        """True if a pipeline_getter failure was recorded within the
+        fail-closed window. Honesty-guard-critical callers consult
+        this to back off on suspect lookups instead of treating
+        them as 'no pending card'."""
+        ts = self._card_store_last_failure_ts
+        if ts is None:
+            return False
+        return (time.time() - ts) < self._CARD_STORE_FAILURE_WINDOW_S
+
     def has_awaiting_card(self, channel: str, chat_id: str) -> bool:
         """True if the given (channel, chat_id) has at least one card in
         status OPEN or DEFERRED. Used by the probe→pending bridge, by
         offer-binding, and by the honesty guard to avoid preempting /
-        over-correcting when a real card already exists."""
+        over-correcting when a real card already exists.
+
+        T1.3 fail-closed semantics: when _card_store() returns None
+        because pipeline_getter just raised (within the failure
+        window), assume there IS an awaiting card. The honesty guard
+        consults this to decide whether to back off; backing off on
+        a suspect lookup preserves the user's pending-card context
+        instead of steamrolling it."""
         store = self._card_store()
         if store is None:
+            if self._card_store_recently_failed():
+                return True  # T1.3 fail-CLOSED
             return False
         try:
             from core.pending_cards import AWAITING_STATUSES

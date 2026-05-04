@@ -4244,10 +4244,23 @@ class MaezDaemon:
         except Exception as e:
             logger.debug("Telegram bot stop failed: %s", e)
         # Stop the v2 surface adapter if we launched it
+        # T1.9 (2026-05-04 audit) — call_soon_threadsafe schedules the
+        # loop's stop but returns immediately. Without joining the
+        # thread, in-flight aiohttp/uvicorn connections never get a
+        # chance to close cleanly before SIGKILL. Join with a bounded
+        # timeout; warn (don't block forever) if it doesn't exit.
         try:
             if getattr(self, "_surface_v2_loop", None) is not None:
                 _loop = self._surface_v2_loop
                 _loop.call_soon_threadsafe(_loop.stop)
+                _thread = getattr(self, "_surface_v2_thread", None)
+                if _thread is not None and _thread.is_alive():
+                    _thread.join(timeout=5.0)
+                    if _thread.is_alive():
+                        logger.warning(
+                            "surface_v2 thread did not exit within "
+                            "5s of loop.stop — connections may leak"
+                        )
         except Exception as e:
             logger.debug("surface v2 stop failed: %s", e)
         try:
