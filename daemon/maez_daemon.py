@@ -1215,6 +1215,29 @@ class MaezDaemon:
         if self._last_reddit_block:
             prompt += f"\n{self._last_reddit_block}\n"
 
+        # R3.5 (2026-05-04 symphony audit, S4 BLOCKER F7): consult
+        # recent card outcomes BEFORE the cycle narration runs. Cycle
+        # 35 narrating "system idle, holding quiet" 12s after the
+        # 14:39 wmctrl card failed three tools is the canonical case
+        # this guards against. The block lists card failures from
+        # the last 120s (re-running the soft-failure detector on
+        # stored execution_output so legacy lying rows from pre-R3
+        # deploy are also surfaced). Empty string when no failures
+        # — adds nothing to the prompt on quiet cycles.
+        try:
+            from core.decision import recent_action_context as _rac
+            _action_outcomes_block = _rac.recent_failures(
+                window_seconds=120.0,
+            )
+            if _action_outcomes_block:
+                prompt += f"\n{_action_outcomes_block}\n"
+        except Exception as _rac_e:
+            logger.debug(
+                "recent_action_context unavailable: %s "
+                "(cycle prompt continues without recent-actions block)",
+                _rac_e,
+            )
+
         # Add public bot context if available
         if self._last_public_context:
             prompt += f"\n{self._last_public_context}\n"
