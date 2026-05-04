@@ -230,7 +230,7 @@ class HardwareGating(_Base):
         )
         # Either way, deferred proposals must NOT have produced a
         # card. Eligible ones (if any survive) may have.
-        for p, request_id in zip(r.proposals, r.cards_created):
+        for p, request_id in zip(r.proposals, r.cards_created, strict=False):
             self.assertEqual(
                 p.evaluation_decision, "eligible",
                 "card must only be created for eligible decisions",
@@ -337,7 +337,9 @@ class SupersessionDefault(_Base):
         )
         if not r1.cards_created:
             self.skipTest("manual yielded no eligible proposal")
-        r2 = orchestrate_from_felt_limitation(
+        # Second run is for its supersession side-effect on the cards
+        # store; we don't read the result tuple itself.
+        orchestrate_from_felt_limitation(
             "when did X happen?",
             pending_card_store=self.cards, hardware=hardware,
         )

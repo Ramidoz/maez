@@ -13,7 +13,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -135,7 +134,7 @@ def _infer_what(action: str, params: dict) -> str:
         if "add-apt-repository" in cmd:
             return "Add a third-party software source"
         if re.search(r'systemctl\s+(start|stop|enable|disable|restart)\b', cmd):
-            return f"Control a system service"
+            return "Control a system service"
         if pe:
             return pe
         return f"Run: {cmd[:100]}"

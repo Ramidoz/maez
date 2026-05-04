@@ -167,6 +167,11 @@ extend-exclude = [
     "backups",
     "web/node_modules",
     "web/.next",
+    # ui/ holds owner-WIP scaffolds (e.g. maez_pulse_bridge.py)
+    # that aren't part of the daemon/web/proxy surfaces. Excluded
+    # from lint so untracked exploratory files don't show as repo
+    # drift; promoted out of ui/ when ready.
+    "ui",
 ]
 
 [tool.ruff.lint]

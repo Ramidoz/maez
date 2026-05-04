@@ -234,8 +234,7 @@ class TelegramReplyAuditCoverage(unittest.TestCase):
                         f"`_audit_telegram_reply` per T1.13 — patch "
                         f"regressed",
                     )
-        # Sanity check: the functions we assert about should exist
-        missing = _AUDIT_REQUIRED_FUNCTIONS - seen
+        # Sanity check: the functions we assert about should exist.
         # _process_message and _handle_message are large functions
         # that may have moved or been renamed. Tolerate one or two
         # missing — focus is on the audit-flagged trio.

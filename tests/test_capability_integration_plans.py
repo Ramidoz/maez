@@ -427,11 +427,10 @@ class DenyPropagation(_Base):
         # (different attribute names), this test fails at the
         # import or attribute access — which is exactly the
         # regression guard we want.
-        from core.decision import decision_pipeline as dp
+        from core.decision import decision_pipeline as dp  # noqa: F401
         # Re-execute the block. The body is a try/except so we
         # need to actually call it. We synthesize a no-op pipeline
         # method by patching the dependencies on the class.
-        cls = dp.DecisionPipeline
         # Skip building a full pipeline; just call the chunk we
         # care about directly.
         if card.action == "integration.review_plan":

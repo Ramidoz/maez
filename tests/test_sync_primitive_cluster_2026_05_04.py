@@ -25,10 +25,8 @@ refactor can't silently drop the lock acquisition.
 """
 from __future__ import annotations
 
-import os
 import sys
 import tempfile
-import threading
 import time
 import unittest
 from pathlib import Path
@@ -257,7 +255,7 @@ class T1_7_SoulWriteRace(unittest.TestCase):
         contract: with the lock, A waits for B; without it, A's
         write would clobber B's append silently. Test verifies one
         of two valid serialized states results, not a hybrid."""
-        from tests._helpers.concurrent import Interleave, run_two_threads
+        from tests._helpers.concurrent import run_two_threads
         from core.evolution import soul_editor as se
         from core.evolution import soul_loader as sl
 

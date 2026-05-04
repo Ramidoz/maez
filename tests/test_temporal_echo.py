@@ -472,7 +472,7 @@ class ScoreIsSharedFeatureCount(unittest.TestCase):
             top = echoes[0]
             self.assertGreaterEqual(top.score, 3)
             # Sanity: scores are non-increasing.
-            for a, b in zip(echoes, echoes[1:]):
+            for a, b in zip(echoes, echoes[1:], strict=False):
                 self.assertGreaterEqual(a.score, b.score)
         finally:
             cleanup()

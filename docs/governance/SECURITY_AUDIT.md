@@ -71,18 +71,43 @@ No such action has ever been required.
 
 ### Ports Maez binds
 
+(Updated 2026-05-04 — Codex audit caught stale port doc.)
+
 | Port | Binding | Purpose | Authentication |
 |---|---|---|---|
-| 5173 | 127.0.0.1 or 0.0.0.0 (cockpit dev build) | Web cockpit (Flask + React) | Session + MAEZ_OWNER_USER_ID check |
-| 8765 | 127.0.0.1 | Fast-reply adapter (ambient-turn service) | None — localhost only |
+| 11435 | 127.0.0.1 | Daemon REST API (`/health`, `/message`, `/internal/brain_loop`, `/api/iphone/*`) | Owner-token check on owner-only routes; `/health` is open |
+| 11436 | 127.0.0.1 | Daemon WebSocket (cycle/health/alert broadcast) | None — localhost only |
+| 11437 | 127.0.0.1 | Web cockpit (separate Flask app: registration, chat, workshop) | Session + `MAEZ_OWNER_USER_ID` check |
 | 11438 | 127.0.0.1 | Subscription proxy (OpenAI-compatible) | None — localhost only |
+
+Verified live via `ss -tlnp` 2026-05-04: every Maez-owned listener
+is on `127.0.0.1`, not `0.0.0.0`. Anything else listening on the
+machine (e.g. `8080` for llama-server, `11434` for Ollama) is a
+backend Maez reaches out to, not a Maez surface.
 
 **Everything else is outbound.** The daemon *reaches out* to the
 local LLM backend (llama-server on 8080 or Ollama on 11434), to
 external APIs via the subscription proxy, to the Telegram Bot API,
 and to the open-meteo weather endpoint. Nothing else listens.
 
-### Cockpit (port 5173)
+### Daemon REST API (port 11435)
+
+- Hosts `/health`, `/message`, `/internal/brain_loop`, the
+  `/api/iphone/*` ingest endpoints, and a small admin surface.
+- Owner-only routes require `MAEZ_OWNER_TOKEN`; `/health` is
+  intentionally unauthenticated (used by readiness checks).
+- Localhost binding is enforced in code — promoting to `0.0.0.0`
+  requires a config change.
+
+### Daemon WebSocket (port 11436)
+
+- Broadcasts `cycle_start`, `cycle_end` (with thought text),
+  `alert`, and `health` events. Clients connect to receive a live
+  feed of the daemon's reasoning and state.
+- No auth; localhost only. Any process on the box that can connect
+  to loopback can subscribe.
+
+### Web cockpit (port 11437)
 
 - Default binding is `127.0.0.1`. If the owner manually binds to
   `0.0.0.0` (for example to reach the cockpit from a phone on the
@@ -95,6 +120,11 @@ and to the open-meteo weather endpoint. Nothing else listens.
   part of Phase 10 launch prep, LAN-binding users should be told to
   put a reverse proxy (caddy / traefik) with basic-auth or OAuth in
   front.
+- The `/api/v1/*` JSON surface (workshop, daemon-state, debug) is
+  unauthenticated. Codex 2026-05-04 audit confirmed this is real
+  but conditional-only: the listener is bound to `127.0.0.1`. The
+  Tier-2 deferral list below tracks this; promotion to LAN reach
+  requires token auth.
 
 ### Subscription proxy (port 11438)
 
@@ -111,12 +141,6 @@ and to the open-meteo weather endpoint. Nothing else listens.
   reality on a single-user machine.
 - Hardened systemd unit restricts write paths (`ReadWritePaths=...
   memory ... logs`) and disables new-privs escalation.
-
-### Fast-reply adapter (port 8765)
-
-- Internal-only localhost service used by the brain loop's
-  ambient-turn path (the between-heavy-cycles fast replies).
-- No auth; no plan to expose.
 
 ### Daemon outbound calls
 

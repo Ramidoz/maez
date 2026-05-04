@@ -702,7 +702,7 @@ class MaezApp:
 
 def main():
     root = tk.Tk()
-    app  = MaezApp(root)
+    MaezApp(root)  # registers handlers on root
     root.mainloop()
 
 
