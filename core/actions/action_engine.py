@@ -16,6 +16,7 @@ import shlex
 import shutil
 import sqlite3
 import subprocess
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -503,8 +504,15 @@ class ActionEngine:
         # the daemon.
         self.daemon = daemon
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        # T2.D (2026-05-04): re-entrant lock guarding `_pending` against
+        # concurrent access from sync entry points (telegram callbacks,
+        # brain loop, GUI). Mirrors T1.2's _offers_lock pattern in
+        # core/brain/conversation_controller.py.
+        self._pending_lock = threading.RLock()
         self._load_pending()
-        logger.info("ActionEngine initialized (pending: %d)", len(self._pending))
+        with self._pending_lock:
+            _pending_count = len(self._pending)
+        logger.info("ActionEngine initialized (pending: %d)", _pending_count)
 
     # ------------------------------------------------------------------ #
     #  Safety checks                                                       #
@@ -680,16 +688,20 @@ class ActionEngine:
     # ------------------------------------------------------------------ #
 
     def _load_pending(self):
-        try:
-            if PENDING_FILE.exists():
-                self._pending = json.loads(PENDING_FILE.read_text())
-            else:
+        # T2.D: lock guards every _pending write so concurrent callers
+        # cannot observe a half-loaded list.
+        with self._pending_lock:
+            try:
+                if PENDING_FILE.exists():
+                    self._pending = json.loads(PENDING_FILE.read_text())
+                else:
+                    self._pending = []
+            except (json.JSONDecodeError, OSError):
                 self._pending = []
-        except (json.JSONDecodeError, OSError):
-            self._pending = []
 
     def _save_pending(self):
-        PENDING_FILE.write_text(json.dumps(self._pending, indent=2, default=str))
+        with self._pending_lock:
+            PENDING_FILE.write_text(json.dumps(self._pending, indent=2, default=str))
 
     def queue_action(self, action: str, params: dict, reasoning: str,
                      tier: int) -> str:
@@ -704,21 +716,24 @@ class ActionEngine:
             "queued_at": datetime.now(timezone.utc).isoformat(),
             "status": "pending",
         }
-        self._pending.append(entry)
-        self._save_pending()
+        with self._pending_lock:
+            self._pending.append(entry)
+            self._save_pending()
         self._log_action(tier, action, reasoning, params, f"QUEUED ({action_id})")
         _quality_tracker.record_proposed(action_id, tier, action, reasoning, params)
         return action_id
 
     def execute_pending(self) -> list[ActionResult]:
         """Execute all pending Tier 1 actions (called at start of each cycle)."""
-        if not self._pending:
-            return []
+        with self._pending_lock:
+            if not self._pending:
+                return []
+            snapshot = list(self._pending)
 
         results = []
         remaining = []
 
-        for entry in self._pending:
+        for entry in snapshot:
             if entry["status"] != "pending":
                 continue
 
@@ -731,26 +746,29 @@ class ActionEngine:
             else:
                 remaining.append(entry)
 
-        self._pending = remaining
-        self._save_pending()
+        with self._pending_lock:
+            self._pending = remaining
+            self._save_pending()
         return results
 
     def get_pending(self) -> list[dict]:
         """Return list of pending actions."""
-        return [a for a in self._pending if a["status"] == "pending"]
+        with self._pending_lock:
+            return [a for a in self._pending if a["status"] == "pending"]
 
     def cancel_pending(self, action_id: str) -> bool:
         """Cancel a pending action by ID."""
-        for entry in self._pending:
-            if entry["id"] == action_id and entry["status"] == "pending":
-                entry["status"] = "cancelled"
-                self._save_pending()
-                self._log_action(entry["tier"], entry["action"],
-                                 entry["reasoning"], entry["params"],
-                                 f"CANCELLED ({action_id})")
-                _quality_tracker.record_outcome(action_id, 'cancelled')
-                _trust_tracker.record_outcome(entry["action"], 'cancelled')
-                return True
+        with self._pending_lock:
+            for entry in self._pending:
+                if entry["id"] == action_id and entry["status"] == "pending":
+                    entry["status"] = "cancelled"
+                    self._save_pending()
+                    self._log_action(entry["tier"], entry["action"],
+                                     entry["reasoning"], entry["params"],
+                                     f"CANCELLED ({action_id})")
+                    _quality_tracker.record_outcome(action_id, 'cancelled')
+                    _trust_tracker.record_outcome(entry["action"], 'cancelled')
+                    return True
         return False
 
     # ------------------------------------------------------------------ #
@@ -2097,22 +2115,31 @@ class ActionEngine:
 
     def approve_action(self, action_id: str) -> ActionResult | None:
         """Approve and immediately execute a Tier 3 pending action."""
-        for entry in self._pending:
-            if entry["id"] == action_id and entry["status"] == "pending":
-                entry["status"] = "approved"
-                self._save_pending()
-                result = self._execute_action(
-                    entry["action"], entry["params"],
-                    entry["reasoning"], entry["tier"],
-                    action_id=entry["id"],
-                )
-                _quality_tracker.record_outcome(action_id, 'approved')
-                _trust_tracker.record_outcome(entry["action"], 'approved')
-                # Remove from pending
-                self._pending = [a for a in self._pending if a["id"] != action_id]
-                self._save_pending()
-                return result
-        return None
+        with self._pending_lock:
+            target_entry = None
+            for entry in self._pending:
+                if entry["id"] == action_id and entry["status"] == "pending":
+                    entry["status"] = "approved"
+                    target_entry = entry
+                    self._save_pending()
+                    break
+            if target_entry is None:
+                return None
+
+        # Execute outside the lock — _execute_action may be slow and
+        # we don't want to block other queue/cancel callers on it.
+        result = self._execute_action(
+            target_entry["action"], target_entry["params"],
+            target_entry["reasoning"], target_entry["tier"],
+            action_id=target_entry["id"],
+        )
+        _quality_tracker.record_outcome(action_id, 'approved')
+        _trust_tracker.record_outcome(target_entry["action"], 'approved')
+
+        with self._pending_lock:
+            self._pending = [a for a in self._pending if a["id"] != action_id]
+            self._save_pending()
+        return result
 
     def execute_tier2_pending(self) -> list[ActionResult]:
         """Execute Tier 2 actions that have waited 5+ minutes."""
@@ -2120,7 +2147,10 @@ class ActionEngine:
         remaining = []
         now = datetime.now(timezone.utc)
 
-        for entry in self._pending:
+        with self._pending_lock:
+            snapshot = list(self._pending)
+
+        for entry in snapshot:
             if entry["status"] != "pending":
                 remaining.append(entry)
                 continue
@@ -2151,8 +2181,9 @@ class ActionEngine:
                 remaining.append(entry)
                 continue
 
-        self._pending = remaining
-        self._save_pending()
+        with self._pending_lock:
+            self._pending = remaining
+            self._save_pending()
         return results
 
     # ------------------------------------------------------------------ #

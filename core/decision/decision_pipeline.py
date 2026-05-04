@@ -69,6 +69,52 @@ from core.pending_cards import (
 
 
 # ------------------------------------------------------------------ #
+#  Audit-trail helpers (T2 cleanup 2026-05-04)                         #
+# ------------------------------------------------------------------ #
+
+def _owner_display_name() -> str:
+    """Return the canonical owner display_name. Indirection lets tests
+    monkeypatch this without reaching into the identity module's
+    cache. Falls back to "Friend" if identity is unavailable."""
+    try:
+        from core.identity import display_name as _dn
+        return _dn() or "Friend"
+    except Exception:
+        return "Friend"
+
+
+def _owner_rejection_outcome() -> str:
+    """Owner-derived audit_log outcome label for owner-rejected cards.
+
+    Replaces the historical hardcoded "rohit_rejected" string so the
+    audit trail is correct on any non-Rohit instance. For Rohit's
+    instance this still resolves to "rohit_rejected" because the
+    canonical owner display_name is "Rohit" — slug = "rohit". Other
+    instances get "<slug>_rejected" (e.g. "alice_rejected"). The
+    quality_tracker / drift report keys on "rohit_rejected" still
+    work for Rohit's instance unchanged.
+    """
+    name = _owner_display_name()
+    slug = "".join(c.lower() if c.isalnum() else "_" for c in name).strip("_")
+    if not slug:
+        slug = "owner"
+    return f"{slug}_rejected"
+
+
+def _resolve_audit_request_id(card: Any) -> str:
+    """Return a usable audit_request_id for a card, synthesizing a
+    deterministic `orphan-card-<request_id>` fallback when the card
+    has no audit_request_id. The audit-trail invariant is "every card
+    outcome → one audit_log row"; orphans broke that silently before
+    this helper existed.
+    """
+    aid = getattr(card, "audit_request_id", None)
+    if aid:
+        return str(aid)
+    return f"orphan-card-{getattr(card, 'request_id', 'unknown')}"
+
+
+# ------------------------------------------------------------------ #
 #  Result types                                                        #
 # ------------------------------------------------------------------ #
 
@@ -686,6 +732,44 @@ class DecisionPipeline:
             outcome="approved_and_ran" if ok else "approved_and_failed",
             notes=(out if ok else err)[:400],
         )
+
+        # T2.C (2026-05-04): mirror _on_approve's failure-branch
+        # consequence_memory recording. The Lane 0 inline path was
+        # structurally missing the equivalent learning signal — an
+        # inline action approved-then-failed produced no
+        # consequence_memory trail, so the planner re-surfaced the
+        # same proposal cycle after cycle. Same kind / context /
+        # surface shape as _on_approve so quality reports aggregate
+        # uniformly across both paths. Silent on failure to keep
+        # pipeline resolution robust.
+        if not ok:
+            try:
+                from core import consequence_memory as _cm
+                _cmd = params.get("cmd") if isinstance(params, dict) else ""
+                _context = (
+                    f"action={action} cmd={_cmd!r}"
+                    if _cmd else f"action={action}"
+                )
+                _cm.record_event(
+                    kind=_cm.CLASS_TOOL_FAILURE,
+                    context=_context[:400],
+                    outcome=(err or "")[:400],
+                    feedback="",  # open for future enrichment
+                    surface="decision_pipeline",
+                    tags=[action] + (
+                        [_cmd.strip().split()[0]]
+                        if _cmd and _cmd.strip().split() else []
+                    ),
+                    extra={"audit_request_id": audit_req_id, "lane": 0},
+                )
+            except Exception as _cm_exc:
+                logger.warning(
+                    "consequence_memory record_event failed on inline "
+                    "action %s (approved_and_failed path) — pattern "
+                    "won't be available for future planner avoidance: %s",
+                    action, _cm_exc,
+                )
+
         return PipelineResult(
             status=PipelineStatus.EXECUTED,
             message=(out[:500] if ok else err[:500]),
@@ -992,8 +1076,11 @@ class DecisionPipeline:
                     "card %s already terminal at mark_done (%s); "
                     "outcome recorded to audit only", card.request_id, e,
                 )
-            if card.audit_request_id:
-                self.audit_log.record_outcome(card.audit_request_id, outcome="approved_and_ran", notes=out[:400])
+            self.audit_log.record_outcome(
+                _resolve_audit_request_id(card),
+                outcome="approved_and_ran",
+                notes=out[:400],
+            )
         else:
             try:
                 card = self.card_store.mark_failed(card.request_id, error=err)
@@ -1002,8 +1089,11 @@ class DecisionPipeline:
                     "card %s already terminal at mark_failed (%s); "
                     "outcome recorded to audit only", card.request_id, e,
                 )
-            if card.audit_request_id:
-                self.audit_log.record_outcome(card.audit_request_id, outcome="approved_and_failed", notes=err[:400])
+            self.audit_log.record_outcome(
+                _resolve_audit_request_id(card),
+                outcome="approved_and_failed",
+                notes=err[:400],
+            )
 
             # 2026-05-02 fix: record to consequence_memory so future
             # planner cycles can retrieve the failure pattern via
@@ -1100,8 +1190,11 @@ class DecisionPipeline:
             via=cls.source,
             notes=cls.reasoning,
         )
-        if card.audit_request_id:
-            self.audit_log.record_outcome(card.audit_request_id, outcome="rohit_rejected", notes=cls.reasoning or "")
+        self.audit_log.record_outcome(
+            _resolve_audit_request_id(card),
+            outcome=_owner_rejection_outcome(),
+            notes=cls.reasoning or "",
+        )
         # Card rejection is a real residue event — Maez proposed
         # something and the user declined. Functional state, not
         # performance; feeds into the next turn's tone. Silent on
