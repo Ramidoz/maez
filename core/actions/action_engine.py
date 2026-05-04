@@ -964,8 +964,17 @@ class ActionEngine:
             ["bash", "-c", cmd],
             capture_output=True, text=True, timeout=_timeout,
         )
-        out = result.stdout.strip()[:4000]
-        err = result.stderr.strip()[:1500]
+        # R3 hardening (Codex review of 017022d, 2026-05-04):
+        # Detect failures on the FULL stdout/stderr BEFORE truncation.
+        # Truncation at 4000 chars (output) and 1500 chars (stderr) is
+        # for ShellCommandError display + return value, not for
+        # detection — a benign-prefix command that emits >4000 chars
+        # of preamble before hitting a soft-failure marker would have
+        # the marker truncated away and slip through the rail.
+        full_out = result.stdout or ""
+        full_err = result.stderr or ""
+        out = full_out.strip()[:4000]
+        err = full_err.strip()[:1500]
         if result.returncode != 0:
             raise ShellCommandError(
                 stdout=out, stderr=err, returncode=result.returncode, cmd=cmd,
@@ -978,12 +987,13 @@ class ActionEngine:
         # failed tools. Returncode-only success keying recorded that
         # turn as `execution_success=1`, which cascaded into a wrong
         # audit_log outcome and a missed consequence_memory write.
-        # The detector scans for unambiguous failure markers and
-        # raises ShellCommandError so decision_pipeline routes the
-        # outcome through the failure branch.
+        # The detector scans the FULL output for unambiguous failure
+        # markers and raises ShellCommandError so decision_pipeline
+        # routes the outcome through the failure branch.
         from core.actions import shell_failure_detector as _sfd
         sig = _sfd.detect_failures_in_output(
-            stdout=out, stderr=err, returncode=result.returncode, cmd=cmd,
+            stdout=full_out, stderr=full_err,
+            returncode=result.returncode, cmd=cmd,
         )
         if sig is not None:
             # Synthesize a non-zero returncode for ShellCommandError so

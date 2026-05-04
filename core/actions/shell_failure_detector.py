@@ -79,18 +79,39 @@ class FailureSignal:
 #     refusal markers — unambiguous.
 
 _PATTERNS: list[tuple[re.Pattern, str]] = [
-    # Binary-not-found: anchored on the bash error-line shape so a
-    # `grep 'command not found' /var/log/x` matching data doesn't
-    # trip. Acceptable variants:
-    #   "bash: line N: <name>: command not found"
-    #   "<shell-name>: <name>: command not found"
-    #   "<name>: command not found" (less reliable; require it at
-    #       LINE START with a binary-name shape, no embedded slashes)
-    # We allow optional leading whitespace + the colon-prefix shape.
+    # Binary-not-found patterns. Two distinct shapes — both must
+    # match because bash emits both forms depending on context.
+    #
+    # Shape 1: "bash: line N: <name>: command not found"
+    #          (composite cmd via `bash -c`, the wmctrl-incident shape)
+    # Shape 2: "/usr/bin/<bin>: command not found"
+    #          (path-prefixed; some shells / wrappers emit this)
+    # Shape 3: "<bin>: command not found"
+    #          (bare — what e.g. `wmctrl -l` produces directly when
+    #           wmctrl isn't on PATH and bash didn't add a `bash:
+    #           line N:` prefix)
+    #
+    # All three are anchored at line-start AND require `command not
+    # found` to be at the line's terminal position so a `grep` /
+    # `cat` finding the substring inside data does NOT trip. The
+    # bare shape (#3) requires the line to start with a binary-name
+    # word (\w + [\w.-]*) so a timestamp-prefixed log line
+    # "2024-05-04 wmctrl: command not found" doesn't match.
     (
         re.compile(
-            r"(?m)^(?:bash:\s+line\s+\d+:\s+|/[\w./-]+:\s+|\w[\w.-]*:\s+)"
-            r"[\w./-]+:\s+command not found\s*$",
+            r"(?m)^bash:\s+line\s+\d+:\s+[\w./-]+:\s+command not found\s*$",
+        ),
+        "binary_not_found",
+    ),
+    (
+        re.compile(
+            r"(?m)^/[\w./-]+:\s+command not found\s*$",
+        ),
+        "binary_not_found",
+    ),
+    (
+        re.compile(
+            r"(?m)^[\w][\w.-]*:\s+command not found\s*$",
         ),
         "binary_not_found",
     ),

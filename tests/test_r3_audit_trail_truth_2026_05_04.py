@@ -75,6 +75,25 @@ class R3_DetectorRecognizesWmctrlPatterns(unittest.TestCase):
             f"signal kind must classify the failure; got {sig.kind!r}",
         )
 
+    def test_bare_command_not_found_shape(self):
+        """Codex 2026-05-04 review of 017022d: the bare shape
+        `wmctrl: command not found` (no `bash: line N:` prefix)
+        was previously not matched. This is what `wmctrl -l`
+        produces directly when the binary is missing — a load-
+        bearing case for the audit-trail truth contract."""
+        from core.actions.shell_failure_detector import (
+            detect_failures_in_output,
+        )
+        sig = detect_failures_in_output(
+            stdout="wmctrl: command not found",
+            stderr="", returncode=0, cmd="wmctrl -l",
+        )
+        self.assertIsNotNone(
+            sig,
+            "bare `<bin>: command not found` must be detected",
+        )
+        self.assertEqual(sig.kind, "binary_not_found")
+
     def test_cant_open_display_null(self):
         from core.actions.shell_failure_detector import (
             detect_failures_in_output,
@@ -262,6 +281,44 @@ class R3_ActionEngineSoftFailure(unittest.TestCase):
                                return_value=_R()):
             result = engine._do_run_shell("echo hello")
         self.assertIn("hello", result.lower())
+
+    def test_detection_runs_on_full_stdout_before_truncation(self):
+        """Codex 2026-05-04 review of 017022d: the prior version of
+        _do_run_shell truncated stdout to 4000 chars BEFORE calling
+        detect_failures_in_output. A benign-prefix command that
+        emits >4000 chars before hitting a soft-failure marker
+        would have the marker truncated away and slip the rail.
+
+        This test feeds 5000 chars of benign 'a' followed by a
+        wmctrl-class failure marker and asserts the detector still
+        catches it via the FULL stdout path."""
+        from core.actions import action_engine
+        from core.actions.action_engine import (
+            ActionEngine, ShellCommandError,
+        )
+
+        engine = ActionEngine.__new__(ActionEngine)
+        engine._covenant_violations = []
+
+        big_benign = "a" * 5000
+        marker = "bash: line 1: wmctrl: command not found"
+
+        class _R:
+            stdout = big_benign + "\n" + marker
+            stderr = ""
+            returncode = 0
+
+        with mock.patch.object(action_engine.subprocess, "run",
+                               return_value=_R()):
+            with self.assertRaises(
+                ShellCommandError,
+                msg=(
+                    "soft-failure marker after >4000 chars of benign "
+                    "output must be detected — pre-truncation detection "
+                    "is the load-bearing contract"
+                ),
+            ):
+                engine._do_run_shell("noisy_cmd")
 
 
 # ── source-pin: detector exposed and called from action_engine ──────
