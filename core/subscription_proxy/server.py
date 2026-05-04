@@ -128,13 +128,40 @@ def _db() -> sqlite3.Connection:
             status          TEXT    NOT NULL,
             prompt_preview  TEXT,
             reply_preview   TEXT,
-            error_preview   TEXT
+            error_preview   TEXT,
+            provenance_source   TEXT NOT NULL DEFAULT 'claude_tier_response',
+            trust_tier          TEXT NOT NULL DEFAULT 'untrusted',
+            training_eligible   INTEGER NOT NULL DEFAULT 0,
+            provenance_version  TEXT NOT NULL DEFAULT 'v1'
         )
         """
     )
+    # ACTION-Hi-1: provenance migration for pre-existing DBs.
+    # Each ADD COLUMN is run inside its own try/except because
+    # sqlite raises if the column already exists; we don't want a
+    # second init to throw on the second run.
+    for col, ddl in (
+        ("provenance_source",
+         "TEXT NOT NULL DEFAULT 'claude_tier_response'"),
+        ("trust_tier",
+         "TEXT NOT NULL DEFAULT 'untrusted'"),
+        ("training_eligible",
+         "INTEGER NOT NULL DEFAULT 0"),
+        ("provenance_version",
+         "TEXT NOT NULL DEFAULT 'v1'"),
+    ):
+        try:
+            con.execute(f"ALTER TABLE calls ADD COLUMN {col} {ddl}")
+        except sqlite3.OperationalError:
+            # Column already exists — idempotent re-init.
+            pass
     con.execute("CREATE INDEX IF NOT EXISTS idx_calls_ts ON calls(ts)")
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_calls_adapter_ts ON calls(adapter, ts)"
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_calls_training_eligible "
+        "ON calls(training_eligible, caller)"
     )
     con.commit()
     return con
@@ -156,7 +183,24 @@ def _record(
     prompt: str, reply: str, input_toks: Optional[int],
     output_toks: Optional[int], duration_s: float, status: str,
     error: str = "",
+    provenance_source: str = "claude_tier_response",
+    trust_tier: str = "untrusted",
+    provenance_version: str = "v1",
 ) -> None:
+    """Persist one proxy-call row.
+
+    ACTION-Hi-1 provenance contract: every row is tagged at write
+    time with `provenance_source`, `trust_tier`, `training_eligible`,
+    `provenance_version`. Defaults are conservative (untrusted +
+    not-training-eligible) so a future SFT exporter cannot
+    accidentally absorb rows that haven't been explicitly reviewed.
+
+    Note: `training_eligible` is intentionally NOT a kwarg here.
+    Every row is hard-coded to 0 at the INSERT site so no caller
+    (including a buggy or compromised producer) can bypass the
+    default-deny gate. Opt-in flows through a separate operator-
+    reviewed audit path; see actions_2026-05-04.md.
+    """
     try:
         phash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
         with _db() as con:
@@ -164,18 +208,80 @@ def _record(
                 "INSERT INTO calls (ts, adapter, caller, model, model_used, "
                 "prompt_hash, prompt_chars, reply_chars, input_toks, "
                 "output_toks, duration_s, status, prompt_preview, "
-                "reply_preview, error_preview) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "reply_preview, error_preview, provenance_source, "
+                "trust_tier, training_eligible, provenance_version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                "?, ?, 0, ?)",
                 (
                     time.time(), adapter, caller, model, model_used,
                     phash, len(prompt), len(reply), input_toks, output_toks,
                     duration_s, status,
                     prompt[:400], reply[:400], error[:400],
+                    provenance_source, trust_tier,
+                    provenance_version,
                 ),
             )
             con.commit()
     except Exception as e:
         logger.warning("trajectory log write failed: %s", e)
+
+
+# ── ACTION-Hi-1 — exporter guard ─────────────────────────────────────
+
+# Default-deny allowlist. Every caller string seen on this proxy as
+# of 2026-05-04 is excluded — explicit operator review is required
+# before adding any caller here. The exporter additionally requires
+# `training_eligible=1` so a row can only flow into a future SFT /
+# distillation export when BOTH conditions hold.
+_DEFAULT_TRAINING_CALLER_ALLOWLIST: frozenset[str] = frozenset()
+
+
+def training_eligible_calls(
+    allowlist: Optional[set[str] | frozenset[str]] = None,
+) -> list[dict]:
+    """Return rows that any future distillation / SFT exporter is
+    allowed to consume. Both gates must pass:
+
+      1. ``training_eligible = 1`` — explicit per-row opt-in
+         (default-deny via the schema default).
+      2. ``caller`` in ``allowlist`` — operator-reviewed allowlist.
+         Default is the empty set; nothing flows without explicit
+         operator inclusion.
+
+    The two-gate design is belt-and-suspenders. ``training_eligible``
+    is the schema-level invariant; ``caller`` is the runtime check
+    (``self_dev/*`` and ``longmemeval-judge`` are notable callers
+    that should NEVER be in the default allowlist — see ACTION-Hi-1
+    rationale in actions_2026-05-04.md).
+
+    Returns row dicts. Caller types should be filtered by the
+    consuming exporter; this function only reports what's eligible.
+    """
+    effective = (
+        frozenset(allowlist) if allowlist is not None
+        else _DEFAULT_TRAINING_CALLER_ALLOWLIST
+    )
+    if not effective:
+        return []
+    # Audit-trail: any caller passing a non-empty allowlist is
+    # taking an action that could lead to model training. The
+    # daemon log captures the moment + the callers being unlocked
+    # so an operator review can reconstruct what was eligible.
+    logger.warning(
+        "subscription_proxy.training_eligible_calls invoked with "
+        "non-empty allowlist=%s — review consumer before any export",
+        sorted(effective),
+    )
+    placeholders = ",".join("?" for _ in effective)
+    with _db() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"SELECT * FROM calls "
+            f"WHERE training_eligible = 1 "
+            f"AND caller IN ({placeholders})",
+            tuple(effective),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def _route(model: str) -> Adapter:

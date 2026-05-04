@@ -205,12 +205,57 @@ def wrap_maez_voice(claude_text: str, tier: str) -> str:
 
 # ── trajectory logger ─────────────────────────────────────────────────
 def log_trajectory(entry: dict[str, Any]) -> None:
-    """Append a JSONL record. For future distillation SFT."""
+    """Append a JSONL record. For future distillation SFT.
+
+    ACTION-Hi-1 provenance contract: every entry is stamped with
+    ``provenance_source``, ``trust_tier``, ``training_eligible``,
+    ``provenance_version`` at write time. Defaults follow the
+    ``source`` field on the entry:
+
+      source='local'    → provenance_source='local_maez',
+                          trust_tier='own_voice',
+                          training_eligible=0
+      source='external' → provenance_source='claude_external',
+                          trust_tier='untrusted',
+                          training_eligible=0
+      anything else     → provenance_source='unknown',
+                          trust_tier='untrusted',
+                          training_eligible=0
+
+    A caller may pre-set any of the provenance fields on the entry
+    dict and the helper will preserve them. ``training_eligible``
+    defaults to 0 in every shape so a future SFT exporter cannot
+    silently absorb own-voice or external content without an
+    explicit operator opt-in step.
+    """
     try:
         TRAJECTORY_DIR.mkdir(parents=True, exist_ok=True)
         fname = datetime.now(timezone.utc).strftime("%Y-%m-%d") + ".jsonl"
         path = TRAJECTORY_DIR / fname
         entry.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+        # Provenance defaults driven by the entry's `source` field.
+        # The `provenance_source` and `trust_tier` keys honor caller
+        # input (so a future trusted producer can label its own
+        # voice differently if needed).
+        _src = (entry.get("source") or "").lower()
+        if _src == "local":
+            entry.setdefault("provenance_source", "local_maez")
+            entry.setdefault("trust_tier", "own_voice")
+        elif _src == "external":
+            entry.setdefault("provenance_source", "claude_external")
+            entry.setdefault("trust_tier", "untrusted")
+        else:
+            entry.setdefault("provenance_source", "unknown")
+            entry.setdefault("trust_tier", "untrusted")
+        entry.setdefault("provenance_version", "v1")
+        # ACTION-Hi-1 — training_eligible is hard-set to 0 here,
+        # NOT via setdefault. A caller (including a buggy or
+        # compromised producer in the same process) cannot bypass
+        # the default-deny gate by pre-setting this key. Any
+        # future opt-in must flow through an explicit operator-
+        # reviewed audit path, not the trajectory write helper.
+        # See actions_2026-05-04.md for the operator-review contract.
+        entry["training_eligible"] = 0
         with TRAJECTORY_LOCK:
             with path.open("a") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
