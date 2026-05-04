@@ -2008,20 +2008,32 @@ def api_workshop_update_model(session_id: str):
 def api_workshop_apply(session_id: str):
     """Apply a unified-diff block to a file in the repo.
 
-    Body: {"diff": "<unified diff text>"}
+    Body: {"diff": "<unified diff text>", "reviewed": true}
     Returns: {applied, target, backup, stdout, stderr, error?}
 
     Same privilege boundary as the rest of /api/v1/workshop — 127.0.0.1
     only, no auth layer. Destructive: writes to disk. Reversible via
-    the returned backup path. The UI should confirm before firing.
+    the returned backup path.
+
+    **Covenant gate** (audit Tier-2, 2026-05-04): the request body
+    must include `reviewed: true`. Without it, apply_diff refuses
+    server-side regardless of UI behaviour. The browser cockpit must
+    render the diff to the operator and get an explicit click before
+    setting the flag — the gate is server-enforced so a future UI
+    bug can't silently bypass diff review.
     """
     try:
         body = request.get_json(silent=True) or {}
         diff_text = (body.get("diff") or "").strip()
         if not diff_text:
             return jsonify({"error": "diff required"}), 400
+        reviewed = bool(body.get("reviewed", False))
         from core.workshop import apply_diff
-        result = apply_diff(session_id=session_id, diff_text=diff_text)
+        result = apply_diff(
+            session_id=session_id,
+            diff_text=diff_text,
+            reviewed=reviewed,
+        )
         status = 200 if result.get("applied") else 400
         return jsonify(result), status
     except Exception as e:

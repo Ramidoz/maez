@@ -606,6 +606,7 @@ def apply_diff(
     *,
     session_id: str,
     diff_text: str,
+    reviewed: bool = False,
 ) -> dict:
     """Apply a unified-diff block to the repo. Resolves the target
     from '+++' header, backs up the file, shells out to `patch` to
@@ -627,9 +628,28 @@ def apply_diff(
         follow-up once we see the pattern of Claude's outputs.
       - Session must exist (we log the applied diff as a turn so the
         conversation history records what was committed).
+      - **Covenant gate** (audit Tier-2, 2026-05-04): caller MUST
+        pass `reviewed=True` to confirm the operator has read the
+        diff. Default-False so a future caller that forgets to wire
+        the UI confirmation gets refused at the function boundary
+        rather than silently bypassing review. The HTTP endpoint
+        threads this from the request body — only the browser UI
+        flips the gate.
     """
     import subprocess
     import shutil as _shutil
+
+    # Covenant gate first — refuse before any work if the operator
+    # hasn't confirmed they read the diff.
+    if not reviewed:
+        return {
+            "applied": False,
+            "error": "apply_diff refuses: caller must pass "
+                     "reviewed=True (operator must confirm they "
+                     "read the diff before it lands on disk).",
+            "target": None, "backup": None,
+            "stdout": "", "stderr": "",
+        }
 
     # Session must exist so we can record the apply event
     session = get_session(session_id)

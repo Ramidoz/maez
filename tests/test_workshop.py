@@ -375,6 +375,7 @@ class ApplyDiff(_Base):
         self._mock_repo({"x.py": "a\n"})
         result = self.ws.apply_diff(
             session_id="bogus", diff_text="+++ x.py\n",
+            reviewed=True,
         )
         self.assertFalse(result["applied"])
         self.assertIn("no session", result["error"])
@@ -384,6 +385,7 @@ class ApplyDiff(_Base):
         sid = self.ws.create_session(title="t")
         result = self.ws.apply_diff(
             session_id=sid, diff_text="not a real diff",
+            reviewed=True,
         )
         self.assertFalse(result["applied"])
         self.assertIn("target path", result["error"].lower())
@@ -394,6 +396,7 @@ class ApplyDiff(_Base):
         result = self.ws.apply_diff(
             session_id=sid,
             diff_text="--- a/../../../etc/hosts\n+++ b/../../../etc/hosts\n",
+            reviewed=True,
         )
         self.assertFalse(result["applied"])
         self.assertIn("not a file under the repo", result["error"])
@@ -416,7 +419,9 @@ class ApplyDiff(_Base):
             "+B\n"
             " c\n"
         )
-        result = self.ws.apply_diff(session_id=sid, diff_text=diff)
+        result = self.ws.apply_diff(
+            session_id=sid, diff_text=diff, reviewed=True,
+        )
         self.assertTrue(result["applied"],
                          f"git-style diff should apply with -p1; got {result}")
         self.assertEqual((root / "foo.py").read_text(), "a\nB\nc\n")
@@ -440,7 +445,7 @@ class ApplyDiff(_Base):
             "+B\n"
             " c\n"
         )
-        self.ws.apply_diff(session_id=sid, diff_text=diff)
+        self.ws.apply_diff(session_id=sid, diff_text=diff, reviewed=True)
         turns = self.ws.get_turns(sid)
         apply_turns = [t for t in turns if "Workshop applied" in t.content]
         self.assertEqual(len(apply_turns), 1)
@@ -462,7 +467,9 @@ class ApplyDiff(_Base):
             "+B\n"
             " c\n"
         )
-        result = self.ws.apply_diff(session_id=sid, diff_text=diff)
+        result = self.ws.apply_diff(
+            session_id=sid, diff_text=diff, reviewed=True,
+        )
         self.assertTrue(result["applied"],
                          f"expected applied=True; got {result}")
         self.assertEqual(result["target"], "foo.py")

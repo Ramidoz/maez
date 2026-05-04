@@ -2309,11 +2309,15 @@ function CodeBlock({ lang, content, copyKey, sessionId }) {
     }
     const msg = `Apply this diff to ${diffTarget}? A timestamped backup will be saved under workshop/backups/.`;
     if (!confirm(msg)) return;
+    // The confirm() above IS the user-saw-diff acknowledgment for the
+    // server-side covenant gate (audit Tier-2, 2026-05-04). Only after
+    // the operator clicks OK do we set reviewed:true; without it the
+    // server refuses regardless of UI state.
     setApplyState('pending');
     fetch(`/api/v1/workshop/session/${sessionId}/apply`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ diff: content }),
+      body: JSON.stringify({ diff: content, reviewed: true }),
     })
       .then(async r => {
         const j = await r.json().catch(() => ({}));
