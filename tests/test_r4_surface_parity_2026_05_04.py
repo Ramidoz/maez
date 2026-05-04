@@ -1,0 +1,220 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+"""REGRESSION GUARDS for R4 — surface parity.
+
+The 2026-05-04 symphony audit (S3 BLOCKERs B1/B2/B4, F2/F4, top-10
+#2) found three surfaces emit Maez replies WITHOUT routing through
+the honesty audit gate or with hand-coded identity strings that
+diverge from the canonical Maez:
+
+  - skills/telegram_public.py — LLM-generated reply at line 349
+    sent without self_claim_audit / audit_assistant_text
+  - skills/web_interface.py — /chat identity short-circuit at
+    line 2625/2632 returns hand-written replies that bypass the
+    main-path audit_assistant_text call (Codex-narrowed to
+    early-return paths after retracting the broader F3)
+  - core/infra/fast_prompt_builder.py — COMPACT_IDENTITY claims
+    "perceive owner's environment via background sensors"
+    unconditionally even when vision is retired (S1 F18)
+
+R4 brings the load-bearing reply paths under the same audit rail
+the daemon + Telegram-owner + CLI surfaces use, and makes the
+fast-lane identity body-truth-aware.
+
+Contract enforced by these tests:
+- skills/telegram_public.py routes its LLM-generated reply through
+  self_claim_audit (or the equivalent audit_assistant_text helper)
+  before update.message.reply_text(reply).
+- skills/web_interface.py /chat identity short-circuit calls
+  audit_assistant_text(identity_reply, surface="web") before the
+  return jsonify(...).
+- core/infra/fast_prompt_builder.py COMPACT_IDENTITY is built from
+  body_capabilities (or core.identity helpers) so the sensor claim
+  reflects runtime truth — vision-off, calendar-broken, etc. show
+  in the prompt rather than being asserted unconditionally.
+- daemon/maez_daemon.py recent_action_context exception path is
+  WARNING (not DEBUG), per Codex 2026-05-04 R3.5 hardening note.
+
+Tests are source-pinned where the integration crosses module
+boundaries (the surfaces themselves bring up live network /
+LLM clients, not unit-testable in this slice).
+"""
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+
+class R4_TelegramPublicAudits(unittest.TestCase):
+    """REGRESSION GUARD: telegram_public must route its LLM-
+    generated reply through the self-claim audit before sending."""
+
+    def test_telegram_public_imports_audit(self):
+        path = REPO / "skills" / "telegram_public.py"
+        src = path.read_text()
+        self.assertTrue(
+            "self_claim_audit" in src or "audit_assistant_text" in src,
+            "telegram_public.py must import the self-claim audit "
+            "helper to gate replies — S3 BLOCKER B2 from the "
+            "symphony audit",
+        )
+
+    def test_telegram_public_audits_reply_before_send(self):
+        """Source-pin: the audit call must precede the `reply_text(reply)`
+        line at line ~349 (post-LLM, pre-send). Search the file for
+        the audit-then-send pattern."""
+        path = REPO / "skills" / "telegram_public.py"
+        src = path.read_text()
+        # Find the LLM-reply assembly + send block. The pattern we
+        # require: audit_assistant_text or self_claim_audit.audit
+        # appears in the same handler that calls reply_text(reply).
+        # We assert the audit helper name is present AND a call to
+        # it appears before the post-LLM reply_text line.
+        import re
+        send_match = re.search(
+            r"await update\.message\.reply_text\(reply\)", src,
+        )
+        self.assertIsNotNone(
+            send_match,
+            "expected the LLM-reply send shape "
+            "`await update.message.reply_text(reply)` to exist "
+            "in telegram_public.py",
+        )
+        send_idx = send_match.start()
+        before_send = src[:send_idx]
+        self.assertTrue(
+            "audit_assistant_text" in before_send
+            or "self_claim_audit" in before_send,
+            "audit gate must be called BEFORE reply_text(reply); "
+            "no audit reference precedes the LLM-reply send",
+        )
+
+
+class R4_WebChatIdentityShortCircuitAudits(unittest.TestCase):
+    """REGRESSION GUARD: /chat identity short-circuit early-return
+    must route through audit_assistant_text. Codex narrowed F3 from
+    BLOCKER (the main /chat path IS audited) to MAJOR (early-return
+    paths bypass the audit) — this closes the narrowed finding."""
+
+    def test_identity_short_circuit_audits_before_return(self):
+        path = REPO / "skills" / "web_interface.py"
+        src = path.read_text()
+        # Locate the identity short-circuit block — it ends with
+        # `return jsonify({"reply": identity_reply, ...})`.
+        import re
+        m = re.search(
+            r"return jsonify\(\{\s*\"reply\":\s*identity_reply",
+            src,
+        )
+        self.assertIsNotNone(
+            m,
+            "expected the identity-short-circuit return shape "
+            "in web_interface.py",
+        )
+        # The audit call must appear BEFORE this return inside the
+        # same enclosing function. We don't AST-walk; we just check
+        # for an audit_assistant_text call within the 1500 chars
+        # preceding the return (the short-circuit block is small).
+        return_idx = m.start()
+        slice_before = src[max(0, return_idx - 1500): return_idx]
+        self.assertIn(
+            "audit_assistant_text", slice_before,
+            "/chat identity short-circuit must call "
+            "audit_assistant_text on identity_reply before the "
+            "return jsonify(...) — the early-return path was "
+            "previously bypassing the main-path audit gate",
+        )
+
+
+class R4_FastPromptBodyTruthAware(unittest.TestCase):
+    """REGRESSION GUARD: fast_prompt_builder.COMPACT_IDENTITY must
+    be derived from body_capabilities (or core.identity helpers)
+    rather than a hand-coded constant claiming unconditional
+    perception. S1 F18: vision-off / calendar-broken state must be
+    reflected in the fast-lane identity, not asserted away."""
+
+    def test_compact_identity_consults_body_capabilities(self):
+        path = REPO / "core" / "infra" / "fast_prompt_builder.py"
+        src = path.read_text()
+        # Either compact identity is now a function that consults
+        # body_capabilities, OR the module imports body_capabilities
+        # to render the identity dynamically. Either path closes the
+        # finding.
+        self.assertTrue(
+            "body_capabilities" in src,
+            "core/infra/fast_prompt_builder.py must reference "
+            "body_capabilities so the COMPACT_IDENTITY adapts to "
+            "runtime sensor reach (vision retired, calendar broken, "
+            "etc.) instead of asserting unconditional perception",
+        )
+
+    def test_compact_identity_no_unconditional_sensor_claim(self):
+        """Source-pin: the literal phrase 'perceive the owner's
+        environment via background sensors' (which was the S1-F18
+        unconditional claim) must NOT remain in the file as a
+        hardcoded constant. Either it's been gated behind a runtime
+        check, or rephrased."""
+        path = REPO / "core" / "infra" / "fast_prompt_builder.py"
+        src = path.read_text()
+        # We allow the phrase to appear inside a function body where
+        # it's conditionally rendered, but NOT as a module-level
+        # constant string. The hardcoded COMPACT_IDENTITY assignment
+        # must no longer contain the unconditional sensor sentence.
+        import re
+        const_match = re.search(
+            r"COMPACT_IDENTITY\s*=\s*\(\s*[^)]*\)",
+            src, re.DOTALL,
+        )
+        if const_match:
+            const_body = const_match.group(0)
+            self.assertNotIn(
+                "perceive the owner's environment via background sensors",
+                const_body,
+                "S1 F18: the unconditional sensor claim must not "
+                "remain in the COMPACT_IDENTITY constant — it must "
+                "be conditionally rendered based on body_capabilities",
+            )
+
+
+class R4_R35HardeningWarning(unittest.TestCase):
+    """REGRESSION GUARD (Codex R3.5 review note 2026-05-04): the
+    daemon's recent_action_context exception path must log at
+    WARNING, not DEBUG. Silent failure of a grounding rail erases
+    its purpose. Mirrors the cycle recall capture pattern in the
+    same file (see commented `warning not debug` rationale)."""
+
+    def test_recent_action_context_exception_logs_warning(self):
+        path = REPO / "daemon" / "maez_daemon.py"
+        src = path.read_text()
+        # Locate the recent_action_context try/except block.
+        import re
+        m = re.search(
+            r"from core\.decision import recent_action_context.*?except\s+Exception",
+            src, re.DOTALL,
+        )
+        self.assertIsNotNone(
+            m,
+            "expected the recent_action_context try/except shape "
+            "in daemon/maez_daemon.py",
+        )
+        block_start = m.start()
+        # Look for the logger call within ~500 chars after the except
+        # line.
+        block = src[block_start: block_start + 1500]
+        # Must contain logger.warning, not logger.debug as the
+        # ONLY logger call inside this except block.
+        self.assertIn(
+            "logger.warning", block,
+            "recent_action_context exception path must log at "
+            "WARNING (not DEBUG) — the grounding rail's silent "
+            "failure mode is what produced the 7-day F1 outage",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

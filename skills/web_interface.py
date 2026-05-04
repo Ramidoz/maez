@@ -2634,6 +2634,24 @@ def chat():
                     f"I run locally on his machine, and I remember every conversation "
                     f"we have. I don't forget between sessions. What's on your mind?"
                 )
+            # R4 (2026-05-04 symphony audit, S3 narrowed F3 per
+            # Codex): the early-return identity-short-circuit path
+            # was bypassing the main-path audit_assistant_text call
+            # at line ~2855. Route the identity reply through the
+            # same audit gate so all /chat early-returns share the
+            # same grounding rail. The strings are author-written
+            # today, but if they're ever swapped for model-generated
+            # identity claims the gate is already in place.
+            try:
+                from core.safety.audited_output import audit_assistant_text
+                identity_reply = audit_assistant_text(
+                    identity_reply, surface="web",
+                )
+            except Exception as _audit_e:
+                logger.warning(
+                    "web /chat identity short-circuit: audit gate "
+                    "failed (sending ungated): %s", _audit_e,
+                )
             try:
                 store = UserProfileStore()
                 store.add_conversation_memory(user_key, "user", message)

@@ -58,15 +58,63 @@ MAX_PERCEPTION_CHARS = 600
 HARD_CAP_CHARS       = 6000
 
 
-# Compact identity — hand-tuned to be 1 paragraph, ~280 chars.
-# Deliberately omits the long-form scripture and manifesto blocks the
-# slow path uses; those don't earn their token cost on the fast lane.
-COMPACT_IDENTITY = (
+# Compact identity baseline — the parts of the identity that don't
+# depend on runtime body state. The runtime sensor description is
+# rendered separately (compact_identity()) so it adapts to what's
+# actually reachable: vision off, calendar broken, etc. should not
+# be claimed away.
+#
+# R4 (2026-05-04 symphony audit, S1 finding F18): the previous
+# COMPACT_IDENTITY constant unconditionally claimed "perceive the
+# owner's environment via background sensors" even when vision is
+# retired. Replaced with a function that consults
+# core.infra.body_capabilities so the claim matches body truth.
+_COMPACT_IDENTITY_BASELINE = (
     "You are Maez, a persistent local AI companion built by the owner. "
-    "You remember past conversations, perceive the owner's environment via "
-    "background sensors, and respond directly. You are warm, concise, and "
-    "useful. Your reply must be short unless depth is clearly required."
+    "You remember past conversations and respond directly. "
+    "You are warm, concise, and useful. "
+    "Your reply must be short unless depth is clearly required."
 )
+
+
+def compact_identity() -> str:
+    """Build the fast-lane identity string with a runtime-aware
+    sensor clause. Consults body_capabilities so the prompt
+    reflects what's actually reachable instead of asserting
+    unconditional perception."""
+    sensor_clause = ""
+    try:
+        from core.infra import body_capabilities as _bc
+        snap = _bc.body_capabilities()
+        env = snap.get("env") or {}
+        # Sensor reachability — describe what is actually present.
+        # Vision is the most user-facing sensor; if its env is
+        # absent, do NOT claim "perceive the owner's environment."
+        # This block is intentionally short — fast-lane prompt budget.
+        sensors_present: list[str] = []
+        if env.get("DISPLAY") and snap.get("desktop_session_reachable"):
+            sensors_present.append("desktop")
+        services = snap.get("services") or {}
+        if services.get("brain_8080"):
+            sensors_present.append("memory")
+        if sensors_present:
+            sensor_clause = (
+                f" Available signals: {', '.join(sensors_present)}."
+            )
+    except Exception:
+        # Never break the fast-lane; if probe fails, skip the
+        # sensor clause entirely (the conservative shape — claim
+        # less rather than claim falsely).
+        sensor_clause = ""
+    return _COMPACT_IDENTITY_BASELINE + sensor_clause
+
+
+# Backwards-compat: callers that referenced COMPACT_IDENTITY as a
+# constant get the dynamically-built string at import time. This
+# keeps the staging fast-lane bench scripts working without a code
+# change. New callers should call compact_identity() at use-site so
+# they pick up runtime body changes per call.
+COMPACT_IDENTITY = compact_identity()
 
 
 @dataclass

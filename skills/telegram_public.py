@@ -346,6 +346,22 @@ Respond naturally. Be present. Be real."""
             logger.error("Public reasoning error: %s", e)
             reply = "Something's off on my end. Give me a moment."
 
+        # R4 (2026-05-04 symphony audit, S3 BLOCKER B2): route the
+        # public-bot LLM-generated reply through the self-claim
+        # audit before send. Stranger surface — ungrounded "I
+        # remember when we…" claims to a non-owner are exactly the
+        # failure mode the audit gate exists to catch. Earlier
+        # versions of this surface emitted Maez replies with no
+        # honesty rail at all.
+        try:
+            from core.safety.audited_output import audit_assistant_text
+            reply = audit_assistant_text(reply, surface="telegram_public")
+        except Exception as _audit_e:
+            logger.warning(
+                "telegram_public: audit gate failed (sending "
+                "ungated reply): %s", _audit_e,
+            )
+
         await update.message.reply_text(reply)
 
         # Store conversation

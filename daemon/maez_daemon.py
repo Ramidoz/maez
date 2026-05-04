@@ -1232,9 +1232,17 @@ class MaezDaemon:
             if _action_outcomes_block:
                 prompt += f"\n{_action_outcomes_block}\n"
         except Exception as _rac_e:
-            logger.debug(
+            # Codex R3.5 review (2026-05-04): WARNING not DEBUG.
+            # The recent-actions block is a grounding rail; silent
+            # failure here means the cycle goes back to claiming
+            # idle without consulting recent failures (the F7 hole).
+            # Same pattern as the cycle recall capture immediately
+            # above, where `warning not debug` is documented as the
+            # right level for grounding-rail failure surfaces.
+            logger.warning(
                 "recent_action_context unavailable: %s "
-                "(cycle prompt continues without recent-actions block)",
+                "(cycle prompt continues without recent-actions block; "
+                "narration grounding rail degraded)",
                 _rac_e,
             )
 
