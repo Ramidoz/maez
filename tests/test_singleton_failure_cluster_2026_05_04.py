@@ -162,12 +162,22 @@ class T1_4_EntityExpansionSilentSwallow(unittest.TestCase):
 
 class T1_9_SurfaceV2ShutdownJoin(unittest.TestCase):
     """REGRESSION GUARD for T1.9: maez_daemon.stop()'s surface_v2
-    block must join self._surface_v2_thread after scheduling
-    _loop.stop, otherwise connections leak before SIGKILL.
+    block must join self._surface_v2_thread before SIGKILL so
+    in-flight connections close cleanly.
+
+    Updated 2026-05-05 (Codex deploy verification): the original
+    fix scheduled `_loop.call_soon_threadsafe(_loop.stop)` and
+    then joined; that loop.stop produced the
+    `Event loop stopped before Future completed` traceback. The
+    cooperative `self.running = False` signal (set earlier in
+    stop()) is now the single shutdown trigger; this test asserts
+    only the join-survival contract. The forbidden-loop.stop
+    pattern is enforced separately by
+    tests/test_t1_9_shutdown_hygiene_2026_05_05.py.
 
     Source-level pin — exercising daemon.stop() from a unit test
     requires booting the daemon, which is impractical. The pin
-    catches refactors that drop the join; behavioral coverage
+    catches refactors that drop the join; behavioural coverage
     happens via real shutdowns in the field."""
 
     def test_surface_v2_block_calls_thread_join(self):

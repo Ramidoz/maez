@@ -1,0 +1,70 @@
+{
+  "baseline_id": "2026-05-04",
+  "natural_text_probes": [
+    "hey you good?",
+    "what can you do with my screen?",
+    "can you check my Firefox tabs?",
+    "what did your body just do?",
+    "what are you unable to do right now?",
+    "i miss her",
+    "what's in your body right now?",
+    "do you remember our conversation yesterday?"
+  ],
+  "probed_at": 1777944403.8105218,
+  "surfaces": {
+    "cli": {
+      "audit_gate_present": true,
+      "body_truth_present": true,
+      "circadian_present": false,
+      "identity_excerpt": "HARD CONSTRAINTS \u2014 These override all other reasoning, always:\n- NEVER kill, disable, or stop the llama-server process o",
+      "system_prompt_chars": 23999,
+      "system_prompt_sha256": "db464608ee997e276403a0091b187b18eef41a6e7cbf186f4f36c70afde43e8a",
+      "tool_manifest_present": false
+    },
+    "daemon_cycle": {
+      "audit_gate_present": true,
+      "body_truth_present": true,
+      "circadian_present": true,
+      "identity_excerpt": "HARD CONSTRAINTS \u2014 These override all other reasoning, always:\n- NEVER kill, disable, or stop the llama-server process o",
+      "system_prompt_chars": 23999,
+      "system_prompt_sha256": "db464608ee997e276403a0091b187b18eef41a6e7cbf186f4f36c70afde43e8a",
+      "tool_manifest_present": false
+    },
+    "fast_reply": {
+      "audit_gate_present": false,
+      "body_truth_present": true,
+      "circadian_present": false,
+      "identity_excerpt": "You are Maez, a persistent local AI companion built by the owner. You remember past conversations and respond directly. ",
+      "system_prompt_chars": 249,
+      "system_prompt_sha256": "63fcd6217176b1d8454b6b9fcb45a5884754735926bc698f2834b804aa9cfbdc",
+      "tool_manifest_present": false
+    },
+    "telegram_owner": {
+      "audit_gate_present": true,
+      "body_truth_present": true,
+      "circadian_present": true,
+      "identity_excerpt": "HARD CONSTRAINTS \u2014 These override all other reasoning, always:\n- NEVER kill, disable, or stop the llama-server process o",
+      "system_prompt_chars": 23999,
+      "system_prompt_sha256": "db464608ee997e276403a0091b187b18eef41a6e7cbf186f4f36c70afde43e8a",
+      "tool_manifest_present": true
+    },
+    "telegram_public": {
+      "audit_gate_present": true,
+      "body_truth_present": false,
+      "circadian_present": false,
+      "identity_excerpt": "You are Maez \u2014 a persistent, thoughtful presence. Not a chatbot. Not an assistant.",
+      "system_prompt_chars": 2517,
+      "system_prompt_sha256": "bba53c231dce4bb31eff280e5e14cc3251b37359a9ece8affd12284849167b92",
+      "tool_manifest_present": false
+    },
+    "web_owner": {
+      "audit_gate_present": true,
+      "body_truth_present": true,
+      "circadian_present": false,
+      "identity_excerpt": "\n            f\"{SOUL}\\n\\n\"\n            + (f\"{ambient_block}\\n\\n\" if ambient_block else \"\"",
+      "system_prompt_chars": 89,
+      "system_prompt_sha256": "dd38349a71cf83007a6b023fb47c0228e24f3f1ddfd0d89727336ac35f3d6b7f",
+      "tool_manifest_present": false
+    }
+  }
+}
