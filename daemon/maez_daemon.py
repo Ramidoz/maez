@@ -1573,6 +1573,82 @@ class MaezDaemon:
 
         logger.info("%s message: %s", source, text[:100])
         snap = perception_snapshot()
+        # Grounding-context starvation fix (2026-05-05): this chat
+        # path shows the current perception snapshot to the model, so
+        # the audit must receive the same per-turn receipt. The
+        # fallback audit manifest only carries stable / bounded-fresh
+        # facts; it deliberately marks system stats absent unless the
+        # caller supplies a real turn snapshot.
+        _chat_signals_present = list(signals_present or [])
+        _chat_signals_absent = list(signals_absent or [])
+        if signals_present is None and signals_absent is None:
+            try:
+                from core.safety.audit_signal_manifest import (
+                    default_audit_signals,
+                )
+                _chat_signals_present, _chat_signals_absent = (
+                    default_audit_signals(source)
+                )
+            except Exception as _signals_exc:
+                logger.debug(
+                    "chat audit fallback manifest unavailable: %s",
+                    _signals_exc,
+                )
+                _chat_signals_present, _chat_signals_absent = [], []
+
+            def _mark_signal_present(name: str, label: str) -> None:
+                if label not in _chat_signals_present:
+                    _chat_signals_present.append(label)
+                _chat_signals_absent[:] = [
+                    s for s in _chat_signals_absent
+                    if not str(s).lower().startswith(name)
+                ]
+
+            def _mark_signal_absent(name: str, label: str) -> None:
+                if label not in _chat_signals_absent:
+                    _chat_signals_absent.append(label)
+                _chat_signals_present[:] = [
+                    s for s in _chat_signals_present
+                    if not str(s).lower().startswith(name)
+                ]
+
+            _mark_signal_present(
+                "system stats",
+                "system stats (CPU/RAM/GPU/disk/processes) — live via perception_snapshot",
+            )
+            _screen_state = (
+                getattr(self._last_screen_obs, "state", None)
+                if self._last_screen_obs is not None
+                else None
+            )
+            if (
+                _screen_state == "ok"
+                and getattr(self._last_screen_obs, "success", False)
+            ):
+                _mark_signal_present("screen observation", "screen observation")
+            elif _screen_state == "disabled":
+                _mark_signal_absent(
+                    "screen observation",
+                    "screen observation (disabled by policy)",
+                )
+            elif _screen_state == "unavailable":
+                _mark_signal_absent(
+                    "screen observation",
+                    "screen observation (endpoint unreachable)",
+                )
+            else:
+                _mark_signal_absent("screen observation", "screen observation")
+
+            if self._last_presence_snap is not None:
+                _mark_signal_present("presence snapshot", "presence snapshot")
+            else:
+                _mark_signal_absent("presence snapshot", "presence snapshot")
+
+            if self._last_calendar_snap is not None:
+                _mark_signal_present("calendar", "calendar")
+            else:
+                _mark_signal_absent("calendar", "calendar")
+
         system_state = format_snapshot(snap)
         authoritative_tool_reply = _authoritative_tool_reply(tool_calls)
         recalled = self.memory.recall_for_telegram(text)
@@ -1942,8 +2018,8 @@ class MaezDaemon:
                 reply,
                 surface=source,
                 transcript=transcript,
-                signals_present=signals_present,
-                signals_absent=signals_absent,
+                signals_present=_chat_signals_present,
+                signals_absent=_chat_signals_absent,
             )
             try:
                 _trace.audit = AuditInfo(

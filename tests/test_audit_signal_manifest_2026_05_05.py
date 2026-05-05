@@ -296,5 +296,54 @@ class JudgePromptRecognizesConfiguredModelIdentity(unittest.TestCase):
         )
 
 
+class DaemonChatPerTurnManifest(unittest.TestCase):
+    """REGRESSION GUARD: daemon.handle_message must pass per-turn
+    perception receipts to the audit. The fallback manifest is only
+    for stable / bounded-fresh facts; it deliberately marks system
+    stats absent. Since handle_message puts perception_snapshot()
+    output into the synthesis prompt, it must also tell the audit
+    that system stats were present for this turn."""
+
+    def test_handle_message_builds_chat_audit_manifest_from_snapshot(self):
+        src = (REPO / "daemon" / "maez_daemon.py").read_text()
+        start = src.find("def handle_message(")
+        self.assertGreater(start, 0, "handle_message() not found")
+        end = src.find("\n    def ", start + 1)
+        body = src[start:end if end > start else len(src)]
+
+        snap_idx = body.find("snap = perception_snapshot()")
+        audit_idx = body.find("reply = audit_assistant_text(")
+        self.assertGreater(snap_idx, 0, "handle_message must capture perception snapshot")
+        self.assertGreater(audit_idx, snap_idx, "audit must happen after snapshot capture")
+
+        pre_audit = body[snap_idx:audit_idx]
+        self.assertIn(
+            "_chat_signals_present",
+            pre_audit,
+            "handle_message must build an explicit chat audit manifest "
+            "from the turn's perception snapshot before auditing",
+        )
+        self.assertIn(
+            "system stats",
+            pre_audit,
+            "handle_message must mark system stats present because the "
+            "same perception snapshot is shown to the model",
+        )
+
+        audit_call = body[audit_idx:body.find(")", audit_idx) + 1]
+        self.assertIn(
+            "signals_present=_chat_signals_present",
+            audit_call,
+            "handle_message must pass the per-turn chat manifest to "
+            "audit_assistant_text, not rely on fallback-only receipts",
+        )
+        self.assertIn(
+            "signals_absent=_chat_signals_absent",
+            audit_call,
+            "handle_message must pass absent per-turn signals too so "
+            "presence/screen/calendar claims stay constrained",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
