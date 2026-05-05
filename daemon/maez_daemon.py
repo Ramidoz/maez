@@ -2549,7 +2549,20 @@ class MaezDaemon:
             logger.info("WS client disconnected (%d total)", len(self._ws_clients))
 
     def _run_ws_server(self):
-        """Run WebSocket server in its own event loop."""
+        """Run WebSocket server in its own event loop.
+
+        Shutdown hygiene (2026-05-05, T1.9 second-instance fix
+        caught by Codex on the dce9fa5 deploy): unlike surface_v2,
+        the serve() coroutine here does `await asyncio.Future()`
+        — an unresolvable forever-await. There is NO cooperative
+        exit path; stop() must call `_ws_loop.call_soon_threadsafe
+        (_loop.stop)` to break us out, and that produces
+        `RuntimeError("Event loop stopped before Future
+        completed.")`. We catch that RuntimeError as the expected
+        shutdown shape WHEN we know we're shutting down
+        (`self.running` is False). A real loop-crash during
+        operation still surfaces as ERROR.
+        """
         self._ws_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._ws_loop)
 
@@ -2558,7 +2571,25 @@ class MaezDaemon:
                 logger.info("WebSocket server started on port %d", WS_PORT)
                 await asyncio.Future()  # run forever
 
-        self._ws_loop.run_until_complete(serve())
+        try:
+            self._ws_loop.run_until_complete(serve())
+        except RuntimeError as e:
+            # The expected shutdown shape: stop() called
+            # _loop.call_soon_threadsafe(_loop.stop), the forever-
+            # await got interrupted, run_until_complete raised
+            # "Event loop stopped before Future completed."
+            # Recognize this as expected when self.running is
+            # False; surface it as ERROR otherwise.
+            if not self.running:
+                logger.info(
+                    "WebSocket server: graceful shutdown "
+                    "(loop stopped during shutdown)"
+                )
+            else:
+                logger.exception(
+                    "WebSocket server: unexpected runtime error "
+                    "while self.running=True: %s", e,
+                )
 
     def _start_health_broadcast(self):
         """Broadcast health stats every 10 seconds."""
