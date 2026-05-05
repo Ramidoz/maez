@@ -171,34 +171,45 @@ class T1_9_SurfaceV2ShutdownJoin(unittest.TestCase):
     happens via real shutdowns in the field."""
 
     def test_surface_v2_block_calls_thread_join(self):
+        """REGRESSION GUARD updated 2026-05-05: the original morning-
+        of-2026-05-04 fix (10220d9) added a thread.join after
+        `_loop.call_soon_threadsafe(_loop.stop)`. Codex's deploy-
+        verification confirmed the loop.stop ITSELF was the source
+        of the `Event loop stopped before Future completed`
+        traceback we were trying to remove. Cooperative shutdown
+        via `self.running = False` (set earlier in stop()) is now
+        the single shutdown signal; the join still bounds the wait.
+
+        See tests/test_t1_9_shutdown_hygiene_2026_05_05.py for the
+        updated forbidden-pattern assertion (no loop.stop in this
+        block); this test continues to assert the thread.join
+        survival contract.
+        """
         path = REPO / "daemon" / "maez_daemon.py"
         src = path.read_text()
-        # Locate the surface_v2 stop block. Bounded by the next
-        # `self.public_bot.stop()` line which immediately follows.
+        # New anchor (post-T1.9-hygiene): the block now opens with
+        # the `_thread = getattr(self, "_surface_v2_thread"` line
+        # — no longer routes through `_surface_v2_loop`.
         try:
-            start = src.index('if getattr(self, "_surface_v2_loop"')
+            start = src.index('_thread = getattr(self, "_surface_v2_thread"')
         except ValueError:
             self.fail(
                 "could not locate surface_v2 stop block by anchor "
-                "`if getattr(self, \"_surface_v2_loop\"` — refactor "
-                "must update this regression guard"
+                "`_thread = getattr(self, \"_surface_v2_thread\"` "
+                "— refactor must update this regression guard"
             )
         end = src.index("self.public_bot.stop()", start)
         block = src[start:end]
 
         self.assertIn(
-            "_loop.call_soon_threadsafe(_loop.stop)", block,
-            "surface_v2 stop block must still schedule _loop.stop",
-        )
-        self.assertIn(
             "_surface_v2_thread", block,
             "surface_v2 stop block must reference _surface_v2_thread "
-            "to join it after scheduling stop",
+            "to join it",
         )
         self.assertIn(
             ".join(", block,
-            "surface_v2 stop block must call thread.join() after "
-            "scheduling _loop.stop — without it, connections leak",
+            "surface_v2 stop block must call thread.join() so "
+            "SIGKILL doesn't race a still-running thread",
         )
 
 

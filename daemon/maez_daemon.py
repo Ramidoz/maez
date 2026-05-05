@@ -4352,24 +4352,44 @@ class MaezDaemon:
             self.telegram.stop()
         except Exception as e:
             logger.debug("Telegram bot stop failed: %s", e)
-        # Stop the v2 surface adapter if we launched it
-        # T1.9 (2026-05-04 audit) — call_soon_threadsafe schedules the
-        # loop's stop but returns immediately. Without joining the
-        # thread, in-flight aiohttp/uvicorn connections never get a
-        # chance to close cleanly before SIGKILL. Join with a bounded
-        # timeout; warn (don't block forever) if it doesn't exit.
+        # Stop the v2 surface adapter if we launched it.
+        #
+        # T1.9 hygiene (Codex deploy verification 2026-05-04 + 05):
+        # The morning's fix (10220d9) added a thread.join(timeout=5)
+        # after `_loop.call_soon_threadsafe(_loop.stop)` to bound
+        # the shutdown wait. Live deploy verification confirmed
+        # the join didn't actually prevent the surface-v2
+        # traceback — `_loop.stop()` interrupts the runner's
+        # `await _asyncio.sleep(1.0)` mid-await, asyncio.run()
+        # raises RuntimeError("Event loop stopped before Future
+        # completed"), and only THEN does the join sit for an
+        # already-dead thread.
+        #
+        # The runner already cooperates: its `while self.running:`
+        # loop exits within ≤1s on the next sleep boundary. The
+        # explicit loop.stop() is redundant and harmful — it
+        # produces the traceback without giving the runner time
+        # to exit cleanly via `await adapter.disconnect()`. We
+        # keep the thread.join (still load-bearing — bounds the
+        # wait against systemd SIGKILL) but drop the loop.stop.
+        #
+        # If the runner ever hangs past 5s in a future bug
+        # (e.g. adapter.disconnect awaiting hung network I/O),
+        # the join's WARNING surfaces it and a force-stop can be
+        # reintroduced THEN with explicit RuntimeError handling
+        # inside the runner. Today the cooperative path is
+        # sufficient and quiet.
         try:
-            if getattr(self, "_surface_v2_loop", None) is not None:
-                _loop = self._surface_v2_loop
-                _loop.call_soon_threadsafe(_loop.stop)
-                _thread = getattr(self, "_surface_v2_thread", None)
-                if _thread is not None and _thread.is_alive():
-                    _thread.join(timeout=5.0)
-                    if _thread.is_alive():
-                        logger.warning(
-                            "surface_v2 thread did not exit within "
-                            "5s of loop.stop — connections may leak"
-                        )
+            _thread = getattr(self, "_surface_v2_thread", None)
+            if _thread is not None and _thread.is_alive():
+                _thread.join(timeout=5.0)
+                if _thread.is_alive():
+                    logger.warning(
+                        "surface_v2 thread did not exit within "
+                        "5s of self.running=False — runner may be "
+                        "blocked on adapter shutdown; connections "
+                        "may leak"
+                    )
         except Exception as e:
             logger.debug("surface v2 stop failed: %s", e)
         try:
