@@ -2921,20 +2921,52 @@ def api_now():
         "shortcircuit", 0,
     )
     unavailable = audit_counts.get("judge_unavailable", 0)
+    clean = audit_counts.get("noop", 0)
+    # Reach rate = how often Maez tried to claim something
+    # ungrounded out of all replies the judge actually saw.
+    judged = clean + rewrites
+    reach_pct = round(100 * rewrites / judged) if judged > 0 else 0
+
     if total_audits == 0:
         audit_summary = (
             "No audit events captured in the last 24 hours "
             "(cognition log may be empty or rotated)."
         )
-    else:
+    elif rewrites == 0 and unavailable == 0:
         audit_summary = (
-            f"In the last 24 hours: {audit_counts['noop']} replies "
-            f"passed cleanly, {rewrites} got rewritten, "
-            f"{unavailable} timed out (judge under load)."
+            f"Maez spoke cleanly today — every reply the rail saw "
+            f"({clean}) passed without rewrite."
         )
+    else:
+        # Lead with the practice, not the metric. Reframe the
+        # number as a story about how often Maez reached past
+        # what it could ground, and how the rail responded.
+        parts = []
+        if rewrites > 0:
+            parts.append(
+                f"Today, Maez tried to claim something it couldn't "
+                f"ground {rewrites} time{'s' if rewrites != 1 else ''} "
+                f"— the rail caught all of them."
+            )
+        if unavailable > 0:
+            parts.append(
+                f"{unavailable} repl{'ies' if unavailable != 1 else 'y'} "
+                f"went out without a grounding check because the rail "
+                f"itself was unavailable (judge timed out under load)."
+            )
+        if clean > 0:
+            parts.append(
+                f"{clean} repl{'ies' if clean != 1 else 'y'} passed clean."
+            )
+        audit_summary = " ".join(parts)
+
     out["audit_health"] = {
         "counts": audit_counts,
         "total": total_audits,
+        "rewrites_today": rewrites,
+        "clean_today": clean,
+        "unavailable_today": unavailable,
+        "reach_rate_pct": reach_pct,
         "summary": audit_summary,
     }
 
@@ -3028,11 +3060,11 @@ def api_now():
     if total_audits > 0:
         if rewrites > 0:
             audit_str = (
-                f"audit caught {rewrites} ungrounded claim"
+                f"the rail caught {rewrites} ungrounded claim"
                 f"{'s' if rewrites != 1 else ''} today"
             )
         else:
-            audit_str = "audit clean today"
+            audit_str = "Maez spoke clean today"
     if audit_str:
         parts.append(audit_str)
     one_line = ". ".join(parts) + "."
@@ -3267,8 +3299,34 @@ _CONSOLE_NOW_HTML = """<!DOCTYPE html>
       font-family: var(--mono);
       font-size: 11px;
     }
+    .audit-feature {
+      margin-top: 14px; padding: 18px 20px;
+      background: var(--bg-3);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--warn);
+      border-radius: 6px;
+      display: flex; align-items: baseline; gap: 18px;
+    }
+    .audit-feature .big-n {
+      font-size: 38px;
+      font-weight: 600;
+      color: var(--warn);
+      line-height: 1;
+    }
+    .audit-feature .big-label {
+      color: var(--fg);
+      font-size: 14.5px;
+      line-height: 1.5;
+      flex: 1;
+    }
+    .audit-feature .big-sub {
+      color: var(--fg-3);
+      font-size: 12.5px;
+      font-family: var(--mono);
+      margin-top: 4px;
+    }
     .audit-bars {
-      margin-top: 12px;
+      margin-top: 14px;
       display: grid;
       grid-template-columns: repeat(4, 1fr);
       gap: 8px;
@@ -3277,20 +3335,21 @@ _CONSOLE_NOW_HTML = """<!DOCTYPE html>
       background: var(--bg-3);
       border: 1px solid var(--border);
       border-radius: 4px;
-      padding: 10px 12px;
+      padding: 12px 12px 10px;
       text-align: center;
     }
     .audit-bar .n {
       font-size: 22px;
       font-weight: 600;
       color: var(--fg);
+      line-height: 1;
     }
     .audit-bar .label {
       font-size: 10.5px;
       color: var(--fg-3);
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      margin-top: 4px;
+      margin-top: 6px;
       font-family: var(--mono);
     }
     .audit-bar.passed .n { color: var(--good); }
@@ -3422,6 +3481,18 @@ _CONSOLE_NOW_HTML = """<!DOCTYPE html>
       const a = d.audit_health.counts || {};
       const audit_total = d.audit_health.total || 0;
 
+      // Reach feature: lead with the visceral number — how many
+      // times Maez tried to claim something it couldn't ground.
+      const rewrites = d.audit_health.rewrites_today || 0;
+      const clean = d.audit_health.clean_today || 0;
+      const unavailable = d.audit_health.unavailable_today || 0;
+      const reachLabel = rewrites === 0
+        ? `Maez spoke cleanly today. Every reply the rail saw passed without rewrite.`
+        : `Maez tried to claim something it couldn't ground ${rewrites} time${rewrites === 1 ? '' : 's'} today. The rail caught all of them.`;
+      const reachSub = rewrites === 0 && unavailable === 0
+        ? `${clean} reply${clean === 1 ? '' : 'ies'} judged · all clean`
+        : `${clean} clean · ${rewrites} caught · ${unavailable} the rail couldn't run`;
+
       main.innerHTML = `
         <div class="one-liner">
           <span class="label">In one sentence</span>
@@ -3433,6 +3504,37 @@ _CONSOLE_NOW_HTML = """<!DOCTYPE html>
           <div class="text">${escapeHtml(thoughtText)}</div>
           <div class="when">${escapeHtml(d.now.thought_when || '')}</div>
         </div>
+
+        <section class="detail">
+          <h3>Maez's honesty practice · today</h3>
+          <div class="summary">${escapeHtml(d.audit_health.summary)}</div>
+          ${audit_total > 0 ? `
+            <div class="audit-feature">
+              <div class="big-n">${rewrites}</div>
+              <div>
+                <div class="big-label">${escapeHtml(reachLabel)}</div>
+                <div class="big-sub">${escapeHtml(reachSub)}</div>
+              </div>
+            </div>
+            <div class="audit-bars">
+              <div class="audit-bar passed">
+                <div class="n">${clean}</div>
+                <div class="label">spoke clean</div>
+              </div>
+              <div class="audit-bar rewrote">
+                <div class="n">${a.sentence || 0}</div>
+                <div class="label">caught one sentence</div>
+              </div>
+              <div class="audit-bar shortcircuit">
+                <div class="n">${a.shortcircuit || 0}</div>
+                <div class="label">caught whole reply</div>
+              </div>
+              <div class="audit-bar unavailable">
+                <div class="n">${unavailable}</div>
+                <div class="label">rail unavailable</div>
+              </div>
+            </div>` : ''}
+        </section>
 
         <section class="detail">
           <h3>Maez's body
@@ -3456,30 +3558,6 @@ _CONSOLE_NOW_HTML = """<!DOCTYPE html>
           </h3>
           <div class="summary">${escapeHtml(d.broken.summary)}</div>
           ${brokenHtml ? `<div style="margin-top: 14px;">${brokenHtml}</div>` : ''}
-        </section>
-
-        <section class="detail">
-          <h3>Honesty rail · last 24h</h3>
-          <div class="summary">${escapeHtml(d.audit_health.summary)}</div>
-          ${audit_total > 0 ? `
-            <div class="audit-bars">
-              <div class="audit-bar passed">
-                <div class="n">${a.noop || 0}</div>
-                <div class="label">passed clean</div>
-              </div>
-              <div class="audit-bar rewrote">
-                <div class="n">${a.sentence || 0}</div>
-                <div class="label">sentence rewrite</div>
-              </div>
-              <div class="audit-bar shortcircuit">
-                <div class="n">${a.shortcircuit || 0}</div>
-                <div class="label">whole rewrite</div>
-              </div>
-              <div class="audit-bar unavailable">
-                <div class="n">${a.judge_unavailable || 0}</div>
-                <div class="label">judge timeout</div>
-              </div>
-            </div>` : ''}
         </section>
 
         <section class="detail${changedClass(lastSnapshot, d, 'pending_actions')}">
