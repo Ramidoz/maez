@@ -2353,9 +2353,10 @@ _CONSOLE_LAST_TURN_HTML = """<!DOCTYPE html>
     a { color: var(--accent-2); text-decoration: none; }
     a:hover { text-decoration: underline; }
     header {
-      padding: 28px 32px 8px;
+      padding: 28px 32px 0;
       border-bottom: 1px solid var(--border);
       display: flex; align-items: baseline; gap: 16px;
+      flex-wrap: wrap;
     }
     header h1 {
       margin: 0; font-size: 18px; font-weight: 600;
@@ -2364,6 +2365,25 @@ _CONSOLE_LAST_TURN_HTML = """<!DOCTYPE html>
     header .subtitle {
       color: var(--fg-3); font-size: 13px; font-family: var(--mono);
     }
+    nav {
+      display: flex; gap: 4px;
+      margin-top: 18px; padding-bottom: 0;
+    }
+    nav a {
+      padding: 8px 16px; border-radius: 6px 6px 0 0;
+      color: var(--fg-3);
+      font-size: 13px; font-family: var(--mono);
+      border: 1px solid transparent;
+      border-bottom: none;
+      text-decoration: none;
+    }
+    nav a.active {
+      color: var(--fg);
+      background: var(--bg);
+      border-color: var(--border);
+      position: relative; top: 1px;
+    }
+    nav a:hover { color: var(--fg-2); text-decoration: none; }
     main {
       max-width: 880px; margin: 0 auto; padding: 32px;
     }
@@ -2512,12 +2532,16 @@ _CONSOLE_LAST_TURN_HTML = """<!DOCTYPE html>
 </head>
 <body>
   <header>
-    <h1>Maez · Last Turn</h1>
+    <h1>Maez <span style="color: var(--fg-3); font-weight: 400;">· Last Turn</span></h1>
     <div class="subtitle">why Maez said what it said</div>
     <div style="margin-left: auto;">
       <button class="refresh-btn" onclick="load()">refresh</button>
     </div>
   </header>
+  <nav style="max-width: 880px; margin: 0 auto; padding: 0 32px;">
+    <a href="/console/now">Now</a>
+    <a href="/console/last-turn" class="active">Last Turn</a>
+  </nav>
   <main id="main">
     <div class="loading">loading the last turn…</div>
   </main>
@@ -2636,6 +2660,883 @@ def console_last_turn():
     """
     from flask import Response
     return Response(_CONSOLE_LAST_TURN_HTML, mimetype="text/html")
+
+
+# ── Maez Console v0.1 — "Maez Now" ───────────────────────────────────
+#
+# Codex review of Console v0 (Last Turn) said: "It still feels like a
+# debug report, not a place to meet Maez." The next slice is Maez Now
+# — current state, body truth, broken things, recent thought, pending
+# actions. Plain-English summaries throughout. Motion: 5-second
+# auto-refresh + visible pulse on change so the page feels alive.
+
+
+@app.route("/api/v1/now")
+def api_now():
+    """Aggregator for the Maez Now page. Read-only. Pulls from:
+      - logs/maez.log (most recent cycle thought + cycle number)
+      - core.infra.body_capabilities (binaries, services, env)
+      - core.infra.capability_registry (services state, disabled
+        features, memory counts)
+      - core.routing.model_config (configured model + endpoint)
+      - memory/fabrication_log.db (audit mode counts last 24h)
+      - memory/pending_cards.db (pending count + items)
+    """
+    import re as _re
+    import sqlite3 as _sq
+    import time as _time
+
+    out: dict = {}
+    now_epoch = _time.time()
+
+    # ── Current cycle + thought ─────────────────────────────────
+    lines = _tail_log_lines(_MAEZ_LOG_PATH, 800)
+    cycle_num: int | None = None
+    cycle_ts: str | None = None
+    cycle_thought: str = ""
+    cycle_is_quiet = False
+    for i in range(len(lines) - 1, -1, -1):
+        # Most recent "Cycle N response:" or HEARTBEAT_OK
+        ln = lines[i]
+        m = _re.search(r"\bCycle (\d+) response:", ln)
+        if m:
+            cycle_num = int(m.group(1))
+            tsm = _re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", ln)
+            if tsm:
+                cycle_ts = tsm.group(1)
+            # Next non-meta line is the response body
+            body_lines: list[str] = []
+            j = i + 1
+            while j < len(lines) and len(body_lines) < 4:
+                bl = lines[j].strip()
+                if bl and not _re.search(
+                    r"^\d{4}-\d{2}-\d{2}.*\[INFO\]", bl,
+                ):
+                    body_lines.append(bl[:240])
+                if len(body_lines) > 0 and _re.search(
+                    r"\[INFO\] cycle \| score", lines[j]
+                    if j < len(lines) else "",
+                ):
+                    break
+                j += 1
+            cycle_thought = " ".join(body_lines)[:600]
+            break
+        m_hb = _re.search(r"Cycle (\d+): HEARTBEAT_OK", ln)
+        if m_hb and cycle_num is None:
+            cycle_num = int(m_hb.group(1))
+            tsm = _re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", ln)
+            if tsm:
+                cycle_ts = tsm.group(1)
+            cycle_is_quiet = True
+            cycle_thought = ""
+            # keep scanning for an actual response further back
+    if cycle_num is None:
+        cycle_num = 0
+
+    out["now"] = {
+        "cycle": cycle_num,
+        "thought": cycle_thought,
+        "thought_when": _humanize_minutes_ago(cycle_ts),
+        "thought_at": cycle_ts,
+        "is_quiet": cycle_is_quiet,
+        "summary": (
+            "Maez is quiet this cycle (no new thought to share)."
+            if cycle_is_quiet else
+            f"Maez just thought this {_humanize_minutes_ago(cycle_ts)}."
+            if cycle_thought else
+            f"Maez is at cycle {cycle_num} — no recent thought captured."
+        ),
+    }
+
+    # ── Body truth ──────────────────────────────────────────────
+    body: dict = {}
+    try:
+        from core.infra import body_capabilities as _bc
+        snap = _bc.body_capabilities()
+        binaries = snap.get("binaries") or {}
+        body["tools_available"] = sorted(
+            [n for n, v in binaries.items() if v],
+        )
+        body["tools_missing"] = sorted(
+            [n for n, v in binaries.items() if not v],
+        )
+        services_reach = snap.get("services") or {}
+        body["services_reachable"] = sorted(
+            [k for k, v in services_reach.items() if v],
+        )
+        body["services_unreachable"] = sorted(
+            [k for k, v in services_reach.items() if not v],
+        )
+        body["desktop_session_reachable"] = bool(
+            snap.get("desktop_session_reachable", False),
+        )
+        body["sudo_passwordless"] = bool(snap.get("sudo_passwordless", False))
+    except Exception as e:
+        body["_error"] = f"body_capabilities probe failed: {e}"
+
+    # Brain endpoint
+    try:
+        from core.routing.model_config import (
+            PRIMARY_MODEL, PRIMARY_BASE_URL,
+        )
+        body["brain_model"] = PRIMARY_MODEL
+        body["brain_endpoint"] = PRIMARY_BASE_URL
+    except Exception:
+        body["brain_model"] = "unknown"
+        body["brain_endpoint"] = "unknown"
+
+    # systemd service status (alive/dead)
+    services_alive: list[str] = []
+    services_dead: list[str] = []
+    try:
+        from core.infra import capability_registry as _cr
+        d = _cr.describe()
+        for unit, state in (d.get("services") or {}).items():
+            if unit.startswith("_"):
+                continue
+            if state == "active":
+                services_alive.append(unit)
+            else:
+                services_dead.append(unit)
+    except Exception:
+        pass
+    body["services_alive_systemd"] = sorted(services_alive)
+    body["services_dead_systemd"] = sorted(services_dead)
+
+    # Plain-English body summary
+    can_phrases: list[str] = []
+    cannot_phrases: list[str] = []
+    if body.get("brain_endpoint", "").startswith("http"):
+        can_phrases.append(
+            f"reach the brain ({body.get('brain_model')})"
+        )
+    if body.get("sudo_passwordless"):
+        can_phrases.append("run sudo without a password")
+    if body.get("desktop_session_reachable"):
+        can_phrases.append("reach the desktop session")
+    else:
+        cannot_phrases.append("see your screen (vision retired)")
+    if "wmctrl" in body.get("tools_missing", []):
+        cannot_phrases.append("use wmctrl (not installed)")
+    if body.get("services_alive_systemd"):
+        can_phrases.append(
+            f"talk to {len(body['services_alive_systemd'])} live services"
+        )
+    body_summary_parts = []
+    if can_phrases:
+        body_summary_parts.append("Maez can " + ", ".join(can_phrases))
+    if cannot_phrases:
+        body_summary_parts.append("can't " + ", ".join(cannot_phrases))
+    body["summary"] = ". ".join(body_summary_parts) + "." if body_summary_parts else "Body state unavailable."
+    out["body"] = body
+
+    # ── Broken things ───────────────────────────────────────────
+    # Detect known operational-noise classes from recent journalctl
+    # that the rails can't auto-resolve. The list here is curated:
+    # known degradations, not every error-line.
+    broken: list[dict] = []
+    if "calendar" in body.get("services_unreachable", []):
+        # Calendar can be technically reachable as TCP; the real
+        # failure is OAuth invalid_grant. Detect from log presence.
+        pass
+    # Look at last 200 lines for known degradation patterns
+    recent_text = "\n".join(lines[-400:])
+    if "invalid_grant" in recent_text or "Calendar fetch failed: OAuth" in recent_text:
+        broken.append({
+            "label": "Calendar (Google OAuth)",
+            "summary": "OAuth credentials are stale; the refresh token "
+                       "needs replacing. Calendar context is unavailable.",
+            "severity": "degraded",
+        })
+    if "GitHub skill auto-disabled" in recent_text:
+        broken.append({
+            "label": "GitHub awareness",
+            "summary": "Personal access token rejected with 401. "
+                       "Update MAEZ_GITHUB_TOKEN and restart maez.service.",
+            "severity": "degraded",
+        })
+    if "screen perception disabled" in recent_text:
+        broken.append({
+            "label": "Vision (screen perception)",
+            "summary": "Intentionally retired. Maez cannot see "
+                       "what's on your screen.",
+            "severity": "intentional",
+        })
+    if "judge LLM call failed" in recent_text or any(
+        "mode=judge_unavailable" in ln for ln in lines[-200:]
+    ):
+        broken.append({
+            "label": "Honesty audit (occasionally)",
+            "summary": "The grounding judge times out under load. "
+                       "When it does, the reply goes out without "
+                       "grounding-check (fail-loud, not fail-closed).",
+            "severity": "intermittent",
+        })
+    if "active_window failed" in recent_text:
+        broken.append({
+            "label": "Active-window detection",
+            "summary": "X session unreachable from the daemon. "
+                       "Maez can't tell what app you have focused.",
+            "severity": "degraded",
+        })
+
+    out["broken"] = {
+        "count": len(broken),
+        "items": broken,
+        "summary": (
+            "Nothing degraded right now."
+            if not broken else
+            f"{len(broken)} thing(s) degraded: " +
+            ", ".join(b["label"].lower() for b in broken) + "."
+        ),
+    }
+
+    # ── Audit health (last 24h) ────────────────────────────────
+    audit_counts: dict[str, int] = {
+        "noop": 0, "sentence": 0, "shortcircuit": 0,
+        "judge_unavailable": 0, "prefilter_clean": 0, "skipped": 0,
+    }
+    try:
+        # Count audit modes from cognition.log over last 24h
+        cog_lines = _tail_log_lines(_COGNITION_LOG_PATH, 4000)
+        cutoff = now_epoch - 24 * 3600
+        for ln in cog_lines:
+            if "self_claim_audit |" not in ln:
+                continue
+            tsm = _re.match(
+                r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", ln,
+            )
+            if tsm:
+                ep = _ts_to_epoch(tsm.group(1))
+                if ep is None or ep < cutoff:
+                    continue
+            mm = _re.search(r"mode=([\w_]+)", ln)
+            if mm:
+                k = mm.group(1)
+                audit_counts[k] = audit_counts.get(k, 0) + 1
+    except Exception:
+        pass
+    total_audits = sum(audit_counts.values())
+    rewrites = audit_counts.get("sentence", 0) + audit_counts.get(
+        "shortcircuit", 0,
+    )
+    unavailable = audit_counts.get("judge_unavailable", 0)
+    if total_audits == 0:
+        audit_summary = (
+            "No audit events captured in the last 24 hours "
+            "(cognition log may be empty or rotated)."
+        )
+    else:
+        audit_summary = (
+            f"In the last 24 hours: {audit_counts['noop']} replies "
+            f"passed cleanly, {rewrites} got rewritten, "
+            f"{unavailable} timed out (judge under load)."
+        )
+    out["audit_health"] = {
+        "counts": audit_counts,
+        "total": total_audits,
+        "summary": audit_summary,
+    }
+
+    # ── Pending actions ─────────────────────────────────────────
+    pending: list[dict] = []
+    try:
+        pc = _sq.connect(_PENDING_CARDS_DB, timeout=2.0)
+        cur = pc.cursor()
+        cur.execute(
+            "SELECT request_id, action, params_json, plain_english, "
+            "  status, created_at "
+            "FROM pending_cards "
+            "WHERE status IN ('open', 'OPEN', 'awaiting_owner', 'AWAITING') "
+            "ORDER BY created_at DESC LIMIT 10",
+        )
+        for rid, action, params, pe, status, created in cur.fetchall():
+            cmd = ""
+            try:
+                import json as _json
+                p = _json.loads(params or "{}")
+                cmd = (p.get("cmd") or "")[:200]
+            except Exception:
+                pass
+            iso = ""
+            try:
+                iso = _time.strftime(
+                    "%Y-%m-%d %H:%M:%S", _time.localtime(float(created)),
+                )
+            except Exception:
+                pass
+            pending.append({
+                "request_id": (rid or "")[:12],
+                "action": action,
+                "cmd_preview": cmd,
+                "plain_english": pe or "",
+                "status": status,
+                "when": _humanize_minutes_ago(iso),
+            })
+        pc.close()
+    except Exception:
+        pass
+
+    out["pending_actions"] = {
+        "count": len(pending),
+        "items": pending,
+        "summary": (
+            "Maez has no pending actions awaiting your approval."
+            if not pending else
+            f"Maez wants approval for {len(pending)} action"
+            f"{'s' if len(pending) != 1 else ''}."
+        ),
+    }
+
+    # ── Memory counts + recent writes ───────────────────────────
+    mem_counts = {}
+    try:
+        from core.infra import capability_registry as _cr
+        d = _cr.describe()
+        mem_counts = d.get("memory_counts") or {}
+    except Exception:
+        pass
+    out["memory"] = {
+        "counts": mem_counts,
+        "summary": (
+            f"Maez holds {mem_counts.get('raw', 0):,} raw memories, "
+            f"{mem_counts.get('daily', 0)} daily summaries, and "
+            f"{mem_counts.get('core', 0)} core beliefs."
+            if mem_counts else
+            "Memory counts unavailable."
+        ),
+    }
+
+    # ── One-line synthesis ──────────────────────────────────────
+    parts: list[str] = []
+    if out["now"]["is_quiet"]:
+        parts.append(f"Maez is quiet at cycle {cycle_num}")
+    elif cycle_thought:
+        parts.append(f"Maez is at cycle {cycle_num} and just spoke")
+    else:
+        parts.append(f"Maez is at cycle {cycle_num}")
+    if out["broken"]["count"] > 0:
+        parts.append(
+            f"{out['broken']['count']} thing(s) degraded"
+        )
+    if out["pending_actions"]["count"] > 0:
+        parts.append(
+            f"{out['pending_actions']['count']} action(s) "
+            f"awaiting your approval"
+        )
+    audit_str = ""
+    if total_audits > 0:
+        if rewrites > 0:
+            audit_str = (
+                f"audit caught {rewrites} ungrounded claim"
+                f"{'s' if rewrites != 1 else ''} today"
+            )
+        else:
+            audit_str = "audit clean today"
+    if audit_str:
+        parts.append(audit_str)
+    one_line = ". ".join(parts) + "."
+    out["summary_one_line"] = one_line
+    out["_meta"] = {
+        "rendered_at": _time.strftime(
+            "%Y-%m-%d %H:%M:%S", _time.localtime(),
+        ),
+        "data_sources": [
+            "logs/maez.log", "logs/cognition.log",
+            "memory/pending_cards.db",
+            "core.infra.body_capabilities",
+            "core.infra.capability_registry",
+        ],
+    }
+    return jsonify(out)
+
+
+_CONSOLE_NOW_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Maez · Now</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      --bg: #0c0c0e;
+      --bg-2: #131318;
+      --bg-3: #1a1a21;
+      --border: #25252e;
+      --fg: #e8e8ec;
+      --fg-2: #a8a8b2;
+      --fg-3: #6c6c78;
+      --accent: #c9a86b;
+      --accent-2: #6b9ec9;
+      --good: #6bc98e;
+      --warn: #c9a86b;
+      --bad: #c96b6b;
+      --mono: ui-monospace, "JetBrains Mono", "Fira Code", Menlo, monospace;
+      --sans: system-ui, -apple-system, "Inter", Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--sans);
+      font-size: 15px;
+      line-height: 1.55;
+      min-height: 100vh;
+    }
+    a { color: var(--accent-2); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    header {
+      padding: 28px 32px 0;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: baseline; gap: 16px;
+      flex-wrap: wrap;
+    }
+    header h1 {
+      margin: 0; font-size: 18px; font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    header .subtitle {
+      color: var(--fg-3); font-size: 13px; font-family: var(--mono);
+    }
+    nav {
+      display: flex; gap: 4px;
+      margin-top: 18px; padding-bottom: 0;
+    }
+    nav a {
+      padding: 8px 16px; border-radius: 6px 6px 0 0;
+      color: var(--fg-3);
+      font-size: 13px; font-family: var(--mono);
+      border: 1px solid transparent;
+      border-bottom: none;
+      text-decoration: none;
+    }
+    nav a.active {
+      color: var(--fg);
+      background: var(--bg);
+      border-color: var(--border);
+      position: relative; top: 1px;
+    }
+    nav a:hover { color: var(--fg-2); text-decoration: none; }
+    .heart {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--good);
+      margin-left: 12px;
+      box-shadow: 0 0 0 0 rgba(107, 201, 142, 0.7);
+      animation: pulse 2s infinite;
+      vertical-align: middle;
+    }
+    .heart.warn { background: var(--warn); animation: pulse-warn 2s infinite; }
+    .heart.bad  { background: var(--bad);  animation: pulse-bad  2s infinite; }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(107, 201, 142, 0.7); }
+      70% { box-shadow: 0 0 0 8px rgba(107, 201, 142, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(107, 201, 142, 0); }
+    }
+    @keyframes pulse-warn {
+      0% { box-shadow: 0 0 0 0 rgba(201, 168, 107, 0.7); }
+      70% { box-shadow: 0 0 0 8px rgba(201, 168, 107, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(201, 168, 107, 0); }
+    }
+    @keyframes pulse-bad {
+      0% { box-shadow: 0 0 0 0 rgba(201, 107, 107, 0.7); }
+      70% { box-shadow: 0 0 0 8px rgba(201, 107, 107, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(201, 107, 107, 0); }
+    }
+    main {
+      max-width: 880px; margin: 0 auto; padding: 32px;
+    }
+    .one-liner {
+      font-size: 17px;
+      color: var(--fg);
+      padding: 18px 22px;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 32px;
+      line-height: 1.6;
+    }
+    .one-liner .label {
+      display: block;
+      color: var(--fg-3); font-size: 11px;
+      text-transform: uppercase; letter-spacing: 0.1em;
+      margin-bottom: 6px;
+    }
+    .thought-bubble {
+      padding: 22px 26px;
+      background: var(--bg-3);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: 6px;
+      margin-bottom: 28px;
+    }
+    .thought-bubble .label {
+      color: var(--fg-3); font-size: 11px;
+      text-transform: uppercase; letter-spacing: 0.1em;
+      margin-bottom: 10px; font-family: var(--mono);
+    }
+    .thought-bubble .text {
+      font-size: 15.5px;
+      color: var(--fg);
+      white-space: pre-wrap;
+      line-height: 1.6;
+    }
+    .thought-bubble .when {
+      color: var(--fg-3); font-size: 12px;
+      margin-top: 12px; font-family: var(--mono);
+    }
+    .thought-bubble.quiet .text {
+      color: var(--fg-3); font-style: italic;
+    }
+    section.detail {
+      margin-bottom: 22px;
+      padding: 18px 22px;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    section.detail h3 {
+      margin: 0 0 10px 0; font-size: 13px; font-weight: 600;
+      color: var(--fg-2);
+      text-transform: uppercase; letter-spacing: 0.1em;
+      display: flex; align-items: center; gap: 8px;
+    }
+    section.detail .summary {
+      color: var(--fg);
+      font-size: 14.5px;
+    }
+    section.detail .badge-list {
+      margin-top: 12px;
+      display: flex; flex-wrap: wrap; gap: 6px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      border: 1px solid var(--border);
+      color: var(--fg-2);
+      background: var(--bg-3);
+    }
+    .badge.good { color: var(--good); border-color: rgba(107, 201, 142, 0.3); }
+    .badge.bad  { color: var(--bad);  border-color: rgba(201, 107, 107, 0.3); }
+    .badge.dim  { color: var(--fg-3); }
+    .broken-item {
+      background: var(--bg-3);
+      border-left: 2px solid var(--warn);
+      padding: 10px 14px;
+      margin: 8px 0;
+      border-radius: 4px;
+    }
+    .broken-item.intentional { border-left-color: var(--fg-3); }
+    .broken-item.intermittent { border-left-color: var(--accent-2); }
+    .broken-item .label {
+      color: var(--fg);
+      font-size: 13.5px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .broken-item .summary-text {
+      color: var(--fg-2);
+      font-size: 13px;
+    }
+    .pending-item {
+      background: var(--bg-3);
+      border-left: 2px solid var(--accent);
+      padding: 12px 16px;
+      margin: 10px 0;
+      border-radius: 4px;
+    }
+    .pending-item .what {
+      color: var(--fg);
+      font-size: 14px;
+      margin-bottom: 6px;
+    }
+    .pending-item .cmd {
+      color: var(--fg-3);
+      font-family: var(--mono);
+      font-size: 12px;
+      margin-bottom: 6px;
+      word-break: break-all;
+    }
+    .pending-item .when {
+      color: var(--fg-3);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+    .audit-bars {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+    }
+    .audit-bar {
+      background: var(--bg-3);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 10px 12px;
+      text-align: center;
+    }
+    .audit-bar .n {
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--fg);
+    }
+    .audit-bar .label {
+      font-size: 10.5px;
+      color: var(--fg-3);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-top: 4px;
+      font-family: var(--mono);
+    }
+    .audit-bar.passed .n { color: var(--good); }
+    .audit-bar.rewrote .n { color: var(--warn); }
+    .audit-bar.shortcircuit .n { color: var(--accent); }
+    .audit-bar.unavailable .n { color: var(--fg-3); }
+    .meta-row {
+      margin-top: 32px; padding-top: 16px;
+      border-top: 1px solid var(--border);
+      color: var(--fg-3);
+      font-family: var(--mono);
+      font-size: 11px;
+      display: flex; justify-content: space-between; flex-wrap: wrap;
+    }
+    .refresh-btn {
+      background: var(--bg-3);
+      color: var(--fg-2);
+      border: 1px solid var(--border);
+      padding: 6px 14px;
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 12px;
+      cursor: pointer;
+      margin-left: auto;
+    }
+    .refresh-btn:hover { color: var(--fg); border-color: var(--fg-3); }
+    .loading {
+      padding: 60px 32px; text-align: center;
+      color: var(--fg-3); font-family: var(--mono);
+    }
+    .err {
+      padding: 18px 22px;
+      background: var(--bg-2);
+      border: 1px solid var(--bad);
+      border-radius: 6px;
+      color: var(--fg-2);
+    }
+    .empty {
+      color: var(--fg-3); font-style: italic; font-size: 14px;
+      margin-top: 8px;
+    }
+    .changed {
+      animation: shimmer 1.2s ease-out;
+    }
+    @keyframes shimmer {
+      0% { background-color: rgba(201, 168, 107, 0.12); }
+      100% { background-color: transparent; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Maez <span style="color: var(--fg-3); font-weight: 400;">· Now</span></h1>
+    <div class="subtitle">what Maez is doing right now</div>
+    <span id="heart" class="heart"></span>
+    <button class="refresh-btn" onclick="load()">refresh</button>
+  </header>
+  <nav style="max-width: 880px; margin: 0 auto; padding: 0 32px;">
+    <a href="/console/now" class="active">Now</a>
+    <a href="/console/last-turn">Last Turn</a>
+  </nav>
+  <main id="main">
+    <div class="loading">loading Maez's current state…</div>
+  </main>
+
+  <script>
+    let lastSnapshot = null;
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      return String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function changedClass(prev, curr, key) {
+      if (prev == null) return '';
+      if (JSON.stringify(prev[key]) !== JSON.stringify(curr[key])) {
+        return ' changed';
+      }
+      return '';
+    }
+
+    function setHeart(d) {
+      const heart = document.getElementById('heart');
+      heart.classList.remove('warn', 'bad');
+      if (d.broken && d.broken.count > 2) heart.classList.add('bad');
+      else if (d.broken && d.broken.count > 0) heart.classList.add('warn');
+    }
+
+    function render(d) {
+      const main = document.getElementById('main');
+      if (d.error) {
+        main.innerHTML = `<div class="err">${escapeHtml(d.error)}</div>`;
+        return;
+      }
+      setHeart(d);
+
+      // Current thought
+      const thoughtClass = d.now.is_quiet ? 'thought-bubble quiet' : 'thought-bubble';
+      const thoughtText = d.now.is_quiet
+        ? `Maez is quiet this cycle (cycle ${d.now.cycle}). HEARTBEAT_OK — perception unchanged.`
+        : (d.now.thought || '(no recent thought captured)');
+
+      // Body badges
+      const toolsAvail = (d.body.tools_available || []).slice(0, 14);
+      const toolsMissing = (d.body.tools_missing || []);
+      const toolsAvailHtml = toolsAvail.map(t => `<span class="badge good">${escapeHtml(t)}</span>`).join('');
+      const toolsMissingHtml = toolsMissing.map(t => `<span class="badge bad">${escapeHtml(t)}</span>`).join('');
+
+      // Broken
+      const brokenHtml = (d.broken.items || []).map(b => `
+        <div class="broken-item ${escapeHtml(b.severity || '')}">
+          <div class="label">${escapeHtml(b.label)}</div>
+          <div class="summary-text">${escapeHtml(b.summary)}</div>
+        </div>
+      `).join('');
+
+      // Pending
+      const pendingHtml = (d.pending_actions.items || []).map(p => `
+        <div class="pending-item">
+          <div class="what">${escapeHtml(p.plain_english || (p.action + ' — ' + (p.cmd_preview || '').slice(0, 80)))}</div>
+          ${p.cmd_preview ? `<div class="cmd">${escapeHtml(p.cmd_preview)}</div>` : ''}
+          <div class="when">${escapeHtml(p.when || '')}</div>
+        </div>
+      `).join('');
+
+      // Audit bars
+      const a = d.audit_health.counts || {};
+      const audit_total = d.audit_health.total || 0;
+
+      main.innerHTML = `
+        <div class="one-liner">
+          <span class="label">In one sentence</span>
+          ${escapeHtml(d.summary_one_line)}
+        </div>
+
+        <div class="${thoughtClass}${changedClass(lastSnapshot, d, 'now')}">
+          <div class="label">Maez just thought · cycle ${d.now.cycle}</div>
+          <div class="text">${escapeHtml(thoughtText)}</div>
+          <div class="when">${escapeHtml(d.now.thought_when || '')}</div>
+        </div>
+
+        <section class="detail">
+          <h3>Maez's body
+            ${d.broken.count === 0 ? '<span class="badge good" style="font-size: 10px; padding: 2px 8px;">healthy</span>' : ''}
+          </h3>
+          <div class="summary">${escapeHtml(d.body.summary || '')}</div>
+          ${(d.body.brain_model && d.body.brain_endpoint) ? `
+            <div class="badge-list" style="margin-top: 14px;">
+              <span class="badge" style="border-color: rgba(201, 168, 107, 0.3); color: var(--accent);">
+                brain: ${escapeHtml(d.body.brain_model)}
+              </span>
+              <span class="badge dim">${escapeHtml(d.body.brain_endpoint)}</span>
+            </div>` : ''}
+          ${toolsAvail.length ? `<div class="badge-list" style="margin-top: 12px;">${toolsAvailHtml}</div>` : ''}
+          ${toolsMissing.length ? `<div class="badge-list" style="margin-top: 8px;">${toolsMissingHtml}</div>` : ''}
+        </section>
+
+        <section class="detail${changedClass(lastSnapshot, d, 'broken')}">
+          <h3>What's degraded
+            ${d.broken.count > 0 ? `<span class="badge ${d.broken.count > 2 ? 'bad' : ''}" style="font-size: 10px; padding: 2px 8px;">${d.broken.count}</span>` : ''}
+          </h3>
+          <div class="summary">${escapeHtml(d.broken.summary)}</div>
+          ${brokenHtml ? `<div style="margin-top: 14px;">${brokenHtml}</div>` : ''}
+        </section>
+
+        <section class="detail">
+          <h3>Honesty rail · last 24h</h3>
+          <div class="summary">${escapeHtml(d.audit_health.summary)}</div>
+          ${audit_total > 0 ? `
+            <div class="audit-bars">
+              <div class="audit-bar passed">
+                <div class="n">${a.noop || 0}</div>
+                <div class="label">passed clean</div>
+              </div>
+              <div class="audit-bar rewrote">
+                <div class="n">${a.sentence || 0}</div>
+                <div class="label">sentence rewrite</div>
+              </div>
+              <div class="audit-bar shortcircuit">
+                <div class="n">${a.shortcircuit || 0}</div>
+                <div class="label">whole rewrite</div>
+              </div>
+              <div class="audit-bar unavailable">
+                <div class="n">${a.judge_unavailable || 0}</div>
+                <div class="label">judge timeout</div>
+              </div>
+            </div>` : ''}
+        </section>
+
+        <section class="detail${changedClass(lastSnapshot, d, 'pending_actions')}">
+          <h3>Maez wants permission for
+            ${d.pending_actions.count > 0 ? `<span class="badge" style="font-size: 10px; padding: 2px 8px; color: var(--accent); border-color: rgba(201, 168, 107, 0.3);">${d.pending_actions.count}</span>` : ''}
+          </h3>
+          <div class="summary">${escapeHtml(d.pending_actions.summary)}</div>
+          ${pendingHtml || ''}
+        </section>
+
+        <section class="detail">
+          <h3>What Maez remembers</h3>
+          <div class="summary">${escapeHtml(d.memory.summary)}</div>
+        </section>
+
+        <div class="meta-row">
+          <span>data: ${(d._meta && d._meta.data_sources || []).slice(0, 3).join(' · ')}</span>
+          <span>auto-refreshes every 5s · rendered ${escapeHtml((d._meta && d._meta.rendered_at) || '')}</span>
+        </div>
+      `;
+      lastSnapshot = d;
+    }
+
+    async function load() {
+      try {
+        const r = await fetch('/api/v1/now');
+        const d = await r.json();
+        render(d);
+      } catch (e) {
+        document.getElementById('main').innerHTML =
+          '<div class="err">failed to load: ' + escapeHtml(e.message) + '</div>';
+      }
+    }
+    load();
+    setInterval(load, 5000);
+  </script>
+</body>
+</html>
+"""
+
+
+@app.route("/console/now")
+def console_now():
+    """Maez Console v0.1 — Maez Now.
+
+    Polished parent-facing page that shows Maez's current state in
+    plain English: latest thought, body truth, what's degraded,
+    honesty-rail health over the last 24 hours, pending actions,
+    memory counts. Auto-refreshes every 5 seconds with a pulse
+    indicator and shimmer animation on changed sections so the
+    page feels alive rather than inert.
+
+    No auth today: served from localhost (127.0.0.1:11437) like
+    the rest of the cockpit.
+    """
+    from flask import Response
+    return Response(_CONSOLE_NOW_HTML, mimetype="text/html")
 
 
 @app.route("/api/v1/dreams")
