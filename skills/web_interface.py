@@ -3659,6 +3659,62 @@ _RAIL_HORIZON_HOURS = 24
 _RAIL_CACHE_TTL_S = 60.0
 _RAIL_CACHE: dict = {"value": None, "built_at": 0.0}
 
+# Surface taxonomy for v0.2.1 split. Production-surface enumeration
+# comes from `grep self_claim_audit logs/cognition.log` aggregated
+# by frequency. Anything not in these groups is classed as
+# "other_or_test" — keeps test/probe noise separable from production
+# without dropping it entirely (legitimate one-off surfaces still
+# show up rather than vanishing into "all").
+_RAIL_SURFACE_GROUPS: dict[str, set[str]] = {
+    "daemon": {"daemon_cycle", "daemon_cycle_retry"},
+    "telegram": {
+        "telegram_surface", "telegram_dialog",
+        "telegram_text", "telegram_public",
+    },
+    "chat": {"chat"},
+    "cli": {"cli"},
+    "web": {"web"},
+    "scheduled": {
+        "morning_briefing", "nightly_journal",
+        "developmental_heartbeat", "self_mod_dialog",
+    },
+}
+_RAIL_PRODUCTION_GROUPS = (
+    "daemon", "telegram", "chat", "cli", "web", "scheduled",
+)
+
+
+def _rail_group_for(surface: str) -> str:
+    """Maps a raw `surface=` token to one of our taxonomy groups, or
+    `other_or_test` for unknown / probe / test surfaces."""
+    for group, members in _RAIL_SURFACE_GROUPS.items():
+        if surface in members:
+            return group
+    return "other_or_test"
+
+
+_RAIL_MODEL_ENV_PATH = "/etc/maez/model.env"
+
+
+def _rail_read_judge_timeout() -> float:
+    """Read MAEZ_JUDGE_TIMEOUT_S from /etc/maez/model.env. Default
+    matches the code default in core/safety/self_claim_audit.py (5s).
+
+    Live-reads on every endpoint hit (cheap — file is <2 KB) so the
+    footer always reflects current truth. Hardcoding a value in the
+    page would lie if the operator forgot to update it after an
+    experiment edit."""
+    try:
+        with open(_RAIL_MODEL_ENV_PATH, "r") as f:
+            for raw in f:
+                line = raw.strip()
+                if line.startswith("MAEZ_JUDGE_TIMEOUT_S="):
+                    val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    return float(val)
+    except Exception:
+        pass
+    return 5.0
+
 
 def _rail_read_tail(path: str, max_bytes: int) -> str:
     try:
@@ -3733,10 +3789,19 @@ def _rail_build_timeline() -> dict:
             minute=minute_anchor, second=0, microsecond=0,
         )
 
+    # Each bucket holds (a) "total" rolled-up counts and
+    # (b) per-surface-group counts so the page can re-render any
+    # filter without a second API roundtrip. Surface groups are
+    # defined in _RAIL_SURFACE_GROUPS.
+    def _new_counts() -> dict:
+        return {"spoke_clean": 0, "corrected": 0, "rail_unavailable": 0}
+
+    all_groups = list(_RAIL_SURFACE_GROUPS.keys()) + ["other_or_test"]
     buckets = [
         {
-            "spoke_clean": 0, "corrected": 0, "rail_unavailable": 0,
+            **_new_counts(),
             "_gpu_samples": [],
+            "by_group": {g: _new_counts() for g in all_groups},
         }
         for _ in range(n_buckets)
     ]
@@ -3759,6 +3824,8 @@ def _rail_build_timeline() -> dict:
         cat = _rail_classify_mode(m.group("mode"))
         if cat:
             buckets[idx][cat] += 1
+            grp = _rail_group_for(m.group("surface"))
+            buckets[idx]["by_group"][grp][cat] += 1
 
     # Perception lines (GPU%)
     for line in _rail_read_tail(
@@ -3788,6 +3855,19 @@ def _rail_build_timeline() -> dict:
         bucket_start = anchor - _td_rail(seconds=offset_s)
         total = b["spoke_clean"] + b["corrected"] + b["rail_unavailable"]
         gpu_samples = b["_gpu_samples"]
+        # by_group: drop empty groups to keep payload compact
+        compact_by_group = {}
+        for g, c in b["by_group"].items():
+            grp_total = c["spoke_clean"] + c["corrected"] + c["rail_unavailable"]
+            if grp_total > 0:
+                compact_by_group[g] = {
+                    **c,
+                    "total": grp_total,
+                    "timeout_rate": (
+                        round(c["rail_unavailable"] / grp_total, 4)
+                        if grp_total > 0 else None
+                    ),
+                }
         out_buckets.append({
             "bucket_start": bucket_start.strftime("%Y-%m-%dT%H:%M"),
             "spoke_clean": b["spoke_clean"],
@@ -3802,9 +3882,10 @@ def _rail_build_timeline() -> dict:
                 round(sum(gpu_samples) / len(gpu_samples), 1)
                 if gpu_samples else None
             ),
+            "by_group": compact_by_group,
         })
 
-    # 24h totals + hourly rollup as a secondary view
+    # 24h totals + per-group totals
     total_clean = sum(b["spoke_clean"] for b in out_buckets)
     total_corrected = sum(b["corrected"] for b in out_buckets)
     total_unavail = sum(b["rail_unavailable"] for b in out_buckets)
@@ -3813,6 +3894,28 @@ def _rail_build_timeline() -> dict:
         round(total_unavail / total_audits, 4)
         if total_audits > 0 else None
     )
+
+    by_group_24h = {}
+    for grp in all_groups:
+        c = sum(
+            (b["by_group"].get(grp, {}).get("spoke_clean", 0) for b in buckets),
+        )
+        co = sum(
+            (b["by_group"].get(grp, {}).get("corrected", 0) for b in buckets),
+        )
+        u = sum(
+            (b["by_group"].get(grp, {}).get("rail_unavailable", 0) for b in buckets),
+        )
+        t = c + co + u
+        if t == 0:
+            continue
+        by_group_24h[grp] = {
+            "spoke_clean": c,
+            "corrected": co,
+            "rail_unavailable": u,
+            "total": t,
+            "timeout_rate": round(u / t, 4) if t else None,
+        }
 
     return {
         "anchor_local": anchor.strftime("%Y-%m-%dT%H:%M"),
@@ -3826,6 +3929,8 @@ def _rail_build_timeline() -> dict:
             "total_audits": total_audits,
             "timeout_rate": overall_timeout_rate,
         },
+        "by_group_24h": by_group_24h,
+        "judge_timeout_s": _rail_read_judge_timeout(),
     }
 
 
@@ -4027,6 +4132,57 @@ _CONSOLE_RAIL_HTML = r"""<!DOCTYPE html>
       font-variant-numeric: tabular-nums;
     }
     .hour-cell.has_unavail { background: rgba(217, 119, 87, 0.15); color: var(--warn); }
+
+    .filter-row {
+      display: flex; align-items: center; gap: 12px;
+      margin-bottom: 16px;
+    }
+    .filter-row label {
+      color: var(--fg-2); font-size: 12px;
+    }
+    .filter-row select {
+      background: var(--bg-2); color: var(--fg-0);
+      border: 1px solid var(--line); border-radius: 4px;
+      padding: 6px 10px; font: inherit; font-size: 13px;
+    }
+    .surface-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 8px; margin-bottom: 24px;
+    }
+    .surface-card {
+      background: var(--bg-1); border: 1px solid var(--line);
+      border-radius: 6px; padding: 12px 14px;
+      cursor: pointer; transition: border-color 0.15s;
+    }
+    .surface-card:hover { border-color: var(--fg-2); }
+    .surface-card.active {
+      border-color: var(--accent);
+      box-shadow: inset 0 0 0 1px var(--accent);
+    }
+    .surface-card .name {
+      color: var(--fg-1); font-size: 12px;
+      margin-bottom: 4px;
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .surface-card .totals {
+      font-size: 11px; color: var(--fg-2);
+      font-variant-numeric: tabular-nums;
+      line-height: 1.5;
+    }
+    .surface-card .rate {
+      font-size: 16px; color: var(--fg-0);
+      font-variant-numeric: tabular-nums;
+      margin-top: 4px;
+    }
+    .surface-card.warn .rate { color: var(--warn); }
+    .judge-timeout-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: var(--bg-2); border: 1px solid var(--line);
+      padding: 3px 10px; border-radius: 999px;
+      font-size: 11px; color: var(--fg-1);
+      font-variant-numeric: tabular-nums;
+    }
     .err {
       background: rgba(217, 119, 87, 0.08);
       border: 1px solid var(--warn);
@@ -4082,50 +4238,83 @@ _CONSOLE_RAIL_HTML = r"""<!DOCTYPE html>
       return Math.round(s / 3600) + 'h ago';
     }
 
-    function render(d) {
-      const main = document.getElementById('main');
-      if (d.error) {
-        main.innerHTML = `<div class="err">${escapeHtml(d.detail || d.error)}</div>`;
-        return;
-      }
+    let CURRENT_DATA = null;
+    let CURRENT_FILTER = 'all';
 
-      const t = d.totals_24h || {};
+    function bucketCountsForFilter(b, filter) {
+      if (filter === 'all') {
+        return {
+          spoke_clean: b.spoke_clean,
+          corrected: b.corrected,
+          rail_unavailable: b.rail_unavailable,
+          total: b.total,
+          timeout_rate: b.timeout_rate,
+        };
+      }
+      const g = (b.by_group && b.by_group[filter]) || null;
+      if (!g) return {
+        spoke_clean: 0, corrected: 0, rail_unavailable: 0,
+        total: 0, timeout_rate: null,
+      };
+      return g;
+    }
+
+    function renderChart() {
+      if (!CURRENT_DATA) return;
+      const d = CURRENT_DATA;
+
+      // Compute filtered counts per bucket
+      const filteredBuckets = d.buckets.map(b => ({
+        bucket_start: b.bucket_start,
+        gpu_pct_avg: b.gpu_pct_avg,
+        ...bucketCountsForFilter(b, CURRENT_FILTER),
+      }));
+
+      // Filtered 24h totals
+      const ft = filteredBuckets.reduce((acc, b) => ({
+        spoke_clean: acc.spoke_clean + b.spoke_clean,
+        corrected: acc.corrected + b.corrected,
+        rail_unavailable: acc.rail_unavailable + b.rail_unavailable,
+        total: acc.total + b.total,
+      }), { spoke_clean: 0, corrected: 0, rail_unavailable: 0, total: 0 });
+      ft.timeout_rate = ft.total > 0 ? ft.rail_unavailable / ft.total : null;
+
       const summaryHtml = `
         <div class="summary-row">
           <div class="summary-card">
             <div class="label">spoke clean</div>
-            <div class="value">${t.spoke_clean.toLocaleString()}</div>
+            <div class="value">${ft.spoke_clean.toLocaleString()}</div>
             <div class="sub">audit ran, no flags</div>
           </div>
           <div class="summary-card">
             <div class="label">corrected</div>
-            <div class="value">${t.corrected.toLocaleString()}</div>
+            <div class="value">${ft.corrected.toLocaleString()}</div>
             <div class="sub">audit caught and rewrote</div>
           </div>
-          <div class="summary-card ${t.rail_unavailable > 50 ? 'warn' : ''}">
+          <div class="summary-card ${ft.rail_unavailable > 50 ? 'warn' : ''}">
             <div class="label">rail unavailable</div>
-            <div class="value">${t.rail_unavailable.toLocaleString()}</div>
+            <div class="value">${ft.rail_unavailable.toLocaleString()}</div>
             <div class="sub">judge couldn't run this turn</div>
           </div>
           <div class="summary-card">
             <div class="label">timeout rate</div>
-            <div class="value">${fmtPct(t.timeout_rate)}</div>
+            <div class="value">${fmtPct(ft.timeout_rate)}</div>
             <div class="sub">unavailable ÷ total audits</div>
           </div>
         </div>
       `;
 
-      // Compute max bar height for normalization
+      // Compute max bar height for normalization (across the filtered view)
       const maxTotal = Math.max(
         1,
-        ...d.buckets.map(b => b.total),
+        ...filteredBuckets.map(b => b.total),
       );
 
       // Compute GPU overlay points (skip nulls so line shows gaps)
       // The chart-container is 240 px tall.
       const CHART_H = 240;
       const overlayPoints = [];
-      d.buckets.forEach((b, i) => {
+      filteredBuckets.forEach((b, i) => {
         if (b.gpu_pct_avg == null) {
           overlayPoints.push(null);
         } else {
@@ -4136,7 +4325,7 @@ _CONSOLE_RAIL_HTML = r"""<!DOCTYPE html>
       });
 
       // Build SVG polyline path with gaps for nulls
-      const xStep = 100 / d.buckets.length;
+      const xStep = 100 / filteredBuckets.length;
       let svgPath = '';
       let pathOpen = false;
       overlayPoints.forEach((p, i) => {
@@ -4154,7 +4343,7 @@ _CONSOLE_RAIL_HTML = r"""<!DOCTYPE html>
         }
       });
 
-      const barsHtml = d.buckets.map(b => {
+      const barsHtml = filteredBuckets.map(b => {
         const total = b.total;
         const cleanH = total ? (b.spoke_clean / maxTotal) * 100 : 0;
         const corrH = total ? (b.corrected / maxTotal) * 100 : 0;
@@ -4178,10 +4367,10 @@ _CONSOLE_RAIL_HTML = r"""<!DOCTYPE html>
       }).join('');
 
       // Hourly rollup (24 cells, oldest → newest)
-      // Aggregate buckets in groups of 4 (4 × 15min = 1h)
+      // Aggregate filtered buckets in groups of 4 (4 × 15min = 1h)
       const hourly = [];
       for (let h = 0; h < 24; h++) {
-        const slice = d.buckets.slice(h * 4, h * 4 + 4);
+        const slice = filteredBuckets.slice(h * 4, h * 4 + 4);
         const sum = slice.reduce((a, b) => ({
           spoke_clean: a.spoke_clean + b.spoke_clean,
           corrected: a.corrected + b.corrected,
@@ -4205,29 +4394,91 @@ _CONSOLE_RAIL_HTML = r"""<!DOCTYPE html>
 
       // Time axis labels: every ~3h
       const axisLabels = [];
-      for (let i = 0; i < d.buckets.length; i += 12) {
-        axisLabels.push(fmtTime(d.buckets[i].bucket_start));
+      for (let i = 0; i < filteredBuckets.length; i += 12) {
+        axisLabels.push(fmtTime(filteredBuckets[i].bucket_start));
       }
       // Always include the very last bucket as the rightmost label
-      if (d.buckets.length > 0) {
-        axisLabels.push(fmtTime(d.buckets[d.buckets.length - 1].bucket_start));
+      if (filteredBuckets.length > 0) {
+        axisLabels.push(fmtTime(filteredBuckets[filteredBuckets.length - 1].bucket_start));
       }
       const axisHtml = axisLabels.map(l => `<span>${l}</span>`).join('');
 
+      // Per-surface card row
+      const groupOrder = ['daemon', 'telegram', 'chat', 'cli', 'web', 'scheduled', 'other_or_test'];
+      const groupLabels = {
+        daemon: 'daemon (background)',
+        telegram: 'telegram (user-facing)',
+        chat: 'chat',
+        cli: 'cli',
+        web: 'web',
+        scheduled: 'scheduled (briefing/journal)',
+        other_or_test: 'other / test',
+      };
+      const surfaceCardsHtml = groupOrder
+        .filter(g => d.by_group_24h && d.by_group_24h[g])
+        .map(g => {
+          const v = d.by_group_24h[g];
+          const isActive = (CURRENT_FILTER === g);
+          const isWarn = v.timeout_rate != null && v.timeout_rate > 0.10;
+          return `
+            <div class="surface-card ${isActive ? 'active' : ''} ${isWarn ? 'warn' : ''}" data-group="${g}">
+              <div class="name">${groupLabels[g] || g}</div>
+              <div class="totals">
+                clean ${v.spoke_clean} · corr ${v.corrected} · unav ${v.rail_unavailable}
+              </div>
+              <div class="rate">${fmtPct(v.timeout_rate)} timeout</div>
+            </div>
+          `;
+        }).join('');
+
+      // Surface dropdown options
+      const optsHtml = ['<option value="all">all surfaces (combined)</option>']
+        .concat(groupOrder
+          .filter(g => d.by_group_24h && d.by_group_24h[g])
+          .map(g => `<option value="${g}" ${CURRENT_FILTER === g ? 'selected' : ''}>${groupLabels[g] || g}</option>`))
+        .join('');
+
+      const filterTitle = CURRENT_FILTER === 'all'
+        ? 'all surfaces combined'
+        : `surface: ${groupLabels[CURRENT_FILTER] || CURRENT_FILTER}`;
+
+      const judgeTimeout = d.judge_timeout_s != null ? d.judge_timeout_s : '?';
+
       main.innerHTML = `
         ${summaryHtml}
-        <div class="chart-card">
-          <div class="chart-title">last 24 hours · 15-minute buckets</div>
+
+        <div class="chart-card" style="padding: 16px 20px;">
+          <div class="chart-title">per-surface 24h totals — click a card to filter</div>
           <div class="chart-help">
-            bar height = total audits in that 15-min slot.
-            color shows what happened. orange line = average GPU% during the slot.
-            hover any bar for exact counts.
+            <strong>tap to filter the chart below.</strong> shows where rail-unavailable
+            actually lives. timeout rate above 10% lights up.
+          </div>
+          <div class="surface-row" id="surface-row">
+            ${surfaceCardsHtml}
+          </div>
+        </div>
+
+        <div class="filter-row">
+          <label>filter:</label>
+          <select id="surface-filter">${optsHtml}</select>
+          <span style="color: var(--fg-2); font-size: 12px;">${filterTitle}</span>
+          <span style="margin-left: auto;" class="judge-timeout-pill">
+            judge timeout: <strong>${judgeTimeout}s</strong>
+          </span>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-title">last 24 hours · 15-minute buckets · ${filterTitle}</div>
+          <div class="chart-help">
+            bar height = total audits in that 15-min slot for the selected surface.
+            color shows what happened. orange line = average GPU% during the slot
+            (gap = no data, not no load). hover any bar for exact counts.
           </div>
           <div class="legend">
             <span><span class="legend-swatch" style="background: var(--good);"></span>spoke clean</span>
             <span><span class="legend-swatch" style="background: var(--accent);"></span>corrected</span>
             <span><span class="legend-swatch" style="background: var(--warn);"></span>rail unavailable</span>
-            <span><span class="legend-swatch" style="background: var(--judge);"></span>GPU% avg (line)</span>
+            <span><span class="legend-swatch" style="background: var(--judge);"></span>GPU% avg (line, all surfaces)</span>
           </div>
           <div class="chart-container">
             <div class="chart-bars">${barsHtml}</div>
@@ -4237,13 +4488,13 @@ _CONSOLE_RAIL_HTML = r"""<!DOCTYPE html>
           </div>
           <div class="axis">${axisHtml}</div>
           <div class="footer-row">
-            <span>buckets: ${d.buckets.length} · anchor: ${fmtTime(d.anchor_local)} local</span>
+            <span>buckets: ${filteredBuckets.length} · anchor: ${fmtTime(d.anchor_local)} local · MAEZ_JUDGE_TIMEOUT_S=${judgeTimeout} (live from /etc/maez/model.env)</span>
             <span>data updated ${ageLabel(d.data_age_seconds)}</span>
           </div>
         </div>
 
         <div class="chart-card">
-          <div class="chart-title">hourly rollup · rail-unavailable count per hour</div>
+          <div class="chart-title">hourly rollup · rail-unavailable count per hour · ${filterTitle}</div>
           <div class="chart-help">
             secondary view. each cell is one hour, oldest on the left.
             number = rail-unavailable events that hour.
@@ -4251,6 +4502,32 @@ _CONSOLE_RAIL_HTML = r"""<!DOCTYPE html>
           <div class="hourly-row">${hourlyHtml}</div>
         </div>
       `;
+
+      // Wire up surface card clicks + dropdown
+      document.querySelectorAll('.surface-card').forEach(c => {
+        c.addEventListener('click', () => {
+          const g = c.getAttribute('data-group');
+          CURRENT_FILTER = (CURRENT_FILTER === g) ? 'all' : g;
+          renderChart();
+        });
+      });
+      const sel = document.getElementById('surface-filter');
+      if (sel) {
+        sel.addEventListener('change', (e) => {
+          CURRENT_FILTER = e.target.value;
+          renderChart();
+        });
+      }
+    }
+
+    function render(d) {
+      const main = document.getElementById('main');
+      if (d.error) {
+        main.innerHTML = `<div class="err">${escapeHtml(d.detail || d.error)}</div>`;
+        return;
+      }
+      CURRENT_DATA = d;
+      renderChart();
     }
 
     async function load() {
