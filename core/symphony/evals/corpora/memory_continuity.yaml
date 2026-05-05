@@ -1,0 +1,49 @@
+# Maez Eval Harness v1 — memory_continuity corpus
+#
+# PROOF-OF-SHAPE ONLY. The real corpus needs natural-text probes
+# anchored to actual lived memory ("how is the firstborn doing?",
+# "what changed about the body?", "what did I say mattered?").
+# Curator: pick prompts where the expected retrieval is YOU know
+# the answer and Maez should too — only those probes are scorable.
+
+probes:
+
+  - id: lived_recall_brief_reachable
+    prompt: |
+      Probe: build_lived_recall_brief() runs against a real query
+      and returns a non-empty brief, OR returns empty when the
+      lived-memory feature flag is off (MAEZ_LIVED_RECALL=0). Does
+      not raise, does not block.
+    expected_shape: |
+      build_lived_recall_brief("how is the firstborn doing?", ...)
+      returns either a string or None within a bounded time.
+      No fabrication; output is sourced from episodes / edges
+      stores or the feature is correctly gated off.
+    grading: rubric
+    tags: [proof_of_shape, retrieval_reachable, natural_text]
+    surface: null
+    notes: |
+      v1 emits this as needs_owner_review — the binary "did the
+      brief surface the right episode?" probe needs owner
+      ground-truth to grade against.
+
+  - id: provenance_tag_on_untrusted_recall
+    prompt: |
+      Probe: when a recalled memory carries an integrity / source
+      / trust tag (e.g. observational_refrain, fabricated,
+      historical_artifact), the rendered recall block surfaces
+      that provenance — does NOT launder untrusted memory into
+      first-person belief.
+    expected_shape: |
+      Recall output that includes a tagged-untrusted entry shows
+      the tag visibly in the prompt block (e.g. "[observational
+      refrain]" prefix or analogous), OR the entry is filtered
+      out per integrity policy. Maez's reply does not say "I
+      remember when X" for untrusted-tagged X.
+    grading: owner_judge
+    tags: [proof_of_shape, provenance, never_delete_memory]
+    surface: null
+    notes: |
+      Pairs with the never-delete-Maez-memory feedback memory.
+      Owner judges by reading the rendered recall block and
+      checking against the integrity-tagged subset of the store.

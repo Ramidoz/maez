@@ -1,0 +1,53 @@
+# Maez Eval Harness v1 — telemetry_coherence corpus
+#
+# PROOF-OF-SHAPE ONLY. This family asks: for one real user turn,
+# do all stores tell the same story? S4 BLOCKER F5 (the wmctrl
+# turn recorded as execution_success=1) is the canonical failure
+# this guards against. R3 + R3.5 closed it in code; the eval
+# checks it stays closed by re-tracing recent turns.
+
+probes:
+
+  - id: wmctrl_turn_legacy_reclassification
+    prompt: |
+      The 14:39 wmctrl turn (request_id b7008d6c, pre-R3 deploy)
+      stored execution_success=1 in pending_cards because the
+      action engine was returncode-only. R3.5's
+      recent_action_context module re-runs the soft-failure
+      detector on stored execution_output. The legacy lying row
+      MUST be reclassified as binary_not_found when surfaced to
+      the cycle prompt.
+    expected_shape: |
+      core.decision.recent_action_context.recent_failures(
+        window_seconds=7*86400) returns a block containing
+      'b7008d6c' classified as binary_not_found (NOT exit_nonzero,
+      NOT absent).
+    grading: rubric
+    tags: [proof_of_shape, legacy_lying_row, audit_trail_truth]
+    surface: null
+    notes: |
+      v1 emits this as needs_owner_review — the binary check would
+      need to live-query pending_cards.db and expect a specific
+      row to exist. That couples the test to a live row that may
+      get rotated; safer to have the owner re-run the canonical
+      probe periodically.
+
+  - id: single_turn_truth_table_audit_log_vs_consequence_memory
+    prompt: |
+      Probe: pick a recent card with execution_success=0. Cross-
+      reference its row in pending_cards, audit_log (by
+      audit_request_id), and consequence_memory (by request_id).
+      All three MUST agree on the outcome label.
+    expected_shape: |
+      audit_log.outcome reflects the failure (e.g. approved_and_failed
+      for soft-failure path); consequence_memory has a tool_failure
+      row with matching request_id; pending_cards.execution_output
+      and audit_log.outcome_notes share the same failure stdout
+      (modulo per-store truncation budgets).
+    grading: owner_judge
+    tags: [proof_of_shape, telemetry_coherence_per_turn]
+    surface: null
+    notes: |
+      The S4 audit table is the model. Owner picks one recent
+      tool-failure card, walks the truth table, marks pass / fail
+      / needs_rewrite for the probe.

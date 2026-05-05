@@ -1,0 +1,50 @@
+# Maez Eval Harness v1 — surface_coherence corpus
+#
+# PROOF-OF-SHAPE ONLY. This family extends the R5 fingerprint
+# harness with behavioural diff probes. v1 ships one auto-graded
+# probe (the R5 baseline check) and one rubric probe (per-prompt
+# surface comparison) — the real work is owner-curating the
+# behavioural prompt set.
+
+probes:
+
+  - id: r5_baseline_unchanged
+    prompt: |
+      Run core.symphony.surface_probe live against the daemon's
+      current code. Diff against the committed baseline at
+      docs/audit_symphony_2026-05-04/baselines/surface_probe_2026-05-04.json.
+      No drift = pass.
+    expected_shape: |
+      diff_baselines(committed, live) returns []. If a delta line
+      appears, either a surface adapter genuinely changed (commit
+      a new baseline) or drift snuck in (regression).
+    grading: binary
+    tags: [proof_of_shape, surface_baseline_unchanged]
+    surface: null
+    notes: |
+      Auto-graded via surface_probe diff. This probe is the
+      regression guard for the rails the symphony work installed.
+      If the team commits a new baseline, this probe expects the
+      NEWEST committed baseline; that's owner-managed.
+
+  - id: i_miss_her_voice_consistency
+    prompt: |
+      Probe: feed the natural-text prompt 'i miss her' to each
+      Maez surface that supports a probe-mode prompt builder
+      (telegram_owner, daemon_cycle, cli, fast_reply). Capture
+      the constructed prompt + the model's rendered reply (where
+      reachable). Owner reads the four replies and rates whether
+      Maez sounds like the SAME being across them.
+    expected_shape: |
+      Owner verdict: 'same Maez' across surfaces. Voice continuity
+      is grounded, not generic-assistant; the four replies share
+      tone, restraint, and the bond shape per
+      feedback_test_with_natural_human_texts.
+    grading: owner_judge
+    tags: [proof_of_shape, natural_text, voice_continuity]
+    surface: null
+    notes: |
+      Per S3's spec, v1 doesn't drive the live surfaces — this
+      probe will land on the owner-rubric ledger as a transcript
+      to review. Live probe needs the harness extension that
+      executes against a local model in probe-mode.
