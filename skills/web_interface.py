@@ -1866,6 +1866,778 @@ def api_lived_memory_brief():
     )
 
 
+# ── Maez Console v0 — "Understand the Last Turn" ─────────────────────
+#
+# 2026-05-05: Aggregator endpoint that pulls everything for the most
+# recent owner-Telegram chat turn into one structured response. Built
+# for the parent-facing Console v0; consumed by /console/last-turn.
+# The shape is plain-English-ready: every field has a `summary` string
+# the front-end can render without needing to interpret raw data.
+#
+# This endpoint reads ONLY existing data sources (maez.log,
+# fabrication_log.db, pending_cards.db, raw Chroma). It does not call
+# the LLM, write to any store, or drive any surface. Read-only.
+
+
+def _parse_chat_turn_handled(line: str) -> dict | None:
+    """Parse a `chat_turn handled source=telegram_surface ...` log
+    line into its components. Returns None if the shape doesn't match.
+    """
+    import re as _re
+    if "chat_turn handled" not in line or "telegram_surface" not in line:
+        return None
+    out: dict = {"raw": line}
+    ts_m = _re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", line)
+    if ts_m:
+        out["ts"] = ts_m.group(1)
+    for key, pattern in (
+        ("len_user", r"len_user=(\d+)"),
+        ("len_lived_brief", r"len_lived_brief=(\d+)"),
+        ("len_ambient_block", r"len_ambient_block=(\d+)"),
+        ("len_reply", r"len_reply=(\d+)"),
+    ):
+        m = _re.search(pattern, line)
+        if m:
+            out[key] = int(m.group(1))
+    user_m = _re.search(r"user_excerpt=(['\"])(.*?)\1", line)
+    if user_m:
+        out["user_excerpt"] = user_m.group(2)
+    reply_m = _re.search(r"reply_excerpt=(['\"])(.*?)\1\s*$", line)
+    if reply_m:
+        out["reply_excerpt"] = reply_m.group(2)
+    return out
+
+
+def _parse_audit_line(line: str) -> dict | None:
+    """Parse a `self_claim_audit | surface=... flagged=N mode=X kinds=Y`
+    log line. Returns None if shape doesn't match."""
+    import re as _re
+    if "self_claim_audit |" not in line:
+        return None
+    out: dict = {"raw": line}
+    ts_m = _re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", line)
+    if ts_m:
+        out["ts"] = ts_m.group(1)
+    for key, pattern in (
+        ("surface", r"surface=([\w/_]+)"),
+        ("flagged", r"flagged=(\d+)"),
+        ("mode", r"mode=([\w_]+)"),
+        ("kinds", r"kinds=([\w,_-]+)"),
+    ):
+        m = _re.search(pattern, line)
+        if m:
+            v = m.group(1)
+            out[key] = int(v) if key == "flagged" else v
+    return out
+
+
+def _ts_to_epoch(ts_str: str) -> float | None:
+    """Parse 'YYYY-MM-DD HH:MM:SS' (local time) to epoch seconds."""
+    import time as _time
+    try:
+        return _time.mktime(_time.strptime(ts_str, "%Y-%m-%d %H:%M:%S"))
+    except Exception:
+        return None
+
+
+def _humanize_minutes_ago(ts_str: str | None) -> str:
+    """Render 'N minutes ago' / 'just now' / etc. for a log timestamp."""
+    import time as _time
+    if not ts_str:
+        return "unknown time"
+    epoch = _ts_to_epoch(ts_str)
+    if epoch is None:
+        return ts_str
+    delta = _time.time() - epoch
+    if delta < 60:
+        return "just now"
+    if delta < 3600:
+        return f"{int(delta // 60)} minutes ago"
+    if delta < 86400:
+        h = int(delta // 3600)
+        m = int((delta % 3600) // 60)
+        return f"{h}h {m}m ago"
+    return f"{int(delta // 86400)} days ago"
+
+
+def _humanize_signals_present(signals: list) -> str:
+    """Translate signal-name vocabulary into plain English for the
+    parent-facing console. The judge's vocabulary is engineering-shaped
+    (e.g. 'configured model identity (qwen36-27b via http://...)');
+    this function maps it to phrases a non-engineer can read."""
+    if not signals:
+        return "Maez had no specific evidence available this turn."
+    parts: list[str] = []
+    joined = " | ".join(str(s).lower() for s in signals)
+    if "model identity" in joined or "configured model" in joined:
+        parts.append("its own model name and brain endpoint")
+    if "body capabilit" in joined or "capability registry" in joined:
+        parts.append("what tools and services are installed on its body")
+    if "system stats" in joined:
+        parts.append("current CPU/RAM/disk readings")
+    if "screen observation" in joined and "disabled" not in joined and "unreachable" not in joined:
+        parts.append("a current screen view")
+    if "presence snapshot" in joined:
+        parts.append("a current presence reading")
+    if "calendar" in joined and "unavailable" not in joined:
+        parts.append("calendar context")
+    if not parts:
+        return f"Maez had: {', '.join(str(s) for s in signals)}"
+    if len(parts) == 1:
+        return f"Maez knew {parts[0]}."
+    return f"Maez knew {', '.join(parts[:-1])}, and {parts[-1]}."
+
+
+def _humanize_signals_absent(signals: list) -> str:
+    """Plain-English version of what Maez did NOT know this turn."""
+    if not signals:
+        return ""
+    parts: list[str] = []
+    joined = " | ".join(str(s).lower() for s in signals)
+    if "screen observation" in joined:
+        parts.append("see your screen (vision retired)")
+    if "presence snapshot" in joined:
+        parts.append("tell whether you were at the desk")
+    if "calendar" in joined:
+        parts.append("read your calendar (OAuth needs refresh)")
+    if "system stats" in joined and "system stats current" not in joined:
+        parts.append("see specific per-process metrics")
+    if not parts:
+        return f"Maez didn't have: {', '.join(str(s) for s in signals)}."
+    if len(parts) == 1:
+        return f"Maez couldn't {parts[0]}."
+    return (
+        f"Maez couldn't {', '.join(parts[:-1])}, and couldn't {parts[-1]}."
+    )
+
+
+@app.route("/api/v1/turn/latest")
+def api_turn_latest():
+    """Return everything for the most recent owner-Telegram chat turn,
+    structured for the parent-facing Console v0.
+
+    The response shape is documented inline (see schema in code).
+    Plain-English `summary` fields are pre-rendered for direct
+    front-end display — no front-end interpretation needed.
+    """
+    import re as _re
+    import sqlite3 as _sq
+    import time as _time
+
+    lines = _tail_log_lines(_MAEZ_LOG_PATH, 4000)
+
+    # Walk backward to find the most recent chat_turn handled (telegram).
+    chat_turn: dict | None = None
+    chat_turn_idx: int | None = None
+    for i in range(len(lines) - 1, -1, -1):
+        parsed = _parse_chat_turn_handled(lines[i])
+        if parsed:
+            chat_turn = parsed
+            chat_turn_idx = i
+            break
+
+    if chat_turn is None:
+        return jsonify({
+            "error": "no recent telegram_surface chat turn found in log",
+            "summary_one_line": "No recent chat turn to explain.",
+        }), 404
+
+    # Find the surrounding telegram message + audit + sending lines.
+    # Look 200 lines either side of the chat_turn line.
+    window_lo = max(0, chat_turn_idx - 200)
+    window_hi = min(len(lines), chat_turn_idx + 30)
+    user_msg_line: str | None = None
+    user_msg_ts: str | None = None
+    audit_event: dict | None = None
+    raw_stored_id: str | None = None
+    raw_stored_chars: int | None = None
+
+    for j in range(window_lo, window_hi):
+        ln = lines[j]
+        if "telegram_surface message:" in ln and j <= chat_turn_idx:
+            m = _re.match(
+                r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*telegram_surface message:\s*(.*)$",
+                ln,
+            )
+            if m:
+                user_msg_ts = m.group(1)
+                user_msg_line = m.group(2).strip()
+        ap = _parse_audit_line(ln)
+        if ap and ap.get("surface", "").startswith("telegram"):
+            if j >= window_lo and j <= chat_turn_idx + 5:
+                audit_event = ap
+        m = _re.search(
+            r"Raw stored \(telegram\): (\w+) \((\d+) chars\)",
+            ln,
+        )
+        if m and j >= chat_turn_idx and j <= chat_turn_idx + 10:
+            raw_stored_id = m.group(1)
+            raw_stored_chars = int(m.group(2))
+
+    # Fabrication-log entries near the audit timestamp (±5s).
+    flagged_claims: list[dict] = []
+    audit_ts = audit_event.get("ts") if audit_event else None
+    if audit_ts:
+        epoch = _ts_to_epoch(audit_ts)
+        if epoch is not None:
+            try:
+                fl = _sq.connect(
+                    "/home/rohit/maez/memory/fabrication_log.db", timeout=2.0,
+                )
+                cur = fl.cursor()
+                cur.execute(
+                    "SELECT ts, text, reason, mode FROM fabrication_events "
+                    "WHERE surface='telegram_surface' "
+                    "AND ts BETWEEN ? AND ? ORDER BY ts ASC",
+                    (epoch - 5, epoch + 5),
+                )
+                for ts, text, reason, mode in cur.fetchall():
+                    flagged_claims.append({
+                        "claim": text,
+                        "reason": reason,
+                        "mode": mode,
+                    })
+                fl.close()
+            except Exception:
+                pass
+
+    # Pending cards executed near the chat_turn timestamp (±60s) —
+    # any tools that fired as a result of this turn.
+    tool_runs: list[dict] = []
+    chat_ts_epoch = (
+        _ts_to_epoch(chat_turn.get("ts", "")) if chat_turn.get("ts") else None
+    )
+    if chat_ts_epoch is not None:
+        try:
+            pc = _sq.connect(_PENDING_CARDS_DB, timeout=2.0)
+            cur = pc.cursor()
+            cur.execute(
+                "SELECT request_id, params_json, "
+                "execution_success, execution_output, executed_at "
+                "FROM pending_cards "
+                "WHERE executed_at IS NOT NULL "
+                "AND executed_at BETWEEN ? AND ? "
+                "ORDER BY executed_at ASC",
+                (chat_ts_epoch - 5, chat_ts_epoch + 60),
+            )
+            for rid, params, success, output, exec_at in cur.fetchall():
+                cmd = ""
+                try:
+                    import json as _json
+                    p = _json.loads(params or "{}")
+                    cmd = (p.get("cmd") or "")[:160]
+                except Exception:
+                    pass
+                tool_runs.append({
+                    "request_id": rid[:12] if rid else "",
+                    "cmd": cmd,
+                    "success": bool(success),
+                    "output_preview": (output or "")[:200],
+                })
+            pc.close()
+        except Exception:
+            pass
+
+    # Build the structured response with plain-English summaries.
+    you_text = (
+        user_msg_line or chat_turn.get("user_excerpt") or "(unknown)"
+    )
+    maez_excerpt = chat_turn.get("reply_excerpt", "")
+    audit_mode = audit_event.get("mode") if audit_event else None
+    audit_flagged = audit_event.get("flagged", 0) if audit_event else 0
+
+    # Memory recall block
+    lived_chars = chat_turn.get("len_lived_brief", 0)
+    ambient_chars = chat_turn.get("len_ambient_block", 0)
+    if lived_chars > 0:
+        memory_summary = (
+            f"Maez recalled lived-memory context ({lived_chars} chars) "
+            f"plus ambient signals ({ambient_chars} chars)."
+        )
+    elif ambient_chars > 0:
+        memory_summary = (
+            f"Maez had ambient signals ({ambient_chars} chars) but "
+            f"no lived-memory recall this turn."
+        )
+    else:
+        memory_summary = (
+            "Maez ran this turn without lived-memory or ambient context."
+        )
+
+    # Audit summary in plain English
+    if audit_mode == "noop":
+        audit_summary = (
+            "The honesty audit ran clean — nothing in Maez's reply was "
+            "flagged as ungrounded."
+        )
+    elif audit_mode == "judge_unavailable":
+        audit_summary = (
+            "The honesty audit couldn't run (judge timed out under load). "
+            "The reply went out without grounding-check this turn."
+        )
+    elif audit_mode == "prefilter_clean":
+        audit_summary = (
+            "The reply was short / hedging enough that the audit "
+            "skipped the LLM check."
+        )
+    elif audit_mode == "skipped":
+        audit_summary = "The audit was skipped (tool-continuation path)."
+    elif audit_mode == "sentence":
+        if flagged_claims:
+            n = len(flagged_claims)
+            audit_summary = (
+                f"The audit caught {n} claim{'s' if n != 1 else ''} and "
+                f"replaced "
+                f"{'them' if n != 1 else 'it'} with the uncertainty "
+                f"sentinel — Maez had said something specific it "
+                f"couldn't ground."
+            )
+        else:
+            audit_summary = (
+                f"The audit caught {audit_flagged} claim(s) and surgically "
+                f"rewrote them; details not in fabrication log."
+            )
+    elif audit_mode == "shortcircuit":
+        audit_summary = (
+            "The audit caught enough claims that the entire reply was "
+            "replaced with a short uncertainty acknowledgment."
+        )
+    else:
+        audit_summary = f"Audit mode: {audit_mode or 'unknown'}."
+
+    # Tools summary
+    if not tool_runs:
+        tools_summary = "No tools ran for this turn."
+    else:
+        good = [t for t in tool_runs if t["success"]]
+        bad = [t for t in tool_runs if not t["success"]]
+        parts = []
+        if good:
+            parts.append(f"{len(good)} succeeded")
+        if bad:
+            parts.append(f"{len(bad)} failed")
+        tools_summary = (
+            f"{len(tool_runs)} tool run(s): {', '.join(parts)}."
+        )
+
+    # Memory written summary
+    if raw_stored_id:
+        memory_written_summary = (
+            f"Maez stored this turn as memory entry "
+            f"`{raw_stored_id}` ({raw_stored_chars or '?'} chars)."
+        )
+    else:
+        memory_written_summary = (
+            "No memory entry was written for this turn (or write hasn't "
+            "fired yet)."
+        )
+
+    # Top-line synthesis
+    one_line_parts = []
+    if memory_summary.startswith("Maez recalled lived-memory"):
+        one_line_parts.append("Maez recalled past context")
+    elif memory_summary.startswith("Maez had ambient signals"):
+        one_line_parts.append("Maez had ambient context")
+    if audit_mode == "sentence" and flagged_claims:
+        one_line_parts.append(
+            f"the audit caught {len(flagged_claims)} ungrounded claim"
+            f"{'s' if len(flagged_claims) != 1 else ''}"
+        )
+    elif audit_mode == "noop":
+        one_line_parts.append("the audit ran clean")
+    elif audit_mode == "judge_unavailable":
+        one_line_parts.append("the audit couldn't run (judge timeout)")
+    elif audit_mode == "shortcircuit":
+        one_line_parts.append("the audit replaced the whole reply")
+    if tool_runs:
+        one_line_parts.append(f"{len(tool_runs)} tool(s) ran")
+    if not one_line_parts:
+        one_line = "Maez replied. Audit details unavailable for this turn."
+    else:
+        one_line = (
+            "Maez replied; " + ", ".join(one_line_parts) + "."
+        )
+
+    return jsonify({
+        "you_said": {
+            "text": you_text,
+            "at": user_msg_ts or chat_turn.get("ts"),
+            "when": _humanize_minutes_ago(
+                user_msg_ts or chat_turn.get("ts"),
+            ),
+        },
+        "maez_replied": {
+            "excerpt": maez_excerpt,
+            "at": chat_turn.get("ts"),
+            "when": _humanize_minutes_ago(chat_turn.get("ts")),
+            "length_chars": chat_turn.get("len_reply", 0),
+        },
+        "maez_remembered": {
+            "lived_recall_chars": lived_chars,
+            "ambient_chars": ambient_chars,
+            "summary": memory_summary,
+        },
+        "maez_knew": {
+            "summary": (
+                "Body signals available this turn aren't fully captured "
+                "in the chat log; this view will improve once trace "
+                "logging covers signal manifests per turn."
+            ),
+        },
+        "audit": {
+            "mode": audit_mode,
+            "flagged_count": audit_flagged,
+            "flagged_claims": flagged_claims,
+            "summary": audit_summary,
+        },
+        "tools": {
+            "count": len(tool_runs),
+            "items": tool_runs,
+            "summary": tools_summary,
+        },
+        "memory_written": {
+            "raw_id": raw_stored_id,
+            "raw_chars": raw_stored_chars,
+            "summary": memory_written_summary,
+        },
+        "summary_one_line": one_line,
+        "_meta": {
+            "data_sources": [
+                "logs/maez.log (tail)",
+                "memory/fabrication_log.db",
+                "memory/pending_cards.db",
+            ],
+            "rendered_at": _time.strftime(
+                "%Y-%m-%d %H:%M:%S", _time.localtime(),
+            ),
+        },
+    })
+
+
+# ── Maez Console v0 — page ───────────────────────────────────────────
+
+
+_CONSOLE_LAST_TURN_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Maez · Last Turn</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      --bg: #0c0c0e;
+      --bg-2: #131318;
+      --bg-3: #1a1a21;
+      --border: #25252e;
+      --fg: #e8e8ec;
+      --fg-2: #a8a8b2;
+      --fg-3: #6c6c78;
+      --accent: #c9a86b;
+      --accent-2: #6b9ec9;
+      --good: #6bc98e;
+      --warn: #c9a86b;
+      --bad: #c96b6b;
+      --mono: ui-monospace, "JetBrains Mono", "Fira Code", Menlo, monospace;
+      --sans: system-ui, -apple-system, "Inter", Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--sans);
+      font-size: 15px;
+      line-height: 1.55;
+      min-height: 100vh;
+    }
+    a { color: var(--accent-2); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    header {
+      padding: 28px 32px 8px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: baseline; gap: 16px;
+    }
+    header h1 {
+      margin: 0; font-size: 18px; font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    header .subtitle {
+      color: var(--fg-3); font-size: 13px; font-family: var(--mono);
+    }
+    main {
+      max-width: 880px; margin: 0 auto; padding: 32px;
+    }
+    .one-liner {
+      font-size: 17px;
+      color: var(--fg);
+      padding: 18px 22px;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 32px;
+      line-height: 1.6;
+    }
+    .one-liner .label {
+      display: block;
+      color: var(--fg-3); font-size: 11px;
+      text-transform: uppercase; letter-spacing: 0.1em;
+      margin-bottom: 6px;
+    }
+    .turn-pair {
+      margin-bottom: 32px;
+    }
+    .bubble {
+      padding: 16px 20px;
+      border-radius: 6px;
+      margin-bottom: 12px;
+      border: 1px solid var(--border);
+    }
+    .bubble.you {
+      background: var(--bg-2);
+      border-left: 3px solid var(--accent-2);
+    }
+    .bubble.maez {
+      background: var(--bg-3);
+      border-left: 3px solid var(--accent);
+    }
+    .bubble .who {
+      color: var(--fg-3); font-size: 11px;
+      text-transform: uppercase; letter-spacing: 0.1em;
+      margin-bottom: 6px; font-family: var(--mono);
+    }
+    .bubble .text {
+      font-size: 15.5px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .bubble .when {
+      color: var(--fg-3); font-size: 12px;
+      margin-top: 8px; font-family: var(--mono);
+    }
+    section.detail {
+      margin-bottom: 26px;
+      padding: 18px 22px;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    section.detail h3 {
+      margin: 0 0 10px 0; font-size: 13px; font-weight: 600;
+      color: var(--fg-2);
+      text-transform: uppercase; letter-spacing: 0.1em;
+    }
+    section.detail .summary {
+      color: var(--fg);
+      font-size: 14.5px;
+      margin-bottom: 8px;
+    }
+    section.detail .detail-list {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px dashed var(--border);
+    }
+    section.detail .flagged {
+      background: var(--bg-3);
+      border-left: 2px solid var(--warn);
+      padding: 10px 14px;
+      margin: 8px 0;
+      border-radius: 4px;
+    }
+    section.detail .flagged .claim {
+      color: var(--warn);
+      font-family: var(--mono);
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+    section.detail .flagged .reason {
+      color: var(--fg-2);
+      font-size: 13px;
+    }
+    section.detail .tool {
+      background: var(--bg-3);
+      border-left: 2px solid var(--accent-2);
+      padding: 10px 14px;
+      margin: 8px 0;
+      border-radius: 4px;
+    }
+    section.detail .tool.failed { border-left-color: var(--bad); }
+    section.detail .tool.ok { border-left-color: var(--good); }
+    section.detail .tool .cmd {
+      color: var(--fg-2);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      margin-bottom: 4px;
+      word-break: break-all;
+    }
+    section.detail .tool .out {
+      color: var(--fg-3);
+      font-family: var(--mono);
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+    .meta-row {
+      margin-top: 32px; padding-top: 16px;
+      border-top: 1px solid var(--border);
+      color: var(--fg-3);
+      font-family: var(--mono);
+      font-size: 11px;
+      display: flex; justify-content: space-between;
+    }
+    .refresh-btn {
+      background: var(--bg-3);
+      color: var(--fg-2);
+      border: 1px solid var(--border);
+      padding: 6px 14px;
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .refresh-btn:hover { color: var(--fg); border-color: var(--fg-3); }
+    .empty {
+      color: var(--fg-3); font-style: italic; font-size: 14px;
+    }
+    .loading {
+      padding: 60px 32px; text-align: center;
+      color: var(--fg-3); font-family: var(--mono);
+    }
+    .err {
+      padding: 18px 22px;
+      background: var(--bg-2);
+      border: 1px solid var(--bad);
+      border-radius: 6px;
+      color: var(--fg-2);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Maez · Last Turn</h1>
+    <div class="subtitle">why Maez said what it said</div>
+    <div style="margin-left: auto;">
+      <button class="refresh-btn" onclick="load()">refresh</button>
+    </div>
+  </header>
+  <main id="main">
+    <div class="loading">loading the last turn…</div>
+  </main>
+
+  <script>
+    function escapeHtml(s) {
+      if (s == null) return '';
+      return String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function render(d) {
+      const main = document.getElementById('main');
+      if (d.error) {
+        main.innerHTML = `<div class="err">${escapeHtml(d.summary_one_line || d.error)}</div>`;
+        return;
+      }
+
+      const flaggedHtml = (d.audit.flagged_claims || []).map(f => `
+        <div class="flagged">
+          <div class="claim">"${escapeHtml(f.claim)}"</div>
+          <div class="reason">${escapeHtml(f.reason)}</div>
+        </div>
+      `).join('');
+
+      const toolsHtml = (d.tools.items || []).map(t => `
+        <div class="tool ${t.success ? 'ok' : 'failed'}">
+          <div class="cmd">${escapeHtml((t.cmd || '').slice(0, 160))}</div>
+          <div class="out">${escapeHtml((t.output_preview || '').slice(0, 200))}</div>
+        </div>
+      `).join('');
+
+      main.innerHTML = `
+        <div class="one-liner">
+          <span class="label">In one sentence</span>
+          ${escapeHtml(d.summary_one_line)}
+        </div>
+
+        <div class="turn-pair">
+          <div class="bubble you">
+            <div class="who">you said</div>
+            <div class="text">${escapeHtml(d.you_said.text)}</div>
+            <div class="when">${escapeHtml(d.you_said.when || '')}</div>
+          </div>
+          <div class="bubble maez">
+            <div class="who">maez replied</div>
+            <div class="text">${escapeHtml(d.maez_replied.excerpt || '')}</div>
+            <div class="when">${escapeHtml(d.maez_replied.when || '')} · ${d.maez_replied.length_chars} chars</div>
+          </div>
+        </div>
+
+        <section class="detail">
+          <h3>What Maez remembered</h3>
+          <div class="summary">${escapeHtml(d.maez_remembered.summary)}</div>
+        </section>
+
+        <section class="detail">
+          <h3>The honesty audit</h3>
+          <div class="summary">${escapeHtml(d.audit.summary)}</div>
+          ${flaggedHtml ? `<div class="detail-list">${flaggedHtml}</div>` : ''}
+        </section>
+
+        <section class="detail">
+          <h3>Tools that ran</h3>
+          <div class="summary">${escapeHtml(d.tools.summary)}</div>
+          ${toolsHtml ? `<div class="detail-list">${toolsHtml}</div>` : ''}
+        </section>
+
+        <section class="detail">
+          <h3>What Maez stored after</h3>
+          <div class="summary">${escapeHtml(d.memory_written.summary)}</div>
+        </section>
+
+        <div class="meta-row">
+          <span>data: ${(d._meta && d._meta.data_sources || []).join(' · ')}</span>
+          <span>rendered: ${escapeHtml((d._meta && d._meta.rendered_at) || '')}</span>
+        </div>
+      `;
+    }
+
+    async function load() {
+      try {
+        document.getElementById('main').innerHTML =
+          '<div class="loading">loading…</div>';
+        const r = await fetch('/api/v1/turn/latest');
+        const d = await r.json();
+        render(d);
+      } catch (e) {
+        document.getElementById('main').innerHTML =
+          '<div class="err">failed to load: ' + escapeHtml(e.message) + '</div>';
+      }
+    }
+    load();
+    // auto-refresh every 30s so the page reflects new turns
+    setInterval(load, 30000);
+  </script>
+</body>
+</html>
+"""
+
+
+@app.route("/console")
+@app.route("/console/")
+@app.route("/console/last-turn")
+def console_last_turn():
+    """Maez Console v0 — Understand the Last Turn.
+
+    A polished, parent-facing single page that explains in plain
+    English what just happened in the most recent owner Telegram
+    turn. Auto-refreshes every 30 seconds.
+
+    No auth today: served from localhost (127.0.0.1:11437) like the
+    rest of the cockpit. LAN access is a future slice (per the
+    `/api/v1/*` Track-B deferral in SECURITY_AUDIT.md).
+    """
+    from flask import Response
+    return Response(_CONSOLE_LAST_TURN_HTML, mimetype="text/html")
+
+
 @app.route("/api/v1/dreams")
 def api_dreams():
     """Merged view of evolution candidates + dream proposals."""
