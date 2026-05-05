@@ -13,12 +13,37 @@ again'. These tests lock in:
 """
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
 from dataclasses import dataclass
+from pathlib import Path
 from unittest.mock import patch
 
-from core import fabrication_memory as fm
-from core.self_claim_audit import audit
+# Test isolation contract (added 2026-05-05 after a leak wiped
+# ~14K production rows): the diag clear helpers refuse to run unless
+# BOTH MAEZ_TEST_MODE=1 is set AND _DB_PATH has been redirected
+# away from the production fabrication_log.db. We satisfy both
+# conditions at module load time so every test in this file runs
+# against a temp DB the operator can safely wipe between cases.
+os.environ["MAEZ_TEST_MODE"] = "1"
+_TEST_DB_DIR = tempfile.mkdtemp(prefix="maez_test_fab_")
+_TEST_DB_PATH = Path(_TEST_DB_DIR) / "fabrication_log.db"
+
+from core import fabrication_memory as fm  # noqa: E402
+
+# Redirect the module-level path. Reset _initialized so _ensure_db
+# rebuilds schema in the temp file (incl. signals_present column).
+fm._DB_PATH = _TEST_DB_PATH
+fm._initialized = False
+
+from core.self_claim_audit import audit  # noqa: E402
+
+
+def tearDownModule():
+    """Clean up the temp DB directory after the test module finishes."""
+    import shutil
+    shutil.rmtree(_TEST_DB_DIR, ignore_errors=True)
 
 
 @dataclass

@@ -330,8 +330,70 @@ def _diag_total_rows() -> int:
         return -1
 
 
+def _assert_test_clear_allowed() -> None:
+    """Belt-and-suspenders guard against accidentally wiping
+    production fabrication memory.
+
+    On 2026-05-05 we discovered _diag_clear_events_for_test had been
+    run against the production memory/fabrication_log.db (likely a
+    test ran without DB-path isolation), wiping ~14K accumulated
+    fabrication events. This guard exists so it cannot happen again.
+
+    Two conditions must BOTH hold for a clear to proceed:
+
+      1. MAEZ_TEST_MODE=1 in the environment.
+      2. _DB_PATH is NOT the same file as the production
+         memory/fabrication_log.db.
+
+    Production satisfies neither. Tests must satisfy both — meaning
+    the test must (a) set the env and (b) redirect _DB_PATH to a
+    temp file. That second requirement is what actually closes the
+    footgun: even if the env leaks into a daemon process, the path
+    check refuses to wipe the production DB."""
+    import os as _os
+    if _os.environ.get("MAEZ_TEST_MODE") != "1":
+        raise RuntimeError(
+            "fabrication_memory clear blocked: MAEZ_TEST_MODE!=1. "
+            "These helpers wipe the database; they must only run "
+            "in test mode with a redirected DB path."
+        )
+    # Resolve the production path the same way _DB_PATH is resolved
+    # at module import time. If they're the same file (samefile
+    # follows symlinks; identity-by-inode), refuse.
+    try:
+        prod_path = (
+            _memory_dir() / "fabrication_log.db"
+            if "_memory_dir" in globals() else None
+        )
+    except Exception:
+        prod_path = None
+    if prod_path is None:
+        # Fallback: resolve against the canonical Maez install root.
+        prod_path = (
+            Path(__file__).resolve().parents[2]
+            / "memory" / "fabrication_log.db"
+        )
+    try:
+        if _DB_PATH.exists() and prod_path.exists() \
+                and _DB_PATH.samefile(prod_path):
+            raise RuntimeError(
+                f"fabrication_memory clear blocked: _DB_PATH "
+                f"({_DB_PATH}) is the production fabrication_log.db. "
+                "Test helpers must redirect _DB_PATH to a temp file."
+            )
+    except FileNotFoundError:
+        # Either path missing — by definition not the production
+        # file the guard exists to protect; allow.
+        pass
+
+
 def _diag_clear_for_test() -> None:
-    """Test-only. Wipes fabrication_log for test isolation."""
+    """Test-only. Wipes fabrication_log for test isolation.
+
+    Refuses to run unless MAEZ_TEST_MODE=1 AND _DB_PATH has been
+    redirected away from the production fabrication_log.db. See
+    _assert_test_clear_allowed for the rationale."""
+    _assert_test_clear_allowed()
     try:
         with _db_lock:
             db = _ensure_db()
@@ -345,7 +407,12 @@ def _diag_clear_for_test() -> None:
 
 
 def _diag_clear_events_for_test() -> None:
-    """Test-only. Wipes fabrication_events for test isolation."""
+    """Test-only. Wipes fabrication_events for test isolation.
+
+    Refuses to run unless MAEZ_TEST_MODE=1 AND _DB_PATH has been
+    redirected away from the production fabrication_log.db. See
+    _assert_test_clear_allowed for the rationale."""
+    _assert_test_clear_allowed()
     try:
         with _db_lock:
             db = _ensure_db()
