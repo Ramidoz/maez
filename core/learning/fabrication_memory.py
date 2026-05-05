@@ -88,11 +88,54 @@ def _ensure_db() -> Optional[sqlite3.Connection]:
                 CREATE INDEX IF NOT EXISTS fab_events_ts_idx
                     ON fabrication_events(ts);
             """)
-            db.commit()
+            # Idempotent column add for existing DBs that pre-date the
+            # signals_present field. Sampling that drives substrate
+            # decisions ("real fabrication" vs "thin manifest") needs
+            # both sides of the receipt: what the audit had AND what
+            # it didn't have. Without signals_present, that
+            # disambiguation is inferential.
+            try:
+                cols = {
+                    r[1] for r in db.execute(
+                        "PRAGMA table_info(fabrication_events)"
+                    ).fetchall()
+                }
+                if "signals_present" not in cols:
+                    db.execute(
+                        "ALTER TABLE fabrication_events "
+                        "ADD COLUMN signals_present TEXT NOT NULL DEFAULT '[]'"
+                    )
+                    db.commit()
+            except Exception:
+                # Schema migration must never block writes. Worst case:
+                # the new column doesn't exist and record_event() falls
+                # back to writing without it.
+                pass
             _initialized = True
         return db
     except Exception:
         return None
+
+
+# Soft retention cap. Without this the table grows unbounded —
+# there's currently no rotation mechanism. 90 days × ~1K events/day
+# = 90K rows = ~10 MB on disk. Enough for monthly-pattern analysis,
+# bounded enough that the file doesn't become a problem.
+_FAB_RETENTION_DAYS = 90
+
+
+def _trim_old_events(db: sqlite3.Connection) -> None:
+    """Best-effort delete of fabrication_events older than the
+    retention cap. Called probabilistically (not every insert) so
+    write-path cost stays near-zero. Silent on failure."""
+    try:
+        cutoff = time.time() - (_FAB_RETENTION_DAYS * 86400)
+        db.execute(
+            "DELETE FROM fabrication_events WHERE ts < ?",
+            (cutoff,),
+        )
+    except Exception:
+        return
 
 
 def record(surface: str, flags: list, mode: str) -> None:
@@ -189,9 +232,18 @@ def record_event(
     signals_absent: list[str],
     reason: str,
     mode: str,
+    signals_present: Optional[list[str]] = None,
 ) -> None:
     """Persist one per-response fabrication event with its signal context.
-    Used to build few-shot examples for the semantic grounding judge."""
+    Used to build few-shot examples for the semantic grounding judge.
+
+    `signals_present` was added 2026-05-05 so post-hoc sampling can
+    distinguish "judge was thin-manifested" (signals_present small,
+    real receipts available but not passed) from "judge correctly
+    flagged real fabrication" (signals_present rich and the claim
+    still couldn't ground). Older events that pre-date the field
+    will read as `[]`.
+    """
     if not text:
         return
     try:
@@ -202,14 +254,20 @@ def record_event(
             with contextlib.closing(db):
                 db.execute(
                     "INSERT INTO fabrication_events "
-                    "(ts, surface, text, signals_absent, reason, mode) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    "(ts, surface, text, signals_absent, signals_present, "
+                    "reason, mode) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (
                         time.time(), surface, text[:2000],
                         json.dumps(signals_absent or []),
+                        json.dumps(signals_present or []),
                         reason[:500], mode,
                     ),
                 )
+                # Probabilistic retention trim — once every ~100 inserts.
+                # Cheap (one DELETE on indexed ts column), bounded.
+                if int(time.time() * 1000) % 100 == 0:
+                    _trim_old_events(db)
                 db.commit()
     except Exception:
         return

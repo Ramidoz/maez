@@ -488,13 +488,15 @@ def audit(
 
     new_text, mode = _rewrite(text, flags)
     _emit(surface=surface, flags=flags, mode=mode,
-          signals_absent=signals_absent)
+          signals_absent=signals_absent,
+          signals_present=signals_present)
     return AuditResult(text=new_text, rewritten=True, mode=mode, flags=flags)
 
 
 def _emit(surface: str, flags: list[Flag], mode: str,
           skipped_reason: Optional[str] = None,
-          signals_absent: Optional[list] = None) -> None:
+          signals_absent: Optional[list] = None,
+          signals_present: Optional[list] = None) -> None:
     """One line per audit call to cognition.log (cockpit fabrication pane
     parses this). Does NOT include the fabricated text itself.
 
@@ -523,11 +525,13 @@ def _emit(surface: str, flags: list[Flag], mode: str,
         try:
             from core import fabrication_memory as _fab_mem
             sa = list(signals_absent or [])
+            sp = list(signals_present or [])
             for f in flags:
                 _fab_mem.record_event(
                     surface=surface,
                     text=f.text,
                     signals_absent=sa,
+                    signals_present=sp,
                     reason=f.reason,
                     mode="judge",
                 )
