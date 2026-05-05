@@ -140,6 +140,32 @@ def audit_assistant_text(
         )
         return text
 
+    # 2026-05-05 wmctrl-incident fix: when the caller didn't supply a
+    # signal manifest, fall back to a default-built manifest naming
+    # the stable / bounded-fresh receipts the audit boundary can
+    # consult itself (model_config, body_capabilities,
+    # capability_registry). Closes the "grounding-context starvation"
+    # class — the chat-audit path was previously calling the judge
+    # with no signal context, producing false positives on true
+    # claims like "I'm running on Qwen3.6-27B via llama.cpp" and
+    # "Root disk is at 82.9%".
+    #
+    # Caller-supplied manifest wins (never overwritten). The fallback
+    # only fires when BOTH signals_present and signals_absent are
+    # None — explicit empty lists are treated as caller intent.
+    if signals_present is None and signals_absent is None:
+        try:
+            from core.safety.audit_signal_manifest import (
+                default_audit_signals,
+            )
+            signals_present, signals_absent = default_audit_signals(surface)
+        except Exception as _asm_exc:
+            logger.warning(
+                "audit_assistant_text: audit_signal_manifest fallback "
+                "failed on %s (continuing with no manifest): %s",
+                surface, _asm_exc,
+            )
+
     try:
         result = _audit(
             text,
