@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -314,8 +315,15 @@ def write_run_result(result: RunResult, *, base_dir: Optional[Path] = None) -> P
 # ── CLI ──────────────────────────────────────────────────────────────
 
 
+def _evals_dir() -> Path:
+    return REPO / "docs" / "audit_symphony_2026-05-04" / "evals"
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     import argparse
+    import os
+    from core.symphony.evals import ledger as _ledger
+
     p = argparse.ArgumentParser(
         prog="python -m core.symphony.evals.runner",
         description="Run the Maez eval harness.",
@@ -331,10 +339,110 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     p.add_argument(
         "--run-id", default=None,
-        help="Run ID (defaults to UTC timestamp).",
+        help="Run ID. Defaults to UTC timestamp on --write/no-flag, "
+             "or REQUIRED for --emit-ledger / --collect.",
+    )
+    p.add_argument(
+        "--emit-ledger", action="store_true",
+        help="Emit a ledger.yaml draft from a previously written "
+             "run_result.json (--run-id required). Owner edits "
+             "the ledger to set verdict per probe.",
+    )
+    p.add_argument(
+        "--collect", action="store_true",
+        help="Read run_result.json + ledger.yaml for --run-id and "
+             "write consolidated.json with owner verdicts merged in. "
+             "Blank verdicts stay needs_owner_review.",
     )
     args = p.parse_args(argv)
 
+    # ── Ledger workflows ──
+    if args.emit_ledger or args.collect:
+        if not args.run_id:
+            print(
+                "error: --emit-ledger and --collect require --run-id "
+                "(the run whose results we're processing)",
+                file=sys.stderr,
+            )
+            return 2
+        run_dir = _evals_dir() / args.run_id
+        run_path = run_dir / "run_result.json"
+        if not run_path.exists():
+            print(
+                f"error: no run_result.json at {run_path} — "
+                f"run --write first to produce it",
+                file=sys.stderr,
+            )
+            return 2
+        run_result = json.loads(run_path.read_text(encoding="utf-8"))
+        ledger_path = run_dir / "ledger.yaml"
+
+        if args.emit_ledger:
+            draft = _ledger.emit_ledger(run_result)
+            if ledger_path.exists():
+                # Don't clobber owner verdicts already filled in;
+                # require explicit --force to rewrite. v1.5 keeps
+                # this safe by refusing rather than supporting force
+                # — owner can delete the file manually if they truly
+                # want a fresh draft.
+                print(
+                    f"error: {os.path.relpath(ledger_path, REPO)} "
+                    f"already exists. Delete it manually if you "
+                    f"want a fresh draft (v1.5 does not auto-clobber "
+                    f"owner verdicts).",
+                    file=sys.stderr,
+                )
+                return 3
+            _ledger.write_ledger(draft, ledger_path)
+            n = len(draft.get("verdicts") or [])
+            print(
+                f"eval-harness: wrote {os.path.relpath(ledger_path, REPO)} "
+                f"({n} verdict slot{'s' if n != 1 else ''})",
+                file=sys.stderr,
+            )
+            return 0
+
+        # --collect
+        if not ledger_path.exists():
+            print(
+                f"error: no ledger.yaml at {ledger_path} — "
+                f"run --emit-ledger first",
+                file=sys.stderr,
+            )
+            return 2
+        ledger = _ledger.read_ledger(ledger_path)
+        try:
+            consolidated = _ledger.collect_verdicts(run_result, ledger)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 4
+        consolidated_path = run_dir / "consolidated.json"
+        consolidated_path.write_text(
+            json.dumps(consolidated, indent=2, sort_keys=True, default=str)
+            + "\n",
+            encoding="utf-8",
+        )
+        # Summarize what changed for the owner.
+        promoted = 0
+        still_needs_review = 0
+        for fam in (consolidated.get("families") or {}).values():
+            for r in fam.get("results") or []:
+                if r.get("outcome") == "needs_owner_review":
+                    still_needs_review += 1
+                elif (
+                    "owner-verdict applied" in (r.get("notes") or "")
+                ):
+                    promoted += 1
+        print(
+            f"eval-harness: wrote "
+            f"{os.path.relpath(consolidated_path, REPO)} "
+            f"({promoted} verdict{'s' if promoted != 1 else ''} applied; "
+            f"{still_needs_review} still needs_owner_review)",
+            file=sys.stderr,
+        )
+        return 0
+
+    # ── Normal run paths (unchanged) ──
     if args.family:
         family_result = run_family(args.family)
         print(json.dumps(
@@ -346,7 +454,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     result = run_all(run_id=args.run_id)
     if args.write:
         path = write_run_result(result)
-        import os
         rel = os.path.relpath(path, REPO)
         print(f"eval-harness: wrote {rel}", end="\n")
     else:
