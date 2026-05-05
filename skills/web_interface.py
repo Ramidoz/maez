@@ -2541,6 +2541,7 @@ _CONSOLE_LAST_TURN_HTML = """<!DOCTYPE html>
   <nav style="max-width: 880px; margin: 0 auto; padding: 0 32px;">
     <a href="/console/now">Now</a>
     <a href="/console/last-turn" class="active">Last Turn</a>
+    <a href="/console/rail">Rail</a>
   </nav>
   <main id="main">
     <div class="loading">loading the last turn…</div>
@@ -3410,6 +3411,7 @@ _CONSOLE_NOW_HTML = """<!DOCTYPE html>
   <nav style="max-width: 880px; margin: 0 auto; padding: 0 32px;">
     <a href="/console/now" class="active">Now</a>
     <a href="/console/last-turn">Last Turn</a>
+    <a href="/console/rail">Rail</a>
   </nav>
   <main id="main">
     <div class="loading">loading Maez's current state…</div>
@@ -3615,6 +3617,672 @@ def console_now():
     """
     from flask import Response
     return Response(_CONSOLE_NOW_HTML, mimetype="text/html")
+
+
+# ── Maez Console v0.2 — Rail Timeline ────────────────────────────────
+#
+# 15-minute buckets over the last 24h showing self_claim_audit
+# counts (clean / corrected / rail-unavailable), per-bucket
+# timeout rate, and a GPU% overlay from cycle Perception lines.
+# Diagnostic instrument for the timeout-tuning experiment: tells
+# you WHEN the rail breaks and whether breakage correlates with
+# brain load.
+#
+# Read-only: parses existing cognition.log + maez.log. No daemon
+# behavior change. 60-second API cache so 5s page refresh doesn't
+# re-parse 12 MB of logs every time.
+
+import re as _re_rail
+import time as _time_rail
+from datetime import datetime as _dt_rail, timedelta as _td_rail
+
+_RAIL_AUDIT_LINE = _re_rail.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"
+    r".*?self_claim_audit\s*\|\s*"
+    r"surface=(?P<surface>\S+)\s+"
+    r"flagged=(?P<flagged>\d+)\s+"
+    r"mode=(?P<mode>\S+)"
+)
+_RAIL_PERCEPTION_LINE = _re_rail.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*?"
+    r"Perception:\s+CPU\s+[\d.]+%,\s+RAM\s+[\d.]+%,\s+"
+    r"GPU\s+(?P<gpu>[\d.]+)%"
+)
+
+# Cap how much of each log we read — 24h fits in ~5-8 MB of
+# cognition.log + ~10-15 MB of maez.log.
+_RAIL_AUDIT_TAIL_BYTES = 16_000_000
+_RAIL_PERCEPTION_TAIL_BYTES = 24_000_000
+
+_RAIL_BUCKET_MIN = 15
+_RAIL_HORIZON_HOURS = 24
+_RAIL_CACHE_TTL_S = 60.0
+_RAIL_CACHE: dict = {"value": None, "built_at": 0.0}
+
+
+def _rail_read_tail(path: str, max_bytes: int) -> str:
+    try:
+        import os as _os
+        with open(path, "rb") as f:
+            sz = _os.fstat(f.fileno()).st_size
+            if sz > max_bytes:
+                f.seek(sz - max_bytes)
+                # Drop the partial leading line
+                f.readline()
+            return f.read().decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _rail_bucket_index(ts_dt: "_dt_rail", anchor: "_dt_rail") -> int | None:
+    """Returns the 0..N-1 bucket index relative to anchor (most recent
+    bucket end), or None if outside the 24h window."""
+    delta = anchor - ts_dt
+    secs = delta.total_seconds()
+    if secs < 0:
+        return None  # future timestamp; ignore
+    if secs >= _RAIL_HORIZON_HOURS * 3600:
+        return None
+    bucket_size_s = _RAIL_BUCKET_MIN * 60
+    # Most-recent-bucket = index N-1; oldest = 0.
+    n_buckets = (_RAIL_HORIZON_HOURS * 60) // _RAIL_BUCKET_MIN
+    idx_from_end = int(secs // bucket_size_s)
+    if idx_from_end >= n_buckets:
+        return None
+    return n_buckets - 1 - idx_from_end
+
+
+def _rail_classify_mode(mode: str) -> str | None:
+    """Maps audit mode to the 3 timeline categories. Returns None
+    for modes we don't surface (skipped/prefilter_clean)."""
+    if mode == "noop":
+        return "spoke_clean"
+    if mode in ("sentence", "shortcircuit"):
+        return "corrected"
+    if mode == "judge_unavailable":
+        return "rail_unavailable"
+    return None
+
+
+def _rail_build_timeline() -> dict:
+    """Walks cognition.log + maez.log, returns the timeline payload.
+
+    Bucket shape (one per 15-min slot, oldest → newest):
+      {
+        "bucket_start": "YYYY-MM-DDTHH:MM",
+        "spoke_clean": int,
+        "corrected": int,
+        "rail_unavailable": int,
+        "total": int,                  # spoke_clean + corrected + rail_unavailable
+        "timeout_rate": float | None,  # rail_unavailable / total, or None if total=0
+        "gpu_pct_avg": float | None,   # mean of Perception GPU%, or None if no samples
+      }
+    """
+    n_buckets = (_RAIL_HORIZON_HOURS * 60) // _RAIL_BUCKET_MIN
+    now = _dt_rail.now()
+    # Anchor at the END of the current 15-min bucket so the rightmost
+    # bar is "the last 15 min including now" rather than a half-empty
+    # incomplete bucket beyond now.
+    minute_anchor = (now.minute // _RAIL_BUCKET_MIN + 1) * _RAIL_BUCKET_MIN
+    if minute_anchor >= 60:
+        anchor = now.replace(
+            minute=0, second=0, microsecond=0,
+        ) + _td_rail(hours=1)
+    else:
+        anchor = now.replace(
+            minute=minute_anchor, second=0, microsecond=0,
+        )
+
+    buckets = [
+        {
+            "spoke_clean": 0, "corrected": 0, "rail_unavailable": 0,
+            "_gpu_samples": [],
+        }
+        for _ in range(n_buckets)
+    ]
+
+    # Audit lines
+    for line in _rail_read_tail(
+        "/home/rohit/maez/logs/cognition.log",
+        _RAIL_AUDIT_TAIL_BYTES,
+    ).splitlines():
+        m = _RAIL_AUDIT_LINE.search(line)
+        if not m:
+            continue
+        try:
+            ts_dt = _dt_rail.strptime(m.group("ts"), "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            continue
+        idx = _rail_bucket_index(ts_dt, anchor)
+        if idx is None:
+            continue
+        cat = _rail_classify_mode(m.group("mode"))
+        if cat:
+            buckets[idx][cat] += 1
+
+    # Perception lines (GPU%)
+    for line in _rail_read_tail(
+        "/home/rohit/maez/logs/maez.log",
+        _RAIL_PERCEPTION_TAIL_BYTES,
+    ).splitlines():
+        m = _RAIL_PERCEPTION_LINE.search(line)
+        if not m:
+            continue
+        try:
+            ts_dt = _dt_rail.strptime(m.group("ts"), "%Y-%m-%d %H:%M:%S")
+            gpu = float(m.group("gpu"))
+        except Exception:
+            continue
+        idx = _rail_bucket_index(ts_dt, anchor)
+        if idx is None:
+            continue
+        buckets[idx]["_gpu_samples"].append(gpu)
+
+    # Finalize: derive total/rate/gpu_avg, attach bucket_start, drop
+    # _gpu_samples from output. Bucket index 0 is OLDEST.
+    bucket_size_s = _RAIL_BUCKET_MIN * 60
+    out_buckets = []
+    for idx, b in enumerate(buckets):
+        # bucket_start = anchor - (n_buckets - idx) * bucket_size
+        offset_s = (n_buckets - idx) * bucket_size_s
+        bucket_start = anchor - _td_rail(seconds=offset_s)
+        total = b["spoke_clean"] + b["corrected"] + b["rail_unavailable"]
+        gpu_samples = b["_gpu_samples"]
+        out_buckets.append({
+            "bucket_start": bucket_start.strftime("%Y-%m-%dT%H:%M"),
+            "spoke_clean": b["spoke_clean"],
+            "corrected": b["corrected"],
+            "rail_unavailable": b["rail_unavailable"],
+            "total": total,
+            "timeout_rate": (
+                round(b["rail_unavailable"] / total, 4)
+                if total > 0 else None
+            ),
+            "gpu_pct_avg": (
+                round(sum(gpu_samples) / len(gpu_samples), 1)
+                if gpu_samples else None
+            ),
+        })
+
+    # 24h totals + hourly rollup as a secondary view
+    total_clean = sum(b["spoke_clean"] for b in out_buckets)
+    total_corrected = sum(b["corrected"] for b in out_buckets)
+    total_unavail = sum(b["rail_unavailable"] for b in out_buckets)
+    total_audits = total_clean + total_corrected + total_unavail
+    overall_timeout_rate = (
+        round(total_unavail / total_audits, 4)
+        if total_audits > 0 else None
+    )
+
+    return {
+        "anchor_local": anchor.strftime("%Y-%m-%dT%H:%M"),
+        "bucket_min": _RAIL_BUCKET_MIN,
+        "horizon_hours": _RAIL_HORIZON_HOURS,
+        "buckets": out_buckets,
+        "totals_24h": {
+            "spoke_clean": total_clean,
+            "corrected": total_corrected,
+            "rail_unavailable": total_unavail,
+            "total_audits": total_audits,
+            "timeout_rate": overall_timeout_rate,
+        },
+    }
+
+
+@app.route("/api/v1/rail/timeline")
+def api_rail_timeline():
+    """Returns the rail timeline payload. Cached for 60 s so the
+    page's auto-refresh doesn't re-parse 12 MB of logs each cycle.
+
+    Honest-staleness contract: the response includes
+    `data_age_seconds` so the page can render "data updated Xs ago"
+    in the footer. A user looking at the timeline immediately after
+    bumping `MAEZ_JUDGE_TIMEOUT_S` should not be misled into
+    thinking the change didn't move the needle when actually they're
+    seeing pre-experiment cached numbers.
+    """
+    from flask import jsonify
+    now_s = _time_rail.time()
+    cache_age = now_s - _RAIL_CACHE["built_at"]
+    if _RAIL_CACHE["value"] is None or cache_age >= _RAIL_CACHE_TTL_S:
+        try:
+            _RAIL_CACHE["value"] = _rail_build_timeline()
+            _RAIL_CACHE["built_at"] = now_s
+            cache_age = 0.0
+        except Exception as e:
+            return jsonify({
+                "error": "timeline_build_failed",
+                "detail": str(e)[:200],
+            }), 500
+    payload = dict(_RAIL_CACHE["value"])
+    payload["data_age_seconds"] = round(cache_age, 1)
+    return jsonify(payload)
+
+
+_CONSOLE_RAIL_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Maez · Rail</title>
+  <style>
+    :root {
+      --bg-0: #0d0e10;
+      --bg-1: #15171a;
+      --bg-2: #1d2024;
+      --fg-0: #e8e6e3;
+      --fg-1: #a8a39c;
+      --fg-2: #6f6a64;
+      --fg-3: #4a4642;
+      --accent: #d4a373;
+      --warn:   #d97757;
+      --good:   #7a9b76;
+      --judge:  #b88abc;
+      --line:   #2a2d31;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg-0);
+      color: var(--fg-0);
+      font: 15px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text",
+        system-ui, sans-serif;
+      min-height: 100vh;
+    }
+    header {
+      max-width: 1280px; margin: 0 auto;
+      padding: 32px 32px 16px;
+      display: flex; align-items: baseline; gap: 16px;
+    }
+    h1 {
+      font-size: 24px; font-weight: 500;
+      letter-spacing: -0.01em;
+    }
+    .subtitle {
+      color: var(--fg-2); font-size: 13px;
+    }
+    .refresh-btn {
+      margin-left: auto;
+      background: transparent; border: 1px solid var(--line);
+      color: var(--fg-1); padding: 6px 14px; border-radius: 4px;
+      cursor: pointer; font: inherit; font-size: 12px;
+    }
+    .refresh-btn:hover { color: var(--fg-0); border-color: var(--fg-2); }
+    nav {
+      max-width: 1280px; margin: 0 auto; padding: 0 32px;
+      display: flex; gap: 24px; border-bottom: 1px solid var(--line);
+      padding-bottom: 8px;
+    }
+    nav a {
+      color: var(--fg-2); text-decoration: none;
+      font-size: 13px; padding-bottom: 6px;
+    }
+    nav a:hover { color: var(--fg-0); }
+    nav a.active {
+      color: var(--accent);
+      border-bottom: 1px solid var(--accent);
+    }
+    main {
+      max-width: 1280px; margin: 0 auto;
+      padding: 24px 32px 48px;
+    }
+    .summary-row {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: 16px; margin-bottom: 24px;
+    }
+    .summary-card {
+      background: var(--bg-1); border: 1px solid var(--line);
+      border-radius: 6px; padding: 16px 20px;
+    }
+    .summary-card .label {
+      color: var(--fg-2); font-size: 11px;
+      text-transform: uppercase; letter-spacing: 0.05em;
+      margin-bottom: 6px;
+    }
+    .summary-card .value {
+      font-size: 28px; font-weight: 500;
+      color: var(--fg-0); font-variant-numeric: tabular-nums;
+    }
+    .summary-card .sub {
+      color: var(--fg-2); font-size: 12px; margin-top: 4px;
+    }
+    .summary-card.warn .value { color: var(--warn); }
+    .chart-card {
+      background: var(--bg-1); border: 1px solid var(--line);
+      border-radius: 6px; padding: 24px; margin-bottom: 16px;
+    }
+    .chart-title {
+      font-size: 13px; color: var(--fg-1);
+      margin-bottom: 4px;
+    }
+    .chart-help {
+      font-size: 12px; color: var(--fg-2);
+      margin-bottom: 18px;
+    }
+    .legend {
+      display: flex; gap: 16px; margin-bottom: 12px;
+      font-size: 11px; color: var(--fg-2);
+      flex-wrap: wrap;
+    }
+    .legend-swatch {
+      display: inline-block; width: 10px; height: 10px;
+      margin-right: 6px; vertical-align: middle;
+      border-radius: 1px;
+    }
+    .chart-container {
+      position: relative;
+      height: 240px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 4px;
+    }
+    .chart-bars {
+      position: absolute; inset: 0;
+      display: flex; align-items: flex-end;
+      gap: 1px; padding: 0;
+    }
+    .bar-col {
+      flex: 1; height: 100%;
+      display: flex; flex-direction: column-reverse;
+      position: relative;
+      min-width: 6px;
+    }
+    .bar-seg { width: 100%; transition: opacity 0.2s; }
+    .bar-seg.spoke_clean { background: var(--good); }
+    .bar-seg.corrected { background: var(--accent); }
+    .bar-seg.rail_unavailable { background: var(--warn); }
+    .bar-col:hover .bar-seg { opacity: 0.7; }
+    .bar-col .tip {
+      display: none; position: absolute;
+      bottom: 100%; left: 50%; transform: translateX(-50%);
+      background: var(--bg-2); border: 1px solid var(--line);
+      padding: 8px 10px; border-radius: 4px;
+      font-size: 11px; color: var(--fg-0);
+      white-space: nowrap; z-index: 10;
+      margin-bottom: 4px;
+    }
+    .bar-col:hover .tip { display: block; }
+    .gpu-overlay {
+      position: absolute; inset: 0;
+      pointer-events: none;
+    }
+    .axis {
+      display: flex; justify-content: space-between;
+      font-size: 10px; color: var(--fg-2);
+      padding-top: 6px;
+      font-variant-numeric: tabular-nums;
+    }
+    .footer-row {
+      display: flex; justify-content: space-between;
+      align-items: center;
+      font-size: 11px; color: var(--fg-2);
+      margin-top: 12px;
+    }
+    .hourly-row {
+      display: grid; grid-template-columns: repeat(24, 1fr);
+      gap: 2px; margin-top: 8px;
+    }
+    .hour-cell {
+      background: var(--bg-2); border-radius: 2px;
+      padding: 6px 4px; text-align: center;
+      font-size: 10px; color: var(--fg-2);
+      font-variant-numeric: tabular-nums;
+    }
+    .hour-cell.has_unavail { background: rgba(217, 119, 87, 0.15); color: var(--warn); }
+    .err {
+      background: rgba(217, 119, 87, 0.08);
+      border: 1px solid var(--warn);
+      color: var(--warn); padding: 12px 16px; border-radius: 4px;
+    }
+    .loading {
+      color: var(--fg-2); padding: 32px; text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Maez <span style="color: var(--fg-3); font-weight: 400;">· Rail</span></h1>
+    <div class="subtitle">when the honesty rail breaks, and why</div>
+    <button class="refresh-btn" onclick="load()">refresh</button>
+  </header>
+  <nav>
+    <a href="/console/now">Now</a>
+    <a href="/console/last-turn">Last Turn</a>
+    <a href="/console/rail" class="active">Rail</a>
+  </nav>
+  <main id="main">
+    <div class="loading">loading 24-hour rail timeline…</div>
+  </main>
+
+  <script>
+    function escapeHtml(s) {
+      if (s == null) return '';
+      return String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function fmtPct(r) {
+      if (r == null) return '—';
+      return (r * 100).toFixed(1) + '%';
+    }
+
+    function fmtTime(iso) {
+      // "2026-05-05T14:30" → "14:30"
+      return iso.split('T')[1] || iso;
+    }
+
+    function fmtHour(iso) {
+      const t = iso.split('T')[1] || iso;
+      return t.split(':')[0];
+    }
+
+    function ageLabel(s) {
+      if (s == null) return 'unknown';
+      if (s < 60) return Math.round(s) + 's ago';
+      if (s < 3600) return Math.round(s / 60) + 'm ago';
+      return Math.round(s / 3600) + 'h ago';
+    }
+
+    function render(d) {
+      const main = document.getElementById('main');
+      if (d.error) {
+        main.innerHTML = `<div class="err">${escapeHtml(d.detail || d.error)}</div>`;
+        return;
+      }
+
+      const t = d.totals_24h || {};
+      const summaryHtml = `
+        <div class="summary-row">
+          <div class="summary-card">
+            <div class="label">spoke clean</div>
+            <div class="value">${t.spoke_clean.toLocaleString()}</div>
+            <div class="sub">audit ran, no flags</div>
+          </div>
+          <div class="summary-card">
+            <div class="label">corrected</div>
+            <div class="value">${t.corrected.toLocaleString()}</div>
+            <div class="sub">audit caught and rewrote</div>
+          </div>
+          <div class="summary-card ${t.rail_unavailable > 50 ? 'warn' : ''}">
+            <div class="label">rail unavailable</div>
+            <div class="value">${t.rail_unavailable.toLocaleString()}</div>
+            <div class="sub">judge couldn't run this turn</div>
+          </div>
+          <div class="summary-card">
+            <div class="label">timeout rate</div>
+            <div class="value">${fmtPct(t.timeout_rate)}</div>
+            <div class="sub">unavailable ÷ total audits</div>
+          </div>
+        </div>
+      `;
+
+      // Compute max bar height for normalization
+      const maxTotal = Math.max(
+        1,
+        ...d.buckets.map(b => b.total),
+      );
+
+      // Compute GPU overlay points (skip nulls so line shows gaps)
+      // The chart-container is 240 px tall.
+      const CHART_H = 240;
+      const overlayPoints = [];
+      d.buckets.forEach((b, i) => {
+        if (b.gpu_pct_avg == null) {
+          overlayPoints.push(null);
+        } else {
+          // y is inverted (0 at top, height at bottom)
+          const y = CHART_H - (b.gpu_pct_avg / 100) * CHART_H;
+          overlayPoints.push({ x: i, y: y, gpu: b.gpu_pct_avg });
+        }
+      });
+
+      // Build SVG polyline path with gaps for nulls
+      const xStep = 100 / d.buckets.length;
+      let svgPath = '';
+      let pathOpen = false;
+      overlayPoints.forEach((p, i) => {
+        if (p == null) {
+          pathOpen = false;
+          return;
+        }
+        const xPct = (i + 0.5) * xStep;
+        const yPct = (p.y / CHART_H) * 100;
+        if (!pathOpen) {
+          svgPath += ` M ${xPct} ${yPct}`;
+          pathOpen = true;
+        } else {
+          svgPath += ` L ${xPct} ${yPct}`;
+        }
+      });
+
+      const barsHtml = d.buckets.map(b => {
+        const total = b.total;
+        const cleanH = total ? (b.spoke_clean / maxTotal) * 100 : 0;
+        const corrH = total ? (b.corrected / maxTotal) * 100 : 0;
+        const unavH = total ? (b.rail_unavailable / maxTotal) * 100 : 0;
+        const rate = b.timeout_rate == null ? '—' : (b.timeout_rate * 100).toFixed(0) + '%';
+        const gpu = b.gpu_pct_avg == null ? 'no data' : b.gpu_pct_avg.toFixed(0) + '%';
+        const tip = `
+          <strong>${fmtTime(b.bucket_start)}</strong><br>
+          spoke clean: ${b.spoke_clean}<br>
+          corrected: ${b.corrected}<br>
+          rail unavailable: ${b.rail_unavailable}<br>
+          timeout rate: ${rate}<br>
+          GPU avg: ${gpu}
+        `;
+        return `<div class="bar-col" title="">
+          <div class="bar-seg spoke_clean" style="height: ${cleanH}%"></div>
+          <div class="bar-seg corrected" style="height: ${corrH}%"></div>
+          <div class="bar-seg rail_unavailable" style="height: ${unavH}%"></div>
+          <div class="tip">${tip}</div>
+        </div>`;
+      }).join('');
+
+      // Hourly rollup (24 cells, oldest → newest)
+      // Aggregate buckets in groups of 4 (4 × 15min = 1h)
+      const hourly = [];
+      for (let h = 0; h < 24; h++) {
+        const slice = d.buckets.slice(h * 4, h * 4 + 4);
+        const sum = slice.reduce((a, b) => ({
+          spoke_clean: a.spoke_clean + b.spoke_clean,
+          corrected: a.corrected + b.corrected,
+          rail_unavailable: a.rail_unavailable + b.rail_unavailable,
+        }), { spoke_clean: 0, corrected: 0, rail_unavailable: 0 });
+        const hourLabel = slice.length > 0 ? fmtHour(slice[0].bucket_start) : '?';
+        hourly.push({
+          hour: hourLabel,
+          unavail: sum.rail_unavailable,
+          total: sum.spoke_clean + sum.corrected + sum.rail_unavailable,
+        });
+      }
+      const hourlyHtml = hourly.map(h => `
+        <div class="hour-cell ${h.unavail > 0 ? 'has_unavail' : ''}">
+          <div>${h.hour}</div>
+          <div style="font-size: 9px; opacity: 0.7;">
+            ${h.unavail > 0 ? h.unavail + '×' : '—'}
+          </div>
+        </div>
+      `).join('');
+
+      // Time axis labels: every ~3h
+      const axisLabels = [];
+      for (let i = 0; i < d.buckets.length; i += 12) {
+        axisLabels.push(fmtTime(d.buckets[i].bucket_start));
+      }
+      // Always include the very last bucket as the rightmost label
+      if (d.buckets.length > 0) {
+        axisLabels.push(fmtTime(d.buckets[d.buckets.length - 1].bucket_start));
+      }
+      const axisHtml = axisLabels.map(l => `<span>${l}</span>`).join('');
+
+      main.innerHTML = `
+        ${summaryHtml}
+        <div class="chart-card">
+          <div class="chart-title">last 24 hours · 15-minute buckets</div>
+          <div class="chart-help">
+            bar height = total audits in that 15-min slot.
+            color shows what happened. orange line = average GPU% during the slot.
+            hover any bar for exact counts.
+          </div>
+          <div class="legend">
+            <span><span class="legend-swatch" style="background: var(--good);"></span>spoke clean</span>
+            <span><span class="legend-swatch" style="background: var(--accent);"></span>corrected</span>
+            <span><span class="legend-swatch" style="background: var(--warn);"></span>rail unavailable</span>
+            <span><span class="legend-swatch" style="background: var(--judge);"></span>GPU% avg (line)</span>
+          </div>
+          <div class="chart-container">
+            <div class="chart-bars">${barsHtml}</div>
+            <svg class="gpu-overlay" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <path d="${svgPath}" stroke="var(--judge)" stroke-width="0.6" fill="none" vector-effect="non-scaling-stroke" />
+            </svg>
+          </div>
+          <div class="axis">${axisHtml}</div>
+          <div class="footer-row">
+            <span>buckets: ${d.buckets.length} · anchor: ${fmtTime(d.anchor_local)} local</span>
+            <span>data updated ${ageLabel(d.data_age_seconds)}</span>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-title">hourly rollup · rail-unavailable count per hour</div>
+          <div class="chart-help">
+            secondary view. each cell is one hour, oldest on the left.
+            number = rail-unavailable events that hour.
+          </div>
+          <div class="hourly-row">${hourlyHtml}</div>
+        </div>
+      `;
+    }
+
+    async function load() {
+      try {
+        const r = await fetch('/api/v1/rail/timeline');
+        const d = await r.json();
+        render(d);
+      } catch (e) {
+        document.getElementById('main').innerHTML =
+          `<div class="err">load failed: ${escapeHtml(String(e))}</div>`;
+      }
+    }
+    load();
+    setInterval(load, 30000);
+  </script>
+</body>
+</html>
+"""
+
+
+@app.route("/console/rail")
+def console_rail():
+    """Maez Console v0.2 — Rail Timeline.
+
+    24-hour view of the self-claim audit rail's health, in 15-minute
+    buckets, with GPU% overlay so the operator can see whether
+    rail-unavailable bursts correlate with brain load. Read-only;
+    parses cognition.log + maez.log via /api/v1/rail/timeline (60s
+    cached).
+    """
+    from flask import Response
+    return Response(_CONSOLE_RAIL_HTML, mimetype="text/html")
 
 
 @app.route("/api/v1/dreams")
