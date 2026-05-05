@@ -9,7 +9,15 @@ After the 09:27 false-positive incident and 222 rail-unavailable timeouts
 in 24h, the architecture decision is:
 
   - Keep dedicated judge (separate service from primary brain).
-  - Run the dedicated judge on GPU (CPU-override caused the timeouts).
+  - Routing judge calls through the primary brain on :8080 caused
+    observed timeouts; the dedicated judge service (with a CPU
+    override on its unit) was disabled and was not serving live
+    traffic, so the CPU override never ran. The first reflex was
+    "restore dedicated judge on GPU" — but tonight's bakeoffs
+    rejected both small-GPU-judge candidates, so the architectural
+    response is now under reconsideration. Cheaper levers
+    (timeout tuning, visible circuit breakers, console timeline)
+    are sequenced ahead of model changes.
   - 4B-Q4 on GPU pushes VRAM ceiling too tight (1040 MiB free).
   - Therefore: replace 4B with a smaller judge (1.5B–1.7B class).
 
