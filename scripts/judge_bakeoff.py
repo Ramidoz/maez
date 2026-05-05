@@ -64,6 +64,7 @@ from typing import Any
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_CORPUS = REPO / "tests" / "data" / "judge_eval_2026_05_05.jsonl"
 DEFAULT_REPORT_DIR = REPO / "logs" / "judge_bakeoff"
+MODEL_ENV_PATH = Path("/etc/maez/model.env")
 
 # Locked decision rule — DO NOT edit without updating the corpus
 # README in the same commit.
@@ -73,6 +74,76 @@ VRAM_FREE_FLOOR_MIB = int(4.9 * 1024)  # rule 3: ≥ 4.9 GB free under burst
 
 
 # ─── corpus + judge plumbing ──────────────────────────────────────
+
+
+def _read_judge_model_path() -> str | None:
+    """Best-effort read of LLAMA_JUDGE_MODEL_PATH from /etc/maez/model.env.
+
+    Records what the live llama-judge.service WOULD start with if
+    `systemctl start llama-judge` were run right now. Captured into
+    the report so a REJECT verdict carries enough context for the
+    operator to either (a) stop the service or (b) restore the path
+    to the last accepted/default value before any future restart.
+
+    Read-only — never edits the file.
+    """
+    if not MODEL_ENV_PATH.is_file():
+        return None
+    try:
+        for raw in MODEL_ENV_PATH.read_text().splitlines():
+            line = raw.strip()
+            if line.startswith("LLAMA_JUDGE_MODEL_PATH="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        return None
+    return None
+
+
+def _judge_service_active() -> bool | None:
+    """Returns True/False if systemctl is reachable, None otherwise.
+    Read-only — never starts/stops anything."""
+    if not shutil.which("systemctl"):
+        return None
+    try:
+        out = subprocess.run(
+            ["systemctl", "is-active", "llama-judge"],
+            capture_output=True, text=True, timeout=2.0,
+        )
+        return out.stdout.strip() == "active"
+    except Exception:
+        return None
+
+
+def _emit_reject_followup(report: dict) -> None:
+    """Print explicit rollback commands on REJECT.
+
+    The runner does not execute these — it prints them so the
+    operator can copy-paste deliberately. Keeps the hard contract
+    (no service restarts, no env edits) intact while still closing
+    the operational gap: a rejected candidate must NOT be left as
+    the path llama-judge will start from on the next restart.
+    """
+    candidate_path = report.get("candidate_model_path")
+    judge_active = report.get("judge_service_active_at_run")
+    print()
+    print("REJECT followup — operator action needed before any restart:")
+    print()
+    if judge_active:
+        print("  # candidate is running with the rejected model — stop it:")
+        print("  sudo systemctl stop llama-judge")
+        print()
+    print("  # restore LLAMA_JUDGE_MODEL_PATH to the last accepted path")
+    print("  # (the previous accepted-good was Qwen3.5-4B-Q4_K_M.gguf;")
+    print("  # confirm with the operator before editing):")
+    print("  sudoedit /etc/maez/model.env")
+    print()
+    if candidate_path:
+        print(f"  # current value (rejected candidate): {candidate_path}")
+    print(
+        "  # leaving the rejected path in model.env risks a later "
+        "'systemctl start llama-judge' silently bringing the rejected "
+        "model back."
+    )
 
 
 def _load_corpus(path: Path) -> list[dict[str, Any]]:
@@ -379,6 +450,8 @@ def main(argv: list[str] | None = None) -> int:
         "ts_utc": datetime.now(timezone.utc).isoformat(),
         "base_url": args.base_url,
         "model": args.model,
+        "candidate_model_path": _read_judge_model_path(),
+        "judge_service_active_at_run": _judge_service_active(),
         "corpus_path": str(corpus_path.resolve()),
         "corpus_size": len(rows),
         "burst": burst,
@@ -402,6 +475,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"report: {out_path}")
 
     print(f"VERDICT: {verdict}" + ("" if verdict == "PASS" else f" — {reason}"))
+
+    if verdict == "REJECT":
+        _emit_reject_followup(report)
+
     return 0 if verdict == "PASS" else 1
 
 
