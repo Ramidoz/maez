@@ -1224,9 +1224,7 @@ def api_cards_list():
 def api_card_deny(request_id: str):
     """Deny a card from the cockpit. Safe — no execution side effect,
     just marks it resolved so the UI (and the daemon's state) both
-    see it as closed. Approve is intentionally NOT exposed here —
-    the execution path lives in the daemon process, so cockpit-side
-    approve would flip state but never run the command."""
+    see it as closed."""
     try:
         from core.pending_cards import PendingCardStore
         store = PendingCardStore(_PENDING_CARDS_DB)
@@ -1239,6 +1237,106 @@ def api_card_deny(request_id: str):
         return jsonify({"ok": True, "status": card.status})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+
+
+# ── Cockpit write-path proxies (Workstation v1 Session 1) ─────────────
+#
+# The cockpit's chat send and card approve previously called the daemon
+# at http://127.0.0.1:11435/* directly from the browser. This violates
+# the one-web-origin rule (browser → maez-web :11437 only). Two thin
+# proxies fix that without changing daemon behavior.
+#
+# Hard contract:
+#   - Read-only-from-maez-web's-perspective: maez-web does NOT execute
+#     the action; it forwards the HTTP call to the daemon and returns
+#     the daemon's response verbatim.
+#   - Localhost-only: both endpoints (and the daemon's underlying
+#     routes) are bound to 127.0.0.1; CSRF surface remains loopback.
+#   - Timeout-bounded: 15s for chat, 30s for approve (approve runs the
+#     decision_pipeline which can take a moment). Failures pass through
+#     as 502 with the error message.
+
+_DAEMON_BASE = "http://127.0.0.1:11435"
+_COCKPIT_PROXY_TIMEOUT_S = 15.0
+_COCKPIT_APPROVE_TIMEOUT_S = 30.0
+
+
+@app.route("/api/v1/cockpit/message", methods=["POST"])
+def api_cockpit_message():
+    """Proxy the cockpit's chat send to the daemon's /message endpoint.
+
+    Forwards the JSON body verbatim. Returns the daemon's response
+    body and status code unchanged. On transport failure (daemon down,
+    timeout), returns 502 with a structured error so the UI can
+    surface "(cockpit couldn't reach daemon)" the same way it does
+    today.
+    """
+    import urllib.request as _urlreq
+    import urllib.error as _urlerr
+    body = request.get_data() or b"{}"
+    headers = {"Content-Type": request.headers.get("Content-Type", "application/json")}
+    try:
+        req = _urlreq.Request(
+            f"{_DAEMON_BASE}/message",
+            data=body, headers=headers, method="POST",
+        )
+        with _urlreq.urlopen(req, timeout=_COCKPIT_PROXY_TIMEOUT_S) as resp:
+            payload = resp.read()
+            status = resp.status
+            ctype = resp.headers.get("Content-Type", "application/json")
+        return (payload, status, {"Content-Type": ctype})
+    except _urlerr.HTTPError as e:
+        # Daemon answered with non-2xx; pass it through.
+        try:
+            payload = e.read()
+        except Exception:
+            payload = str(e).encode("utf-8")
+        return (payload, e.code, {"Content-Type": "application/json"})
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": "daemon_unreachable",
+            "detail": str(e)[:200],
+        }), 502
+
+
+@app.route("/api/v1/cards/<request_id>/approve", methods=["POST"])
+def api_card_approve(request_id: str):
+    """Proxy a card approval to the daemon's
+    /internal/approve_card/<id> endpoint. Same contract as the
+    /message proxy above: forward verbatim, surface daemon's reply
+    and status. Approve runs the decision_pipeline (will-I gate +
+    execute), so timeout is longer."""
+    import urllib.request as _urlreq
+    import urllib.error as _urlerr
+    body = request.get_data() or b""
+    headers = {}
+    ct = request.headers.get("Content-Type")
+    if ct:
+        headers["Content-Type"] = ct
+    try:
+        from urllib.parse import quote as _q
+        url = f"{_DAEMON_BASE}/internal/approve_card/{_q(request_id, safe='')}"
+        req = _urlreq.Request(
+            url, data=body, headers=headers, method="POST",
+        )
+        with _urlreq.urlopen(req, timeout=_COCKPIT_APPROVE_TIMEOUT_S) as resp:
+            payload = resp.read()
+            status = resp.status
+            ctype = resp.headers.get("Content-Type", "application/json")
+        return (payload, status, {"Content-Type": ctype})
+    except _urlerr.HTTPError as e:
+        try:
+            payload = e.read()
+        except Exception:
+            payload = str(e).encode("utf-8")
+        return (payload, e.code, {"Content-Type": "application/json"})
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": "daemon_unreachable",
+            "detail": str(e)[:200],
+        }), 502
 
 
 @app.route("/api/v1/services")
