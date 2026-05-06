@@ -54,7 +54,19 @@ const { ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane
 // ═══════════════════════════════════════════════════════════
 function TerminalDirection() {
   const sim = useSim();
-  const [surface, setSurface] = React.useState('dashboard');
+  // Workstation v1 / Session 1: cockpit opens to chat by default.
+  // The cockpit is a room to talk to Maez, not a dashboard. A user
+  // who explicitly navigates to another surface (Dashboard, Memory,
+  // Soul, etc.) has their choice persisted in localStorage so the
+  // page restores their last-active surface on reload — but a brand
+  // new visitor lands in conversation.
+  const [surface, setSurface] = React.useState(() => {
+    try {
+      return localStorage.getItem('maez.cockpit.surface') || 'chat';
+    } catch (e) {
+      return 'chat';
+    }
+  });
   const [dashboardMode, setDashboardMode] = React.useState(() => {
     try {
       return localStorage.getItem('maez.cockpit.dashboardMode') || 'living';
@@ -62,6 +74,12 @@ function TerminalDirection() {
       return 'living';
     }
   });
+  const setSurfaceStored = React.useCallback((next) => {
+    setSurface(next);
+    try {
+      localStorage.setItem('maez.cockpit.surface', next);
+    } catch (e) {}
+  }, []);
   const setDashboardModeStored = React.useCallback((mode) => {
     setDashboardMode(mode);
     try {
@@ -70,8 +88,8 @@ function TerminalDirection() {
   }, []);
   const openSurface = React.useCallback((nextSurface, mode) => {
     if (mode) setDashboardModeStored(mode);
-    setSurface(nextSurface);
-  }, [setDashboardModeStored]);
+    setSurfaceStored(nextSurface);
+  }, [setDashboardModeStored, setSurfaceStored]);
 
   const nav = [
     { id: 'dashboard',  label: 'Dashboard',   hotkey: '1', icon: '◈' },
@@ -121,7 +139,7 @@ function TerminalDirection() {
           {nav.map((n) => {
             const active = surface === n.id;
             return (
-              <button key={n.id} className="ap-btn" onClick={() => setSurface(n.id)}
+              <button key={n.id} className="ap-btn" onClick={() => setSurfaceStored(n.id)}
                 style={{ width: '100%', background: active ? A.surfaceRaised : 'transparent', border: active ? `0.5px solid ${A.strokeHi}` : '0.5px solid transparent',
                   color: active ? A.text : A.textDim, padding: '8px 12px', fontFamily: A.sans, fontSize: 13, fontWeight: active ? 500 : 400,
                   textAlign: 'left', display: 'flex', alignItems: 'center', gap: 10, borderRadius: 8, marginBottom: 2,
