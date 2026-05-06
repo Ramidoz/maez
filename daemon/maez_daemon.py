@@ -1616,6 +1616,7 @@ class MaezDaemon:
                 "system stats",
                 "system stats (CPU/RAM/GPU/disk/processes) — live via perception_snapshot",
             )
+
             _screen_state = (
                 getattr(self._last_screen_obs, "state", None)
                 if self._last_screen_obs is not None
@@ -1639,10 +1640,16 @@ class MaezDaemon:
             else:
                 _mark_signal_absent("screen observation", "screen observation")
 
-            if self._last_presence_snap is not None:
-                _mark_signal_present("presence snapshot", "presence snapshot")
-            else:
+            if self._last_presence_snap is None:
                 _mark_signal_absent("presence snapshot", "presence snapshot")
+            elif not getattr(self._last_presence_snap, "success", False):
+                _err = getattr(self._last_presence_snap, "error", None) or "unknown"
+                _mark_signal_absent(
+                    "presence snapshot",
+                    f"presence snapshot — unavailable: {_err}",
+                )
+            else:
+                _mark_signal_present("presence snapshot", "presence snapshot")
 
             if self._last_calendar_snap is not None:
                 _mark_signal_present("calendar", "calendar")
