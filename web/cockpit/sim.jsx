@@ -11,6 +11,8 @@ const SIM = (() => {
   const pad = (n) => String(n).padStart(2, '0');
   const ts = (d = now()) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   const hms = (d = now()) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  let turnSeq = 0;
+  const turnId = () => `turn-${Date.now()}-${++turnSeq}`;
 
   const state = {
     meta: {
@@ -302,7 +304,8 @@ const SIM = (() => {
     sendMessage: (text) => {
       const sess = state.chat.sessions.find(s => s.id === state.chat.activeSessionId);
       if (!sess) return;
-      sess.history.push({ role: 'user', t: ts(), content: text });
+      const userTurn = { _id: turnId(), role: 'user', t: ts(), content: text };
+      sess.history.push(userTurn);
       sess.preview = text.slice(0, 80);
       sess.updated = ts().slice(0,5);
       const isShell = /^(ls|cat|systemctl|tail|ps|curl|df|free|nvidia-smi|journalctl)|\bcheck\b|\brestart\b|\brun\b/i.test(text);
@@ -358,32 +361,38 @@ const SIM = (() => {
       state.chat._awaitingReply = true;
       state.chat._tools = [];
       emit();
+      return userTurn;
     },
     pushAssistantTurn: (reply) => {
       const sess = state.chat.sessions.find(s => s.id === state.chat.activeSessionId);
       if (!sess) return;
-      sess.history.push({
+      const assistantTurn = {
+        _id: turnId(),
         role: 'assistant', t: ts(),
         route: 'local',
         model: 'daemon',
         content: reply,
         trace: { tools: state.chat._tools || [], memory: 0, tokens: Math.floor((reply||'').length / 4) },
-      });
+      };
+      sess.history.push(assistantTurn);
       state.chat._awaitingReply = false;
       state.chat.streaming = false;
       state.chat.streamBuf = '';
       emit();
+      return assistantTurn;
     },
     finishSimReply: (reply) => {
       // Compatibility hook for ChatPane paths that still go through the
       // simulated flow — treat finish as a push-assistant.
       const sess = state.chat.sessions.find(s => s.id === state.chat.activeSessionId);
       if (!sess) return;
-      sess.history.push({ role: 'assistant', t: ts(), route: 'local', model: 'daemon', content: reply, trace: { tools: [], memory: 0, tokens: Math.floor((reply||'').length/4) } });
+      const assistantTurn = { _id: turnId(), role: 'assistant', t: ts(), route: 'local', model: 'daemon', content: reply, trace: { tools: [], memory: 0, tokens: Math.floor((reply||'').length/4) } };
+      sess.history.push(assistantTurn);
       state.chat.streaming = false;
       state.chat.streamBuf = '';
       state.chat._awaitingReply = false;
       emit();
+      return assistantTurn;
     },
     selectSession: (id) => { state.chat.activeSessionId = id; emit(); },
     newSession: () => {

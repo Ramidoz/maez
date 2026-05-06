@@ -391,7 +391,7 @@ function ActivityVisualizer() {
   );
 }
 
-function ChatPane({ tall, showSidebar = true }) {
+function ChatPane({ tall, showSidebar = true, selectedTurn, onSelectTurn }) {
   const sim = useSim();
   const [input, setInput] = React.useState('');
   const [modelId, setModelId] = React.useState('auto');
@@ -450,10 +450,20 @@ function ChatPane({ tall, showSidebar = true }) {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       const reply = (data && data.reply) || '(empty reply)';
-      sim.pushAssistantTurn ? sim.pushAssistantTurn(reply) : sim.finishSimReply(reply);
+      const assistantTurn = sim.pushAssistantTurn ? sim.pushAssistantTurn(reply) : sim.finishSimReply(reply);
+      onSelectTurn?.({
+        key: assistantTurn?._id || `latest:${Date.now()}`,
+        message: assistantTurn || { role: 'assistant', content: reply },
+        isLatest: true,
+      });
     } catch (e) {
       const msg = "(cockpit couldn't reach Maez — " + String(e) + ")";
-      sim.pushAssistantTurn ? sim.pushAssistantTurn(msg) : sim.finishSimReply(msg);
+      const assistantTurn = sim.pushAssistantTurn ? sim.pushAssistantTurn(msg) : sim.finishSimReply(msg);
+      onSelectTurn?.({
+        key: assistantTurn?._id || `latest:${Date.now()}`,
+        message: assistantTurn || { role: 'assistant', content: msg },
+        isLatest: true,
+      });
     }
   };
 
@@ -485,7 +495,21 @@ function ChatPane({ tall, showSidebar = true }) {
 
       {/* Messages */}
       <div ref={scrollRef} className="ap-scroll" style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '20px 20px 4px' }}>
-        {(session?.history || []).map((m, i) => <ChatMessage key={i} m={m} />)}
+        {(session?.history || []).map((m, i) => {
+          const key = m._id || `${session?.id || 'session'}:${i}`;
+          return (
+            <ChatMessage
+              key={key}
+              m={m}
+              selected={selectedTurn?.key === key}
+              onSelect={m.role === 'assistant' ? () => onSelectTurn?.({
+                key,
+                message: m,
+                isLatest: i === (session?.history || []).length - 1,
+              }) : null}
+            />
+          );
+        })}
         {sim.state.chat.streaming && <StreamingMessage text={sim.state.chat.streamBuf} route={sim.state.chat._route} model={sim.state.chat._model} showThinking={thinking} />}
         {sim.state.chat._awaitingReply && !sim.state.chat.streaming && (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '12px 6px', fontSize: 12, color: A.textDim }}>
@@ -749,7 +773,7 @@ function MaezAvatar({ size = 32 }) {
   );
 }
 
-function ChatMessage({ m }) {
+function ChatMessage({ m, selected = false, onSelect }) {
   if (m.role === 'user') {
     return (
       <div className="ap-rise" style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
@@ -767,7 +791,23 @@ function ChatMessage({ m }) {
     );
   }
   return (
-    <div className="ap-rise" style={{ display: 'flex', gap: 10, marginBottom: 18 }}>
+    <div
+      className="ap-rise"
+      onClick={onSelect || undefined}
+      title={onSelect ? 'Inspect why Maez said this' : undefined}
+      style={{
+        display: 'flex',
+        gap: 10,
+        marginBottom: 18,
+        cursor: onSelect ? 'pointer' : 'default',
+        borderRadius: 14,
+        padding: selected ? '10px 12px' : '0',
+        marginLeft: selected ? -12 : 0,
+        marginRight: selected ? -12 : 0,
+        background: selected ? `${A.orange}13` : 'transparent',
+        border: selected ? `0.5px solid ${A.orange}55` : '0.5px solid transparent',
+      }}
+    >
       <MaezAvatar size={28} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>

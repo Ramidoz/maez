@@ -47,6 +47,152 @@ const { ChatPane, ServicesPane, GpuPane, DaemonPane, SignalsPane, ScratchpadPane
         JudgmentSurface, SelfDevSurface, WorkshopSurface,
         DaemonDeep, S, A, Card, Glass, Chip, Pill, Dot, Button, SoftBtn, MaezAvatar, Icon } = window.TerminalUI;
 
+function MaezNowRail() {
+  const [data, setData] = React.useState(null);
+  const [error, setError] = React.useState('');
+
+  React.useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/v1/now');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const json = await res.json();
+        if (alive) { setData(json); setError(''); }
+      } catch (e) {
+        if (alive) setError(String(e));
+      }
+    };
+    load();
+    const id = setInterval(load, 5000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  const now = data?.now || {};
+  const body = data?.body || {};
+  const broken = data?.broken?.items || [];
+  const memory = data?.memory || {};
+  const pending = data?.pending_actions || {};
+
+  return (
+    <div style={{ padding: '14px 18px', margin: '4px 12px 0', borderTop: `0.5px solid ${A.stroke}`, fontFamily: A.sans }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 8 }}>
+        <Dot c={error ? A.red : A.green} pulse={!error} size={6} />
+        <span style={{ fontSize: 11, color: A.text, fontWeight: 700 }}>Maez Now</span>
+      </div>
+      {error ? (
+        <div style={{ fontSize: 11, color: A.red, lineHeight: 1.45 }}>Now view unavailable: {error}</div>
+      ) : (
+        <>
+          <div style={{ fontSize: 11, color: A.textDim, lineHeight: 1.45, marginBottom: 10 }}>
+            {now.summary || 'Waiting for Maez current state.'}
+          </div>
+          {now.thought && (
+            <div style={{ fontFamily: A.sans, fontStyle: 'italic', fontSize: 12, color: A.textSoft, lineHeight: 1.45, marginBottom: 10 }}>
+              "{now.thought}"
+            </div>
+          )}
+          <div style={{ display: 'grid', gap: 6, fontFamily: A.mono, fontSize: 10.5, color: A.textDim, lineHeight: 1.45 }}>
+            <div>cycle <span style={{ color: A.cyan }}>{now.cycle || 0}</span></div>
+            <div>brain <span style={{ color: A.textSoft }}>{body.brain_model || 'unknown'}</span></div>
+            <div>memory <span style={{ color: A.textSoft }}>{memory.summary || 'counts unavailable'}</span></div>
+            <div>pending <span style={{ color: pending.count ? A.orange : A.green }}>{pending.count || 0}</span></div>
+          </div>
+          {broken.length > 0 && (
+            <div style={{ marginTop: 11, display: 'grid', gap: 5 }}>
+              {broken.slice(0, 4).map((b, i) => (
+                <div key={i} style={{ border: `0.5px solid ${A.red}33`, background: `${A.red}0f`, borderRadius: 7, padding: '6px 7px' }}>
+                  <div style={{ fontSize: 10.5, color: A.text, fontWeight: 700 }}>{b.label}</div>
+                  <div style={{ fontSize: 10.5, color: A.textDim, lineHeight: 1.35, marginTop: 2 }}>{b.summary}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function WhyReplyPane({ selectedTurn }) {
+  const [data, setData] = React.useState(null);
+  const [error, setError] = React.useState('');
+
+  React.useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/v1/turn/latest');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const json = await res.json();
+        if (alive) { setData(json); setError(''); }
+      } catch (e) {
+        if (alive) setError(String(e));
+      }
+    };
+    load();
+    const id = setInterval(load, 30000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  const selectedText = selectedTurn?.message?.content || '';
+  const notLatest = selectedTurn && selectedTurn.isLatest === false;
+  const flagged = data?.audit?.flagged_claims || [];
+  const toolRuns = data?.tools?.items || [];
+
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <div style={{ padding: '4px 4px 12px', borderBottom: `0.5px solid ${A.stroke}` }}>
+        <div style={{ fontSize: 10, color: A.textFaint, letterSpacing: 1.1, textTransform: 'uppercase', fontWeight: 800 }}>Why this reply</div>
+        <div style={{ fontSize: 13, color: A.textSoft, lineHeight: 1.45, marginTop: 7 }}>
+          {selectedTurn ? 'Selected Maez reply. Latest-turn evidence is shown below.' : 'Select a Maez reply in the chat to inspect it.'}
+        </div>
+      </div>
+      <div className="ap-scroll" style={{ flex: 1, overflow: 'auto', padding: '12px 2px 2px', display: 'grid', gap: 12, alignContent: 'start' }}>
+        {selectedText && (
+          <WhyBlock title="selected reply">
+            <div style={{ color: A.textSoft, fontSize: 12.5, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{selectedText.slice(0, 520)}</div>
+            {notLatest && <div style={{ color: A.orange, fontSize: 11.5, lineHeight: 1.45, marginTop: 8 }}>Full explanation is only available for the most recent turn until the per-turn ledger lands.</div>}
+          </WhyBlock>
+        )}
+        {error && <WhyBlock title="evidence unavailable"><span style={{ color: A.red }}>Could not load latest-turn explanation: {error}</span></WhyBlock>}
+        {data?.summary_one_line && <WhyBlock title="in one sentence">{data.summary_one_line}</WhyBlock>}
+        <WhyBlock title="what Maez remembered">{data?.maez_remembered?.summary || 'Waiting for latest-turn memory evidence.'}</WhyBlock>
+        <WhyBlock title="body signals">
+          <div>{data?.maez_knew?.summary || 'Signal receipts are not available for this latest turn.'}</div>
+        </WhyBlock>
+        <WhyBlock title="honesty audit">
+          <div>{data?.audit?.summary || 'Waiting for latest-turn audit evidence.'}</div>
+          {flagged.length > 0 && (
+            <div style={{ display: 'grid', gap: 7, marginTop: 9 }}>
+              {flagged.slice(0, 4).map((f, i) => (
+                <div key={i} style={{ borderLeft: `2px solid ${A.orange}`, paddingLeft: 8 }}>
+                  <div style={{ color: A.text, fontSize: 12 }}>{f.claim}</div>
+                  <div style={{ color: A.textDim, fontSize: 11, marginTop: 2 }}>{f.reason}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </WhyBlock>
+        <WhyBlock title="tools">{data?.tools?.summary || 'No tool evidence loaded.'}</WhyBlock>
+        {toolRuns.length > 0 && toolRuns.slice(0, 3).map((t, i) => (
+          <WhyBlock key={i} title={t.success ? 'tool succeeded' : 'tool failed'}>{t.cmd || t.request_id}</WhyBlock>
+        ))}
+        <WhyBlock title="memory written">{data?.memory_written?.summary || 'No storage evidence loaded.'}</WhyBlock>
+      </div>
+    </div>
+  );
+}
+
+function WhyBlock({ title, children }) {
+  return (
+    <div style={{ background: A.surfaceLo, border: `0.5px solid ${A.stroke}`, borderRadius: 12, padding: 12 }}>
+      <div style={{ fontSize: 9.5, color: A.textFaint, letterSpacing: 1, textTransform: 'uppercase', fontWeight: 800, marginBottom: 7 }}>{title}</div>
+      <div style={{ color: A.textSoft, fontSize: 12.5, lineHeight: 1.5 }}>{children}</div>
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════
 // Direction A — Terminal Command-Center
 // 1440×900 tiled workstation. Sidebar switches the "focus" surface
@@ -74,6 +220,7 @@ function TerminalDirection() {
       return 'living';
     }
   });
+  const [selectedTurn, setSelectedTurn] = React.useState(null);
   const setSurfaceStored = React.useCallback((next) => {
     setSurface(next);
     try {
@@ -155,19 +302,7 @@ function TerminalDirection() {
           })}
         </div>
         <div style={{ flex: 1 }} />
-        <div style={{ padding: '14px 18px', margin: '4px 12px 0', borderTop: `0.5px solid ${A.stroke}`, fontFamily: A.sans }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
-            <Dot c={A.indigo} pulse size={6} />
-            <span style={{ fontSize: 11, color: A.text, fontWeight: 600 }}>Daemon</span>
-          </div>
-          <div style={{ fontSize: 10.5, color: A.textDim, lineHeight: 1.6, fontFamily: A.mono }}>
-            <div>cycle #{sim.state.daemon.cycle.toLocaleString()}</div>
-            <div>next in <span style={{ color: A.cyan }}>{sim.state.daemon.nextTickIn}s</span></div>
-          </div>
-          <div style={{ fontFamily: A.sans, fontStyle: 'italic', fontSize: 12, color: A.textSoft, marginTop: 8, lineHeight: 1.4 }}>
-            feeling {sim.state.daemon.mood}.
-          </div>
-        </div>
+        <MaezNowRail />
       </div>
 
       {/* main — surface */}
@@ -179,7 +314,7 @@ function TerminalDirection() {
             openSurface={openSurface}
           />
         )}
-        {surface === 'chat' && <div style={{ padding: 20, height: '100%', display: 'flex' }}><div style={{ flex: 1, display: 'flex' }}><ChatPane tall /></div></div>}
+        {surface === 'chat' && <div style={{ padding: 20, height: '100%', display: 'flex' }}><div style={{ flex: 1, display: 'flex' }}><ChatPane tall selectedTurn={selectedTurn} onSelectTurn={setSelectedTurn} /></div></div>}
         {surface === 'approvals' && <ApprovalsQueueSurface />}
         {surface === 'memory' && <MemorySurface />}
         {surface === 'soul' && <SoulSurface />}
@@ -195,10 +330,8 @@ function TerminalDirection() {
       </div>
 
       {/* right rail */}
-      <div className="ap-glass" style={{ background: 'rgba(9,10,7,0.58)', borderLeft: `0.5px solid ${A.stroke}`, display: 'grid', gridTemplateRows: '1.08fr 0.92fr 1fr', gap: 12, padding: 12, overflow: 'hidden' }}>
-        <ReadinessPane compact />
-        <DaemonPane compact />
-        <SignalsPane compact />
+      <div className="ap-glass" style={{ background: 'rgba(9,10,7,0.58)', borderLeft: `0.5px solid ${A.stroke}`, padding: 12, overflow: 'hidden' }}>
+        <WhyReplyPane selectedTurn={selectedTurn} />
       </div>
     </div>
   );
