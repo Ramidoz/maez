@@ -417,12 +417,11 @@ function ChatPane({ tall, showSidebar = true }) {
     ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
   }, [input]);
 
-  // Real chat: post to the daemon's /message endpoint (port 11435).
-  // sim.sendMessage previously simulated a reply — now we push the user
-  // turn into sim state, hit the daemon, and push the real reply back
-  // into sim state when it arrives. No streaming yet (the daemon
-  // endpoint returns the complete reply once); we just flip a pending
-  // flag so the UI shows "Thinking…".
+  // Real chat: post to maez-web's /api/v1/cockpit/message proxy, which
+  // forwards to the daemon's /message endpoint. One web origin, no
+  // browser-direct daemon calls (Workstation v1 / Session 1). The
+  // proxy timeout is 15s; on daemon-unreachable it returns 502 with
+  // a structured error which the catch block surfaces.
   const submit = async () => {
     const text = input.trim();
     if (!text) return;
@@ -443,7 +442,7 @@ function ChatPane({ tall, showSidebar = true }) {
       .filter((h) => h && h.role && h.content)
       .map((h) => ({ role: h.role, content: h.content }));
     try {
-      const res = await fetch('http://127.0.0.1:11435/message', {
+      const res = await fetch('/api/v1/cockpit/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, source: 'cockpit', history }),
@@ -453,7 +452,7 @@ function ChatPane({ tall, showSidebar = true }) {
       const reply = (data && data.reply) || '(empty reply)';
       sim.pushAssistantTurn ? sim.pushAssistantTurn(reply) : sim.finishSimReply(reply);
     } catch (e) {
-      const msg = "(cockpit couldn't reach daemon on :11435 — " + String(e) + ")";
+      const msg = "(cockpit couldn't reach Maez — " + String(e) + ")";
       sim.pushAssistantTurn ? sim.pushAssistantTurn(msg) : sim.finishSimReply(msg);
     }
   };
