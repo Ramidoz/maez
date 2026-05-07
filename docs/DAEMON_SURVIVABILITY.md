@@ -153,10 +153,16 @@ entries past their TTL.
   session_key. Tasks are tagged with `task.session_key` at spawn.
   Wedged-but-stale entries log WARNING (operator signal); clean
   evictions log INFO.
-- **Lifecycle:** TelegramAdapter creates `_batch_sweep_task` at
-  `__init__`; `connect()` calls `super().start()` to spawn the
-  base-class `_session_sweep_task`. `disconnect() → self.stop() →
-  super().stop()` cancels both in lockstep.
+- **Lifecycle:** `_batch_sweep_task` is created via the idempotent
+  `_ensure_batch_sweep_started()` helper. `__init__` calls it
+  best-effort (succeeds in test contexts that already have a running
+  loop; silently defers in production where adapters are constructed
+  synchronously before the loop exists). `connect()` is the
+  load-bearing call site — it invokes both `super().start()` (for the
+  base-class `_session_sweep_task`) AND
+  `_ensure_batch_sweep_started()` (for the Telegram batch sweep).
+  `disconnect() → self.stop() → super().stop()` cancels both in
+  lockstep.
 - Invalid env values fall back to defaults with a WARNING (slice
   1.2/1.3/1.4 posture).
 

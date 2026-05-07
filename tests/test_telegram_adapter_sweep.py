@@ -290,11 +290,24 @@ class BatchSweepBehavior(unittest.IsolatedAsyncioTestCase):
     # ------- lifecycle: start/stop -----------------------------------------
 
     async def test_sweep_task_cancelled_on_adapter_stop(self):
-        """The periodic sweep task is created at __init__ and must be
-        cancelled by stop(). After stop(), it's .done()."""
+        """The periodic sweep task — created via
+        ``_ensure_batch_sweep_started()`` (called from __init__ when a
+        loop exists, OR from connect() in production) — must be
+        cancelled by stop(). After stop(), it's .done().
+
+        Note on lifecycle: __init__'s call to the helper succeeds here
+        because IsolatedAsyncioTestCase has a running loop. In
+        production the adapter is constructed synchronously, init's
+        call defers, and connect() does the load-bearing start. See
+        StartedOutsideEventLoop test class for that scenario.
+        """
         adapter = _make_adapter()
         sweep_task = adapter._batch_sweep_task
-        self.assertIsNotNone(sweep_task, "init must create the periodic sweep task")
+        self.assertIsNotNone(
+            sweep_task,
+            "in test context (running loop), init must create the "
+            "periodic sweep task via _ensure_batch_sweep_started()",
+        )
         self.assertFalse(sweep_task.done(), "sweep task should be running after init")
 
         await adapter.stop()
@@ -308,6 +321,76 @@ class BatchSweepBehavior(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             sweep_task.done(),
             "stop() must cancel the periodic sweep task",
+        )
+
+
+class StartedOutsideEventLoop(unittest.TestCase):
+    """Behavioral regression for the slice 1.5 follow-up production bug.
+
+    Production constructs TelegramAdapter synchronously (no event loop
+    running) BEFORE scheduling connect() on the daemon's loop. The
+    original slice 1.5 implementation only created _batch_sweep_task
+    in __init__; with no loop available, ``asyncio.create_task``
+    raised, the warning was logged, and the task silently never ran
+    in production — even though IsolatedAsyncioTestCase tests passed.
+
+    This test directly reproduces that scenario:
+      1. Construct in sync context. Assert _batch_sweep_task is None.
+      2. Enter an event loop, call _ensure_batch_sweep_started().
+         Assert task is now alive.
+      3. Stop the adapter; assert task is done.
+
+    A regression that drops connect()'s call to the helper (or
+    reverts to init-only creation) fails this test directly.
+    """
+
+    def test_sync_construct_then_async_start(self):
+        # Phase 1: sync construction, no event loop.
+        adapter = TelegramAdapter(PlatformConfig())
+        self.assertIsNone(
+            adapter._batch_sweep_task,
+            "synchronous construction outside an event loop must not "
+            "have created the sweep task; the deferred-start helper "
+            "is the only correct path here",
+        )
+
+        # Phase 2: enter a loop and call the helper directly. This
+        # mirrors what connect() does in production after the daemon
+        # establishes its event loop.
+        async def _start_then_stop():
+            adapter._ensure_batch_sweep_started()
+            self.assertIsNotNone(
+                adapter._batch_sweep_task,
+                "after entering a loop and calling the helper, the "
+                "task must be created — this is the production path",
+            )
+            self.assertFalse(
+                adapter._batch_sweep_task.done(),
+                "newly-created sweep task must be alive",
+            )
+            # Idempotency check: calling again should not duplicate.
+            existing = adapter._batch_sweep_task
+            adapter._ensure_batch_sweep_started()
+            self.assertIs(
+                adapter._batch_sweep_task, existing,
+                "_ensure_batch_sweep_started must be idempotent — a "
+                "second call when the task is already running must "
+                "NOT create a new task",
+            )
+            # Phase 3: stop cleanly.
+            await adapter.stop()
+            self.assertTrue(
+                existing.done(),
+                "stop() must cancel the sweep task",
+            )
+
+        asyncio.run(_start_then_stop())
+
+        # After stop(), the helper resets the task ref to None.
+        self.assertIsNone(
+            adapter._batch_sweep_task,
+            "stop() must reset _batch_sweep_task to None so a "
+            "subsequent connect() can re-start cleanly",
         )
 
 
