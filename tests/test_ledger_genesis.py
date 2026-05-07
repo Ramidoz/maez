@@ -306,5 +306,63 @@ class GenesisIdempotenceTests(unittest.TestCase):
                          "re-migration must not create a second genesis row")
 
 
+class HeadPointerTests(unittest.TestCase):
+    """meta.last_chain_hash is the truncation-defense head pointer.
+
+    Without this, an attacker who deletes the last N rows of `turns`
+    passes verification cleanly. With it, the chain walker can assert
+    that the final reached row's chain_hash matches the recorded head.
+    On first-run seed, the head IS the genesis row.
+    """
+
+    def test_last_chain_hash_seeded_to_genesis(self):
+        db_path = _fresh_db_path("head_pointer.db")
+        migrate.run(str(db_path))
+        conn = sqlite3.connect(db_path)
+        try:
+            head_row = conn.execute(
+                "SELECT value FROM meta WHERE key='last_chain_hash'"
+            ).fetchone()
+            genesis_row = conn.execute(
+                "SELECT value FROM meta WHERE key='genesis_hash'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(head_row,
+            "meta.last_chain_hash must be seeded by migrate.run()")
+        self.assertIsNotNone(genesis_row)
+        self.assertEqual(head_row[0], genesis_row[0],
+            "On first-run seed, meta.last_chain_hash must equal "
+            "meta.genesis_hash (the genesis row IS the head).")
+
+    def test_last_chain_hash_64_char_lowercase_hex(self):
+        db_path = _fresh_db_path("head_format.db")
+        migrate.run(str(db_path))
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key='last_chain_hash'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(row)
+        self.assertTrue(_is_lower_hex_64(row[0]),
+            f"meta.last_chain_hash must be 64 lowercase hex chars; got {row[0]!r}")
+
+    def test_idempotent_re_migration_does_not_duplicate_head(self):
+        db_path = _fresh_db_path("head_idem.db")
+        migrate.run(str(db_path))
+        migrate.run(str(db_path))  # second call must be no-op
+        conn = sqlite3.connect(db_path)
+        try:
+            n = conn.execute(
+                "SELECT COUNT(*) FROM meta WHERE key='last_chain_hash'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(n, 1,
+            "re-migration must not duplicate the last_chain_hash meta row")
+
+
 if __name__ == "__main__":
     unittest.main()

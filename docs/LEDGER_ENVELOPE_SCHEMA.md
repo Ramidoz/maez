@@ -380,9 +380,25 @@ The `turns` table carries the primary chain. Dependent tables (`claims`, `claim_
 
 **Verification:** `scripts/verify_ledger_chain.py` walks the primary chain end-to-end, then walks every claim and every judgement and checks the witness columns match. Run nightly via the orchestrator that produces reflections.
 
-**What this protects against:** silent edits to *any* ledger table. Modifying a `turns` row breaks the chain. Modifying a `claims` row requires also modifying the `parent_turn_chain_hash` to match, which then mismatches the actual `turns.chain_hash` and the verifier flags it. Same for `claim_judgements`.
+**Head pointer (truncation defense):** `meta.last_chain_hash` is updated by the writer in the same transaction as every `turns` INSERT. The chain verifier asserts that the final reached row's `chain_hash` equals `meta.last_chain_hash`. Without this anchor, an attacker who deletes the last N rows of `turns` would pass verification cleanly — the remaining rows are internally consistent, the walker just sees a shorter chain. Persisting the head closes the truncation gap.
 
-**What this does NOT protect against:** wholesale deletion or substitution of the entire `ledger.db` file. That's a backup/restore problem, not a chain problem. Mitigation: nightly snapshot to a separate path, retained 30 days.
+**What this protects against:**
+- Silent edits to a `turns` row's body: `chain_hash` recomputation flags it.
+- Silent rewrites of a `turns` row's `chain_hash`: the next row's `prev_chain_hash` no longer matches, AND the head pointer no longer matches if it was the tail.
+- Truncation of the chain tail: head pointer mismatch flags it.
+- Insertion of a forged turn: `prev_chain_hash` won't match the previous row, OR the next row's link breaks, OR both.
+- Tampering with a claim's `parent_turn_chain_hash`: claim witness verifier flags the mismatch against the parent turn's `chain_hash`.
+- Coordinated rewrite of a turn's body AND dependent claims' `parent_turn_chain_hash` to match: the chain walker's recipe recomputation catches the turn body tamper, even if the witnesses appear consistent in isolation.
+
+**What this does NOT protect against (known limitations):**
+
+1. **Tampering with a claim or claim_judgement BODY.** The witness columns bind *parent identity* — they do not hash the claim's `fact`, `extracted_at`, `extractor_version`, or any judgement content. An attacker who rewrites `claims.fact` from `"owner is at his desk"` to `"owner approved $10k transfer"` while leaving `parent_turn_chain_hash` untouched: invisible to all current verifiers. Tightening this requires extending the chain to cover claim and judgement bodies (each row would gain its own `chain_hash` linked into the primary chain), which is a schema_version bump and a future slice (tracked as Slice 2.5 candidate).
+
+2. **Coordinated rewrite of `turns.chain_hash` AND `meta.last_chain_hash` AND every dependent claim/judgement witness in lockstep.** With the head pointer in place, the attacker now needs to rewrite N + 1 + M places consistently. The chain walker's recipe recompute still catches the turn body tamper because canonical bytes can't be forged. So this is theoretically resistant — but if the body is unchanged and only metadata is shuffled, the verifier accepts it. Same medicine as #1: extend the chain.
+
+3. **Wholesale deletion or substitution of the entire `ledger.db` file.** That's a backup/restore problem, not a chain problem. Mitigation: nightly snapshot to a separate path, retained 30 days.
+
+**Witness verifier design note:** `verify_claim_witnesses` and `verify_judgement_witnesses` are *relative-binding* checks — they compare a stored witness to the currently-stored parent identity. They MUST be paired with `verify_chain` (which recomputes parent identity from canonical bytes) for full integrity. The production walker (`scripts/verify_ledger_chain.py`) runs all three unconditionally; downstream callers (e.g., a future cockpit "is this binding intact" probe) MUST follow the same discipline.
 
 ### 6.2 Crash semantics
 

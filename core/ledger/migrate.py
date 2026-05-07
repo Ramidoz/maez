@@ -170,6 +170,21 @@ def _seed_genesis(conn: sqlite3.Connection) -> None:
             (chain_hash,),
         )
 
+    # Head pointer: meta.last_chain_hash. The writer (slice 2.3) MUST
+    # update this row on every append in the same transaction as the
+    # turns INSERT, so the chain has a verifiable head. Without this,
+    # truncation of the chain tail would be undetectable — the walker
+    # would happily accept a shorter chain that's internally consistent.
+    # On first-run seed, the head IS the genesis row.
+    head_row = conn.execute(
+        "SELECT value FROM meta WHERE key='last_chain_hash'"
+    ).fetchone()
+    if head_row is None:
+        conn.execute(
+            "INSERT INTO meta(key, value) VALUES ('last_chain_hash', ?)",
+            (chain_hash,),
+        )
+
 
 def run(db_path: str) -> None:
     """Apply pending ledger migrations and seed meta + genesis.
