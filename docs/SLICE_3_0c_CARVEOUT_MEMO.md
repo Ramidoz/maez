@@ -87,7 +87,7 @@ The grounding judge today is an LLM-as-judge call (Qwen3.5-4B per current config
 - A few-shot block of NEGATIVE carve-out examples (§4 negatives), each with the rejection reason.
 - An explicit default-deny instruction: when uncertain, classify as NOT eligible.
 
-This is a prompt-template change in slice 3 proper, not a model change. Note the dependency: shipping slice 3 without the carve-out instructions will refuse "what is the capital of France." Shipping slice 3 with naive instructions will laund hallucinations.
+This is a prompt-template change in slice 3 proper, not a model change. Note the dependency: shipping slice 3 without the carve-out instructions will refuse "what is the capital of France." Shipping slice 3 with naive instructions will launder hallucinations.
 
 ## 7. Open questions for Rohit
 
