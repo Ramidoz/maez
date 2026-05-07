@@ -312,6 +312,86 @@ class PerKindWriteTests(unittest.TestCase):
         )
 
 
+class EraInitTests(unittest.TestCase):
+    """Writer sets meta.ledger_era_starts_at on first non-genesis write."""
+
+    def _read_era(self, db_path: str) -> str | None:
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key='ledger_era_starts_at'"
+            ).fetchone()
+        finally:
+            conn.close()
+        return row[0] if row else None
+
+    def test_era_unset_after_migrate_only(self):
+        """Fresh migrated DB has no era set — only writer sets it."""
+        db_path = _fresh_db("era_unset")
+        era = self._read_era(db_path)
+        # migrate.run does NOT seed the era row. It's the writer's job.
+        self.assertTrue(
+            era is None or not (era or "").strip(),
+            f"era should be unset on fresh migrate; got {era!r}",
+        )
+
+    def test_first_write_sets_era(self):
+        db_path = _fresh_db("era_first")
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            w = writer.LedgerWriter(db_path)
+            try:
+                w.write_turn("user_message", "first ever")
+            finally:
+                w.close()
+        era_str = self._read_era(db_path)
+        self.assertIsNotNone(era_str)
+        # Should be a parseable float.
+        era_float = float(era_str)
+        self.assertGreater(era_float, 0)
+
+    def test_second_write_does_not_change_era(self):
+        db_path = _fresh_db("era_second")
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            w = writer.LedgerWriter(db_path)
+            try:
+                w.write_turn("user_message", "first")
+                era_after_first = self._read_era(db_path)
+                # Sleep imperceptibly to ensure if era WERE updated, the
+                # value would differ.
+                import time as _time
+                _time.sleep(0.01)
+                w.write_turn("user_message", "second")
+                era_after_second = self._read_era(db_path)
+            finally:
+                w.close()
+        self.assertEqual(
+            era_after_first, era_after_second,
+            "era must NOT change on subsequent writes — only set on first",
+        )
+
+    def test_era_set_atomically_with_first_row(self):
+        """Era is set in the same transaction as the first INSERT.
+
+        Verified by reading meta.ledger_era_starts_at AFTER the write
+        and confirming it matches the turn's timestamp.
+        """
+        db_path = _fresh_db("era_atomic")
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            w = writer.LedgerWriter(db_path)
+            try:
+                tid = w.write_turn("user_message", "atomic check")
+            finally:
+                w.close()
+        row = _read_turn(db_path, tid)
+        era_str = self._read_era(db_path)
+        # Era stored as repr(float). Parse and compare to row timestamp.
+        era_float = float(era_str)
+        self.assertAlmostEqual(
+            era_float, row["timestamp"], places=4,
+            msg=f"era ({era_float}) should equal first row's timestamp ({row['timestamp']})",
+        )
+
+
 class LifecycleTests(unittest.TestCase):
     def test_close_prevents_further_writes(self):
         db_path = _fresh_db("lifecycle_close")

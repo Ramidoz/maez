@@ -322,6 +322,29 @@ class LedgerWriter:
                     )
                 prev_chain_hash = head[0]
 
+                # Era init: on the first non-genesis write, set
+                # meta.ledger_era_starts_at to the current timestamp
+                # in the SAME transaction as the INSERT. After that,
+                # never overwrite. Reconciliation reads this row to
+                # determine which external rows are post-ledger and
+                # therefore eligible to be flagged as orphans. Without
+                # this, slice 2.4 reconciliation refuses to run; with
+                # it, the era is anchored at the moment the daemon
+                # first started writing through the ledger.
+                era_row = conn.execute(
+                    "SELECT value FROM meta WHERE key = 'ledger_era_starts_at'"
+                ).fetchone()
+                era_unset = (
+                    era_row is None
+                    or not (era_row[0] or "").strip()
+                )
+                if era_unset:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO meta(key, value) "
+                        "VALUES ('ledger_era_starts_at', ?)",
+                        (repr(ts),),
+                    )
+
                 new_chain_hash = chain.compute_chain_hash(row, prev_chain_hash)
 
                 cols = list(_TURN_COLUMNS) + ["prev_chain_hash", "chain_hash"]
