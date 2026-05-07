@@ -77,14 +77,54 @@ from core.health.circuit_breaker import CircuitBreaker, CircuitOpen
 # logger which keeps existing dashboard/filter wiring intact.
 _BREAKER_LOG = logging.getLogger("core.cognition.grounding_judge")
 
+_DEFAULT_JUDGE_BREAKER_THRESHOLD = 3
+_DEFAULT_JUDGE_BREAKER_WINDOW_S = 300.0
+_DEFAULT_JUDGE_BREAKER_COOLDOWN_S = 30.0
+
+
+def _parse_breaker_env(name: str, default: float, *, kind: type) -> float:
+    """Parse a breaker env var with safe-fallback + WARN.
+
+    A typo on a survivability knob must not crash the daemon at import
+    time. Same posture as MAEZ_PROPOSAL_INTENT_TIMEOUT_S in slice 1.1.
+    Returns the parsed value, or the default with a warning logged on
+    invalid/non-positive input.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        value = kind(raw)
+    except (TypeError, ValueError):
+        _BREAKER_LOG.warning(
+            "%s=%r is invalid; using default %s", name, raw, default,
+        )
+        return default
+    if value <= 0:
+        _BREAKER_LOG.warning(
+            "%s=%r must be positive; using default %s", name, raw, default,
+        )
+        return default
+    return value
+
+
 _JUDGE_BREAKER = CircuitBreaker(
     name="grounding_judge",
-    failure_threshold=int(os.environ.get(
-        "MAEZ_JUDGE_BREAKER_THRESHOLD", "3")),
-    window_s=float(os.environ.get(
-        "MAEZ_JUDGE_BREAKER_WINDOW_S", "300")),
-    cooldown_s=float(os.environ.get(
-        "MAEZ_JUDGE_BREAKER_COOLDOWN_S", "30")),
+    failure_threshold=int(_parse_breaker_env(
+        "MAEZ_JUDGE_BREAKER_THRESHOLD",
+        _DEFAULT_JUDGE_BREAKER_THRESHOLD,
+        kind=int,
+    )),
+    window_s=_parse_breaker_env(
+        "MAEZ_JUDGE_BREAKER_WINDOW_S",
+        _DEFAULT_JUDGE_BREAKER_WINDOW_S,
+        kind=float,
+    ),
+    cooldown_s=_parse_breaker_env(
+        "MAEZ_JUDGE_BREAKER_COOLDOWN_S",
+        _DEFAULT_JUDGE_BREAKER_COOLDOWN_S,
+        kind=float,
+    ),
     log=_BREAKER_LOG,
 )
 

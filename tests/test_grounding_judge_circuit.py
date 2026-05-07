@@ -5,8 +5,10 @@ contract described in the slice spec:
 
   1. A module-level _JUDGE_BREAKER (CircuitBreaker) is constructed at import
      time, with thresholds/window/cooldown read from env vars
-     MAEZ_JUDGE_BREAKER_THRESHOLD (default 5), MAEZ_JUDGE_BREAKER_WINDOW_S
-     (default 60), MAEZ_JUDGE_BREAKER_COOLDOWN_S (default 30).
+     MAEZ_JUDGE_BREAKER_THRESHOLD (default 3), MAEZ_JUDGE_BREAKER_WINDOW_S
+     (default 300), MAEZ_JUDGE_BREAKER_COOLDOWN_S (default 30). Invalid
+     values fall back to defaults with a WARNING — daemon import must
+     not fail on a typo.
   2. _call_dedicated_judge runs through _JUDGE_BREAKER.call(...).
   3. CircuitOpen translates to JudgeUnavailable(error_class="circuit_open").
   4. The fallback _llm_client.chat path is NOT wrapped — only the dedicated
@@ -391,6 +393,80 @@ class TestLoggingEmitsOnStateChange(_BaseCircuitTest):
             f"expected breaker name in close-transition logs, got "
             f"{log_cm_close.output!r}",
         )
+
+
+class TestBreakerEnvParseFallback(unittest.TestCase):
+    """Invalid breaker env values must NOT crash the daemon at import.
+
+    Operators tweak survivability knobs from /etc/maez/*.env files; a
+    typo on MAEZ_JUDGE_BREAKER_THRESHOLD=three would have crashed
+    grounding_judge import (raw int() on the value), taking the audit
+    gate down. Match the slice 1.1 MAEZ_PROPOSAL_INTENT_TIMEOUT_S
+    posture: fall back to defaults with a WARNING.
+    """
+
+    def tearDown(self):
+        importlib.reload(grounding_judge)
+
+    def test_invalid_threshold_falls_back_to_default(self):
+        env = {
+            "MAEZ_JUDGE_BASE_URL": "http://127.0.0.1:8081",
+            "MAEZ_JUDGE_BREAKER_THRESHOLD": "three",
+            "MAEZ_JUDGE_BREAKER_WINDOW_S": "300",
+            "MAEZ_JUDGE_BREAKER_COOLDOWN_S": "30",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with self.assertLogs(
+                "core.cognition.grounding_judge", level="WARNING",
+            ) as log_cm:
+                module = importlib.reload(grounding_judge)
+            # Module imported without crashing.
+            self.assertEqual(
+                module._JUDGE_BREAKER.failure_threshold, 3,
+                "expected fallback to default threshold 3",
+            )
+            self.assertTrue(
+                any("MAEZ_JUDGE_BREAKER_THRESHOLD" in line
+                    for line in log_cm.output),
+                f"expected WARN about bad threshold, got {log_cm.output!r}",
+            )
+
+    def test_negative_window_falls_back_to_default(self):
+        env = {
+            "MAEZ_JUDGE_BASE_URL": "http://127.0.0.1:8081",
+            "MAEZ_JUDGE_BREAKER_THRESHOLD": "3",
+            "MAEZ_JUDGE_BREAKER_WINDOW_S": "-60",
+            "MAEZ_JUDGE_BREAKER_COOLDOWN_S": "30",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with self.assertLogs(
+                "core.cognition.grounding_judge", level="WARNING",
+            ) as log_cm:
+                module = importlib.reload(grounding_judge)
+            self.assertEqual(
+                module._JUDGE_BREAKER.window_s, 300.0,
+                "expected fallback to default window 300",
+            )
+            self.assertTrue(
+                any("MAEZ_JUDGE_BREAKER_WINDOW_S" in line
+                    for line in log_cm.output),
+                f"expected WARN about non-positive window, "
+                f"got {log_cm.output!r}",
+            )
+
+    def test_empty_string_falls_back_silently(self):
+        # Empty string is treated as 'unset' — no warning, just default.
+        env = {
+            "MAEZ_JUDGE_BASE_URL": "http://127.0.0.1:8081",
+            "MAEZ_JUDGE_BREAKER_THRESHOLD": "",
+            "MAEZ_JUDGE_BREAKER_WINDOW_S": "",
+            "MAEZ_JUDGE_BREAKER_COOLDOWN_S": "",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            module = importlib.reload(grounding_judge)
+        self.assertEqual(module._JUDGE_BREAKER.failure_threshold, 3)
+        self.assertEqual(module._JUDGE_BREAKER.window_s, 300.0)
+        self.assertEqual(module._JUDGE_BREAKER.cooldown_s, 30.0)
 
 
 class TestBadResponseDoesNotCount(_BaseCircuitTest):

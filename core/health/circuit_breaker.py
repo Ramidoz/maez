@@ -94,7 +94,7 @@ class CircuitBreaker:
         self,
         fn: Callable[..., Any],
         *args: Any,
-        should_count_failure: Callable[[BaseException], bool] = lambda e: True,
+        should_count_failure: Callable[[Exception], bool] = lambda e: True,
         **kwargs: Any,
     ) -> Any:
         """Run ``fn(*args, **kwargs)`` under the breaker.
@@ -103,6 +103,14 @@ class CircuitBreaker:
         Return ``True`` to count it toward the failure threshold,
         ``False`` to let it surface without affecting breaker state.
         Default counts every exception.
+
+        Catches ``Exception``, not ``BaseException``: process-control
+        exceptions (KeyboardInterrupt, SystemExit, GeneratorExit) bypass
+        breaker accounting and propagate without releasing the probe
+        lock. That's intentional — those are not transport failures.
+        If the probe is interrupted by KeyboardInterrupt, the probe
+        lock stays held until process exit, which is the correct
+        posture for a process that's about to die anyway.
         """
         admission = self._admit()
         if admission == "reject":
@@ -111,7 +119,7 @@ class CircuitBreaker:
 
         try:
             result = fn(*args, **kwargs)
-        except BaseException as exc:
+        except Exception as exc:
             if should_count_failure(exc):
                 self._record_failure(admission)
             else:
