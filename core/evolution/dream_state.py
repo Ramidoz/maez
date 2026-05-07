@@ -239,6 +239,16 @@ class DreamState:
         # the gate before this cycle finishes. Set even on early-return
         # paths below (NOTHING / too-short / novelty-fail) so failures
         # don't immediately re-spawn another cycle.
+        #
+        # Slice 1.3 cross-file coupling: the daemon also wraps cycle
+        # spawns in a BoundedSingletonWorker that refuses concurrent
+        # submits. The two guards are intentionally redundant — this
+        # cooldown bound is the cadence (when), the worker is the
+        # concurrency bound (how many at once). If this update ever
+        # moves to the END of the cycle, the bounded worker becomes
+        # load-bearing for re-spawn safety; do NOT remove it from the
+        # daemon spawn site without also restoring start-of-cycle
+        # cooldown semantics here.
         self._last_dream_at = now
 
         # 1. Fetch recent raw memories (chronological)

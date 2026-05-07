@@ -376,6 +376,19 @@ class MaezDaemon:
             telegram=self.telegram,
             action_engine=self.actions,
         )
+        # Slice 1.3 (2026-05-07): bound dream-cycle worker threads.
+        # Previously each idle-AFK trigger spawned a fresh
+        # ``threading.Thread(daemon=True)`` with no join and no
+        # concurrency guard. The cooldown gate (DREAM_COOLDOWN_S, set
+        # at the START of run_dream_cycle in dream_state.py:242) is
+        # the cadence guard, but it does NOT survive cycles longer
+        # than the cooldown — leading to ~40-50 leaked threads per
+        # 43-min window. The bounded worker enforces "at most one
+        # in flight" defense-in-depth, and lets daemon stop() wait
+        # for an in-flight cycle to finish (bounded join) so dream
+        # cycles writing to memory.db don't get torn mid-write.
+        from core.health.bounded_worker import BoundedSingletonWorker
+        self._dream_worker = BoundedSingletonWorker(name="dream-cycle")
         self._last_alert_time = 0.0
         self._last_screen_obs: ScreenObservation | None = None
         self._screen_cycle_counter = 0
@@ -4099,11 +4112,22 @@ class MaezDaemon:
                         except Exception as _e:
                             logger.error("Dream cycle worker failed: %s", _e)
 
-                    threading.Thread(
-                        target=_run_dream_bg,
-                        name="dream-cycle",
-                        daemon=True,
-                    ).start()
+                    # Slice 1.3: bounded singleton — submit() refuses if
+                    # a previous worker is still in flight (cycle longer
+                    # than DREAM_COOLDOWN_S) or if the daemon is shutting
+                    # down. Cooldown gate above (should_run_now) is the
+                    # cadence guard; this is the concurrency guard.
+                    # NOTE on coupling: the cooldown gate's correctness
+                    # depends on dream_state.run_dream_cycle() updating
+                    # _last_dream_at at the START of the cycle (see
+                    # core/evolution/dream_state.py:242). If that ever
+                    # moves to the end of the cycle, this submit-skip
+                    # behavior becomes load-bearing for re-spawn safety.
+                    if not self._dream_worker.submit(_run_dream_bg):
+                        logger.debug(
+                            "Dream cycle skipped — previous worker "
+                            "still running or daemon shutting down"
+                        )
             except Exception as e:
                 logger.debug("Dream cycle check failed: %s", e)
 
@@ -4485,6 +4509,17 @@ class MaezDaemon:
             voice_output_shutdown()
         except Exception:
             pass  # Voice may not be initialized
+        # Slice 1.3: bounded shutdown of dream worker. Wait up to 5s
+        # for an in-flight dream cycle to finish (writes to memory.db
+        # mid-cycle would otherwise tear). After this, submit() refuses
+        # any stale callers that might still be in the loop's tail.
+        try:
+            if not self._dream_worker.shutdown(timeout=5.0):
+                logger.warning(
+                    "Dream worker did not finish within shutdown timeout"
+                )
+        except Exception as e:
+            logger.debug("Dream worker shutdown failed: %s", e)
         try:
             self.telegram.stop()
         except Exception as e:

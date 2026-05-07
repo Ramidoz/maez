@@ -66,3 +66,32 @@ Inspect breaker state from a Python REPL:
 from core.cognition.grounding_judge import _JUDGE_BREAKER
 print(_JUDGE_BREAKER)  # → CircuitBreaker(name='grounding_judge', state=..., ...)
 ```
+
+## Dream-cycle worker bounding
+
+The dream cycle (background AFK-triggered self-reflection) runs in a
+daemon thread. Previously each idle trigger spawned a fresh
+`threading.Thread(daemon=True)` with no concurrency guard — when a
+cycle exceeded `DREAM_COOLDOWN_S`, multiple cycles could run
+concurrently, leaking ~40-50 threads per 43-min window in observed
+runs.
+
+Slice 1.3 wraps the spawn in a `BoundedSingletonWorker`
+(`core/health/bounded_worker.py`) that enforces at-most-one in flight
+and supports bounded shutdown.
+
+- **Concurrency:** at most one dream cycle in flight. Trigger-while-
+  busy is logged at DEBUG and skipped.
+- **Cadence:** unchanged — `dream_state.py:_last_dream_at` is still
+  the primary cadence gate, updated at the start of `run_dream_cycle`.
+  The worker is defense-in-depth against the cooldown failing under
+  long cycles.
+- **Shutdown:** `MaezDaemon.stop()` calls `worker.shutdown(timeout=5.0)`
+  before exit; an in-flight cycle gets up to 5 seconds to finish
+  writing to `memory.db`. After shutdown is signaled, no new cycles
+  can spawn (eliminates the half-write-on-exit hazard).
+- **Inspect from REPL:**
+  ```python
+  print(daemon._dream_worker)
+  # → BoundedSingletonWorker(name='dream-cycle', in_flight=..., shutdown=...)
+  ```
