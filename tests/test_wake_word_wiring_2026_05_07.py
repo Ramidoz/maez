@@ -160,6 +160,32 @@ class WakeWordReaderWiringTests(unittest.TestCase):
 
     # ── safe-fallback env parsing ─────────────────────────────────────
 
+    def test_fd_set_to_nonblocking(self):
+        """slice 1.4 follow-up High finding: os.read on a blocking fd
+        is NOT formally bounded even after select admission. The fd
+        must be switched to non-blocking so os.read returns
+        immediately with whatever's available or raises BlockingIOError."""
+        self.assertIn(
+            "os.set_blocking(fd, False)",
+            self.src,
+            "the reader must call os.set_blocking(fd, False) on the "
+            "stdout fd; otherwise the os.read on a blocking pipe can "
+            "still wedge despite select admission, leaving the "
+            "D-state vector partially open",
+        )
+
+    def test_blocking_io_error_handled(self):
+        """The non-blocking fd contract requires the reader to handle
+        BlockingIOError as 'no data, retry' rather than as a fatal
+        error — otherwise a benign select-says-ready-but-data-consumed
+        race would falsely terminate the reader."""
+        self.assertIn(
+            "except BlockingIOError",
+            self.src,
+            "reader must catch BlockingIOError from os.read on the "
+            "non-blocking fd and continue the select loop",
+        )
+
     def test_watchdog_env_uses_safe_fallback_parser(self):
         # Match the slice 1.2/1.3 posture: a typo on a survivability
         # knob must not crash module import.
@@ -209,15 +235,20 @@ class StopCleanupLadderBehavioralTests(unittest.TestCase):
         from unittest.mock import MagicMock, call
         ww = self.ww
 
-        proc = MagicMock()
+        # Use a parent Mock that owns both proc and stop_event as
+        # attributes — parent.mock_calls preserves insertion order
+        # across both, which lets us verify stop_event.set() ran
+        # BEFORE proc.terminate() (the slice 1.4 follow-up review
+        # caught that the previous test asserted the call existed
+        # but not its order).
+        parent = MagicMock()
+        proc = parent.proc
+        reader = MagicMock()
         # Reader stays alive for first is_alive check (after terminate)
         # then dies after proc.kill() — observed by alternating Trues
         # then False. Mock counts: terminate→is_alive(True)→close→kill→
-        # is_alive(False).
-        # We simulate "still alive after terminate join" by returning
-        # True for the FIRST is_alive check, False after.
-        reader = MagicMock()
-        reader.is_alive = MagicMock(side_effect=[True, True, False])
+        # is_alive(False)→is_alive(False) [for global-clear branch].
+        reader.is_alive = MagicMock(side_effect=[True, True, False, False])
         reader.join = MagicMock()
 
         # Audio loop thread mock (so the final _thread.join doesn't
@@ -225,16 +256,32 @@ class StopCleanupLadderBehavioralTests(unittest.TestCase):
         audio_loop = MagicMock()
         audio_loop.join = MagicMock()
 
-        # Wire module state.
+        stop_event = parent.stop_event
         ww._pw_proc = proc
         ww._pw_reader_thread = reader
-        ww._stop_event = MagicMock()
+        ww._stop_event = stop_event
         ww._thread = audio_loop
 
         # Call stop and verify escalation order.
         ww.stop()
 
         # Assertions:
+        # 0. stop_event.set() called FIRST, BEFORE proc.terminate().
+        #    Without setting the event first, the reader's select()
+        #    loop wouldn't know to exit even if the pipe drained
+        #    naturally. Verify both presence AND order.
+        stop_event.set.assert_called_once()
+        # parent.mock_calls preserves insertion order across child
+        # attributes — find indices of stop_event.set and proc.terminate.
+        method_path_names = [c[0] for c in parent.mock_calls]
+        self.assertIn("stop_event.set", method_path_names)
+        self.assertIn("proc.terminate", method_path_names)
+        self.assertLess(
+            method_path_names.index("stop_event.set"),
+            method_path_names.index("proc.terminate"),
+            f"stop_event.set() must run BEFORE proc.terminate(); "
+            f"observed call order: {method_path_names}",
+        )
         # 1. terminate called.
         proc.terminate.assert_called_once()
         # 2. First reader.join used a 2.0s timeout.
@@ -273,25 +320,84 @@ class StopCleanupLadderBehavioralTests(unittest.TestCase):
         from unittest.mock import MagicMock
         ww = self.ww
 
-        proc = MagicMock()
+        parent = MagicMock()
+        proc = parent.proc
         reader = MagicMock()
         # Reader is alive at the initial check, but exits during the
         # first join — is_alive() returns False after.
-        reader.is_alive = MagicMock(side_effect=[True, False])
+        reader.is_alive = MagicMock(side_effect=[True, False, False])
         reader.join = MagicMock()
 
+        stop_event = parent.stop_event
         ww._pw_proc = proc
         ww._pw_reader_thread = reader
-        ww._stop_event = MagicMock()
+        ww._stop_event = stop_event
         ww._thread = MagicMock()
 
         ww.stop()
 
+        # stop_event.set() called BEFORE proc.terminate() in graceful
+        # path too (verified via parent mock ordering).
+        stop_event.set.assert_called_once()
+        method_path_names = [c[0] for c in parent.mock_calls]
+        self.assertLess(
+            method_path_names.index("stop_event.set"),
+            method_path_names.index("proc.terminate"),
+            f"stop_event.set() must precede proc.terminate() in "
+            f"graceful path too; got {method_path_names}",
+        )
         proc.terminate.assert_called_once()
         reader.join.assert_called_once()
         # Escalation must NOT have run.
         proc.stdout.close.assert_not_called()
         proc.kill.assert_not_called()
+        # Reader exited cleanly → globals reset.
+        self.assertIsNone(ww._pw_proc)
+        self.assertIsNone(ww._pw_reader_thread)
+
+    def test_stop_preserves_globals_when_reader_orphaned(self):
+        """LOW finding from slice 1.4 follow-up review: if both joins
+        time out and reader is still alive, stop() must NOT silently
+        clear _pw_reader_thread to None. Clearing would lie to a
+        subsequent start() about a clean slate while the orphan still
+        holds the fd. Leave the references so future code (or
+        operator inspection) can detect the wedged state."""
+        from unittest.mock import MagicMock
+        ww = self.ww
+
+        proc = MagicMock()
+        reader = MagicMock()
+        # Reader is alive at every check — wedged in kernel-space,
+        # SIGTERM and SIGKILL both failed to free the read.
+        reader.is_alive = MagicMock(return_value=True)
+        reader.join = MagicMock()
+
+        stop_event = MagicMock()
+        ww._pw_proc = proc
+        ww._pw_reader_thread = reader
+        ww._stop_event = stop_event
+        ww._thread = MagicMock()
+
+        with self.assertLogs("maez", level="ERROR") as log_cm:
+            ww.stop()
+
+        # Full escalation ran.
+        stop_event.set.assert_called_once()
+        proc.terminate.assert_called_once()
+        proc.stdout.close.assert_called_once()
+        proc.kill.assert_called_once()
+        # Globals must NOT be cleared — orphan thread still alive.
+        self.assertIs(
+            ww._pw_reader_thread, reader,
+            "orphan reader reference must be preserved so future "
+            "start() / operator inspection can detect the wedge",
+        )
+        self.assertIs(ww._pw_proc, proc)
+        # An ERROR-level log line must mention the orphan.
+        self.assertTrue(
+            any("still alive" in line for line in log_cm.output),
+            f"expected ERROR log about orphan; got {log_cm.output!r}",
+        )
 
 
 if __name__ == "__main__":

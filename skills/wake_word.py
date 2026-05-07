@@ -260,14 +260,24 @@ def _run_pw_reader(
     if pw-record never produces data, the watchdog fires and kills it
     so the read unblocks instead of hanging in kernel-space.
 
-    Uses ``os.read(fd, n)`` instead of ``proc.stdout.read(n)`` — the
-    buffered file object's ``read(n)`` waits for the FULL requested
-    size and can still block after select() reports the fd ready
-    (review finding 2026-05-07: select-then-buffered-read is NOT
-    actually bounded). ``os.read`` returns whatever bytes are
-    immediately available up to ``n`` and never blocks beyond what
-    select admitted, so we accumulate bytes in a buffer until the
-    requested size is reached, polling select between each os.read.
+    Uses ``os.read(fd, n)`` on a NON-BLOCKING fd instead of
+    ``proc.stdout.read(n)`` — the buffered file object's ``read(n)``
+    waits for the FULL requested size and can still block after
+    select() reports the fd ready (slice 1.4 review 2026-05-07:
+    select-then-buffered-read is NOT actually bounded).
+
+    The fd is explicitly switched to non-blocking via
+    ``os.set_blocking(fd, False)``; on a non-blocking fd, ``os.read``
+    is guaranteed by POSIX to return immediately with whatever bytes
+    are available, raising ``BlockingIOError`` if there's no data
+    yet. We treat ``BlockingIOError`` as "no data, retry select" so
+    a select-says-ready-but-data-already-consumed race doesn't
+    cascade into a fault.
+
+    The accumulation loop polls select between each os.read so the
+    full requested size assembles correctly when pw-record emits
+    smaller-than-requested partial chunks (Linux pipes do this
+    routinely under load).
 
     Exits cleanly on stop_event, EOF, OSError/ValueError, or watchdog.
     Never raises (all exceptions caught + logged on ``log``).
@@ -282,23 +292,63 @@ def _run_pw_reader(
         log.warning("pw-reader: stdout fileno() unavailable: %s", e)
         return
 
-    last_data = time.monotonic()
+    # Switch fd to non-blocking so os.read is formally bounded —
+    # without this, the os.read contract on a blocking fd is
+    # "block until at least 1 byte is available," which on a
+    # truly stuck pipe can still wedge despite select admission.
+    try:
+        os.set_blocking(fd, False)
+    except (OSError, ValueError) as e:
+        log.warning(
+            "pw-reader: os.set_blocking(False) failed: %s — "
+            "falling back to blocking semantics; watchdog still "
+            "active but raw reads may have weaker timing bounds",
+            e,
+        )
+
+    # Watchdog tracks LAST FULL-CHUNK completion, not last-byte arrival.
+    # Updating on every partial read (the previous design) let a slow
+    # trickle of 1-byte-every-4s indefinitely refresh the timestamp
+    # without any chunk ever assembling — wedged reader, watchdog
+    # never fires. Tracking chunk completion catches both no-data and
+    # slow-trickle starvation cases.
+    last_chunk_completed = time.monotonic()
 
     def _bounded_read(nbytes: int) -> Optional[bytes]:
         """Read exactly ``nbytes`` via os.read + accumulation, polling
-        select() with a watchdog between each chunk. Returns ``None``
-        if stop_event, watchdog, EOF, or OS error ended the read;
-        bytes (length == nbytes) otherwise.
+        select() with a watchdog between each iteration. Returns
+        ``None`` if stop_event, watchdog, EOF, or OS error ended the
+        read; bytes (length == nbytes) otherwise.
+
+        Watchdog: checked at the TOP of each loop iteration, regardless
+        of whether select reported ready. This catches the slow-trickle
+        case where select keeps reporting ready (data IS arriving) but
+        no full chunk ever assembles within ``watchdog_s``.
 
         os.read may return fewer than requested bytes on each call —
         a Linux pipe returns whatever's currently buffered up to
         ``nbytes``. The accumulation loop ensures we don't return
         partial data that downstream np.frombuffer would misparse.
+        ``last_chunk_completed`` is NOT updated on partial reads;
+        only the outer loop updates it after a full chunk processes.
         """
-        nonlocal last_data
         buf = bytearray()
         while len(buf) < nbytes:
             if stop_event.is_set():
+                return None
+            # Watchdog FIRST, before select. Catches slow-trickle:
+            # select stays ready as bytes dribble in, but no chunk
+            # completes within watchdog_s.
+            if time.monotonic() - last_chunk_completed > watchdog_s:
+                log.warning(
+                    "pw-reader: no full chunk in %.1fs (got %d/%d "
+                    "bytes); killing proc to unblock",
+                    watchdog_s, len(buf), nbytes,
+                )
+                try:
+                    proc.kill()
+                except Exception as e:  # noqa: BLE001
+                    log.debug("pw-reader: proc.kill() failed: %s", e)
                 return None
             try:
                 ready, _, _ = select.select(
@@ -308,23 +358,19 @@ def _run_pw_reader(
                 log.warning("pw-reader: select failed: %s", e)
                 return None
             if not ready:
-                if time.monotonic() - last_data > watchdog_s:
-                    log.warning(
-                        "pw-reader: pw-record silent for %.1fs; "
-                        "killing proc to unblock",
-                        watchdog_s,
-                    )
-                    try:
-                        proc.kill()
-                    except Exception as e:  # noqa: BLE001
-                        log.debug("pw-reader: proc.kill() failed: %s", e)
-                    return None
+                # Watchdog will catch sustained no-ready at the top
+                # of the next iteration; just keep polling.
                 continue
             try:
-                # os.read on a Linux pipe returns what's available up to
-                # the requested size; never blocks for more once select
-                # reports ready (unlike the buffered proc.stdout.read).
+                # os.read on a non-blocking fd is formally bounded:
+                # returns whatever's immediately available, raises
+                # BlockingIOError if no data, and never waits.
                 chunk = os.read(fd, nbytes - len(buf))
+            except BlockingIOError:
+                # select-says-ready race: data was consumed between
+                # the select admission and the read. Just continue
+                # the loop; next select iteration will re-check.
+                continue
             except (OSError, ValueError) as e:
                 # ValueError can fire if proc.stdout was closed by
                 # stop()'s escalation ladder while we were mid-loop.
@@ -333,7 +379,8 @@ def _run_pw_reader(
             if not chunk:  # EOF
                 return None
             buf.extend(chunk)
-            last_data = time.monotonic()
+            # Intentionally NOT updating last_chunk_completed here —
+            # see the docstring; partial-byte progress doesn't count.
         return bytes(buf)
 
     if skip_wav_header:
@@ -344,14 +391,17 @@ def _run_pw_reader(
         if header is None:
             return
         log.info("pw-record stream active (fifine)")
-        # Reset watchdog AFTER header consumption so pre-startup buffer
-        # latency doesn't count against ongoing-silence detection.
-        last_data = time.monotonic()
+        # Header completed — refresh watchdog timestamp.
+        last_chunk_completed = time.monotonic()
 
     while not stop_event.is_set():
         data = _bounded_read(chunk_bytes)
         if data is None:
             return
+        # Full chunk completed — refresh watchdog timestamp BEFORE
+        # processing so a slow downstream (np.frombuffer / queue) doesn't
+        # count against pw-record's silence budget.
+        last_chunk_completed = time.monotonic()
         try:
             raw = np.frombuffer(data, dtype=np.int16)
         except ValueError as e:
@@ -657,6 +707,19 @@ def stop():
                 "killing proc"
             )
             if proc is not None:
+                # Restore blocking mode before close — the reader set
+                # the fd non-blocking, and CPython's BufferedReader
+                # close path can have undefined behavior on a non-
+                # blocking fd in certain kernel states. Restoring is
+                # cheap insurance against a second-order failure
+                # during the cleanup ladder itself.
+                try:
+                    fd = proc.stdout.fileno()
+                    os.set_blocking(fd, True)
+                except Exception as e:  # noqa: BLE001
+                    logger.debug(
+                        "pw-record set_blocking(True) failed: %s", e,
+                    )
                 try:
                     proc.stdout.close()
                 except Exception as e:  # noqa: BLE001
@@ -676,8 +739,26 @@ def stop():
         _thread.join(timeout=5)
     _thread = None
     _stop_event = None
-    _pw_proc = None
-    _pw_reader_thread = None
+    # Reset pw-record globals ONLY if reader actually died. If both
+    # joins timed out and the thread is still alive (orphan holding
+    # the fd), leave the globals set rather than silently NULLing
+    # them — operator inspection / external diagnostics can read
+    # them to confirm the wedge. (Note: start() does not currently
+    # check these globals before re-binding, so the preserved refs
+    # don't auto-prevent a subsequent start. Adding an orphan-check
+    # in start() is a future hardening; for now the value is
+    # diagnostic, not gating.) The orphan is daemon=True so the OS
+    # reaps it on process exit.
+    if reader is None or not reader.is_alive():
+        _pw_proc = None
+        _pw_reader_thread = None
+    else:
+        logger.error(
+            "pw-reader thread is still alive after stop()'s "
+            "escalation ladder; leaving _pw_reader_thread set "
+            "for diagnostic inspection. The thread will be reaped "
+            "at process exit (daemon=True)."
+        )
     logger.info("Wake word listener stopped")
 
 

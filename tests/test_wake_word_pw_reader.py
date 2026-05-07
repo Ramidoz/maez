@@ -485,6 +485,187 @@ class RunPwReaderTests(unittest.TestCase):
         raw, _ = self.queue[0]
         self.assertEqual(raw.shape[0], CHUNK_BYTES // 2)
 
+    # ------------------------------------------------------------------
+    # 13. Partial WAV HEADER reads also accumulate correctly.
+    # The historical D-state hang vector is the header read, and the
+    # accumulation path is shared with chunk reads. This test pins the
+    # header path explicitly — review note (slice 1.4 follow-up):
+    # "the high-risk historical header path deserves its own
+    # partial-header test."
+    # ------------------------------------------------------------------
+    def test_partial_header_accumulates_correctly(self):
+        # Header is 44 bytes. Deliver it in 3 partial reads (22+11+11),
+        # then a normal chunk, then EOF. Helper must accumulate the
+        # header to exactly 44 bytes before processing the chunk.
+        seq = [
+            b"R" * 22,       # partial header 1
+            b"I" * 11,       # partial header 2
+            b"FF" * 5 + b"X", # partial header 3 (fills to 44)
+            _silent_chunk(), # post-header chunk
+            b"",             # EOF
+        ]
+        proc = _make_fake_proc()
+
+        with patch("select.select",
+                   return_value=([FAKE_FD], [], [])), \
+             patch("os.read", side_effect=_osread_returning(seq)):
+            _run_pw_reader(
+                proc,
+                self.stop_event,
+                self.queue,
+                self.lock,
+                CHUNK_BYTES,
+                watchdog_s=5.0,
+                skip_wav_header=True,  # exercise the header accumulation
+            )
+
+        # Exactly one chunk queued — the post-header data. The 44-byte
+        # accumulated header must NOT have leaked into the audio queue.
+        self.assertEqual(
+            len(self.queue), 1,
+            "partial header must accumulate to 44 bytes and be "
+            "discarded; only the post-header chunk should land in the "
+            f"queue. Got {len(self.queue)} queued items.",
+        )
+        # And the queued chunk must have the right shape (proves no
+        # off-by-one truncation from header-vs-chunk boundary).
+        raw, _ = self.queue[0]
+        self.assertEqual(raw.shape[0], CHUNK_BYTES // 2)
+
+    # ------------------------------------------------------------------
+    # 14. Sets the fd to non-blocking via os.set_blocking. The High
+    # finding from slice 1.4 follow-up review: blocking-fd os.read can
+    # still wedge despite select admission. The contract requires
+    # non-blocking semantics.
+    # ------------------------------------------------------------------
+    def test_sets_fd_nonblocking(self):
+        proc = _make_fake_proc()
+        # Reader will exit immediately on EOF; we just need to verify
+        # set_blocking(False) was called on the fd.
+        seq = [b""]
+
+        with patch("select.select",
+                   return_value=([FAKE_FD], [], [])), \
+             patch("os.read", side_effect=_osread_returning(seq)), \
+             patch("os.set_blocking") as set_blocking_mock:
+            _run_pw_reader(
+                proc,
+                self.stop_event,
+                self.queue,
+                self.lock,
+                CHUNK_BYTES,
+                watchdog_s=5.0,
+                skip_wav_header=False,
+            )
+
+        set_blocking_mock.assert_called_once_with(FAKE_FD, False)
+
+    # ------------------------------------------------------------------
+    # 15. BlockingIOError on os.read is treated as "no data, retry" —
+    # not as a fatal error. Race scenario: select reports ready but
+    # the data was consumed between admission and read.
+    # ------------------------------------------------------------------
+    def test_watchdog_fires_on_slow_trickle(self):
+        """Slice 1.4 follow-up CRITICAL: a slow-trickle stream (bytes
+        arriving, but never enough to complete a chunk within
+        watchdog_s) must still trip the watchdog. The previous
+        implementation reset last_data on every partial os.read, so
+        a 1-byte-every-4s feed would refresh the timestamp
+        indefinitely without ever completing a chunk — wedged reader,
+        watchdog never fires.
+
+        Fix: watchdog tracks LAST FULL-CHUNK COMPLETION, not last-byte
+        arrival.
+        """
+        # Feed a slow trickle with a real per-byte delay so chunks
+        # CANNOT complete within watchdog_s. Without the sleep, the
+        # mock returns microseconds-fast and 2048 bytes accumulate
+        # well under the watchdog window — defeating the test intent.
+        single_byte = bytes(1)
+        # Infinite-ish trickle — generator yields 1 byte forever.
+        def trickle():
+            while True:
+                yield single_byte
+
+        gen = trickle()
+
+        def osread_trickle(_fd, _n):
+            # 50ms per byte → ~100s to accumulate 2048 bytes; well
+            # past the 0.3s watchdog. This is the production-realistic
+            # "stream is alive but starving" scenario.
+            time.sleep(0.05)
+            return next(gen)
+
+        proc = _make_fake_proc()
+
+        with patch("select.select",
+                   return_value=([FAKE_FD], [], [])), \
+             patch("os.read", side_effect=osread_trickle):
+            t0 = time.monotonic()
+            _run_pw_reader(
+                proc,
+                self.stop_event,
+                self.queue,
+                self.lock,
+                CHUNK_BYTES,
+                watchdog_s=0.3,
+                skip_wav_header=False,
+            )
+            elapsed = time.monotonic() - t0
+
+        # Watchdog must have fired despite the trickle.
+        self.assertGreater(
+            proc.kill.call_count, 0,
+            "watchdog must fire on slow-trickle starvation (no full "
+            "chunk in watchdog_s); previous design false-passed by "
+            "resetting on every partial byte",
+        )
+        # Bounded time: ~watchdog_s plus iteration overhead.
+        self.assertLess(
+            elapsed, 1.5,
+            f"watchdog should fire within ~watchdog_s on trickle; "
+            f"took {elapsed:.2f}s",
+        )
+        # No chunk should have made it to the queue (we never
+        # accumulated 2048 bytes).
+        self.assertEqual(len(self.queue), 0)
+
+    def test_blocking_io_error_continues_loop(self):
+        # First os.read raises BlockingIOError (race), second returns
+        # a real chunk, third EOFs.
+        seq = [
+            BlockingIOError("EAGAIN"),
+            _silent_chunk(),
+            b"",
+        ]
+        proc = _make_fake_proc()
+
+        with patch("select.select",
+                   return_value=([FAKE_FD], [], [])), \
+             patch("os.read", side_effect=_osread_returning(seq)):
+            t0 = time.monotonic()
+            _run_pw_reader(
+                proc,
+                self.stop_event,
+                self.queue,
+                self.lock,
+                CHUNK_BYTES,
+                watchdog_s=5.0,
+                skip_wav_header=False,
+            )
+            elapsed = time.monotonic() - t0
+
+        # The chunk after the BlockingIOError must have made it to the
+        # queue — proving the loop continued instead of bailing.
+        self.assertEqual(
+            len(self.queue), 1,
+            "BlockingIOError must be treated as 'no data, retry'; "
+            "the next successful read should still queue a chunk",
+        )
+        # And no proc.kill from a false watchdog fire.
+        self.assertEqual(proc.kill.call_count, 0)
+        self.assertLess(elapsed, 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()
