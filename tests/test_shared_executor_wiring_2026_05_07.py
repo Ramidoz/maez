@@ -6,7 +6,7 @@ Slice 1.6 replaces every ``loop.run_in_executor(None, ...)`` call with
 ``loop.run_in_executor(get_shared_executor(), ...)``. Passing ``None``
 uses asyncio's default thread pool, which grows unbounded — the source
 of the thread leak this slice closes. The shared executor in
-``core/health/shared_executor.py`` is bounded (default 6 workers,
+``core/health/shared_executor.py`` is bounded (default 8 workers,
 configurable via the ``MAEZ_SHARED_EXECUTOR_MAX_WORKERS`` env var).
 
 Inventory pinned by these tests:
@@ -109,21 +109,18 @@ class MaezAdapterCallSiteTests(unittest.TestCase):
         )
 
     def test_maez_adapter_uses_get_shared_executor_call(self):
-        # Migration uses two patterns:
-        #   - LLM sites: ``run_llm_in_executor(loop, fn)`` — bounded
-        #     await via asyncio.wait_for.
-        #   - Non-LLM sites: ``loop.run_in_executor(get_shared_executor(),
-        #     fn)`` — plain bounded pool.
-        # Both route through the shared pool. Count BOTH.
-        plain = self.src.count("get_shared_executor()")
-        llm = self.src.count("run_llm_in_executor(")
-        total = plain + llm
+        # Slice 1.6 follow-up: production uses plain
+        # ``loop.run_in_executor(get_shared_executor(), fn)`` at all
+        # call sites. ``run_llm_in_executor`` was rolled back from
+        # production (ghost-turn risk on side-effect-mutating LLM
+        # calls); see core/health/shared_executor.py docstring.
+        count = self.src.count("get_shared_executor()")
         self.assertGreaterEqual(
-            total, 4,
-            f"maez_adapter.py must use get_shared_executor() OR "
-            f"run_llm_in_executor() at each of the 4 migrated "
-            f"run_in_executor sites; saw {plain} plain + {llm} LLM "
-            f"= {total} total.",
+            count, 4,
+            f"maez_adapter.py must call get_shared_executor() at each "
+            f"of the 4 migrated run_in_executor sites; saw {count}. "
+            f"All sites use plain loop.run_in_executor("
+            f"get_shared_executor(), fn).",
         )
 
 
@@ -155,22 +152,16 @@ class TelegramVoiceCallSiteTests(unittest.TestCase):
         )
 
     def test_telegram_voice_uses_get_shared_executor_call(self):
-        # Migration uses two patterns:
-        #   - LLM sites: ``run_llm_in_executor(loop, fn)`` — bounded
-        #     await via asyncio.wait_for; helper internally calls
-        #     get_shared_executor().
-        #   - Non-LLM sites: ``loop.run_in_executor(get_shared_executor(),
-        #     fn)`` — plain bounded pool, no awaiter timeout.
-        # Both patterns route through the shared pool. Count BOTH.
-        plain = self.src.count("get_shared_executor()")
-        llm = self.src.count("run_llm_in_executor(")
-        total = plain + llm
+        # Slice 1.6 follow-up: production uses plain
+        # ``loop.run_in_executor(get_shared_executor(), fn)`` at all
+        # call sites. ``run_llm_in_executor`` was rolled back from
+        # production (ghost-turn risk on side-effect-mutating LLM
+        # calls); see core/health/shared_executor.py docstring.
+        count = self.src.count("get_shared_executor()")
         self.assertGreaterEqual(
-            total, 8,
-            f"telegram_voice.py must use get_shared_executor() OR "
-            f"run_llm_in_executor() at each of the 8 migrated "
-            f"run_in_executor sites; saw {plain} plain + {llm} LLM "
-            f"= {total} total.",
+            count, 8,
+            f"telegram_voice.py must call get_shared_executor() at each "
+            f"of the 8 migrated run_in_executor sites; saw {count}.",
         )
 
 
@@ -187,6 +178,22 @@ class DaemonShutdownTests(unittest.TestCase):
             "daemon/maez_daemon.py must call shutdown_shared_executor "
             "during stop() so the bounded worker threads are joined "
             "before process exit.",
+        )
+
+    def test_daemon_uses_wait_false(self):
+        """Slice 1.6 follow-up: daemon stop() must call
+        shutdown_shared_executor with wait=False. With wait=True, a
+        sync LLM call wedged on a dead llama.cpp would block stop()
+        forever (the original slice 1.6 review caught this and
+        verified empirically with a 2s blocked worker)."""
+        path = REPO / "daemon" / "maez_daemon.py"
+        src = path.read_text()
+        self.assertIn(
+            "shutdown_shared_executor(wait=False",
+            src,
+            "daemon stop() must use shutdown_shared_executor("
+            "wait=False, ...) so a wedged worker thread doesn't "
+            "block daemon shutdown indefinitely",
         )
 
 

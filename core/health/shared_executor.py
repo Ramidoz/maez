@@ -163,24 +163,36 @@ async def run_llm_in_executor(
     *args: Any,
     timeout_s: Optional[float] = None,
 ) -> Any:
-    """Run ``fn`` (and optional positional args) in the shared
-    executor with an asyncio-side timeout.
+    """Run ``fn`` in the shared executor with an asyncio-side timeout.
+
+    .. WARNING::
+        **NOT WIRED INTO PRODUCTION** as of slice 1.6 follow-up.
+
+        Initial slice 1.6 used this helper at LLM-bearing call sites
+        but that introduced a worse problem: the awaiter times out
+        while the worker thread keeps running. Several of the
+        affected call sites (run_brain_loop, jarvis_loop,
+        pipe.handle_reply, etc.) write durable state — memory rows,
+        approval cards, intermediate Telegram sends — AFTER the
+        surface has already given up. Result: ghost turns where the
+        user gets "internal error" + a stale follow-up message
+        appears 3 minutes later from the abandoned worker.
+
+        Root fix requires either (a) per-call deadlines INSIDE the
+        LLM client (the pattern slice 1.1 used for proposal_intent
+        and slice 1.2 for the grounding judge) extended to brain_loop
+        and jarvis_loop, OR (b) turn-generation tokens that workers
+        check before writing side effects.
+
+        Until one of those lands, production sites use plain
+        ``loop.run_in_executor(get_shared_executor(), fn)`` —
+        pool-bounded, no awaiter timeout. That preserves the slice
+        1.6 leak fix without introducing the ghost-turn risk.
 
     The worker thread itself can NOT be cancelled (Python sync code
-    runs to completion). This wrapper bounds only the AWAITER —
-    when timeout_s elapses, ``asyncio.TimeoutError`` propagates and
-    the calling coroutine moves on; the worker stays busy until its
-    sync code returns naturally. The pool budget is consumed for
-    the duration; under a wedged backend the pool can still fill.
-    The slice 1.6 mitigation is "make the awaiter recoverable,"
-    not "kill the thread" — the latter would require slices 1.1/1.2-
-    style explicit timeout handling INSIDE the LLM call, which
-    those slices already provide for proposal_intent and the
-    grounding judge but not for run_brain_loop / jarvis_loop /
-    next_step_proposer. Those remain a future-slice concern.
-
-    On timeout: logs a WARNING noting the worker thread may still
-    be running, then raises ``asyncio.TimeoutError`` to the caller.
+    runs to completion). This wrapper bounds only the AWAITER. On
+    timeout, logs a WARNING and raises ``asyncio.TimeoutError`` to
+    the caller; the worker keeps running.
     """
     if timeout_s is None:
         timeout_s = LLM_CALL_TIMEOUT_S

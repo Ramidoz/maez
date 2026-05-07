@@ -92,7 +92,7 @@ class SharedExecutorTests(unittest.TestCase):
         self.assertTrue(mod.is_initialized())
 
     # ------------------------------------------------------------------
-    # 3. Default max_workers == 6
+    # 3. Default max_workers == 8
     # ------------------------------------------------------------------
     def test_max_workers_default(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):

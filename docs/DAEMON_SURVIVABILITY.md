@@ -191,36 +191,51 @@ Slice 1.6 routes all 12 sites through a process-wide bounded
 | `MAEZ_SHARED_EXECUTOR_MAX_WORKERS` | `8` | Bound on concurrent sync work |
 | `MAEZ_LLM_CALL_TIMEOUT_S` | `120` | asyncio-side timeout for LLM call sites |
 
-**Two integration patterns:**
+**Integration pattern (production):**
 
-- **Non-LLM sites** (disk I/O, dream proposal apply): use
-  `loop.run_in_executor(get_shared_executor(), fn)` directly.
-  Bounded by pool size, no awaiter timeout.
-- **LLM sites** (run_brain_loop, jarvis loop, next_step proposer,
-  pipeline reply, recovery synthesis): use
-  `run_llm_in_executor(loop, fn)`. Wraps `loop.run_in_executor`
-  with `asyncio.wait_for(timeout=MAEZ_LLM_CALL_TIMEOUT_S)`. The
-  worker thread itself is unkillable (Python sync code runs to
-  completion), but the asyncio awaiter is bounded — daemon's reply
-  path moves on after timeout instead of blocking forever on a
-  wedged backend.
+All 12 call sites use plain `loop.run_in_executor(get_shared_executor(), fn)`.
+Pool-bounded; no asyncio awaiter timeout. The original slice 1.6
+attempt added an awaiter-side timeout via `run_llm_in_executor` —
+that helper still exists in the module but is **NOT wired into
+production**. Reason:
+
+  * The worker thread cannot be cancelled (Python sync code runs
+    to completion).
+  * Several call sites (run_brain_loop, jarvis_loop, pipe.handle_reply,
+    daemon.handle_message) write durable state — memory rows,
+    approval cards, intermediate sends — after the surface has
+    already given up.
+  * Result of an awaiter-only timeout: ghost turns. User sees
+    "internal error" at T=120s, then a stale follow-up appears at
+    T=300s when the abandoned worker writes its card / sends its
+    intermediate message.
+
+The proper fix is either (a) per-call deadlines INSIDE the LLM
+client — the pattern slice 1.1 used for proposal_intent and slice
+1.2 for the grounding judge — extended to brain_loop and
+jarvis_loop, OR (b) turn-generation tokens that workers check
+before writing side effects. Either way, that's a future slice.
 
 **Shutdown:** `MaezDaemon.stop()` calls
-`shutdown_shared_executor(wait=True, cancel_futures=True)` AFTER
+`shutdown_shared_executor(wait=False, cancel_futures=True)` AFTER
 all surfaces (telegram, surface_v2, public_bot) have stopped
-submitting. Running LLM calls can't be cancelled mid-flight in
-Python; they're left to finish or be reaped at process exit (the
-asyncio awaiter has already moved on via the wait_for timeout).
-Queued futures are dropped via `cancel_futures=True`.
+submitting.
+
+  * `wait=False`: a sync LLM call wedged on a dead llama.cpp
+    would block stop() forever with `wait=True`. With `wait=False`,
+    the daemon proceeds; stuck workers remain in the process
+    until either they complete naturally or systemd's
+    `TimeoutStopSec` sends SIGKILL.
+  * `cancel_futures=True`: queued (not-yet-running) work is dropped
+    immediately. Running sync work cannot be cancelled.
 
 **Pool exhaustion under wedged backend:** N hung LLM calls fill
-the pool with N stuck workers. The asyncio awaiters are freed by
-their wait_for timeouts, but the pool budget remains consumed
-until the worker threads return (or process exits). This is a
-known limitation; the proper fix is per-call timeouts INSIDE the
-LLM client (slices 1.1 and 1.2 already do this for proposal
-intent and grounding judge respectively; brain_loop / jarvis_loop
-remain a future-slice concern).
+the pool with N stuck workers; the corresponding awaiters block
+forever (no asyncio-side timeout in production today). Daemon's
+reply path stalls. The proper fix is the per-call deadline pattern
+described above. This slice closes the *thread leak* but not the
+*caller-blocking-on-wedged-backend* shape — that requires the
+deferred LLM-client-internal timeouts.
 
 Inspect:
 ```python

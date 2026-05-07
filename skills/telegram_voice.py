@@ -25,10 +25,7 @@ from telegram.ext import (
 
 import sys
 sys.path.insert(0, str(Path("/home/rohit/maez")))
-from core.health.shared_executor import (
-    get_shared_executor,
-    run_llm_in_executor,
-)
+from core.health.shared_executor import get_shared_executor
 from core.perception import snapshot as perception_snapshot, format_snapshot
 from core.conversation_controller import ConversationController
 from memory.memory_manager import MemoryManager
@@ -733,8 +730,8 @@ class TelegramVoice:
 
         try:
             loop = asyncio.get_event_loop()
-            result = await run_llm_in_executor(
-                loop,
+            result = await loop.run_in_executor(
+                get_shared_executor(),
                 lambda: pipe.handle_reply(
                     text=text,
                     user_id="rohit",
@@ -1058,8 +1055,8 @@ class TelegramVoice:
                     import time as _time_mod
                     recovery_started_at = _time_mod.time()
                     loop = asyncio.get_event_loop()
-                    recovery_transcript = await run_llm_in_executor(
-                        loop,
+                    recovery_transcript = await loop.run_in_executor(
+                        get_shared_executor(),
                         lambda: self._run_jarvis_loop("", recovery_seed=recovery_seed),
                     )
                     if recovery_transcript:
@@ -1073,8 +1070,8 @@ class TelegramVoice:
                         new_card_cmd = self._find_recovery_new_card_cmd(
                             recovery_started_at
                         )
-                        reply_text = await run_llm_in_executor(
-                            loop,
+                        reply_text = await loop.run_in_executor(
+                            get_shared_executor(),
                             lambda: self._synthesize_recovery_reply(
                                 recovery_seed, recovery_transcript,
                                 new_card_cmd=new_card_cmd,
@@ -2927,8 +2924,9 @@ class TelegramVoice:
         jarvis_block = ""
         try:
             loop = asyncio.get_running_loop()
-            jarvis_block = await run_llm_in_executor(
-                loop, self._run_jarvis_loop, user_text,
+            jarvis_block = await loop.run_in_executor(
+                get_shared_executor(),
+                self._run_jarvis_loop, user_text,
             )
         except Exception as e:
             logger.warning("jarvis loop failed: %s", e)
@@ -2941,8 +2939,9 @@ class TelegramVoice:
         # next will reflect the real proposal.
         try:
             loop = asyncio.get_running_loop()
-            next_step = await run_llm_in_executor(
-                loop, self._propose_next_step_from_probe, user_text,
+            next_step = await loop.run_in_executor(
+                get_shared_executor(),
+                self._propose_next_step_from_probe, user_text,
             )
             if next_step:
                 logger.info(

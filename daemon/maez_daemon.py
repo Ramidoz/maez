@@ -4573,14 +4573,19 @@ class MaezDaemon:
         # submitting. Placing it earlier could leave a late submission
         # racing the shutdown and raising
         # RuntimeError: cannot schedule new futures after shutdown.
-        # cancel_futures=True drops queued work; running LLM calls
-        # can't be cancelled in Python so they're left to finish or
-        # be reaped at process exit (the corresponding asyncio
-        # awaiters were already freed by run_llm_in_executor's
-        # asyncio.wait_for timeout).
+        #
+        # wait=False: a sync LLM call wedged on a dead llama.cpp would
+        # block stop() forever with wait=True. With wait=False, the
+        # daemon proceeds with the rest of the shutdown ladder; the
+        # stuck workers remain in the process until either they
+        # complete naturally or systemd's TimeoutStopSec sends SIGKILL.
+        #
+        # cancel_futures=True: queued (not-yet-running) work is
+        # dropped immediately. Running sync work cannot be cancelled
+        # in Python.
         try:
             from core.health.shared_executor import shutdown_shared_executor
-            shutdown_shared_executor(wait=True, cancel_futures=True)
+            shutdown_shared_executor(wait=False, cancel_futures=True)
         except Exception as e:
             logger.debug("Shared executor shutdown failed: %s", e)
         try:

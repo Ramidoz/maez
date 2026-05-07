@@ -28,10 +28,7 @@ import logging
 import re
 from typing import Any, Optional
 
-from core.health.shared_executor import (
-    get_shared_executor,
-    run_llm_in_executor,
-)
+from core.health.shared_executor import get_shared_executor
 from skills.surface.platform_base import MessageEvent
 from skills.surface.platform_config import PlatformConfig
 from skills.surface.telegram_adapter import TelegramAdapter
@@ -229,8 +226,8 @@ class MaezMessageHandler:
                     open_cards = []
                 if open_cards:
                     try:
-                        result = await run_llm_in_executor(
-                            loop,
+                        result = await loop.run_in_executor(
+                            get_shared_executor(),
                             lambda: pipe.handle_reply(
                                 text=text,
                                 user_id="rohit",
@@ -368,8 +365,8 @@ class MaezMessageHandler:
                     # actual tool trajectory, not just the synthesis
                     # text. Falls back to a string + empty tool_calls
                     # if a future change reverts the structured API.
-                    _result = await run_llm_in_executor(
-                        loop,
+                    _result = await loop.run_in_executor(
+                        get_shared_executor(),
                         lambda: _brain_loop.run_brain_loop(
                             text,
                             action_engine=action_engine,
@@ -403,8 +400,8 @@ class MaezMessageHandler:
             # in_tool_continuation. Adapter no longer double-audits the
             # returned reply.
             try:
-                reply = await run_llm_in_executor(
-                    loop,
+                reply = await loop.run_in_executor(
+                    get_shared_executor(),
                     lambda: self.daemon.handle_message(
                         text,
                         SURFACE_NAME,
