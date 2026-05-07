@@ -411,6 +411,18 @@ def try_write_turn(
     Per the architectural invariant: shadow writes only. The user
     reply ships regardless of what happens here.
     """
+    raw_flag = os.environ.get("MAEZ_LEDGER_WRITES", "")
+    stripped_flag = raw_flag.strip().lower()
+    if stripped_flag in _FALSE_VALUES:
+        return None
+    if stripped_flag not in _TRUE_VALUES:
+        _LOGGER.warning(
+            "MAEZ_LEDGER_WRITES has unrecognized value %r; "
+            "treating shadow write as disabled. Use '1' or 'true' to enable.",
+            raw_flag,
+        )
+        return None
+
     try:
         w = LedgerWriter(db_path)
     except Exception as e:
@@ -432,5 +444,4 @@ def try_write_turn(
             w.close()
         except Exception:
             pass
-
 

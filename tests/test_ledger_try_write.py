@@ -52,6 +52,31 @@ class TryWriteTurnTests(unittest.TestCase):
             tid = writer.try_write_turn(db, "user_message", "hello")
         self.assertIsNone(tid)
 
+    def test_disabled_shadow_write_does_not_create_db(self):
+        """Default-off must mean no production ledger file is touched."""
+        db = Path(_TEST_DB_DIR) / f"disabled_missing_{os.urandom(4).hex()}.db"
+        self.assertFalse(db.exists())
+        env = {k: v for k, v in os.environ.items() if k != "MAEZ_LEDGER_WRITES"}
+        env["MAEZ_LEDGER_WRITES"] = "0"
+        with patch.dict(os.environ, env, clear=True):
+            tid = writer.try_write_turn(str(db), "user_message", "hello")
+        self.assertIsNone(tid)
+        self.assertFalse(
+            db.exists(),
+            "disabled try_write_turn must return before sqlite3.connect",
+        )
+
+    def test_unrecognized_shadow_write_flag_does_not_create_db(self):
+        """Garbage flag values warn and stay dormant without creating DB."""
+        db = Path(_TEST_DB_DIR) / f"garbage_flag_{os.urandom(4).hex()}.db"
+        self.assertFalse(db.exists())
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "yes"}):
+            with self.assertLogs("core.ledger.writer", level="WARNING") as cm:
+                tid = writer.try_write_turn(str(db), "user_message", "hello")
+        self.assertIsNone(tid)
+        self.assertFalse(db.exists())
+        self.assertTrue(any("MAEZ_LEDGER_WRITES" in line for line in cm.output))
+
     def test_returns_none_on_validation_error(self):
         """A payload violating the per-kind contract must be swallowed,
         not raised. Production daemon must keep responding even when
