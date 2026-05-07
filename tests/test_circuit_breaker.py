@@ -340,6 +340,70 @@ class TestShouldCountFailure(unittest.TestCase):
                 cb.call(_boom)
         self.assertEqual(cb.state, "open")
 
+    def test_half_open_not_counted_failure_closes_circuit(self):
+        """In HALF_OPEN, a not-counted failure means transport recovered
+        (we got past the network and got a response, even if body was
+        wrong). The breaker should treat that as probe-success and CLOSE,
+        otherwise it would stay HALF_OPEN forever — throttling concurrent
+        callers via the probe lock even though transport is healthy.
+
+        Reproduces a bug missed by the slice 1.2 review: bad_response
+        during HALF_OPEN left the breaker stuck.
+        """
+        clock = FakeClock()
+        cb = CircuitBreaker(name="cb", failure_threshold=2, window_s=60.0,
+                            cooldown_s=30.0, clock=clock)
+
+        class BenignError(Exception):
+            pass
+
+        not_counted = lambda e: not isinstance(e, BenignError)
+
+        # Trip the breaker with real (counted) failures.
+        for _ in range(2):
+            with self.assertRaises(RuntimeError):
+                cb.call(_boom)
+        self.assertEqual(cb.state, "open")
+
+        # Cooldown elapses → HALF_OPEN admission for next call.
+        clock.advance(31.0)
+
+        # Probe gets a not-counted failure (e.g. bad_response).
+        # The original exception must propagate to the caller.
+        with self.assertRaises(BenignError):
+            cb.call(
+                lambda: (_ for _ in ()).throw(BenignError("malformed body")),
+                should_count_failure=not_counted,
+            )
+
+        # Breaker must be CLOSED — transport is fine, we got past the network.
+        self.assertEqual(
+            cb.state, "closed",
+            "HALF_OPEN + not-counted failure means transport recovered; "
+            "breaker must close (was stuck in half_open before fix)",
+        )
+
+        # And subsequent calls are NOT throttled by the probe lock —
+        # two threads calling concurrently both proceed.
+        proceed = threading.Event()
+
+        def slow_ok():
+            proceed.wait(timeout=1.0)
+            return "ok"
+
+        results = {}
+        def worker(tag):
+            results[tag] = cb.call(slow_ok)
+
+        t1 = threading.Thread(target=worker, args=("a",))
+        t2 = threading.Thread(target=worker, args=("b",))
+        t1.start(); t2.start()
+        proceed.set()
+        t1.join(timeout=1.0); t2.join(timeout=1.0)
+
+        self.assertEqual(results.get("a"), "ok")
+        self.assertEqual(results.get("b"), "ok")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -122,11 +122,16 @@ class CircuitBreaker:
         except Exception as exc:
             if should_count_failure(exc):
                 self._record_failure(admission)
-            else:
-                # Failure not counted, but if we were probing we still need
-                # to release the probe lock so the breaker can recover.
-                if admission == "probe":
-                    self._release_probe_lock()
+            elif admission == "probe":
+                # Not-counted failure during HALF_OPEN means we got past
+                # the network and got a response — even though the body
+                # was wrong, transport recovered. Treat as probe-success
+                # for breaker-state purposes (close + clear history),
+                # then propagate the original exception. Otherwise the
+                # breaker would stay HALF_OPEN forever, throttling all
+                # concurrent callers via the probe lock even though the
+                # backend is reachable.
+                self._record_success(admission)
             raise
         else:
             self._record_success(admission)

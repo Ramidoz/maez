@@ -45,6 +45,9 @@ as a single probe; success closes the breaker, failure reopens it.
 | `MAEZ_JUDGE_BREAKER_WINDOW_S`  | `300` | Window over which failures count |
 | `MAEZ_JUDGE_BREAKER_COOLDOWN_S` | `30` | Time before HALF_OPEN probe allowed |
 
+Invalid or non-positive values fall back to the defaults with a WARNING
+on `core.cognition.grounding_judge`. A typo will not crash daemon import.
+
 - Scope: dedicated judge HTTP path only (`_call_dedicated_judge`). The
   fallback `_llm_client.chat` path is intentionally not wrapped — it
   shares an endpoint with the proposal worker and gets its own breaker
