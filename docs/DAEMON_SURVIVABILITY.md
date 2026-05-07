@@ -25,6 +25,6 @@ Inspect recent proposal-intent failures:
 
 ```bash
 sqlite3 memory/evolution_track.db \
-  "SELECT id, weakness, last_error FROM proposal_jobs \
+  "SELECT id, weakness_description, last_error FROM proposal_jobs \
    WHERE state='failed' ORDER BY finished_at DESC LIMIT 10"
 ```
