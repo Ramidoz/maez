@@ -37,12 +37,13 @@ class BoundedSingletonWorker:
     have deterministic outcomes — exactly one wins and spawns; the rest
     return False.
 
-    Shutdown contract: once ``join`` is called, the worker is marked
-    closed and subsequent ``submit`` calls return False even if no
-    thread is currently running. This prevents a stale caller from
-    spawning a thread after the daemon has decided to shut down (which
-    would risk half-written DB rows from background tasks racing the
-    process exit).
+    Shutdown contract: ``shutdown`` (close + wait) marks the worker
+    closed; subsequent ``submit`` calls return False even if no thread
+    is currently running. Use ``shutdown`` for daemon stop() flow to
+    prevent stale callers from spawning a thread after the process
+    has decided to exit (which would risk half-written DB rows from
+    background tasks racing the exit). ``join`` is wait-only and
+    leaves the worker reusable for within-flow synchronization.
 
     ``in_flight`` is observational and inherently racy with concurrent
     ``submit`` / thread completion. For test synchronization, use
