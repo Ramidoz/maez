@@ -176,5 +176,123 @@ class WakeWordReaderWiringTests(unittest.TestCase):
         )
 
 
+class StopCleanupLadderBehavioralTests(unittest.TestCase):
+    """Behavioral test of wake_word.stop() escalation ladder.
+
+    Source-level guards confirm the strings exist; this test confirms
+    the order of operations actually runs when the reader thread
+    persists past terminate(). This is the production cleanup path
+    for the 2026-05-07 D-state incident — worth a behavioral test.
+    """
+
+    def setUp(self):
+        # Snapshot module state so we can restore it.
+        from skills import wake_word as ww
+        self.ww = ww
+        self._snap = (
+            ww._thread,
+            ww._stop_event,
+            ww._pw_proc,
+            ww._pw_reader_thread,
+        )
+
+    def tearDown(self):
+        ww = self.ww
+        ww._thread, ww._stop_event, ww._pw_proc, ww._pw_reader_thread = (
+            self._snap
+        )
+
+    def test_stop_escalation_runs_when_reader_persists_past_terminate(self):
+        """When reader stays alive after proc.terminate(), stop() must
+        escalate: close stdout → kill → final join. Verify call order
+        and that stdout.close() runs BEFORE proc.kill()."""
+        from unittest.mock import MagicMock, call
+        ww = self.ww
+
+        proc = MagicMock()
+        # Reader stays alive for first is_alive check (after terminate)
+        # then dies after proc.kill() — observed by alternating Trues
+        # then False. Mock counts: terminate→is_alive(True)→close→kill→
+        # is_alive(False).
+        # We simulate "still alive after terminate join" by returning
+        # True for the FIRST is_alive check, False after.
+        reader = MagicMock()
+        reader.is_alive = MagicMock(side_effect=[True, True, False])
+        reader.join = MagicMock()
+
+        # Audio loop thread mock (so the final _thread.join doesn't
+        # do anything interesting).
+        audio_loop = MagicMock()
+        audio_loop.join = MagicMock()
+
+        # Wire module state.
+        ww._pw_proc = proc
+        ww._pw_reader_thread = reader
+        ww._stop_event = MagicMock()
+        ww._thread = audio_loop
+
+        # Call stop and verify escalation order.
+        ww.stop()
+
+        # Assertions:
+        # 1. terminate called.
+        proc.terminate.assert_called_once()
+        # 2. First reader.join used a 2.0s timeout.
+        first_join = reader.join.call_args_list[0]
+        self.assertEqual(first_join, call(timeout=2.0))
+        # 3. Because is_alive returned True after first join,
+        #    escalation ran: stdout.close() and kill() both called.
+        proc.stdout.close.assert_called_once()
+        proc.kill.assert_called_once()
+        # 4. stdout.close() was called BEFORE proc.kill() (Critical #3:
+        #    closing stdout forces pending read to error out, so kill
+        #    has a higher chance of completing the cleanup).
+        # Use mock_calls on the parent which preserves insertion order
+        # across all child attributes/methods.
+        method_names = [c[0] for c in proc.mock_calls]
+        self.assertIn("stdout.close", method_names)
+        self.assertIn("kill", method_names)
+        self.assertLess(
+            method_names.index("stdout.close"),
+            method_names.index("kill"),
+            f"stdout.close() must precede kill() in escalation; "
+            f"observed call order: {method_names}",
+        )
+        # 5. Second join also bounded.
+        self.assertEqual(reader.join.call_count, 2)
+        second_join = reader.join.call_args_list[1]
+        self.assertEqual(second_join, call(timeout=2.0))
+        # 6. Module state reset so a future start() is clean.
+        self.assertIsNone(ww._pw_proc)
+        self.assertIsNone(ww._pw_reader_thread)
+
+    def test_stop_skips_escalation_when_reader_exits_on_terminate(self):
+        """If reader exits cleanly after proc.terminate(), the
+        escalation path (stdout.close + kill) must NOT run. Avoids
+        unnecessary SIGKILLs on graceful shutdowns."""
+        from unittest.mock import MagicMock
+        ww = self.ww
+
+        proc = MagicMock()
+        reader = MagicMock()
+        # Reader is alive at the initial check, but exits during the
+        # first join — is_alive() returns False after.
+        reader.is_alive = MagicMock(side_effect=[True, False])
+        reader.join = MagicMock()
+
+        ww._pw_proc = proc
+        ww._pw_reader_thread = reader
+        ww._stop_event = MagicMock()
+        ww._thread = MagicMock()
+
+        ww.stop()
+
+        proc.terminate.assert_called_once()
+        reader.join.assert_called_once()
+        # Escalation must NOT have run.
+        proc.stdout.close.assert_not_called()
+        proc.kill.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

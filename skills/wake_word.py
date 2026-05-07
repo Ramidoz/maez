@@ -260,11 +260,21 @@ def _run_pw_reader(
     if pw-record never produces data, the watchdog fires and kills it
     so the read unblocks instead of hanging in kernel-space.
 
-    Exits cleanly on stop_event, EOF, OSError, or watchdog. Never
-    raises (all exceptions caught + logged on ``log``).
+    Uses ``os.read(fd, n)`` instead of ``proc.stdout.read(n)`` — the
+    buffered file object's ``read(n)`` waits for the FULL requested
+    size and can still block after select() reports the fd ready
+    (review finding 2026-05-07: select-then-buffered-read is NOT
+    actually bounded). ``os.read`` returns whatever bytes are
+    immediately available up to ``n`` and never blocks beyond what
+    select admitted, so we accumulate bytes in a buffer until the
+    requested size is reached, polling select between each os.read.
 
-    Duck-typing on ``proc``: only requires ``.stdout.fileno()``,
-    ``.stdout.read()``, and ``.kill()``. Tests pass a MagicMock.
+    Exits cleanly on stop_event, EOF, OSError/ValueError, or watchdog.
+    Never raises (all exceptions caught + logged on ``log``).
+
+    Duck-typing on ``proc``: only requires ``.stdout.fileno()`` and
+    ``.kill()``. The actual reads go through ``os.read`` on the fd,
+    so tests patch ``os.read``, not ``proc.stdout.read``.
     """
     try:
         fd = proc.stdout.fileno()
@@ -275,11 +285,21 @@ def _run_pw_reader(
     last_data = time.monotonic()
 
     def _bounded_read(nbytes: int) -> Optional[bytes]:
-        """Read exactly ``nbytes`` (or fewer on partial pipe), polling
-        select() with a watchdog. Returns ``None`` if stop_event,
-        watchdog, or EOF/OSError ended the read; bytes otherwise."""
+        """Read exactly ``nbytes`` via os.read + accumulation, polling
+        select() with a watchdog between each chunk. Returns ``None``
+        if stop_event, watchdog, EOF, or OS error ended the read;
+        bytes (length == nbytes) otherwise.
+
+        os.read may return fewer than requested bytes on each call —
+        a Linux pipe returns whatever's currently buffered up to
+        ``nbytes``. The accumulation loop ensures we don't return
+        partial data that downstream np.frombuffer would misparse.
+        """
         nonlocal last_data
-        while not stop_event.is_set():
+        buf = bytearray()
+        while len(buf) < nbytes:
+            if stop_event.is_set():
+                return None
             try:
                 ready, _, _ = select.select(
                     [fd], [], [], PW_READER_SELECT_TIMEOUT_S,
@@ -301,20 +321,25 @@ def _run_pw_reader(
                     return None
                 continue
             try:
-                data = proc.stdout.read(nbytes)
-            except OSError as e:
-                log.warning("pw-reader: read failed: %s", e)
+                # os.read on a Linux pipe returns what's available up to
+                # the requested size; never blocks for more once select
+                # reports ready (unlike the buffered proc.stdout.read).
+                chunk = os.read(fd, nbytes - len(buf))
+            except (OSError, ValueError) as e:
+                # ValueError can fire if proc.stdout was closed by
+                # stop()'s escalation ladder while we were mid-loop.
+                log.warning("pw-reader: os.read failed: %s", e)
                 return None
-            if not data:  # EOF
+            if not chunk:  # EOF
                 return None
+            buf.extend(chunk)
             last_data = time.monotonic()
-            return data
+        return bytes(buf)
 
     if skip_wav_header:
-        # Header is select-polled the same way as chunks — the original
-        # design only protected the chunk loop, leaving the header read
-        # as a duplicate D-state vector (Critical #1 from slice 1.4
-        # adversarial review).
+        # Header is select-polled with the same watchdog as chunks
+        # (Critical #1 from slice 1.4 adversarial review). The
+        # accumulation loop handles partial reads from os.read.
         header = _bounded_read(44)
         if header is None:
             return
