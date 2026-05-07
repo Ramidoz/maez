@@ -55,6 +55,29 @@ class ProposalIntentTimeoutTests(unittest.TestCase):
 
         self.assertEqual(call.call_count, 1)
 
+    def test_generate_patch_intent_retry_timeout_is_terminal(self):
+        """First attempt parses to nothing; retry attempt times out.
+        The second-attempt timeout path must also raise terminally.
+        """
+        from skills import evolution_engine as ee
+
+        editable = [{
+            "name": "SCORE_WEIGHT_GROUNDING",
+            "type": "int",
+            "current_value": 20,
+            "lineno": 1,
+            "target_rank": 1,
+        }]
+
+        with patch.object(
+            ee, "_call_ollama_for_intent",
+            side_effect=[("garbage non-json", None), ("__TIMEOUT__", None)],
+        ) as call:
+            with self.assertRaises(ee.ProposalIntentTimeout):
+                ee._generate_patch_intent("weakness", {}, editable)
+
+        self.assertEqual(call.call_count, 2)
+
     def test_worker_marks_intent_timeout_failed_not_pending(self):
         from skills import evolution_engine as ee
 
