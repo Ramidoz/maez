@@ -384,3 +384,53 @@ class LedgerWriter:
                     self._conn.close()
                 finally:
                     self._conn = None
+
+
+# ---------------------------------------------------------------------------
+# Shadow-write helper for daemon callers
+# ---------------------------------------------------------------------------
+
+
+def try_write_turn(
+    db_path: str,
+    turn_kind: str,
+    raw_text: str | None,
+    **kwargs,
+) -> str | None:
+    """Open a LedgerWriter, write one turn, close. Never raises.
+
+    Daemon callers use this so a ledger failure (writer disabled, DB
+    missing, validation error, SQL error, anything) does NOT break the
+    user-facing reply path. On any exception, logs a warning at
+    core.ledger.writer level and returns None.
+
+    Returns the new turn_id on success, or None on disabled-writer /
+    failure. The single-call shape keeps the daemon plumbing to one
+    line per write.
+
+    Per the architectural invariant: shadow writes only. The user
+    reply ships regardless of what happens here.
+    """
+    try:
+        w = LedgerWriter(db_path)
+    except Exception as e:
+        _LOGGER.warning(
+            "shadow ledger writer init failed (kind=%r, path=%r): %s",
+            turn_kind, db_path, e,
+        )
+        return None
+    try:
+        return w.write_turn(turn_kind, raw_text, **kwargs)
+    except Exception as e:
+        _LOGGER.warning(
+            "shadow ledger write failed (kind=%r): %s",
+            turn_kind, e,
+        )
+        return None
+    finally:
+        try:
+            w.close()
+        except Exception:
+            pass
+
+

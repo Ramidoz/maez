@@ -107,6 +107,7 @@ LOG_PATH = BASE_DIR / "logs" / "maez.log"
 MEMORY_DIR = BASE_DIR / "memory"
 PID_FILE = BASE_DIR / "daemon" / "maez.pid"
 SHUTDOWN_FILE = BASE_DIR / "daemon" / "last_shutdown"
+LEDGER_DB_PATH = MEMORY_DIR / "ledger.db"
 
 # --- Constants ---
 from core.model_config import PRIMARY_MODEL as MODEL  # single source of truth — /etc/maez/model.env
@@ -1519,6 +1520,28 @@ class MaezDaemon:
         _trace = Trace.start(surface=source, user_text=text)
         _trace_t_start = time.time()
         _trace_pre_audit_text: str = ""
+
+        # Slice 2.5b — shadow-write the user_message turn to the
+        # ledger. Default-off via MAEZ_LEDGER_WRITES; failures NEVER
+        # break the reply path (try_write_turn swallows all exceptions
+        # and returns None). The returned turn_id (if any) is captured
+        # for future use as parent_turn_id when slice 2.5c plumbs the
+        # model_reply turn (gated on slice 3 evidence-envelope work).
+        try:
+            from core.ledger.writer import try_write_turn as _try_write_turn
+
+            _user_msg_turn_id = _try_write_turn(
+                str(LEDGER_DB_PATH),
+                "user_message",
+                text,
+                surface=source,
+            )
+        except Exception:
+            # Belt-and-suspenders: try_write_turn is already exception-
+            # safe, but a broken core.ledger import path must never
+            # block the daemon. Log nothing here — the helper logs
+            # internally when it actually has something to report.
+            _user_msg_turn_id = None
 
         # Inner-residue detection on incoming user text. See
         # core/inner_residue.py — rejection markers become persistent
