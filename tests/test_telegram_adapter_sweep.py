@@ -340,8 +340,17 @@ class StartedOutsideEventLoop(unittest.TestCase):
          Assert task is now alive.
       3. Stop the adapter; assert task is done.
 
-    A regression that drops connect()'s call to the helper (or
-    reverts to init-only creation) fails this test directly.
+    Coverage split:
+      - This test catches a regression that BREAKS the helper itself
+        (e.g. reverting to bare ``asyncio.create_task`` in __init__,
+        or removing the deferred-start logic): the helper would no
+        longer recover the production path and this test fails.
+      - The source-level wiring guard
+        ``test_telegram_connect_starts_batch_sweep`` catches a
+        regression that drops connect()'s CALL to the helper while
+        leaving the helper itself intact (this behavioral test would
+        still pass because it calls the helper directly).
+      Both guards together cover the full bug shape.
     """
 
     def test_sync_construct_then_async_start(self):
