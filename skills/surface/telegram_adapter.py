@@ -313,18 +313,38 @@ class TelegramAdapter(BasePlatformAdapter):
             "MAEZ_TELEGRAM_BATCH_TTL_S", 300.0
         )
         self._batch_sweep_task: Optional[asyncio.Task] = None
+        # Best-effort init-time start. In production the adapter is
+        # constructed synchronously before any event loop exists, so
+        # this fails and connect() must start the sweep instead.
+        # IsolatedAsyncioTestCase has a loop, so tests succeed here.
+        self._ensure_batch_sweep_started()
+
+    def _ensure_batch_sweep_started(self) -> None:
+        """Idempotently start the periodic batch sweep task.
+
+        Slice 1.5 follow-up: production constructs TelegramAdapter
+        synchronously, then schedules connect() — meaning init-time
+        ``asyncio.create_task`` raises RuntimeError("no running event
+        loop") and the sweep silently never starts. connect() now
+        calls this helper explicitly to close that gap. Idempotent,
+        so init-time + connect-time calls don't duplicate the task.
+        """
+        existing = self._batch_sweep_task
+        if existing is not None and not existing.done():
+            return  # already running
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            # No running event loop at construction time (e.g. tests
-            # creating adapters synchronously). disconnect() will be a
-            # no-op for the sweep; nothing to clean up.
-            logger.warning(
-                "[%s] No running event loop at init; batch sweep task not created",
+            # No running event loop. Caller (init) doesn't have a
+            # loop yet; connect() will retry once a loop is running.
+            logger.debug(
+                "[%s] no running event loop; batch sweep deferred",
                 getattr(self, "name", "telegram"),
             )
-        else:
-            self._batch_sweep_task = asyncio.create_task(self._batch_sweep_loop())
+            return
+        self._batch_sweep_task = asyncio.create_task(
+            self._batch_sweep_loop()
+        )
 
     @staticmethod
     def _is_callback_user_authorized(user_id: str) -> bool:
@@ -980,6 +1000,14 @@ class TelegramAdapter(BasePlatformAdapter):
                     self.name, start_err,
                 )
 
+            # Slice 1.5 follow-up: ALSO start the Telegram batch sweep
+            # here. Init-time creation only succeeds if a loop was
+            # already running; production constructs the adapter
+            # synchronously, so this is the load-bearing call. Helper
+            # is idempotent — if init-time create succeeded (test
+            # context), this is a no-op.
+            self._ensure_batch_sweep_started()
+
             return True
             
         except Exception as e:
@@ -1093,6 +1121,11 @@ class TelegramAdapter(BasePlatformAdapter):
             await asyncio.gather(*pending_media_group_tasks, return_exceptions=True)
         self._media_group_tasks.clear()
         self._media_group_events.clear()
+        # Slice 1.5 follow-up: clear the corresponding touched-timestamp
+        # map. Without this, shutdown/reconnect leaves residue that the
+        # next sweep cycle would noisily clean (or never clean if the
+        # sweep task wasn't restarted).
+        self._batch_last_touched["media_group"].clear()
 
         if self._app:
             try:
@@ -1111,6 +1144,16 @@ class TelegramAdapter(BasePlatformAdapter):
                 task.cancel()
         self._pending_photo_batch_tasks.clear()
         self._pending_photo_batches.clear()
+        # Slice 1.5 follow-up: clear matching touched map.
+        self._batch_last_touched["photo"].clear()
+        # Slice 1.5 follow-up: text-batch tasks aren't currently
+        # cancelled on disconnect (pre-existing behavior); but the
+        # sweep's touched map should still be cleared so a stale
+        # timestamp from before the disconnect doesn't survive across
+        # the lifecycle boundary. The orphaned text-flush tasks
+        # themselves are a pre-existing concern flagged in slice 1.5
+        # review; out of scope to fix here.
+        self._batch_last_touched["text"].clear()
 
         self._mark_disconnected()
         self._app = None

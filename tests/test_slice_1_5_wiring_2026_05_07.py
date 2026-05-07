@@ -95,6 +95,47 @@ class Slice15WiringTests(unittest.TestCase):
             "session eviction never runs on a real daemon.",
         )
 
+    def test_telegram_connect_starts_batch_sweep(self):
+        """Slice 1.5 follow-up: production constructs TelegramAdapter
+        synchronously (no event loop), which means init-time
+        ``asyncio.create_task`` raises and the batch sweep silently
+        never starts. connect() must explicitly start (or restart) the
+        batch sweep, in addition to super().start().
+        """
+        self.assertIn(
+            "_ensure_batch_sweep_started", self.tg_src,
+            "TelegramAdapter must expose an idempotent helper that "
+            "starts the batch sweep, callable from both __init__ "
+            "(best-effort) and connect() (load-bearing)",
+        )
+        # And connect() must call it after super().start().
+        # Simpler check: count occurrences — should be at least 2
+        # (one in __init__, one in connect()).
+        occurrences = self.tg_src.count("_ensure_batch_sweep_started")
+        self.assertGreaterEqual(
+            occurrences, 3,
+            f"_ensure_batch_sweep_started should appear at least 3 "
+            f"times: definition + init call + connect call. "
+            f"Got {occurrences}.",
+        )
+
+    def test_disconnect_clears_batch_last_touched_subdicts(self):
+        """Slice 1.5 follow-up: disconnect() clears the underlying
+        media_group / photo dicts but missed the parallel
+        _batch_last_touched maps. That left timestamp residue across
+        reconnects which the next sweep would noisily clean (or never
+        clean if the sweep wasn't restarted)."""
+        # All three subdicts must be cleared in disconnect().
+        for kind in ("media_group", "photo", "text"):
+            needle = f'_batch_last_touched["{kind}"].clear()'
+            self.assertIn(
+                needle, self.tg_src,
+                f"disconnect() must clear "
+                f"_batch_last_touched[{kind!r}] alongside the matching "
+                f"task/event dict cleanup, otherwise stale timestamps "
+                f"survive a reconnect cycle",
+            )
+
     def test_telegram_stop_calls_super_stop(self):
         """Symmetric to test_telegram_connect_calls_super_start. The
         stop() method must propagate to the base class so
