@@ -41,7 +41,8 @@ These categories are excluded from the carve-out. Claims here require evidence o
 - **Maez's own state or history** — "I told you earlier," "I'm running version X," "last session we…"
 - **Prices, schedules, financial data** — "the price of Bitcoin is X," "the train leaves at 6pm."
 - **Laws, regulations, jurisdictional rules** — "in California, you must X."
-- **Medical, legal, or financial ADVICE / DOSING / SAFETY claims** — anything that could be acted on in a way that affects health, money, or legal standing. Stable biomedical/legal/financial *facts* (e.g. "aspirin is a pain reliever," "California is a community-property state," "USD is the U.S. currency") may qualify under the general carve-out. Anything crossing into "you should do X" / "X is safe at Y dose" / "X is legal in Z" / "the tax rate on X is Y%" is excluded categorically. Boundary case: "aspirin can cause stomach ulcers" is a known risk fact, but its framing as user-actionable safety advice ("aspirin is safe to take with food") is not. When ambiguous, default-deny.
+- **Medical and financial ADVICE / DOSING / SAFETY claims** — anything that could be acted on in a way that affects health or money. Stable *biomedical facts* (e.g. "aspirin is a pain reliever," "USD is the U.S. currency") may qualify under the general carve-out. Anything crossing into "you should do X" / "X is safe at Y dose" / "the tax rate on X is Y%" is excluded categorically. Boundary case: "aspirin can cause stomach ulcers" is a known risk fact, but its framing as user-actionable safety advice ("aspirin is safe to take with food") is not. When ambiguous, default-deny.
+- **All legal / jurisdictional / regulatory claims** — including ones that look like stable facts ("California is a community-property state," "the speed limit on US interstates is X"). These are excluded categorically because the failure mode is liability: a wrong legal claim from Maez can produce real-world harm even when the user didn't ask for advice. Maez should refer the user to an authoritative source rather than answer from carve-out. This exclusion is broader than the medical carve-out by design.
 - **Specific dates, numbers, quantities about real-world entities** — "Paris has 2.1M residents," "the Eiffel Tower is 330m tall." Boundary case; argued in §4 and §7.
 - **Specific software versions and release facts** — "Python 3.13 added X."
 - **Anything where the only justification is "I read this somewhere."**
@@ -67,7 +68,7 @@ Decision flow at audit time:
 
 ```
 For each factual claim C in the candidate reply:
-  if C carries provenance self_history / tool-verified / observed / recalled / owner-said:
+  if C carries provenance self-history / tool-verified / observed / recalled / owner-said:
       trace to evidence; pass iff traced.
   elif C carries provenance inferred / synthesized:
       flag for audit but allow (model owned the uncertainty).

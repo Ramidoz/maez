@@ -2,7 +2,7 @@
 
 **Slice 1 of Project A completion. Paper artifact. No implementation in this doc.**
 
-**Status:** Ratified 2026-05-06 (Slice 2 design checkpoint). Schema additions land via amendments and a schema_version bump per §11; the ratification covers the §2 enum and §3–§4 structures as of that date. Slice 3.0b (2026-05-07) extends the §2 enum with `self_history` and §3 with the matching slot.
+**Status:** Ratified 2026-05-06 (Slice 2 design checkpoint). Schema additions land via amendments and a schema_version bump per §11; the ratification covers the §2 enum and §3–§4 structures as of that date. Slice 3.0b (2026-05-07) extends the §2 enum with `self-history` (kebab-case provenance value) and §3 with the matching `self_history` slot (snake_case Python field).
 **Author:** Claude (drafted 2026-05-06, revised same day after audit pushback)
 **Companion docs:** [MAEZ_FRONTIER.md](MAEZ_FRONTIER.md) §6 (dependency graph), §9.1 (build order)
 

@@ -80,21 +80,28 @@ Rationale: drop **bulk first, signal last**. tool_result bodies are bulk; forbid
 
 ### 3a. Emergency minimal-envelope fallback
 
-If steps 1-5 still leave the envelope over cap (pathological case: hundreds of forbidden entries + maximum signals from a heavy-recall turn), the builder MUST construct a **minimal envelope** rather than emit something that blows the prompt:
+If steps 1-5 still leave the envelope over cap (pathological case: hundreds of forbidden entries + maximum signals from a heavy-recall turn), the builder MUST construct a **minimal envelope** rather than emit something that blows the prompt. The minimal envelope itself enforces hard caps on every section so it is provably under budget:
 
 ```
 {
   "schema_version": <int>,
   "_truncated": true,
   "_truncation_reason": "preserved-sections exceeded cap",
-  "tool_results": [{name, status} for each tool_result],   # status only, no summaries
-  "forbidden": [{topic, reason} for first N within budget], # newest N that fit
-  "signals_present": [...within remaining budget...],
-  "signals_absent": [...within remaining budget...]
+  "tool_results": [{name, status} for first MAX_FALLBACK_TOOLS that fit],   # capped: status-only
+  "forbidden":    [{topic, reason} for first MAX_FALLBACK_FORBIDDEN that fit],
+  "signals_present": [...first MAX_FALLBACK_SIGNALS chars worth that fit...],
+  "signals_absent":  [...first MAX_FALLBACK_SIGNALS chars worth that fit...]
 }
 ```
 
-Hard floor: an envelope with `_truncated=true` and only status flags is ALWAYS under cap. If even the minimal envelope can't fit, the builder logs ERROR and emits an empty `{"schema_version": N, "_truncated": true, "_truncation_reason": "envelope unrenderable"}` so the daemon's prompt-builder has a deterministic shape to consume.
+Suggested floor caps (subject to slice-3-proper tuning):
+- `MAX_FALLBACK_TOOLS = 8` (status-only, no summary; ~30 chars per entry)
+- `MAX_FALLBACK_FORBIDDEN = 8` (newest first; per-entry cap unchanged at 80 chars)
+- `MAX_FALLBACK_SIGNALS = 480 chars total per signals_present + signals_absent` (combined)
+
+These floor caps total roughly 2K chars (~500 tokens) — comfortably under any plausible envelope cap including a 3K token budget. The "ALWAYS under cap" claim is enforced by THESE floor caps, not by the structural shape alone — emitting unbounded `[for each tool_result]` could still overflow if a pathological turn produced thousands of tool calls.
+
+If even the floor caps can't fit the configured `char_cap` (env-var override below practical minimum, e.g. `MAEZ_EVIDENCE_ENVELOPE_BUDGET_TOKENS=10`), the builder logs ERROR and emits an empty `{"schema_version": N, "_truncated": true, "_truncation_reason": "envelope unrenderable"}` so the daemon's prompt-builder has a deterministic shape to consume.
 
 Telemetry on the minimal-envelope path is WARNING-level (see §4) — but with `truncation_kind="minimal_fallback"` so operators can grep for it specifically.
 
@@ -104,21 +111,27 @@ Telemetry on the minimal-envelope path is WARNING-level (see §4) — but with `
 
 Every cap that bites emits a structured WARNING log line. Silent truncation is the "stuff disappeared mysteriously" failure mode. Operators must see when caps bite to tune them.
 
-Required fields per log:
+**Required fields per log** (consolidated with §7 — operators tuning the budget see both axes; if real-world token counts diverge from the chars/4 approximation, the discrepancy is visible):
 
 - `turn_id`
 - `section` (e.g. `tool_results`, `claimable`)
+- `truncation_kind` — one of: `per_section_cap`, `total_cap`, `minimal_fallback`. Lets operators grep specifically for the emergency fallback path (§3a).
 - `dropped_entries` (count) and `dropped_chars`
 - `envelope_chars_before` and `envelope_chars_after`
-- `cap_hit` (which limit triggered: per-section, total)
+- `envelope_tokens_estimated_before` and `envelope_tokens_estimated_after` (chars / 4, rounded)
+- `char_cap` and `token_cap` — both the resolved char_cap (after env override + conversion) and the source `token_cap` it was derived from
+- `cap_hit` — which limit triggered: per-section, total, minimal-fallback
 
 Pseudocode:
 
 ```
 WARNING maez.envelope envelope_truncated
   turn_id=... section=tool_results
+  truncation_kind=total_cap
   dropped_entries=3 dropped_chars=1840
   envelope_chars_before=18204 envelope_chars_after=16364
+  envelope_tokens_estimated_before=4551 envelope_tokens_estimated_after=4091
+  char_cap=12000 token_cap=3000
   cap_hit=total
 ```
 
@@ -174,21 +187,7 @@ char_cap = token_budget * chars_per_token
 
 So `MAEZ_EVIDENCE_ENVELOPE_BUDGET_TOKENS=3000` → `char_cap = 12_000`.
 
-Telemetry MUST log both the estimated tokens AND the actual chars when truncation fires:
-
-```
-{
-  "envelope_chars_before": <int>,
-  "envelope_chars_after": <int>,
-  "envelope_tokens_estimated_before": <int>,  # chars / 4, rounded
-  "envelope_tokens_estimated_after": <int>,
-  "char_cap": <int>,
-  "token_cap": <int>,
-  ...
-}
-```
-
-Operators tuning the budget see both axes; if real-world token counts diverge from the chars/4 approximation, the discrepancy is visible.
+Telemetry on truncation must log BOTH chars and estimated tokens — full field list is consolidated in §4 above (single source of truth for the log shape).
 
 If a future slice introduces tokenizer-backed counting (real round-trip per build), this conversion rule becomes the fallback for cold-start / no-tokenizer cases.
 

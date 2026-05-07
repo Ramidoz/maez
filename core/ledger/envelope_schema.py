@@ -14,8 +14,10 @@ defined in ``docs/LEDGER_ENVELOPE_SCHEMA.md``:
      ``peer_message_out`` turns; this module's :func:`validate_envelope`
      enforces that any well-known slot it carries is shaped correctly.
 
-Slice 3.0b (2026-05-07) introduces the ``self_history`` provenance value
-+ slot pair to address self-history fabrications (Maez claiming "I told
+Slice 3.0b (2026-05-07) introduces the ``self-history`` provenance
+value (kebab-case to match ``owner-said`` / ``tool-verified``) plus the
+matching ``self_history`` envelope slot (snake_case Python field).
+Together they address self-history fabrications (Maez claiming "I told
 you X earlier" when no such turn exists). The slot's *population* — i.e.
 the bounded ledger lookback that turns prior ``model_reply`` /
 ``daemon_cycle`` / ``peer_message_out`` rows into ``SelfHistoryRef``
@@ -41,7 +43,11 @@ __all__ = [
 # String values are kebab-case / lowercase / no aliases.
 #
 # Slice 3.0b additions (2026-05-07):
-#   ``self_history`` — claims about Maez's prior utterances or actions.
+#   ``self-history`` (provenance VALUE, kebab-case to match the existing
+#   convention) — claims about Maez's prior utterances or actions.
+#   The matching envelope SLOT field is ``self_history`` (snake_case
+#   Python field convention). The asymmetry is intentional: enum values
+#   are kebab, struct fields are snake.
 PROVENANCE_VALUES: frozenset[str] = frozenset({
     "owner-said",
     "tool-verified",
