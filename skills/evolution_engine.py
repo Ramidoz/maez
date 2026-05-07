@@ -32,6 +32,37 @@ from typing import Optional
 
 logger = logging.getLogger("maez")
 
+_DEFAULT_PROPOSAL_INTENT_TIMEOUT_S = 45.0
+
+
+def _proposal_intent_timeout_s() -> float:
+    """Bound background proposal intent LLM calls.
+
+    Proposal generation is not user-facing. If the local backend is wedged,
+    this path should fail the proposal job rather than sitting in a long or
+    unbounded generation while the daemon is trying to stay responsive.
+    """
+    raw = os.environ.get("MAEZ_PROPOSAL_INTENT_TIMEOUT_S")
+    if raw is None or not str(raw).strip():
+        return _DEFAULT_PROPOSAL_INTENT_TIMEOUT_S
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "MAEZ_PROPOSAL_INTENT_TIMEOUT_S=%r is invalid; using %.1fs",
+            raw,
+            _DEFAULT_PROPOSAL_INTENT_TIMEOUT_S,
+        )
+        return _DEFAULT_PROPOSAL_INTENT_TIMEOUT_S
+    if value <= 0:
+        logger.warning(
+            "MAEZ_PROPOSAL_INTENT_TIMEOUT_S=%r must be positive; using %.1fs",
+            raw,
+            _DEFAULT_PROPOSAL_INTENT_TIMEOUT_S,
+        )
+        return _DEFAULT_PROPOSAL_INTENT_TIMEOUT_S
+    return value
+
 try:
     from core.infra import paths as _paths
     MAEZ_ROOT = str(_paths.home())
@@ -2150,7 +2181,12 @@ def _call_ollama_for_intent(prompt: str) -> tuple[str | None, dict | None]:
     name kept for stability in callers."""
     try:
         from core import llm_client as _llm_client
-        raw = (_llm_client.generate(prompt=prompt, timeout_s=180) or '').strip()
+        raw = (
+            _llm_client.generate(
+                prompt=prompt,
+                timeout_s=_proposal_intent_timeout_s(),
+            ) or ''
+        ).strip()
         if not raw:
             return '', None
         intent = extract_intent_json(raw)

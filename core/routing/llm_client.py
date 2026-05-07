@@ -216,6 +216,7 @@ def _chat_llamacpp(
     stream: bool = False,
     think: Optional[bool] = None,
     options: Optional[dict] = None,
+    timeout_s: Optional[float] = None,
 ) -> _LlmResponse:
     """Call llama.cpp's OpenAI-compatible server (source-built with CUDA
     since Session 11p) and adapt the response to the ollama shape that
@@ -273,6 +274,7 @@ def _chat_llamacpp(
                 max_tokens=max_tokens,
                 extra_body=extra_body if extra_body else None,
                 stream=True,
+                timeout=timeout_s,
             )
 
             def _stream_adapter():
@@ -294,6 +296,7 @@ def _chat_llamacpp(
             temperature=temperature,
             max_tokens=max_tokens,
             extra_body=extra_body if extra_body else None,
+            timeout=timeout_s,
         )
     except Exception as e:
         raise BackendError(f'llamacpp chat failed: {e!r}') from e
@@ -391,7 +394,8 @@ def generate(
         # callers expected.
         try:
             import ollama
-            resp = ollama.generate(
+            client = ollama.Client(timeout=timeout_s)
+            resp = client.generate(
                 model=model,
                 prompt=prompt,
                 options={'temperature': temperature, 'num_predict': max_tokens},
@@ -414,6 +418,7 @@ def generate(
             stream=False,
             think=think,
             options={'temperature': temperature, 'num_predict': max_tokens},
+            timeout_s=timeout_s,
         )
         return (chat_resp.message.content or '') if hasattr(chat_resp, 'message') else ''
     except BackendError:
