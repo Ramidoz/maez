@@ -34,11 +34,38 @@ import re
 import socket as _socket
 import subprocess
 import sys
+import time
 import uuid
 from abc import ABC, abstractmethod
 from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_positive_float_env(var_name: str, default: float) -> float:
+    """Safe-fallback parser for positive-float env vars (slice 1.5).
+
+    Returns default when unset/empty. Logs WARNING and returns default
+    when value is non-numeric or non-positive.
+    """
+    raw = os.environ.get(var_name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid value for %s=%r; using default %s",
+            var_name, raw, default,
+        )
+        return default
+    if value <= 0:
+        logger.warning(
+            "Non-positive value for %s=%r; using default %s",
+            var_name, raw, default,
+        )
+        return default
+    return value
 
 
 def utf16_len(s: str) -> int:
@@ -925,6 +952,15 @@ class BasePlatformAdapter(ABC):
         # Track active message handlers per session for interrupt support
         # Key: session_key (e.g., chat_id), Value: (event, asyncio.Event for interrupt)
         self._active_sessions: Dict[str, asyncio.Event] = {}
+        # Slice 1.5: parallel last-touched timestamps for periodic sweep.
+        self._active_session_touched_at: Dict[str, float] = {}
+        self._session_sweep_interval_s: float = _parse_positive_float_env(
+            "MAEZ_SESSION_SWEEP_INTERVAL_S", 600.0
+        )
+        self._session_ttl_s: float = _parse_positive_float_env(
+            "MAEZ_SESSION_TTL_S", 86400.0
+        )
+        self._session_sweep_task: Optional[asyncio.Task] = None
         self._pending_messages: Dict[str, MessageEvent] = {}
         # Background message-processing tasks spawned by handle_message().
         # Gateway shutdown cancels these so an old gateway instance doesn't keep
@@ -1781,6 +1817,7 @@ class BasePlatformAdapter(ABC):
         # duplicate task.  (grammY sequentialize / aiogram EventIsolation
         # pattern — set the guard synchronously, not inside the task.)
         self._active_sessions[session_key] = asyncio.Event()
+        self._active_session_touched_at[session_key] = time.time()
 
         # Spawn background task to process this message
         task = asyncio.create_task(self._process_message_background(event, session_key))
@@ -1790,6 +1827,10 @@ class BasePlatformAdapter(ABC):
             # Some tests stub create_task() with lightweight sentinels that are not
             # hashable and do not support lifecycle callbacks.
             return
+        try:
+            setattr(task, "session_key", session_key)
+        except (AttributeError, TypeError):
+            pass
         if hasattr(task, "add_done_callback"):
             task.add_done_callback(self._background_tasks.discard)
             task.add_done_callback(self._expected_cancelled_tasks.discard)
@@ -1834,6 +1875,7 @@ class BasePlatformAdapter(ABC):
         # Fall back to a new Event only if the entry was removed externally.
         interrupt_event = self._active_sessions.get(session_key) or asyncio.Event()
         self._active_sessions[session_key] = interrupt_event
+        self._active_session_touched_at[session_key] = time.time()
         callback_generation = getattr(interrupt_event, "_hermes_run_generation", None)
         
         # Start continuous typing indicator (refreshes every 2 seconds)
@@ -2160,12 +2202,17 @@ class BasePlatformAdapter(ABC):
                 except TypeError:
                     # Tests stub create_task() with non-hashable sentinels; tolerate.
                     pass
+                try:
+                    setattr(drain_task, "session_key", session_key)
+                except (AttributeError, TypeError):
+                    pass
                 # Leave _active_sessions[session_key] populated — the drain
                 # task's own lifecycle will clean it up.
             else:
                 # Clean up session tracking
                 if session_key in self._active_sessions:
                     del self._active_sessions[session_key]
+                self._active_session_touched_at.pop(session_key, None)
     
     async def cancel_background_tasks(self) -> None:
         """Cancel any in-flight background message-processing tasks.
@@ -2197,6 +2244,105 @@ class BasePlatformAdapter(ABC):
         self._expected_cancelled_tasks.clear()
         self._pending_messages.clear()
         self._active_sessions.clear()
+        self._active_session_touched_at.clear()
+
+    async def start(self) -> None:
+        """Start lifecycle hooks. Spawns the periodic idle-session sweep.
+
+        Subclasses overriding ``start`` should call ``super().start()`` to
+        keep the sweep task wired up.
+        """
+        if self._session_sweep_task is None or self._session_sweep_task.done():
+            try:
+                self._session_sweep_task = asyncio.create_task(
+                    self._session_sweep_loop()
+                )
+            except RuntimeError:
+                # No running loop yet — leave None; caller can re-invoke later.
+                logger.warning(
+                    "[%s] start() called without a running event loop; "
+                    "session sweep task not created",
+                    getattr(self, "name", self.platform.name),
+                )
+                self._session_sweep_task = None
+
+    async def stop(self) -> None:
+        """Cancel the periodic idle-session sweep task (if any)."""
+        task = self._session_sweep_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._session_sweep_task = None
+
+    async def _session_sweep_loop(self) -> None:
+        """Periodic loop body — sleeps `_session_sweep_interval_s` between ticks."""
+        while True:
+            try:
+                await asyncio.sleep(self._session_sweep_interval_s)
+                await self._sweep_idle_sessions()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("session sweep loop error: %s", e)
+
+    async def _sweep_idle_sessions(self, now: Optional[float] = None) -> None:
+        """One-tick sweep of `_active_sessions`.
+
+        Eviction requires ALL of:
+          1. now - last_touched_at > _session_ttl_s
+          2. interrupt event is NOT set
+          3. no live `_background_tasks` task references this session_key
+        Conditions 2 or 3 blocking eviction emit WARNING (operator signal).
+        """
+        if now is None:
+            now = time.time()
+        ttl = self._session_ttl_s
+        # Snapshot keys first — async yields could mutate the dict.
+        keys = list(self._active_sessions.keys())
+        # Build the set of session_keys referenced by live background tasks.
+        live_keys: set = set()
+        for t in list(self._background_tasks):
+            if t is None or t.done():
+                continue
+            sk = getattr(t, "session_key", None)
+            if sk is not None:
+                live_keys.add(sk)
+        for key in keys:
+            event = self._active_sessions.get(key)
+            if event is None:
+                continue
+            touched = self._active_session_touched_at.get(key)
+            if touched is None:
+                # Fall back to event attribute if set, else assume "just touched"
+                touched = getattr(event, "last_touched_at", now)
+            age = now - touched
+            if age <= ttl:
+                continue
+            # TTL elapsed — check blockers.
+            if event.is_set():
+                logger.warning(
+                    "session %s: TTL elapsed (age=%.1fs > %.1fs) but interrupt "
+                    "event still set; not evicting",
+                    key, age, ttl,
+                )
+                continue
+            if key in live_keys:
+                logger.warning(
+                    "session %s: TTL elapsed (age=%.1fs > %.1fs) but live "
+                    "background task present; not evicting",
+                    key, age, ttl,
+                )
+                continue
+            # Clean to evict.
+            self._active_sessions.pop(key, None)
+            self._active_session_touched_at.pop(key, None)
+            logger.info(
+                "session %s: evicting idle entry (age=%.1fs > %.1fs)",
+                key, age, ttl,
+            )
 
     def has_pending_interrupt(self, session_key: str) -> bool:
         """Check if there's a pending interrupt for a session."""

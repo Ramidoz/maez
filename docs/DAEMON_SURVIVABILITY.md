@@ -127,3 +127,43 @@ unblock the pipe.
 - Invalid `MAEZ_PW_READER_WATCHDOG_S` values fall back to the default
   with a WARNING — daemon import must not fail on a typo.
 - Per-process state. Restart resets.
+
+## Telegram batch / session dict eviction (slice 1.5)
+
+The Telegram surface has four dicts that grow O(unique_senders) and
+self-evict on the happy path but leak residue on exception/race
+paths: `_pending_text_batches`, `_pending_photo_batches`,
+`_media_group_events` (telegram_adapter), and `_active_sessions`
+(platform_base). Slice 1.5 adds periodic sweep tasks that prune
+entries past their TTL.
+
+| Env var | Default | Notes |
+|---|---|---|
+| `MAEZ_TELEGRAM_SWEEP_INTERVAL_S` | `60` | Telegram batch sweep cadence (seconds) |
+| `MAEZ_TELEGRAM_BATCH_TTL_S` | `300` | Telegram batch entry TTL (5 min) |
+| `MAEZ_SESSION_SWEEP_INTERVAL_S` | `600` | Session sweep cadence (seconds) |
+| `MAEZ_SESSION_TTL_S` | `86400` | Session idle horizon (24h) |
+
+- **Telegram batch eviction:** entries past TTL are removed; if the
+  associated flush task is `done()`, INFO log; if NOT done (silently-
+  crashed flush signal), the task is cancelled and a WARNING is
+  logged. `_batch_last_touched` is refreshed on every append site.
+- **Session eviction** requires ALL THREE: TTL elapsed, interrupt
+  event NOT set, and NO live `_background_tasks` referencing the
+  session_key. Tasks are tagged with `task.session_key` at spawn.
+  Wedged-but-stale entries log WARNING (operator signal); clean
+  evictions log INFO.
+- **Lifecycle:** TelegramAdapter creates `_batch_sweep_task` at
+  `__init__`; `connect()` calls `super().start()` to spawn the
+  base-class `_session_sweep_task`. `disconnect() → self.stop() →
+  super().stop()` cancels both in lockstep.
+- Invalid env values fall back to defaults with a WARNING (slice
+  1.2/1.3/1.4 posture).
+
+Inspect counts from a Python REPL:
+
+```python
+print(len(adapter._pending_text_batches),
+      len(adapter._media_group_events),
+      len(adapter._active_sessions))
+```

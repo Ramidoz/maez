@@ -31,11 +31,39 @@ import json
 import logging
 import os
 import tempfile
+import time
 import html as _html
 import re
 from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_positive_float_env(var_name: str, default: float) -> float:
+    """Safe-fallback parser for positive-float env vars (slice 1.5 posture).
+
+    Returns default when unset/empty. Logs WARNING and returns default
+    when value is non-numeric or non-positive.
+    """
+    raw = os.environ.get(var_name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid value for %s=%r; using default %s",
+            var_name, raw, default,
+        )
+        return default
+    if value <= 0:
+        logger.warning(
+            "Non-positive value for %s=%r; using default %s",
+            var_name, raw, default,
+        )
+        return default
+    return value
+
 
 try:
     from telegram import Update, Bot, Message, InlineKeyboardButton, InlineKeyboardMarkup
@@ -271,6 +299,32 @@ class TelegramAdapter(BasePlatformAdapter):
         self._model_picker_state: Dict[str, dict] = {}
         # Approval button state: message_id → session_key
         self._approval_state: Dict[int, str] = {}
+
+        # Slice 1.5: periodic batch-dict sweeper.
+        self._batch_last_touched: Dict[str, Dict[str, float]] = {
+            "text": {},
+            "photo": {},
+            "media_group": {},
+        }
+        self._sweep_interval_s: float = _parse_positive_float_env(
+            "MAEZ_TELEGRAM_SWEEP_INTERVAL_S", 60.0
+        )
+        self._batch_ttl_s: float = _parse_positive_float_env(
+            "MAEZ_TELEGRAM_BATCH_TTL_S", 300.0
+        )
+        self._batch_sweep_task: Optional[asyncio.Task] = None
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running event loop at construction time (e.g. tests
+            # creating adapters synchronously). disconnect() will be a
+            # no-op for the sweep; nothing to clean up.
+            logger.warning(
+                "[%s] No running event loop at init; batch sweep task not created",
+                getattr(self, "name", "telegram"),
+            )
+        else:
+            self._batch_sweep_task = asyncio.create_task(self._batch_sweep_loop())
 
     @staticmethod
     def _is_callback_user_authorized(user_id: str) -> bool:
@@ -913,6 +967,19 @@ class TelegramAdapter(BasePlatformAdapter):
                     self.name, topics_err, exc_info=True,
                 )
 
+            # Slice 1.5: spawn the BasePlatformAdapter session-sweep task.
+            # Without this, _active_session_touched_at and the 24h idle
+            # eviction never run in production. The disconnect() →
+            # self.stop() → super().stop() chain handles teardown.
+            try:
+                await super().start()
+            except Exception as start_err:  # pragma: no cover - defensive
+                logger.warning(
+                    "[%s] BasePlatformAdapter.start() failed (non-fatal "
+                    "— session sweep will not run this lifecycle): %s",
+                    self.name, start_err,
+                )
+
             return True
             
         except Exception as e:
@@ -922,8 +989,103 @@ class TelegramAdapter(BasePlatformAdapter):
             logger.error("[%s] Failed to connect to Telegram: %s", self.name, e, exc_info=True)
             return False
     
+    async def stop(self) -> None:
+        """Cancel the periodic batch sweep task (slice 1.5).
+
+        Called from disconnect() before the existing batch-task cleanup so
+        the sweep does not race the teardown and emit spurious WARNINGs.
+        Also delegates to ``BasePlatformAdapter.stop()`` so the session
+        sweep task (slice 1.5 base class) is cancelled in lockstep.
+        """
+        task = self._batch_sweep_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._batch_sweep_task = None
+        # Slice 1.5: also stop the BasePlatformAdapter session-sweep
+        # task. Without this, _session_sweep_task is never cancelled
+        # in production teardown.
+        try:
+            await super().stop()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(
+                "[%s] BasePlatformAdapter.stop() failed: %s",
+                self.name, e,
+            )
+
+    async def _batch_sweep_loop(self) -> None:
+        """Periodic loop body — sleeps `_sweep_interval_s` between ticks."""
+        while True:
+            try:
+                await asyncio.sleep(self._sweep_interval_s)
+                await self._evict_stale_batches()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("telegram batch sweep loop error: %s", e)
+
+    async def _evict_stale_batches(self, now: Optional[float] = None) -> None:
+        """One-tick sweep of the three batch dicts.
+
+        For each entry whose last_touched_at is older than `_batch_ttl_s`:
+          - If the matching task is .done(): INFO log, evict.
+          - If the matching task is NOT .done(): cancel it, WARNING log
+            (silently-crashed-flush signal), then evict.
+        Uses dict.pop(..., None) so this remains idempotent against the
+        legitimate flush-finally also popping.
+        """
+        if now is None:
+            now = time.time()
+        ttl = self._batch_ttl_s
+        kinds = (
+            ("text", self._pending_text_batches, self._pending_text_batch_tasks),
+            ("photo", self._pending_photo_batches, self._pending_photo_batch_tasks),
+            ("media_group", self._media_group_events, self._media_group_tasks),
+        )
+        for kind, ev_dict, task_dict in kinds:
+            touched_map = self._batch_last_touched.setdefault(kind, {})
+            # Snapshot keys first — async yields could mutate.
+            for key in list(touched_map.keys()):
+                touched = touched_map.get(key)
+                if touched is None:
+                    continue
+                age = now - touched
+                if age <= ttl:
+                    continue
+                task = task_dict.get(key)
+                cancelled_task = None
+                if task is not None and not task.done():
+                    logger.warning(
+                        "[Telegram] Evicting stale %s batch %s (age=%.1fs > %.1fs); "
+                        "flush task still live — cancelling (silent-crash signal)",
+                        kind, key, age, ttl,
+                    )
+                    task.cancel()
+                    cancelled_task = task
+                else:
+                    logger.info(
+                        "[Telegram] Evicting stale %s batch %s (age=%.1fs > %.1fs)",
+                        kind, key, age, ttl,
+                    )
+                ev_dict.pop(key, None)
+                task_dict.pop(key, None)
+                touched_map.pop(key, None)
+                # Yield once so a just-cancelled task transitions to its
+                # final state before the caller probes it.
+                if cancelled_task is not None:
+                    try:
+                        await asyncio.sleep(0)
+                    except asyncio.CancelledError:
+                        raise
+
     async def disconnect(self) -> None:
         """Stop polling/webhook, cancel pending album flushes, and disconnect."""
+        # Slice 1.5: stop the periodic sweep BEFORE the existing batch
+        # cleanup below, so the sweep doesn't race teardown.
+        await self.stop()
         pending_media_group_tasks = list(self._media_group_tasks.values())
         for task in pending_media_group_tasks:
             task.cancel()
@@ -2489,6 +2651,7 @@ class TelegramAdapter(BasePlatformAdapter):
             if event.media_urls:
                 existing.media_urls.extend(event.media_urls)
                 existing.media_types.extend(event.media_types)
+        self._batch_last_touched["text"][key] = time.time()
 
         # Cancel any pending flush and restart the timer
         prior_task = self._pending_text_batch_tasks.get(key)
@@ -2526,6 +2689,7 @@ class TelegramAdapter(BasePlatformAdapter):
         finally:
             if self._pending_text_batch_tasks.get(key) is current_task:
                 self._pending_text_batch_tasks.pop(key, None)
+            self._batch_last_touched.get("text", {}).pop(key, None)
 
     # ------------------------------------------------------------------
     # Photo batching
@@ -2557,6 +2721,7 @@ class TelegramAdapter(BasePlatformAdapter):
         finally:
             if self._pending_photo_batch_tasks.get(batch_key) is current_task:
                 self._pending_photo_batch_tasks.pop(batch_key, None)
+            self._batch_last_touched.get("photo", {}).pop(batch_key, None)
 
     def _enqueue_photo_event(self, batch_key: str, event: MessageEvent) -> None:
         """Merge photo events into a pending batch and schedule flush."""
@@ -2568,6 +2733,7 @@ class TelegramAdapter(BasePlatformAdapter):
             existing.media_types.extend(event.media_types)
             if event.text:
                 existing.text = self._merge_caption(existing.text, event.text)
+        self._batch_last_touched["photo"][batch_key] = time.time()
 
         prior_task = self._pending_photo_batch_tasks.get(batch_key)
         if prior_task and not prior_task.done():
@@ -2790,6 +2956,7 @@ class TelegramAdapter(BasePlatformAdapter):
             existing.media_types.extend(event.media_types)
             if event.text:
                 existing.text = self._merge_caption(existing.text, event.text)
+        self._batch_last_touched["media_group"][media_group_id] = time.time()
 
         prior_task = self._media_group_tasks.get(media_group_id)
         if prior_task:
@@ -2809,6 +2976,7 @@ class TelegramAdapter(BasePlatformAdapter):
             return
         finally:
             self._media_group_tasks.pop(media_group_id, None)
+            self._batch_last_touched.get("media_group", {}).pop(media_group_id, None)
 
     async def _handle_sticker(self, msg: Message, event: "MessageEvent") -> None:
         """
