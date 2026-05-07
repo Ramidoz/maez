@@ -216,9 +216,9 @@ CREATE INDEX idx_turns_model ON turns (model_id, timestamp DESC) WHERE model_id 
 | `peer_message_out` | raw_text, evidence_envelope_json, audit_verdict_json | — |
 | `system_event` | raw_text | model_id, prompt_hash |
 
-### 4.3 `claims` table — denormalized provenance for query
+### 4.3 `claims` table — what was claimed, immutable
 
-Every claim made in `rewritten_text` (or `raw_text` if not rewritten) gets one row here. This lets the cockpit answer "show me every claim Maez made today by provenance class."
+Every claim shape extracted from `rewritten_text` (or `raw_text` if not rewritten) gets one row here. **Strictly immutable** — no UPDATEs, no provenance overwrites. Judgement of the claim lives in §4.3a (`claim_judgements`).
 
 ```sql
 CREATE TABLE claims (
@@ -226,17 +226,72 @@ CREATE TABLE claims (
     turn_id          TEXT NOT NULL,
     tenant_id        TEXT NOT NULL DEFAULT 'owner',
     fact             TEXT NOT NULL,            -- the claim text (extracted)
-    provenance       TEXT NOT NULL,            -- one of the 6 enum values
-    evidence_refs_json TEXT NOT NULL,          -- per-class evidence (see §2)
-    confidence       REAL NOT NULL,            -- 0..1
-    audit_verdict    TEXT NOT NULL,            -- 'approved' | 'rewritten' | 'flagged'
+    extracted_at     REAL NOT NULL,            -- unix timestamp Pass A ran
+    extractor_version TEXT NOT NULL,           -- heuristic version that produced this row
+
+    -- Tamper-witness: must equal turns.chain_hash for this turn_id at insert time
+    -- (verified by tests/test_ledger_chain.py + reconciliation)
+    parent_turn_chain_hash TEXT NOT NULL,
 
     FOREIGN KEY (turn_id) REFERENCES turns(turn_id)
 );
 
-CREATE INDEX idx_claims_tenant_provenance ON claims (tenant_id, provenance, claim_id DESC);
-CREATE INDEX idx_claims_turn ON claims (turn_id);
+CREATE INDEX idx_claims_tenant_turn ON claims (tenant_id, turn_id);
+CREATE INDEX idx_claims_extracted_ts ON claims (tenant_id, extracted_at DESC);
 ```
+
+### 4.3a `claim_judgements` table — every judgement attempt, append-only
+
+Pass B (and any reconciliation re-run) writes a new row here. **No row exists for a claim until it has been judged.** The absence of a `claim_judgements` row for a `claim_id` is itself the signal "extracted but not yet checked."
+
+```sql
+CREATE TABLE claim_judgements (
+    judgement_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    claim_id         INTEGER NOT NULL,
+    tenant_id        TEXT NOT NULL DEFAULT 'owner',
+    judged_at        REAL NOT NULL,
+    judged_by        TEXT NOT NULL,            -- 'pass_b_judge' | 'reconciliation' | 'owner_manual'
+    judge_model_id   TEXT,                     -- model that produced this judgement, NULL if owner_manual
+    provenance       TEXT,                     -- one of the 6 enum values, NULL if unable_to_classify
+    evidence_refs_json TEXT NOT NULL,
+    confidence       REAL,                     -- 0..1, NULL if provenance is NULL
+    audit_verdict    TEXT NOT NULL,            -- 'grounded' | 'rewritten_in_reply' | 'flagged' | 'unable_to_classify'
+
+    -- Tamper-witness chain: must equal claims.parent_turn_chain_hash at insert time
+    -- (so a judgement is bound to the turn-state in which the claim was extracted)
+    parent_claim_witness TEXT NOT NULL,
+
+    FOREIGN KEY (claim_id) REFERENCES claims(claim_id)
+);
+
+CREATE INDEX idx_judgements_claim_ts ON claim_judgements (claim_id, judged_at DESC);
+CREATE INDEX idx_judgements_tenant_ts ON claim_judgements (tenant_id, judged_at DESC);
+CREATE INDEX idx_judgements_provenance ON claim_judgements (tenant_id, provenance, judged_at DESC) WHERE provenance IS NOT NULL;
+
+-- Latest-judgement view for cockpit queries
+CREATE VIEW latest_claim_judgement AS
+SELECT cj.*
+FROM claim_judgements cj
+JOIN (
+    SELECT claim_id, MAX(judged_at) AS last_ts
+    FROM claim_judgements
+    GROUP BY claim_id
+) latest ON cj.claim_id = latest.claim_id AND cj.judged_at = latest.last_ts;
+
+-- Convenience view: every claim with its latest judgement (or NULL if not yet judged)
+CREATE VIEW claims_with_judgement AS
+SELECT
+    c.*,
+    lcj.provenance,
+    lcj.confidence,
+    lcj.audit_verdict,
+    lcj.judged_at,
+    lcj.judged_by
+FROM claims c
+LEFT JOIN latest_claim_judgement lcj ON lcj.claim_id = c.claim_id;
+```
+
+**Why two tables instead of one updatable row.** The two-table shape preserves strict append-only across the entire ledger. The history of judgement attempts becomes data — if reconciliation re-runs Pass B with a newer judge model, the prior judgement stays visible, and you can read the difference. This is what makes the ledger more trustworthy than memory: nothing is silently overwritten.
 
 ### 4.4 `model_swaps` table — for §11 model-agnostic spine
 
@@ -294,13 +349,20 @@ This ordering means: at any consistent observation point, *every* ledger row's c
 
 ### 6.1 Chain construction
 
-Each row's `chain_hash` is `sha256(prev_chain_hash || canonical_row_bytes)`.
+The `turns` table carries the primary chain. Dependent tables (`claims`, `claim_judgements`) attach to the chain via tamper-witness columns.
 
-- `canonical_row_bytes` = JSON-serialized row with keys sorted, omitting `chain_hash` and `prev_chain_hash` themselves
-- Genesis row: `prev_chain_hash` is NULL, `chain_hash = sha256("genesis" || canonical_row_bytes)`, also written to `meta.genesis_hash`
-- Verification: `scripts/verify_ledger_chain.py` walks the chain end-to-end. Run nightly via the orchestrator that produces reflections.
+**Primary chain (`turns`):**
+- Each row's `chain_hash` is `sha256(prev_chain_hash || canonical_row_bytes)`.
+- `canonical_row_bytes` = JSON-serialized row with keys sorted, omitting `chain_hash` and `prev_chain_hash` themselves.
+- Genesis row: `prev_chain_hash` is NULL, `chain_hash = sha256("genesis" || canonical_row_bytes)`, also written to `meta.genesis_hash`.
 
-**What this protects against:** silent edits to ledger rows. If anyone (including Maez) modifies a row, the chain breaks at that row and the verifier flags it.
+**Witness binding (`claims`, `claim_judgements`):**
+- `claims.parent_turn_chain_hash` MUST equal the parent turn's `chain_hash` at insert time. Verified at insert by the writer; verified retroactively by the chain verifier.
+- `claim_judgements.parent_claim_witness` MUST equal the parent claim's `parent_turn_chain_hash` at insert time. (This binds a judgement to the turn-state-snapshot the claim was extracted under, even if reconciliation re-judges later.)
+
+**Verification:** `scripts/verify_ledger_chain.py` walks the primary chain end-to-end, then walks every claim and every judgement and checks the witness columns match. Run nightly via the orchestrator that produces reflections.
+
+**What this protects against:** silent edits to *any* ledger table. Modifying a `turns` row breaks the chain. Modifying a `claims` row requires also modifying the `parent_turn_chain_hash` to match, which then mismatches the actual `turns.chain_hash` and the verifier flags it. Same for `claim_judgements`.
 
 **What this does NOT protect against:** wholesale deletion or substitution of the entire `ledger.db` file. That's a backup/restore problem, not a chain problem. Mitigation: nightly snapshot to a separate path, retained 30 days.
 
@@ -368,41 +430,57 @@ The schema is paper. Slice 2 implements the writer. These are the tests Slice 2 
 
 This is the decision that determines whether the ledger lies elegantly or tells the truth. If claims extraction is wrong, every downstream slice (cockpit "why this reply", anti-sycophancy eval, daemon-rewrite-rate gate, voice-LoRA training) reads from a corrupted source.
 
-**v1 policy (proposed for ratification):**
+**v1 policy (RATIFIED 2026-05-06 with three edits — see §10.1 for ratification record):**
 
 1. **Two-pass extraction, both pre-existing in the audit pipeline.**
-   - **Pass A — heuristic.** A deterministic extractor walks the rewritten reply text and pulls out claim-shaped sentences using surface patterns: assertive declaratives, "the X is/was/will Y", numeric assertions, named-entity references, temporal claims, and self-references about Maez's own state. Output: a list of candidate claim strings with surface-feature tags.
-   - **Pass B — LLM-judged.** The audit Pass 2 judge (already running per turn) is extended with a structured-output instruction that returns, alongside its existing verdict, a list of `{claim, provenance, evidence_refs, confidence}` for every candidate that survived Pass A. The judge sees the evidence envelope (§3) and grades each candidate against it.
+   - **Pass A — heuristic.** A deterministic extractor walks the rewritten reply text and pulls out claim-shaped sentences using surface patterns: assertive declaratives, "the X is/was/will Y", numeric assertions, named-entity references, temporal claims, and self-references about Maez's own state. Output: a list of candidate claim strings with surface-feature tags. **Inserts one row per candidate into `claims` (immutable).**
+   - **Pass B — LLM-judged.** The audit Pass 2 judge (already running per turn) is extended with a structured-output instruction that returns, alongside its existing verdict, a list of `{claim_id, provenance, evidence_refs, confidence, audit_verdict}` for every candidate Pass A produced. The judge sees the evidence envelope (§3) and grades each candidate against it. **Inserts one row per judgement into `claim_judgements` (also immutable; reconciliation or future re-judge appends new rows).**
 
-2. **Both passes write `claims` rows.** Pass A's candidates are inserted with `audit_verdict='extracted_unjudged'` *before* Pass B runs, so a crash mid-judgement does not lose the claim list. Pass B then UPDATEs (this is the *only* permitted UPDATE in the entire ledger; enforced by trigger exception list) the `provenance`, `evidence_refs_json`, `confidence`, and `audit_verdict` columns.
+2. **Two-table shape, no UPDATEs anywhere.** `claims` rows are immutable from the moment Pass A inserts them. `claim_judgements` rows are immutable from the moment Pass B (or reconciliation, or owner_manual) inserts them. The cockpit queries the `latest_claim_judgement` view to see "what does Maez currently believe about this claim." History stays visible. The ledger preserves strict append-only across all three tables (`turns`, `claims`, `claim_judgements`) — there are no UPDATE carve-outs.
 
-3. **Claims with `provenance=NULL` after both passes** (judge couldn't classify) are still written. They are flagged for the daemon-rewrite-rate metric — unclassifiable claims count toward the rewrite signal whether or not the text was rewritten.
+3. **A claim without a `claim_judgements` row is "extracted but not yet checked."** This is the truthful state during the gap between Pass A and Pass B, and during a Pass B failure. The cockpit and audit machinery distinguish "no judgement row yet" from "judgement says provenance=NULL" — the first means we haven't looked, the second means we looked and couldn't classify.
 
-4. **Claims extraction does NOT block reply delivery.** If Pass B times out or errors, the reply still reaches the user (existing audit pipeline behavior). The `claims` row stays at `extracted_unjudged`. Reconciliation job (§6.2) re-runs Pass B on backlog at the next quiet cycle.
+4. **Honest non-deferral, not fail-open.** If Pass B times out or errors, the user-facing reply still ships (existing audit pipeline behavior). The `claims` row stays without a `claim_judgements` row. **Maez may have spoken; the evidence notebook says "not checked yet."** This is *not* a fail-open posture — fail-open is about whether the user gets a reply. The ledger question is about what the notebook records actually happened. The notebook tells the truth even when the user-facing path keeps moving. Reconciliation (§6.2) revisits unjudged claims at the next quiet cycle and inserts a `claim_judgements` row.
 
-5. **No third-party LLM in the extractor.** Pass B uses Maez's own judge (currently retired Qwen3.5-4B; otherwise the brain itself if judge is offline). Sending claim extraction to OpenRouter or Claude or Gemini would leak production text and would teach Maez to sound like the extractor's voice, not its own.
+5. **Judgements with `provenance=NULL`** (judge ran but couldn't classify) are written with `audit_verdict='unable_to_classify'`. They count toward the daemon-rewrite-rate metric and are flagged for owner review weekly.
+
+6. **No third-party LLM in the extractor.** Pass B uses Maez's own judge (currently retired Qwen3.5-4B; otherwise the brain itself if judge is offline). Sending claim extraction to OpenRouter or Claude or Gemini would leak production text and would teach Maez to sound like the extractor's voice, not its own. Hard rule, no exceptions, enforced by a runtime check that the configured judge endpoint resolves to a Maez-owned model.
 
 **Why two passes and not one:**
 - Pure heuristic misses semantic claims (Maez says "I noticed you've been quiet" — that's a claim about the user's state, but the surface form is innocuous).
 - Pure LLM is non-deterministic and expensive per turn. The heuristic shortlist makes the LLM's job bounded and the audit cost predictable.
-- The separation also gives reconciliation a clean handoff: heuristic always runs synchronously; LLM judgement can be deferred or re-run.
+- The separation also gives reconciliation a clean handoff: heuristic always runs synchronously; LLM judgement can be deferred or re-run, and re-runs append rather than overwrite.
 
-**v1 acceptance:** Slice 4 ships when 100 sampled turns show:
-- ≥95% of human-rated claims appear in the `claims` table.
-- ≥80% of `claims` rows have a non-NULL `provenance` after both passes.
-- The remaining ≤20% with `provenance=NULL` are reviewed by Rohit weekly and used to grow the heuristic and refine the judge prompt.
+**v1 acceptance — hard gates, not floors that erode:**
+
+Slice 4 ships when 100 sampled turns show:
+- **≥95% claim recall.** ≥95% of human-rated claims appear in the `claims` table.
+- **≥80% non-NULL provenance.** ≥80% of `claims` rows have a corresponding `claim_judgements` row with non-NULL `provenance`.
+- The remaining ≤20% (NULL provenance or no judgement yet) are reviewed by Rohit weekly and used to grow the heuristic and refine the judge prompt.
+
+**If first measurement falls short, the response is NOT "lower the bar."** The response is one of:
+- **Fix the extractor or judge** until the bar is met, OR
+- **Amend the schema with explicit evidence and a schema_version bump.** A written amendment in this doc, ratified by Rohit, with the corpus showing why the original numbers are unreachable (e.g., some claim shapes are inherently fuzzy and require redefining "claim"). Numbers may move with cause; they do not erode silently.
+
+The bar protects the ledger's honesty. Quietly relaxing it is how QA gates die.
 
 **Open question deferred to Slice 4 ratification:** the exact heuristic patterns. v1 schema commits to the *two-pass shape*, not specific regex. Heuristic implementation is not a schema concern.
 
+### 10.1 Ratification record
+
+| Date | Decision | Edits applied |
+|---|---|---|
+| 2026-05-06 | Rohit ratified §10 | (#2) Rejected single-table UPDATE carve-out; required separate `claim_judgements` table with `latest_claim_judgement` view. (#3) Required wording change from "fail-open posture" to "honest non-deferral" with explicit "Maez may speak; notebook says not checked yet." (#5) Required hard-gate language: failures must be fixed or amended-with-evidence, never silently relaxed. |
+
 ---
 
-## 11. Other open questions (lower stakes than §10)
+## 11. Other open questions (RATIFIED 2026-05-06)
 
-1. **Hash algorithm: sha256 vs. blake3?** sha256 is universally available and audit-friendly. blake3 is faster. Default to sha256 unless a perf reason emerges.
-2. **Retention policy for `turns`?** The frontier is "lifelong memory" so the default is *forever*. But disk space is finite. Proposal: hot rows in `ledger.db`, cold rows (>2 years) archived to `ledger_archive_<year>.db`. Defer to Project A.5.
-3. **Should `evidence_envelope_json` and `audit_verdict_json` be normalized into separate tables for query efficiency?** Likely yes for the envelope (cockpit will repeatedly query "what did Maez know at turn T"); defer for the verdict. Track in Slice 5.
-4. **`tenant_id` mid-tenant rename?** If a tenant ID is ever changed (e.g., `'owner'` → `'rohit'` for clarity), what happens to old rows? Proposal: forbid in v1. Add a `tenant_aliases` table in v2 if needed.
-5. **`turn_kind` extension?** Adding a new kind requires updating the per-kind NOT-NULL contract. Proposal: schema_version bump on any new kind. Not free, deliberately.
+1. **Hash algorithm: sha256.** Ratified. Universally available and audit-friendly; perf is not the bottleneck.
+2. **Retention policy: deferred to Project A.5.** Ratified. Disk is fine; decide when a real constraint surfaces.
+3. **Normalization of `evidence_envelope_json` / `audit_verdict_json`: deferred to Slice 5.** Ratified. Wait until cockpit query patterns reveal the need.
+4. **`tenant_id` mid-tenant rename: forbidden in v1.** Ratified. `tenant_aliases` is a v2 feature only if ever needed.
+5. **New `turn_kind`: requires schema_version bump.** Ratified. Deliberately not free; prevents enum drift.
 
 ---
 
@@ -410,16 +488,16 @@ This is the decision that determines whether the ledger lies elegantly or tells 
 
 This schema is ready for Slice 2 implementation when:
 
-- [ ] [MAEZ_FRONTIER.md](MAEZ_FRONTIER.md) is committed (cross-link target exists in git)
+- [x] [MAEZ_FRONTIER.md](MAEZ_FRONTIER.md) is committed (cross-link target exists in git) — `aa1cb1a`
 - [ ] Rohit has read this doc and ratified the provenance enum values (§2)
 - [ ] Rohit has ratified the `turn_kind` enum values and per-kind NOT-NULL contract (§4.2)
 - [ ] Rohit has confirmed the surface enum values cover all current and near-term surfaces (§4.2 `surface` column)
-- [ ] **The v1 claims-extraction policy (§10) has been ratified or rewritten** — this is the load-bearing decision, not a deferrable open question
+- [x] **The v1 claims-extraction policy (§10) has been ratified or rewritten** — ratified 2026-05-06 with three edits (see §10.1)
 - [ ] At least one external agent (Codex or Hermes) has reviewed and signed off
 - [ ] The cross-DB FK contract (§5) has been verified against the current schema of `audit_log.db`, `fabrication_log.db`, `pending_cards.db`, `self_mod_dialogs.db`
 - [ ] The crash semantics (§6.2) reconciliation job has been scoped (the doc says "synthesize a `system_event`"; implementation must define the synthesis exactly)
-- [ ] The lower-stakes open questions in §11 have explicit decisions or deferrals
+- [x] The lower-stakes open questions in §11 have explicit decisions — ratified 2026-05-06
 
 ---
 
-*This is paper. No code lands until §12 is checked off. Particular attention to §10 — the claims-extraction policy is where the ledger earns its honesty.*
+*This is paper. No code lands until §12 is checked off. Five gates remain: provenance enum, turn_kind enum, surface enum, external review, cross-DB FK verification, and reconciliation job scope. The load-bearing one — §10 claims-extraction — has cleared.*
