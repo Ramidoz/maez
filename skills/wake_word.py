@@ -17,6 +17,7 @@ No dependency on openwakeword hey_mycroft scores.
 
 import logging
 import os
+import select
 import subprocess
 import threading
 import time
@@ -197,6 +198,155 @@ def _transcribe(whisper, audio: np.ndarray) -> Optional[str]:
     return text if text else None
 
 
+# Slice 1.4 (2026-05-07): bounded pw-record stdout reader.
+#
+# The previous inline _reader did `proc.stdout.read(chunk_bytes)` with
+# no timeout. If pw-record hung (PipeWire crash, device removal, etc.),
+# the read blocked in kernel-space — the D-state we observed on
+# 2026-05-07. Setting stop_event was useless because the read itself
+# never reached the next stop_event check.
+#
+# This helper polls stdout via select() with a short timeout (so
+# stop_event is checked every PW_READER_SELECT_TIMEOUT_S), and a
+# silence watchdog kills pw-record after PW_READER_WATCHDOG_S of
+# continuous "not ready" polls. Killing the proc closes the pipe,
+# which lets the helper exit cleanly instead of hanging.
+PW_READER_SELECT_TIMEOUT_S = 0.5
+
+_DEFAULT_PW_READER_WATCHDOG_S = 5.0
+
+
+def _pw_reader_watchdog_s() -> float:
+    """Parse MAEZ_PW_READER_WATCHDOG_S with safe fallback. Same posture
+    as the slice 1.2 breaker env-var parsing — a typo on a survivability
+    knob must not crash daemon import."""
+    raw = os.environ.get("MAEZ_PW_READER_WATCHDOG_S")
+    if raw is None or not str(raw).strip():
+        return _DEFAULT_PW_READER_WATCHDOG_S
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "MAEZ_PW_READER_WATCHDOG_S=%r is invalid; using %.1fs",
+            raw, _DEFAULT_PW_READER_WATCHDOG_S,
+        )
+        return _DEFAULT_PW_READER_WATCHDOG_S
+    if value <= 0:
+        logger.warning(
+            "MAEZ_PW_READER_WATCHDOG_S=%r must be positive; using %.1fs",
+            raw, _DEFAULT_PW_READER_WATCHDOG_S,
+        )
+        return _DEFAULT_PW_READER_WATCHDOG_S
+    return value
+
+
+PW_READER_WATCHDOG_S = _pw_reader_watchdog_s()
+
+
+def _run_pw_reader(
+    proc: subprocess.Popen,
+    stop_event: threading.Event,
+    audio_queue: list,
+    queue_lock: threading.Lock,
+    chunk_bytes: int,
+    *,
+    watchdog_s: float = PW_READER_WATCHDOG_S,
+    log: logging.Logger = logger,
+    skip_wav_header: bool = True,
+) -> None:
+    """Loop on proc.stdout with select() polling and a silence watchdog.
+
+    Both the WAV header read and the chunk reads go through select() —
+    if pw-record never produces data, the watchdog fires and kills it
+    so the read unblocks instead of hanging in kernel-space.
+
+    Exits cleanly on stop_event, EOF, OSError, or watchdog. Never
+    raises (all exceptions caught + logged on ``log``).
+
+    Duck-typing on ``proc``: only requires ``.stdout.fileno()``,
+    ``.stdout.read()``, and ``.kill()``. Tests pass a MagicMock.
+    """
+    try:
+        fd = proc.stdout.fileno()
+    except (AttributeError, ValueError, OSError) as e:
+        log.warning("pw-reader: stdout fileno() unavailable: %s", e)
+        return
+
+    last_data = time.monotonic()
+
+    def _bounded_read(nbytes: int) -> Optional[bytes]:
+        """Read exactly ``nbytes`` (or fewer on partial pipe), polling
+        select() with a watchdog. Returns ``None`` if stop_event,
+        watchdog, or EOF/OSError ended the read; bytes otherwise."""
+        nonlocal last_data
+        while not stop_event.is_set():
+            try:
+                ready, _, _ = select.select(
+                    [fd], [], [], PW_READER_SELECT_TIMEOUT_S,
+                )
+            except (OSError, ValueError) as e:
+                log.warning("pw-reader: select failed: %s", e)
+                return None
+            if not ready:
+                if time.monotonic() - last_data > watchdog_s:
+                    log.warning(
+                        "pw-reader: pw-record silent for %.1fs; "
+                        "killing proc to unblock",
+                        watchdog_s,
+                    )
+                    try:
+                        proc.kill()
+                    except Exception as e:  # noqa: BLE001
+                        log.debug("pw-reader: proc.kill() failed: %s", e)
+                    return None
+                continue
+            try:
+                data = proc.stdout.read(nbytes)
+            except OSError as e:
+                log.warning("pw-reader: read failed: %s", e)
+                return None
+            if not data:  # EOF
+                return None
+            last_data = time.monotonic()
+            return data
+
+    if skip_wav_header:
+        # Header is select-polled the same way as chunks — the original
+        # design only protected the chunk loop, leaving the header read
+        # as a duplicate D-state vector (Critical #1 from slice 1.4
+        # adversarial review).
+        header = _bounded_read(44)
+        if header is None:
+            return
+        log.info("pw-record stream active (fifine)")
+        # Reset watchdog AFTER header consumption so pre-startup buffer
+        # latency doesn't count against ongoing-silence detection.
+        last_data = time.monotonic()
+
+    while not stop_event.is_set():
+        data = _bounded_read(chunk_bytes)
+        if data is None:
+            return
+        try:
+            raw = np.frombuffer(data, dtype=np.int16)
+        except ValueError as e:
+            log.warning("pw-reader: bad frame buffer: %s", e)
+            return
+        if len(raw) == 0:
+            continue
+        with queue_lock:
+            audio_queue.append((raw, raw.astype(np.float32) / 32768.0))
+
+
+# Slice 1.4: module-level handles to the pw-record proc and reader thread.
+# wake_word.stop() needs direct access to bounded-join the reader
+# independently of whether _audio_loop_inner's finally block runs —
+# without this, a wedged audio-loop thread would prevent reader cleanup
+# (Critical #2 from slice 1.4 adversarial review).
+_pw_proc: Optional[subprocess.Popen] = None
+_pw_reader_thread: Optional[threading.Thread] = None
+
+
 def _audio_loop(callback: Callable[[str], None], stop_event: threading.Event):
     logger.info("[AUDIO] _audio_loop thread started")
     try:
@@ -239,20 +389,18 @@ def _audio_loop_inner(callback: Callable[[str], None], stop_event: threading.Eve
     queue_lock = threading.Lock()
     chunk_bytes = CHUNK_SAMPLES * 2  # int16 = 2 bytes per sample
 
-    def _reader():
-        proc.stdout.read(44)  # skip WAV header
-        logger.info("pw-record stream active (fifine)")
-        while not stop_event.is_set():
-            data = proc.stdout.read(chunk_bytes)
-            if not data:
-                break
-            raw = np.frombuffer(data, dtype=np.int16)
-            if len(raw) == 0:
-                continue
-            with queue_lock:
-                audio_queue.append((raw, raw.astype(np.float32) / 32768.0))
-
-    reader_thread = threading.Thread(target=_reader, daemon=True)
+    # Slice 1.4: spawn the bounded reader and publish proc + thread to
+    # module-level globals so wake_word.stop() can clean up directly,
+    # independent of whether _audio_loop_inner's finally block runs.
+    global _pw_proc, _pw_reader_thread
+    _pw_proc = proc
+    reader_thread = threading.Thread(
+        target=_run_pw_reader,
+        args=(proc, stop_event, audio_queue, queue_lock, chunk_bytes),
+        daemon=True,
+        name="pw-reader",
+    )
+    _pw_reader_thread = reader_thread
     reader_thread.start()
     logger.info("Fifine mic stream open via pw-record")
 
@@ -450,13 +598,61 @@ def start(callback: Callable[[str], None]) -> bool:
 
 
 def stop():
-    global _thread, _stop_event
+    """Slice 1.4: direct cleanup of pw-record proc + reader thread BEFORE
+    waiting on the outer audio-loop thread. If _audio_loop_inner is
+    wedged (e.g., stuck in numpy work or waiting on queue_lock), its
+    finally block won't run — but we can still terminate/kill the proc
+    and bounded-join the reader, preventing the D-state hang on shutdown.
+
+    Cleanup ladder (Critical #2 + #3 from adversarial review):
+      1. Signal stop_event so the reader's select() loop exits next poll.
+      2. proc.terminate() — graceful SIGTERM to pw-record.
+      3. Bounded join on reader_thread; if alive, escalate.
+      4. proc.stdout.close() — forces pending reads to error out.
+      5. proc.kill() — SIGKILL.
+      6. Final bounded join. If still alive after both kills, log error
+         (the thread becomes an OS-reaped orphan at process exit).
+    """
+    global _thread, _stop_event, _pw_proc, _pw_reader_thread
     if _stop_event:
         _stop_event.set()
+
+    proc = _pw_proc
+    reader = _pw_reader_thread
+    if proc is not None:
+        try:
+            proc.terminate()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("pw-record terminate failed: %s", e)
+    if reader is not None and reader.is_alive():
+        reader.join(timeout=2.0)
+        if reader.is_alive():
+            logger.warning(
+                "pw-reader did not exit on terminate; closing stdout + "
+                "killing proc"
+            )
+            if proc is not None:
+                try:
+                    proc.stdout.close()
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("pw-record stdout.close() failed: %s", e)
+                try:
+                    proc.kill()
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("pw-record kill failed: %s", e)
+            reader.join(timeout=2.0)
+            if reader.is_alive():
+                logger.error(
+                    "pw-reader thread did not exit after kill; will "
+                    "become orphan on process exit"
+                )
+
     if _thread:
         _thread.join(timeout=5)
     _thread = None
     _stop_event = None
+    _pw_proc = None
+    _pw_reader_thread = None
     logger.info("Wake word listener stopped")
 
 

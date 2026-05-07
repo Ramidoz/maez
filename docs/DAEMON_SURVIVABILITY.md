@@ -95,3 +95,35 @@ and supports bounded shutdown.
   print(daemon._dream_worker)
   # → BoundedSingletonWorker(name='dream-cycle', in_flight=..., shutdown=...)
   ```
+
+## Wake-word reader (pw-record) bounded read
+
+The wake-word listener spawns `pw-record` (PipeWire microphone capture)
+as a subprocess and reads its stdout in a daemon thread. Previously the
+read was a blocking `proc.stdout.read(chunk_bytes)` with no timeout —
+if PipeWire hung or the audio device went away mid-read, the reader
+thread blocked in kernel-space (D-state). On 2026-05-07 this thread
+held file descriptors through `kill -9` of the daemon and required a
+machine reboot to release.
+
+Slice 1.4 wraps the read in `select()` polling with a silence
+watchdog. Both the WAV header read and the chunk reads go through
+the same path; if pw-record produces no data for
+`MAEZ_PW_READER_WATCHDOG_S` seconds, the helper kills the process to
+unblock the pipe.
+
+| Env var | Default | Notes |
+|---|---|---|
+| `MAEZ_PW_READER_WATCHDOG_S` | `5.0` | Continuous-silence threshold before proc.kill() |
+
+- **Polling cadence:** `select()` timeout of 0.5s — the upper bound
+  on how long stop_event takes to propagate to a quiet reader.
+- **Cleanup ladder in `wake_word.stop()`:** terminate → bounded join
+  (2s) → close stdout → kill → bounded join (2s) → log error if still
+  alive. Module-level `_pw_proc` and `_pw_reader_thread` globals let
+  `stop()` reach the proc and thread directly without depending on
+  `_audio_loop_inner`'s finally block running (which it might not, if
+  the audio loop itself is wedged).
+- Invalid `MAEZ_PW_READER_WATCHDOG_S` values fall back to the default
+  with a WARNING — daemon import must not fail on a typo.
+- Per-process state. Restart resets.
