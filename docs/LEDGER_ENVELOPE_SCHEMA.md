@@ -44,7 +44,7 @@ Seven classes. Every claim a Maez reply makes must map to exactly one. The audit
 | `recalled` | From a memory layer (raw / daily / core / continuity / lived / reflection). | Medium | memory_ids[] |
 | `inferred` | Deduced from any combination of above with explicit reasoning chain. | Weak | reasoning_chain_id (a turn_id with the deduction) |
 | `synthesized` | Meta-observation from the reflection layer (`source_kind="reflection"`). | Weak | source_episode_ids[] from the reflection's grounding |
-| `self_history` | Claims about Maez's prior utterances or actions, traceable to ledger turn_ids of prior `model_reply`, `daemon_cycle`, or `peer_message_out` entries within the relevant session/chat scope. Symmetric with how `tool_results` (slot) pairs with `tool-verified` (provenance value). Added Slice 3.0b 2026-05-07 to address self-history fabrications (e.g. "I told you the weather earlier" with no such ledger row). | Strong | self_history slot ref (turn_id + utterance_summary) |
+| `self-history` | Claims about Maez's prior utterances or actions, traceable to ledger turn_ids of prior `model_reply`, `daemon_cycle`, or `peer_message_out` entries within the relevant session/chat scope. Symmetric with how `tool_results` (slot) pairs with `tool-verified` (provenance value). Added Slice 3.0b 2026-05-07 to address self-history fabrications (e.g. "I told you the weather earlier" with no such ledger row). The provenance VALUE is kebab-case to match `owner-said` / `tool-verified`; the envelope SLOT field is `self_history` (snake_case Python convention). | Strong | self_history slot ref (turn_id + utterance_summary) |
 
 **Audit rule:** A reply containing claims with no provenance class — or with `inferred`/`synthesized` claims that lack the required evidence — must be flagged or rewritten by audit Pass 2.
 
@@ -100,7 +100,7 @@ class SelfHistoryRef:
 
 - The `self_history` slot is OPTIONAL on every turn_kind. Absence/empty list means "no prior-utterance evidence available this turn." It is not yet REQUIRED on `model_reply` / `daemon_cycle` because the population path (the envelope BUILDER) is not yet implemented.
 - **Population is the responsibility of the envelope BUILDER (slice 3 proper, not 3.0b).** The builder will run a bounded ledger lookback over the last N `model_reply` / `daemon_cycle` / `peer_message_out` turns within the relevant session/chat scope, summarize each into ≤200 chars, and attach them as `SelfHistoryRef` entries. Slice 3.0b only ratifies the schema vocabulary, validators, and minimal consumer awareness.
-- Pairing rule: a claim labeled `provenance="self_history"` MUST cite one or more `turn_id`s that appear in this envelope's `self_history` slot. Enforcement of that pairing is a Slice 4 (provenance tagging) consumer concern; this slice declares the contract only.
+- Pairing rule: a claim labeled `provenance="self-history"` MUST cite one or more `turn_id`s that appear in this envelope's `self_history` slot. Note the asymmetry — the provenance VALUE is kebab-case (`self-history`), the slot FIELD is snake_case (`self_history`). Enforcement of that pairing is a Slice 4 (provenance tagging) consumer concern; this slice declares the contract only.
 
 ### 3.2 Prompt injection
 

@@ -75,7 +75,15 @@ def _model_reply_kwargs(envelope: dict | None) -> dict:
 class ProvenanceEnumTests(unittest.TestCase):
 
     def test_enum_includes_self_history(self):
-        self.assertIn("self_history", envelope_schema.PROVENANCE_VALUES)
+        # Kebab-case to match the existing convention
+        # (owner-said, tool-verified). The envelope SLOT field uses
+        # snake_case (`self_history`); only the provenance VALUE is
+        # kebab.
+        self.assertIn("self-history", envelope_schema.PROVENANCE_VALUES)
+        self.assertNotIn(
+            "self_history", envelope_schema.PROVENANCE_VALUES,
+            "underscore variant must not exist as a provenance value",
+        )
 
     def test_enum_keeps_six_legacy_values(self):
         for v in (
@@ -89,7 +97,14 @@ class ProvenanceEnumTests(unittest.TestCase):
         self.assertEqual(len(envelope_schema.PROVENANCE_VALUES), 7)
 
     def test_validate_provenance_accepts_self_history(self):
-        envelope_schema.validate_provenance("self_history")  # no raise
+        envelope_schema.validate_provenance("self-history")  # no raise
+
+    def test_validate_provenance_rejects_underscore_variant(self):
+        # The naming-convention guard: a slip back to underscore form
+        # must be rejected. Catches a future agent re-adding the
+        # snake-case variant by accident.
+        with self.assertRaises(ValueError):
+            envelope_schema.validate_provenance("self_history")
 
     def test_validate_provenance_rejects_unknown(self):
         with self.assertRaises(ValueError):
@@ -292,7 +307,13 @@ class SelfClaimAuditAcceptsProvenanceTests(unittest.TestCase):
 
     def test_self_history_accepted(self):
         from core.safety import self_claim_audit
-        self.assertTrue(self_claim_audit.accepts_provenance("self_history"))
+        self.assertTrue(self_claim_audit.accepts_provenance("self-history"))
+
+    def test_self_history_underscore_form_rejected(self):
+        # The audit's accepts_provenance defers to the schema enum;
+        # underscore form is not in the enum.
+        from core.safety import self_claim_audit
+        self.assertFalse(self_claim_audit.accepts_provenance("self_history"))
 
     def test_legacy_value_still_accepted(self):
         from core.safety import self_claim_audit
@@ -311,8 +332,9 @@ class SchemaDocWiringTests(unittest.TestCase):
 
     def test_schema_doc_enum_section_mentions_self_history(self):
         doc = (_REPO / "docs" / "LEDGER_ENVELOPE_SCHEMA.md").read_text()
-        # §2 enum table row.
-        self.assertIn("`self_history`", doc)
+        # §2 enum table row uses kebab-case to match owner-said /
+        # tool-verified. The slot field elsewhere uses snake_case.
+        self.assertIn("`self-history`", doc)
         self.assertIn("Seven classes", doc)
 
     def test_schema_doc_envelope_section_has_self_history_slot(self):

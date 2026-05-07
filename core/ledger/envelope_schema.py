@@ -49,7 +49,10 @@ PROVENANCE_VALUES: frozenset[str] = frozenset({
     "recalled",
     "inferred",
     "synthesized",
-    "self_history",
+    # Provenance VALUE is kebab-case to match the schema's enum
+    # convention (owner-said, tool-verified). The envelope SLOT
+    # field is `self_history` (snake_case, Python field convention).
+    "self-history",
 })
 
 
