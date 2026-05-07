@@ -62,6 +62,44 @@ from core.model_config import (
 # owner watched. Fail-loud only matters if the failure is fast.
 _JUDGE_TIMEOUT_S = float(os.environ.get("MAEZ_JUDGE_TIMEOUT_S", "5"))
 
+# Slice 1.2 (2026-05-07): circuit breaker for the dedicated judge HTTP
+# path. Stops connect-storms when the judge endpoint is wedged. Defaults
+# tuned against the May 2026 hang signature: 3 transport failures within
+# a 5-minute window opens the circuit; one successful probe after a 30s
+# cooldown closes it. Fallback _llm_client.chat path is intentionally
+# NOT wrapped — it shares an endpoint with proposal_worker and gets its
+# own breaker policy in a future slice.
+from core.health.circuit_breaker import CircuitBreaker, CircuitOpen
+
+# Logger named to match the integration test's assertLogs target so
+# breaker state-transition WARNINGs land where operators (and tests)
+# expect them. Distinct from the module-level "maez.grounding_judge"
+# logger which keeps existing dashboard/filter wiring intact.
+_BREAKER_LOG = logging.getLogger("core.cognition.grounding_judge")
+
+_JUDGE_BREAKER = CircuitBreaker(
+    name="grounding_judge",
+    failure_threshold=int(os.environ.get(
+        "MAEZ_JUDGE_BREAKER_THRESHOLD", "3")),
+    window_s=float(os.environ.get(
+        "MAEZ_JUDGE_BREAKER_WINDOW_S", "300")),
+    cooldown_s=float(os.environ.get(
+        "MAEZ_JUDGE_BREAKER_COOLDOWN_S", "30")),
+    log=_BREAKER_LOG,
+)
+
+
+def _is_transport_failure(exc: BaseException) -> bool:
+    """Predicate for the breaker: only count transport-class failures
+    (refused/timeout/http_5xx) toward opening the circuit.
+
+    bad_response (judge alive but body malformed) is NOT counted —
+    otherwise a single bad prompt-template deploy would deterministically
+    open the circuit forever, turning connect-storm protection into a
+    self-inflicted outage.
+    """
+    return _classify_exception(exc) in {"refused", "timeout", "http_5xx"}
+
 
 class JudgeUnavailable(Exception):
     """Raised when the grounding judge cannot run (transport failure,
@@ -112,32 +150,49 @@ def _classify_exception(e: BaseException) -> str:
 
 def _call_dedicated_judge(prompt: str) -> str:
     """HTTP call to the dedicated judge llama-server. Returns raw content
-    string. Raises on network/HTTP failure — caller handles fail-open."""
-    payload: dict = {
-        "model": _JUDGE_MODEL,
-        "messages": [
-            {"role": "system",
-             "content": "You are a strict grounding auditor. "
-                        "Output only valid JSON."},
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": _TEMP,
-        "max_tokens": _MAX_TOKENS,
-    }
-    # Model-specific quirks (e.g. enable_thinking=false for Qwen3.x) come
-    # from MAEZ_JUDGE_CHAT_KWARGS JSON. A model that doesn't understand
-    # a given kwarg will simply ignore it — safe across model families.
-    if _JUDGE_CHAT_KWARGS:
-        payload["chat_template_kwargs"] = dict(_JUDGE_CHAT_KWARGS)
-    body = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        f"{_JUDGE_BASE_URL}/v1/chat/completions",
-        data=body,
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=_JUDGE_TIMEOUT_S) as resp:
-        data = json.loads(resp.read())
-    return data["choices"][0]["message"]["content"] or ""
+    string. Raises on network/HTTP failure — caller handles fail-open.
+
+    Slice 1.2: wrapped through the module-level circuit breaker. When the
+    breaker is OPEN (sustained transport failures), the call short-
+    circuits as ``JudgeUnavailable(error_class='circuit_open')`` without
+    touching the network. bad_response failures (HTTP OK, malformed body)
+    are NOT counted toward the breaker.
+    """
+    def _do_call() -> str:
+        payload: dict = {
+            "model": _JUDGE_MODEL,
+            "messages": [
+                {"role": "system",
+                 "content": "You are a strict grounding auditor. "
+                            "Output only valid JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": _TEMP,
+            "max_tokens": _MAX_TOKENS,
+        }
+        # Model-specific quirks (e.g. enable_thinking=false for Qwen3.x)
+        # come from MAEZ_JUDGE_CHAT_KWARGS JSON. A model that doesn't
+        # understand a given kwarg will simply ignore it — safe across
+        # model families.
+        if _JUDGE_CHAT_KWARGS:
+            payload["chat_template_kwargs"] = dict(_JUDGE_CHAT_KWARGS)
+        body = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            f"{_JUDGE_BASE_URL}/v1/chat/completions",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=_JUDGE_TIMEOUT_S) as resp:
+            data = json.loads(resp.read())
+        return data["choices"][0]["message"]["content"] or ""
+
+    try:
+        return _JUDGE_BREAKER.call(
+            _do_call,
+            should_count_failure=_is_transport_failure,
+        )
+    except CircuitOpen as e:
+        raise JudgeUnavailable(str(e), error_class="circuit_open") from e
 
 
 # Built-in few-shot bank covering failure classes the regex used to handle.
