@@ -407,14 +407,14 @@ The ledger writer touches multiple SQLite databases in §5's order. A crash anyw
 | State | What happened | Resolution |
 |---|---|---|
 | **A. No writes landed** | Crash before step 1 (audit_log write). | Nothing to reconcile. Next turn proceeds normally. |
-| **B. Dependent rows landed, ledger row missing** | Crash between steps 1–3. Audit log has a row, ledger does not. | Reconciliation job (`scripts/reconcile_ledger.py`) runs at startup AND nightly. Detects orphan dependent rows (`audit_log`, `fabrication_events`, etc.) with no corresponding `turns` row, and writes a synthetic `turn_kind='system_event'` ledger entry referencing them, so the chain remains complete and the orphans become attributable. |
-| **C. Ledger row landed, claims missing** | Crash between steps 3–4. `turns` row exists; `claims` rows for it do not. | Same reconciliation job re-runs claim extraction (Slice 4 logic) over the orphan turn's `rewritten_text` and writes the `claims` rows. The chain is unaffected because `claims` are not part of the chain. |
+| **B. Dependent rows landed, ledger row missing** | Crash between steps 1–3. Audit log has a row, ledger does not. | Operator runs `scripts/reconcile_ledger.py` manually (dry-run first, then `--apply` with `MAEZ_LEDGER_WRITES=1`). The job detects orphan dependent rows (`audit_log`, `fabrication_events`, etc.) with no corresponding `turns` row, and writes a synthetic `turn_kind='system_event'` ledger entry referencing them, so the chain remains complete and the orphans become attributable. **Current Slice 2.4 implementation is operator-invokable only; no daemon startup/nightly auto-run exists yet.** |
+| **C. Ledger row landed, claims missing** | Crash between steps 3–4. `turns` row exists; `claims` rows for it do not. | Current Slice 2.4 implementation is **detect-only**: the job reports `state_c_turns` and exits with CLI code 3 when this is the highest-priority signal. Auto-repair waits for Slice 4 claim extraction. A sandbox run that shows State C is a hard fail for production flip. |
 
 **Hard rule:** the ledger writer must NEVER use a single transaction that spans multiple SQLite databases. Each DB's writes are their own transaction; cross-DB integrity is restored by the reconciliation job, not by attempting a multi-DB atomic write (which SQLite cannot guarantee). This is a deliberate trade: best-effort cross-DB consistency in the steady state, eventual consistency after crashes, with the reconciliation job as the convergence mechanism.
 
-**Reconciliation job invariants** (verified by `tests/test_reconciliation.py`):
-- After running, every `audit_log` row has a corresponding `turns` row referencing it (for kinds where audit ran).
-- After running, every `turns` row with `was_rewritten=1` has at least one `claims` row.
+**Reconciliation job invariants** (verified by `tests/test_ledger_reconcile.py` and `tests/test_reconcile_ledger_cli.py`):
+- After `--apply`, every post-era orphan in `audit_log`, `fabrication_events`, `pending_cards`, and `self_mod_dialogs` has a corresponding synthetic `turns` row referencing it.
+- `was_rewritten=1` turns without claims are detected as State C and reported; they are not repaired in Slice 2.4.
 - The chain remains valid: synthetic reconciliation rows are appended at the chain head, never inserted mid-chain.
 
 ### 6.3 Synthetic reconciliation row spec

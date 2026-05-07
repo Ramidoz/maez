@@ -25,6 +25,7 @@ RuntimeError. Pre-era external rows are filtered out (not orphans).
 from __future__ import annotations
 
 import os
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -326,6 +327,17 @@ class OrphanRepairTests(unittest.TestCase):
                      and r["audit_log_id"] == orphan
                      and r["turn_id"] != "genesis"]
         self.assertEqual(len(synthetic), 1)
+        self.assertEqual(synthetic[0]["raw_surface"], "ledger_reconciliation")
+        payload = json.loads(synthetic[0]["raw_text"])
+        self.assertEqual(payload["event"], "orphan_dependent_row")
+        self.assertEqual(payload["source_db"], "audit_log")
+        self.assertEqual(payload["source_table"], "audit_log")
+        self.assertEqual(payload["source_id"], orphan)
+        self.assertEqual(payload["source_ts"], 1.0)
+        self.assertEqual(
+            payload["reason"],
+            "ledger_write_missing_after_crash_or_legacy_write",
+        )
         self.assertEqual(chain.verify_chain(rows), [])
 
     def test_apply_repairs_multiple_orphans(self):

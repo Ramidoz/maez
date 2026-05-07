@@ -75,7 +75,7 @@ def _read_era(ledger_db_path: str) -> float:
 
 def _post_era_rows(
     db_path: str, table: str, ts_col: str, era_ts: float,
-) -> list[int]:
+) -> list[dict]:
     """Read post-era ids from an external DB.
 
     Tolerant by design:
@@ -96,12 +96,13 @@ def _post_era_rows(
         if present is None:
             return []
         rows = conn.execute(
-            f"SELECT id FROM {table} WHERE {ts_col} > ? ORDER BY id ASC",
+            f"SELECT id, {ts_col} FROM {table} WHERE {ts_col} > ? "
+            "ORDER BY id ASC",
             (era_ts,),
         ).fetchall()
     finally:
         conn.close()
-    return [int(r[0]) for r in rows]
+    return [{"id": int(r[0]), "ts": float(r[1])} for r in rows]
 
 
 def _referenced_ids(ledger_db_path: str, fk_col: str) -> set:
@@ -182,7 +183,10 @@ def reconcile(
         if not post_era:
             continue
         referenced = _referenced_ids(ledger_db_path, fk_col)
-        orphan_ids = sorted(i for i in post_era if i not in referenced)
+        orphan_ids = sorted(
+            int(row["id"]) for row in post_era
+            if int(row["id"]) not in referenced
+        )
         orphans[key] = orphan_ids
 
     state_c = _state_c_turns(ledger_db_path)
@@ -215,9 +219,22 @@ def reconcile(
                     "MAEZ_LEDGER_WRITES is not enabled per LedgerWriter."
                 )
             for table, ts_col, fk_col, key in _FK_MAP:
+                ext_db = ext_paths[key]
+                post_era = _post_era_rows(ext_db, table, ts_col, era_ts)
+                row_by_id = {int(row["id"]): row for row in post_era}
                 for orphan_id in orphans[key]:
+                    source_ts = row_by_id.get(orphan_id, {}).get("ts")
                     raw_text = json.dumps(
-                        {"event": "reconciliation", fk_col: orphan_id},
+                        {
+                            "event": "orphan_dependent_row",
+                            "reason": (
+                                "ledger_write_missing_after_crash_or_legacy_write"
+                            ),
+                            "source_db": key,
+                            "source_id": orphan_id,
+                            "source_table": table,
+                            "source_ts": source_ts,
+                        },
                         sort_keys=True,
                         separators=(",", ":"),
                     )
@@ -226,6 +243,7 @@ def reconcile(
                         "system_event",
                         raw_text,
                         surface="system",
+                        raw_surface="ledger_reconciliation",
                         **kwargs,
                     )
                     if tid is not None:
