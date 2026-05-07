@@ -154,19 +154,64 @@ class DaemonDreamWorkerWiringTests(unittest.TestCase):
         being set at the START of run_dream_cycle, not at the end.
         If that ever moves, the bounded worker becomes the only re-
         spawn safety — and the cross-file note must remain to flag
-        that coupling for the next refactor."""
+        that coupling for the next refactor.
+
+        Position is verified, not just existence: within
+        ``run_dream_cycle``, the FIRST ``self._last_dream_at = now``
+        must appear BEFORE the first real-work call (the recent_raw
+        memory fetch). 'Exists somewhere' is not a position guard;
+        an end-of-function assignment would still pass that.
+
+        Note: dream_state.py legitimately has a SECOND
+        ``self._last_dream_at = now`` later in the cycle that extends
+        the cooldown after a successful proposal lands. That's
+        intentional and not what this test guards. The guard scope is
+        the FIRST assignment within the function bounds.
+        """
+        # Locate the function bounds: from `def run_dream_cycle` to
+        # the next `\n    def ` (next method on the class).
+        func_start = self.dream_src.index("def run_dream_cycle(self")
+        # Look for the next method definition after our function start.
+        next_def = self.dream_src.find("\n    def ", func_start + 1)
+        self.assertGreater(
+            next_def, func_start,
+            "could not locate end of run_dream_cycle (no following "
+            "method definition); test needs to be re-anchored if the "
+            "file structure changed",
+        )
+        body = self.dream_src[func_start:next_def]
+
+        # The assignment must exist within the function.
         self.assertIn(
             "self._last_dream_at = now",
-            self.dream_src,
-            "dream_state must update _last_dream_at to claim the "
+            body,
+            "run_dream_cycle must update _last_dream_at to claim the "
             "cooldown slot",
         )
+        # ...AND the FIRST occurrence in the function must appear
+        # before the first real-work call.
+        # `self.memory.recent_raw(` is the first I/O call inside
+        # run_dream_cycle; if the assignment lands after it, the
+        # cooldown is set too late.
+        assignment_idx = body.index("self._last_dream_at = now")
+        work_idx = body.index("self.memory.recent_raw(")
+        self.assertLess(
+            assignment_idx, work_idx,
+            "first self._last_dream_at = now in run_dream_cycle must "
+            "appear BEFORE the first real-work call "
+            "(self.memory.recent_raw). End-of-function placement would "
+            "let a long cycle re-spawn before the cooldown is claimed "
+            "— exactly the bug slice 1.3 guards. "
+            f"Saw assignment at body offset {assignment_idx}, "
+            f"work at body offset {work_idx}.",
+        )
+
         # The slice 1.3 coupling comment must remain so a future
         # refactor doesn't silently move the cooldown update without
         # also touching the daemon's bounded worker spawn site.
         self.assertIn(
             "Slice 1.3 cross-file coupling",
-            self.dream_src,
+            body,
             "the slice 1.3 cross-file coupling note must remain in "
             "dream_state.run_dream_cycle so a future refactor doesn't "
             "silently break re-spawn safety",
