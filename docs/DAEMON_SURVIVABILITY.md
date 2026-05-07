@@ -173,3 +173,57 @@ print(len(adapter._pending_text_batches),
       len(adapter._media_group_events),
       len(adapter._active_sessions))
 ```
+
+## Shared executor for sync work (slice 1.6)
+
+The 12 `run_in_executor(None, ...)` call sites in
+`skills/surface/maez_adapter.py` and `skills/telegram_voice.py` used
+Python's default thread pool (`min(32, cpu+4)`). Under sustained
+load the pool fills with idle workers that never reap — the audit
+attributed ~150-200 of the 330 leaked-threads-per-43-min hang to
+this class.
+
+Slice 1.6 routes all 12 sites through a process-wide bounded
+`ThreadPoolExecutor` in `core/health/shared_executor.py`.
+
+| Env var | Default | Notes |
+|---|---|---|
+| `MAEZ_SHARED_EXECUTOR_MAX_WORKERS` | `8` | Bound on concurrent sync work |
+| `MAEZ_LLM_CALL_TIMEOUT_S` | `120` | asyncio-side timeout for LLM call sites |
+
+**Two integration patterns:**
+
+- **Non-LLM sites** (disk I/O, dream proposal apply): use
+  `loop.run_in_executor(get_shared_executor(), fn)` directly.
+  Bounded by pool size, no awaiter timeout.
+- **LLM sites** (run_brain_loop, jarvis loop, next_step proposer,
+  pipeline reply, recovery synthesis): use
+  `run_llm_in_executor(loop, fn)`. Wraps `loop.run_in_executor`
+  with `asyncio.wait_for(timeout=MAEZ_LLM_CALL_TIMEOUT_S)`. The
+  worker thread itself is unkillable (Python sync code runs to
+  completion), but the asyncio awaiter is bounded — daemon's reply
+  path moves on after timeout instead of blocking forever on a
+  wedged backend.
+
+**Shutdown:** `MaezDaemon.stop()` calls
+`shutdown_shared_executor(wait=True, cancel_futures=True)` AFTER
+all surfaces (telegram, surface_v2, public_bot) have stopped
+submitting. Running LLM calls can't be cancelled mid-flight in
+Python; they're left to finish or be reaped at process exit (the
+asyncio awaiter has already moved on via the wait_for timeout).
+Queued futures are dropped via `cancel_futures=True`.
+
+**Pool exhaustion under wedged backend:** N hung LLM calls fill
+the pool with N stuck workers. The asyncio awaiters are freed by
+their wait_for timeouts, but the pool budget remains consumed
+until the worker threads return (or process exits). This is a
+known limitation; the proper fix is per-call timeouts INSIDE the
+LLM client (slices 1.1 and 1.2 already do this for proposal
+intent and grounding judge respectively; brain_loop / jarvis_loop
+remain a future-slice concern).
+
+Inspect:
+```python
+from core.health.shared_executor import get_shared_executor, is_initialized
+print(is_initialized(), get_shared_executor()._max_workers)
+```

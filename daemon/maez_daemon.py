@@ -4568,6 +4568,21 @@ class MaezDaemon:
             self.public_bot.stop()
         except Exception as e:
             logger.debug("Public bot stop failed: %s", e)
+        # Slice 1.6: shut down the shared ThreadPoolExecutor AFTER all
+        # surfaces (telegram, surface_v2, public_bot) have stopped
+        # submitting. Placing it earlier could leave a late submission
+        # racing the shutdown and raising
+        # RuntimeError: cannot schedule new futures after shutdown.
+        # cancel_futures=True drops queued work; running LLM calls
+        # can't be cancelled in Python so they're left to finish or
+        # be reaped at process exit (the corresponding asyncio
+        # awaiters were already freed by run_llm_in_executor's
+        # asyncio.wait_for timeout).
+        try:
+            from core.health.shared_executor import shutdown_shared_executor
+            shutdown_shared_executor(wait=True, cancel_futures=True)
+        except Exception as e:
+            logger.debug("Shared executor shutdown failed: %s", e)
         try:
             if self._ws_loop is not None:
                 self._ws_loop.call_soon_threadsafe(self._ws_loop.stop)
