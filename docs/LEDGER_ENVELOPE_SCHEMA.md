@@ -2,9 +2,8 @@
 
 **Slice 1 of Project A completion. Paper artifact. No implementation in this doc.**
 
-**Status:** Draft for review (NOT ratified)
+**Status:** Ratified 2026-05-06 (Slice 2 design checkpoint). Schema additions land via amendments and a schema_version bump per §11; the ratification covers the §2 enum and §3–§4 structures as of that date. Slice 3.0b (2026-05-07) extends the §2 enum with `self_history` and §3 with the matching slot.
 **Author:** Claude (drafted 2026-05-06, revised same day after audit pushback)
-**Reviewers needed:** Rohit, plus one external (Codex or Hermes)
 **Companion docs:** [MAEZ_FRONTIER.md](MAEZ_FRONTIER.md) §6 (dependency graph), §9.1 (build order)
 
 ---
@@ -35,7 +34,7 @@ This doc fixes the joint schema before any code lands.
 
 ## 2. The provenance enum
 
-Six classes. Every claim a Maez reply makes must map to exactly one. The audit layer weights them differently.
+Seven classes. Every claim a Maez reply makes must map to exactly one. The audit layer weights them differently.
 
 | Class | Definition | Weight | Required evidence |
 |---|---|---|---|
@@ -45,6 +44,7 @@ Six classes. Every claim a Maez reply makes must map to exactly one. The audit l
 | `recalled` | From a memory layer (raw / daily / core / continuity / lived / reflection). | Medium | memory_ids[] |
 | `inferred` | Deduced from any combination of above with explicit reasoning chain. | Weak | reasoning_chain_id (a turn_id with the deduction) |
 | `synthesized` | Meta-observation from the reflection layer (`source_kind="reflection"`). | Weak | source_episode_ids[] from the reflection's grounding |
+| `self_history` | Claims about Maez's prior utterances or actions, traceable to ledger turn_ids of prior `model_reply`, `daemon_cycle`, or `peer_message_out` entries within the relevant session/chat scope. Symmetric with how `tool_results` (slot) pairs with `tool-verified` (provenance value). Added Slice 3.0b 2026-05-07 to address self-history fabrications (e.g. "I told you the weather earlier" with no such ledger row). | Strong | self_history slot ref (turn_id + utterance_summary) |
 
 **Audit rule:** A reply containing claims with no provenance class — or with `inferred`/`synthesized` claims that lack the required evidence — must be flagged or rewritten by audit Pass 2.
 
@@ -71,6 +71,7 @@ class EvidenceEnvelope:
     world_state: WorldStateBrief          # current snapshots
     memory_brief: MemoryBrief             # recalled items with ids
     tool_results: list[ToolResultRef]     # recent tool calls available
+    self_history: list[SelfHistoryRef]    # bounded prior-utterance summaries (slice 3.0b)
 
     signals_present: list[str]            # canonical signal labels (compatibility with audit_signal_manifest)
     signals_absent: list[str]             # labels for signals that should exist but don't
@@ -86,7 +87,20 @@ class ClaimSlot:
 class ForbiddenClaim:
     fact: str                             # what the prompt may try to claim
     reason: str                           # why it's forbidden ("no presence snapshot this turn")
+
+@dataclass
+class SelfHistoryRef:
+    turn_id: str                          # links into ledger.turns
+    timestamp: float                      # unix seconds, prior turn's wall-clock time
+    utterance_summary: str                # ≤200 chars; bounded summary of what was said
+    kind: str                             # one of: model_reply, daemon_cycle, peer_message_out
 ```
+
+**Slice 3.0b notes (2026-05-07):**
+
+- The `self_history` slot is OPTIONAL on every turn_kind. Absence/empty list means "no prior-utterance evidence available this turn." It is not yet REQUIRED on `model_reply` / `daemon_cycle` because the population path (the envelope BUILDER) is not yet implemented.
+- **Population is the responsibility of the envelope BUILDER (slice 3 proper, not 3.0b).** The builder will run a bounded ledger lookback over the last N `model_reply` / `daemon_cycle` / `peer_message_out` turns within the relevant session/chat scope, summarize each into ≤200 chars, and attach them as `SelfHistoryRef` entries. Slice 3.0b only ratifies the schema vocabulary, validators, and minimal consumer awareness.
+- Pairing rule: a claim labeled `provenance="self_history"` MUST cite one or more `turn_id`s that appear in this envelope's `self_history` slot. Enforcement of that pairing is a Slice 4 (provenance tagging) consumer concern; this slice declares the contract only.
 
 ### 3.2 Prompt injection
 

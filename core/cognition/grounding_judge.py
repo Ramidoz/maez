@@ -282,9 +282,35 @@ def _build_judge_prompt(
     signals_present: list[str],
     signals_absent: list[str],
     few_shots: list[dict],
+    self_history: list[dict] | None = None,
 ) -> str:
     present_list = "\n".join(f"  ✓ {s}" for s in (signals_present or []))
     absent_list = "\n".join(f"  ✗ {s}" for s in (signals_absent or []))
+
+    # Slice 3.0b (2026-05-07): self_history block. When the envelope
+    # builder (slice 3 proper) populates this list with prior-utterance
+    # summaries from the ledger, the judge sees what Maez actually said
+    # earlier and can flag self-history fabrications ("I told you X")
+    # that don't trace back to a real turn_id. When the slot is empty
+    # or absent, the block is omitted entirely so the prompt size on
+    # chat-surface calls (no envelope yet) doesn't grow.
+    self_history_block = ""
+    if self_history:
+        sh_lines = [
+            "MAEZ'S PRIOR UTTERANCES THIS SESSION (self_history slot — "
+            "claims about what Maez said earlier MUST trace to one of "
+            "these turn_ids):",
+        ]
+        for entry in self_history:
+            tid = (entry.get("turn_id") or "")[:36]
+            kind = entry.get("kind") or "?"
+            ts = entry.get("timestamp")
+            ts_str = f"{ts:.0f}" if isinstance(ts, (int, float)) else "?"
+            summary = (entry.get("utterance_summary") or "")[:200]
+            sh_lines.append(
+                f"  - turn_id={tid} kind={kind} ts={ts_str}: {summary!r}"
+            )
+        self_history_block = "\n".join(sh_lines) + "\n\n"
 
     # Always include the built-in few-shot bank so chat-surface calls
     # (empty signal manifests) still see the important anti-patterns.
@@ -316,6 +342,15 @@ def _build_judge_prompt(
         "SIGNALS NOT AVAILABLE THIS TURN (claims about these require "
         "another grounded source, otherwise they are fabrication):\n"
         f"{absent_list or '  (none)'}\n\n"
+        f"{self_history_block}"
+        "SELF-HISTORY RULE (slice 3.0b): if the response makes a claim "
+        "about Maez's own prior utterances or actions ('I told you X', "
+        "'I mentioned earlier', 'as I said'), that claim is GROUNDED only "
+        "if a SELF_HISTORY entry above contains the referenced content. "
+        "If the SELF_HISTORY block is empty or doesn't contain the "
+        "referenced utterance, the self-history claim is fabrication — "
+        "flag it. Generic acknowledgements ('right', 'as you noted') do "
+        "not require self_history evidence.\n\n"
         f"{fewshot_block}"
         "A claim is UNGROUNDED if:\n"
         "  - It asserts owner activity/presence/focus without a "

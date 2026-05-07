@@ -84,6 +84,27 @@ class AuditResult:
     skipped_reason: Optional[str] = None
 
 
+# Slice 3.0b (2026-05-07): the post-hoc audit must accept the new
+# `self_history` provenance label without crashing. Enforcement of
+# self-history pairing (a claim labeled self_history must cite a
+# turn_id present in the envelope's self_history slot) is a Slice 4
+# concern — the per-claim provenance machinery doesn't exist yet.
+# This stub keeps audit Pass 2 well-formed when it sees the label.
+def accepts_provenance(value: str) -> bool:
+    """Return True iff ``value`` is a valid §2 provenance enum value.
+
+    Source-of-truth lookup against ``core.ledger.envelope_schema``.
+    Used by callers that touch a ``provenance`` field on a flag /
+    judgement record and need a quick "is this label known?" check
+    that will not crash on the slice 3.0b ``self_history`` addition.
+    """
+    try:
+        from core.ledger import envelope_schema as _es
+    except Exception:
+        return False
+    return value in _es.PROVENANCE_VALUES
+
+
 _REWRITE_SENTENCE = "I don't have a grounded answer for that part."
 _REWRITE_WHOLE = "I don't have a grounded answer for this right now."
 

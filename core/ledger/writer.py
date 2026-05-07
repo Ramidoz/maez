@@ -51,6 +51,7 @@ import time
 import uuid
 
 from core.ledger import chain
+from core.ledger import envelope_schema as _envelope_schema
 
 __all__ = ["LedgerWriter"]
 
@@ -256,6 +257,18 @@ class LedgerWriter:
                 raise ValueError(
                     f"{turn_kind} forbids {field} (per §4.2)"
                 )
+
+        # §3 envelope-shape validation (slice 3.0b: self_history slot
+        # added). Permissive on unknown keys; strict on the well-known
+        # slot shapes. None envelopes (allowed where the per-kind
+        # contract permits absence) skip cleanly.
+        if evidence_envelope is not None:
+            try:
+                _envelope_schema.validate_envelope(evidence_envelope)
+            except ValueError as e:
+                raise ValueError(
+                    f"{turn_kind} evidence_envelope invalid: {e}"
+                ) from e
 
         # Build the canonical row. Column shape matches GENESIS_ROW.
         turn_id = str(uuid.uuid4())
