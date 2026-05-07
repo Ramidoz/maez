@@ -78,12 +78,11 @@ def judge_answer(
     it None and get the local llama-server route through
     ``core.routing.llm_client.generate``.
 
-    Note: ``timeout_s`` is honored only if the underlying
-    ``generate`` implementation respects it. The current
-    ``llm_client.generate`` accepts the kwarg but does not plumb it
-    through to the backend client (pre-existing limitation flagged
-    in the Slice 9 Session 2 audit). If a judge call hangs, the
-    operator should kill the run rather than rely on this timeout.
+    Note: ``timeout_s`` is forwarded through
+    ``core.routing.llm_client.generate`` to supported backends (Ollama
+    via ``ollama.Client(timeout=...)`` and llama.cpp via the
+    OpenAI-compatible client timeout). Backend behavior still depends
+    on the client/server honoring transport timeouts.
     """
     pred_s = str(prediction) if prediction is not None else ""
     if not pred_s.strip():

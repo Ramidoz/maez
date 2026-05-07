@@ -35,6 +35,10 @@ logger = logging.getLogger("maez")
 _DEFAULT_PROPOSAL_INTENT_TIMEOUT_S = 45.0
 
 
+class ProposalIntentTimeout(RuntimeError):
+    """Raised when the proposal-intent LLM path exceeds its bounded budget."""
+
+
 def _proposal_intent_timeout_s() -> float:
     """Bound background proposal intent LLM calls.
 
@@ -2055,6 +2059,8 @@ def _generate_patch_intent(weakness: str, evidence: dict, editable_targets: list
 
     # First attempt
     raw, intent = _call_ollama_for_intent(prompt)
+    if raw == '__TIMEOUT__':
+        raise ProposalIntentTimeout("proposal intent LLM timed out")
 
     if intent:
         intent.update(retry_info)
@@ -2127,7 +2133,7 @@ def _generate_patch_intent(weakness: str, evidence: dict, editable_targets: list
         return _enrich_intent(intent, editable_targets)
 
     # Fix 3: One retry with stricter, narrower prompt
-    retry_reason = 'empty_response' if not raw else ('timeout' if raw == '__TIMEOUT__' else 'non_json')
+    retry_reason = 'empty_response' if not raw else 'non_json'
     retry_info['retry_attempted'] = True
     retry_info['retry_reason'] = retry_reason
     logger.info("Intent parse failed (%s), retrying with stricter prompt", retry_reason)
@@ -2155,6 +2161,8 @@ def _generate_patch_intent(weakness: str, evidence: dict, editable_targets: list
     )
 
     raw2, intent2 = _call_ollama_for_intent(retry_prompt)
+    if raw2 == '__TIMEOUT__':
+        raise ProposalIntentTimeout("proposal intent LLM timed out")
     if intent2:
         retry_info['retry_succeeded'] = True
         intent2.update(retry_info)
@@ -2704,7 +2712,10 @@ def process_proposal_job(job_id: int) -> dict:
     # usefulness rubric and retries once internally on 'weak'. Any weak
     # intent that reaches here has already failed a retry — treat as final
     # rejection rather than re-retrying a third time.)
-    intent = _generate_patch_intent(weakness, evidence, editable)
+    try:
+        intent = _generate_patch_intent(weakness, evidence, editable)
+    except ProposalIntentTimeout as e:
+        return {'error': str(e), 'terminal': True}
     if not intent:
         return {'error': 'Gemma returned no valid patch intent'}
 
@@ -2934,7 +2945,8 @@ def _worker_tick():
             with _rail_conn() as conn:
                 row = conn.execute("SELECT attempt_count FROM proposal_jobs WHERE id=?", (job_id,)).fetchone()
                 attempts = row[0] if row else 1
-                new_state = 'failed' if attempts >= MAX_JOB_ATTEMPTS else 'pending'
+                terminal = bool(result.get('terminal'))
+                new_state = 'failed' if terminal or attempts >= MAX_JOB_ATTEMPTS else 'pending'
                 conn.execute(
                     "UPDATE proposal_jobs SET state=?, finished_at=?, last_error=? WHERE id=?",
                     (new_state, now, error[:500], job_id),
