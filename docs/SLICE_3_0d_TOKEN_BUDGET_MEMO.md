@@ -193,9 +193,37 @@ If a future slice introduces tokenizer-backed counting (real round-trip per buil
 
 ---
 
-## 8. Open questions for Rohit
+## 8. Decisions (ratified 2026-05-07)
 
-1. **Total envelope budget:** corrected to **3K** (was 4K — original draft overflowed the 32K context). Acceptable, or prefer 2.5K (more reply headroom) / 4K with a tighter recall cut?
-2. **Char counts vs. token counts:** memo uses chars with the fixed `*4` conversion (see §7). Accept the approximation, or invest in tokenizer-backed counting in a future slice?
-3. **Logger name:** new `maez.envelope` logger, or fold into existing `maez.cognition`? New logger is more filterable; existing logger is fewer moving parts.
-4. **Recall cap with envelope present:** memo proposes the recall block cap drops from 60K chars (15K tokens) to 52K chars (13K tokens) when an envelope is being built. Acceptable trade?
+The four open questions from the prior draft are decided as follows.
+Slice 3 proper builds against these answers; departures require a new
+memo amendment.
+
+1. **Total envelope budget → 3K.** Original 4K draft overflowed the
+   32K llama.cpp context (~33K total). 3K with a 13K-token recall cap
+   keeps worst-case prompts at ~30K, preserving reply space and slack.
+   Operating envelope per §2 is still ~1.9K, so 3K remains a safety
+   ceiling, not an operating target.
+
+2. **Char approximation → ACCEPTED.** Memo uses `chars / 4` per §7
+   for the token estimate. Telemetry logs both axes (§4). Revisit if
+   real-world telemetry shows divergence >25% between estimated and
+   actual token counts (would indicate the Qwen tokenizer is producing
+   a meaningfully different ratio than `*4`). No tokenizer round-trip
+   in the per-build path until that signal appears.
+
+3. **Logger name → `maez.envelope`** (new logger). Slice 1.2's
+   `core.cognition.grounding_judge` set the precedent for adding
+   purpose-specific loggers when there's a distinct operator-grep
+   signal. Envelope truncation telemetry has its own grep needs
+   (audit-team operators tuning caps) and shouldn't dilute
+   `maez.cognition`'s broader signal.
+
+4. **Recall cap with envelope present → 52K chars (13K tokens),
+   ACCEPTED.** Reduction of ~3K chars from the existing 60K cap is
+   the smallest change that makes the budget math fit a 3K envelope
+   without squeezing reply space. The existing 60K cap stays as the
+   no-envelope fallback (i.e. when `MAEZ_EVIDENCE_ENVELOPE_DISABLED=1`
+   the recall builder uses 60K). Slice 3 proper implements the
+   conditional; the env var to override is
+   `MAEZ_RECALL_CAP_WITH_ENVELOPE_CHARS` (default 52_000).

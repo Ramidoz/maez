@@ -41,7 +41,7 @@ These categories are excluded from the carve-out. Claims here require evidence o
 - **Maez's own state or history** — "I told you earlier," "I'm running version X," "last session we…"
 - **Prices, schedules, financial data** — "the price of Bitcoin is X," "the train leaves at 6pm."
 - **Laws, regulations, jurisdictional rules** — "in California, you must X."
-- **Medical and financial ADVICE / DOSING / SAFETY claims** — anything that could be acted on in a way that affects health or money. Stable *biomedical facts* (e.g. "aspirin is a pain reliever," "USD is the U.S. currency") may qualify under the general carve-out. Anything crossing into "you should do X" / "X is safe at Y dose" / "the tax rate on X is Y%" is excluded categorically. Boundary case: "aspirin can cause stomach ulcers" is a known risk fact, but its framing as user-actionable safety advice ("aspirin is safe to take with food") is not. When ambiguous, default-deny.
+- **Medical and financial ADVICE / DOSING / SAFETY claims** — anything that could be acted on in a way that affects health or money. Stable *biomedical or trivial financial-definition facts* (e.g. "aspirin is a pain reliever," "USD is the U.S. currency") may qualify under the general carve-out. Anything crossing into "you should do X" / "X is safe at Y dose" / "the tax rate on X is Y%" / live prices / projections is excluded categorically. Boundary case: "aspirin can cause stomach ulcers" is a known risk fact, but its framing as user-actionable safety advice ("aspirin is safe to take with food") is not. When ambiguous, default-deny.
 - **All legal / jurisdictional / regulatory claims** — including ones that look like stable facts ("California is a community-property state," "the speed limit on US interstates is X"). These are excluded categorically because the failure mode is liability: a wrong legal claim from Maez can produce real-world harm even when the user didn't ask for advice. Maez should refer the user to an authoritative source rather than answer from carve-out. This exclusion is broader than the medical carve-out by design.
 - **Specific dates, numbers, quantities about real-world entities** — "Paris has 2.1M residents," "the Eiffel Tower is 330m tall." Boundary case; argued in §4 and §7.
 - **Specific software versions and release facts** — "Python 3.13 added X."
@@ -89,13 +89,29 @@ The grounding judge today is an LLM-as-judge call (Qwen3.5-4B per current config
 
 This is a prompt-template change in slice 3 proper, not a model change. Note the dependency: shipping slice 3 without the carve-out instructions will refuse "what is the capital of France." Shipping slice 3 with naive instructions will launder hallucinations.
 
-## 7. Open questions for Rohit
+## 7. Decisions (ratified 2026-05-07)
 
-1. **The "Eiffel Tower is 330m tall" boundary.** Argument for inclusion: it's stable, non-temporal, non-personal, and widely known. Argument against (and the position this memo takes): it's a specific number about a real entity, the model has been observed to be wrong on such numbers, and the user can't tell. Defaulting to deny here keeps the carve-out narrow. Rohit to confirm.
+The three open questions from the prior draft are decided as follows.
+Slice 3 proper builds against these answers; departures require a new
+memo amendment.
 
-2. **Phrase-match vs judge-classification.** Should the carve-out require the claim to match (paraphrase) something in training data — a check we cannot actually perform — or is "judge classifies as stable" sufficient? This memo assumes the latter. The former is unverifiable in practice.
+1. **"Eiffel Tower is 330m tall" boundary → DEFAULT-DENY.** Numerical
+   specifics about real-world entities (heights, populations, dates,
+   release years, prices) require evidence even when widely known.
+   Reasoning: the model has been observed to be wrong on such numbers
+   and the user can't tell. The carve-out stays narrow.
 
-3. **Numeric confidence bar.** Should the judge be required to pass with ≥0.8 (or similar) confidence on the carve-out classification? This memo recommends yes in principle but does not pin a number; the threshold should be tuned against the rewrite-rate metric in slice 3 proper.
+2. **Phrase-match vs judge-classification → JUDGE-CLASSIFICATION.**
+   Phrase-match against training data is impossible to perform reliably.
+   Use the judge's "is this a stable, non-temporal, non-personal
+   background fact?" classification as the carve-out gate. Revisit if
+   false positives show up in the rewrite-rate metric.
+
+3. **Numeric confidence bar → DEFER to slice 3 proper.** No threshold
+   pinned at memo time. Slice 3 proper picks a number once judge
+   calibration data exists. Until then, "high confidence" is the
+   judge's own word; the audit pass that consumes the classification
+   treats anything below that bar as ambiguous → default-deny.
 
 ## 8. What ratification unblocks
 
