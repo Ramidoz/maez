@@ -107,7 +107,7 @@ LOG_PATH = BASE_DIR / "logs" / "maez.log"
 MEMORY_DIR = BASE_DIR / "memory"
 PID_FILE = BASE_DIR / "daemon" / "maez.pid"
 SHUTDOWN_FILE = BASE_DIR / "daemon" / "last_shutdown"
-LEDGER_DB_PATH = MEMORY_DIR / "ledger.db"
+LEDGER_DB_PATH = Path(os.environ.get("MAEZ_LEDGER_DB_PATH") or (MEMORY_DIR / "ledger.db"))
 
 # --- Constants ---
 from core.model_config import PRIMARY_MODEL as MODEL  # single source of truth — /etc/maez/model.env
