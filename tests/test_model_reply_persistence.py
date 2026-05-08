@@ -155,6 +155,8 @@ class DaemonModelReplyPersistenceWiringTests(unittest.TestCase):
         self.assertGreater(store_idx, persist_idx)
 
         window = body[persist_idx:persist_idx + 700]
+        self.assertIn('if getattr(_trace.audit, "ran", False):',
+                      body[persist_idx - 250:persist_idx])
         self.assertIn("parent_turn_id=_user_msg_turn_id", window)
         self.assertIn("surface=source", window)
         self.assertIn("evidence_envelope=_evidence_envelope", window)
@@ -193,11 +195,37 @@ class CliModelReplyPersistenceWiringTests(unittest.TestCase):
         self.assertGreater(persist_idx, audit_idx)
         self.assertGreater(trajectory_idx, persist_idx)
 
-        window = body[persist_idx:persist_idx + 850]
+        window = body[persist_idx - 250:persist_idx + 850]
         self.assertIn('surface="cli"', window)
         self.assertIn("parent_turn_id=_cli_user_msg_turn_id", window)
         self.assertIn("evidence_envelope=_evidence_envelope", window)
         self.assertIn("final_reply", window)
+        self.assertIn("if _cli_ledger_db_path and _cli_audit_ran:", window)
+
+    def test_cli_does_not_persist_interrupted_or_audit_failed_reply(self):
+        body = _method_body(_read("cli/maez_chat.py"), "_handle_chat")
+        interrupted_idx = body.find("if self._stop_stream.is_set():")
+        audit_flag_idx = body.find("_cli_audit_ran = True")
+        persist_idx = body.find("persist_model_reply(")
+
+        self.assertGreater(interrupted_idx, 0)
+        self.assertGreater(audit_flag_idx, interrupted_idx)
+        self.assertGreater(persist_idx, audit_flag_idx)
+        self.assertIn("if _cli_ledger_db_path and _cli_audit_ran:",
+                      body[persist_idx - 250:persist_idx])
+
+
+class WebModelReplyAuditBoundaryTests(unittest.TestCase):
+    def test_web_owner_persistence_requires_successful_audit(self):
+        body = _method_body(_read("skills/web_interface.py"), "chat")
+        audit_idx = body.find("reply = audit_assistant_text(")
+        persist_idx = body.find("persist_model_reply(")
+
+        self.assertGreater(audit_idx, 0)
+        self.assertGreater(persist_idx, audit_idx)
+        self.assertIn("_web_audit_ran = True", body[audit_idx:persist_idx])
+        self.assertIn("if owner_bridge and _web_audit_ran:",
+                      body[persist_idx - 250:persist_idx])
 
 
 if __name__ == "__main__":

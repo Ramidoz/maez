@@ -5839,6 +5839,9 @@ def chat():
     # both, so raw memory + SFT trajectory captured the unaudited
     # reply even when the user saw the corrected one. See
     # core/safety/audited_output.py for the full invariant.
+    _web_audit_ran = False
+    _web_audit_changed = False
+    _web_pre_audit_reply = reply
     try:
         from core.safety.audited_output import audit_assistant_text
         reply = audit_assistant_text(
@@ -5848,10 +5851,12 @@ def chat():
             signals_absent=_web_signals_absent,
             evidence_envelope=_evidence_envelope,
         )
+        _web_audit_ran = True
+        _web_audit_changed = (_web_pre_audit_reply != reply)
     except Exception as _e:
         logger.warning("self-claim audit failed on /chat: %s", _e)
 
-    if owner_bridge:
+    if owner_bridge and _web_audit_ran:
         try:
             from core.ledger.model_reply_persistence import persist_model_reply
 
@@ -5871,6 +5876,8 @@ def chat():
                     evidence_envelope=_evidence_envelope,
                     audit_verdict={
                         "verdict": "post_audit_reply_persisted",
+                        "audit_ran": _web_audit_ran,
+                        "changed_output": _web_audit_changed,
                         "surface": "web_owner",
                     },
                 )

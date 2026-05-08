@@ -923,6 +923,9 @@ class ChatSession:
         if self._deep_once:
             self._deep_once = False
         meta_base = f"claude:{decision.tier}" if route_external else "local"
+        _cli_audit_ran = False
+        _cli_audit_changed = False
+        _cli_audit_mode = ""
 
         # Agent-style loop: model may propose commands, we run them (with
         # approval), feed results back, and let the model synthesize.
@@ -1030,6 +1033,9 @@ class ChatSession:
                     in_tool_continuation=(iteration > 0),
                     evidence_envelope=_evidence_envelope,
                 )
+                _cli_audit_ran = True
+                _cli_audit_changed = bool(_sc_result.rewritten)
+                _cli_audit_mode = str(_sc_result.mode)
                 if _sc_result.rewritten:
                     assistant.content = _sc_result.text
                     console.print(Text.from_markup(
@@ -1130,13 +1136,13 @@ class ChatSession:
         try:
             from core.ledger.model_reply_persistence import persist_model_reply
 
-            if _cli_ledger_db_path:
+            if _cli_ledger_db_path and _cli_audit_ran:
                 persist_model_reply(
                     db_path=_cli_ledger_db_path,
                     raw_text=final_reply,
                     surface="cli",
                     parent_turn_id=_cli_user_msg_turn_id,
-                    model_id=LOCAL_MODEL,
+                    model_id=meta_base,
                     prompt_material={
                         "system_prompt": system_prompt,
                         "user_text": user_text,
@@ -1146,6 +1152,9 @@ class ChatSession:
                     evidence_envelope=_evidence_envelope,
                     audit_verdict={
                         "verdict": "post_audit_reply_persisted",
+                        "audit_ran": _cli_audit_ran,
+                        "changed_output": _cli_audit_changed,
+                        "mode": _cli_audit_mode,
                         "surface": "cli",
                     },
                 )
