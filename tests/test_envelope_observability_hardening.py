@@ -13,10 +13,16 @@ Closes four findings from the 12-agent post-wiring audit:
   3. ``recent_turns_by_kind`` lookup races / lock contention bubbled
      up as bare exceptions caught silently at the populate boundary.
      Same debug-log fix at the wrapper/caller boundary.
-  4. ``cognition.log`` used a plain ``FileHandler`` — slice 3's new
-     ``maez.envelope`` truncation telemetry propagates here. Fix:
-     ``RotatingFileHandler`` so long-running daemons don't grow the
-     log unbounded.
+  4. ``maez.log`` used a plain ``FileHandler`` on the daemon's
+     ``maez`` logger. Slice 3's new ``maez.envelope`` truncation
+     telemetry is a CHILD of ``maez`` (not of ``maez.cognition``),
+     so its records propagate up to that handler and land in
+     ``logs/maez.log``. Fix: ``RotatingFileHandler`` on the daemon
+     ``maez`` logger so long-running daemons don't grow it
+     unbounded. ``cognition.log`` also got a rotating handler as
+     hygiene for the cognition-specific records emitted directly
+     by ``cognition_quality.py``, but that file is NOT the
+     envelope-telemetry sink.
 """
 from __future__ import annotations
 
