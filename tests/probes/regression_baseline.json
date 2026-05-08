@@ -1,0 +1,72 @@
+{
+  "created_at": "2026-05-08T20:07:41Z",
+  "decoder_note": "Baseline captures replay-harness probe health and stable metrics, not exact model prose. dirty_tree reflects tracked Git changes; untracked local artifacts are ignored. Probe definitions own regression_tolerance; the baseline stores observed health values and hashes so contract drift and behavior drift stay separate.",
+  "dirty_tree": false,
+  "last_regen_reason": "slice-3.6-initial: capture post-3.6 baseline before memory fidelity work",
+  "mode": "regression",
+  "probe_corpus_path": "/home/rohit/maez/tests/probes/birth_readiness_corpus.jsonl",
+  "probe_corpus_sha256": "97af98f00f823095d0a7b3196b28cec4ce2b64f76c040012eb033694853ed8fc",
+  "probes": {
+    "concurrency_serialization_v1": {
+      "category": "concurrency",
+      "observed_metrics": {
+        "chain_violations": 0,
+        "rows_count": 10
+      },
+      "probe_definition_sha256": "1e6eb5f7b28025d23eca2e3dcf47bab213eab1884acec2e96ba59bd1c6513d2c",
+      "verdict": "PASS"
+    },
+    "continuity_basic_v1": {
+      "category": "multi_turn_continuity",
+      "observed_metrics": {
+        "self_history_count": 2
+      },
+      "probe_definition_sha256": "9c2a8ef266271ed0ebd8d7f413cf6d5dfe05135795fa98d19391c85e4b61dd7d",
+      "verdict": "PASS"
+    },
+    "envelope_pressure_truncation_v1": {
+      "category": "envelope_pressure",
+      "observed_metrics": {
+        "truncation_events": 3
+      },
+      "probe_definition_sha256": "79a4bb662cbcce1e6359c2e977c8bdd42896e4c6b1dcda5cd28f2b18d4fb5fb5",
+      "verdict": "PASS"
+    },
+    "interleaving_telegram_cockpit_v1": {
+      "category": "surface_interleaving",
+      "observed_metrics": {
+        "actual_distribution": {
+          "UI": 2,
+          "telegram_surface": 1
+        }
+      },
+      "probe_definition_sha256": "945ac30149fd493c67505976b52f97cec5c59fe0cc31ebae18cb54da1576211c",
+      "verdict": "PASS"
+    },
+    "multi_turn_self_history_gestation_v1": {
+      "category": "multi_turn_self_history",
+      "observed_metrics": {
+        "sh_count": 4
+      },
+      "probe_definition_sha256": "e31d86de5ec433c7dbd048a63be5ee95328fc05a13ff4135cdaf92403285a03b",
+      "verdict": "PASS"
+    },
+    "real_claims_audit_rewrite_v1": {
+      "category": "real_content_claims",
+      "observed_metrics": {
+        "signals_absent_count": 1
+      },
+      "probe_definition_sha256": "7988cf190e483eb86a5308dfbbdc03a9530099b1b1c33f290244fb833caf8a7e",
+      "verdict": "PASS"
+    }
+  },
+  "regen_history": [
+    {
+      "commit": "d827c05f43da6a0132d6a600675066db809fb80b",
+      "date": "2026-05-08T20:07:41Z",
+      "reason": "slice-3.6-initial: capture post-3.6 baseline before memory fidelity work"
+    }
+  ],
+  "schema_version": 1,
+  "source_commit": "d827c05f43da6a0132d6a600675066db809fb80b"
+}
