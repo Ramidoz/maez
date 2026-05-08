@@ -7,7 +7,7 @@ sandbox window.
 Scans ``logs/maez.log`` and ``logs/cognition.log`` over a time window
 and prints a compact summary of the slice-3 telemetry surfaces:
 
-  * Envelope truncation events (section × cap_hit × count)
+  * Envelope truncation events (kind × section × count)
   * Grounding-judge unavailability (error_class × count)
   * Audit rewrite distribution (mode × count, surface × count)
   * Recall-cap-hit signal (best-effort proxy)
