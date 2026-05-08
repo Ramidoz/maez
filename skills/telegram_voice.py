@@ -53,15 +53,33 @@ def _audit_telegram_reply(
     returns None), the audit falls through to legacy signals."""
     if not text:
         return text
+    reply, _, _ = _audit_telegram_reply_with_status(
+        text,
+        surface=surface,
+        evidence_envelope=evidence_envelope,
+    )
+    return reply
+
+
+def _audit_telegram_reply_with_status(
+    text: str,
+    surface: str,
+    *,
+    evidence_envelope: dict | None = None,
+) -> tuple[str, bool, bool]:
+    """Return audited text plus whether audit ran and rewrote output."""
+    if not text:
+        return text, False, False
     try:
         from core.self_claim_audit import audit as _sc_audit
         r = _sc_audit(
             text, surface=surface, evidence_envelope=evidence_envelope,
         )
-        return r.text if r.rewritten else text
+        audited_text = r.text if r.rewritten else text
+        return audited_text, True, bool(r.rewritten)
     except Exception as e:
         logger.warning("self-claim audit failed on %s: %s", surface, e)
-        return text
+        return text, False, False
 
 
 def _get_circadian_context() -> str:
@@ -2907,6 +2925,29 @@ class TelegramVoice:
                 self._thread_last_active = _time.time()
                 return response
 
+        _telegram_user_msg_turn_id = None
+        _telegram_ledger_db_path = None
+        _telegram_surface = "telegram_surface"
+        try:
+            from core.cognition.envelope_builder import (
+                default_ledger_db_path as _default_ledger_db_path,
+            )
+            from core.ledger.writer import try_write_turn as _try_write_turn
+
+            _telegram_ledger_db_path = _default_ledger_db_path()
+            if _telegram_ledger_db_path:
+                _telegram_user_msg_turn_id = _try_write_turn(
+                    _telegram_ledger_db_path,
+                    "user_message",
+                    user_text,
+                    surface=_telegram_surface,
+                )
+        except Exception as _ledger_user_exc:
+            logger.debug(
+                "telegram_text user_message ledger persistence skipped: %s",
+                _ledger_user_exc,
+            )
+
         # Multi-turn thread management
         if _time.time() - self._thread_last_active > 1800:
             self._conversation_thread = []
@@ -3322,6 +3363,8 @@ class TelegramVoice:
         # Non-streaming reply — Jarvis runs tools first, then one clean synthesis call.
         # Eliminates fabrication incentive: the model sees the full transcript before
         # writing a single word, so there's nothing to invent.
+        _telegram_audit_ran = False
+        _telegram_audit_changed = False
         try:
             await context.bot.send_chat_action(
                 chat_id=update.effective_chat.id, action="typing"
@@ -3358,9 +3401,12 @@ class TelegramVoice:
             # missing audit (only dialog/terminal/fallback replies were
             # audited), which is why the 2026-04-19 "Maelstrom merge"
             # turns escaped on this surface. Silent on audit failure.
-            reply = _audit_telegram_reply(
-                full_reply, surface="telegram_text",
-                evidence_envelope=_evidence_envelope,
+            reply, _telegram_audit_ran, _telegram_audit_changed = (
+                _audit_telegram_reply_with_status(
+                    full_reply,
+                    surface="telegram_text",
+                    evidence_envelope=_evidence_envelope,
+                )
             )
 
             for part in split_long_message(reply):
@@ -3429,6 +3475,37 @@ class TelegramVoice:
         # at the site where they queue the action — not parsed out of the
         # LLM's prose.
         self._detect_and_queue_action(user_text, reply)
+        try:
+            from core.ledger.model_reply_persistence import (
+                build_model_reply_audit_verdict,
+                persist_model_reply,
+            )
+
+            if _telegram_ledger_db_path and _telegram_audit_ran:
+                persist_model_reply(
+                    db_path=_telegram_ledger_db_path,
+                    raw_text=reply,
+                    surface="telegram_surface",
+                    parent_turn_id=_telegram_user_msg_turn_id,
+                    model_id=MODEL,
+                    prompt_material={
+                        "messages": messages,
+                        "surface": "telegram_surface",
+                        "event": "autobiographical_continuity_turning_on",
+                    },
+                    soul_material=_jarvis_system_prompt,
+                    evidence_envelope=_evidence_envelope,
+                    audit_verdict=build_model_reply_audit_verdict(
+                        surface="telegram_surface",
+                        audit_ran=_telegram_audit_ran,
+                        changed_output=_telegram_audit_changed,
+                    ),
+                )
+        except Exception as _ledger_reply_exc:
+            logger.debug(
+                "telegram_text model_reply ledger persistence skipped: %s",
+                _ledger_reply_exc,
+            )
         # 5x.B Pass 1: bond transcript; mixed-origin (see 5x.D).
         self.memory.store_telegram(
             f"the owner asked: {user_text}\nMaez replied: {reply}",

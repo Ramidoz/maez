@@ -5858,7 +5858,10 @@ def chat():
 
     if owner_bridge and _web_audit_ran:
         try:
-            from core.ledger.model_reply_persistence import persist_model_reply
+            from core.ledger.model_reply_persistence import (
+                build_model_reply_audit_verdict,
+                persist_model_reply,
+            )
 
             if _owner_ledger_db_path:
                 persist_model_reply(
@@ -5874,12 +5877,11 @@ def chat():
                     },
                     soul_material=SOUL,
                     evidence_envelope=_evidence_envelope,
-                    audit_verdict={
-                        "verdict": "post_audit_reply_persisted",
-                        "audit_ran": _web_audit_ran,
-                        "changed_output": _web_audit_changed,
-                        "surface": "web_owner",
-                    },
+                    audit_verdict=build_model_reply_audit_verdict(
+                        surface="web_owner",
+                        audit_ran=_web_audit_ran,
+                        changed_output=_web_audit_changed,
+                    ),
                 )
         except Exception as _ledger_reply_exc:
             logger.debug(

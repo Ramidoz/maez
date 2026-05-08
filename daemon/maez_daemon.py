@@ -2230,7 +2230,10 @@ class MaezDaemon:
         # This is best-effort shadow persistence: the user-facing reply
         # still returns if the ledger is disabled or unavailable.
         try:
-            from core.ledger.model_reply_persistence import persist_model_reply
+            from core.ledger.model_reply_persistence import (
+                build_model_reply_audit_verdict,
+                persist_model_reply,
+            )
 
             if getattr(_trace.audit, "ran", False):
                 persist_model_reply(
@@ -2246,14 +2249,13 @@ class MaezDaemon:
                     },
                     soul_material=getattr(self, "system_prompt", ""),
                     evidence_envelope=_evidence_envelope,
-                    audit_verdict={
-                        "verdict": "post_audit_reply_persisted",
-                        "audit_ran": True,
-                        "changed_output": bool(
+                    audit_verdict=build_model_reply_audit_verdict(
+                        surface=source,
+                        audit_ran=True,
+                        changed_output=bool(
                             getattr(_trace.audit, "changed_output", False)
                         ),
-                        "event": "autobiographical_continuity_turning_on",
-                    },
+                    ),
                     memory_read_ids=list(
                         getattr(_trace, "lived_recall_ids", []) or []
                     ),

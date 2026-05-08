@@ -142,6 +142,35 @@ class ModelReplyPersistenceHelperTests(unittest.TestCase):
             conn.close()
         self.assertEqual(n, 0)
 
+    def test_helper_canonicalizes_audit_verdict_shape(self):
+        mod = importlib.import_module("core.ledger.model_reply_persistence")
+        if not hasattr(mod, "build_model_reply_audit_verdict"):
+            self.fail(
+                "model_reply persistence must expose a shared audit verdict "
+                "builder so surface metadata does not fork by caller"
+            )
+
+        verdict = mod.build_model_reply_audit_verdict(
+            surface="cli",
+            audit_ran=True,
+            changed_output=False,
+            surface_meta={"mode": "noop"},
+        )
+
+        self.assertEqual(
+            set(verdict),
+            {
+                "verdict",
+                "audit_ran",
+                "changed_output",
+                "surface",
+                "event",
+                "surface_meta",
+            },
+        )
+        self.assertEqual(verdict["event"], "autobiographical_continuity_turning_on")
+        self.assertEqual(verdict["surface_meta"], {"mode": "noop"})
+
 
 class DaemonModelReplyPersistenceWiringTests(unittest.TestCase):
     def test_handle_message_persists_model_reply_after_audit_before_memory_store(self):
@@ -161,6 +190,7 @@ class DaemonModelReplyPersistenceWiringTests(unittest.TestCase):
         self.assertIn("surface=source", window)
         self.assertIn("evidence_envelope=_evidence_envelope", window)
         self.assertIn('"autobiographical_continuity_turning_on"', window)
+        self.assertIn("build_model_reply_audit_verdict", window)
 
 
 class WebModelReplyPersistenceWiringTests(unittest.TestCase):
@@ -179,6 +209,7 @@ class WebModelReplyPersistenceWiringTests(unittest.TestCase):
         self.assertIn('surface="web_owner"', persist_window)
         self.assertIn("parent_turn_id=_owner_user_msg_turn_id", persist_window)
         self.assertIn("evidence_envelope=_evidence_envelope", persist_window)
+        self.assertIn("build_model_reply_audit_verdict", persist_window)
 
         public_window = body[body.find("else:"):persist_idx]
         self.assertNotIn("persist_model_reply(", public_window)
@@ -201,6 +232,7 @@ class CliModelReplyPersistenceWiringTests(unittest.TestCase):
         self.assertIn("evidence_envelope=_evidence_envelope", window)
         self.assertIn("final_reply", window)
         self.assertIn("if _cli_ledger_db_path and _cli_audit_ran:", window)
+        self.assertIn("build_model_reply_audit_verdict", window)
 
     def test_cli_does_not_persist_interrupted_or_audit_failed_reply(self):
         body = _method_body(_read("cli/maez_chat.py"), "_handle_chat")
@@ -225,7 +257,31 @@ class WebModelReplyAuditBoundaryTests(unittest.TestCase):
         self.assertGreater(persist_idx, audit_idx)
         self.assertIn("_web_audit_ran = True", body[audit_idx:persist_idx])
         self.assertIn("if owner_bridge and _web_audit_ran:",
-                      body[persist_idx - 250:persist_idx])
+                      body[persist_idx - 350:persist_idx])
+
+
+class TelegramVoiceModelReplyPersistenceTests(unittest.TestCase):
+    def test_owner_private_telegram_persists_model_reply_after_audit_before_store(self):
+        body = _method_body(_read("skills/telegram_voice.py"), "_process_message")
+        audit_idx = body.find("_audit_telegram_reply_with_status(")
+        persist_idx = body.find("persist_model_reply(")
+        store_idx = body.find("self.memory.store_telegram(", persist_idx)
+
+        self.assertGreater(audit_idx, 0)
+        self.assertGreater(persist_idx, audit_idx)
+        self.assertGreater(store_idx, persist_idx)
+
+        window = body[persist_idx - 350:persist_idx + 900]
+        self.assertIn('if _telegram_ledger_db_path and _telegram_audit_ran:', window)
+        self.assertIn('surface="telegram_surface"', window)
+        self.assertIn("parent_turn_id=_telegram_user_msg_turn_id", window)
+        self.assertIn("evidence_envelope=_evidence_envelope", window)
+        self.assertIn("build_model_reply_audit_verdict", window)
+
+    def test_persistence_fail_open_is_warn_once(self):
+        src = _read("core/ledger/model_reply_persistence.py")
+        self.assertIn("_warn_once", src)
+        self.assertIn("_LOGGER.warning", src)
 
 
 if __name__ == "__main__":

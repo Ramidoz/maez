@@ -1134,7 +1134,10 @@ class ChatSession:
         # Trajectory log (final turn only — keeps log tidy)
         final_reply = self.turns[-1].content if self.turns else ""
         try:
-            from core.ledger.model_reply_persistence import persist_model_reply
+            from core.ledger.model_reply_persistence import (
+                build_model_reply_audit_verdict,
+                persist_model_reply,
+            )
 
             if _cli_ledger_db_path and _cli_audit_ran:
                 persist_model_reply(
@@ -1150,13 +1153,12 @@ class ChatSession:
                     },
                     soul_material=soul,
                     evidence_envelope=_evidence_envelope,
-                    audit_verdict={
-                        "verdict": "post_audit_reply_persisted",
-                        "audit_ran": _cli_audit_ran,
-                        "changed_output": _cli_audit_changed,
-                        "mode": _cli_audit_mode,
-                        "surface": "cli",
-                    },
+                    audit_verdict=build_model_reply_audit_verdict(
+                        surface="cli",
+                        audit_ran=_cli_audit_ran,
+                        changed_output=_cli_audit_changed,
+                        surface_meta={"mode": _cli_audit_mode},
+                    ),
                 )
         except Exception:
             pass
