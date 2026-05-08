@@ -790,6 +790,22 @@ class ChatSession:
     def _handle_chat(self, user_text: str):
         # Assemble messages
         self.turns.append(Turn("user", user_text))
+        _cli_user_msg_turn_id = None
+        _cli_surface = "cli"
+        try:
+            from core.cognition.envelope_builder import default_ledger_db_path
+            from core.ledger.writer import try_write_turn as _try_write_turn
+
+            _cli_ledger_db_path = default_ledger_db_path()
+            if _cli_ledger_db_path:
+                _cli_user_msg_turn_id = _try_write_turn(
+                    _cli_ledger_db_path,
+                    "user_message",
+                    user_text,
+                    surface=_cli_surface,
+                )
+        except Exception:
+            _cli_ledger_db_path = None
 
         # Inner-residue detection: if the user text carries clear
         # rejection markers, record a residue event so the next turn's
@@ -1111,6 +1127,30 @@ class ChatSession:
 
         # Trajectory log (final turn only — keeps log tidy)
         final_reply = self.turns[-1].content if self.turns else ""
+        try:
+            from core.ledger.model_reply_persistence import persist_model_reply
+
+            if _cli_ledger_db_path:
+                persist_model_reply(
+                    db_path=_cli_ledger_db_path,
+                    raw_text=final_reply,
+                    surface="cli",
+                    parent_turn_id=_cli_user_msg_turn_id,
+                    model_id=LOCAL_MODEL,
+                    prompt_material={
+                        "system_prompt": system_prompt,
+                        "user_text": user_text,
+                        "source": meta_base,
+                    },
+                    soul_material=soul,
+                    evidence_envelope=_evidence_envelope,
+                    audit_verdict={
+                        "verdict": "post_audit_reply_persisted",
+                        "surface": "cli",
+                    },
+                )
+        except Exception:
+            pass
         try:
             claude_router.log_trajectory({
                 "profile_id": profile_id,

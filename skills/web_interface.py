@@ -5387,10 +5387,26 @@ def chat():
     logger.info("Web chat from %s: %s", display, message[:80])
     messages_list = []
     user_key = None
+    _owner_ledger_db_path = None
+    _owner_user_msg_turn_id = None
     _evidence_envelope = None
     _envelope_block = ""
 
     if owner_bridge:
+        try:
+            from core.cognition.envelope_builder import default_ledger_db_path
+            from core.ledger.writer import try_write_turn as _try_write_turn
+
+            _owner_ledger_db_path = default_ledger_db_path()
+            if _owner_ledger_db_path:
+                _owner_user_msg_turn_id = _try_write_turn(
+                    _owner_ledger_db_path,
+                    "user_message",
+                    message,
+                    surface="web_owner",
+                )
+        except Exception:
+            _owner_ledger_db_path = None
         _web_signals_present = ["owner bridge authenticated"]
         _web_signals_absent = []
         # Ambient grounding — current weather at the owner's location, active window,
@@ -5834,6 +5850,35 @@ def chat():
         )
     except Exception as _e:
         logger.warning("self-claim audit failed on /chat: %s", _e)
+
+    if owner_bridge:
+        try:
+            from core.ledger.model_reply_persistence import persist_model_reply
+
+            if _owner_ledger_db_path:
+                persist_model_reply(
+                    db_path=_owner_ledger_db_path,
+                    raw_text=reply,
+                    surface="web_owner",
+                    parent_turn_id=_owner_user_msg_turn_id,
+                    model_id=used_source or MODEL,
+                    prompt_material={
+                        "messages": messages_list,
+                        "source": used_source,
+                        "owner_bridge": True,
+                    },
+                    soul_material=SOUL,
+                    evidence_envelope=_evidence_envelope,
+                    audit_verdict={
+                        "verdict": "post_audit_reply_persisted",
+                        "surface": "web_owner",
+                    },
+                )
+        except Exception as _ledger_reply_exc:
+            logger.debug(
+                "web /chat model_reply ledger persistence skipped: %s",
+                _ledger_reply_exc,
+            )
 
     try:
         if owner_bridge:

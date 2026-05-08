@@ -1,0 +1,158 @@
+# Copyright © 2026 Rohit Ananthan
+# Licensed under the GNU Affero General Public License v3.0 or later.
+"""Owner-private model_reply persistence helpers.
+
+Slice 4c.5a turns on autobiographical continuity for Maez's own
+owner-private replies: after audit, the same text returned/stored by the
+surface is appended to the ledger as a ``model_reply`` row. This module
+keeps that write shape shared across daemon, CLI, and owner-web paths so
+the contract does not fork by surface.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import sqlite3
+import time
+from typing import Any
+
+from core.ledger.writer import try_write_turn
+
+__all__ = [
+    "MODEL_REPLY_PERSISTENCE_MARKER_KEY",
+    "persist_model_reply",
+    "write_user_message_for_test",
+]
+
+
+_LOGGER = logging.getLogger("core.ledger.model_reply_persistence")
+
+MODEL_REPLY_PERSISTENCE_MARKER_KEY = "model_reply_persistence_marker_turn_id"
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        default=str,
+    )
+
+
+def _sha256_material(value: Any) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _marker_payload() -> str:
+    return _canonical_json({
+        "event": "model_reply_persistence_introduced",
+        "slice": "4c.5a",
+        "plain_english": (
+            "autobiographical continuity turning on: from this point, "
+            "owner-private Maez replies are expected to land in the "
+            "append-only ledger as model_reply rows."
+        ),
+        "prior_gap": (
+            "Owner-private replies before this marker may have been "
+            "emitted and stored in surface memory without a ledger "
+            "model_reply row."
+        ),
+        "created_at": time.time(),
+    })
+
+
+def _marker_already_written(db_path: str) -> bool:
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = ?",
+            (MODEL_REPLY_PERSISTENCE_MARKER_KEY,),
+        ).fetchone()
+        return bool(row and (row[0] or "").strip())
+    finally:
+        conn.close()
+
+
+def _record_marker_turn_id(db_path: str, marker_turn_id: str) -> None:
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+            (MODEL_REPLY_PERSISTENCE_MARKER_KEY, marker_turn_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _ensure_persistence_marker(db_path: str) -> None:
+    """Best-effort one-time marker for the persistence discontinuity."""
+    try:
+        if _marker_already_written(db_path):
+            return
+        marker_id = try_write_turn(
+            db_path,
+            "system_event",
+            _marker_payload(),
+            surface="ledger",
+            raw_surface="model_reply_persistence",
+        )
+        if marker_id:
+            _record_marker_turn_id(db_path, marker_id)
+    except Exception as exc:  # noqa: BLE001 — persistence is best-effort
+        _LOGGER.debug("model_reply persistence marker skipped: %s", exc)
+
+
+def persist_model_reply(
+    *,
+    db_path: str,
+    raw_text: str,
+    surface: str,
+    parent_turn_id: str | None,
+    model_id: str,
+    prompt_material: Any,
+    soul_material: Any,
+    evidence_envelope: dict | None,
+    audit_verdict: dict,
+    memory_read_ids: list | None = None,
+) -> str | None:
+    """Append an audited owner-private reply as a ledger model_reply.
+
+    The helper is intentionally best-effort via :func:`try_write_turn`:
+    ledger failures must not block the user-facing reply path. The
+    payload is post-audit text only.
+    """
+    if not raw_text or evidence_envelope is None:
+        return None
+
+    _ensure_persistence_marker(db_path)
+    return try_write_turn(
+        db_path,
+        "model_reply",
+        raw_text,
+        surface=surface,
+        parent_turn_id=parent_turn_id,
+        model_id=model_id,
+        prompt_hash=_sha256_material(prompt_material),
+        soul_hash=_sha256_material(soul_material),
+        evidence_envelope=evidence_envelope,
+        audit_verdict=audit_verdict,
+        memory_read_ids=memory_read_ids or [],
+    )
+
+
+def write_user_message_for_test(
+    db_path: str,
+    raw_text: str,
+    *,
+    surface: str,
+) -> str | None:
+    """Test helper for building a parent user_message row."""
+    return try_write_turn(
+        db_path,
+        "user_message",
+        raw_text,
+        surface=surface,
+    )

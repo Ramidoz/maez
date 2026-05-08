@@ -2225,6 +2225,42 @@ class MaezDaemon:
             except Exception:
                 pass
 
+        # Slice 4c.5a — autobiographical continuity turning on.
+        # Persist the post-audit owner-private reply as a model_reply row.
+        # This is best-effort shadow persistence: the user-facing reply
+        # still returns if the ledger is disabled or unavailable.
+        try:
+            from core.ledger.model_reply_persistence import persist_model_reply
+
+            persist_model_reply(
+                db_path=str(LEDGER_DB_PATH),
+                raw_text=reply,
+                surface=source,
+                parent_turn_id=_user_msg_turn_id,
+                model_id=MODEL,
+                prompt_material={
+                    "messages": messages,
+                    "surface": source,
+                    "event": "autobiographical_continuity_turning_on",
+                },
+                soul_material=getattr(self, "system_prompt", ""),
+                evidence_envelope=_evidence_envelope,
+                audit_verdict={
+                    "verdict": "post_audit_reply_persisted",
+                    "audit_ran": bool(getattr(_trace.audit, "ran", False)),
+                    "changed_output": bool(
+                        getattr(_trace.audit, "changed_output", False)
+                    ),
+                    "event": "autobiographical_continuity_turning_on",
+                },
+                memory_read_ids=list(getattr(_trace, "lived_recall_ids", []) or []),
+            )
+        except Exception as _ledger_reply_exc:
+            logger.debug(
+                "model_reply ledger persistence skipped: %s",
+                _ledger_reply_exc,
+            )
+
         # Tri-state pursuit trace capture (audit M2 fix). The earlier
         # version recorded "hold" on every error path, conflating
         # evaluator-returned-None (legitimate hold) with
