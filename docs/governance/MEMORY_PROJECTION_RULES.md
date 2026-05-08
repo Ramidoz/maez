@@ -1,6 +1,6 @@
 # Memory Projection Rules
 
-**Status:** Accepted for Slice 4b shadow strengthening
+**Status:** Accepted through Slice 4c observation
 **Date:** 2026-05-08
 **projection_rules_schema_version: 2**
 **projection_policy_id:** `maez-memory-projection-v1`
@@ -169,6 +169,96 @@ Probe outputs are diagnostic. They are not for inclusion in prompt
 context, audit input, or any other downstream system. The
 `audit_boundary: not_audit_evidence` field is the structural defense;
 this sentence is the human-discipline defense.
+
+## Slice 4c Observation Adapter
+
+Slice 4c adds a typed projection-candidate adapter for observation only.
+It resolves the anatomical boundary between `self_history` and
+lived-recall candidates without making projection a production recall
+consumer. The adapter may be used by diagnostic tooling to ask "what
+would `repetition_with_continuity.v1` do here?" It must not change
+prompt text, ledger rows, audit evidence, or live recall ordering.
+
+Diagnostic output lands in a separate JSONL log, such as
+`logs/projection_observation.jsonl`. It must not be stored as a field on
+existing ledger rows; adding observation fields to raw ledger rows would
+violate the raw truth invariant even if the field were diagnostic.
+
+## Projection Candidate Adapter Contract
+
+Allowed inputs:
+
+- raw `self_history` dictionaries through `project_self_history`
+- typed observation candidates through `ProjectionCandidate`, including
+  lived-recall episode, open-loop, or graph-belief candidates whose
+  source receipts are explicit
+
+Required candidate fields:
+
+- `candidate_id` — stable non-empty diagnostic id for the candidate
+- `candidate_kind` — stable non-empty kind, for example
+  `lived_episode`, `open_loop`, or `graph_belief`
+- `text` — excerpt used only for diagnostic projection
+- `source_ids` — one or more non-empty immutable receipt ids
+- `continuity_key` — explicit continuity thread from source metadata
+- `continuity_key_basis` — Slice 4c value: `source_metadata`
+- `timestamp` — Unix seconds since epoch, UTC
+- `lifecycle_stage` — explicit lifecycle label
+- `trust_scope` — Slice 4c value: `owner_private`
+
+Forbidden inputs:
+
+- heuristic-derived continuity keys
+- daemon-cycle-only candidates
+- candidates without independent receipts
+- candidates generated from projection's own prior output
+- candidates generated from "was this recently in the context window"
+- public or guest-surface candidates
+
+Candidate independence is counted from immutable `source_ids`, not from
+diagnostic `candidate_id`s. Two candidates derived from the same receipt
+remain one source for strengthening.
+
+The adapter preserves report schema v2. It adapts typed candidates into
+the same projection entry shape used by `project_self_history`; it does
+not add new required report fields.
+
+4c observation remains under `scripts/memory_projection_probe.py`.
+observation output is not prompt context, audit evidence, live recall
+ordering, or ledger metadata.
+
+## Sunset Commitments
+
+The strengthen-only asymmetry is accepted as a starting covenant, not as
+a permanent promise. It must be reviewed no later than 2028-05-08.
+
+An earlier review is mandatory on the first recorded incident where
+Rohit says, in substance, "I have outgrown this thread but it keeps surfacing."
+That incident should be cited in the next memory-projection slice memo.
+
+Before weakening, fading, or negative salience is introduced, a
+fading-rule ADR or BAD decision must be drafted and owner-ratified.
+Weakening is not a hidden version bump on
+`repetition_with_continuity.v1`; it is a new covenant decision.
+
+## Slice 4d Activation Blockers
+
+Activation is not part of Slice 4c. Before any production conversation
+path consumes projection:
+
+- the typed activation adapter may expose only `candidate_id`,
+  `ordering_bump`, and `continuity_marker`
+- it must not expose `projected_text`, raw `strength_score`, or raw
+  `strength_reasons` to prompt assembly
+- projection-influenced replies must be trace-labeled at write time
+- trace labels are metadata and must not change chain-hash canonical
+  bytes
+- grounding-judge and evidence-envelope audit paths must refuse or flag
+  trace-labeled rows as non-evidence
+- an audit-replay test must cover the delayed-feedback path: projected
+  reply written on one turn, envelope built on the next turn
+- any regression baseline regeneration must land as a separate commit
+  with an explicit `--reason`
 
 ## Forbidden Rule Shapes
 

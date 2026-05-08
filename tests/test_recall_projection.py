@@ -8,6 +8,7 @@ but it must not alter live recall, evidence envelopes, or judge input.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
@@ -92,6 +93,21 @@ class MemoryProjectionRulesDocTests(unittest.TestCase):
         self.assertIn("rapid repetition", text)
         self.assertIn("daemon-internal echo", text)
         self.assertIn("Probe outputs are diagnostic", text)
+
+    def test_projection_rules_doc_has_candidate_adapter_contract_and_sunset(self):
+        path = _REPO / "docs" / "governance" / "MEMORY_PROJECTION_RULES.md"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("Projection Candidate Adapter Contract", text)
+        self.assertIn("Allowed inputs", text)
+        self.assertIn("Required candidate fields", text)
+        self.assertIn("Forbidden inputs", text)
+        self.assertIn("heuristic-derived continuity keys", text)
+        self.assertIn("daemon-cycle-only", text)
+        self.assertIn("Sunset Commitments", text)
+        self.assertIn("2028-05-08", text)
+        self.assertIn("outgrown this thread but it keeps surfacing", text)
+        self.assertIn("4c observation remains under", text)
+        self.assertIn("observation output is not prompt context", text)
 
 
 class RecallProjectionObjectTests(unittest.TestCase):
@@ -406,6 +422,150 @@ class RepetitionWithContinuityRuleTests(unittest.TestCase):
         )
 
 
+class ProjectionCandidateAdapterTests(unittest.TestCase):
+    def test_projection_candidate_adapter_accepts_lived_recall_candidate_shape(self):
+        from core.memory import recall_projection as rp
+        candidates = [
+            rp.ProjectionCandidate(
+                candidate_id="episode:alpha",
+                candidate_kind="lived_episode",
+                text="Rohit protected the audit boundary.",
+                source_ids=("turn-a",),
+                continuity_key="audit-boundary",
+                continuity_key_basis="source_metadata",
+                timestamp=1_700_000_000,
+                lifecycle_stage="gestation",
+                trust_scope="owner_private",
+            ),
+            rp.ProjectionCandidate(
+                candidate_id="episode:beta",
+                candidate_kind="lived_episode",
+                text="The audit boundary returned later.",
+                source_ids=("turn-b",),
+                continuity_key="audit-boundary",
+                continuity_key_basis="source_metadata",
+                timestamp=1_700_086_400,
+                lifecycle_stage="gestation",
+                trust_scope="owner_private",
+            ),
+        ]
+        report = rp.project_candidates(
+            candidates,
+            policy=rp.REPETITION_WITH_CONTINUITY_POLICY,
+        )
+        self.assertEqual(
+            [item.turn_id for item in report.items],
+            ["episode:alpha", "episode:beta"],
+        )
+        self.assertEqual(
+            [item.projection_effect for item in report.items],
+            ["strengthened", "strengthened"],
+        )
+        self.assertEqual(report.audit_boundary, "not_audit_evidence")
+
+    def test_projection_candidate_adapter_rejects_missing_required_receipts(self):
+        from core.memory import recall_projection as rp
+        candidate = rp.ProjectionCandidate(
+            candidate_id="episode:missing-source",
+            candidate_kind="lived_episode",
+            text="A source-free candidate is not observable truth.",
+            source_ids=(),
+            continuity_key="source-free",
+            continuity_key_basis="source_metadata",
+            timestamp=1_700_000_000,
+            lifecycle_stage="gestation",
+            trust_scope="owner_private",
+        )
+        with self.assertRaisesRegex(ValueError, "source_ids"):
+            rp.project_candidates([candidate])
+
+    def test_projection_candidate_adapter_refuses_heuristic_continuity_key(self):
+        from core.memory import recall_projection as rp
+        candidate = rp.ProjectionCandidate(
+            candidate_id="episode:heuristic",
+            candidate_kind="lived_episode",
+            text="A guessed continuity key must not enter covenant salience.",
+            source_ids=("turn-a",),
+            continuity_key="guessed-key",
+            continuity_key_basis="heuristic",
+            timestamp=1_700_000_000,
+            lifecycle_stage="gestation",
+            trust_scope="owner_private",
+        )
+        with self.assertRaisesRegex(ValueError, "continuity_key_basis"):
+            rp.project_candidates([candidate])
+
+    def test_projection_candidate_adapter_refuses_daemon_cycle_only_candidate(self):
+        from core.memory import recall_projection as rp
+        candidate = rp.ProjectionCandidate(
+            candidate_id="daemon:loop",
+            candidate_kind="daemon_cycle",
+            text="The daemon echoed itself.",
+            source_ids=("daemon-turn",),
+            continuity_key="internal-loop",
+            continuity_key_basis="source_metadata",
+            timestamp=1_700_000_000,
+            lifecycle_stage="gestation",
+            trust_scope="owner_private",
+        )
+        with self.assertRaisesRegex(ValueError, "daemon_cycle"):
+            rp.project_candidates([candidate])
+
+    def test_projection_candidate_adapter_does_not_strengthen_duplicate_receipts(self):
+        from core.memory import recall_projection as rp
+        candidates = [
+            rp.ProjectionCandidate(
+                candidate_id="episode:alpha",
+                candidate_kind="lived_episode",
+                text="Same receipt, first candidate.",
+                source_ids=("turn-same",),
+                continuity_key="same-source",
+                continuity_key_basis="source_metadata",
+                timestamp=1_700_000_000,
+                lifecycle_stage="gestation",
+                trust_scope="owner_private",
+            ),
+            rp.ProjectionCandidate(
+                candidate_id="episode:beta",
+                candidate_kind="lived_episode",
+                text="Same receipt, second candidate.",
+                source_ids=("turn-same",),
+                continuity_key="same-source",
+                continuity_key_basis="source_metadata",
+                timestamp=1_700_086_400,
+                lifecycle_stage="gestation",
+                trust_scope="owner_private",
+            ),
+        ]
+        report = rp.project_candidates(
+            candidates,
+            policy=rp.REPETITION_WITH_CONTINUITY_POLICY,
+        )
+        self.assertEqual(
+            [item.projection_effect for item in report.items],
+            ["identity", "identity"],
+        )
+        self.assertEqual(
+            report.items[0].rule_inputs["independent_source_count"], 1,
+        )
+
+    def test_projection_candidate_adapter_refuses_public_or_guest_candidates(self):
+        from core.memory import recall_projection as rp
+        candidate = rp.ProjectionCandidate(
+            candidate_id="episode:public",
+            candidate_kind="lived_episode",
+            text="Public or guest candidates cannot shape bonded salience.",
+            source_ids=("turn-a",),
+            continuity_key="public-context",
+            continuity_key_basis="source_metadata",
+            timestamp=1_700_000_000,
+            lifecycle_stage="gestation",
+            trust_scope="guest_public",
+        )
+        with self.assertRaisesRegex(ValueError, "trust_scope"):
+            rp.project_candidates([candidate])
+
+
 class InertBoundaryTests(unittest.TestCase):
     def test_projection_probe_is_read_only(self):
         path = _REPO / "scripts" / "memory_projection_probe.py"
@@ -427,6 +587,65 @@ class InertBoundaryTests(unittest.TestCase):
         text = path.read_text(encoding="utf-8")
         self.assertIn("--projection-rule", text)
         self.assertIn("repetition_with_continuity.v1", text)
+
+    def test_projection_probe_writes_observation_jsonl_not_ledger(self):
+        from scripts import memory_projection_probe as probe
+        from core.memory import recall_projection as rp
+        candidates = [
+            rp.ProjectionCandidate(
+                candidate_id="episode:alpha",
+                candidate_kind="lived_episode",
+                text="Rohit protected the audit boundary.",
+                source_ids=("turn-a",),
+                continuity_key="audit-boundary",
+                continuity_key_basis="source_metadata",
+                timestamp=1_700_000_000,
+                lifecycle_stage="gestation",
+                trust_scope="owner_private",
+            ),
+            rp.ProjectionCandidate(
+                candidate_id="episode:beta",
+                candidate_kind="lived_episode",
+                text="The audit boundary returned later.",
+                source_ids=("turn-b",),
+                continuity_key="audit-boundary",
+                continuity_key_basis="source_metadata",
+                timestamp=1_700_086_400,
+                lifecycle_stage="gestation",
+                trust_scope="owner_private",
+            ),
+        ]
+        report = rp.project_candidates(
+            candidates,
+            policy=rp.REPETITION_WITH_CONTINUITY_POLICY,
+        )
+        path = Path(_TEST_DB_DIR) / "projection_observation.jsonl"
+        probe.write_projection_observation(
+            report=report,
+            candidates=candidates,
+            log_path=path,
+        )
+        records = [
+            json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0]["schema_version"], 2)
+        self.assertEqual(
+            records[0]["policy"]["rule_id"],
+            "repetition_with_continuity.v1",
+        )
+        self.assertEqual(records[0]["candidate_count"], 2)
+        self.assertEqual(records[0]["projected_count"], 2)
+        self.assertEqual(records[0]["candidate_id"], "episode:alpha")
+        self.assertEqual(records[0]["candidate_kind"], "lived_episode")
+        self.assertEqual(records[0]["trust_scope"], "owner_private")
+        self.assertEqual(records[0]["source_ids"], ["turn-a"])
+        self.assertEqual(records[0]["continuity_key"], "audit-boundary")
+        self.assertEqual(records[0]["would_strengthen"], True)
+        self.assertEqual(records[0]["audit_boundary"], "not_audit_evidence")
+        self.assertRegex(records[0]["policy_doc_sha256"], r"^[0-9a-f]{64}$")
+        self.assertIn("independent_source_count", records[0]["rule_inputs"])
+        self.assertEqual(records[0]["counterevidence_refs"], [])
 
     def test_grounding_judge_self_history_uses_raw_entries_not_projected(self):
         from core.cognition import grounding_judge

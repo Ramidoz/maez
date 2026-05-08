@@ -55,6 +55,27 @@ REPETITION_WITH_CONTINUITY_POLICY = ProjectionPolicy(
 
 
 @dataclass(frozen=True)
+class ProjectionCandidate:
+    """Typed observation input for non-self-history recall candidates.
+
+    Slice 4c uses this adapter shape for offline observation only. It
+    lets lived-recall-shaped candidates enter the projection rule without
+    pretending that episodes, edges, and self_history are the same organ.
+    """
+
+    candidate_id: str
+    candidate_kind: str
+    text: str
+    source_ids: tuple[str, ...]
+    continuity_key: str
+    continuity_key_basis: str
+    timestamp: float
+    lifecycle_stage: str
+    trust_scope: str
+    counterevidence_for: str = ""
+
+
+@dataclass(frozen=True)
 class ProjectionSourceRef:
     """Raw source pointer for one projected item."""
 
@@ -189,6 +210,45 @@ def _source_ref(entry: dict[str, Any]) -> ProjectionSourceRef:
     )
 
 
+def _candidate_to_entry(candidate: ProjectionCandidate) -> dict[str, Any]:
+    """Validate and adapt one typed candidate to the projection entry shape."""
+
+    if not candidate.candidate_id:
+        raise ValueError("projection candidate requires candidate_id")
+    if not candidate.candidate_kind:
+        raise ValueError("projection candidate requires candidate_kind")
+    if candidate.candidate_kind in EXCLUDED_STRENGTHENING_KINDS:
+        raise ValueError("projection candidate kind daemon_cycle is forbidden")
+    if not candidate.text:
+        raise ValueError("projection candidate requires text")
+    if not candidate.source_ids or any(not sid for sid in candidate.source_ids):
+        raise ValueError("projection candidate requires non-empty source_ids")
+    if not candidate.continuity_key:
+        raise ValueError("projection candidate requires continuity_key")
+    if candidate.continuity_key_basis != "source_metadata":
+        raise ValueError(
+            "projection candidate continuity_key_basis must be source_metadata"
+        )
+    if not candidate.lifecycle_stage:
+        raise ValueError("projection candidate requires lifecycle_stage")
+    if candidate.trust_scope != "owner_private":
+        raise ValueError(
+            "projection candidate trust_scope must be owner_private"
+        )
+    if candidate.timestamp is None:
+        raise ValueError("projection candidate requires timestamp")
+    return {
+        "turn_id": candidate.candidate_id,
+        "kind": candidate.candidate_kind,
+        "utterance_summary": candidate.text,
+        "timestamp": candidate.timestamp,
+        "lifecycle_stage": candidate.lifecycle_stage,
+        "continuity_key": candidate.continuity_key,
+        "counterevidence_for": candidate.counterevidence_for,
+        "strengthening_source_ids": tuple(candidate.source_ids),
+    }
+
+
 def _counterevidence_by_key(
     entries: Iterable[dict[str, Any]],
 ) -> dict[str, list[ProjectionSourceRef]]:
@@ -232,13 +292,18 @@ def _strengthening_inputs(
     *,
     group: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    independent_turn_ids = {
-        str(e.get("turn_id") or "") for e in group
-        if e.get("turn_id") and _is_strengthening_eligible(e)
-    }
+    independent_source_ids: set[str] = set()
+    for e in group:
+        if not _is_strengthening_eligible(e):
+            continue
+        source_ids = e.get("strengthening_source_ids")
+        if isinstance(source_ids, tuple | list):
+            independent_source_ids.update(str(sid) for sid in source_ids if sid)
+        elif e.get("turn_id"):
+            independent_source_ids.add(str(e.get("turn_id") or ""))
     return {
         "continuity_key": entry.get("continuity_key") or "",
-        "independent_source_count": len(independent_turn_ids),
+        "independent_source_count": len(independent_source_ids),
         "temporal_distinct": _has_temporal_distinctness(group),
         "eligible_for_strengthening": _is_strengthening_eligible(entry),
         "min_temporal_separation_seconds": MIN_TEMPORAL_SEPARATION_SECONDS,
@@ -322,4 +387,22 @@ def project_self_history(
         raw_count=len(raw_entries),
         omitted_count=0,
         policy_doc_sha256=_policy_doc_sha256(),
+    )
+
+
+def project_candidates(
+    candidates: Iterable[ProjectionCandidate],
+    *,
+    policy: ProjectionPolicy = DEFAULT_POLICY,
+) -> ProjectionReport:
+    """Return a projection report for typed observation candidates.
+
+    This is the Slice 4c adapter path. It is intentionally equivalent to
+    projecting validated entry dictionaries, so report schema v2 remains
+    readable and unchanged.
+    """
+
+    return project_self_history(
+        [_candidate_to_entry(candidate) for candidate in candidates],
+        policy=policy,
     )

@@ -13,6 +13,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO))
@@ -64,6 +65,68 @@ def build_report(
         "raw_self_history": raw_self_history,
         "projection": projection.to_dict(),
     }
+
+
+def _candidate_by_id(
+    candidates: list[_rp.ProjectionCandidate],
+) -> dict[str, _rp.ProjectionCandidate]:
+    return {candidate.candidate_id: candidate for candidate in candidates}
+
+
+def projection_observation_records(
+    *,
+    report: _rp.ProjectionReport,
+    candidates: list[_rp.ProjectionCandidate],
+) -> list[dict[str, Any]]:
+    """Return diagnostic-only records for Slice 4c observation logs."""
+
+    candidates_by_id = _candidate_by_id(candidates)
+    records: list[dict[str, Any]] = []
+    for item in report.items:
+        candidate = candidates_by_id[item.turn_id]
+        records.append({
+            "schema_version": report.schema_version,
+            "policy": report.policy.to_dict(),
+            "candidate_count": len(candidates),
+            "projected_count": report.projected_count,
+            "candidate_id": candidate.candidate_id,
+            "candidate_kind": candidate.candidate_kind,
+            "trust_scope": candidate.trust_scope,
+            "source_ids": list(candidate.source_ids),
+            "continuity_key": candidate.continuity_key,
+            "would_strengthen": item.projection_effect == "strengthened",
+            "projection_effect": item.projection_effect,
+            "strength_reasons": list(item.strength_reasons),
+            "rule_inputs": dict(item.rule_inputs),
+            "counterevidence_refs": [
+                ref.to_dict() for ref in item.counterevidence_refs
+            ],
+            "audit_boundary": report.audit_boundary,
+            "policy_doc_sha256": report.policy_doc_sha256,
+        })
+    return records
+
+
+def write_projection_observation(
+    *,
+    report: _rp.ProjectionReport,
+    candidates: list[_rp.ProjectionCandidate],
+    log_path: Path,
+) -> None:
+    """Append Slice 4c projection diagnostics to a JSONL log file.
+
+    This writes operator diagnostics only. It does not write the ledger,
+    alter prompt context, or feed audit evidence.
+    """
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    records = projection_observation_records(
+        report=report,
+        candidates=candidates,
+    )
+    with log_path.open("a", encoding="utf-8") as fh:
+        for record in records:
+            fh.write(json.dumps(record, sort_keys=True) + "\n")
 
 
 def main(argv: list[str] | None = None) -> int:
