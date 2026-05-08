@@ -1,6 +1,6 @@
 # Slice 3.0c — Background-Knowledge Carve-Out for the Evidence Envelope
 
-**Status:** DESIGN MEMO — awaiting Rohit ratification.
+**Status:** RATIFIED 2026-05-07 (commit ae179e9). Decisions in §7 are locked; departures require a memo amendment.
 **Date:** 2026-05-07.
 **Scope:** Audit-time policy. No schema change, no envelope field, no code in this slice.
 

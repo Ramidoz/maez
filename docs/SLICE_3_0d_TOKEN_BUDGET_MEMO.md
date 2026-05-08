@@ -1,6 +1,6 @@
 # Slice 3.0d — Evidence Envelope Token Budget Memo
 
-**Status:** Design only. No code, no schema changes.
+**Status:** RATIFIED 2026-05-07 (commit ae179e9). Decisions in §8 are locked; departures require a memo amendment.
 **Author:** Claude (drafted 2026-05-07)
 **Companion docs:** [LEDGER_ENVELOPE_SCHEMA.md](LEDGER_ENVELOPE_SCHEMA.md) §3, [LEDGER_2_5C_ACCEPTANCE.md](LEDGER_2_5C_ACCEPTANCE.md)
 **Anchor in code (not yet edited):** `daemon/maez_daemon.py` ~L1711–1780 (memory recall cap + sys-prompt construction)
@@ -135,7 +135,7 @@ WARNING maez.envelope envelope_truncated
   cap_hit=total
 ```
 
-Open question (§8): logger name `maez.envelope` vs. piggybacking on `maez.cognition`.
+Decided (§8): logger name is **`maez.envelope`** — new purpose-specific logger, precedent set by slice 1.2's `core.cognition.grounding_judge`.
 
 ---
 
@@ -220,9 +220,11 @@ memo amendment.
    `maez.cognition`'s broader signal.
 
 4. **Recall cap with envelope present → 52K chars (13K tokens),
-   ACCEPTED.** Reduction of ~3K chars from the existing 60K cap is
-   the smallest change that makes the budget math fit a 3K envelope
-   without squeezing reply space. The existing 60K cap stays as the
+   ACCEPTED.** Reduction of 8K chars (~2K tokens) from the existing
+   60K cap is the smallest change that makes the budget math fit a
+   3K envelope without squeezing reply space. (Earlier draft of this
+   bullet said "~3K chars" — that was wrong; 60K − 52K = 8K chars.
+   The §1 budget table is correct.) The existing 60K cap stays as the
    no-envelope fallback (i.e. when `MAEZ_EVIDENCE_ENVELOPE_DISABLED=1`
    the recall builder uses 60K). Slice 3 proper implements the
    conditional; the env var to override is
