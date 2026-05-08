@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import io
 import json
-import logging
 import os
 import sys
 import tempfile
@@ -52,6 +51,37 @@ def _fresh_probe_db(name: str) -> str:
 _CORPUS_PATH = (
     Path(__file__).resolve().parent / "probes" / "birth_readiness_corpus.jsonl"
 )
+
+
+def _write_jsonl(path: Path, probes: list[dict]) -> None:
+    path.write_text(
+        "\n".join(json.dumps(p, sort_keys=True) for p in probes) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _minimal_probe(
+    probe_id: str = "continuity_basic_v1",
+    *,
+    root_percent: str = "78",
+) -> dict:
+    return {
+        "id": probe_id,
+        "category": "multi_turn_continuity",
+        "purpose": "regression test continuity probe",
+        "history": [
+            {"role": "user", "content": f"Root partition is at {root_percent}%."},
+            {"role": "assistant", "content": f"Acknowledged — root at {root_percent}%."},
+        ],
+        "expected_self_history_min": 1,
+        "expected_self_history_includes_substrings": [root_percent],
+        "expected_lifecycle_target": "birth_ready",
+        "regression_tolerance": {
+            "metrics": {
+                "self_history_count": {"op": "min", "value": 1},
+            },
+        },
+    }
 
 
 class FixtureLoaderTests(unittest.TestCase):
@@ -246,6 +276,299 @@ class BirthReadinessReportTests(unittest.TestCase):
         text = rh.format_report(report)
         self.assertIn("BIRTH-READINESS PROBE REPORT", text)
         self.assertIn("overall:", text.lower())
+
+
+class RegressionModeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="maez_regression_tests_")
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.corpus = self.root / "corpus.jsonl"
+        self.baseline = self.root / "regression_baseline.json"
+        _write_jsonl(self.corpus, [_minimal_probe()])
+
+    def _run_cli(self, *args: str) -> tuple[int, str]:
+        out = io.StringIO()
+        err = io.StringIO()
+        with patch("sys.stdout", out), patch("sys.stderr", err):
+            code = rh.main(list(args))
+        return code, out.getvalue() + err.getvalue()
+
+    def test_regression_mode_without_baseline_flag_errors(self):
+        code, text = self._run_cli(
+            "--mode", "regression",
+            "--corpus", str(self.corpus),
+        )
+        self.assertNotEqual(code, 0)
+        self.assertIn("--baseline", text)
+
+    def test_regression_check_requires_existing_baseline(self):
+        code, text = self._run_cli(
+            "--mode", "regression",
+            "--baseline", "check",
+            "--baseline-path", str(self.baseline),
+            "--corpus", str(self.corpus),
+        )
+        self.assertNotEqual(code, 0)
+        self.assertIn("baseline file not found", text)
+
+    def test_baseline_write_requires_reason(self):
+        code, text = self._run_cli(
+            "--mode", "regression",
+            "--baseline", "write",
+            "--baseline-path", str(self.baseline),
+            "--corpus", str(self.corpus),
+        )
+        self.assertNotEqual(code, 0)
+        self.assertIn("--reason", text)
+
+    def test_baseline_write_refuses_dirty_tree(self):
+        with patch.object(rh, "_git_dirty", return_value=True):
+            code, text = self._run_cli(
+                "--mode", "regression",
+                "--baseline", "write",
+                "--reason", "test dirty tree",
+                "--baseline-path", str(self.baseline),
+                "--corpus", str(self.corpus),
+            )
+        self.assertNotEqual(code, 0)
+        self.assertIn("dirty working tree", text)
+
+    def test_baseline_write_stores_corpus_hash_per_probe_hash_and_history(self):
+        with patch.object(rh, "_git_dirty", return_value=False), \
+             patch.object(rh, "_git_commit", return_value="abc123"):
+            code, text = self._run_cli(
+                "--mode", "regression",
+                "--baseline", "write",
+                "--reason", "initial baseline",
+                "--baseline-path", str(self.baseline),
+                "--corpus", str(self.corpus),
+            )
+        self.assertEqual(code, 0, text)
+        data = json.loads(self.baseline.read_text(encoding="utf-8"))
+        self.assertEqual(data["schema_version"], 1)
+        self.assertEqual(data["source_commit"], "abc123")
+        self.assertFalse(data["dirty_tree"])
+        self.assertEqual(data["last_regen_reason"], "initial baseline")
+        self.assertEqual(data["regen_history"][0]["reason"], "initial baseline")
+        self.assertIn("probe_corpus_sha256", data)
+        probe = data["probes"]["continuity_basic_v1"]
+        self.assertIn("probe_definition_sha256", probe)
+        self.assertEqual(probe["verdict"], "PASS")
+        self.assertIn("observed_metrics", probe)
+
+    def test_baseline_write_appends_existing_regen_history(self):
+        with patch.object(rh, "_git_dirty", return_value=False), \
+             patch.object(rh, "_git_commit", return_value="abc123"):
+            self.assertEqual(self._run_cli(
+                "--mode", "regression",
+                "--baseline", "write",
+                "--reason", "initial baseline",
+                "--baseline-path", str(self.baseline),
+                "--corpus", str(self.corpus),
+            )[0], 0)
+        with patch.object(rh, "_git_dirty", return_value=False), \
+             patch.object(rh, "_git_commit", return_value="def456"):
+            self.assertEqual(self._run_cli(
+                "--mode", "regression",
+                "--baseline", "write",
+                "--reason", "intentional regen",
+                "--baseline-path", str(self.baseline),
+                "--corpus", str(self.corpus),
+            )[0], 0)
+        data = json.loads(self.baseline.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [r["reason"] for r in data["regen_history"]],
+            ["initial baseline", "intentional regen"],
+        )
+        self.assertEqual(data["last_regen_reason"], "intentional regen")
+
+    def test_baseline_write_rejects_malformed_regen_history_entry(self):
+        with patch.object(rh, "_git_dirty", return_value=False), \
+             patch.object(rh, "_git_commit", return_value="abc123"):
+            self.assertEqual(self._run_cli(
+                "--mode", "regression",
+                "--baseline", "write",
+                "--reason", "initial baseline",
+                "--baseline-path", str(self.baseline),
+                "--corpus", str(self.corpus),
+            )[0], 0)
+        data = json.loads(self.baseline.read_text(encoding="utf-8"))
+        data["regen_history"].append("not an object")
+        self.baseline.write_text(json.dumps(data), encoding="utf-8")
+        with patch.object(rh, "_git_dirty", return_value=False), \
+             patch.object(rh, "_git_commit", return_value="def456"):
+            code, text = self._run_cli(
+                "--mode", "regression",
+                "--baseline", "write",
+                "--reason", "intentional regen",
+                "--baseline-path", str(self.baseline),
+                "--corpus", str(self.corpus),
+            )
+        self.assertNotEqual(code, 0)
+        self.assertIn("regen_history entries must be objects", text)
+
+    def test_baseline_write_report_does_not_claim_no_drift(self):
+        with patch.object(rh, "_git_dirty", return_value=False), \
+             patch.object(rh, "_git_commit", return_value="abc123"):
+            code, text = self._run_cli(
+                "--mode", "regression",
+                "--baseline", "write",
+                "--reason", "initial baseline",
+                "--baseline-path", str(self.baseline),
+                "--corpus", str(self.corpus),
+            )
+        self.assertEqual(code, 0, text)
+        self.assertIn("BASELINE WRITTEN", text)
+        self.assertIn("initial baseline", text)
+        self.assertNotIn("No drift detected", text)
+
+    def test_regression_check_matching_baseline_passes(self):
+        with patch.object(rh, "_git_dirty", return_value=False), \
+             patch.object(rh, "_git_commit", return_value="abc123"):
+            self.assertEqual(self._run_cli(
+                "--mode", "regression",
+                "--baseline", "write",
+                "--reason", "initial baseline",
+                "--baseline-path", str(self.baseline),
+                "--corpus", str(self.corpus),
+            )[0], 0)
+        code, text = self._run_cli(
+            "--mode", "regression",
+            "--baseline", "check",
+            "--baseline-path", str(self.baseline),
+            "--corpus", str(self.corpus),
+        )
+        self.assertEqual(code, 0, text)
+        self.assertIn("overall:      PASS", text)
+
+    def test_regression_check_detects_metric_drift(self):
+        with patch.object(rh, "_git_dirty", return_value=False), \
+             patch.object(rh, "_git_commit", return_value="abc123"):
+            self.assertEqual(self._run_cli(
+                "--mode", "regression",
+                "--baseline", "write",
+                "--reason", "initial baseline",
+                "--baseline-path", str(self.baseline),
+                "--corpus", str(self.corpus),
+            )[0], 0)
+        data = json.loads(self.baseline.read_text(encoding="utf-8"))
+        data["probes"]["continuity_basic_v1"]["observed_metrics"][
+            "self_history_count"
+        ] = 99
+        self.baseline.write_text(json.dumps(data), encoding="utf-8")
+        code, text = self._run_cli(
+            "--mode", "regression",
+            "--baseline", "check",
+            "--baseline-path", str(self.baseline),
+            "--corpus", str(self.corpus),
+        )
+        self.assertNotEqual(code, 0)
+        self.assertIn("self_history_count", text)
+
+    def test_regression_check_detects_missing_prior_metric(self):
+        with patch.object(rh, "_git_dirty", return_value=False), \
+             patch.object(rh, "_git_commit", return_value="abc123"):
+            self.assertEqual(self._run_cli(
+                "--mode", "regression",
+                "--baseline", "write",
+                "--reason", "initial baseline",
+                "--baseline-path", str(self.baseline),
+                "--corpus", str(self.corpus),
+            )[0], 0)
+        data = json.loads(self.baseline.read_text(encoding="utf-8"))
+        data["probes"]["continuity_basic_v1"]["observed_metrics"][
+            "metric_that_used_to_exist"
+        ] = 1
+        data["probes"]["continuity_basic_v1"]["regression_tolerance"] = {
+            "metrics": {"metric_that_used_to_exist": {"op": "exact"}}
+        }
+        self.baseline.write_text(json.dumps(data), encoding="utf-8")
+        code, text = self._run_cli(
+            "--mode", "regression",
+            "--baseline", "check",
+            "--baseline-path", str(self.baseline),
+            "--corpus", str(self.corpus),
+        )
+        self.assertNotEqual(code, 0)
+        self.assertIn("metric_that_used_to_exist", text)
+        self.assertIn("missing", text.lower())
+
+    def test_schema_version_mismatch_errors(self):
+        self.baseline.write_text(json.dumps({
+            "schema_version": 999,
+            "probes": {},
+        }), encoding="utf-8")
+        code, text = self._run_cli(
+            "--mode", "regression",
+            "--baseline", "check",
+            "--baseline-path", str(self.baseline),
+            "--corpus", str(self.corpus),
+        )
+        self.assertNotEqual(code, 0)
+        self.assertIn("unsupported baseline schema_version", text)
+
+    def test_malformed_baseline_errors_clearly(self):
+        self.baseline.write_text("{not json", encoding="utf-8")
+        code, text = self._run_cli(
+            "--mode", "regression",
+            "--baseline", "check",
+            "--baseline-path", str(self.baseline),
+            "--corpus", str(self.corpus),
+        )
+        self.assertNotEqual(code, 0)
+        self.assertIn("malformed baseline", text)
+
+    def test_corpus_change_reports_added_removed_and_modified_probe_ids(self):
+        old_probe = _minimal_probe()
+        removed_probe = _minimal_probe("removed_probe_v1")
+        _write_jsonl(self.corpus, [old_probe, removed_probe])
+        with patch.object(rh, "_git_dirty", return_value=False), \
+             patch.object(rh, "_git_commit", return_value="abc123"):
+            self.assertEqual(self._run_cli(
+                "--mode", "regression",
+                "--baseline", "write",
+                "--reason", "initial baseline",
+                "--baseline-path", str(self.baseline),
+                "--corpus", str(self.corpus),
+            )[0], 0)
+        modified = _minimal_probe(root_percent="79")
+        added = _minimal_probe("added_probe_v1")
+        _write_jsonl(self.corpus, [modified, added])
+        code, text = self._run_cli(
+            "--mode", "regression",
+            "--baseline", "check",
+            "--baseline-path", str(self.baseline),
+            "--corpus", str(self.corpus),
+        )
+        self.assertNotEqual(code, 0)
+        self.assertIn("probe_corpus_changed", text)
+        self.assertIn("added_probe_v1", text)
+        self.assertIn("removed_probe_v1", text)
+        self.assertIn("continuity_basic_v1", text)
+
+    def test_duplicate_probe_ids_raise_loudly(self):
+        probe = _minimal_probe()
+        _write_jsonl(self.corpus, [probe, probe])
+        with self.assertRaises(rh.ProbeCorpusError) as cm:
+            rh.load_probe_definitions(self.corpus)
+        self.assertIn("duplicate probe id", str(cm.exception))
+
+    def test_missing_regression_tolerance_for_non_exact_metric_fails_loud(self):
+        probe = _minimal_probe()
+        probe.pop("regression_tolerance")
+        _write_jsonl(self.corpus, [probe])
+        with patch.object(rh, "_git_dirty", return_value=False), \
+             patch.object(rh, "_git_commit", return_value="abc123"):
+            code, text = self._run_cli(
+                "--mode", "regression",
+                "--baseline", "write",
+                "--reason", "initial baseline",
+                "--baseline-path", str(self.baseline),
+                "--corpus", str(self.corpus),
+            )
+        self.assertNotEqual(code, 0)
+        self.assertIn("missing regression_tolerance", text)
 
 
 class EnvelopePressureMinFloorTests(unittest.TestCase):

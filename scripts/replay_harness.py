@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 # Copyright © 2026 Rohit Ananthan
 # Licensed under the GNU Affero General Public License v3.0 or later.
-"""replay_harness.py — birth-readiness probe runner for Maez.
+"""replay_harness.py — birth-readiness and regression probe runner for Maez.
 
 Per docs/SLICE_GESTATION_BOUNDARY_MEMO.md §5, the replay harness has
-two modes:
+two modes as of Slice 3.6:
 
-  - regression       — compare current behavior vs a stored baseline.
-                       Goal: detect drift after architectural changes.
   - birth_readiness  — compare current behavior vs expected post-birth
                        behavior. Goal: measure the gap to birth criteria.
+  - regression       — compare current behavior vs a stored, schema-
+                       versioned baseline and fail on behavior drift,
+                       probe-contract drift, or unreasoned baseline
+                       regeneration.
 
 The harness loads a JSONL probe corpus (one probe per line). Each
 probe targets one of the missing 2.5c volume-gate behavior classes:
@@ -39,10 +41,12 @@ from __future__ import annotations
 import argparse
 import contextlib
 import dataclasses
+import hashlib
 import json
 import logging
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -61,7 +65,6 @@ sys.path.insert(0, str(_REPO))
 from core.cognition import envelope_builder as _eb  # noqa: E402
 from core.ledger import chain as _chain  # noqa: E402
 from core.ledger import migrate as _migrate  # noqa: E402
-from core.ledger import recent_turns as _rt  # noqa: E402
 from core.ledger import writer as _writer  # noqa: E402
 
 
@@ -70,6 +73,10 @@ from core.ledger import writer as _writer  # noqa: E402
 
 class ProbeCorpusError(ValueError):
     """Raised when a probe corpus file is malformed."""
+
+
+class RegressionBaselineError(ValueError):
+    """Raised when regression baseline input is missing or invalid."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -100,7 +107,33 @@ class CorpusReport:
     finished_at: float
 
 
+@dataclasses.dataclass(frozen=True)
+class ProbeDefinition:
+    probe: Probe
+    canonical_json: str
+    sha256: str
+
+
+@dataclasses.dataclass
+class RegressionDrift:
+    probe_id: str
+    status: str
+    reason: str
+
+
+@dataclasses.dataclass
+class RegressionReport:
+    baseline_path: str
+    corpus_path: str
+    overall: str
+    drifts: list[RegressionDrift]
+    baseline: dict | None = None
+    operation: str = "check"
+
+
 _REQUIRED_FIELDS = ("id", "category", "purpose")
+_BASELINE_SCHEMA_VERSION = 1
+_DEFAULT_BASELINE_PATH = _REPO / "tests" / "probes" / "regression_baseline.json"
 
 
 # ── fixture loading ───────────────────────────────────────────────────
@@ -144,6 +177,42 @@ def load_probes(corpus_path: str | Path) -> list[Probe]:
     p = Path(corpus_path)
     with p.open("r", encoding="utf-8") as fh:
         return list(_iter_probes_from_handle(fh, source=str(p)))
+
+
+def _canonical_json(obj: dict) -> str:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def probe_corpus_sha256(corpus_path: str | Path) -> str:
+    return hashlib.sha256(Path(corpus_path).read_bytes()).hexdigest()
+
+
+def load_probe_definitions(corpus_path: str | Path) -> dict[str, ProbeDefinition]:
+    """Load probes plus a stable per-probe definition hash.
+
+    The corpus file's raw bytes identify whole-corpus drift. Per-probe
+    hashes identify added / removed / modified probe contracts for
+    human-readable regression reports.
+    """
+    path = Path(corpus_path)
+    definitions: dict[str, ProbeDefinition] = {}
+    with path.open("r", encoding="utf-8") as fh:
+        for probe in _iter_probes_from_handle(fh, source=str(path)):
+            if probe.id in definitions:
+                raise ProbeCorpusError(
+                    f"{path}: duplicate probe id {probe.id!r}"
+                )
+            canonical = _canonical_json(probe.raw)
+            definitions[probe.id] = ProbeDefinition(
+                probe=probe,
+                canonical_json=canonical,
+                sha256=_sha256_text(canonical),
+            )
+    return definitions
 
 
 # ── telemetry capture ─────────────────────────────────────────────────
@@ -634,6 +703,316 @@ def run_corpus(
     )
 
 
+def _git_commit() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(_REPO),
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return "unknown"
+
+
+def _git_dirty() -> bool:
+    """Return True when tracked files differ from HEAD/index.
+
+    Untracked artifacts are intentionally ignored. Rohit's workstation
+    often has local generated assets; baseline writes should refuse
+    uncommitted tracked behavior changes, not unrelated untracked files.
+    """
+    unstaged = subprocess.run(
+        ["git", "diff", "--quiet"],
+        cwd=str(_REPO),
+        check=False,
+    ).returncode
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "--quiet"],
+        cwd=str(_REPO),
+        check=False,
+    ).returncode
+    return unstaged != 0 or staged != 0
+
+
+def _load_baseline(path: str | Path) -> dict:
+    p = Path(path)
+    if not p.exists():
+        raise RegressionBaselineError(f"baseline file not found: {p}")
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise RegressionBaselineError(f"malformed baseline: {e}") from e
+    if not isinstance(data, dict):
+        raise RegressionBaselineError("malformed baseline: expected object")
+    version = data.get("schema_version")
+    if version != _BASELINE_SCHEMA_VERSION:
+        raise RegressionBaselineError(
+            f"unsupported baseline schema_version={version!r}; "
+            f"expected {_BASELINE_SCHEMA_VERSION}"
+        )
+    return data
+
+
+def _require_regression_tolerance(probe: Probe, result: ProbeResult) -> dict:
+    tolerance = probe.raw.get("regression_tolerance")
+    if not isinstance(tolerance, dict):
+        raise RegressionBaselineError(
+            f"probe {probe.id}: missing regression_tolerance"
+        )
+    metrics_tol = tolerance.get("metrics")
+    if result.metrics and not isinstance(metrics_tol, dict):
+        raise RegressionBaselineError(
+            f"probe {probe.id}: missing regression_tolerance.metrics"
+        )
+    for metric in result.metrics:
+        if metric not in metrics_tol:
+            raise RegressionBaselineError(
+                f"probe {probe.id}: missing regression_tolerance for metric {metric!r}"
+            )
+    return tolerance
+
+
+def _metric_satisfies(
+    *,
+    metric: str,
+    baseline_value: Any,
+    current_value: Any,
+    spec: dict,
+) -> tuple[bool, str]:
+    op = spec.get("op", "exact")
+    if op == "exact":
+        ok = current_value == baseline_value
+        return ok, f"metric {metric} expected {baseline_value!r}, got {current_value!r}"
+    if op == "min":
+        floor = spec.get("value", baseline_value)
+        expected = max(floor, baseline_value)
+        ok = current_value >= expected
+        return ok, f"metric {metric} expected >= {expected!r}, got {current_value!r}"
+    if op == "max":
+        ceiling = spec.get("value", baseline_value)
+        expected = min(ceiling, baseline_value)
+        ok = current_value <= expected
+        return ok, f"metric {metric} expected <= {expected!r}, got {current_value!r}"
+    if op == "range":
+        bounds = spec.get("value", [])
+        low, high = bounds if isinstance(bounds, list | tuple) and len(bounds) == 2 else (None, None)
+        ok = low is not None and high is not None and low <= current_value <= high
+        return ok, f"metric {metric} expected in [{low!r}, {high!r}], got {current_value!r}"
+    if op == "contains":
+        required = spec.get("value", [])
+        if not isinstance(required, list):
+            required = [required]
+        if isinstance(current_value, dict):
+            haystack = set(current_value)
+        elif isinstance(current_value, list | tuple | set):
+            haystack = set(current_value)
+        else:
+            haystack = {current_value}
+        missing = [v for v in required if v not in haystack]
+        ok = not missing
+        return ok, f"metric {metric} missing required values {missing!r}"
+    return False, f"metric {metric} has unsupported tolerance op {op!r}"
+
+
+def _run_current_results(
+    *,
+    corpus_path: str | Path,
+) -> tuple[dict[str, ProbeDefinition], dict[str, ProbeResult]]:
+    definitions = load_probe_definitions(corpus_path)
+    results: dict[str, ProbeResult] = {}
+    for probe_id, definition in definitions.items():
+        db = _default_probe_db_factory(probe_id)
+        results[probe_id] = run_probe(
+            definition.probe,
+            probe_db_path=db,
+            mode="regression",
+        )
+    return definitions, results
+
+
+def write_regression_baseline(
+    *,
+    corpus_path: str | Path,
+    baseline_path: str | Path,
+    reason: str,
+) -> RegressionReport:
+    if not reason.strip():
+        raise RegressionBaselineError("--reason is required for --baseline write")
+    if _git_dirty():
+        raise RegressionBaselineError(
+            "dirty working tree; commit or discard tracked changes before writing baseline"
+        )
+    definitions, results = _run_current_results(corpus_path=corpus_path)
+    probes: dict[str, dict] = {}
+    for probe_id, definition in definitions.items():
+        result = results[probe_id]
+        if result.verdict != "PASS":
+            raise RegressionBaselineError(
+                f"refusing to write baseline with failing probe {probe_id}: "
+                f"{result.verdict} — {result.reason}"
+            )
+        _require_regression_tolerance(definition.probe, result)
+        probes[probe_id] = {
+            "category": result.category,
+            "verdict": result.verdict,
+            "observed_metrics": result.metrics,
+            "probe_definition_sha256": definition.sha256,
+        }
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    commit = _git_commit()
+    existing_history: list[dict] = []
+    if Path(baseline_path).exists():
+        existing = _load_baseline(baseline_path)
+        history = existing.get("regen_history")
+        if isinstance(history, list):
+            if not all(isinstance(h, dict) for h in history):
+                raise RegressionBaselineError(
+                    "malformed baseline: regen_history entries must be objects"
+                )
+            existing_history = list(history)
+        else:
+            raise RegressionBaselineError(
+                "malformed baseline: regen_history must be a list"
+            )
+    new_history_entry = {
+        "commit": commit,
+        "date": now,
+        "reason": reason.strip(),
+    }
+    data = {
+        "schema_version": _BASELINE_SCHEMA_VERSION,
+        "created_at": now,
+        "source_commit": commit,
+        "dirty_tree": False,
+        "mode": "regression",
+        "probe_corpus_path": str(Path(corpus_path)),
+        "probe_corpus_sha256": probe_corpus_sha256(corpus_path),
+        "decoder_note": (
+            "Baseline captures replay-harness probe health and stable metrics, "
+            "not exact model prose. dirty_tree reflects tracked Git changes; "
+            "untracked local artifacts are ignored. Probe definitions own "
+            "regression_tolerance; the baseline stores observed health values "
+            "and hashes so contract drift and behavior drift stay separate."
+        ),
+        "last_regen_reason": reason.strip(),
+        "regen_history": [*existing_history, new_history_entry],
+        "probes": probes,
+    }
+    p = Path(baseline_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return RegressionReport(
+        baseline_path=str(p),
+        corpus_path=str(corpus_path),
+        overall="PASS",
+        drifts=[],
+        baseline=data,
+        operation="write",
+    )
+
+
+def check_regression_baseline(
+    *,
+    corpus_path: str | Path,
+    baseline_path: str | Path,
+) -> RegressionReport:
+    baseline = _load_baseline(baseline_path)
+    current_defs, current_results = _run_current_results(corpus_path=corpus_path)
+    drifts: list[RegressionDrift] = []
+
+    baseline_probes = baseline.get("probes")
+    if not isinstance(baseline_probes, dict):
+        raise RegressionBaselineError("malformed baseline: missing probes object")
+
+    current_corpus_hash = probe_corpus_sha256(corpus_path)
+    if baseline.get("probe_corpus_sha256") != current_corpus_hash:
+        baseline_ids = set(baseline_probes)
+        current_ids = set(current_defs)
+        added = sorted(current_ids - baseline_ids)
+        removed = sorted(baseline_ids - current_ids)
+        modified = sorted(
+            pid for pid in (current_ids & baseline_ids)
+            if baseline_probes[pid].get("probe_definition_sha256")
+            != current_defs[pid].sha256
+        )
+        reason = (
+            "probe_corpus_changed "
+            f"added={added or ['none']} "
+            f"removed={removed or ['none']} "
+            f"modified={modified or ['none']}"
+        )
+        drifts.append(RegressionDrift("probe_corpus", "DRIFT", reason))
+
+    for probe_id in sorted(set(baseline_probes) | set(current_results)):
+        prior = baseline_probes.get(probe_id)
+        current = current_results.get(probe_id)
+        if prior is None:
+            drifts.append(RegressionDrift(probe_id, "NEW", "probe missing from baseline"))
+            continue
+        if current is None:
+            drifts.append(RegressionDrift(probe_id, "MISSING", "probe missing from current corpus"))
+            continue
+        if prior.get("category") != current.category:
+            drifts.append(RegressionDrift(
+                probe_id, "DRIFT",
+                f"category expected {prior.get('category')!r}, got {current.category!r}",
+            ))
+        if prior.get("verdict") != current.verdict:
+            drifts.append(RegressionDrift(
+                probe_id, "DRIFT",
+                f"verdict expected {prior.get('verdict')!r}, got {current.verdict!r}",
+            ))
+        prior_metrics = prior.get("observed_metrics") or {}
+        if not isinstance(prior_metrics, dict):
+            raise RegressionBaselineError(
+                f"malformed baseline: probe {probe_id} observed_metrics must be object"
+            )
+        tolerance = _require_regression_tolerance(current_defs[probe_id].probe, current)
+        metrics_tol = tolerance.get("metrics", {})
+        metric_keys = sorted(set(prior_metrics) | set(current.metrics))
+        for metric in metric_keys:
+            if metric not in current.metrics:
+                drifts.append(RegressionDrift(
+                    probe_id,
+                    "DRIFT",
+                    f"metric {metric} missing from current result "
+                    f"(baseline had {prior_metrics.get(metric)!r})",
+                ))
+                continue
+            if metric not in prior_metrics:
+                drifts.append(RegressionDrift(
+                    probe_id,
+                    "DRIFT",
+                    f"metric {metric} missing from baseline "
+                    f"(current has {current.metrics.get(metric)!r})",
+                ))
+                continue
+            current_value = current.metrics[metric]
+            if metric not in metrics_tol:
+                raise RegressionBaselineError(
+                    f"probe {probe_id}: missing regression_tolerance for metric {metric!r}"
+                )
+            baseline_value = prior_metrics.get(metric)
+            ok, reason = _metric_satisfies(
+                metric=metric,
+                baseline_value=baseline_value,
+                current_value=current_value,
+                spec=metrics_tol[metric],
+            )
+            if not ok:
+                drifts.append(RegressionDrift(probe_id, "DRIFT", reason))
+
+    overall = "PASS" if not drifts else "DRIFT"
+    return RegressionReport(
+        baseline_path=str(baseline_path),
+        corpus_path=str(corpus_path),
+        overall=overall,
+        drifts=drifts,
+        baseline=baseline,
+    )
+
+
 def format_report(report: CorpusReport) -> str:
     lines = [
         "=" * 70,
@@ -658,6 +1037,52 @@ def format_report(report: CorpusReport) -> str:
     return "\n".join(lines)
 
 
+def format_regression_report(report: RegressionReport) -> str:
+    baseline = report.baseline or {}
+    if report.operation == "write":
+        lines = [
+            "=" * 70,
+            "REGRESSION BASELINE WRITTEN",
+            "=" * 70,
+            f"baseline:      {report.baseline_path}",
+            f"corpus:        {report.corpus_path}",
+            f"schema:        {baseline.get('schema_version', '-')}",
+            f"source_commit: {baseline.get('source_commit', '-')}",
+            f"reason:        {baseline.get('last_regen_reason', '-')}",
+            f"probe_count:   {len(baseline.get('probes') or {})}",
+            "",
+            "This writes the reference point; it is not a no-drift check.",
+            "=" * 70,
+        ]
+        return "\n".join(lines)
+
+    lines = [
+        "=" * 70,
+        "REGRESSION BASELINE REPORT",
+        "=" * 70,
+        f"baseline:      {report.baseline_path}",
+        f"corpus:        {report.corpus_path}",
+        f"schema:        {baseline.get('schema_version', '-')}",
+        f"source_commit: {baseline.get('source_commit', '-')}",
+        f"overall:      {report.overall}",
+        "",
+    ]
+    if not report.drifts:
+        probe_count = len(baseline.get("probes") or {})
+        lines.append(
+            f"No drift detected across {probe_count} probe(s). "
+            "This checks stable probe metrics/contracts, not exact model prose."
+        )
+    else:
+        lines.append("Drift")
+        lines.append("─" * 70)
+        for drift in report.drifts:
+            lines.append(f"  [{drift.status}] {drift.probe_id}")
+            lines.append(f"         {drift.reason}")
+    lines.append("=" * 70)
+    return "\n".join(lines)
+
+
 # ── CLI ───────────────────────────────────────────────────────────────
 
 
@@ -676,10 +1101,55 @@ def main(argv: list[str] | None = None) -> int:
         help="Comparison mode (default: birth_readiness).",
     )
     parser.add_argument(
+        "--baseline", type=str, default=None,
+        choices=("check", "write"),
+        help="Regression baseline operation. Required with --mode regression.",
+    )
+    parser.add_argument(
+        "--baseline-path", type=str,
+        default=str(_DEFAULT_BASELINE_PATH),
+        help="Path to regression baseline JSON.",
+    )
+    parser.add_argument(
+        "--reason", type=str, default=None,
+        help="Required reason for --mode regression --baseline write.",
+    )
+    parser.add_argument(
         "--output", type=str, default=None,
         help="Write report to this path (default: stdout).",
     )
     args = parser.parse_args(argv)
+
+    if args.mode == "regression":
+        try:
+            if args.baseline is None:
+                raise RegressionBaselineError(
+                    "--baseline {check,write} is required with --mode regression"
+                )
+            if args.baseline == "write":
+                if not args.reason:
+                    raise RegressionBaselineError(
+                        "--reason is required for --baseline write"
+                    )
+                report = write_regression_baseline(
+                    corpus_path=args.corpus,
+                    baseline_path=args.baseline_path,
+                    reason=args.reason,
+                )
+            else:
+                report = check_regression_baseline(
+                    corpus_path=args.corpus,
+                    baseline_path=args.baseline_path,
+                )
+            text = format_regression_report(report)
+            if args.output:
+                Path(args.output).write_text(text + "\n")
+            else:
+                print(text)
+            return 0 if report.overall == "PASS" else 1
+        except RegressionBaselineError as e:
+            print(f"regression baseline error: {e}", file=sys.stderr)
+            return 2
 
     report = run_corpus(corpus_path=args.corpus, mode=args.mode)
     text = format_report(report)
