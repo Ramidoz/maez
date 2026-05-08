@@ -155,6 +155,42 @@ class TelegramVoiceWiringTests(unittest.TestCase):
         self.assertTrue(callable(default_audit_signals))
 
 
+class TelegramRecallCoordinationTests(unittest.TestCase):
+    """Reviewer-flagged regression (2026-05-07): telegram_voice's
+    primary recall site MUST use resolve_recall_cap_chars() because
+    the same surface injects the evidence envelope into the prompt.
+    Without coordination, recall + envelope can overflow the 32K
+    llama.cpp context. Source-checked rather than behavior-tested
+    because the behavior path requires a full Telegram bot loop."""
+
+    def test_telegram_recall_site_uses_resolver(self):
+        import re
+        from pathlib import Path
+        src = Path("/home/rohit/maez/skills/telegram_voice.py").read_text()
+        # The single format_for_prompt call in this file MUST pass
+        # max_chars from the resolver, not be uncapped.
+        calls = re.findall(
+            r"self\.memory\.format_for_prompt\([^)]*\)", src,
+        )
+        self.assertGreaterEqual(
+            len(calls), 1,
+            "expected at least one format_for_prompt call in "
+            "telegram_voice.py — has the surface been refactored?",
+        )
+        for call in calls:
+            self.assertIn(
+                "max_chars=", call,
+                f"telegram_voice format_for_prompt missing max_chars: "
+                f"{call!r} — would overflow 32K ctx with envelope",
+            )
+            # The cap MUST come from the resolver (single decision point).
+            self.assertIn(
+                "_resolve_recall_cap", call,
+                f"telegram_voice format_for_prompt not using "
+                f"resolve_recall_cap_chars(): {call!r}",
+            )
+
+
 class AuditTelegramReplyEnvelopeForwardTests(unittest.TestCase):
     """skills/telegram_voice._audit_telegram_reply forwards the
     envelope to self_claim_audit.audit. With envelope=None (disabled

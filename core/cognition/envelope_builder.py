@@ -108,18 +108,39 @@ def render_envelope_for_prompt(envelope: dict | None) -> str:
     lines = [header]
 
     if claimable:
-        lines.append("You may claim:")
+        claimable_lines = []
         for c in claimable:
             text = c.get("text") or c.get("fact") or ""
+            if not text:
+                # Skip degenerate entries — emitting `  - ""` produces
+                # a malformed prompt-block line the model has no way
+                # to act on. Reviewer-flagged 2026-05-07.
+                continue
             prov = c.get("provenance") or ""
             evidence = c.get("evidence") or c.get("evidence_refs") or ""
             tail_bits = []
             if prov:
-                tail_bits.append(prov)
+                tail_bits.append(str(prov))
             if evidence:
-                tail_bits.append(str(evidence))
+                # JSON-shape structured evidence (dict/list) for the
+                # model rather than Python repr — single-quoted keys
+                # confuse downstream JSON-aware tooling. Fall back to
+                # str() for non-JSON-able payloads.
+                if isinstance(evidence, (dict, list)):
+                    try:
+                        tail_bits.append(
+                            json.dumps(evidence, default=str,
+                                       ensure_ascii=False),
+                        )
+                    except (TypeError, ValueError):
+                        tail_bits.append(str(evidence))
+                else:
+                    tail_bits.append(str(evidence))
             tail = f"  ({'; '.join(tail_bits)})" if tail_bits else ""
-            lines.append(f'  - "{text}"{tail}')
+            claimable_lines.append(f'  - "{text}"{tail}')
+        if claimable_lines:
+            lines.append("You may claim:")
+            lines.extend(claimable_lines)
 
     forbidden_lines = []
     for f in forbidden:

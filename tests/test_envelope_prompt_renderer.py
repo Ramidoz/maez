@@ -152,5 +152,59 @@ class TruncatedFallbackTests(unittest.TestCase):
         self.assertIn("truncated", rendered.lower())
 
 
+class RendererEdgeCaseTests(unittest.TestCase):
+    """Reviewer-flagged (2026-05-07): renderer must not emit malformed
+    lines when claim entries are degenerate. Also: structured evidence
+    fields must render readably, not as Python repr."""
+
+    def test_empty_text_claimable_skipped(self):
+        env = {
+            "claimable": [
+                {"text": "", "provenance": "observed"},
+                {"text": "real claim", "provenance": "observed"},
+                {"text": None, "provenance": "observed"},
+                {"fact": "", "provenance": "observed"},
+            ],
+            "forbidden": [], "tool_results": [], "self_history": [],
+            "signals_present": [], "signals_absent": [],
+        }
+        rendered = eb.render_envelope_for_prompt(env)
+        # Empty/None text claimables MUST NOT emit a `  - ""` line.
+        self.assertNotIn('- ""', rendered)
+        self.assertIn("real claim", rendered)
+
+    def test_evidence_dict_renders_as_json_not_python_repr(self):
+        env = {
+            "claimable": [{
+                "text": "owner is at his desk",
+                "provenance": "observed",
+                "evidence_refs": {"snapshot_id": "abc-123",
+                                  "timestamp": 1700000000},
+            }],
+            "forbidden": [], "tool_results": [], "self_history": [],
+            "signals_present": [], "signals_absent": [],
+        }
+        rendered = eb.render_envelope_for_prompt(env)
+        # Python repr produces single-quoted keys: {'snapshot_id': ...}
+        # JSON produces double-quoted keys: {"snapshot_id": ...}
+        # Per memo / readability, use JSON-shaped output.
+        self.assertNotIn("'snapshot_id'", rendered)
+        self.assertIn('"snapshot_id"', rendered)
+
+    def test_evidence_list_renders_as_json(self):
+        env = {
+            "claimable": [{
+                "text": "tool ran",
+                "provenance": "tool-verified",
+                "evidence_refs": ["call-1", "call-2"],
+            }],
+            "forbidden": [], "tool_results": [], "self_history": [],
+            "signals_present": [], "signals_absent": [],
+        }
+        rendered = eb.render_envelope_for_prompt(env)
+        # JSON-shaped, not str([..]) shape.
+        self.assertIn('"call-1"', rendered)
+
+
 if __name__ == "__main__":
     unittest.main()

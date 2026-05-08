@@ -2915,7 +2915,17 @@ class TelegramVoice:
         snap = perception_snapshot()
         system_state = format_snapshot(snap)
         recalled = self.memory.recall_for_telegram(user_text)
-        memory_block = self.memory.format_for_prompt(recalled)
+        # Slice 3 wiring (2026-05-07): coordinate recall cap with the
+        # evidence envelope per SLICE_3_0d §1. Resolver returns 52K
+        # when envelope is present in the prompt (downstream below);
+        # 60K when MAEZ_EVIDENCE_ENVELOPE_DISABLED=1. Without this
+        # cap, recall + envelope can overflow the 32K llama.cpp ctx.
+        from core.cognition.envelope_builder import (
+            resolve_recall_cap_chars as _resolve_recall_cap,
+        )
+        memory_block = self.memory.format_for_prompt(
+            recalled, max_chars=_resolve_recall_cap(),
+        )
 
         web_context = ""
         if needs_web_search(user_text):
