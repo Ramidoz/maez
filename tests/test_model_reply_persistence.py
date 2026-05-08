@@ -65,12 +65,12 @@ class ModelReplyPersistenceHelperTests(unittest.TestCase):
         db = _fresh_db("helper")
         with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
             parent = mod.write_user_message_for_test(
-                db, "owner asks", surface="telegram_surface",
+                db, "owner asks", surface="telegram_text",
             )
             reply1 = persist_model_reply(
                 db_path=db,
                 raw_text="Maez answers after audit",
-                surface="telegram_surface",
+                surface="telegram_text",
                 parent_turn_id=parent,
                 model_id="test-model",
                 prompt_material={"messages": ["owner asks"]},
@@ -81,7 +81,7 @@ class ModelReplyPersistenceHelperTests(unittest.TestCase):
             reply2 = persist_model_reply(
                 db_path=db,
                 raw_text="Maez answers again",
-                surface="telegram_surface",
+                surface="telegram_text",
                 parent_turn_id=parent,
                 model_id="test-model",
                 prompt_material={"messages": ["owner asks again"]},
@@ -110,7 +110,7 @@ class ModelReplyPersistenceHelperTests(unittest.TestCase):
         replies = [r for r in rows if r[0] == "model_reply"]
         self.assertEqual(len(markers), 1)
         self.assertEqual(len(replies), 2)
-        self.assertEqual(replies[0][2], "telegram_surface")
+        self.assertEqual(replies[0][2], "telegram_text")
         self.assertEqual(replies[0][3], parent)
 
         marker_payload = json.loads(markers[0][1])
@@ -124,7 +124,7 @@ class ModelReplyPersistenceHelperTests(unittest.TestCase):
             tid = mod.persist_model_reply(
                 db_path=db,
                 raw_text="reply without envelope",
-                surface="telegram_surface",
+                surface="telegram_text",
                 parent_turn_id=None,
                 model_id="test-model",
                 prompt_material={"messages": []},
@@ -192,6 +192,15 @@ class DaemonModelReplyPersistenceWiringTests(unittest.TestCase):
         self.assertIn('"autobiographical_continuity_turning_on"', window)
         self.assertIn("build_model_reply_audit_verdict", window)
 
+    def test_outer_fail_open_uses_warn_once_not_debug(self):
+        body = _method_body(_read("daemon/maez_daemon.py"), "handle_message")
+        persist_idx = body.find("persist_model_reply(")
+        self.assertGreater(persist_idx, 0)
+        after = body[persist_idx:persist_idx + 1200]
+
+        self.assertIn("warn_model_reply_persistence_skip", after)
+        self.assertNotIn("logger.debug", after)
+
 
 class WebModelReplyPersistenceWiringTests(unittest.TestCase):
     def test_owner_bridge_persists_model_reply_and_public_path_does_not(self):
@@ -214,6 +223,15 @@ class WebModelReplyPersistenceWiringTests(unittest.TestCase):
         public_window = body[body.find("else:"):persist_idx]
         self.assertNotIn("persist_model_reply(", public_window)
 
+    def test_outer_fail_open_uses_warn_once_not_debug(self):
+        body = _method_body(_read("skills/web_interface.py"), "chat")
+        persist_idx = body.find("persist_model_reply(")
+        self.assertGreater(persist_idx, 0)
+        after = body[persist_idx:persist_idx + 1200]
+
+        self.assertIn("warn_model_reply_persistence_skip", after)
+        self.assertNotIn("logger.debug", after)
+
 
 class CliModelReplyPersistenceWiringTests(unittest.TestCase):
     def test_cli_persists_model_reply_after_audit_before_trajectory_log(self):
@@ -233,6 +251,17 @@ class CliModelReplyPersistenceWiringTests(unittest.TestCase):
         self.assertIn("final_reply", window)
         self.assertIn("if _cli_ledger_db_path and _cli_audit_ran:", window)
         self.assertIn("build_model_reply_audit_verdict", window)
+
+    def test_outer_fail_open_uses_warn_once_not_pass(self):
+        body = _method_body(_read("cli/maez_chat.py"), "_handle_chat")
+        persist_idx = body.find("persist_model_reply(")
+        trajectory_idx = body.find("claude_router.log_trajectory(")
+        self.assertGreater(persist_idx, 0)
+        self.assertGreater(trajectory_idx, persist_idx)
+        after = body[persist_idx:trajectory_idx]
+
+        self.assertIn("warn_model_reply_persistence_skip", after)
+        self.assertNotIn("pass", after)
 
     def test_cli_does_not_persist_interrupted_or_audit_failed_reply(self):
         body = _method_body(_read("cli/maez_chat.py"), "_handle_chat")
@@ -257,7 +286,7 @@ class WebModelReplyAuditBoundaryTests(unittest.TestCase):
         self.assertGreater(persist_idx, audit_idx)
         self.assertIn("_web_audit_ran = True", body[audit_idx:persist_idx])
         self.assertIn("if owner_bridge and _web_audit_ran:",
-                      body[persist_idx - 350:persist_idx])
+                      body[persist_idx - 500:persist_idx])
 
 
 class TelegramVoiceModelReplyPersistenceTests(unittest.TestCase):
@@ -273,15 +302,52 @@ class TelegramVoiceModelReplyPersistenceTests(unittest.TestCase):
 
         window = body[persist_idx - 350:persist_idx + 900]
         self.assertIn('if _telegram_ledger_db_path and _telegram_audit_ran:', window)
-        self.assertIn('surface="telegram_surface"', window)
+        self.assertIn('surface="telegram_text"', window)
         self.assertIn("parent_turn_id=_telegram_user_msg_turn_id", window)
         self.assertIn("evidence_envelope=_evidence_envelope", window)
         self.assertIn("build_model_reply_audit_verdict", window)
 
+    def test_telegram_uses_single_surface_label_for_audit_envelope_and_ledger(self):
+        body = _method_body(_read("skills/telegram_voice.py"), "_process_message")
+        persist_idx = body.find("persist_model_reply(")
+        self.assertGreater(persist_idx, 0)
+        persistence_window = body[persist_idx - 700:persist_idx + 1000]
+
+        self.assertIn('_default_signals("telegram_text")', body)
+        self.assertIn('surface="telegram_text"', persistence_window)
+        self.assertIn('"surface": "telegram_text"', persistence_window)
+        self.assertNotIn('"telegram_surface"', persistence_window)
+
+    def test_outer_fail_open_uses_warn_once_not_debug(self):
+        body = _method_body(_read("skills/telegram_voice.py"), "_process_message")
+        persist_idx = body.find("persist_model_reply(")
+        store_idx = body.find("self.memory.store_telegram(", persist_idx)
+        self.assertGreater(persist_idx, 0)
+        self.assertGreater(store_idx, persist_idx)
+        after = body[persist_idx:store_idx]
+
+        self.assertIn("warn_model_reply_persistence_skip", after)
+        self.assertNotIn("logger.debug", after)
+
+
+class MemoryProjectionRulesModelReplyScopeTests(unittest.TestCase):
+    def test_rulebook_documents_autobiographical_reply_persistence_scope(self):
+        doc = _read("docs/governance/MEMORY_PROJECTION_RULES.md")
+
+        self.assertIn("Autobiographical Reply Persistence Scope", doc)
+        self.assertIn("main owner-response paths", doc)
+        self.assertIn("Excluded speech paths", doc)
+        self.assertIn("reflection", doc)
+        self.assertIn("proposal", doc)
+        self.assertIn("dream", doc)
+        self.assertIn("not silently promoted", doc)
+
     def test_persistence_fail_open_is_warn_once(self):
         src = _read("core/ledger/model_reply_persistence.py")
+        warn_src = _read("core/ledger/model_reply_persistence_warning.py")
         self.assertIn("_warn_once", src)
-        self.assertIn("_LOGGER.warning", src)
+        self.assertIn("_LOGGER.warning", warn_src)
+        self.assertIn("warn_model_reply_persistence_skip", src)
 
 
 if __name__ == "__main__":

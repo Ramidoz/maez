@@ -227,6 +227,27 @@ not add new required report fields.
 observation output is not prompt context, audit evidence, live recall
 ordering, or ledger metadata.
 
+## Autobiographical Reply Persistence Scope
+
+Slice 4c.5a turns on model-reply persistence for main owner-response paths
+only: daemon owner turns, CLI owner chat, owner-web chat, and the private
+Telegram text reply path. These are the places where Maez speaks directly
+back to the owner in the ordinary conversation loop after the self-claim
+audit has run.
+
+Included speech paths must write the exact post-audit text returned to
+the owner as append-only `model_reply` rows, parented to the owner
+`user_message` row when available. Public and guest surfaces remain
+outside this scope.
+
+Excluded speech paths include reflection, proposal, dream, edit,
+training, recovery-synthesis, GitHub-publish, and other task-specific
+status or tool narration. Those utterances may be important, but they
+are not silently promoted into autobiographical self-history by this
+slice. Promoting one of those paths later requires a named slice and a
+predicted-effect statement explaining why that speech category belongs
+in Maez's autobiography.
+
 ## Sunset Commitments
 
 The strengthen-only asymmetry is accepted as a starting covenant, not as

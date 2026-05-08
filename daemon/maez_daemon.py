@@ -2229,6 +2229,9 @@ class MaezDaemon:
         # Persist the post-audit owner-private reply as a model_reply row.
         # This is best-effort shadow persistence: the user-facing reply
         # still returns if the ledger is disabled or unavailable.
+        from core.ledger.model_reply_persistence_warning import (
+            warn_model_reply_persistence_skip,
+        )
         try:
             from core.ledger.model_reply_persistence import (
                 build_model_reply_audit_verdict,
@@ -2261,7 +2264,8 @@ class MaezDaemon:
                     ),
                 )
         except Exception as _ledger_reply_exc:
-            logger.debug(
+            warn_model_reply_persistence_skip(
+                "daemon-handle-message",
                 "model_reply ledger persistence skipped: %s",
                 _ledger_reply_exc,
             )

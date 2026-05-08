@@ -12,33 +12,27 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import sqlite3
 import time
 from typing import Any
 
 from core.ledger.writer import try_write_turn
+from core.ledger.model_reply_persistence_warning import (
+    warn_model_reply_persistence_once as _warn_once,
+    warn_model_reply_persistence_skip,
+)
 
 __all__ = [
     "MODEL_REPLY_PERSISTENCE_MARKER_KEY",
     "build_model_reply_audit_verdict",
     "persist_model_reply",
+    "warn_model_reply_persistence_skip",
     "write_user_message_for_test",
 ]
 
 
-_LOGGER = logging.getLogger("core.ledger.model_reply_persistence")
-_WARNED_KEYS: set[str] = set()
-
 MODEL_REPLY_PERSISTENCE_MARKER_KEY = "model_reply_persistence_marker_turn_id"
 MODEL_REPLY_PERSISTENCE_EVENT = "autobiographical_continuity_turning_on"
-
-
-def _warn_once(key: str, message: str, *args: Any) -> None:
-    if key in _WARNED_KEYS:
-        return
-    _WARNED_KEYS.add(key)
-    _LOGGER.warning(message, *args)
 
 
 def _canonical_json(value: Any) -> str:

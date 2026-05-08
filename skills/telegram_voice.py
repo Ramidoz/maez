@@ -2927,7 +2927,7 @@ class TelegramVoice:
 
         _telegram_user_msg_turn_id = None
         _telegram_ledger_db_path = None
-        _telegram_surface = "telegram_surface"
+        _telegram_surface = "telegram_text"
         try:
             from core.cognition.envelope_builder import (
                 default_ledger_db_path as _default_ledger_db_path,
@@ -3475,6 +3475,9 @@ class TelegramVoice:
         # at the site where they queue the action — not parsed out of the
         # LLM's prose.
         self._detect_and_queue_action(user_text, reply)
+        from core.ledger.model_reply_persistence_warning import (
+            warn_model_reply_persistence_skip,
+        )
         try:
             from core.ledger.model_reply_persistence import (
                 build_model_reply_audit_verdict,
@@ -3485,24 +3488,25 @@ class TelegramVoice:
                 persist_model_reply(
                     db_path=_telegram_ledger_db_path,
                     raw_text=reply,
-                    surface="telegram_surface",
+                    surface="telegram_text",
                     parent_turn_id=_telegram_user_msg_turn_id,
                     model_id=MODEL,
                     prompt_material={
                         "messages": messages,
-                        "surface": "telegram_surface",
+                        "surface": "telegram_text",
                         "event": "autobiographical_continuity_turning_on",
                     },
                     soul_material=_jarvis_system_prompt,
                     evidence_envelope=_evidence_envelope,
                     audit_verdict=build_model_reply_audit_verdict(
-                        surface="telegram_surface",
+                        surface="telegram_text",
                         audit_ran=_telegram_audit_ran,
                         changed_output=_telegram_audit_changed,
                     ),
                 )
         except Exception as _ledger_reply_exc:
-            logger.debug(
+            warn_model_reply_persistence_skip(
+                "telegram-text",
                 "telegram_text model_reply ledger persistence skipped: %s",
                 _ledger_reply_exc,
             )

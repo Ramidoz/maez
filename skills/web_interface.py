@@ -5857,6 +5857,9 @@ def chat():
         logger.warning("self-claim audit failed on /chat: %s", _e)
 
     if owner_bridge and _web_audit_ran:
+        from core.ledger.model_reply_persistence_warning import (
+            warn_model_reply_persistence_skip,
+        )
         try:
             from core.ledger.model_reply_persistence import (
                 build_model_reply_audit_verdict,
@@ -5884,7 +5887,8 @@ def chat():
                     ),
                 )
         except Exception as _ledger_reply_exc:
-            logger.debug(
+            warn_model_reply_persistence_skip(
+                "web-owner-chat",
                 "web /chat model_reply ledger persistence skipped: %s",
                 _ledger_reply_exc,
             )

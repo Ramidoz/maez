@@ -31,6 +31,7 @@ Keyboard:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import signal
@@ -72,6 +73,8 @@ from core.tool_loop import (
     _run_shell, format_tool_results_for_model,
 )
 from skills import claude_router
+
+logger = logging.getLogger("maez.cli")
 
 # ── config ─────────────────────────────────────────────────────────────
 LOCAL_BRAIN_URL = os.environ.get("MAEZ_LLAMACPP_URL", "http://127.0.0.1:8080/v1")
@@ -1133,6 +1136,9 @@ class ChatSession:
 
         # Trajectory log (final turn only — keeps log tidy)
         final_reply = self.turns[-1].content if self.turns else ""
+        from core.ledger.model_reply_persistence_warning import (
+            warn_model_reply_persistence_skip,
+        )
         try:
             from core.ledger.model_reply_persistence import (
                 build_model_reply_audit_verdict,
@@ -1160,8 +1166,12 @@ class ChatSession:
                         surface_meta={"mode": _cli_audit_mode},
                     ),
                 )
-        except Exception:
-            pass
+        except Exception as _ledger_reply_exc:
+            warn_model_reply_persistence_skip(
+                "cli-chat",
+                "cli model_reply ledger persistence skipped: %s",
+                _ledger_reply_exc,
+            )
         try:
             claude_router.log_trajectory({
                 "profile_id": profile_id,
