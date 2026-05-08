@@ -1715,6 +1715,16 @@ class MaezDaemon:
         # lived brief, premise flag, user turn, and the response budget
         # within the 32K ctx. Core + daily are preserved; raw entries
         # drop from the tail if needed.
+        #
+        # Slice 3 proper (2026-05-07): the coordinated reduction to
+        # 52K chars per SLICE_3_0d §1 lands in the SAME slice that
+        # injects the evidence envelope into the prompt. Until that
+        # wiring exists, shrinking recall here would lose 8K chars
+        # for zero envelope benefit. The ready-to-use resolver is
+        # `core.cognition.envelope_builder.resolve_recall_cap_chars`
+        # — the wiring slice should replace this hardcoded 60_000
+        # with `resolve_recall_cap_chars()` AT THE SAME TIME it adds
+        # the envelope to the prompt.
         memory_block = self.memory.format_for_prompt(recalled, max_chars=60_000)
 
         # Web search if needed. If a deterministic tool already answered

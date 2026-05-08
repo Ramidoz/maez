@@ -321,6 +321,7 @@ def _find_flags(
     text: str,
     signals_present: Optional[list] = None,
     signals_absent: Optional[list] = None,
+    evidence_envelope: Optional[dict] = None,
 ) -> tuple[list[Flag], bool]:
     """Call the semantic grounding judge, convert its output to Flags.
 
@@ -348,6 +349,7 @@ def _find_flags(
             signals_present=sp,
             signals_absent=sa,
             few_shots=_fab_mem.few_shots_for(signals_absent=sa, k=3),
+            evidence_envelope=evidence_envelope,
         )
     except _judge_mod.JudgeUnavailable as e:
         # R1 (2026-05-04): distinguish "judge ran clean" from "judge
@@ -448,6 +450,7 @@ def audit(
     transcript: Optional[str] = None,
     signals_present: Optional[list] = None,
     signals_absent: Optional[list] = None,
+    evidence_envelope: Optional[dict] = None,
 ) -> AuditResult:
     """Audit an assistant reply via the grounding judge.
 
@@ -490,6 +493,7 @@ def audit(
 
     flags, judge_available = _find_flags(
         text, signals_present=signals_present, signals_absent=signals_absent,
+        evidence_envelope=evidence_envelope,
     )
     if not flags:
         # Distinguish "judge said clean" from "judge unavailable" so the

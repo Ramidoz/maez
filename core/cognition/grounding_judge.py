@@ -235,6 +235,72 @@ def _call_dedicated_judge(prompt: str) -> str:
         raise JudgeUnavailable(str(e), error_class="circuit_open") from e
 
 
+# Slice 3 proper (2026-05-07): carve-out classification block.
+# Encodes the ratified docs/SLICE_3_0c_CARVEOUT_MEMO.md (§§2-5, §7) as
+# verbatim prompt content. The carve-out lets the judge admit stable,
+# non-temporal, non-personal background facts ("Paris is the capital of
+# France") without requiring an EVIDENCE entry, while categorically
+# rejecting numerical specifics about real entities (Eiffel height
+# class), legal/regulatory claims, medical advice/dosing, and anything
+# ambiguous (default-deny). Without this block, strict slice-3
+# enforcement would reject "what's the capital of France" — a known UX
+# failure the memo exists to prevent.
+_CARVE_OUT_BLOCK = (
+    "BACKGROUND-KNOWLEDGE CARVE-OUT (slice 3.0c, ratified 2026-05-07):\n"
+    "A claim with NO provenance marker may pass UNFLAGGED only if it is\n"
+    "ALL THREE of: stable, non-temporal, non-personal. Default-deny:\n"
+    "when in doubt, treat as ungrounded and flag.\n\n"
+    "  * STABLE — does not move with current events, time of day, news,\n"
+    "    or world state. (\"Paris is the capital of France\" is stable;\n"
+    "    \"the population of Paris is 2.1M\" is not — it moves.)\n"
+    "  * NON-TEMPORAL — no \"now,\" \"today,\" \"recently,\" \"currently,\"\n"
+    "    \"latest.\" (\"Python is dynamically typed\" passes;\n"
+    "    \"the latest Python release is 3.13\" fails.)\n"
+    "  * NON-PERSONAL — not about Rohit, Maez, or any named individual.\n\n"
+    "EXCLUSIONS — claims in these categories ALWAYS require evidence,\n"
+    "even when widely known. Default-deny applies:\n"
+    "  - Current events, news, recent developments.\n"
+    "  - Local state (weather, disk, processes, what's on screen).\n"
+    "  - Owner / personal facts (Rohit's location, calendar, plans).\n"
+    "  - Maez's own state or history.\n"
+    "  - Prices, schedules, financial data.\n"
+    "  - ALL legal / jurisdictional / regulatory claims (broader than\n"
+    "    medical — liability risk). Refer the user to an authoritative\n"
+    "    source rather than answer from carve-out.\n"
+    "  - Medical / financial ADVICE, DOSING, SAFETY claims. Stable\n"
+    "    biomedical facts (\"aspirin is a pain reliever\") may pass; "
+    "anything\n"
+    "    crossing into \"safe at X dose\" / \"you should do Y\" is excluded.\n"
+    "  - Specific dates, numbers, quantities about real-world entities\n"
+    "    (heights, populations, dates, release years). Boundary case —\n"
+    "    DEFAULT-DENY even when widely known.\n"
+    "  - Specific software versions and release facts.\n\n"
+    "POSITIVE EXAMPLES (carve-out PASSES, do NOT flag):\n"
+    "  + \"Paris is the capital of France.\"\n"
+    "  + \"Python is dynamically typed.\"\n"
+    "  + \"Photosynthesis converts CO2 and water into glucose and\n"
+    "     oxygen.\"\n"
+    "  + \"The Eiffel Tower is in Paris.\" (location, stable)\n"
+    "  + \"Aspirin is a pain reliever.\" (biomedical fact, not advice)\n"
+    "  + \"The boiling point of water at sea level under standard\n"
+    "     atmospheric pressure is 100°C.\" (precise stable fact)\n\n"
+    "NEGATIVE EXAMPLES (carve-out FAILS, MUST flag as ungrounded):\n"
+    "  − \"The Eiffel Tower is 330 meters tall.\" — numerical specific\n"
+    "    about a real entity. The model could be off by meters and the\n"
+    "    user wouldn't know. Default-deny.\n"
+    "  − \"Mona Lisa was painted around 1503.\" — date about a real\n"
+    "    entity. Default-deny on year-class specifics.\n"
+    "  − \"Aspirin is safe in doses up to 1000mg.\" — medical dosing.\n"
+    "    Excluded categorically regardless of truth.\n"
+    "  − \"California is a community-property state.\" — legal /\n"
+    "    jurisdictional. Excluded categorically (liability).\n"
+    "  − \"Python 3.13 added the GIL toggle.\" — specific software\n"
+    "    version / release fact. Excluded.\n"
+    "  − \"Python's GIL makes it slow for CPU-bound work.\" — opinion /\n"
+    "    contested oversimplification. Default-deny.\n\n"
+)
+
+
 # Built-in few-shot bank covering failure classes the regex used to handle.
 # Augments (does not replace) the signal-shape-matched shots from
 # fabrication_memory. These are always included so chat-surface calls
@@ -283,6 +349,7 @@ def _build_judge_prompt(
     signals_absent: list[str],
     few_shots: list[dict],
     self_history: list[dict] | None = None,
+    tool_results: list[dict] | None = None,
 ) -> str:
     present_list = "\n".join(f"  ✓ {s}" for s in (signals_present or []))
     absent_list = "\n".join(f"  ✗ {s}" for s in (signals_absent or []))
@@ -311,6 +378,28 @@ def _build_judge_prompt(
                 f"  - turn_id={tid} kind={kind} ts={ts_str}: {summary!r}"
             )
         self_history_block = "\n".join(sh_lines) + "\n\n"
+
+    # Slice 3 proper (2026-05-07): tool_results block. Entry shape
+    # follows the ratified SLICE_3_0d memo §5 contract:
+    #   {name, status, tool_call_id, summary}
+    # `summary` is bounded to 200 chars by the envelope builder; this
+    # renderer is shape-faithful only and does not re-truncate. Block
+    # omitted when empty so chat-surface calls don't grow the prompt.
+    tool_results_block = ""
+    if tool_results:
+        tr_lines = [
+            "TOOL RESULTS THIS TURN (claims about these are GROUNDED "
+            "by direct tool output — do NOT flag them as fabricated):",
+        ]
+        for tr in tool_results:
+            name = tr.get("name") or "?"
+            status = tr.get("status")
+            status_str = str(status) if status is not None else "?"
+            summary = tr.get("summary") or ""
+            tr_lines.append(
+                f"  - name={name} status={status_str}: {summary!r}"
+            )
+        tool_results_block = "\n".join(tr_lines) + "\n\n"
 
     # Always include the built-in few-shot bank so chat-surface calls
     # (empty signal manifests) still see the important anti-patterns.
@@ -351,6 +440,8 @@ def _build_judge_prompt(
         "referenced utterance, the self-history claim is fabrication — "
         "flag it. Generic acknowledgements ('right', 'as you noted') do "
         "not require self_history evidence.\n\n"
+        f"{tool_results_block}"
+        f"{_CARVE_OUT_BLOCK}"
         f"{fewshot_block}"
         "A claim is UNGROUNDED if:\n"
         "  - It asserts owner activity/presence/focus without a "
@@ -484,6 +575,7 @@ def judge(
     signals_absent: list[str],
     few_shots: list[dict] | None = None,
     model: str = _MODEL_DEFAULT,
+    evidence_envelope: dict | None = None,
 ) -> list[dict]:
     """Run the grounding judge. Returns a list of flag dicts
     {text, reason, rewrite}.
@@ -509,14 +601,42 @@ def judge(
     """
     if not text or not text.strip():
         return []
+    # Slice 3 proper (2026-05-07): when an evidence_envelope is
+    # provided, it is THE source of truth for grounding context.
+    # Missing keys mean "empty section" — they do NOT silently fall
+    # back to the legacy signals_present/signals_absent kwargs.
+    # Mixing envelope + legacy kwargs in one call would yield a
+    # partially-canonical context that the audit layer cannot reason
+    # about; full-takeover semantics are the only safe option.
+    if evidence_envelope is not None:
+        eff_signals_present = list(
+            evidence_envelope.get("signals_present") or []
+        )
+        eff_signals_absent = list(
+            evidence_envelope.get("signals_absent") or []
+        )
+        eff_self_history = list(
+            evidence_envelope.get("self_history") or []
+        ) or None
+        eff_tool_results = list(
+            evidence_envelope.get("tool_results") or []
+        ) or None
+    else:
+        eff_signals_present = signals_present or []
+        eff_signals_absent = signals_absent or []
+        eff_self_history = None
+        eff_tool_results = None
+
     # _build_judge_prompt failures are caller-facing bugs (never
     # transient), so we let them surface as their natural exception
     # type rather than masking as JudgeUnavailable.
     prompt = _build_judge_prompt(
         text=text,
-        signals_present=signals_present or [],
-        signals_absent=signals_absent or [],
+        signals_present=eff_signals_present,
+        signals_absent=eff_signals_absent,
         few_shots=few_shots or [],
+        self_history=eff_self_history,
+        tool_results=eff_tool_results,
     )
     try:
         if _JUDGE_BASE_URL:
