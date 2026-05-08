@@ -193,6 +193,13 @@ class TurnsTableTests(unittest.TestCase):
         ("pending_card_id",        "INTEGER", False, None),
         ("prev_chain_hash",        "TEXT",    False, None),
         ("chain_hash",             "TEXT",    True,  None),
+        # Gestation Boundary slice (2026-05-08, migration 0003):
+        # default 'gestation' for pre-birth rows; writer overrides to
+        # 'lived' when meta.birth_event_turn_id is set. Note: this
+        # column is intentionally NOT part of the chain-hash canonical
+        # bytes (see core/ledger/chain.py::_CHAIN_HASH_EXCLUDE +
+        # tests/test_gestation_boundary.py::ChainHashInvariantTests).
+        ("lifecycle_stage",        "TEXT",    True,  "'gestation'"),
     ]
 
     def test_columns(self):

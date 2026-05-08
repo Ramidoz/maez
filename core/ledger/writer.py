@@ -360,11 +360,28 @@ class LedgerWriter:
 
                 new_chain_hash = chain.compute_chain_hash(row, prev_chain_hash)
 
+                # Gestation Boundary slice (2026-05-08): post-birth
+                # writes carry lifecycle_stage='lived'; pre-birth rows
+                # fall through to SQL DEFAULT 'gestation'. The column
+                # is intentionally not in the chain-hash row dict
+                # (per chain._CHAIN_HASH_EXCLUDE) so birth state never
+                # affects chain integrity.
+                birth_row = conn.execute(
+                    "SELECT value FROM meta WHERE key = 'birth_event_turn_id'"
+                ).fetchone()
+                post_birth = (
+                    birth_row is not None
+                    and (birth_row[0] or "").strip() != ""
+                )
+
                 cols = list(_TURN_COLUMNS) + ["prev_chain_hash", "chain_hash"]
-                placeholders = ",".join("?" for _ in cols)
                 values = [row[c] for c in _TURN_COLUMNS] + [
                     prev_chain_hash, new_chain_hash,
                 ]
+                if post_birth:
+                    cols.append("lifecycle_stage")
+                    values.append("lived")
+                placeholders = ",".join("?" for _ in cols)
 
                 conn.execute(
                     f"INSERT INTO turns ({','.join(cols)}) "

@@ -206,7 +206,11 @@ class GenesisRecipeTests(unittest.TestCase):
     The expected canonical row recipe (from §6.1):
       - canonical_row_bytes = JSON of the row dict
       - keys sorted, separators=(',', ':'), ensure_ascii=True
-      - omits `chain_hash` and `prev_chain_hash`
+      - omits `chain_hash`, `prev_chain_hash`, AND `lifecycle_stage`
+        (the last added by the Gestation Boundary slice 2026-05-08
+        per migration 0003 — the column lives outside chain-hash
+        canonical bytes so birth-state changes never break chain
+        integrity; see core/ledger/chain.py::_CHAIN_HASH_EXCLUDE)
       - NULL columns are included as null keys (not omitted)
       - chain_hash = sha256(("genesis" + canonical_row_bytes).encode())
     """
@@ -229,11 +233,14 @@ class GenesisRecipeTests(unittest.TestCase):
             conn.close()
         self.assertIsNotNone(row, "no genesis row to verify recipe against")
 
-        # Build the canonical dict: every column EXCEPT chain_hash and
-        # prev_chain_hash (these two are omitted per §6.1).
+        # Build the canonical dict: every column EXCEPT the three
+        # excluded by §6.1 + Gestation Boundary slice — chain_hash,
+        # prev_chain_hash, lifecycle_stage. Must match the strip set
+        # in core.ledger.chain._CHAIN_HASH_EXCLUDE.
         canonical_dict = {
             k: row[k] for k in row.keys()
-            if k not in ("chain_hash", "prev_chain_hash")
+            if k not in ("chain_hash", "prev_chain_hash",
+                         "lifecycle_stage")
         }
 
         # Canonical JSON: sorted keys, no whitespace, ensure_ascii.

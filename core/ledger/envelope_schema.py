@@ -33,10 +33,19 @@ __all__ = [
     "PROVENANCE_VALUES",
     "SELF_HISTORY_KINDS",
     "SELF_HISTORY_SUMMARY_MAX",
+    "LIFECYCLE_STAGES",
     "validate_provenance",
     "validate_self_history_entry",
     "validate_envelope",
 ]
+
+
+# Gestation Boundary slice (2026-05-08): the only valid lifecycle_stage
+# values. Validated on self_history entries so a typo like
+# 'gestaetion' fails loudly instead of silently promoting a gestation
+# row to lived (since the prompt-block label logic checks
+# `stage == "gestation"`, anything else falls through to no-label).
+LIFECYCLE_STAGES: frozenset[str] = frozenset({"gestation", "lived"})
 
 
 # Provenance enum — see LEDGER_ENVELOPE_SCHEMA.md §2.
@@ -132,6 +141,21 @@ def validate_self_history_entry(entry: Any) -> None:
             f"self_history entry kind {kind!r} not in "
             f"{sorted(SELF_HISTORY_KINDS)}"
         )
+
+    # Gestation Boundary slice (2026-05-08): lifecycle_stage is
+    # OPTIONAL on the entry — legacy callers + pre-migration rows may
+    # not carry it, and the default-deny convention treats absence as
+    # 'gestation'. But when PRESENT, it MUST be one of the valid
+    # values. A typo would silently promote gestation rows to lived
+    # in the prompt-block label path (per adversarial-review §6.6
+    # finding) — fail loud instead.
+    if "lifecycle_stage" in entry:
+        stage = entry["lifecycle_stage"]
+        if stage not in LIFECYCLE_STAGES:
+            raise ValueError(
+                f"self_history entry lifecycle_stage {stage!r} not in "
+                f"{sorted(LIFECYCLE_STAGES)}"
+            )
 
 
 def validate_envelope(envelope: Any) -> None:

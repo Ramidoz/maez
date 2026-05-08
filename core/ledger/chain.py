@@ -56,12 +56,24 @@ __all__ = [
 ]
 
 
+# Slice — Gestation Boundary (2026-05-08): the `lifecycle_stage` column
+# is added to the `turns` table by migration 0003 with default
+# 'gestation' (pre-birth) or 'lived' (post-birth, set by writer when
+# meta.birth_event_turn_id is populated). Per
+# docs/SLICE_GESTATION_BOUNDARY_MEMO.md §6.1, this column MUST NOT be
+# included in chain-hash canonical bytes — otherwise existing chains
+# break the moment migration 0003 lands. Add it to the strip set so
+# rows with or without the column produce identical chain hashes.
+# Pinned by tests/test_gestation_boundary.py::ChainHashInvariantTests.
+_CHAIN_HASH_EXCLUDE = ("chain_hash", "prev_chain_hash", "lifecycle_stage")
+
+
 def canonical_row_bytes(row: dict) -> bytes:
     """Return the §6.1 canonical JSON bytes for a turn row."""
     stripped = {
         k: v
         for k, v in row.items()
-        if k not in ("chain_hash", "prev_chain_hash")
+        if k not in _CHAIN_HASH_EXCLUDE
     }
     return json.dumps(
         stripped,

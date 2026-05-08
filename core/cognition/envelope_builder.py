@@ -296,6 +296,7 @@ class BoundedEnvelopeBuilder:
         turn_id: str | None = None,
         token_cap: int | None = None,
         char_cap: int | None = None,
+        recall_gestation: str = "user",
     ) -> dict | None:
         """Build a §3-shape evidence envelope with all caps applied.
 
@@ -339,6 +340,7 @@ class BoundedEnvelopeBuilder:
         fb_cap, fb_un, fb_drops = self._normalize_forbidden(forbidden or [])
         sh_cap = self._populate_self_history(
             ledger_db_path, limit=sh_limit, tenant_id=tenant_id,
+            recall_gestation=recall_gestation,
         )
         sp_cap, sp_un, sp_drops = self._normalize_signals(signals_present)
         sa_cap, sa_un, sa_drops = self._normalize_signals(signals_absent)
@@ -741,6 +743,7 @@ class BoundedEnvelopeBuilder:
     # ── self_history population (best-effort, ledger lookback) ─────
     def _populate_self_history(
         self, db_path: str | None, *, limit: int, tenant_id: str,
+        recall_gestation: str = "user",
     ) -> list[dict]:
         if db_path is None or limit <= 0:
             return []
@@ -750,6 +753,7 @@ class BoundedEnvelopeBuilder:
                 kinds=list(_es.SELF_HISTORY_KINDS),
                 limit=limit,
                 tenant_id=tenant_id,
+                recall_gestation=recall_gestation,
             )
         except Exception as exc:
             # Best-effort: ledger unreachable / locked / schema drift
@@ -766,7 +770,7 @@ class BoundedEnvelopeBuilder:
             return []
         out: list[dict] = []
         for row in rows:
-            out.append({
+            entry = {
                 "turn_id": row["turn_id"],
                 "timestamp": row["timestamp"],
                 "kind": row["turn_kind"],
@@ -774,7 +778,15 @@ class BoundedEnvelopeBuilder:
                     row["raw_text"] or "",
                     self.MAX_SELF_HISTORY_SUMMARY_CHARS,
                 ),
-            })
+            }
+            # Gestation Boundary slice (2026-05-08): forward the
+            # lifecycle_stage so grounding_judge._build_judge_prompt
+            # can label pre-birth utterances when surfaced. Defensive
+            # default 'gestation' on missing column — pre-migration
+            # rows or legacy DBs are treated as pre-birth.
+            stage = row.get("lifecycle_stage")
+            entry["lifecycle_stage"] = stage if stage else "gestation"
+            out.append(entry)
         return out
 
     # ── helpers ────────────────────────────────────────────────────
@@ -836,11 +848,17 @@ def build_envelope(
     turn_id: str | None = None,
     token_cap: int | None = None,
     char_cap: int | None = None,
+    recall_gestation: str = "user",
 ) -> dict | None:
     """Convenience wrapper around :class:`BoundedEnvelopeBuilder`.
 
     Returns ``None`` when ``MAEZ_EVIDENCE_ENVELOPE_DISABLED=1`` per
     memo §7. See :meth:`BoundedEnvelopeBuilder.build`.
+
+    ``recall_gestation`` defaults to ``"user"`` (gestation rows
+    downweight behind lived rows in self_history). Dev/operator paths
+    that explicitly want full pre-birth diary access pass
+    ``recall_gestation="full"`` per the gestation slice memo §4.
     """
     builder = BoundedEnvelopeBuilder()
     return builder.build(
@@ -855,4 +873,5 @@ def build_envelope(
         turn_id=turn_id,
         token_cap=token_cap,
         char_cap=char_cap,
+        recall_gestation=recall_gestation,
     )

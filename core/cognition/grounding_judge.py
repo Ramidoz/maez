@@ -374,8 +374,21 @@ def _build_judge_prompt(
             ts = entry.get("timestamp")
             ts_str = f"{ts:.0f}" if isinstance(ts, (int, float)) else "?"
             summary = (entry.get("utterance_summary") or "")[:200]
+            # Gestation Boundary slice (2026-05-08, per memo §4):
+            # gestation entries surface with a [from before — pre-birth /
+            # build-stage] marker so the model knows that's pre-birth
+            # context, not ordinary autobiographical memory. Default-
+            # deny on missing column: treat absent lifecycle_stage as
+            # 'gestation' (defensive — pre-migration rows shouldn't
+            # silently promote to lived).
+            stage = entry.get("lifecycle_stage", "gestation")
+            label = (
+                "[from before — pre-birth / build-stage] "
+                if stage == "gestation" else ""
+            )
             sh_lines.append(
-                f"  - turn_id={tid} kind={kind} ts={ts_str}: {summary!r}"
+                f"  - turn_id={tid} kind={kind} ts={ts_str}: "
+                f"{label}{summary!r}"
             )
         self_history_block = "\n".join(sh_lines) + "\n\n"
 
