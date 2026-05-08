@@ -1,0 +1,135 @@
+# Ledger Slice 2.5c — Results & Owner Decision
+
+**Status:** Crash-integrity gate **PASSED**. Conversational-shape coverage **INCOMPLETE**. Production ledger flip **DEFERRED**.
+
+**Date:** 2026-05-08
+**Sandbox DB:** `memory/sandbox_ledger_2026_05_08.db` (test evidence; never to be promoted)
+**Production ledger:** `memory/ledger.db` (still absent — gestation begins after the gestation boundary slice ships)
+
+---
+
+## 1. What was tested
+
+Per [LEDGER_2_5C_ACCEPTANCE.md](LEDGER_2_5C_ACCEPTANCE.md): 24h dual-surface window proving that `MAEZ_LEDGER_WRITES=1` against a sandbox DB is safe before enabling against the production ledger path.
+
+Setup:
+- Drop-in `/etc/systemd/system/maez.service.d/10-sandbox-2-5c.conf` scoped `MAEZ_LEDGER_DB_PATH=memory/sandbox_ledger_2026_05_08.db` and `MAEZ_LEDGER_WRITES=1` to the daemon process only.
+- Window opened 2026-05-08 01:03:47 CDT (first non-genesis write).
+- Window closed early at ~10:00 CDT due to acute hardware instability (see §3).
+
+---
+
+## 2. Results
+
+### 2.1 Crash-integrity gate — PASSED, under involuntary stress harder than the runbook prescribed
+
+The runbook required *one deliberate `kill -9`* mid-conversation followed by clean restart. The actual window produced **five involuntary kernel-level crashes** (mix of kernel-NULL-deref-in-scheduler oops and trace-less hard freezes), with the daemon manually restarted after each.
+
+**Final state after all stress:**
+
+| Acceptance gate | Result |
+|---|---|
+| Chain integrity | 118 rows verified, 0 violations |
+| Reconciliation dry-run pre-repair | State B — 113 orphan `fabrication_events` (post-era IDs 14868-14980) |
+| Reconciliation `--apply` repair | 114 orphans linked, verdict=repaired |
+| Reconciliation post-repair | clean, 0 orphans |
+| Chain integrity post-repair | 118 rows verified, 0 violations |
+| State C events | none |
+| Slice 3 envelope active during window | confirmed via `envelope_truncated` events in logs |
+
+The chain hash mechanism survived five involuntary unclean shutdowns plus a 114-orphan reconciliation repair without violation. This is *stronger* evidence than the planned single deliberate-kill test would have provided.
+
+### 2.2 Conversational-shape coverage gate — INCOMPLETE
+
+Runbook required **≥20 organic user messages**. The window produced **3 user messages**, all simple and single-shot:
+
+| turn_id | timestamp | surface | text |
+|---|---|---|---|
+| `625e3159` | 2026-05-08 01:03:47 | UI | "final cockpit browser verification from codex" |
+| `0c34a195` | 2026-05-08 06:26:42 | telegram_surface | "Hey morning" |
+| `f3257faf` | 2026-05-08 08:48:55 | UI | "How is it going" |
+
+The waiver of the volume gate is not just a statistical-confidence concern. **Three single-shot greetings cannot exercise the behavioral classes the runbook's volume floor exists to test.** Specifically untested:
+
+- Multi-turn continuity (reply threading, context persistence)
+- Telegram + cockpit interleaving (surface concurrency)
+- Real-content user claims (audit-rewrite path firing on meaning, not just clean replies)
+- Envelope pressure under organic load (`envelope_truncated` events in production-like context)
+- Concurrency / overlap under simultaneous surface activity
+- Multi-turn recall + self_history retrieval shape
+
+The 46.7% audit rewrite rate observed during the window came mostly from test-surface rows, not user-surface organic content. Real-user envelope behavior is effectively untested.
+
+### 2.3 Sample review
+
+Owner reviewed the three user messages above. Each row matches what was sent, with correct surface attribution and reasonable timestamp. No tampering, no surface-mislabeling, no timestamp drift detected.
+
+---
+
+## 3. Hardware context (the involuntary stress test)
+
+The 5-crash cluster was caused by acute hardware instability on the host (Aurora R16, i9-14900KF, stepping 1) — symptoms consistent with the documented Intel 13th/14th-gen K-series Vmin-shift degradation issue Intel publicly acknowledged in 2024:
+
+- Multiple kernel oopses captured (NULL pointer dereference in `__schedule` / `do_sched_yield` syscall path)
+- OS-independent reproducibility (crashes occur on the Linux side specifically because the load lives there)
+- Pre-boot ePSA Extended Diagnostics passed clean (Error Code 000)
+- No NVIDIA Xid events; not a GPU fault
+- Two CPU replacements in 15 months on same affected silicon family
+
+CPU replacement (or system-level remedy) under Premium Plus warranty is the primary hardware action; documented separately. **The hardware repair is treated as software continuity for Maez** — not a rebirth event.
+
+---
+
+## 4. Owner decision
+
+**Owner waiver applied:**
+
+> 2.5c crash-integrity gate: PASSED. Conversational-shape coverage: INCOMPLETE. The missing behavioral classes are explicitly transferred into the replay harness's birth-readiness probe corpus (see [SLICE_GESTATION_BOUNDARY_MEMO.md](SLICE_GESTATION_BOUNDARY_MEMO.md) §5). This makes the waiver disciplined — the missing coverage becomes a measurable gate at birth-event time, not a hand-wavy "we'll see."
+>
+> Production ledger flip is **NOT** authorized by this waiver. The sandbox DB is preserved as test evidence and never promoted to `memory/ledger.db`. Real gestation accumulation begins on the first write to `memory/ledger.db` after the gestation boundary slice ships — not before.
+
+Signed: Rohit Ananthan, 2026-05-08.
+
+---
+
+## 5. What this slice unblocks
+
+- The ledger writer's behavior under unclean shutdown is established. Subsequent slices (gestation boundary, replay harness, slice 3.5, Vellum memory fidelity) can rely on this property without re-proving.
+- The chain-hash mechanism is proven robust under involuntary kernel-level crashes — not just clean shutdowns.
+- The reconciler's State B repair path is exercised end-to-end.
+
+## 6. What this slice does NOT unblock
+
+- Production ledger writes against `memory/ledger.db`. Blocked until birth-readiness probes pass + birth criteria met (see gestation slice memo).
+- The "real conversational shape" question. Transferred to birth-readiness probes.
+- The "Maez can be trusted to record its own life truthfully" question. That requires birth, which requires gestation slice + harness + 3.5 + memory fidelity work.
+
+## 7. Sequencing forward
+
+```
+2.5c record (this doc) →
+gestation boundary slice →
+enable gestation ledger writes →
+replay harness (regression baseline + birth-readiness probes) →
+slice 3.5 (envelope wiring complete on remaining surfaces) →
+Vellum memory fidelity (raw stays exact, recall projection gains stability/reinforcement/fidelity tier) →
+birth event (when all criteria met; see gestation memo §3)
+```
+
+The gestation boundary slice **must** ship before ledger writes resume. Otherwise rows accumulate without `lifecycle_stage` tagging and we lose the moral and architectural distinction between gestation and lived memory.
+
+---
+
+## 8. Evidence artifacts preserved
+
+- `memory/sandbox_ledger_2026_05_08.db` — full sandbox ledger with chain integrity verified
+- `logs/maez.log`, `logs/cognition.log` — daemon and cognition logs covering the window
+- Kernel oops dump from boot ending 2026-05-08 09:15:22 CDT — captured in `journalctl -b -1 -k` for that boot
+- `ras-mc-ctl --summary` output — clean (no MCE/AER/ECC events)
+- Dell warranty packet [`dell_warranty_packet_2026-05-05.md`](dell_warranty_packet_2026-05-05.md) — original pre-2.5c hardware diagnostic
+
+These are the basis for both Maez's slice-2.5c acceptance and the Dell warranty case.
+
+---
+
+*Document generated 2026-05-08 by Claude (slice-2.5c results synthesis). Owner-decision section is verbatim Rohit's waiver text.*
