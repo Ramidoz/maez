@@ -1,10 +1,10 @@
 # Memory Projection Rules
 
-**Status:** Accepted for Slice 4a architecture
+**Status:** Accepted for Slice 4b shadow strengthening
 **Date:** 2026-05-08
-**projection_rules_schema_version: 1**
+**projection_rules_schema_version: 2**
 **projection_policy_id:** `maez-memory-projection-v1`
-**projection_policy_version:** `1.0.0`
+**projection_policy_version:** `2.0.0`
 
 ## Governance Anchors
 
@@ -36,13 +36,14 @@ or supersede raw ledger truth. Supersession, when introduced later, is
 a projection/read-model relationship over append-only sources, not
 removal from the source of truth.
 
-## Schema v1
+## Schema v2
 
-Projection reports and policies version together for Slice 4a. Later
+Projection reports and policies version together for Slice 4b. Schema v2
+adds explicit audit-boundary and strengthening-rationale fields. Later
 slices may add a new policy version without changing the report schema;
-when that happens, the policy version changes and the report schema
-stays readable as long as the required fields below remain present. If
-required fields change, `projection_rules_schema_version` must bump.
+when that happens, the policy version changes and the report schema stays
+readable as long as the required fields below remain present. If required
+fields change, `projection_rules_schema_version` must bump.
 
 Required policy fields:
 
@@ -59,6 +60,13 @@ Required report fields:
 - `schema_version`
 - `created_at` — Unix seconds since epoch, UTC
 - `policy`
+- `audit_boundary`
+  - Type: string enum. Slice 4b value: `not_audit_evidence`.
+- `policy_doc_path`
+  - Type: repo-relative string path to this rulebook.
+- `policy_doc_sha256`
+  - Type: SHA-256 hex digest of `policy_doc_path` contents at report
+    generation time.
 - `raw_count`
 - `projected_count`
 - `omitted_count`
@@ -73,6 +81,17 @@ Required projected item fields:
 - `source_refs`
 - `rule_id`
 - `projection_effect`
+  - Type: string enum. Slice 4b values: `identity`, `strengthened`.
+- `strength_score`
+  - Type: non-negative integer. Slice 4b baseline is `0`;
+    `repetition_with_continuity.v1` may raise it to `1`.
+- `strength_reasons`
+  - Type: list of strings naming documented rule reasons.
+- `rule_inputs`
+  - Type: object containing the structured facts the rule used.
+- `counterevidence_refs`
+  - Type: list of source ref objects that limit or oppose
+    strengthening. Empty list when none are present.
 
 Required source ref fields:
 
@@ -88,7 +107,8 @@ Required source ref fields:
 
 `rule_id: identity.v1`
 
-The Slice 4a rule is intentionally inert:
+The identity rule remains available in schema v2 and is intentionally
+inert:
 
 - preserve input order exactly
 - preserve text exactly
@@ -98,6 +118,57 @@ The Slice 4a rule is intentionally inert:
 - write nothing
 - feed no production prompt
 - feed no audit evidence
+
+## Slice 4b Shadow Strengthening Rule
+
+`rule_id: repetition_with_continuity.v1`
+
+Direction: strengthens only. Weakening, fading, or negative strength
+scores are intentionally not part of v1 and would be a separate
+covenant decision, not a version bump on this rule. Adding weakening
+capability requires a new ADR or BAD decision because it is structurally
+a different kind of change to memory salience.
+
+This rule strengthens a projected memory item only when the same
+continuity thread recurs across independent source refs over time.
+Strengthening is projection-only and shadow/probe-only in Slice 4b; it
+must not alter production prompt context or audit evidence.
+
+Temporal distinctness criteria:
+
+- Same turn is not independent.
+- Independent source refs must have different non-empty `turn_id`s.
+- Rapid repetition inside the short-window floor does not strengthen.
+  The Slice 4b floor is one hour.
+- Daemon-internal echo does not strengthen. Repeated `daemon_cycle`
+  entries without external trigger are not life circling back.
+- A continuity thread must be explicit in the source metadata; repeated
+  soothing text alone is not enough.
+
+Strengthening may reward:
+
+- recurring concerns, commitments, people, open loops, corrections,
+  refusals, or self-description threads
+- contradiction or refusal memories when the recurrence receipts remain
+  attached
+- source refs whose counterevidence is still attached as
+  `counterevidence_refs`
+
+Strengthening must not reward:
+
+- comfort, positivity, owner approval, engagement, attachment, or
+  emotional intensity by itself
+- operator preference or any env/config knob
+- public/guest surface behavior
+- raw-memory mutation or audit-evidence eligibility
+
+Every strengthened item must carry `strength_score`, `strength_reasons`,
+`rule_inputs`, source refs, and any `counterevidence_refs`.
+
+Probe outputs are diagnostic. They are not for inclusion in prompt
+context, audit input, or any other downstream system. The
+`audit_boundary: not_audit_evidence` field is the structural defense;
+this sentence is the human-discipline defense.
 
 ## Forbidden Rule Shapes
 
@@ -147,3 +218,7 @@ Slice 4a must pin these invariants:
 - evidence envelope uses raw self-history, not projection
 - `core.memory.recall_projection` has no production callers
 - replay regression baseline remains unchanged
+- `repetition_with_continuity.v1` strengthens only temporally distinct
+  recurrence
+- rapid repetition and daemon-internal echo do not strengthen
+- strengthening reports carry `audit_boundary: not_audit_evidence`

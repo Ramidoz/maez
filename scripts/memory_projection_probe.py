@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # Copyright © 2026 Rohit Ananthan
 # Licensed under the GNU Affero General Public License v3.0 or later.
-"""Read-only probe for Slice 4a recall projection.
+"""Read-only probe for Slice 4a/4b recall projection.
 
-Shows raw ledger-derived self_history beside the inert projection view.
+Shows raw ledger-derived self_history beside the projection view.
 This is operator tooling, not a birth-readiness fixture. It never writes
 to the ledger and does not feed production prompts or audit evidence.
 """
@@ -41,6 +41,7 @@ def build_report(
     tenant_id: str,
     limit: int,
     recall_gestation: str,
+    projection_rule: str,
 ) -> dict:
     rows = _rt.recent_turns_by_kind(
         ledger_db_path,
@@ -50,9 +51,16 @@ def build_report(
         recall_gestation=recall_gestation,
     )
     raw_self_history = _rows_to_self_history(rows)
-    projection = _rp.project_self_history(raw_self_history)
+    policy = {
+        "identity.v1": _rp.DEFAULT_POLICY,
+        "repetition_with_continuity.v1": (
+            _rp.REPETITION_WITH_CONTINUITY_POLICY
+        ),
+    }[projection_rule]
+    projection = _rp.project_self_history(raw_self_history, policy=policy)
     return {
         "mode": "read_only_memory_projection_probe",
+        "projection_rule": projection_rule,
         "raw_self_history": raw_self_history,
         "projection": projection.to_dict(),
     }
@@ -68,12 +76,18 @@ def main(argv: list[str] | None = None) -> int:
         choices=("user", "full"),
         default="user",
     )
+    parser.add_argument(
+        "--projection-rule",
+        choices=("identity.v1", "repetition_with_continuity.v1"),
+        default="identity.v1",
+    )
     args = parser.parse_args(argv)
     report = build_report(
         ledger_db_path=args.ledger_db_path,
         tenant_id=args.tenant_id,
         limit=args.limit,
         recall_gestation=args.recall_gestation,
+        projection_rule=args.projection_rule,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0

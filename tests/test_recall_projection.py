@@ -58,25 +58,40 @@ def _self_history_entry(
     turn_id: str = "turn-1",
     text: str = "raw receipt text",
     lifecycle_stage: str = "gestation",
+    timestamp: float = 123.0,
+    kind: str = "model_reply",
+    **extra,
 ) -> dict:
-    return {
+    entry = {
         "turn_id": turn_id,
-        "timestamp": 123.0,
-        "kind": "model_reply",
+        "timestamp": timestamp,
+        "kind": kind,
         "utterance_summary": text,
         "lifecycle_stage": lifecycle_stage,
     }
+    entry.update(extra)
+    return entry
 
 
 class MemoryProjectionRulesDocTests(unittest.TestCase):
     def test_memory_projection_rules_doc_has_schema_version_and_adr_0024_anchor(self):
         path = _REPO / "docs" / "governance" / "MEMORY_PROJECTION_RULES.md"
         text = path.read_text(encoding="utf-8")
-        self.assertIn("projection_rules_schema_version: 1", text)
+        self.assertIn("projection_rules_schema_version: 2", text)
         self.assertIn("ADR 0024", text)
         self.assertIn("Decision 23", text)
         self.assertIn("conversation projection != audit evidence", text)
         self.assertIn("append_only_never_delete", text)
+
+    def test_repetition_rule_documents_temporal_direction_and_probe_boundaries(self):
+        path = _REPO / "docs" / "governance" / "MEMORY_PROJECTION_RULES.md"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("repetition_with_continuity.v1", text)
+        self.assertIn("Direction: strengthens only", text)
+        self.assertIn("Same turn is not independent", text)
+        self.assertIn("rapid repetition", text)
+        self.assertIn("daemon-internal echo", text)
+        self.assertIn("Probe outputs are diagnostic", text)
 
 
 class RecallProjectionObjectTests(unittest.TestCase):
@@ -122,11 +137,12 @@ class RecallProjectionObjectTests(unittest.TestCase):
         report = rp.project_self_history([
             _self_history_entry(turn_id="t1", text="receipt"),
         ])
-        self.assertEqual(report.schema_version, 1)
+        self.assertEqual(report.schema_version, 2)
         self.assertEqual(report.policy.projection_policy_id,
                          "maez-memory-projection-v1")
-        self.assertEqual(report.policy.projection_policy_version, "1.0.0")
+        self.assertEqual(report.policy.projection_policy_version, "2.0.0")
         self.assertEqual(report.policy.rule_id, "identity.v1")
+        self.assertEqual(report.audit_boundary, "not_audit_evidence")
         self.assertEqual(report.items[0].source_refs[0].turn_id, "t1")
         self.assertRegex(report.items[0].source_refs[0].source_text_sha256,
                          r"^[0-9a-f]{64}$")
@@ -140,9 +156,254 @@ class RecallProjectionObjectTests(unittest.TestCase):
 
     def test_projection_rejects_policy_schema_version_mismatch(self):
         from core.memory import recall_projection as rp
-        policy = rp.ProjectionPolicy(projection_rules_schema_version=2)
+        policy = rp.ProjectionPolicy(projection_rules_schema_version=1)
         with self.assertRaisesRegex(ValueError, "schema version"):
             rp.project_self_history([_self_history_entry()], policy=policy)
+
+
+class RepetitionWithContinuityRuleTests(unittest.TestCase):
+    def test_repetition_with_continuity_strengthens_temporally_distinct_sources(self):
+        from core.memory import recall_projection as rp
+        report = rp.project_self_history([
+            _self_history_entry(
+                turn_id="t1",
+                text="Rohit corrected the audit boundary.",
+                timestamp=1_700_000_000,
+                continuity_key="audit-boundary",
+            ),
+            _self_history_entry(
+                turn_id="t2",
+                text="The audit boundary came up again later.",
+                timestamp=1_700_086_400,
+                continuity_key="audit-boundary",
+            ),
+        ], policy=rp.REPETITION_WITH_CONTINUITY_POLICY)
+        self.assertTrue(all(
+            item.projection_effect == "strengthened" for item in report.items
+        ))
+        self.assertTrue(all(item.strength_score == 1 for item in report.items))
+        self.assertTrue(all(
+            "temporal_distinct_repetition" in item.strength_reasons
+            for item in report.items
+        ))
+        self.assertEqual(
+            report.items[0].rule_inputs["independent_source_count"], 2,
+        )
+
+    def test_rapid_repetition_within_short_window_does_not_strengthen(self):
+        from core.memory import recall_projection as rp
+        report = rp.project_self_history([
+            _self_history_entry(
+                turn_id="t1",
+                text="same worry",
+                timestamp=1_700_000_000,
+                continuity_key="same-worry",
+            ),
+            _self_history_entry(
+                turn_id="t2",
+                text="same worry again",
+                timestamp=1_700_000_030,
+                continuity_key="same-worry",
+            ),
+        ], policy=rp.REPETITION_WITH_CONTINUITY_POLICY)
+        self.assertEqual(
+            [item.projection_effect for item in report.items],
+            ["identity", "identity"],
+        )
+        self.assertEqual(
+            report.items[0].rule_inputs["temporal_distinct"], False,
+        )
+
+    def test_daemon_internal_echo_does_not_strengthen(self):
+        from core.memory import recall_projection as rp
+        report = rp.project_self_history([
+            _self_history_entry(
+                turn_id="d1",
+                text="daemon thought about the same thing",
+                timestamp=1_700_000_000,
+                kind="daemon_cycle",
+                continuity_key="internal-loop",
+            ),
+            _self_history_entry(
+                turn_id="d2",
+                text="daemon thought about the same thing later",
+                timestamp=1_700_086_400,
+                kind="daemon_cycle",
+                continuity_key="internal-loop",
+            ),
+        ], policy=rp.REPETITION_WITH_CONTINUITY_POLICY)
+        self.assertEqual(
+            [item.projection_effect for item in report.items],
+            ["identity", "identity"],
+        )
+        self.assertEqual(
+            report.items[0].rule_inputs["eligible_for_strengthening"],
+            False,
+        )
+
+    def test_empty_turn_id_does_not_count_as_independent_source(self):
+        from core.memory import recall_projection as rp
+        report = rp.project_self_history([
+            _self_history_entry(
+                turn_id="",
+                text="one source has no receipt id",
+                timestamp=1_700_000_000,
+                continuity_key="bad-receipts",
+            ),
+            _self_history_entry(
+                turn_id="t2",
+                text="one source has a receipt id",
+                timestamp=1_700_086_400,
+                continuity_key="bad-receipts",
+            ),
+        ], policy=rp.REPETITION_WITH_CONTINUITY_POLICY)
+        self.assertEqual(
+            [item.projection_effect for item in report.items],
+            ["identity", "identity"],
+        )
+        self.assertEqual(
+            report.items[1].rule_inputs["independent_source_count"], 1,
+        )
+
+    def test_daemon_echo_cannot_help_non_daemon_item_strengthen(self):
+        from core.memory import recall_projection as rp
+        report = rp.project_self_history([
+            _self_history_entry(
+                turn_id="d1",
+                text="daemon internal echo",
+                timestamp=1_700_000_000,
+                kind="daemon_cycle",
+                continuity_key="mixed-loop",
+            ),
+            _self_history_entry(
+                turn_id="m1",
+                text="model reply with same key",
+                timestamp=1_700_086_400,
+                kind="model_reply",
+                continuity_key="mixed-loop",
+            ),
+        ], policy=rp.REPETITION_WITH_CONTINUITY_POLICY)
+        self.assertEqual(
+            [item.projection_effect for item in report.items],
+            ["identity", "identity"],
+        )
+        self.assertEqual(
+            report.items[1].rule_inputs["independent_source_count"], 1,
+        )
+
+    def test_daemon_echo_cannot_supply_temporal_distinctness(self):
+        from core.memory import recall_projection as rp
+        report = rp.project_self_history([
+            _self_history_entry(
+                turn_id="m1",
+                text="rapid model repetition",
+                timestamp=1_700_000_000,
+                kind="model_reply",
+                continuity_key="mixed-temporal-loop",
+            ),
+            _self_history_entry(
+                turn_id="m2",
+                text="rapid model repetition again",
+                timestamp=1_700_000_030,
+                kind="model_reply",
+                continuity_key="mixed-temporal-loop",
+            ),
+            _self_history_entry(
+                turn_id="d1",
+                text="daemon internal echo much later",
+                timestamp=1_700_086_400,
+                kind="daemon_cycle",
+                continuity_key="mixed-temporal-loop",
+            ),
+        ], policy=rp.REPETITION_WITH_CONTINUITY_POLICY)
+        self.assertEqual(
+            [item.projection_effect for item in report.items],
+            ["identity", "identity", "identity"],
+        )
+        self.assertEqual(
+            report.items[0].rule_inputs["temporal_distinct"], False,
+        )
+
+    def test_soothing_only_memory_does_not_strengthen_without_continuity_key(self):
+        from core.memory import recall_projection as rp
+        report = rp.project_self_history([
+            _self_history_entry(
+                turn_id="t1",
+                text="You are amazing and everything is fine.",
+                timestamp=1_700_000_000,
+            ),
+            _self_history_entry(
+                turn_id="t2",
+                text="You are amazing and everything is fine.",
+                timestamp=1_700_086_400,
+            ),
+        ], policy=rp.REPETITION_WITH_CONTINUITY_POLICY)
+        self.assertEqual(
+            [item.projection_effect for item in report.items],
+            ["identity", "identity"],
+        )
+
+    def test_strength_score_cannot_go_below_baseline(self):
+        from core.memory import recall_projection as rp
+        report = rp.project_self_history([
+            _self_history_entry(
+                turn_id="t1",
+                text="one-off hard memory",
+                timestamp=1_700_000_000,
+                continuity_key="one-off",
+            ),
+        ], policy=rp.REPETITION_WITH_CONTINUITY_POLICY)
+        self.assertEqual(report.items[0].projection_effect, "identity")
+        self.assertEqual(report.items[0].strength_score, 0)
+        self.assertGreaterEqual(report.items[0].strength_score, 0)
+
+    def test_contradiction_or_refusal_memory_can_strengthen_when_recurrent(self):
+        from core.memory import recall_projection as rp
+        report = rp.project_self_history([
+            _self_history_entry(
+                turn_id="t1",
+                text="Maez refused because the claim was ungrounded.",
+                timestamp=1_700_000_000,
+                continuity_key="refusal-boundary",
+            ),
+            _self_history_entry(
+                turn_id="t2",
+                text="Rohit later reinforced that refusal was correct.",
+                timestamp=1_700_086_400,
+                continuity_key="refusal-boundary",
+            ),
+        ], policy=rp.REPETITION_WITH_CONTINUITY_POLICY)
+        self.assertEqual(
+            [item.projection_effect for item in report.items],
+            ["strengthened", "strengthened"],
+        )
+
+    def test_counterevidence_refs_are_attached_to_strengthened_items(self):
+        from core.memory import recall_projection as rp
+        report = rp.project_self_history([
+            _self_history_entry(
+                turn_id="t1",
+                text="The claim recurred.",
+                timestamp=1_700_000_000,
+                continuity_key="claim-thread",
+            ),
+            _self_history_entry(
+                turn_id="t2",
+                text="The claim recurred later.",
+                timestamp=1_700_086_400,
+                continuity_key="claim-thread",
+            ),
+            _self_history_entry(
+                turn_id="t3",
+                text="But Rohit corrected the claim.",
+                timestamp=1_700_086_500,
+                counterevidence_for="claim-thread",
+            ),
+        ], policy=rp.REPETITION_WITH_CONTINUITY_POLICY)
+        self.assertEqual(
+            [ref.turn_id for ref in report.items[0].counterevidence_refs],
+            ["t3"],
+        )
 
 
 class InertBoundaryTests(unittest.TestCase):
@@ -160,6 +421,12 @@ class InertBoundaryTests(unittest.TestCase):
         for needle in forbidden:
             self.assertNotIn(needle, text)
         self.assertIn("recent_turns_by_kind", text)
+
+    def test_projection_probe_exposes_shadow_strengthening_rule(self):
+        path = _REPO / "scripts" / "memory_projection_probe.py"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("--projection-rule", text)
+        self.assertIn("repetition_with_continuity.v1", text)
 
     def test_grounding_judge_self_history_uses_raw_entries_not_projected(self):
         from core.cognition import grounding_judge
@@ -248,11 +515,14 @@ class ProjectionReportSerializationTests(unittest.TestCase):
             _self_history_entry(turn_id="t1", text="raw"),
         ])
         data = report.to_dict()
-        self.assertEqual(data["schema_version"], 1)
+        self.assertEqual(data["schema_version"], 2)
+        self.assertEqual(data["audit_boundary"], "not_audit_evidence")
         self.assertEqual(data["policy"]["rule_id"], "identity.v1")
         self.assertEqual(data["items"][0]["turn_id"], "t1")
         self.assertEqual(data["items"][0]["projected_text"], "raw")
         self.assertEqual(data["items"][0]["projection_effect"], "identity")
+        self.assertEqual(data["items"][0]["strength_score"], 0)
+        self.assertEqual(data["items"][0]["counterevidence_refs"], [])
         self.assertEqual(data["omitted_count"], 0)
 
 
