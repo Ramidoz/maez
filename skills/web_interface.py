@@ -1252,12 +1252,12 @@ def api_card_deny(request_id: str):
 #     the daemon's response verbatim.
 #   - Localhost-only: both endpoints (and the daemon's underlying
 #     routes) are bound to 127.0.0.1; CSRF surface remains loopback.
-#   - Timeout-bounded: 15s for chat, 30s for approve (approve runs the
+#   - Timeout-bounded: 60s for chat, 30s for approve (approve runs the
 #     decision_pipeline which can take a moment). Failures pass through
 #     as 502 with the error message.
 
 _DAEMON_BASE = "http://127.0.0.1:11435"
-_COCKPIT_PROXY_TIMEOUT_S = 15.0
+_COCKPIT_PROXY_TIMEOUT_S = 60.0
 _COCKPIT_APPROVE_TIMEOUT_S = 30.0
 
 

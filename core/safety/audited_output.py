@@ -125,6 +125,13 @@ def audit_assistant_text(
             "(continuing without scrub): %s",
             surface, exc,
         )
+    else:
+        if _scrubbed:
+            # Output-guard rewrites are code-generated refusals, not model
+            # claims. Sending them through the semantic self-claim judge can
+            # erase the refusal wording and make the safety boundary less
+            # legible while adding no grounding value.
+            return text
 
     # Derive tool-continuation from transcript presence unless caller
     # explicitly forced the value. Single knob, minimal API surface.

@@ -81,6 +81,7 @@ class CockpitMessageProxy(unittest.TestCase):
         self.assertEqual(captured["method"], "POST")
         self.assertEqual(captured["data"], sent_body)
         self.assertIsNotNone(captured["timeout"])
+        self.assertGreaterEqual(captured["timeout"], 60.0)
 
     def test_passes_through_daemon_4xx_response(self):
         """If daemon answers 400, the cockpit caller sees 400 + body."""

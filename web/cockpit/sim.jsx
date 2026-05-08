@@ -355,7 +355,8 @@ const SIM = (() => {
     pushUserTurn: (text) => {
       const sess = state.chat.sessions.find(s => s.id === state.chat.activeSessionId);
       if (!sess) return;
-      sess.history.push({ role: 'user', t: ts(), content: text });
+      const userTurn = { _id: turnId(), role: 'user', t: ts(), content: text };
+      sess.history.push(userTurn);
       sess.preview = text.slice(0, 80);
       sess.updated = ts().slice(0, 5);
       state.chat._awaitingReply = true;
