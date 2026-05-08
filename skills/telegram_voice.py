@@ -37,15 +37,27 @@ from skills.web_search import (
 logger = logging.getLogger("maez")
 
 
-def _audit_telegram_reply(text: str, surface: str) -> str:
+def _audit_telegram_reply(
+    text: str,
+    surface: str,
+    *,
+    evidence_envelope: dict | None = None,
+) -> str:
     """Run the self-claim audit on a telegram reply before send. Returns
     the (possibly rewritten) text. Silent on audit errors — we never want
-    the audit to break a reply from reaching the user."""
+    the audit to break a reply from reaching the user.
+
+    Slice 3 wiring (2026-05-07): when ``evidence_envelope`` is provided,
+    the audit gets it as canonical grounding context; when None (or
+    when MAEZ_EVIDENCE_ENVELOPE_DISABLED=1, in which case the builder
+    returns None), the audit falls through to legacy signals."""
     if not text:
         return text
     try:
         from core.self_claim_audit import audit as _sc_audit
-        r = _sc_audit(text, surface=surface)
+        r = _sc_audit(
+            text, surface=surface, evidence_envelope=evidence_envelope,
+        )
         return r.text if r.rewritten else text
     except Exception as e:
         logger.warning("self-claim audit failed on %s: %s", surface, e)
@@ -3251,6 +3263,36 @@ class TelegramVoice:
         except Exception:
             pass
 
+        # Slice 3 wiring (2026-05-07): build the evidence envelope so
+        # the LLM sees what it MAY claim and what's forbidden BEFORE
+        # generation, and so the audit gets the same context.
+        # Returns None when MAEZ_EVIDENCE_ENVELOPE_DISABLED=1; the
+        # renderer treats None as empty (legacy prompt shape).
+        try:
+            from core.cognition.envelope_builder import (
+                build_envelope as _build_envelope,
+                default_ledger_db_path as _default_ledger_db,
+                render_envelope_for_prompt as _render_envelope,
+            )
+            from core.safety.audit_signal_manifest import (
+                default_audit_signals as _default_signals,
+            )
+            _sp, _sa = _default_signals("telegram_text")
+            _evidence_envelope = _build_envelope(
+                ledger_db_path=_default_ledger_db(),
+                signals_present=_sp,
+                signals_absent=_sa,
+                tool_results=[],
+            )
+            _envelope_block = _render_envelope(_evidence_envelope)
+        except Exception as _env_exc:
+            logger.warning(
+                "evidence_envelope build failed for telegram_text "
+                "(continuing without envelope): %s", _env_exc,
+            )
+            _evidence_envelope = None
+            _envelope_block = ""
+
         # Build messages with system context + thread
         messages = [
             {"role": "system", "content": _jarvis_system_prompt},
@@ -3259,6 +3301,12 @@ class TelegramVoice:
         # Add thread history (skip current message since it's in prompt)
         for turn in self._conversation_thread[:-1]:
             messages.append(turn)
+        # Envelope block sits as a system message immediately before
+        # the final user turn so the model attends to its constraints
+        # at maximum recency. Empty string when disabled — keeps the
+        # message list shape identical to legacy in that case.
+        if _envelope_block:
+            messages.append({"role": "system", "content": _envelope_block})
         messages.append({"role": "user", "content": final_user})
 
         # Non-streaming reply — Jarvis runs tools first, then one clean synthesis call.
@@ -3300,7 +3348,10 @@ class TelegramVoice:
             # missing audit (only dialog/terminal/fallback replies were
             # audited), which is why the 2026-04-19 "Maelstrom merge"
             # turns escaped on this surface. Silent on audit failure.
-            reply = _audit_telegram_reply(full_reply, surface="telegram_text")
+            reply = _audit_telegram_reply(
+                full_reply, surface="telegram_text",
+                evidence_envelope=_evidence_envelope,
+            )
 
             for part in split_long_message(reply):
                 await context.bot.send_message(
@@ -3320,7 +3371,10 @@ class TelegramVoice:
             # canary triggers. Route through the same gate as the
             # success path. Mirror of the b672a2d (T1.13)
             # audit-routing pattern.
-            reply = _audit_telegram_reply(full_reply, surface="telegram_text")
+            reply = _audit_telegram_reply(
+                full_reply, surface="telegram_text",
+                evidence_envelope=_evidence_envelope,
+            )
             await update.message.reply_text(reply)
             return reply
 

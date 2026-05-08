@@ -59,6 +59,7 @@ def audit_assistant_text(
     signals_present: Optional[list] = None,
     signals_absent: Optional[list] = None,
     in_tool_continuation: Optional[bool] = None,
+    evidence_envelope: Optional[dict] = None,
 ) -> str:
     """Return the audited form of an assistant reply.
 
@@ -174,6 +175,7 @@ def audit_assistant_text(
             transcript=transcript or None,
             signals_present=signals_present,
             signals_absent=signals_absent,
+            evidence_envelope=evidence_envelope,
         )
     except Exception as exc:
         logger.warning(

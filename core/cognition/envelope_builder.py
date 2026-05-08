@@ -38,10 +38,112 @@ from core.ledger import recent_turns as _rt
 __all__ = [
     "BoundedEnvelopeBuilder",
     "build_envelope",
+    "default_ledger_db_path",
+    "render_envelope_for_prompt",
     "resolve_recall_cap_chars",
     "DEFAULT_SELF_HISTORY_LIMIT",
     "ENVELOPE_SCHEMA_VERSION",
 ]
+
+
+def default_ledger_db_path() -> str | None:
+    """Resolve the canonical ledger DB path for callers that don't
+    already have a daemon-scoped reference.
+
+    Returns ``MAEZ_LEDGER_DB_PATH`` if set and the file exists; else
+    ``<maez_home>/memory/ledger.db`` if it exists; else ``None``.
+    Builder semantics treat ``None`` as "no self_history available
+    this turn" — best-effort grounding, never raises.
+    """
+    raw = os.environ.get("MAEZ_LEDGER_DB_PATH")
+    if raw and os.path.exists(raw):
+        return raw
+    try:
+        from pathlib import Path as _Path
+        from core.infra.paths import home as _maez_home
+        path = _Path(_maez_home()) / "memory" / "ledger.db"
+        return str(path) if path.exists() else None
+    except Exception:
+        return None
+
+
+def render_envelope_for_prompt(envelope: dict | None) -> str:
+    """Render the LEDGER_ENVELOPE_SCHEMA §3.2 constraint block.
+
+    The block is what the daemon injects into the LLM's generation
+    prompt so the model sees, BEFORE generating, what's permitted and
+    what's forbidden. Returns ``""`` when the envelope is None
+    (disabled bypass) or carries no constraints — keeps the prompt
+    identical to legacy in those cases. The block itself looks like::
+
+        [EVIDENCE ENVELOPE — TURN <turn_id>]
+        You may claim:
+          - "owner is at his desk"  (observed)
+          - "owner asked about X"   (owner-said)
+        You may NOT claim:
+          - anything about the calendar (signal absent: calendar)
+        If you must speak about a forbidden topic, name the absence
+        instead of confabulating.
+        [END ENVELOPE]
+    """
+    if envelope is None:
+        return ""
+
+    claimable = envelope.get("claimable") or []
+    forbidden = envelope.get("forbidden") or []
+    signals_absent = envelope.get("signals_absent") or []
+    truncated = envelope.get("_truncated") is True
+
+    if not claimable and not forbidden and not signals_absent and not truncated:
+        return ""
+
+    turn_id = envelope.get("turn_id") or ""
+    header = (
+        f"[EVIDENCE ENVELOPE — TURN {turn_id}]" if turn_id
+        else "[EVIDENCE ENVELOPE]"
+    )
+    if truncated:
+        header += " (truncated)"
+
+    lines = [header]
+
+    if claimable:
+        lines.append("You may claim:")
+        for c in claimable:
+            text = c.get("text") or c.get("fact") or ""
+            prov = c.get("provenance") or ""
+            evidence = c.get("evidence") or c.get("evidence_refs") or ""
+            tail_bits = []
+            if prov:
+                tail_bits.append(prov)
+            if evidence:
+                tail_bits.append(str(evidence))
+            tail = f"  ({'; '.join(tail_bits)})" if tail_bits else ""
+            lines.append(f'  - "{text}"{tail}')
+
+    forbidden_lines = []
+    for f in forbidden:
+        topic = f.get("topic") or f.get("text") or f.get("fact") or ""
+        reason = f.get("reason") or ""
+        if topic:
+            tail = f" (signal absent: {reason})" if reason else ""
+            forbidden_lines.append(f"  - anything about {topic}{tail}")
+    for s in signals_absent:
+        if s and not any(s in line for line in forbidden_lines):
+            forbidden_lines.append(
+                f"  - anything about {s} (signal absent: {s})"
+            )
+
+    if forbidden_lines:
+        lines.append("You may NOT claim:")
+        lines.extend(forbidden_lines)
+        lines.append(
+            "If you must speak about a forbidden topic, name the absence "
+            "instead of confabulating."
+        )
+
+    lines.append("[END ENVELOPE]")
+    return "\n".join(lines)
 
 
 # Matches the ledger meta.schema_version (see migrations/0001_init.sql

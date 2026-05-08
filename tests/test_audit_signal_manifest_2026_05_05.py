@@ -200,7 +200,8 @@ class FalsePositiveModelIdentityClosed(unittest.TestCase):
         captured_manifest = {}
 
         def _capture_judge(*, text, signals_present, signals_absent,
-                           few_shots=None, model=None):
+                           few_shots=None, model=None,
+                           evidence_envelope=None):
             captured_manifest["present"] = signals_present
             captured_manifest["absent"] = signals_absent
             return []  # judge says clean
@@ -245,7 +246,7 @@ class FalsePositiveModelIdentityClosed(unittest.TestCase):
         captured = {}
 
         def _capture(*, text, signals_present, signals_absent,
-                     few_shots=None, model=None):
+                     few_shots=None, model=None, evidence_envelope=None):
             captured["present"] = signals_present
             return []
 

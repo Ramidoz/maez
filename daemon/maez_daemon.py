@@ -1710,22 +1710,46 @@ class MaezDaemon:
             logger.debug("trace memory_ids capture skipped: %s", _trace_exc)
         # Bound the recall block so a high-recall query (long-content
         # core memories + many raw matches) cannot push the whole
-        # prompt past the llama-server context window. 60_000 chars
-        # ~= 15K tokens, leaving headroom for sys_prompt, chat_history,
-        # lived brief, premise flag, user turn, and the response budget
-        # within the 32K ctx. Core + daily are preserved; raw entries
-        # drop from the tail if needed.
-        #
-        # Slice 3 proper (2026-05-07): the coordinated reduction to
-        # 52K chars per SLICE_3_0d §1 lands in the SAME slice that
-        # injects the evidence envelope into the prompt. Until that
-        # wiring exists, shrinking recall here would lose 8K chars
-        # for zero envelope benefit. The ready-to-use resolver is
-        # `core.cognition.envelope_builder.resolve_recall_cap_chars`
-        # — the wiring slice should replace this hardcoded 60_000
-        # with `resolve_recall_cap_chars()` AT THE SAME TIME it adds
-        # the envelope to the prompt.
-        memory_block = self.memory.format_for_prompt(recalled, max_chars=60_000)
+        # prompt past the llama-server context window. Cap is
+        # coordinated with the evidence envelope per SLICE_3_0d §1:
+        # 52K chars (~13K tokens) when an envelope is present in the
+        # prompt; 60K (legacy) when MAEZ_EVIDENCE_ENVELOPE_DISABLED=1.
+        # Core + daily are preserved; raw entries drop from the tail
+        # if needed. See core.cognition.envelope_builder.
+        from core.cognition.envelope_builder import (
+            build_envelope as _build_envelope,
+            render_envelope_for_prompt as _render_envelope,
+            resolve_recall_cap_chars as _resolve_recall_cap,
+        )
+        memory_block = self.memory.format_for_prompt(
+            recalled, max_chars=_resolve_recall_cap(),
+        )
+
+        # Slice 3 wiring: build the evidence envelope so the LLM sees
+        # what it MAY claim and what's forbidden BEFORE generation,
+        # and so the post-generation audit gets the same context.
+        # Returns None when MAEZ_EVIDENCE_ENVELOPE_DISABLED=1 — the
+        # downstream renderer treats None as empty (legacy prompt
+        # shape) and audit_assistant_text falls through to the
+        # legacy signals path.
+        try:
+            _evidence_envelope = _build_envelope(
+                ledger_db_path=str(LEDGER_DB_PATH),
+                signals_present=_chat_signals_present,
+                signals_absent=_chat_signals_absent,
+                tool_results=[],
+                turn_id=_user_msg_turn_id,
+            )
+        except Exception as _env_exc:
+            # Envelope construction is best-effort; a builder bug
+            # MUST NOT block the daemon's reply path. Fall through
+            # to the legacy signals-only audit.
+            logger.warning(
+                "evidence_envelope build failed (continuing without "
+                "envelope): %s", _env_exc,
+            )
+            _evidence_envelope = None
+        _envelope_block = _render_envelope(_evidence_envelope)
 
         # Web search if needed. If a deterministic tool already answered
         # a volatile fact (e.g. currency conversion), do not add web
@@ -1755,6 +1779,12 @@ class MaezDaemon:
 
         if memory_block:
             prompt += memory_block + "\n\n"
+        # Slice 3 wiring: envelope block sits between recall and
+        # web_context. Empty string when envelope is None (disabled
+        # mode) or the envelope carries no constraints — keeps the
+        # legacy prompt shape identical in those cases.
+        if _envelope_block:
+            prompt += _envelope_block + "\n\n"
         if web_context:
             prompt += (
                 f"{web_context}\n\n"
@@ -2073,6 +2103,7 @@ class MaezDaemon:
                 transcript=transcript,
                 signals_present=_chat_signals_present,
                 signals_absent=_chat_signals_absent,
+                evidence_envelope=_evidence_envelope,
             )
             try:
                 _trace.audit = AuditInfo(
