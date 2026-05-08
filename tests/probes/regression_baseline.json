@@ -1,8 +1,8 @@
 {
-  "created_at": "2026-05-08T20:07:41Z",
+  "created_at": "2026-05-08T22:48:00Z",
   "decoder_note": "Baseline captures replay-harness probe health and stable metrics, not exact model prose. dirty_tree reflects tracked Git changes; untracked local artifacts are ignored. Probe definitions own regression_tolerance; the baseline stores observed health values and hashes so contract drift and behavior drift stay separate.",
   "dirty_tree": false,
-  "last_regen_reason": "slice-3.6-initial: capture post-3.6 baseline before memory fidelity work",
+  "last_regen_reason": "slice-4c.5a: model_reply persistence introduced; autobiographical continuity turning on",
   "mode": "regression",
   "probe_corpus_path": "/home/rohit/maez/tests/probes/birth_readiness_corpus.jsonl",
   "probe_corpus_sha256": "97af98f00f823095d0a7b3196b28cec4ce2b64f76c040012eb033694853ed8fc",
@@ -65,8 +65,13 @@
       "commit": "d827c05f43da6a0132d6a600675066db809fb80b",
       "date": "2026-05-08T20:07:41Z",
       "reason": "slice-3.6-initial: capture post-3.6 baseline before memory fidelity work"
+    },
+    {
+      "commit": "a6920b1352b7afa77ce96f56786fe134d75c9a51",
+      "date": "2026-05-08T22:48:00Z",
+      "reason": "slice-4c.5a: model_reply persistence introduced; autobiographical continuity turning on"
     }
   ],
   "schema_version": 1,
-  "source_commit": "d827c05f43da6a0132d6a600675066db809fb80b"
+  "source_commit": "a6920b1352b7afa77ce96f56786fe134d75c9a51"
 }
