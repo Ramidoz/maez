@@ -33,12 +33,16 @@ except Exception:
         / "logs" / "cognition.log"
     )
 COG_LOG.parent.mkdir(parents=True, exist_ok=True)
-# Slice 3 cleanup (2026-05-07): rotate cognition.log so long-running
-# daemons don't grow it unbounded. The new `maez.envelope` truncation
-# telemetry (envelope cap warnings, per-section drops) propagates
-# through here via the maez logger tree, materially increasing the
-# write rate. 50MB × 10 files = 500MB ceiling — generous enough to
-# preserve cockpit grep history, bounded enough to never fill disk.
+# Slice 3 cleanup (2026-05-07/08): rotate cognition.log. NOTE: this
+# handler is attached to `maez.cognition` only; `maez.envelope`
+# (slice-3's chatty truncation logger) is a SIBLING in the maez
+# logger tree, not a child of maez.cognition, so envelope records
+# do NOT land here. They propagate up to `maez` and land in
+# logs/maez.log via the daemon's RotatingFileHandler at
+# daemon/maez_daemon.py. This rotation is hygiene for the
+# cognition-specific records this file emits (cycle scores,
+# critique events, behavior policy lines).
+# 50MB × 10 files = 500MB ceiling.
 _cog_handler = logging.handlers.RotatingFileHandler(
     COG_LOG, maxBytes=50 * 1024 * 1024, backupCount=10,
 )

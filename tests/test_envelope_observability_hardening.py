@@ -149,27 +149,47 @@ class SelfHistoryPopulationLoggingTests(unittest.TestCase):
         self.assertEqual(len(self.cap.records), before)
 
 
+class MaezLogRotationTests(unittest.TestCase):
+    """maez.log (the daemon's primary log) must use a rotating
+    handler. The maez.envelope logger is a CHILD of maez, not of
+    maez.cognition — so envelope truncation telemetry propagates
+    up to the daemon's `maez` handler at maez_daemon.py:290 and
+    lands in maez.log, NOT cognition.log.
+
+    Reviewer-flagged 2026-05-08: the prior commit rotated
+    cognition.log, which was wrong-room — slice-3's chatty
+    envelope telemetry doesn't even reach that file.
+    """
+
+    def test_daemon_maez_logger_uses_rotating_file_handler(self):
+        src = Path(
+            "/home/rohit/maez/daemon/maez_daemon.py"
+        ).read_text()
+        # Plain FileHandler attached to the `maez` logger is the
+        # bug-class; the file_handler line at module scope must be
+        # a RotatingFileHandler with explicit bounds.
+        self.assertIn(
+            "RotatingFileHandler", src,
+            "daemon/maez_daemon.py must use RotatingFileHandler on "
+            "the `maez` logger — the envelope propagation path "
+            "lands here, plain FileHandler grows unbounded.",
+        )
+        self.assertIn("maxBytes=", src)
+        self.assertIn("backupCount=", src)
+
+
 class CognitionLogRotationTests(unittest.TestCase):
-    """cognition.log must use RotatingFileHandler so long-running
-    daemons + slice-3's chatty maez.envelope truncation telemetry
-    don't grow the file unbounded. Source-checked rather than
-    behavior-tested because triggering a real rotation requires
-    writing megabytes of log content."""
+    """cognition_quality.py also rotates its own maez.cognition
+    handler. NOT load-bearing for slice-3 envelope telemetry
+    (envelope is a maez child, not a maez.cognition child), but
+    still good hygiene because maez.cognition can be chatty under
+    high-cycle load. Pinned for completeness."""
 
     def test_cognition_quality_uses_rotating_file_handler(self):
         src = Path(
             "/home/rohit/maez/core/cognition/cognition_quality.py"
         ).read_text()
-        # Plain FileHandler usage in handler-attachment context is
-        # the bug-class; RotatingFileHandler is the fix.
-        self.assertIn(
-            "RotatingFileHandler", src,
-            "cognition_quality.py must use RotatingFileHandler "
-            "(slice-3 envelope telemetry propagates here; plain "
-            "FileHandler grows unbounded)",
-        )
-        # Belt + suspenders: bounds must be set non-trivially. Look
-        # for maxBytes= and backupCount= as required kwargs.
+        self.assertIn("RotatingFileHandler", src)
         self.assertIn("maxBytes=", src)
         self.assertIn("backupCount=", src)
 
