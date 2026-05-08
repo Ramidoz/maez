@@ -15,6 +15,7 @@ Integration points:
 
 import collections
 import logging
+import logging.handlers
 import re
 from pathlib import Path
 
@@ -32,7 +33,15 @@ except Exception:
         / "logs" / "cognition.log"
     )
 COG_LOG.parent.mkdir(parents=True, exist_ok=True)
-_cog_handler = logging.FileHandler(COG_LOG)
+# Slice 3 cleanup (2026-05-07): rotate cognition.log so long-running
+# daemons don't grow it unbounded. The new `maez.envelope` truncation
+# telemetry (envelope cap warnings, per-section drops) propagates
+# through here via the maez logger tree, materially increasing the
+# write rate. 50MB × 10 files = 500MB ceiling — generous enough to
+# preserve cockpit grep history, bounded enough to never fill disk.
+_cog_handler = logging.handlers.RotatingFileHandler(
+    COG_LOG, maxBytes=50 * 1024 * 1024, backupCount=10,
+)
 _cog_handler.setFormatter(logging.Formatter(
     "%(asctime)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
 ))

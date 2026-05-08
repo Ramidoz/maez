@@ -192,7 +192,7 @@ def resolve_recall_cap_chars() -> int:
     if raw is None:
         return 52_000
     try:
-        return max(0, int(raw))
+        value = int(raw)
     except ValueError:
         _log.warning(
             "maez.envelope: invalid "
@@ -200,6 +200,18 @@ def resolve_recall_cap_chars() -> int:
             raw,
         )
         return 52_000
+    if value < 0:
+        # Negative values were silently clamped to 0 pre-2026-05-07,
+        # producing an empty memory block with no operator signal.
+        # Reviewer-flagged: warn + return the default rather than
+        # honor a nonsensical override.
+        _log.warning(
+            "maez.envelope: invalid negative "
+            "MAEZ_RECALL_CAP_WITH_ENVELOPE_CHARS=%d — using default 52000",
+            value,
+        )
+        return 52_000
+    return value
 
 
 _log = logging.getLogger("maez.envelope")
@@ -739,7 +751,18 @@ class BoundedEnvelopeBuilder:
                 limit=limit,
                 tenant_id=tenant_id,
             )
-        except Exception:
+        except Exception as exc:
+            # Best-effort: ledger unreachable / locked / schema drift
+            # produces an empty self_history rather than blocking
+            # generation. Pre-2026-05-07 this swallowed the exception
+            # silently — operators couldn't tell self-history
+            # population was failing. Debug-log the cause; behavior
+            # unchanged (still returns []).
+            _log.debug(
+                "self_history population skipped (ledger lookup "
+                "failed for db_path=%r): %s",
+                db_path, exc,
+            )
             return []
         out: list[dict] = []
         for row in rows:
