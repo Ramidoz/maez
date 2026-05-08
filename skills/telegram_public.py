@@ -306,6 +306,37 @@ Respond naturally. Be present. Be real."""
         history = self.store.get_recent_conversation(user.id, limit=8)
         relevant = self.store.get_relevant_memories(user.id, message, limit=5)
         system_prompt = self._build_system_prompt(profile, relevant)
+        _public_signals_present = ["public telegram profile"]
+        _public_signals_absent = ["owner private ledger self-history"]
+        if history:
+            _public_signals_present.append("public user's own conversation history")
+        else:
+            _public_signals_absent.append("public user's own conversation history")
+        if relevant:
+            _public_signals_present.append("public user's relevant memories")
+        else:
+            _public_signals_absent.append("public user's relevant memories")
+        try:
+            from core.cognition.envelope_builder import (
+                build_envelope,
+                render_envelope_for_prompt,
+            )
+
+            _evidence_envelope = build_envelope(
+                ledger_db_path=None,
+                signals_present=_public_signals_present,
+                signals_absent=_public_signals_absent,
+                tool_results=[],
+            )
+            _envelope_block = render_envelope_for_prompt(_evidence_envelope)
+        except Exception as _env_exc:
+            logger.warning(
+                "telegram_public evidence_envelope build failed "
+                "(continuing without envelope): %s",
+                _env_exc,
+            )
+            _evidence_envelope = None
+            _envelope_block = ""
 
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
 
@@ -329,6 +360,8 @@ Respond naturally. Be present. Be real."""
                 ]
             for turn in prepared:
                 messages.append(turn)
+            if _envelope_block:
+                messages.append({'role': 'system', 'content': _envelope_block})
             messages.append({'role': 'user', 'content': message})
 
             # Session 11p: route through llm_client so the backend (Ollama
@@ -355,7 +388,13 @@ Respond naturally. Be present. Be real."""
         # honesty rail at all.
         try:
             from core.safety.audited_output import audit_assistant_text
-            reply = audit_assistant_text(reply, surface="telegram_public")
+            reply = audit_assistant_text(
+                reply,
+                surface="telegram_public",
+                signals_present=_public_signals_present,
+                signals_absent=_public_signals_absent,
+                evidence_envelope=_evidence_envelope,
+            )
         except Exception as _audit_e:
             logger.warning(
                 "telegram_public: audit gate failed (sending "

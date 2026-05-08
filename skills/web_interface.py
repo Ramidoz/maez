@@ -5387,8 +5387,12 @@ def chat():
     logger.info("Web chat from %s: %s", display, message[:80])
     messages_list = []
     user_key = None
+    _evidence_envelope = None
+    _envelope_block = ""
 
     if owner_bridge:
+        _web_signals_present = ["owner bridge authenticated"]
+        _web_signals_absent = []
         # Ambient grounding — current weather at the owner's location, active window,
         # recent iPhone signals. Cached (60s TTL) so repeat turns don't hammer APIs.
         try:
@@ -5409,10 +5413,20 @@ def chat():
         )
         # Same prompt-budget cap as the daemon's /message path so a
         # high-recall query can't push past the llama-server ctx.
+        from core.cognition.envelope_builder import resolve_recall_cap_chars
+
         owner_memory = memory.format_for_prompt(
             memory.recall_for_telegram(message),
-            max_chars=60_000,
+            max_chars=resolve_recall_cap_chars(),
         )
+        if owner_memory:
+            _web_signals_present.append("owner continuity memory")
+        else:
+            _web_signals_absent.append("owner continuity memory")
+        if ambient_block:
+            _web_signals_present.append("ambient context")
+        else:
+            _web_signals_absent.append("ambient context")
         messages_list = [{"role": "system", "content": owner_system}]
         if owner_memory:
             messages_list.append({
@@ -5432,6 +5446,7 @@ def chat():
         # exception. Lived recall is an owner-only signal (episodes
         # and graph edges describe the owner's relationships); the
         # guest path below intentionally does NOT inject it.
+        _lived_brief = ""
         if os.environ.get("MAEZ_LIVED_RECALL", "1") != "0":
             try:
                 from core.memory.lived_recall import build_lived_recall_brief as _build_brief
@@ -5453,8 +5468,14 @@ def chat():
                         messages_list.append({"role": "system", "content": _lived_brief})
             except Exception as _lived_exc:
                 logger.debug("web /chat lived recall skipped: %s", _lived_exc)
+        if _lived_brief:
+            _web_signals_present.append("lived recall")
+        else:
+            _web_signals_absent.append("lived recall")
         messages_list.append({"role": "user", "content": message})
     else:
+        _web_signals_present = ["web account authentication"]
+        _web_signals_absent = ["owner private ledger self-history"]
         share_config = user_full.get("share_config", {}) if user_full else {}
         trust_tier = user_full.get("trust_tier", 0) if user_full else 0
         tg_id = user_full.get("telegram_id") if user_full else None
@@ -5489,10 +5510,29 @@ def chat():
             # same grounding rail. The strings are author-written
             # today, but if they're ever swapped for model-generated
             # identity claims the gate is already in place.
+            _identity_envelope = None
+            try:
+                from core.cognition.envelope_builder import build_envelope
+
+                _identity_envelope = build_envelope(
+                    ledger_db_path=None,
+                    signals_present=["author-written identity baseline"],
+                    signals_absent=["owner private ledger self-history"],
+                    tool_results=[],
+                )
+            except Exception as _env_exc:
+                logger.warning(
+                    "web /chat identity evidence_envelope build failed "
+                    "(continuing with legacy audit): %s",
+                    _env_exc,
+                )
             try:
                 from core.safety.audited_output import audit_assistant_text
+
                 identity_reply = audit_assistant_text(
-                    identity_reply, surface="web",
+                    identity_reply,
+                    surface="web",
+                    evidence_envelope=_identity_envelope,
                 )
             except Exception as _audit_e:
                 logger.warning(
@@ -5547,6 +5587,7 @@ def chat():
         share_str = ", ".join(k for k, v in share_config.items() if v) if share_config else "nothing personal"
 
         if linked_user:
+            _web_signals_present.append("linked/trusted public user profile")
             # Session 11m: trusted_system prompt for linked users. share_config
             # is the privacy rail — if the owner tightens it in users.db, it takes
             # effect on the next request with no code change.
@@ -5585,11 +5626,38 @@ def chat():
             + f'{display} says:\n"{message}"\n\n'
             + "Respond directly. Be warm and conversational."
         )
+        if user_memory:
+            _web_signals_present.append("public user's own conversation history")
+        else:
+            _web_signals_absent.append("public user's own conversation history")
 
         messages_list = [{"role": "system", "content": system_prompt_for_chat}]
         for h in history[:-1]:
             if isinstance(h, dict) and h.get("role") and h.get("content"):
                 messages_list.append({"role": h["role"], "content": h["content"]})
+        try:
+            from core.cognition.envelope_builder import (
+                build_envelope,
+                render_envelope_for_prompt,
+            )
+
+            _evidence_envelope = build_envelope(
+                ledger_db_path=None,
+                signals_present=_web_signals_present,
+                signals_absent=_web_signals_absent,
+                tool_results=[],
+            )
+            _envelope_block = render_envelope_for_prompt(_evidence_envelope)
+        except Exception as _env_exc:
+            logger.warning(
+                "web /chat public evidence_envelope build failed "
+                "(continuing without envelope): %s",
+                _env_exc,
+            )
+            _evidence_envelope = None
+            _envelope_block = ""
+        if _envelope_block:
+            messages_list.append({"role": "system", "content": _envelope_block})
         messages_list.append({"role": "user", "content": prompt})
 
     # Phase 1 hybrid router: if user's Maez has jarvis_tier and the
@@ -5661,15 +5729,53 @@ def chat():
             )
             jarvis_transcript_web = ""
 
+    if owner_bridge:
+        _web_tool_results = []
+        if jarvis_transcript_web:
+            _web_signals_present.append("owner tool-loop transcript")
+            _web_tool_results.append({
+                "name": "web_tool_loop",
+                "status": "ok",
+                "summary": jarvis_transcript_web,
+            })
+        else:
+            _web_signals_absent.append("owner tool-loop transcript")
+        try:
+            from core.cognition.envelope_builder import (
+                build_envelope,
+                default_ledger_db_path,
+                render_envelope_for_prompt,
+            )
+
+            _evidence_envelope = build_envelope(
+                ledger_db_path=default_ledger_db_path(),
+                signals_present=_web_signals_present,
+                signals_absent=_web_signals_absent,
+                tool_results=_web_tool_results,
+            )
+            _envelope_block = render_envelope_for_prompt(_evidence_envelope)
+        except Exception as _env_exc:
+            logger.warning(
+                "web /chat evidence_envelope build failed "
+                "(continuing without envelope): %s",
+                _env_exc,
+            )
+            _evidence_envelope = None
+            _envelope_block = ""
+        if _envelope_block:
+            messages_list.insert(-1, {"role": "system", "content": _envelope_block})
+
     reply = ""
     used_source = "local"
     claude_meta: dict | None = None
 
     if route_external:
         try:
-            system_prompt_for_api = messages_list[0]["content"] if (
-                messages_list and messages_list[0].get("role") == "system"
-            ) else SOUL
+            system_parts = [
+                m["content"] for m in messages_list
+                if m.get("role") == "system" and m.get("content")
+            ]
+            system_prompt_for_api = "\n\n".join(system_parts) if system_parts else SOUL
             claude_result = claude_router.call_claude(
                 system=system_prompt_for_api,
                 messages=messages_list,
@@ -5701,6 +5807,8 @@ def chat():
                 {"role": "system", "content": f"You are Maez, a friendly AI. Talk to {display} warmly."},
                 {"role": "user", "content": message},
             ]
+            if _envelope_block:
+                simple_msgs.insert(-1, {"role": "system", "content": _envelope_block})
             resp2 = _llm_client.chat(
                 model=MODEL, messages=simple_msgs, think=False,
                 options={"temperature": 0.7, "num_predict": 150},
@@ -5717,7 +5825,13 @@ def chat():
     # core/safety/audited_output.py for the full invariant.
     try:
         from core.safety.audited_output import audit_assistant_text
-        reply = audit_assistant_text(reply, surface="web")
+        reply = audit_assistant_text(
+            reply,
+            surface="web",
+            signals_present=_web_signals_present,
+            signals_absent=_web_signals_absent,
+            evidence_envelope=_evidence_envelope,
+        )
     except Exception as _e:
         logger.warning("self-claim audit failed on /chat: %s", _e)
 

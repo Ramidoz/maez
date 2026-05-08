@@ -872,6 +872,40 @@ class MaezDaemon:
                 f"If yes — write exactly what you would send. 1-2 sentences. Direct. No preamble.\n"
                 f"If no — respond with exactly: NOTHING"
             )
+            # Aggregated-window manifest. The input to the proactive
+            # LLM call was RAW MEMORY, not live perception — so the
+            # audit should know screen/presence/calendar are derived
+            # from the reviewed window, not observable right now.
+            proactive_signals_absent = [
+                "live screen observation (input was memory window)",
+                "live presence snapshot (input was memory window)",
+                "live calendar (input was memory window)",
+            ]
+            proactive_signals_present = [
+                f"memory window of last {window_size} raw entries",
+            ]
+            _evidence_envelope = self._build_audit_evidence_envelope(
+                surface="daemon_proactive",
+                signals_present=proactive_signals_present,
+                signals_absent=proactive_signals_absent,
+            )
+            try:
+                from core.cognition.envelope_builder import (
+                    render_envelope_for_prompt as _render_envelope,
+                )
+
+                _envelope_block = _render_envelope(_evidence_envelope)
+            except Exception as _env_exc:
+                logger.warning(
+                    "evidence_envelope render failed for daemon_proactive "
+                    "(continuing without prompt block): %s",
+                    _env_exc,
+                )
+                _evidence_envelope = None
+                _envelope_block = ""
+            if _envelope_block:
+                prompt += "\n\n" + _envelope_block
+
             # Session 11r: via llm_client (was missed in 11p batch)
             from core import llm_client as _llm_client
 
@@ -894,19 +928,6 @@ class MaezDaemon:
             # model output before sending to the owner.
             result = self._strip_temporal_phrases(result)
 
-            # Aggregated-window manifest. The input to the proactive
-            # LLM call was RAW MEMORY, not live perception — so the
-            # audit should know screen/presence/calendar are derived
-            # from the reviewed window, not observable right now.
-            proactive_signals_absent = [
-                "live screen observation (input was memory window)",
-                "live presence snapshot (input was memory window)",
-                "live calendar (input was memory window)",
-            ]
-            proactive_signals_present = [
-                f"memory window of last {window_size} raw entries",
-            ]
-
             try:
                 from core.safety.audited_output import audit_assistant_text
 
@@ -915,6 +936,7 @@ class MaezDaemon:
                     surface="daemon_proactive",
                     signals_present=proactive_signals_present,
                     signals_absent=proactive_signals_absent,
+                    evidence_envelope=_evidence_envelope,
                 )
             except Exception as _aud_exc:
                 logger.warning("proactive audit fail-open: %s", _aud_exc)
@@ -1140,6 +1162,35 @@ class MaezDaemon:
         """Get current local time."""
         return datetime.now().astimezone()
 
+    def _build_audit_evidence_envelope(
+        self,
+        *,
+        surface: str,
+        signals_present: list[str],
+        signals_absent: list[str],
+        turn_id: str | None = None,
+        tool_results: list[dict] | None = None,
+    ) -> dict | None:
+        """Best-effort envelope builder for daemon-owned audit paths."""
+        try:
+            from core.cognition.envelope_builder import build_envelope
+
+            return build_envelope(
+                ledger_db_path=str(LEDGER_DB_PATH),
+                signals_present=signals_present,
+                signals_absent=signals_absent,
+                tool_results=tool_results or [],
+                turn_id=turn_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "evidence_envelope build failed for %s "
+                "(continuing without envelope): %s",
+                surface,
+                exc,
+            )
+            return None
+
     def _reason(self, snap: dict, *, stale_fields: set | None = None) -> str | None:
         """Run a single reasoning cycle against the local model.
 
@@ -1186,7 +1237,15 @@ class MaezDaemon:
                 "F.B downgrade rule will see empty scope this cycle",
                 _crc_exc,
             )
-        memory_block = self.memory.format_for_prompt(recalled)
+        from core.cognition.envelope_builder import (
+            build_envelope,
+            render_envelope_for_prompt,
+            resolve_recall_cap_chars,
+        )
+
+        memory_block = self.memory.format_for_prompt(
+            recalled, max_chars=resolve_recall_cap_chars(),
+        )
         stats = self.memory.memory_stats()
         if memory_block:
             logger.info(
@@ -1332,8 +1391,12 @@ class MaezDaemon:
         screen_present = self._last_screen_obs is not None and getattr(
             self._last_screen_obs, "success", False
         )
-        presence_present = self._last_presence_snap is not None
-        calendar_present = self._last_calendar_snap is not None
+        presence_present = self._last_presence_snap is not None and getattr(
+            self._last_presence_snap, "success", False
+        )
+        calendar_present = self._last_calendar_snap is not None and getattr(
+            self._last_calendar_snap, "success", False
+        )
         signals_present = []
         signals_absent = []
         if True:
@@ -1363,11 +1426,41 @@ class MaezDaemon:
                 + "\n"
             )
 
+        try:
+            _cycle_evidence_envelope = build_envelope(
+                ledger_db_path=str(LEDGER_DB_PATH),
+                signals_present=signals_present,
+                signals_absent=signals_absent,
+                tool_results=[],
+            )
+        except Exception as _env_exc:
+            logger.warning(
+                "evidence_envelope build failed for daemon_cycle "
+                "(continuing without envelope): %s",
+                _env_exc,
+            )
+            _cycle_evidence_envelope = None
+        try:
+            _cycle_envelope_block = render_envelope_for_prompt(
+                _cycle_evidence_envelope,
+            )
+        except Exception as _env_exc:
+            logger.warning(
+                "evidence_envelope render failed for daemon_cycle "
+                "(continuing without prompt block): %s",
+                _env_exc,
+            )
+            _cycle_evidence_envelope = None
+            _cycle_envelope_block = ""
+        self._last_cycle_evidence_envelope = _cycle_evidence_envelope
+
         # Signal manifest is the only per-cycle-dynamic rule-shaped block.
         # It goes in the user message because its content changes based on
         # which signals are present. _STATIC_CYCLE_INSTRUCTIONS (appended
         # to system prompt) references "SIGNALS PRESENT / ABSENT" here.
         prompt += signal_manifest
+        if _cycle_envelope_block:
+            prompt += _cycle_envelope_block + "\n\n"
 
         # Store prompt for potential retry use
         self._last_reasoning_prompt = prompt
@@ -2495,6 +2588,18 @@ class MaezDaemon:
             # System
             disk_pct = snap["disk"].get("/", {}).get("percent", 0)
             stats = self.memory.memory_stats()
+            _briefing_signals_present = ["git status summary", "system stats"]
+            _briefing_signals_absent = []
+            if self._last_calendar_snap is not None and getattr(
+                self._last_calendar_snap, "success", False,
+            ):
+                _briefing_signals_present.append("calendar")
+            else:
+                _briefing_signals_absent.append("calendar")
+            if news.get("success"):
+                _briefing_signals_present.append("rss news search")
+            else:
+                _briefing_signals_absent.append("rss news search")
 
             owner_name = _display_name() or "Friend"
             briefing_prompt = (
@@ -2509,16 +2614,36 @@ class MaezDaemon:
                 f"Cover: what matters today, system status, one news item.\n"
                 f"Be direct. Be useful. Sign off as Maez."
             )
+            _evidence_envelope = self._build_audit_evidence_envelope(
+                surface="morning_briefing",
+                signals_present=_briefing_signals_present,
+                signals_absent=_briefing_signals_absent,
+            )
+            try:
+                from core.cognition.envelope_builder import (
+                    render_envelope_for_prompt as _render_envelope,
+                )
+
+                _envelope_block = _render_envelope(_evidence_envelope)
+            except Exception as _env_exc:
+                logger.warning(
+                    "evidence_envelope render failed for morning_briefing "
+                    "(continuing without prompt block): %s",
+                    _env_exc,
+                )
+                _evidence_envelope = None
+                _envelope_block = ""
 
             # Session 11r: via llm_client (was missed in 11p batch)
             from core import llm_client as _llm_client
 
+            _messages = [{"role": "system", "content": self.system_prompt}]
+            if _envelope_block:
+                _messages.append({"role": "system", "content": _envelope_block})
+            _messages.append({"role": "user", "content": briefing_prompt})
             response = _llm_client.chat(
                 model=MODEL,
-                messages=[
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": briefing_prompt},
-                ],
+                messages=_messages,
                 think=False,
                 options={"temperature": 0.5, "num_predict": 4096},
             )
@@ -2534,6 +2659,9 @@ class MaezDaemon:
                     briefing = audit_assistant_text(
                         briefing,
                         surface="morning_briefing",
+                        signals_present=_briefing_signals_present,
+                        signals_absent=_briefing_signals_absent,
+                        evidence_envelope=_evidence_envelope,
                     )
                 except Exception as _aud_exc:
                     logger.warning(
@@ -3151,6 +3279,33 @@ class MaezDaemon:
             f"--- Today's data ---\n\n"
             f"{prompt_context}"
         )
+        _journal_signals_present = [
+            "daemon_logs",
+            "memory_stats",
+            "perception_snapshot",
+        ]
+        _journal_signals_absent: list[str] = []
+        _evidence_envelope = self._build_audit_evidence_envelope(
+            surface="nightly_journal",
+            signals_present=_journal_signals_present,
+            signals_absent=_journal_signals_absent,
+        )
+        try:
+            from core.cognition.envelope_builder import (
+                render_envelope_for_prompt as _render_envelope,
+            )
+
+            _envelope_block = _render_envelope(_evidence_envelope)
+        except Exception as _env_exc:
+            logger.warning(
+                "evidence_envelope render failed for nightly_journal "
+                "(continuing without prompt block): %s",
+                _env_exc,
+            )
+            _evidence_envelope = None
+            _envelope_block = ""
+        if _envelope_block:
+            summary_prompt += "\n\n" + _envelope_block
 
         try:
             # Session 11r: via llm_client (was missed in 11p batch)
@@ -3186,8 +3341,9 @@ class MaezDaemon:
             summary = audit_assistant_text(
                 summary,
                 surface="nightly_journal",
-                signals_present=["daemon_logs", "memory_stats", "perception_snapshot"],
-                signals_absent=[],
+                signals_present=_journal_signals_present,
+                signals_absent=_journal_signals_absent,
+                evidence_envelope=_evidence_envelope,
             )
         except Exception as e:
             logger.debug("Nightly journal audit fail-open: %s", e)
@@ -3271,10 +3427,12 @@ class MaezDaemon:
             owner_name = _display_name()
         except Exception:
             owner_name = "the owner"
+        _continuity_available = False
         try:
             from core.brain.continuity_ledger import summarize_day
 
             continuity_summary = summarize_day(date_str)
+            _continuity_available = True
         except Exception as e:
             logger.debug("Continuity ledger summary unavailable: %s", e)
             continuity_summary = "Continuity probe summary unavailable."
@@ -3294,16 +3452,46 @@ class MaezDaemon:
             journal_summary=journal_summary,
             continuity_summary=continuity_summary,
         )
+        _heartbeat_signals_present = [
+            "nightly_journal",
+            "memory_stats",
+            "daemon_logs",
+        ]
+        _heartbeat_signals_absent: list[str] = []
+        if _continuity_available:
+            _heartbeat_signals_present.append("continuity_ledger")
+        else:
+            _heartbeat_signals_absent.append("continuity_ledger")
+        _evidence_envelope = self._build_audit_evidence_envelope(
+            surface="developmental_heartbeat",
+            signals_present=_heartbeat_signals_present,
+            signals_absent=_heartbeat_signals_absent,
+        )
+        try:
+            from core.cognition.envelope_builder import (
+                render_envelope_for_prompt as _render_envelope,
+            )
+
+            _envelope_block = _render_envelope(_evidence_envelope)
+        except Exception as _env_exc:
+            logger.warning(
+                "evidence_envelope render failed for developmental_heartbeat "
+                "(continuing without prompt block): %s",
+                _env_exc,
+            )
+            _evidence_envelope = None
+            _envelope_block = ""
 
         try:
             from core import llm_client as _llm_client
 
+            _messages = [{"role": "system", "content": self.system_prompt}]
+            if _envelope_block:
+                _messages.append({"role": "system", "content": _envelope_block})
+            _messages.append({"role": "user", "content": build_prompt(evidence)})
             response = _llm_client.chat(
                 model=MODEL,
-                messages=[
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": build_prompt(evidence)},
-                ],
+                messages=_messages,
                 think=False,
                 options={"temperature": 0.2, "num_predict": 700},
             )
@@ -3321,13 +3509,9 @@ class MaezDaemon:
             heartbeat = audit_assistant_text(
                 heartbeat,
                 surface="developmental_heartbeat",
-                signals_present=[
-                    "nightly_journal",
-                    "memory_stats",
-                    "daemon_logs",
-                    "continuity_ledger",
-                ],
-                signals_absent=[],
+                signals_present=_heartbeat_signals_present,
+                signals_absent=_heartbeat_signals_absent,
+                evidence_envelope=_evidence_envelope,
             )
             heartbeat = normalize_heartbeat(heartbeat, evidence)
         except Exception as e:
@@ -3801,12 +3985,16 @@ class MaezDaemon:
                         _cycle_signals_absent.append("screen observation (endpoint unreachable)")
                     else:
                         _cycle_signals_absent.append("screen observation")
-                    if self._last_presence_snap is not None:
+                    if self._last_presence_snap is not None and getattr(
+                        self._last_presence_snap, "success", False
+                    ):
                         _audit_transcript_parts.append("✓ presence_snapshot: present")
                         _cycle_signals_present.append("presence snapshot")
                     else:
                         _cycle_signals_absent.append("presence snapshot")
-                    if self._last_calendar_snap is not None:
+                    if self._last_calendar_snap is not None and getattr(
+                        self._last_calendar_snap, "success", False
+                    ):
                         _audit_transcript_parts.append("✓ calendar_snapshot: present")
                         _cycle_signals_present.append("calendar")
                     else:
@@ -3821,6 +4009,11 @@ class MaezDaemon:
                         transcript=_audit_transcript,
                         signals_present=_cycle_signals_present,
                         signals_absent=_cycle_signals_absent,
+                        evidence_envelope=getattr(
+                            self,
+                            "_last_cycle_evidence_envelope",
+                            None,
+                        ),
                     )
                     if _audit_result.rewritten:
                         logger.info(
@@ -3918,6 +4111,11 @@ class MaezDaemon:
                                             surface="daemon_cycle_retry",
                                             signals_present=_cycle_signals_present,
                                             signals_absent=_cycle_signals_absent,
+                                            evidence_envelope=getattr(
+                                                self,
+                                                "_last_cycle_evidence_envelope",
+                                                None,
+                                            ),
                                         )
                                     except Exception as _retry_aud_exc:
                                         logger.warning(

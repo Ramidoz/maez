@@ -30,7 +30,7 @@ import json
 import logging
 import os
 import time
-from typing import Any, Iterable
+from typing import Iterable
 
 from core.ledger import envelope_schema as _es
 from core.ledger import recent_turns as _rt
@@ -91,10 +91,21 @@ def render_envelope_for_prompt(envelope: dict | None) -> str:
 
     claimable = envelope.get("claimable") or []
     forbidden = envelope.get("forbidden") or []
+    tool_results = envelope.get("tool_results") or []
+    self_history = envelope.get("self_history") or []
+    signals_present = envelope.get("signals_present") or []
     signals_absent = envelope.get("signals_absent") or []
     truncated = envelope.get("_truncated") is True
 
-    if not claimable and not forbidden and not signals_absent and not truncated:
+    if (
+        not tool_results
+        and not claimable
+        and not forbidden
+        and not self_history
+        and not signals_present
+        and not signals_absent
+        and not truncated
+    ):
         return ""
 
     turn_id = envelope.get("turn_id") or ""
@@ -106,6 +117,17 @@ def render_envelope_for_prompt(envelope: dict | None) -> str:
         header += " (truncated)"
 
     lines = [header]
+
+    if tool_results:
+        lines.append("Tool results available:")
+        for t in tool_results:
+            name = t.get("name") or "tool"
+            status = t.get("status") or "unknown"
+            call_id = t.get("tool_call_id") or ""
+            summary = t.get("summary") or ""
+            call_part = f" [{call_id}]" if call_id else ""
+            summary_part = f": {summary}" if summary else ""
+            lines.append(f"  - {name}{call_part} status={status}{summary_part}")
 
     if claimable:
         claimable_lines = []
@@ -141,6 +163,24 @@ def render_envelope_for_prompt(envelope: dict | None) -> str:
         if claimable_lines:
             lines.append("You may claim:")
             lines.extend(claimable_lines)
+
+    if self_history:
+        lines.append("Prior Maez utterances:")
+        for h in self_history:
+            kind = h.get("kind") or "model_reply"
+            summary = h.get("utterance_summary") or ""
+            if not summary:
+                continue
+            stage = h.get("lifecycle_stage") or ""
+            stage_label = "pre-birth / build-stage" if stage == "gestation" else stage
+            stage_part = f" ({stage_label})" if stage_label else ""
+            lines.append(f"  - {kind}{stage_part}: {summary}")
+
+    if signals_present:
+        lines.append("Signals present:")
+        for s in signals_present:
+            if s:
+                lines.append(f"  - {s}")
 
     forbidden_lines = []
     for f in forbidden:

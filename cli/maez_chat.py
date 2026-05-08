@@ -856,6 +856,34 @@ class ChatSession:
         except Exception:
             pass
 
+        # Slice 3.5: CLI is a dev/operator surface, but its default
+        # stance is still user-facing gestation recall. Full-strength
+        # gestation recall stays an explicit future debug argument, not
+        # an ambient env var that can leak into ordinary chat.
+        try:
+            from core.cognition.envelope_builder import (
+                build_envelope,
+                default_ledger_db_path,
+                render_envelope_for_prompt,
+            )
+            from core.safety.audit_signal_manifest import default_audit_signals
+
+            _sp, _sa = default_audit_signals("cli")
+            _evidence_envelope = build_envelope(
+                ledger_db_path=default_ledger_db_path(),
+                signals_present=_sp,
+                signals_absent=_sa,
+                tool_results=[],
+            )
+            _envelope_block = render_envelope_for_prompt(_evidence_envelope)
+            if _envelope_block:
+                system_prompt += "\n\n" + _envelope_block
+        except Exception as _env_exc:
+            console.print(
+                f"[dim yellow](evidence envelope unavailable: {_env_exc})[/dim yellow]"
+            )
+            _evidence_envelope = None
+
         decision = claude_router.classify(user_text)
         # Apply /local /sonnet /opus override if armed
         if self._force_route_once:
@@ -984,6 +1012,7 @@ class ChatSession:
                     assistant.content,
                     surface="cli",
                     in_tool_continuation=(iteration > 0),
+                    evidence_envelope=_evidence_envelope,
                 )
                 if _sc_result.rewritten:
                     assistant.content = _sc_result.text

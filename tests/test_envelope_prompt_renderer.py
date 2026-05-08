@@ -88,6 +88,50 @@ class ClaimableSectionTests(unittest.TestCase):
         self.assertIn("owner-said", rendered)
 
 
+class AuditEvidenceSectionTests(unittest.TestCase):
+    def test_tool_results_render_when_audit_can_use_them(self):
+        env = {
+            "tool_results": [{
+                "name": "web_tool_loop",
+                "status": "ok",
+                "tool_call_id": "call-123",
+                "summary": "Observed disk usage from real tool output.",
+            }],
+            "claimable": [], "forbidden": [], "self_history": [],
+            "signals_present": [], "signals_absent": [],
+        }
+        rendered = eb.render_envelope_for_prompt(env)
+        self.assertIn("Tool results available", rendered)
+        self.assertIn("web_tool_loop", rendered)
+        self.assertIn("Observed disk usage", rendered)
+
+    def test_self_history_renders_when_audit_can_use_it(self):
+        env = {
+            "self_history": [{
+                "turn_id": "turn-1",
+                "kind": "model_reply",
+                "utterance_summary": "I said I did not have a grounded answer.",
+                "lifecycle_stage": "gestation",
+            }],
+            "tool_results": [], "claimable": [], "forbidden": [],
+            "signals_present": [], "signals_absent": [],
+        }
+        rendered = eb.render_envelope_for_prompt(env)
+        self.assertIn("Prior Maez utterances", rendered)
+        self.assertIn("pre-birth / build-stage", rendered)
+        self.assertIn("I said I did not have a grounded answer", rendered)
+
+    def test_signals_present_render_when_audit_can_use_them(self):
+        env = {
+            "signals_present": ["configured model identity", "body capability registry"],
+            "tool_results": [], "claimable": [], "forbidden": [],
+            "self_history": [], "signals_absent": [],
+        }
+        rendered = eb.render_envelope_for_prompt(env)
+        self.assertIn("Signals present", rendered)
+        self.assertIn("configured model identity", rendered)
+
+
 class ForbiddenSectionTests(unittest.TestCase):
     def test_forbidden_rendered_as_you_may_not_claim(self):
         env = {
