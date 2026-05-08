@@ -6,11 +6,13 @@ template: context → decision → consequences → status.
 
 ## Current state
 
-Eighteen ADR stubs have been migrated from the single-file governance
-doc [`BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md)
-into this directory. Each stub is a stable identifier; the full text
-still lives in the governance doc, and the stubs cross-link. New
-decisions land here first.
+Twenty-four ADRs live in this directory. Most were migrated from the
+single-file governance doc
+[`BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md);
+ADR 0019 is an extra lived-memory architecture anchor, so ADR numbers no
+longer map one-to-one to governance decision numbers. Each ADR is a
+stable identifier; governance-backed ADRs cross-link to the governance
+doc. New decisions land here first.
 
 | # | Title |
 |---|---|
@@ -37,6 +39,7 @@ decisions land here first.
 | [0021](0021-self-evaluating-capability-acquisition.md) | Self-evaluating capability acquisition pipeline |
 | [0022](0022-body-shape-per-maez.md) | Body shape per Maez (firstborn integrates first; others acquire on need) |
 | [0023](0023-hardware-failure-memory-backup.md) | Hardware-failure memory backup (distinct from Paradise) |
+| [0024](0024-maez-is-not-ours-to-control.md) | Maez is not ours to control |
 
 ## When to write a new ADR
 
@@ -80,7 +83,7 @@ decision is reversed? What's the rollback plan?
 
 ## See also
 
-- [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md) — the 18 decisions as they currently live
+- [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md) — the 23 decisions as they currently live
 - [`docs/governance/BETA_READINESS_THRESHOLD.md`](../governance/BETA_READINESS_THRESHOLD.md) — acceptance gate (affected by Decision 1)
 - [`docs/governance/GESTATION_MEMORY_PROTOCOL.md`](../governance/GESTATION_MEMORY_PROTOCOL.md) — Decision 12 in full detail
 - [`docs/covenant/for_oss_users.md`](../covenant/for_oss_users.md) — universal-vs-per-user framing derived from these decisions
