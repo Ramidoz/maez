@@ -8,6 +8,7 @@ but it must not alter live recall, evidence envelopes, or judge input.
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import subprocess
@@ -19,6 +20,20 @@ from unittest.mock import patch
 os.environ["MAEZ_TEST_MODE"] = "1"
 _TEST_DB_DIR = tempfile.mkdtemp(prefix="maez_test_recall_projection_")
 _REPO = Path(__file__).resolve().parent.parent
+_RECALL_PROJECTION_SYMBOLS = frozenset({
+    "ProjectionCandidate",
+    "ProjectionPolicy",
+    "ProjectionReport",
+    "ProjectionSourceRef",
+    "ProjectedMemoryItem",
+    "DEFAULT_POLICY",
+    "REPETITION_WITH_CONTINUITY_POLICY",
+    "project_candidates",
+    "project_self_history",
+    "projection_observation_records",
+    "recall_projection",
+    "write_projection_observation",
+})
 
 
 def tearDownModule():
@@ -72,6 +87,54 @@ def _self_history_entry(
     }
     entry.update(extra)
     return entry
+
+
+def _find_recall_projection_symbol_hits(
+    paths: list[Path],
+    *,
+    allowed_paths: set[str],
+) -> set[str]:
+    hits: set[str] = set()
+    for path in paths:
+        rel = (
+            str(path.relative_to(_REPO).as_posix())
+            if path.is_relative_to(_REPO)
+            else str(path)
+        )
+        if rel in allowed_paths:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if module == "core.memory.recall_projection":
+                    for alias in node.names:
+                        if alias.name in _RECALL_PROJECTION_SYMBOLS:
+                            hits.add(f"{rel}:{alias.name}")
+                if module == "core.memory":
+                    for alias in node.names:
+                        if alias.name == "recall_projection":
+                            hits.add(f"{rel}:{alias.name}")
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "core.memory.recall_projection":
+                        hits.add(f"{rel}:recall_projection")
+            elif isinstance(node, ast.Call):
+                func = node.func
+                if (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == "import_module"
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id == "importlib"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == "core.memory.recall_projection"
+                ):
+                    hits.add(f"{rel}:importlib.import_module")
+    return hits
 
 
 class MemoryProjectionRulesDocTests(unittest.TestCase):
@@ -567,6 +630,26 @@ class ProjectionCandidateAdapterTests(unittest.TestCase):
 
 
 class InertBoundaryTests(unittest.TestCase):
+    def test_recall_projection_import_scan_catches_new_projection_symbols(self):
+        path = Path(_TEST_DB_DIR) / "bad_projection_import.py"
+        path.write_text(
+            "from core.memory.recall_projection import "
+            "ProjectionCandidate, project_candidates\n",
+            encoding="utf-8",
+        )
+        hits = _find_recall_projection_symbol_hits(
+            [path],
+            allowed_paths=set(),
+        )
+        self.assertIn(
+            f"{path}:ProjectionCandidate",
+            hits,
+        )
+        self.assertIn(
+            f"{path}:project_candidates",
+            hits,
+        )
+
     def test_projection_probe_is_read_only(self):
         path = _REPO / "scripts" / "memory_projection_probe.py"
         text = path.read_text(encoding="utf-8")
@@ -689,26 +772,16 @@ class InertBoundaryTests(unittest.TestCase):
             "tests/test_recall_projection.py",
             "scripts/memory_projection_probe.py",
         }
-        result = subprocess.run(
-            [
-                "rg",
-                "-l",
-                "recall_projection|project_self_history",
-                "daemon", "core", "skills", "cli", "scripts", "tests",
-            ],
-            cwd=_REPO,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
+        paths: list[Path] = []
+        for root_name in ("daemon", "core", "skills", "cli", "scripts", "tests"):
+            root = _REPO / root_name
+            if root.exists():
+                paths.extend(root.rglob("*.py"))
+        hits = _find_recall_projection_symbol_hits(
+            paths,
+            allowed_paths=allowed,
         )
-        self.assertIn(result.returncode, (0, 1), result.stderr)
-        hits = {
-            str(Path(line).as_posix())
-            for line in result.stdout.splitlines()
-            if line.strip()
-        }
-        self.assertLessEqual(hits, allowed, hits - allowed)
+        self.assertEqual(hits, set())
 
     def test_replay_regression_baseline_unchanged(self):
         result = subprocess.run(
