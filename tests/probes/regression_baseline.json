@@ -1,8 +1,8 @@
 {
-  "created_at": "2026-05-08T23:13:18Z",
+  "created_at": "2026-05-08T23:29:26Z",
   "decoder_note": "Baseline captures replay-harness probe health and stable metrics, not exact model prose. dirty_tree reflects tracked Git changes; untracked local artifacts are ignored. Probe definitions own regression_tolerance; the baseline stores observed health values and hashes so contract drift and behavior drift stay separate.",
   "dirty_tree": false,
-  "last_regen_reason": "slice-4c.5a.1: complete private Telegram reply persistence coverage",
+  "last_regen_reason": "slice-4c.5a.2: tighten reply persistence cleanup tail",
   "mode": "regression",
   "probe_corpus_path": "/home/rohit/maez/tests/probes/birth_readiness_corpus.jsonl",
   "probe_corpus_sha256": "97af98f00f823095d0a7b3196b28cec4ce2b64f76c040012eb033694853ed8fc",
@@ -80,8 +80,13 @@
       "commit": "b8366c04c19320c4a26bbadbd9d70d04fa024af8",
       "date": "2026-05-08T23:13:18Z",
       "reason": "slice-4c.5a.1: complete private Telegram reply persistence coverage"
+    },
+    {
+      "commit": "9304eb07643da7215903fdbcc5af51a2c9a69e80",
+      "date": "2026-05-08T23:29:26Z",
+      "reason": "slice-4c.5a.2: tighten reply persistence cleanup tail"
     }
   ],
   "schema_version": 1,
-  "source_commit": "b8366c04c19320c4a26bbadbd9d70d04fa024af8"
+  "source_commit": "9304eb07643da7215903fdbcc5af51a2c9a69e80"
 }
