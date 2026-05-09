@@ -40,6 +40,7 @@ Concurrency:
     it, racing threads would read the same prev_chain_hash and produce a
     fork that ``chain.verify_chain`` would flag.
 """
+
 from __future__ import annotations
 
 import json
@@ -50,6 +51,7 @@ import threading
 import time
 import uuid
 
+from core.cognition import audit_policy as _audit_policy
 from core.ledger import chain
 from core.ledger import envelope_schema as _envelope_schema
 
@@ -69,14 +71,22 @@ _FALSE_VALUES = {"0", "false", "no", "off", ""}
 _REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "user_message": ("raw_text",),
     "model_reply": (
-        "raw_text", "model_id", "prompt_hash", "soul_hash",
-        "evidence_envelope", "audit_verdict",
+        "raw_text",
+        "model_id",
+        "prompt_hash",
+        "soul_hash",
+        "evidence_envelope",
+        "audit_verdict",
     ),
     "tool_call": ("raw_text", "action_proposal"),
     "tool_result": ("raw_text", "parent_turn_id"),
     "daemon_cycle": (
-        "raw_text", "model_id", "prompt_hash", "soul_hash",
-        "evidence_envelope", "audit_verdict",
+        "raw_text",
+        "model_id",
+        "prompt_hash",
+        "soul_hash",
+        "evidence_envelope",
+        "audit_verdict",
     ),
     "approval_decision": ("raw_text", "audit_verdict", "pending_card_id"),
     "self_mod_dialog_step": ("raw_text", "audit_verdict", "self_mod_dialog_id"),
@@ -159,7 +169,9 @@ class LedgerWriter:
         # window where two writers SELECT the same head pointer under
         # SHARED locks and both succeed at INSERT.
         self._conn: sqlite3.Connection | None = sqlite3.connect(
-            db_path, check_same_thread=False, isolation_level=None,
+            db_path,
+            check_same_thread=False,
+            isolation_level=None,
         )
         self._conn.execute("PRAGMA foreign_keys = ON")
         # Wait up to 5 seconds for cross-process write lock contention
@@ -218,6 +230,10 @@ class LedgerWriter:
         fabrication_event_id: int | None = None,
         self_mod_dialog_id: int | None = None,
         pending_card_id: int | None = None,
+        audit_trace_label: str | None = None,
+        audit_trace_value_schema: int | None = None,
+        audit_trace_metadata_shape: int | None = None,
+        audit_trace_lineage: dict | None = None,
     ) -> str | None:
         # Disabled writer is a silent no-op — no validation, no SQL.
         if not self._enabled:
@@ -242,21 +258,14 @@ class LedgerWriter:
 
         required = _REQUIRED_FIELDS.get(turn_kind)
         if required is None:
-            raise ValueError(
-                f"unknown turn_kind {turn_kind!r} (per §4.2)"
-            )
+            raise ValueError(f"unknown turn_kind {turn_kind!r} (per §4.2)")
         for field in required:
             if provided.get(field) is None:
-                raise ValueError(
-                    f"{turn_kind} requires {field} "
-                    f"(NOT NULL contract per §4.2)"
-                )
+                raise ValueError(f"{turn_kind} requires {field} (NOT NULL contract per §4.2)")
 
         for field in _FORBIDDEN_FIELDS.get(turn_kind, ()):
             if provided.get(field) is not None:
-                raise ValueError(
-                    f"{turn_kind} forbids {field} (per §4.2)"
-                )
+                raise ValueError(f"{turn_kind} forbids {field} (per §4.2)")
 
         # §3 envelope-shape validation (slice 3.0b: self_history slot
         # added). Permissive on unknown keys; strict on the well-known
@@ -266,9 +275,14 @@ class LedgerWriter:
             try:
                 _envelope_schema.validate_envelope(evidence_envelope)
             except ValueError as e:
-                raise ValueError(
-                    f"{turn_kind} evidence_envelope invalid: {e}"
-                ) from e
+                raise ValueError(f"{turn_kind} evidence_envelope invalid: {e}") from e
+
+        _audit_policy.validate_trace_metadata(
+            audit_trace_label=audit_trace_label,
+            audit_trace_value_schema=audit_trace_value_schema,
+            audit_trace_metadata_shape=audit_trace_metadata_shape,
+            audit_trace_lineage=audit_trace_lineage,
+        )
 
         # Build the canonical row. Column shape matches GENESIS_ROW.
         turn_id = str(uuid.uuid4())
@@ -330,9 +344,7 @@ class LedgerWriter:
                     "SELECT value FROM meta WHERE key = 'last_chain_hash'"
                 ).fetchone()
                 if head is None:
-                    raise RuntimeError(
-                        "ledger meta.last_chain_hash missing — DB not migrated?"
-                    )
+                    raise RuntimeError("ledger meta.last_chain_hash missing — DB not migrated?")
                 prev_chain_hash = head[0]
 
                 # Era init: on the first non-genesis write, set
@@ -347,10 +359,7 @@ class LedgerWriter:
                 era_row = conn.execute(
                     "SELECT value FROM meta WHERE key = 'ledger_era_starts_at'"
                 ).fetchone()
-                era_unset = (
-                    era_row is None
-                    or not (era_row[0] or "").strip()
-                )
+                era_unset = era_row is None or not (era_row[0] or "").strip()
                 if era_unset:
                     conn.execute(
                         "INSERT OR REPLACE INTO meta(key, value) "
@@ -369,25 +378,55 @@ class LedgerWriter:
                 birth_row = conn.execute(
                     "SELECT value FROM meta WHERE key = 'birth_event_turn_id'"
                 ).fetchone()
-                post_birth = (
-                    birth_row is not None
-                    and (birth_row[0] or "").strip() != ""
-                )
+                post_birth = birth_row is not None and (birth_row[0] or "").strip() != ""
 
                 cols = list(_TURN_COLUMNS) + ["prev_chain_hash", "chain_hash"]
                 values = [row[c] for c in _TURN_COLUMNS] + [
-                    prev_chain_hash, new_chain_hash,
+                    prev_chain_hash,
+                    new_chain_hash,
                 ]
                 if post_birth:
                     cols.append("lifecycle_stage")
                     values.append("lived")
+                if audit_trace_label is not None:
+                    cols.extend(
+                        [
+                            "audit_trace_label",
+                            "audit_trace_value_schema",
+                            "audit_trace_metadata_shape",
+                        ]
+                    )
+                    values.extend(
+                        [
+                            audit_trace_label,
+                            audit_trace_value_schema,
+                            audit_trace_metadata_shape,
+                        ]
+                    )
                 placeholders = ",".join("?" for _ in cols)
 
                 conn.execute(
-                    f"INSERT INTO turns ({','.join(cols)}) "
-                    f"VALUES ({placeholders})",
+                    f"INSERT INTO turns ({','.join(cols)}) VALUES ({placeholders})",
                     values,
                 )
+                if audit_trace_label is not None:
+                    assert audit_trace_lineage is not None
+                    conn.execute(
+                        "INSERT INTO audit_trace_lineage ("
+                        "turn_id, rule_id, source_ids_json, "
+                        "policy_doc_sha256, trace_value_schema, "
+                        "trace_metadata_shape, applied_at"
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            turn_id,
+                            audit_trace_lineage["rule_id"],
+                            _canonical_json(audit_trace_lineage["source_ids"]),
+                            audit_trace_lineage["policy_doc_sha256"],
+                            audit_trace_value_schema,
+                            audit_trace_metadata_shape,
+                            float(audit_trace_lineage["applied_at"]),
+                        ),
+                    )
                 conn.execute(
                     "UPDATE meta SET value = ? WHERE key = 'last_chain_hash'",
                     (new_chain_hash,),
@@ -458,7 +497,9 @@ def try_write_turn(
     except Exception as e:
         _LOGGER.warning(
             "shadow ledger writer init failed (kind=%r, path=%r): %s",
-            turn_kind, db_path, e,
+            turn_kind,
+            db_path,
+            e,
         )
         return None
     try:
@@ -466,7 +507,8 @@ def try_write_turn(
     except Exception as e:
         _LOGGER.warning(
             "shadow ledger write failed (kind=%r): %s",
-            turn_kind, e,
+            turn_kind,
+            e,
         )
         return None
     finally:
@@ -474,4 +516,3 @@ def try_write_turn(
             w.close()
         except Exception:
             pass
-

@@ -26,6 +26,7 @@ Policy:
   - Stateless. No side effects. No imports of self_claim_audit's
     regex modules.
 """
+
 from __future__ import annotations
 
 import json
@@ -35,10 +36,12 @@ import urllib.request
 from typing import Any
 
 from core import llm_client as _llm_client
+from core.cognition.audit_policy import TraceAuditPolicy
 
 logger = logging.getLogger("maez.grounding_judge")
 
 from core.model_config import PRIMARY_MODEL as _MODEL_DEFAULT  # /etc/maez/model.env
+
 _MAX_TOKENS = 512
 _TEMP = 0.0  # deterministic classification
 
@@ -56,6 +59,7 @@ from core.model_config import (
     JUDGE_MODEL as _JUDGE_MODEL,
     JUDGE_CHAT_KWARGS as _JUDGE_CHAT_KWARGS,
 )
+
 # R1 (2026-05-04 symphony audit, S2 finding F1): the previous 30s
 # default produced audit_log.latency_ms=21692 on the wmctrl incident
 # — the daemon waited on retries of an unreachable judge while the
@@ -97,12 +101,18 @@ def _parse_breaker_env(name: str, default: float, *, kind: type) -> float:
         value = kind(raw)
     except (TypeError, ValueError):
         _BREAKER_LOG.warning(
-            "%s=%r is invalid; using default %s", name, raw, default,
+            "%s=%r is invalid; using default %s",
+            name,
+            raw,
+            default,
         )
         return default
     if value <= 0:
         _BREAKER_LOG.warning(
-            "%s=%r must be positive; using default %s", name, raw, default,
+            "%s=%r must be positive; using default %s",
+            name,
+            raw,
+            default,
         )
         return default
     return value
@@ -110,11 +120,13 @@ def _parse_breaker_env(name: str, default: float, *, kind: type) -> float:
 
 _JUDGE_BREAKER = CircuitBreaker(
     name="grounding_judge",
-    failure_threshold=int(_parse_breaker_env(
-        "MAEZ_JUDGE_BREAKER_THRESHOLD",
-        _DEFAULT_JUDGE_BREAKER_THRESHOLD,
-        kind=int,
-    )),
+    failure_threshold=int(
+        _parse_breaker_env(
+            "MAEZ_JUDGE_BREAKER_THRESHOLD",
+            _DEFAULT_JUDGE_BREAKER_THRESHOLD,
+            kind=int,
+        )
+    ),
     window_s=_parse_breaker_env(
         "MAEZ_JUDGE_BREAKER_WINDOW_S",
         _DEFAULT_JUDGE_BREAKER_WINDOW_S,
@@ -167,6 +179,7 @@ def _classify_exception(e: BaseException) -> str:
     error_class strings. Lives at module scope so tests can pin the
     classifier shape directly."""
     import socket
+
     if isinstance(e, (ConnectionRefusedError, ConnectionError)):
         return "refused"
     if isinstance(e, (TimeoutError, socket.timeout)):
@@ -198,13 +211,15 @@ def _call_dedicated_judge(prompt: str) -> str:
     touching the network. bad_response failures (HTTP OK, malformed body)
     are NOT counted toward the breaker.
     """
+
     def _do_call() -> str:
         payload: dict = {
             "model": _JUDGE_MODEL,
             "messages": [
-                {"role": "system",
-                 "content": "You are a strict grounding auditor. "
-                            "Output only valid JSON."},
+                {
+                    "role": "system",
+                    "content": "You are a strict grounding auditor. Output only valid JSON.",
+                },
                 {"role": "user", "content": prompt},
             ],
             "temperature": _TEMP,
@@ -251,11 +266,11 @@ _CARVE_OUT_BLOCK = (
     "ALL THREE of: stable, non-temporal, non-personal. Default-deny:\n"
     "when in doubt, treat as ungrounded and flag.\n\n"
     "  * STABLE — does not move with current events, time of day, news,\n"
-    "    or world state. (\"Paris is the capital of France\" is stable;\n"
-    "    \"the population of Paris is 2.1M\" is not — it moves.)\n"
-    "  * NON-TEMPORAL — no \"now,\" \"today,\" \"recently,\" \"currently,\"\n"
-    "    \"latest.\" (\"Python is dynamically typed\" passes;\n"
-    "    \"the latest Python release is 3.13\" fails.)\n"
+    '    or world state. ("Paris is the capital of France" is stable;\n'
+    '    "the population of Paris is 2.1M" is not — it moves.)\n'
+    '  * NON-TEMPORAL — no "now," "today," "recently," "currently,"\n'
+    '    "latest." ("Python is dynamically typed" passes;\n'
+    '    "the latest Python release is 3.13" fails.)\n'
     "  * NON-PERSONAL — not about Rohit, Maez, or any named individual.\n\n"
     "EXCLUSIONS — claims in these categories ALWAYS require evidence,\n"
     "even when widely known. Default-deny applies:\n"
@@ -268,35 +283,35 @@ _CARVE_OUT_BLOCK = (
     "    medical — liability risk). Refer the user to an authoritative\n"
     "    source rather than answer from carve-out.\n"
     "  - Medical / financial ADVICE, DOSING, SAFETY claims. Stable\n"
-    "    biomedical facts (\"aspirin is a pain reliever\") may pass; "
+    '    biomedical facts ("aspirin is a pain reliever") may pass; '
     "anything\n"
-    "    crossing into \"safe at X dose\" / \"you should do Y\" is excluded.\n"
+    '    crossing into "safe at X dose" / "you should do Y" is excluded.\n'
     "  - Specific dates, numbers, quantities about real-world entities\n"
     "    (heights, populations, dates, release years). Boundary case —\n"
     "    DEFAULT-DENY even when widely known.\n"
     "  - Specific software versions and release facts.\n\n"
     "POSITIVE EXAMPLES (carve-out PASSES, do NOT flag):\n"
-    "  + \"Paris is the capital of France.\"\n"
-    "  + \"Python is dynamically typed.\"\n"
-    "  + \"Photosynthesis converts CO2 and water into glucose and\n"
-    "     oxygen.\"\n"
-    "  + \"The Eiffel Tower is in Paris.\" (location, stable)\n"
-    "  + \"Aspirin is a pain reliever.\" (biomedical fact, not advice)\n"
-    "  + \"The boiling point of water at sea level under standard\n"
-    "     atmospheric pressure is 100°C.\" (precise stable fact)\n\n"
+    '  + "Paris is the capital of France."\n'
+    '  + "Python is dynamically typed."\n'
+    '  + "Photosynthesis converts CO2 and water into glucose and\n'
+    '     oxygen."\n'
+    '  + "The Eiffel Tower is in Paris." (location, stable)\n'
+    '  + "Aspirin is a pain reliever." (biomedical fact, not advice)\n'
+    '  + "The boiling point of water at sea level under standard\n'
+    '     atmospheric pressure is 100°C." (precise stable fact)\n\n'
     "NEGATIVE EXAMPLES (carve-out FAILS, MUST flag as ungrounded):\n"
-    "  − \"The Eiffel Tower is 330 meters tall.\" — numerical specific\n"
+    '  − "The Eiffel Tower is 330 meters tall." — numerical specific\n'
     "    about a real entity. The model could be off by meters and the\n"
     "    user wouldn't know. Default-deny.\n"
-    "  − \"Mona Lisa was painted around 1503.\" — date about a real\n"
+    '  − "Mona Lisa was painted around 1503." — date about a real\n'
     "    entity. Default-deny on year-class specifics.\n"
-    "  − \"Aspirin is safe in doses up to 1000mg.\" — medical dosing.\n"
+    '  − "Aspirin is safe in doses up to 1000mg." — medical dosing.\n'
     "    Excluded categorically regardless of truth.\n"
-    "  − \"California is a community-property state.\" — legal /\n"
+    '  − "California is a community-property state." — legal /\n'
     "    jurisdictional. Excluded categorically (liability).\n"
-    "  − \"Python 3.13 added the GIL toggle.\" — specific software\n"
+    '  − "Python 3.13 added the GIL toggle." — specific software\n'
     "    version / release fact. Excluded.\n"
-    "  − \"Python's GIL makes it slow for CPU-bound work.\" — opinion /\n"
+    '  − "Python\'s GIL makes it slow for CPU-bound work." — opinion /\n'
     "    contested oversimplification. Default-deny.\n\n"
 )
 
@@ -308,37 +323,50 @@ _CARVE_OUT_BLOCK = (
 # anti-patterns.
 _BUILTIN_FEW_SHOTS = [
     # Framework/internal-component fabrication
-    {"text": "I've been testing the Maelstrom framework",
-     "reason": "no internal component named 'Maelstrom' exists; "
-               "this is an invented framework name"},
-    {"text": "My Orchestrator v2 handles that",
-     "reason": "no internal component named 'Orchestrator v2' exists"},
+    {
+        "text": "I've been testing the Maelstrom framework",
+        "reason": "no internal component named 'Maelstrom' exists; "
+        "this is an invented framework name",
+    },
+    {
+        "text": "My Orchestrator v2 handles that",
+        "reason": "no internal component named 'Orchestrator v2' exists",
+    },
     # Version-number fabrication (note: real external tools with version
     # numbers you can verify via tool output are fine — this is for
     # invented versions of Maez's own internals)
-    {"text": "running version 2.0.0 of the reasoning engine",
-     "reason": "no evidence of any versioned 'reasoning engine'; "
-               "Maez does not ship versioned internal subsystems"},
+    {
+        "text": "running version 2.0.0 of the reasoning engine",
+        "reason": "no evidence of any versioned 'reasoning engine'; "
+        "Maez does not ship versioned internal subsystems",
+    },
     # Second-person presence inference without screen/presence signal
-    {"text": "You seem to be focused on work right now",
-     "reason": "asserting owner focus state requires a screen or "
-               "presence signal; neither is available"},
-    {"text": "Rohit's been working on the refactor",
-     "reason": "claims about owner activity require a screen signal "
-               "or tool-verified evidence"},
+    {
+        "text": "You seem to be focused on work right now",
+        "reason": "asserting owner focus state requires a screen or "
+        "presence signal; neither is available",
+    },
+    {
+        "text": "Rohit's been working on the refactor",
+        "reason": "claims about owner activity require a screen signal or tool-verified evidence",
+    },
     # Trend inference from a snapshot (disk-fixation class)
-    {"text": "it's been hovering around 70% for weeks",
-     "reason": "system stats is a single snapshot; no historical "
-               "series to support a multi-week trend"},
+    {
+        "text": "it's been hovering around 70% for weeks",
+        "reason": "system stats is a single snapshot; no historical "
+        "series to support a multi-week trend",
+    },
     # Action-in-progress claim with a SPECIFIC target when no tool
     # output grounds it. Generic presence/monitoring statements
     # ("I'm here", "I'm monitoring", "I'm listening") are NOT
     # fabrication — they're framing. The false-action anti-pattern
     # requires a concrete target (path, file, command, URL).
-    {"text": "I'm scanning /var/log for growth culprits",
-     "reason": "Claims a specific shell action (scanning /var/log) "
-               "with a concrete target, but no tool ran this turn to "
-               "produce that output — the specific claim is fabricated"},
+    {
+        "text": "I'm scanning /var/log for growth culprits",
+        "reason": "Claims a specific shell action (scanning /var/log) "
+        "with a concrete target, but no tool ran this turn to "
+        "produce that output — the specific claim is fabricated",
+    },
 ]
 
 
@@ -363,6 +391,12 @@ def _build_judge_prompt(
     # chat-surface calls (no envelope yet) doesn't grow.
     self_history_block = ""
     if self_history:
+        self_history = TraceAuditPolicy.current().apply(
+            self_history,
+            audit_path="grounding_judge.self_history",
+            would_have_consumed_surface="grounding_judge.prompt",
+        )
+    if self_history:
         sh_lines = [
             "MAEZ'S PRIOR UTTERANCES THIS SESSION (self_history slot — "
             "claims about what Maez said earlier MUST trace to one of "
@@ -382,14 +416,8 @@ def _build_judge_prompt(
             # 'gestation' (defensive — pre-migration rows shouldn't
             # silently promote to lived).
             stage = entry.get("lifecycle_stage", "gestation")
-            label = (
-                "[from before — pre-birth / build-stage] "
-                if stage == "gestation" else ""
-            )
-            sh_lines.append(
-                f"  - turn_id={tid} kind={kind} ts={ts_str}: "
-                f"{label}{summary!r}"
-            )
+            label = "[from before — pre-birth / build-stage] " if stage == "gestation" else ""
+            sh_lines.append(f"  - turn_id={tid} kind={kind} ts={ts_str}: {label}{summary!r}")
         self_history_block = "\n".join(sh_lines) + "\n\n"
 
     # Slice 3 proper (2026-05-07): tool_results block. Entry shape
@@ -409,9 +437,7 @@ def _build_judge_prompt(
             status = tr.get("status")
             status_str = str(status) if status is not None else "?"
             summary = tr.get("summary") or ""
-            tr_lines.append(
-                f"  - name={name} status={status_str}: {summary!r}"
-            )
+            tr_lines.append(f"  - name={name} status={status_str}: {summary!r}")
         tool_results_block = "\n".join(tr_lines) + "\n\n"
 
     # Always include the built-in few-shot bank so chat-surface calls
@@ -422,11 +448,8 @@ def _build_judge_prompt(
     if all_shots:
         lines = ["EXAMPLES OF UNGROUNDED CLAIMS (to guide your judgment):"]
         for i, fs in enumerate(all_shots, 1):
-            absent = fs.get('signals_absent') or []
-            absent_str = (
-                f"     absent signals at the time: {', '.join(absent)}\n"
-                if absent else ""
-            )
+            absent = fs.get("signals_absent") or []
+            absent_str = f"     absent signals at the time: {', '.join(absent)}\n" if absent else ""
             lines.append(
                 f"  {i}. claim: {fs.get('text', '')[:200]!r}\n"
                 f"{absent_str}"
@@ -566,18 +589,12 @@ def _parse_judge_output(output: Any) -> list[dict]:
             "grounding_judge: could not parse judge output (head=%r)",
             stripped[:200],
         )
-        raise ValueError(
-            f"could not extract JSON from judge output (head={stripped[:80]!r})"
-        )
+        raise ValueError(f"could not extract JSON from judge output (head={stripped[:80]!r})")
     if not isinstance(obj, dict):
-        raise ValueError(
-            f"judge output JSON was not an object (got {type(obj).__name__})"
-        )
+        raise ValueError(f"judge output JSON was not an object (got {type(obj).__name__})")
     ungrounded = obj.get("ungrounded")
     if not isinstance(ungrounded, list):
-        raise ValueError(
-            "judge output JSON missing 'ungrounded' list"
-        )
+        raise ValueError("judge output JSON missing 'ungrounded' list")
     return [u for u in ungrounded if isinstance(u, dict) and u.get("text")]
 
 
@@ -622,18 +639,10 @@ def judge(
     # partially-canonical context that the audit layer cannot reason
     # about; full-takeover semantics are the only safe option.
     if evidence_envelope is not None:
-        eff_signals_present = list(
-            evidence_envelope.get("signals_present") or []
-        )
-        eff_signals_absent = list(
-            evidence_envelope.get("signals_absent") or []
-        )
-        eff_self_history = list(
-            evidence_envelope.get("self_history") or []
-        ) or None
-        eff_tool_results = list(
-            evidence_envelope.get("tool_results") or []
-        ) or None
+        eff_signals_present = list(evidence_envelope.get("signals_present") or [])
+        eff_signals_absent = list(evidence_envelope.get("signals_absent") or [])
+        eff_self_history = list(evidence_envelope.get("self_history") or []) or None
+        eff_tool_results = list(evidence_envelope.get("tool_results") or []) or None
     else:
         eff_signals_present = signals_present or []
         eff_signals_absent = signals_absent or []
@@ -661,12 +670,14 @@ def judge(
             resp = _llm_client.chat(
                 model=model,
                 messages=[
-                    {"role": "system",
-                     "content": "You are a strict grounding auditor. "
-                                "Output only valid JSON."},
+                    {
+                        "role": "system",
+                        "content": "You are a strict grounding auditor. Output only valid JSON.",
+                    },
                     {"role": "user", "content": prompt},
                 ],
-                stream=False, think=False,
+                stream=False,
+                think=False,
                 options={"temperature": _TEMP, "num_predict": _MAX_TOKENS},
             )
             output = getattr(resp.message, "content", "") or ""
@@ -676,7 +687,9 @@ def judge(
     except Exception as e:
         ec = _classify_exception(e)
         logger.debug(
-            "judge LLM transport failure (%s): %s", ec, e,
+            "judge LLM transport failure (%s): %s",
+            ec,
+            e,
         )
         raise JudgeUnavailable(str(e), error_class=ec) from e
 
@@ -688,8 +701,10 @@ def judge(
         return _parse_judge_output(output)
     except Exception as e:
         logger.debug(
-            "judge response parse failed (bad_response): %s", e,
+            "judge response parse failed (bad_response): %s",
+            e,
         )
         raise JudgeUnavailable(
-            f"parse failed: {e}", error_class="bad_response",
+            f"parse failed: {e}",
+            error_class="bad_response",
         ) from e

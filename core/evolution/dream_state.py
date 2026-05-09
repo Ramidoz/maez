@@ -8,7 +8,7 @@ Dream mode: autonomous pattern detection during idle time.
 
 When the owner has been AFK for >30 minutes, the daemon's reasoning loop
 occasionally runs a "dream cycle" instead of (or alongside) its normal
-30-second perception cycle. In a dream cycle, Maez reviews her last ~80
+30-second perception cycle. In a dream cycle, Maez reviews its last ~80
 raw memories, looks for patterns that individual memories didn't name
 (trajectories, rhythms, contradictions, shifts), and synthesizes a short
 paragraph of reflection.
@@ -63,6 +63,7 @@ from core.model_config import PRIMARY_MODEL as MODEL
 
 try:
     from core import paths as _paths
+
     DEFAULT_DB_PATH = str(_paths.memory_dir() / "dream_proposals.db")
     SOUL_PATH = _paths.soul_combined_path()
     QUALITY_DB_PATH = _paths.memory_dir() / "quality.db"
@@ -168,29 +169,18 @@ class DreamState:
             # Session 11s: schema migration for soul section-replace
             # proposals. Backward compat — existing rows default to
             # proposal_type='append' and NULL target_section/new_body.
-            existing_cols = {
-                row[1] for row in c.execute("PRAGMA table_info(dream_proposals)")
-            }
+            existing_cols = {row[1] for row in c.execute("PRAGMA table_info(dream_proposals)")}
             if "proposal_type" not in existing_cols:
                 c.execute(
                     "ALTER TABLE dream_proposals ADD COLUMN "
                     "proposal_type TEXT NOT NULL DEFAULT 'append'"
                 )
             if "target_section" not in existing_cols:
-                c.execute(
-                    "ALTER TABLE dream_proposals ADD COLUMN "
-                    "target_section TEXT"
-                )
+                c.execute("ALTER TABLE dream_proposals ADD COLUMN target_section TEXT")
             if "proposed_new_body" not in existing_cols:
-                c.execute(
-                    "ALTER TABLE dream_proposals ADD COLUMN "
-                    "proposed_new_body TEXT"
-                )
+                c.execute("ALTER TABLE dream_proposals ADD COLUMN proposed_new_body TEXT")
             if "unified_diff" not in existing_cols:
-                c.execute(
-                    "ALTER TABLE dream_proposals ADD COLUMN "
-                    "unified_diff TEXT"
-                )
+                c.execute("ALTER TABLE dream_proposals ADD COLUMN unified_diff TEXT")
             c.execute(
                 """
                 CREATE INDEX IF NOT EXISTS ix_dream_status
@@ -272,8 +262,8 @@ class DreamState:
             "What's a PATTERN you notice across multiple observations that NONE of\n"
             "the individual ones named? Not a single event — a trajectory, a rhythm,\n"
             "a contradiction, a shift.\n\n"
-            "Respond in ONE short paragraph (2-4 sentences). Start with \"I notice...\"\n"
-            "or \"A pattern:\" or similar. Be specific — name actual topics from the\n"
+            'Respond in ONE short paragraph (2-4 sentences). Start with "I notice..."\n'
+            'or "A pattern:" or similar. Be specific — name actual topics from the\n'
             "observations, not abstract categories.\n\n"
             "If nothing genuinely new emerges — respond with exactly: NOTHING"
         )
@@ -284,6 +274,7 @@ class DreamState:
         # think=False for fast synthesis, no scratchpad needed for pattern work.
         try:
             from core import llm_client as _llm_client
+
             response = _llm_client.chat(
                 model=MODEL,
                 messages=[{"role": "user", "content": prompt}],
@@ -335,8 +326,10 @@ class DreamState:
             audited_insight = insight
             try:
                 from core.safety.audited_output import audit_assistant_text
+
                 audited_insight = audit_assistant_text(
-                    insight, surface="dream_state",
+                    insight,
+                    surface="dream_state",
                 )
             except Exception as _aud_exc:
                 logger.debug("dream: audit fail-open: %s", _aud_exc)
@@ -373,10 +366,10 @@ class DreamState:
         # Read recent cognition quality from quality.db
         try:
             import sqlite3 as _sql
+
             conn = _sql.connect(str(QUALITY_DB_PATH))
             rows = conn.execute(
-                "SELECT score, primary_labels FROM cycle_scores "
-                "ORDER BY id DESC LIMIT 50"
+                "SELECT score, primary_labels FROM cycle_scores ORDER BY id DESC LIMIT 50"
             ).fetchall()
             conn.close()
         except Exception as e:
@@ -413,7 +406,8 @@ class DreamState:
         if not should_propose:
             logger.debug(
                 "training eval: no proposal — decline=%.1f, exchanges=%d",
-                decline, new_exchange_count,
+                decline,
+                new_exchange_count,
             )
             return None
 
@@ -458,8 +452,7 @@ class DreamState:
         try:
             with self._lock, self._conn() as c:
                 cur = c.execute(
-                    "SELECT insight FROM dream_proposals "
-                    "ORDER BY id DESC LIMIT ?",
+                    "SELECT insight FROM dream_proposals ORDER BY id DESC LIMIT ?",
                     (NOVELTY_DREAM_LOOKBACK,),
                 )
                 priors.extend(row[0] for row in cur.fetchall())
@@ -492,7 +485,7 @@ class DreamState:
                         body = body[idx:]
                         break
                 for i in range(0, len(body), 800):
-                    chunk = body[i:i + 1600]  # 800-step with overlap
+                    chunk = body[i : i + 1600]  # 800-step with overlap
                     if chunk.strip():
                         priors.append(chunk)
         except Exception as e:
@@ -516,8 +509,9 @@ class DreamState:
                 if max_overlap > NOVELTY_JACCARD_MAX:
                     break  # early exit — already too similar
 
-        logger.debug("dream novelty: max_jaccard=%.3f threshold=%.3f",
-                     max_overlap, NOVELTY_JACCARD_MAX)
+        logger.debug(
+            "dream novelty: max_jaccard=%.3f threshold=%.3f", max_overlap, NOVELTY_JACCARD_MAX
+        )
         if max_overlap > NOVELTY_JACCARD_MAX:
             return False
 
@@ -537,23 +531,19 @@ class DreamState:
         try:
             with self._lock, self._conn() as c:
                 cur = c.execute(
-                    "SELECT insight FROM dream_proposals "
-                    "ORDER BY id DESC LIMIT ?",
+                    "SELECT insight FROM dream_proposals ORDER BY id DESC LIMIT ?",
                     (NOVELTY_TOPIC_LOOKBACK,),
                 )
-                recent_topics = [
-                    _primary_topic((row[0] or "").lower())
-                    for row in cur.fetchall()
-                ]
+                recent_topics = [_primary_topic((row[0] or "").lower()) for row in cur.fetchall()]
         except Exception as e:
             logger.debug("dream novelty: topic-lookback fetch failed: %s", e)
             return True
-        if (cand_topic in recent_topics
-                and max_overlap >= NOVELTY_TOPIC_JACCARD_MIN):
+        if cand_topic in recent_topics and max_overlap >= NOVELTY_TOPIC_JACCARD_MIN:
             logger.info(
-                "dream novelty: rejected on topic='%s' jaccard=%.3f "
-                "(recent topics=%s)",
-                cand_topic, max_overlap, recent_topics,
+                "dream novelty: rejected on topic='%s' jaccard=%.3f (recent topics=%s)",
+                cand_topic,
+                max_overlap,
+                recent_topics,
             )
             return False
         return True
@@ -594,8 +584,7 @@ class DreamState:
                 "(created_at, insight, status, proposal_type, "
                 " target_section, proposed_new_body, unified_diff) "
                 "VALUES (?, ?, 'pending', 'section_replace', ?, ?, ?)",
-                (time.time(), insight, target_section,
-                 proposed_new_body, unified_diff),
+                (time.time(), insight, target_section, proposed_new_body, unified_diff),
             )
             c.commit()
             return int(cur.lastrowid)
@@ -625,9 +614,7 @@ class DreamState:
             c.commit()
             prop_id = int(cur.lastrowid)
 
-        logger.info(
-            "dream: training proposal #%d stored — %s", prop_id, rationale[:120]
-        )
+        logger.info("dream: training proposal #%d stored — %s", prop_id, rationale[:120])
 
         if self.telegram is not None:
             try:
@@ -642,8 +629,10 @@ class DreamState:
                 # autonomous surface behind the same output guard.
                 try:
                     from core.safety.audited_output import audit_assistant_text
+
                     msg = audit_assistant_text(
-                        msg, surface="training_proposal",
+                        msg,
+                        surface="training_proposal",
                     )
                 except Exception as _aud_exc:
                     logger.debug("dream: training proposal audit fail-open: %s", _aud_exc)
@@ -653,17 +642,12 @@ class DreamState:
 
         return prop_id
 
-    def list_pending(
-        self, proposal_type: Optional[str] = None
-    ) -> list[tuple[int, str, str]]:
+    def list_pending(self, proposal_type: Optional[str] = None) -> list[tuple[int, str, str]]:
         """Return [(id, created_at_iso, insight)] for pending proposals,
         oldest first. If ``proposal_type`` is given (``'append'`` or
         ``'section_replace'``), only proposals of that type are returned.
         """
-        sql = (
-            "SELECT id, created_at, insight FROM dream_proposals "
-            "WHERE status = 'pending'"
-        )
+        sql = "SELECT id, created_at, insight FROM dream_proposals WHERE status = 'pending'"
         params: tuple = ()
         if proposal_type is not None:
             sql += " AND proposal_type = ?"
@@ -736,8 +720,7 @@ class DreamState:
         if ok:
             with self._lock, self._conn() as c:
                 c.execute(
-                    "UPDATE dream_proposals SET status = 'applied', "
-                    "applied_at = ? WHERE id = ?",
+                    "UPDATE dream_proposals SET status = 'applied', applied_at = ? WHERE id = ?",
                     (time.time(), prop_id),
                 )
                 c.commit()
@@ -791,20 +774,15 @@ class DreamState:
         if ok:
             with self._lock, self._conn() as c:
                 c.execute(
-                    "UPDATE dream_proposals SET status = 'applied', "
-                    "applied_at = ? WHERE id = ?",
+                    "UPDATE dream_proposals SET status = 'applied', applied_at = ? WHERE id = ?",
                     (time.time(), prop_id),
                 )
                 c.commit()
-            logger.info(
-                "dream: section-edit proposal #%d applied to soul.md", prop_id
-            )
+            logger.info("dream: section-edit proposal #%d applied to soul.md", prop_id)
             return True, f"edit #{prop_id} applied: {msg}"
         return False, f"section edit rejected for #{prop_id}: {msg}"
 
-    def reject_proposal(
-        self, prop_id: int, reason: str = "manual"
-    ) -> tuple[bool, str]:
+    def reject_proposal(self, prop_id: int, reason: str = "manual") -> tuple[bool, str]:
         """Mark a proposal as rejected. No soul edit."""
         prop = self.get_proposal(prop_id)
         if prop is None:
@@ -813,8 +791,7 @@ class DreamState:
             return False, f"dream #{prop_id} already {prop['status']}"
         with self._lock, self._conn() as c:
             c.execute(
-                "UPDATE dream_proposals SET status = 'rejected', "
-                "reject_reason = ? WHERE id = ?",
+                "UPDATE dream_proposals SET status = 'rejected', reject_reason = ? WHERE id = ?",
                 (reason, prop_id),
             )
             c.commit()

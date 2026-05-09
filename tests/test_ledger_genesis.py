@@ -21,11 +21,11 @@ assert structural + determinism properties so this file does not
 duplicate the writer's canonicalization logic and break every time
 the canonical-bytes definition shifts.
 """
+
 from __future__ import annotations
 
 import os
 import sqlite3
-import string
 import tempfile
 import unittest
 from pathlib import Path
@@ -45,6 +45,7 @@ from core.ledger import migrate  # noqa: E402
 
 def tearDownModule():
     import shutil
+
     shutil.rmtree(_TEST_DB_DIR, ignore_errors=True)
 
 
@@ -65,11 +66,7 @@ _LOWER_HEX = set("0123456789abcdef")
 
 def _is_lower_hex_64(s: str) -> bool:
     """Strictly lowercase 64-char hex (sha256 by Python convention)."""
-    return (
-        isinstance(s, str)
-        and len(s) == 64
-        and all(c in _LOWER_HEX for c in s)
-    )
+    return isinstance(s, str) and len(s) == 64 and all(c in _LOWER_HEX for c in s)
 
 
 class GenesisMetaTests(unittest.TestCase):
@@ -84,16 +81,12 @@ class GenesisMetaTests(unittest.TestCase):
         self.conn.close()
 
     def test_schema_version_is_one(self):
-        row = self.conn.execute(
-            "SELECT value FROM meta WHERE key='schema_version'"
-        ).fetchone()
+        row = self.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
         self.assertIsNotNone(row, "meta.schema_version was not seeded")
         self.assertEqual(row[0], "1")
 
     def test_genesis_hash_is_64_char_hex(self):
-        row = self.conn.execute(
-            "SELECT value FROM meta WHERE key='genesis_hash'"
-        ).fetchone()
+        row = self.conn.execute("SELECT value FROM meta WHERE key='genesis_hash'").fetchone()
         self.assertIsNotNone(row, "meta.genesis_hash was not seeded")
         self.assertTrue(
             _is_lower_hex_64(row[0]),
@@ -101,12 +94,10 @@ class GenesisMetaTests(unittest.TestCase):
         )
 
     def test_meta_has_no_duplicate_keys(self):
-        n_sv = self.conn.execute(
-            "SELECT COUNT(*) FROM meta WHERE key='schema_version'"
-        ).fetchone()[0]
-        n_gh = self.conn.execute(
-            "SELECT COUNT(*) FROM meta WHERE key='genesis_hash'"
-        ).fetchone()[0]
+        n_sv = self.conn.execute("SELECT COUNT(*) FROM meta WHERE key='schema_version'").fetchone()[
+            0
+        ]
+        n_gh = self.conn.execute("SELECT COUNT(*) FROM meta WHERE key='genesis_hash'").fetchone()[0]
         self.assertEqual(n_sv, 1)
         self.assertEqual(n_gh, 1)
 
@@ -133,9 +124,9 @@ class GenesisRowTests(unittest.TestCase):
             "SELECT chain_hash FROM turns WHERE prev_chain_hash IS NULL"
         ).fetchone()
         self.assertIsNotNone(row)
-        meta_hash = self.conn.execute(
-            "SELECT value FROM meta WHERE key='genesis_hash'"
-        ).fetchone()[0]
+        meta_hash = self.conn.execute("SELECT value FROM meta WHERE key='genesis_hash'").fetchone()[
+            0
+        ]
         self.assertEqual(row[0], meta_hash)
 
     def test_genesis_row_tenant_is_owner(self):
@@ -175,17 +166,14 @@ class GenesisDeterminismTests(unittest.TestCase):
         c1 = sqlite3.connect(p1)
         c2 = sqlite3.connect(p2)
         try:
-            h1 = c1.execute(
-                "SELECT value FROM meta WHERE key='genesis_hash'"
-            ).fetchone()[0]
-            h2 = c2.execute(
-                "SELECT value FROM meta WHERE key='genesis_hash'"
-            ).fetchone()[0]
+            h1 = c1.execute("SELECT value FROM meta WHERE key='genesis_hash'").fetchone()[0]
+            h2 = c2.execute("SELECT value FROM meta WHERE key='genesis_hash'").fetchone()[0]
         finally:
             c1.close()
             c2.close()
         self.assertEqual(
-            h1, h2,
+            h1,
+            h2,
             "genesis_hash must be deterministic across fresh migrations; "
             "non-determinism implies the canonical-row-bytes recipe pulled "
             "in a non-stable field (timestamp, uuid, etc.)",
@@ -206,11 +194,10 @@ class GenesisRecipeTests(unittest.TestCase):
     The expected canonical row recipe (from §6.1):
       - canonical_row_bytes = JSON of the row dict
       - keys sorted, separators=(',', ':'), ensure_ascii=True
-      - omits `chain_hash`, `prev_chain_hash`, AND `lifecycle_stage`
-        (the last added by the Gestation Boundary slice 2026-05-08
-        per migration 0003 — the column lives outside chain-hash
-        canonical bytes so birth-state changes never break chain
-        integrity; see core/ledger/chain.py::_CHAIN_HASH_EXCLUDE)
+      - omits every column listed in
+        core.ledger.chain._CHAIN_HASH_EXCLUDE. This includes chain
+        links, lifecycle_stage, and later additive audit metadata that
+        must not change canonical bytes.
       - NULL columns are included as null keys (not omitted)
       - chain_hash = sha256(("genesis" + canonical_row_bytes).encode())
     """
@@ -218,6 +205,7 @@ class GenesisRecipeTests(unittest.TestCase):
     def test_genesis_chain_hash_matches_canonical_recipe(self):
         import hashlib
         import json
+        from core.ledger.chain import _CHAIN_HASH_EXCLUDE
 
         db_path = _fresh_db_path("genesis_recipe.db")
         migrate.run(str(db_path))
@@ -226,22 +214,15 @@ class GenesisRecipeTests(unittest.TestCase):
         conn.row_factory = sqlite3.Row
         try:
             # Read every column of the genesis row.
-            row = conn.execute(
-                "SELECT * FROM turns WHERE prev_chain_hash IS NULL"
-            ).fetchone()
+            row = conn.execute("SELECT * FROM turns WHERE prev_chain_hash IS NULL").fetchone()
         finally:
             conn.close()
         self.assertIsNotNone(row, "no genesis row to verify recipe against")
 
-        # Build the canonical dict: every column EXCEPT the three
-        # excluded by §6.1 + Gestation Boundary slice — chain_hash,
-        # prev_chain_hash, lifecycle_stage. Must match the strip set
-        # in core.ledger.chain._CHAIN_HASH_EXCLUDE.
-        canonical_dict = {
-            k: row[k] for k in row.keys()
-            if k not in ("chain_hash", "prev_chain_hash",
-                         "lifecycle_stage")
-        }
+        # Build the canonical dict using the production strip set so
+        # schema-only metadata columns do not fork the test oracle from
+        # the chain-hash implementation.
+        canonical_dict = {k: row[k] for k in row.keys() if k not in _CHAIN_HASH_EXCLUDE}
 
         # Canonical JSON: sorted keys, no whitespace, ensure_ascii.
         canonical_bytes = json.dumps(
@@ -250,13 +231,12 @@ class GenesisRecipeTests(unittest.TestCase):
             separators=(",", ":"),
             ensure_ascii=True,
         )
-        expected = hashlib.sha256(
-            ("genesis" + canonical_bytes).encode("utf-8")
-        ).hexdigest()
+        expected = hashlib.sha256(("genesis" + canonical_bytes).encode("utf-8")).hexdigest()
 
         actual = row["chain_hash"]
         self.assertEqual(
-            actual, expected,
+            actual,
+            expected,
             f"genesis chain_hash does not match canonical recipe.\n"
             f"  expected: {expected}\n"
             f"  actual:   {actual}\n"
@@ -279,9 +259,7 @@ class GenesisIdempotenceTests(unittest.TestCase):
             hash_before = conn.execute(
                 "SELECT value FROM meta WHERE key='genesis_hash'"
             ).fetchone()[0]
-            n_turns_before = conn.execute(
-                "SELECT COUNT(*) FROM turns"
-            ).fetchone()[0]
+            n_turns_before = conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
             n_genesis_before = conn.execute(
                 "SELECT COUNT(*) FROM turns WHERE prev_chain_hash IS NULL"
             ).fetchone()[0]
@@ -292,25 +270,22 @@ class GenesisIdempotenceTests(unittest.TestCase):
 
         conn = sqlite3.connect(db_path)
         try:
-            hash_after = conn.execute(
-                "SELECT value FROM meta WHERE key='genesis_hash'"
-            ).fetchone()[0]
-            n_turns_after = conn.execute(
-                "SELECT COUNT(*) FROM turns"
-            ).fetchone()[0]
+            hash_after = conn.execute("SELECT value FROM meta WHERE key='genesis_hash'").fetchone()[
+                0
+            ]
+            n_turns_after = conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
             n_genesis_after = conn.execute(
                 "SELECT COUNT(*) FROM turns WHERE prev_chain_hash IS NULL"
             ).fetchone()[0]
         finally:
             conn.close()
 
-        self.assertEqual(hash_before, hash_after,
-                         "genesis_hash must not change on re-migration")
-        self.assertEqual(n_turns_before, n_turns_after,
-                         "re-migration must not append rows to turns")
+        self.assertEqual(hash_before, hash_after, "genesis_hash must not change on re-migration")
+        self.assertEqual(
+            n_turns_before, n_turns_after, "re-migration must not append rows to turns"
+        )
         self.assertEqual(n_genesis_before, 1)
-        self.assertEqual(n_genesis_after, 1,
-                         "re-migration must not create a second genesis row")
+        self.assertEqual(n_genesis_after, 1, "re-migration must not create a second genesis row")
 
 
 class HeadPointerTests(unittest.TestCase):
@@ -327,34 +302,32 @@ class HeadPointerTests(unittest.TestCase):
         migrate.run(str(db_path))
         conn = sqlite3.connect(db_path)
         try:
-            head_row = conn.execute(
-                "SELECT value FROM meta WHERE key='last_chain_hash'"
-            ).fetchone()
-            genesis_row = conn.execute(
-                "SELECT value FROM meta WHERE key='genesis_hash'"
-            ).fetchone()
+            head_row = conn.execute("SELECT value FROM meta WHERE key='last_chain_hash'").fetchone()
+            genesis_row = conn.execute("SELECT value FROM meta WHERE key='genesis_hash'").fetchone()
         finally:
             conn.close()
-        self.assertIsNotNone(head_row,
-            "meta.last_chain_hash must be seeded by migrate.run()")
+        self.assertIsNotNone(head_row, "meta.last_chain_hash must be seeded by migrate.run()")
         self.assertIsNotNone(genesis_row)
-        self.assertEqual(head_row[0], genesis_row[0],
+        self.assertEqual(
+            head_row[0],
+            genesis_row[0],
             "On first-run seed, meta.last_chain_hash must equal "
-            "meta.genesis_hash (the genesis row IS the head).")
+            "meta.genesis_hash (the genesis row IS the head).",
+        )
 
     def test_last_chain_hash_64_char_lowercase_hex(self):
         db_path = _fresh_db_path("head_format.db")
         migrate.run(str(db_path))
         conn = sqlite3.connect(db_path)
         try:
-            row = conn.execute(
-                "SELECT value FROM meta WHERE key='last_chain_hash'"
-            ).fetchone()
+            row = conn.execute("SELECT value FROM meta WHERE key='last_chain_hash'").fetchone()
         finally:
             conn.close()
         self.assertIsNotNone(row)
-        self.assertTrue(_is_lower_hex_64(row[0]),
-            f"meta.last_chain_hash must be 64 lowercase hex chars; got {row[0]!r}")
+        self.assertTrue(
+            _is_lower_hex_64(row[0]),
+            f"meta.last_chain_hash must be 64 lowercase hex chars; got {row[0]!r}",
+        )
 
     def test_idempotent_re_migration_does_not_duplicate_head(self):
         db_path = _fresh_db_path("head_idem.db")
@@ -362,13 +335,10 @@ class HeadPointerTests(unittest.TestCase):
         migrate.run(str(db_path))  # second call must be no-op
         conn = sqlite3.connect(db_path)
         try:
-            n = conn.execute(
-                "SELECT COUNT(*) FROM meta WHERE key='last_chain_hash'"
-            ).fetchone()[0]
+            n = conn.execute("SELECT COUNT(*) FROM meta WHERE key='last_chain_hash'").fetchone()[0]
         finally:
             conn.close()
-        self.assertEqual(n, 1,
-            "re-migration must not duplicate the last_chain_hash meta row")
+        self.assertEqual(n, 1, "re-migration must not duplicate the last_chain_hash meta row")
 
 
 if __name__ == "__main__":

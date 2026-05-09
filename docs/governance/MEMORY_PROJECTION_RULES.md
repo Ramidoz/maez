@@ -248,6 +248,45 @@ slice. Promoting one of those paths later requires a named slice and a
 predicted-effect statement explaining why that speech category belongs
 in Maez's autobiography.
 
+## Slice 4c.5b Trace Metadata And Audit Refusal
+
+Slice 4c.5b adds trace metadata as an audit-refusal substrate. A trace
+label is a thin refusal token on the raw ledger row, not a rich
+provenance payload and not audit evidence.
+
+Current policy:
+
+- `AUDIT_TRACE_POLICY = "refuse_v1"`
+- `TRACE_LABEL_VALUE_SCHEMA = 1`
+- `TRACE_METADATA_SHAPE = 1`
+- current traced label value: `projection_influenced`
+
+Audit-touching reads MUST exclude trace-labeled rows. Relaxing this
+predicate requires an ADR; it must never land as a refactor,
+simplification, or cleanup. Any change to the definition of what counts
+as `projection_influenced` — including bug fixes that alter the boundary
+— requires an ADR.
+
+A frozen golden predicate corpus must classify trace rows identically
+across versions unless an ADR explicitly changes the boundary. Schema
+shape and label vocabulary version separately so field evolution cannot
+masquerade as predicate evolution.
+
+Rich lineage is stored outside the `turns` row in a diagnostic lineage
+record keyed by `turn_id`. The `turns` row carries only the refusal
+token. This preserves future reconstruction without allowing rich trace
+metadata to be read back as audit evidence.
+
+Future slices introducing summarization, compaction, embedding,
+consolidation, dreaming, or any derived rows MUST propagate trace labels
+to derived rows or refuse traced inputs. Derived rows may not launder
+projection influence into apparently untraced evidence.
+
+Deferred follow-ups: a `trace-rows` diagnostic CLI and sampled refusal
+episodes as ledger events are post-activation follow-up slices. They do
+not block 4c.5b, but should ship before trace metadata is operated for
+extended periods.
+
 ## Sunset Commitments
 
 The strengthen-only asymmetry is accepted as a starting covenant, not as
@@ -274,8 +313,7 @@ path consumes projection:
 - projection-influenced replies must be trace-labeled at write time
 - trace labels are metadata and must not change chain-hash canonical
   bytes
-- grounding-judge and evidence-envelope audit paths must refuse or flag
-  trace-labeled rows as non-evidence
+- audit-touching reads MUST exclude trace-labeled rows as non-evidence
 - an audit-replay test must cover the delayed-feedback path: projected
   reply written on one turn, envelope built on the next turn
 - any regression baseline regeneration must land as a separate commit

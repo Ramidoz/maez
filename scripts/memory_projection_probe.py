@@ -7,6 +7,7 @@ Shows raw ledger-derived self_history beside the projection view.
 This is operator tooling, not a birth-readiness fixture. It never writes
 to the ledger and does not feed production prompts or audit evidence.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -26,13 +27,15 @@ from core.memory import recall_projection as _rp  # noqa: E402
 def _rows_to_self_history(rows: list[dict]) -> list[dict]:
     entries: list[dict] = []
     for row in rows:
-        entries.append({
-            "turn_id": row.get("turn_id", ""),
-            "timestamp": row.get("timestamp"),
-            "kind": row.get("turn_kind", ""),
-            "utterance_summary": (row.get("raw_text") or "")[:200],
-            "lifecycle_stage": row.get("lifecycle_stage") or "unknown",
-        })
+        entries.append(
+            {
+                "turn_id": row.get("turn_id", ""),
+                "timestamp": row.get("timestamp"),
+                "kind": row.get("turn_kind", ""),
+                "utterance_summary": (row.get("raw_text") or "")[:200],
+                "lifecycle_stage": row.get("lifecycle_stage") or "unknown",
+            }
+        )
     return entries
 
 
@@ -50,13 +53,14 @@ def build_report(
         limit=limit,
         tenant_id=tenant_id,
         recall_gestation=recall_gestation,
+        include_trace_labeled=True,
+        audit_path="diagnostic.memory_projection_probe",
+        would_have_consumed_surface="projection_probe.raw_self_history",
     )
     raw_self_history = _rows_to_self_history(rows)
     policy = {
         "identity.v1": _rp.DEFAULT_POLICY,
-        "repetition_with_continuity.v1": (
-            _rp.REPETITION_WITH_CONTINUITY_POLICY
-        ),
+        "repetition_with_continuity.v1": (_rp.REPETITION_WITH_CONTINUITY_POLICY),
     }[projection_rule]
     projection = _rp.project_self_history(raw_self_history, policy=policy)
     return {
@@ -84,26 +88,26 @@ def projection_observation_records(
     records: list[dict[str, Any]] = []
     for item in report.items:
         candidate = candidates_by_id[item.turn_id]
-        records.append({
-            "schema_version": report.schema_version,
-            "policy": report.policy.to_dict(),
-            "candidate_count": len(candidates),
-            "projected_count": report.projected_count,
-            "candidate_id": candidate.candidate_id,
-            "candidate_kind": candidate.candidate_kind,
-            "trust_scope": candidate.trust_scope,
-            "source_ids": list(candidate.source_ids),
-            "continuity_key": candidate.continuity_key,
-            "would_strengthen": item.projection_effect == "strengthened",
-            "projection_effect": item.projection_effect,
-            "strength_reasons": list(item.strength_reasons),
-            "rule_inputs": dict(item.rule_inputs),
-            "counterevidence_refs": [
-                ref.to_dict() for ref in item.counterevidence_refs
-            ],
-            "audit_boundary": report.audit_boundary,
-            "policy_doc_sha256": report.policy_doc_sha256,
-        })
+        records.append(
+            {
+                "schema_version": report.schema_version,
+                "policy": report.policy.to_dict(),
+                "candidate_count": len(candidates),
+                "projected_count": report.projected_count,
+                "candidate_id": candidate.candidate_id,
+                "candidate_kind": candidate.candidate_kind,
+                "trust_scope": candidate.trust_scope,
+                "source_ids": list(candidate.source_ids),
+                "continuity_key": candidate.continuity_key,
+                "would_strengthen": item.projection_effect == "strengthened",
+                "projection_effect": item.projection_effect,
+                "strength_reasons": list(item.strength_reasons),
+                "rule_inputs": dict(item.rule_inputs),
+                "counterevidence_refs": [ref.to_dict() for ref in item.counterevidence_refs],
+                "audit_boundary": report.audit_boundary,
+                "policy_doc_sha256": report.policy_doc_sha256,
+            }
+        )
     return records
 
 

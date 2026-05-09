@@ -8,6 +8,7 @@ surface is appended to the ledger as a ``model_reply`` row. This module
 keeps that write shape shared across daemon, CLI, owner-web, and
 owner-private Telegram paths so the contract does not fork by surface.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -50,21 +51,23 @@ def _sha256_material(value: Any) -> str:
 
 
 def _marker_payload() -> str:
-    return _canonical_json({
-        "event": "model_reply_persistence_introduced",
-        "slice": "4c.5a",
-        "plain_english": (
-            "autobiographical continuity turning on: from this point, "
-            "owner-private Maez replies are expected to land in the "
-            "append-only ledger as model_reply rows."
-        ),
-        "prior_gap": (
-            "Owner-private replies before this marker may have been "
-            "emitted and stored in surface memory without a ledger "
-            "model_reply row."
-        ),
-        "created_at": time.time(),
-    })
+    return _canonical_json(
+        {
+            "event": "model_reply_persistence_introduced",
+            "slice": "4c.5a",
+            "plain_english": (
+                "autobiographical continuity turning on: from this point, "
+                "owner-private Maez replies are expected to land in the "
+                "append-only ledger as model_reply rows."
+            ),
+            "prior_gap": (
+                "Owner-private replies before this marker may have been "
+                "emitted and stored in surface memory without a ledger "
+                "model_reply row."
+            ),
+            "created_at": time.time(),
+        }
+    )
 
 
 def _marker_already_written(db_path: str) -> bool:
@@ -143,6 +146,10 @@ def persist_model_reply(
     evidence_envelope: dict | None,
     audit_verdict: dict,
     memory_read_ids: list | None = None,
+    audit_trace_label: str | None = None,
+    audit_trace_value_schema: int | None = None,
+    audit_trace_metadata_shape: int | None = None,
+    audit_trace_lineage: dict | None = None,
 ) -> str | None:
     """Append an audited owner-private reply as a ledger model_reply.
 
@@ -167,6 +174,10 @@ def persist_model_reply(
             evidence_envelope=evidence_envelope,
             audit_verdict=audit_verdict,
             memory_read_ids=memory_read_ids or [],
+            audit_trace_label=audit_trace_label,
+            audit_trace_value_schema=audit_trace_value_schema,
+            audit_trace_metadata_shape=audit_trace_metadata_shape,
+            audit_trace_lineage=audit_trace_lineage,
         )
         if turn_id is None:
             _warn_once(

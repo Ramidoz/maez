@@ -42,6 +42,7 @@ Public API:
 Stdlib only (hashlib, json). No I/O, no globals, no side effects —
 DB loading happens in scripts/verify_ledger_chain.py.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -65,16 +66,19 @@ __all__ = [
 # break the moment migration 0003 lands. Add it to the strip set so
 # rows with or without the column produce identical chain hashes.
 # Pinned by tests/test_gestation_boundary.py::ChainHashInvariantTests.
-_CHAIN_HASH_EXCLUDE = ("chain_hash", "prev_chain_hash", "lifecycle_stage")
+_CHAIN_HASH_EXCLUDE = (
+    "chain_hash",
+    "prev_chain_hash",
+    "lifecycle_stage",
+    "audit_trace_label",
+    "audit_trace_value_schema",
+    "audit_trace_metadata_shape",
+)
 
 
 def canonical_row_bytes(row: dict) -> bytes:
     """Return the §6.1 canonical JSON bytes for a turn row."""
-    stripped = {
-        k: v
-        for k, v in row.items()
-        if k not in _CHAIN_HASH_EXCLUDE
-    }
+    stripped = {k: v for k, v in row.items() if k not in _CHAIN_HASH_EXCLUDE}
     return json.dumps(
         stripped,
         sort_keys=True,
@@ -119,25 +123,29 @@ def verify_chain(rows: list[dict]) -> list[dict]:
 
         recomputed = compute_chain_hash(row, stored_prev)
         if recomputed != stored_hash:
-            violations.append({
-                "row_index": i,
-                "turn_id": turn_id,
-                "reason": "chain-hash-mismatch",
-                "expected": recomputed,
-                "actual": stored_hash if isinstance(stored_hash, str) else "",
-            })
+            violations.append(
+                {
+                    "row_index": i,
+                    "turn_id": turn_id,
+                    "reason": "chain-hash-mismatch",
+                    "expected": recomputed,
+                    "actual": stored_hash if isinstance(stored_hash, str) else "",
+                }
+            )
 
         if i == 0:
             continue
         prev_row_hash = rows[i - 1].get("chain_hash", "")
         if stored_prev != prev_row_hash:
-            violations.append({
-                "row_index": i,
-                "turn_id": turn_id,
-                "reason": "broken-prev-link",
-                "expected": prev_row_hash if isinstance(prev_row_hash, str) else "",
-                "actual": stored_prev if isinstance(stored_prev, str) else "",
-            })
+            violations.append(
+                {
+                    "row_index": i,
+                    "turn_id": turn_id,
+                    "reason": "broken-prev-link",
+                    "expected": prev_row_hash if isinstance(prev_row_hash, str) else "",
+                    "actual": stored_prev if isinstance(stored_prev, str) else "",
+                }
+            )
 
     return violations
 
@@ -174,24 +182,28 @@ def verify_claim_witnesses(
 
         parent_turn = turns_by_id.get(turn_id)
         if parent_turn is None:
-            violations.append({
-                "claim_id": claim_id,
-                "turn_id": turn_id,
-                "reason": "orphan-claim-no-parent-turn",
-                "expected": "",
-                "actual": actual_witness if isinstance(actual_witness, str) else "",
-            })
+            violations.append(
+                {
+                    "claim_id": claim_id,
+                    "turn_id": turn_id,
+                    "reason": "orphan-claim-no-parent-turn",
+                    "expected": "",
+                    "actual": actual_witness if isinstance(actual_witness, str) else "",
+                }
+            )
             continue
 
         expected_witness = parent_turn.get("chain_hash", "")
         if actual_witness != expected_witness:
-            violations.append({
-                "claim_id": claim_id,
-                "turn_id": turn_id,
-                "reason": "claim-witness-mismatch",
-                "expected": expected_witness if isinstance(expected_witness, str) else "",
-                "actual": actual_witness if isinstance(actual_witness, str) else "",
-            })
+            violations.append(
+                {
+                    "claim_id": claim_id,
+                    "turn_id": turn_id,
+                    "reason": "claim-witness-mismatch",
+                    "expected": expected_witness if isinstance(expected_witness, str) else "",
+                    "actual": actual_witness if isinstance(actual_witness, str) else "",
+                }
+            )
 
     return violations
 
@@ -218,23 +230,27 @@ def verify_judgement_witnesses(
 
         parent_claim = claims_by_id.get(claim_id)
         if parent_claim is None:
-            violations.append({
-                "judgement_id": judgement_id,
-                "claim_id": claim_id,
-                "reason": "orphan-judgement-no-parent-claim",
-                "expected": "",
-                "actual": actual_witness if isinstance(actual_witness, str) else "",
-            })
+            violations.append(
+                {
+                    "judgement_id": judgement_id,
+                    "claim_id": claim_id,
+                    "reason": "orphan-judgement-no-parent-claim",
+                    "expected": "",
+                    "actual": actual_witness if isinstance(actual_witness, str) else "",
+                }
+            )
             continue
 
         expected_witness = parent_claim.get("parent_turn_chain_hash", "")
         if actual_witness != expected_witness:
-            violations.append({
-                "judgement_id": judgement_id,
-                "claim_id": claim_id,
-                "reason": "judgement-witness-mismatch",
-                "expected": expected_witness if isinstance(expected_witness, str) else "",
-                "actual": actual_witness if isinstance(actual_witness, str) else "",
-            })
+            violations.append(
+                {
+                    "judgement_id": judgement_id,
+                    "claim_id": claim_id,
+                    "reason": "judgement-witness-mismatch",
+                    "expected": expected_witness if isinstance(expected_witness, str) else "",
+                    "actual": actual_witness if isinstance(actual_witness, str) else "",
+                }
+            )
 
     return violations

@@ -24,6 +24,7 @@ A backward-compat free function :func:`build_envelope` instantiates
 the class once per call — earlier callers (slice 3 foundation) keep
 working unchanged.
 """
+
 from __future__ import annotations
 
 import json
@@ -61,6 +62,7 @@ def default_ledger_db_path() -> str | None:
     try:
         from pathlib import Path as _Path
         from core.infra.paths import home as _maez_home
+
         path = _Path(_maez_home()) / "memory" / "ledger.db"
         return str(path) if path.exists() else None
     except Exception:
@@ -109,10 +111,7 @@ def render_envelope_for_prompt(envelope: dict | None) -> str:
         return ""
 
     turn_id = envelope.get("turn_id") or ""
-    header = (
-        f"[EVIDENCE ENVELOPE — TURN {turn_id}]" if turn_id
-        else "[EVIDENCE ENVELOPE]"
-    )
+    header = f"[EVIDENCE ENVELOPE — TURN {turn_id}]" if turn_id else "[EVIDENCE ENVELOPE]"
     if truncated:
         header += " (truncated)"
 
@@ -151,8 +150,7 @@ def render_envelope_for_prompt(envelope: dict | None) -> str:
                 if isinstance(evidence, (dict, list)):
                     try:
                         tail_bits.append(
-                            json.dumps(evidence, default=str,
-                                       ensure_ascii=False),
+                            json.dumps(evidence, default=str, ensure_ascii=False),
                         )
                     except (TypeError, ValueError):
                         tail_bits.append(str(evidence))
@@ -191,16 +189,13 @@ def render_envelope_for_prompt(envelope: dict | None) -> str:
             forbidden_lines.append(f"  - anything about {topic}{tail}")
     for s in signals_absent:
         if s and not any(s in line for line in forbidden_lines):
-            forbidden_lines.append(
-                f"  - anything about {s} (signal absent: {s})"
-            )
+            forbidden_lines.append(f"  - anything about {s} (signal absent: {s})")
 
     if forbidden_lines:
         lines.append("You may NOT claim:")
         lines.extend(forbidden_lines)
         lines.append(
-            "If you must speak about a forbidden topic, name the absence "
-            "instead of confabulating."
+            "If you must speak about a forbidden topic, name the absence instead of confabulating."
         )
 
     lines.append("[END ENVELOPE]")
@@ -235,8 +230,7 @@ def resolve_recall_cap_chars() -> int:
         value = int(raw)
     except ValueError:
         _log.warning(
-            "maez.envelope: invalid "
-            "MAEZ_RECALL_CAP_WITH_ENVELOPE_CHARS=%r — using default 52000",
+            "maez.envelope: invalid MAEZ_RECALL_CAP_WITH_ENVELOPE_CHARS=%r — using default 52000",
             raw,
         )
         return 52_000
@@ -364,7 +358,8 @@ class BoundedEnvelopeBuilder:
             tcap = ccap // self.CHARS_PER_TOKEN
 
         sh_limit = (
-            self.MAX_SELF_HISTORY if self_history_limit is None
+            self.MAX_SELF_HISTORY
+            if self_history_limit is None
             else min(self_history_limit, self.MAX_SELF_HISTORY)
         )
 
@@ -379,7 +374,9 @@ class BoundedEnvelopeBuilder:
         cl_cap, cl_un, cl_drops = self._normalize_claimable(claimable or [])
         fb_cap, fb_un, fb_drops = self._normalize_forbidden(forbidden or [])
         sh_cap = self._populate_self_history(
-            ledger_db_path, limit=sh_limit, tenant_id=tenant_id,
+            ledger_db_path,
+            limit=sh_limit,
+            tenant_id=tenant_id,
             recall_gestation=recall_gestation,
         )
         sp_cap, sp_un, sp_drops = self._normalize_signals(signals_present)
@@ -426,7 +423,8 @@ class BoundedEnvelopeBuilder:
                 dropped_chars=drops["chars"],
                 envelope_chars_before=chars_before_sec,
                 envelope_chars_after=before_chars,
-                char_cap=ccap, token_cap=tcap,
+                char_cap=ccap,
+                token_cap=tcap,
                 cap_hit="per_section",
                 turn_id=turn_id,
             )
@@ -434,15 +432,21 @@ class BoundedEnvelopeBuilder:
         # ── §3 total-cap truncation ────────────────────────────────
         if before_chars > ccap:
             env = self._apply_total_cap_order(
-                env, char_cap=ccap, token_cap=tcap, turn_id=turn_id,
+                env,
+                char_cap=ccap,
+                token_cap=tcap,
+                turn_id=turn_id,
             )
 
         # ── §3a minimal fallback if still over ─────────────────────
         after_chars = self._envelope_chars(env)
         if after_chars > ccap:
             env = self._minimal_fallback(
-                env, char_cap=ccap, token_cap=tcap,
-                turn_id=turn_id, before_chars=after_chars,
+                env,
+                char_cap=ccap,
+                token_cap=tcap,
+                turn_id=turn_id,
+                before_chars=after_chars,
             )
 
         self._stamp_chars_final(env)
@@ -496,8 +500,7 @@ class BoundedEnvelopeBuilder:
             # "saved" tracks chars not delivered (rough estimate via
             # JSON length of the dropped tail) so per-section
             # telemetry stays honest.
-            saved = len(json.dumps(raw[cls.MAX_LIST_ITEMS:],
-                                   ensure_ascii=False))
+            saved = len(json.dumps(raw[cls.MAX_LIST_ITEMS :], ensure_ascii=False))
             return kept, saved
         if isinstance(raw, str):
             if len(raw) > cls.MAX_TOOL_RESULT_SUMMARY_CHARS:
@@ -511,7 +514,8 @@ class BoundedEnvelopeBuilder:
     # emit telemetry — the orchestrator in build() does that with
     # real envelope_chars_before/after computed via substitution.
     def _normalize_tool_results(
-        self, items,
+        self,
+        items,
     ) -> tuple[list[dict], list[dict], dict]:
         items_list = list(items or [])
         # Uncapped: shape-cleaned, no count/summary caps. Same shape
@@ -540,37 +544,48 @@ class BoundedEnvelopeBuilder:
                 new["summary"] = compressed
                 body_truncated_chars += saved
             capped.append(new)
-        return capped, uncapped, {
-            "entries": dropped_n, "chars": body_truncated_chars,
-        }
+        return (
+            capped,
+            uncapped,
+            {
+                "entries": dropped_n,
+                "chars": body_truncated_chars,
+            },
+        )
 
     def _normalize_claimable(
-        self, items,
+        self,
+        items,
     ) -> tuple[list[dict], list[dict], dict]:
         uncapped = [dict(i) for i in items if isinstance(i, dict)]
         dropped_n = max(0, len(uncapped) - self.MAX_CLAIMABLE)
         # §3.2 — drop OLDEST first, keep most recent. Caller emits
         # oldest→newest, so preserve the tail.
-        kept = uncapped[-self.MAX_CLAIMABLE:] if uncapped else []
+        kept = uncapped[-self.MAX_CLAIMABLE :] if uncapped else []
         truncated_chars = 0
         capped: list[dict] = []
         for it in kept:
             entry = dict(it)
             if "text" in entry and isinstance(entry["text"], str):
                 if len(entry["text"]) > self.MAX_CLAIMABLE_ENTRY_CHARS:
-                    truncated_chars += (
-                        len(entry["text"]) - self.MAX_CLAIMABLE_ENTRY_CHARS
-                    )
+                    truncated_chars += len(entry["text"]) - self.MAX_CLAIMABLE_ENTRY_CHARS
                     entry["text"] = _truncate(
-                        entry["text"], self.MAX_CLAIMABLE_ENTRY_CHARS,
+                        entry["text"],
+                        self.MAX_CLAIMABLE_ENTRY_CHARS,
                     )
             capped.append(entry)
-        return capped, uncapped, {
-            "entries": dropped_n, "chars": truncated_chars,
-        }
+        return (
+            capped,
+            uncapped,
+            {
+                "entries": dropped_n,
+                "chars": truncated_chars,
+            },
+        )
 
     def _normalize_forbidden(
-        self, items,
+        self,
+        items,
     ) -> tuple[list[dict], list[dict], dict]:
         uncapped = [dict(i) for i in items if isinstance(i, dict)]
         dropped_n = max(0, len(uncapped) - self.MAX_FORBIDDEN)
@@ -581,21 +596,25 @@ class BoundedEnvelopeBuilder:
             entry = dict(it)
             for field in ("text", "topic", "reason"):
                 v = entry.get(field)
-                if (isinstance(v, str)
-                        and len(v) > self.MAX_FORBIDDEN_ENTRY_CHARS):
-                    truncated_chars += (
-                        len(v) - self.MAX_FORBIDDEN_ENTRY_CHARS
-                    )
+                if isinstance(v, str) and len(v) > self.MAX_FORBIDDEN_ENTRY_CHARS:
+                    truncated_chars += len(v) - self.MAX_FORBIDDEN_ENTRY_CHARS
                     entry[field] = _truncate(
-                        v, self.MAX_FORBIDDEN_ENTRY_CHARS,
+                        v,
+                        self.MAX_FORBIDDEN_ENTRY_CHARS,
                     )
             capped.append(entry)
-        return capped, uncapped, {
-            "entries": dropped_n, "chars": truncated_chars,
-        }
+        return (
+            capped,
+            uncapped,
+            {
+                "entries": dropped_n,
+                "chars": truncated_chars,
+            },
+        )
 
     def _normalize_signals(
-        self, items,
+        self,
+        items,
     ) -> tuple[list[str], list[str], dict]:
         # Uncapped: dedup-only (no count/per-entry caps). Capped also
         # dedups (the operating-envelope shape) — drops counted are
@@ -626,13 +645,23 @@ class BoundedEnvelopeBuilder:
                 continue
             seen.add(t)
             capped.append(t)
-        return capped, uncapped, {
-            "entries": dropped_n, "chars": truncated_chars,
-        }
+        return (
+            capped,
+            uncapped,
+            {
+                "entries": dropped_n,
+                "chars": truncated_chars,
+            },
+        )
 
     # ── §3 total-cap truncation order ──────────────────────────────
     def _apply_total_cap_order(
-        self, env: dict, *, char_cap: int, token_cap: int, turn_id,
+        self,
+        env: dict,
+        *,
+        char_cap: int,
+        token_cap: int,
+        turn_id,
     ) -> dict:
         """§3: drop bulk first. tool_result body bytes → claimable
         entries → self_history entries → preserve forbidden + signals."""
@@ -654,14 +683,14 @@ class BoundedEnvelopeBuilder:
                 dropped_chars=saved,
                 envelope_chars_before=before,
                 envelope_chars_after=self._envelope_chars(env),
-                char_cap=char_cap, token_cap=token_cap,
+                char_cap=char_cap,
+                token_cap=token_cap,
                 cap_hit="total",
                 turn_id=turn_id,
             )
 
         # Step 2: drop claimable oldest-first until under cap.
-        while (self._envelope_chars(env) > char_cap
-               and env.get("claimable")):
+        while self._envelope_chars(env) > char_cap and env.get("claimable"):
             dropped = env["claimable"].pop(0)
             self._emit_truncation(
                 section="claimable",
@@ -670,14 +699,14 @@ class BoundedEnvelopeBuilder:
                 dropped_chars=len(json.dumps(dropped, ensure_ascii=False)),
                 envelope_chars_before=before,
                 envelope_chars_after=self._envelope_chars(env),
-                char_cap=char_cap, token_cap=token_cap,
+                char_cap=char_cap,
+                token_cap=token_cap,
                 cap_hit="total",
                 turn_id=turn_id,
             )
 
         # Step 3: drop self_history oldest-first.
-        while (self._envelope_chars(env) > char_cap
-               and env.get("self_history")):
+        while self._envelope_chars(env) > char_cap and env.get("self_history"):
             dropped = env["self_history"].pop()  # oldest = end (DESC order)
             self._emit_truncation(
                 section="self_history",
@@ -686,7 +715,8 @@ class BoundedEnvelopeBuilder:
                 dropped_chars=len(json.dumps(dropped, ensure_ascii=False)),
                 envelope_chars_before=before,
                 envelope_chars_after=self._envelope_chars(env),
-                char_cap=char_cap, token_cap=token_cap,
+                char_cap=char_cap,
+                token_cap=token_cap,
                 cap_hit="total",
                 turn_id=turn_id,
             )
@@ -695,8 +725,13 @@ class BoundedEnvelopeBuilder:
 
     # ── §3a minimal-envelope fallback ──────────────────────────────
     def _minimal_fallback(
-        self, env: dict, *, char_cap: int, token_cap: int,
-        turn_id, before_chars: int,
+        self,
+        env: dict,
+        *,
+        char_cap: int,
+        token_cap: int,
+        turn_id,
+        before_chars: int,
     ) -> dict:
         # Tool results: status-only, MAX_FALLBACK_TOOLS.
         tools_min = []
@@ -774,7 +809,8 @@ class BoundedEnvelopeBuilder:
             dropped_chars=max(0, before_chars - after_chars),
             envelope_chars_before=before_chars,
             envelope_chars_after=after_chars,
-            char_cap=char_cap, token_cap=token_cap,
+            char_cap=char_cap,
+            token_cap=token_cap,
             cap_hit="minimal_fallback",
             turn_id=turn_id,
         )
@@ -782,7 +818,11 @@ class BoundedEnvelopeBuilder:
 
     # ── self_history population (best-effort, ledger lookback) ─────
     def _populate_self_history(
-        self, db_path: str | None, *, limit: int, tenant_id: str,
+        self,
+        db_path: str | None,
+        *,
+        limit: int,
+        tenant_id: str,
         recall_gestation: str = "user",
     ) -> list[dict]:
         if db_path is None or limit <= 0:
@@ -794,6 +834,8 @@ class BoundedEnvelopeBuilder:
                 limit=limit,
                 tenant_id=tenant_id,
                 recall_gestation=recall_gestation,
+                audit_path="envelope_builder.self_history",
+                would_have_consumed_surface="evidence_envelope.self_history",
             )
         except Exception as exc:
             # Best-effort: ledger unreachable / locked / schema drift
@@ -803,9 +845,9 @@ class BoundedEnvelopeBuilder:
             # population was failing. Debug-log the cause; behavior
             # unchanged (still returns []).
             _log.debug(
-                "self_history population skipped (ledger lookup "
-                "failed for db_path=%r): %s",
-                db_path, exc,
+                "self_history population skipped (ledger lookup failed for db_path=%r): %s",
+                db_path,
+                exc,
             )
             return []
         out: list[dict] = []
@@ -839,17 +881,24 @@ class BoundedEnvelopeBuilder:
         return len(json.dumps(env, sort_keys=True, ensure_ascii=False))
 
     def _emit_truncation(
-        self, *, section, truncation_kind, dropped_entries, dropped_chars,
-        envelope_chars_before, envelope_chars_after, char_cap, token_cap,
-        cap_hit, turn_id,
+        self,
+        *,
+        section,
+        truncation_kind,
+        dropped_entries,
+        dropped_chars,
+        envelope_chars_before,
+        envelope_chars_after,
+        char_cap,
+        token_cap,
+        cap_hit,
+        turn_id,
     ) -> None:
         toks_before = (
-            envelope_chars_before // self.CHARS_PER_TOKEN
-            if envelope_chars_before >= 0 else -1
+            envelope_chars_before // self.CHARS_PER_TOKEN if envelope_chars_before >= 0 else -1
         )
         toks_after = (
-            envelope_chars_after // self.CHARS_PER_TOKEN
-            if envelope_chars_after >= 0 else -1
+            envelope_chars_after // self.CHARS_PER_TOKEN if envelope_chars_after >= 0 else -1
         )
         extra = {
             "section": section,
@@ -868,8 +917,13 @@ class BoundedEnvelopeBuilder:
         _log.warning(
             "envelope_truncated section=%s kind=%s dropped_entries=%s "
             "dropped_chars=%s before=%s after=%s cap=%s",
-            section, truncation_kind, dropped_entries, dropped_chars,
-            envelope_chars_before, envelope_chars_after, char_cap,
+            section,
+            truncation_kind,
+            dropped_entries,
+            dropped_chars,
+            envelope_chars_before,
+            envelope_chars_after,
+            char_cap,
             extra=extra,
         )
 

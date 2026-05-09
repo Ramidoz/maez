@@ -14,10 +14,13 @@ responsibility, not this module's.
 Read-only by construction: opens the DB with ``mode=ro`` so a live
 writer is not contended.
 """
+
 from __future__ import annotations
 
 import sqlite3
 from typing import Iterable
+
+from core.cognition.audit_policy import TraceAuditPolicy
 
 __all__ = ["recent_turns_by_kind"]
 
@@ -29,6 +32,9 @@ def recent_turns_by_kind(
     limit: int,
     tenant_id: str = "owner",
     recall_gestation: str = "user",
+    include_trace_labeled: bool = False,
+    audit_path: str = "recent_turns_by_kind",
+    would_have_consumed_surface: str = "self_history",
 ) -> list[dict]:
     """Return up to ``limit`` most-recent turn rows whose ``turn_kind``
     is in ``kinds``, newest-first, scoped to ``tenant_id``.
@@ -61,10 +67,7 @@ def recent_turns_by_kind(
     if limit < 0:
         raise ValueError(f"limit must be >= 0, got {limit}")
     if recall_gestation not in ("user", "full"):
-        raise ValueError(
-            f"recall_gestation must be 'user' or 'full', "
-            f"got {recall_gestation!r}"
-        )
+        raise ValueError(f"recall_gestation must be 'user' or 'full', got {recall_gestation!r}")
     kinds_list = list(kinds)
     if not kinds_list or limit == 0:
         return []
@@ -78,24 +81,44 @@ def recent_turns_by_kind(
         # Implements the memo §4 "0.15x downweight" as priority sort:
         # gestation rows only surface when lived rows don't fill limit.
         order_clause = (
-            "ORDER BY "
-            "CASE WHEN lifecycle_stage = 'lived' THEN 1 ELSE 2 END ASC, "
-            "timestamp DESC"
+            "ORDER BY CASE WHEN lifecycle_stage = 'lived' THEN 1 ELSE 2 END ASC, timestamp DESC"
         )
 
-    sql = (
-        "SELECT turn_id, timestamp, turn_kind, raw_text, lifecycle_stage "
-        "FROM turns "
-        f"WHERE tenant_id = ? AND turn_kind IN ({placeholders}) "
-        f"{order_clause} "
-        "LIMIT ?"
+    select_cols = (
+        "turn_id, timestamp, turn_kind, raw_text, lifecycle_stage, "
+        "audit_trace_label, audit_trace_value_schema, "
+        "audit_trace_metadata_shape"
     )
+    base_where = f"WHERE tenant_id = ? AND turn_kind IN ({placeholders}) "
+    sql = f"SELECT {select_cols} FROM turns {base_where}{order_clause} LIMIT ?"
     params = (tenant_id, *kinds_list, limit)
 
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
         conn.row_factory = sqlite3.Row
-        cur = conn.execute(sql, params)
+        if include_trace_labeled:
+            cur = conn.execute(sql, params)
+            return [dict(r) for r in cur.fetchall()]
+
+        # Log rows that would have been consumed by the unfiltered
+        # top-window, then perform the actual read with the refusal
+        # predicate at SQL level so untraced older rows can backfill.
+        candidate_rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+        TraceAuditPolicy.current().apply(
+            candidate_rows,
+            audit_path=audit_path,
+            would_have_consumed_surface=would_have_consumed_surface,
+        )
+
+        filtered_sql = (
+            f"SELECT {select_cols} "
+            "FROM turns "
+            f"{base_where}"
+            "AND audit_trace_label IS NULL "
+            f"{order_clause} "
+            "LIMIT ?"
+        )
+        cur = conn.execute(filtered_sql, params)
         return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
