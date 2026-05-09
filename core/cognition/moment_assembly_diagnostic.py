@@ -11,6 +11,8 @@ enum values must fail in old readers instead of being silently accepted.
 from __future__ import annotations
 
 import contextvars
+from copy import deepcopy
+from datetime import UTC, datetime
 from enum import StrEnum
 import hashlib
 import json
@@ -75,6 +77,42 @@ BYPASS_REASONS = frozenset(
         "exception",
         "deliberate_skip",
         "unspecified",
+    }
+)
+NEXT_SURFACE_VALUES = frozenset(
+    {
+        "cli",
+        "telegram_text",
+        "telegram_recovery",
+        "web_owner",
+        "daemon_cycle",
+        "unknown",
+    }
+)
+PRESSURE_DELTA_VALUES = frozenset({"down", "flat", "up", "unknown"})
+SELF_WORKSPACE_NEED_VALUES = frozenset(CANDIDATE_SOURCE_NAMES + ("unknown",))
+PREDICTION_STATUSES = frozenset({"predicted", "deliberate_skip"})
+EPISTEMIC_PRECISION_VALUES = frozenset({"low", "medium", "high", "unknown"})
+ANTICIPATION_METHOD_VALUES = frozenset(
+    {
+        "deterministic_source_pattern_v1",
+        "deliberate_skip_covenant_boundary_v1",
+    }
+)
+ANTICIPATION_TARGET_KEYS = frozenset(
+    {
+        "next_surface",
+        "next_pressure_delta",
+        "next_self_workspace_need",
+    }
+)
+FORBIDDEN_ANTICIPATION_VALUE_KEYS = frozenset(
+    {
+        "model_confidence",
+        "logit_confidence",
+        "hidden_state_confidence",
+        "llm_verbal_confidence",
+        "verbal_confidence",
     }
 )
 
@@ -165,6 +203,19 @@ def validate_slot(name: str, slot: dict[str, Any]) -> None:
         raise ValueError(f"{name}: value is required")
     if "source_ids" not in slot or not isinstance(slot["source_ids"], list):
         raise ValueError(f"{name}: source_ids list is required")
+    if name == "anticipation" and state is DiagnosticState.EMITTED_VALUE:
+        _validate_anticipation_value(slot["value"], slot["source_ids"])
+        return
+    if name == "surprise_delta" and state in {
+        DiagnosticState.EMITTED_VALUE,
+        DiagnosticState.NOT_OBSERVED,
+    }:
+        _validate_surprise_delta_value(
+            value=slot["value"],
+            source_ids=slot["source_ids"],
+            state=state,
+        )
+        return
     if state in {DiagnosticState.NOT_IMPLEMENTED, DiagnosticState.NOT_OBSERVED}:
         if slot["value"] is not None:
             raise ValueError(f"{name}: {state.value} requires value None")
@@ -197,6 +248,170 @@ def _default_slot(state: DiagnosticState = DiagnosticState.NOT_IMPLEMENTED) -> d
     return build_slot(state, value=None, source_ids=[])
 
 
+def _typed_ledger_source_ids(source_ids: list[str]) -> list[str]:
+    return [
+        source_id
+        for source_id in source_ids
+        if isinstance(source_id, str) and source_id.startswith("ledger:")
+    ]
+
+
+def _all_unknown_targets(targets: dict[str, Any]) -> bool:
+    pressure_delta = targets.get("next_pressure_delta")
+    workspace_need = targets.get("next_self_workspace_need")
+    return (
+        targets.get("next_surface") == "unknown"
+        and isinstance(pressure_delta, dict)
+        and set(pressure_delta) == set(PRESSURE_NAMES)
+        and all(value == "unknown" for value in pressure_delta.values())
+        and workspace_need == ["unknown"]
+    )
+
+
+def _validate_anticipation_targets(targets: Any) -> None:
+    if not isinstance(targets, dict):
+        raise ValueError("anticipation targets must be an object")
+    if set(targets) != ANTICIPATION_TARGET_KEYS:
+        raise ValueError("anticipation targets must have exactly the closed target keys")
+    next_surface = targets["next_surface"]
+    if next_surface not in NEXT_SURFACE_VALUES:
+        raise ValueError(f"next_surface must be one of {sorted(NEXT_SURFACE_VALUES)!r}")
+    pressure_delta = targets["next_pressure_delta"]
+    if not isinstance(pressure_delta, dict):
+        raise ValueError("next_pressure_delta must be an object")
+    if set(pressure_delta) != set(PRESSURE_NAMES):
+        raise ValueError("next_pressure_delta pressure keys drifted from PRESSURE_NAMES")
+    for name, value in pressure_delta.items():
+        if value not in PRESSURE_DELTA_VALUES:
+            raise ValueError(f"next_pressure_delta.{name} has unknown direction {value!r}")
+    workspace_need = targets["next_self_workspace_need"]
+    if not isinstance(workspace_need, list) or not workspace_need:
+        raise ValueError("next_self_workspace_need must be a non-empty list")
+    if len(set(workspace_need)) != len(workspace_need):
+        raise ValueError("next_self_workspace_need must not contain duplicates")
+    for value in workspace_need:
+        if value not in SELF_WORKSPACE_NEED_VALUES:
+            raise ValueError(
+                "next_self_workspace_need must use the closed candidate-source vocabulary"
+            )
+
+
+def _validate_epistemic_precision(
+    *,
+    precision: Any,
+    source_ids: list[str],
+    targets: dict[str, Any],
+    prediction_status: str,
+) -> None:
+    if precision not in EPISTEMIC_PRECISION_VALUES:
+        raise ValueError("epistemic_precision must use the closed precision vocabulary")
+    ledger_source_count = len(set(_typed_ledger_source_ids(source_ids)))
+    if precision == "high" and ledger_source_count < 3:
+        raise ValueError("epistemic_precision=high requires at least 3 typed ledger sources")
+    if precision == "medium" and ledger_source_count < 2:
+        raise ValueError("epistemic_precision=medium requires at least 2 typed ledger sources")
+    if precision == "low" and ledger_source_count < 1:
+        raise ValueError("epistemic_precision=low requires at least 1 typed ledger source")
+    if precision in {"low", "medium", "high"} and ledger_source_count != len(source_ids):
+        raise ValueError("epistemic_precision evidence must be typed ledger source_ids")
+    if precision == "unknown" and source_ids:
+        raise ValueError("epistemic_precision=unknown must not carry ledger evidence")
+    if (
+        precision == "unknown"
+        and prediction_status == "predicted"
+        and not _all_unknown_targets(targets)
+    ):
+        raise ValueError("epistemic_precision=unknown requires unknown-safe targets")
+
+
+def _validate_anticipation_value(value: Any, source_ids: list[str]) -> None:
+    if not isinstance(value, dict):
+        raise ValueError("anticipation value must be an object")
+    forbidden = FORBIDDEN_ANTICIPATION_VALUE_KEYS.intersection(value)
+    if forbidden:
+        raise ValueError(
+            "anticipation value must not carry model_confidence/logit/hidden-state fields"
+        )
+    required = {
+        "prediction_id",
+        "predicted_at_turn_id",
+        "prediction_status",
+        "targets",
+        "epistemic_precision",
+        "method",
+        "expires_after_turns",
+        "predicted_at_wall_clock",
+    }
+    if set(value) != required:
+        raise ValueError("anticipation value must use the exact X.1 field set")
+    for key in ("prediction_id", "predicted_at_turn_id", "predicted_at_wall_clock"):
+        if not isinstance(value[key], str) or not value[key]:
+            raise ValueError(f"anticipation {key} must be a non-empty string")
+    if value["prediction_status"] not in PREDICTION_STATUSES:
+        raise ValueError("prediction_status must use the closed status vocabulary")
+    if value["method"] not in ANTICIPATION_METHOD_VALUES:
+        raise ValueError("anticipation method must use the closed method vocabulary")
+    if not isinstance(value["expires_after_turns"], int) or value["expires_after_turns"] < 0:
+        raise ValueError("expires_after_turns must be a non-negative integer")
+    _validate_anticipation_targets(value["targets"])
+    if value["prediction_status"] == "deliberate_skip" and not _all_unknown_targets(
+        value["targets"]
+    ):
+        raise ValueError("deliberate_skip requires unknown-safe targets")
+    _validate_epistemic_precision(
+        precision=value["epistemic_precision"],
+        source_ids=source_ids,
+        targets=value["targets"],
+        prediction_status=value["prediction_status"],
+    )
+
+
+def _validate_surprise_delta_value(
+    *,
+    value: Any,
+    source_ids: list[str],
+    state: DiagnosticState,
+) -> None:
+    if not source_ids or len(source_ids) != 1:
+        raise ValueError("surprise_delta requires exactly one prediction_record_id source")
+    if not isinstance(source_ids[0], str) or not source_ids[0]:
+        raise ValueError("surprise_delta prediction_record_id source must be non-empty")
+    if not isinstance(value, dict):
+        raise ValueError("surprise_delta value must be an object")
+    if set(value) != {"prediction_record_id", "matches", "surprise_score"}:
+        raise ValueError("surprise_delta value must use the exact X.1 field set")
+    if value["prediction_record_id"] != source_ids[0]:
+        raise ValueError("surprise_delta source_ids must point to prediction_record_id")
+    if state is DiagnosticState.NOT_OBSERVED:
+        if value["matches"] is not None or value["surprise_score"] is not None:
+            raise ValueError("not_observed surprise_delta requires null match/score")
+        return
+    matches = value["matches"]
+    if not isinstance(matches, dict):
+        raise ValueError("surprise_delta matches must be an object")
+    if set(matches) != {
+        "next_surface",
+        "next_pressure_delta",
+        "next_self_workspace_need",
+    }:
+        raise ValueError("surprise_delta matches must use the exact target keys")
+    if not isinstance(matches["next_surface"], bool):
+        raise ValueError("surprise_delta next_surface match must be boolean")
+    if not isinstance(matches["next_self_workspace_need"], bool):
+        raise ValueError("surprise_delta next_self_workspace_need match must be boolean")
+    pressure = matches["next_pressure_delta"]
+    if not isinstance(pressure, dict) or set(pressure) != {"matched", "total"}:
+        raise ValueError("surprise_delta pressure match must be {matched,total}")
+    if pressure["total"] != len(PRESSURE_NAMES):
+        raise ValueError("surprise_delta pressure total drifted from PRESSURE_NAMES")
+    if not (0 <= pressure["matched"] <= pressure["total"]):
+        raise ValueError("surprise_delta matched pressure count out of bounds")
+    if not isinstance(value["surprise_score"], int | float):
+        raise ValueError("surprise_delta surprise_score must be numeric")
+    if not (0.0 <= float(value["surprise_score"]) <= 1.0):
+        raise ValueError("surprise_delta surprise_score must be in [0, 1]")
+
+
 def _filled_slots(names: tuple[str, ...]) -> dict[str, dict[str, Any]]:
     return {name: _default_slot() for name in names}
 
@@ -212,6 +427,95 @@ def _decoder_note(thesis_sha: str) -> dict[str, str]:
         "architectural_thesis_adr_id": ARCHITECTURAL_THESIS_ADR_ID,
         "audit_boundary": AUDIT_BOUNDARY,
     }
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def build_anticipation_slot(
+    *,
+    prediction_id: str,
+    predicted_at_turn_id: str,
+    targets: dict[str, Any],
+    epistemic_precision: str,
+    method: str,
+    expires_after_turns: int,
+    predicted_at_wall_clock: str | None = None,
+    source_ids: list[str],
+    prediction_status: str = "predicted",
+) -> dict[str, Any]:
+    value = {
+        "prediction_id": prediction_id,
+        "predicted_at_turn_id": predicted_at_turn_id,
+        "prediction_status": prediction_status,
+        "targets": targets,
+        "epistemic_precision": epistemic_precision,
+        "method": method,
+        "expires_after_turns": expires_after_turns,
+        "predicted_at_wall_clock": predicted_at_wall_clock or _utc_now_iso(),
+    }
+    slot = {
+        "schema_version": ORGAN_SCHEMA_VERSION,
+        "state": DiagnosticState.EMITTED_VALUE.value,
+        "value": value,
+        "source_ids": list(source_ids),
+    }
+    validate_slot("anticipation", slot)
+    return slot
+
+
+def build_surprise_delta_slot(
+    *,
+    prediction_record_id: str,
+    matched_surface: bool | None = None,
+    matched_pressure_count: int | None = None,
+    total_pressure_count: int | None = None,
+    matched_workspace_need: bool | None = None,
+    surprise_score: float | None = None,
+    expired_without_observation: bool = False,
+) -> dict[str, Any]:
+    if expired_without_observation:
+        slot = {
+            "schema_version": ORGAN_SCHEMA_VERSION,
+            "state": DiagnosticState.NOT_OBSERVED.value,
+            "value": {
+                "prediction_record_id": prediction_record_id,
+                "matches": None,
+                "surprise_score": None,
+            },
+            "source_ids": [prediction_record_id],
+        }
+        validate_slot("surprise_delta", slot)
+        return slot
+    if matched_surface is None or matched_workspace_need is None:
+        raise ValueError("observed surprise_delta requires surface and workspace matches")
+    if matched_pressure_count is None or total_pressure_count is None:
+        raise ValueError("observed surprise_delta requires pressure match counts")
+    if surprise_score is None:
+        surface_score = 1.0 if matched_surface else 0.0
+        pressure_score = matched_pressure_count / total_pressure_count
+        workspace_score = 1.0 if matched_workspace_need else 0.0
+        surprise_score = round(1.0 - ((surface_score + pressure_score + workspace_score) / 3.0), 6)
+    slot = {
+        "schema_version": ORGAN_SCHEMA_VERSION,
+        "state": DiagnosticState.EMITTED_VALUE.value,
+        "value": {
+            "prediction_record_id": prediction_record_id,
+            "matches": {
+                "next_surface": bool(matched_surface),
+                "next_pressure_delta": {
+                    "matched": int(matched_pressure_count),
+                    "total": int(total_pressure_count),
+                },
+                "next_self_workspace_need": bool(matched_workspace_need),
+            },
+            "surprise_score": float(surprise_score),
+        },
+        "source_ids": [prediction_record_id],
+    }
+    validate_slot("surprise_delta", slot)
+    return slot
 
 
 def build_diagnostic_record(
@@ -357,6 +661,157 @@ def write_diagnostic_record(*, record: dict[str, Any], log_path: Path) -> None:
         os.fsync(fh.fileno())
 
 
+def normalize_diagnostic_record(record: dict[str, Any]) -> dict[str, Any]:
+    normalized = deepcopy(record)
+    if (
+        normalized.get("schema_version") == 1
+        and normalized.get("assembly_path") == "bypassed"
+        and "bypass_note" not in normalized
+    ):
+        normalized["bypass_note"] = ""
+    return normalized
+
+
+def _read_diagnostic_records(log_path: Path) -> list[dict[str, Any]]:
+    if not log_path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        records.append(normalize_diagnostic_record(json.loads(line)))
+    return records
+
+
+def write_anticipation_record(
+    *,
+    surface: str,
+    turn_id: str | None,
+    anticipation: dict[str, Any],
+    log_path: Path = DEFAULT_LOG_PATH,
+    mark_current_turn_observed: bool = False,
+) -> str:
+    source_id = str(turn_id) if turn_id else f"completion:{surface}:{uuid4()}"
+    surprise_delta = build_slot(
+        DiagnosticState.EMITTED_NULL,
+        value=None,
+        source_ids=[str(anticipation["value"]["prediction_id"])],
+    )
+    record = build_diagnostic_record(
+        surface=surface,
+        source_ids=[source_id],
+        assembly_path="observed",
+        anticipation=anticipation,
+        surprise_delta=surprise_delta,
+        source_id_synthetic=not bool(turn_id),
+    )
+    write_diagnostic_record(record=record, log_path=log_path)
+    record_id = str(record["record_id"])
+    if mark_current_turn_observed:
+        mark_current_moment_assembly_observed(record_id=record_id)
+    return record_id
+
+
+def _reconciled_prediction_record_ids(records: list[dict[str, Any]]) -> set[str]:
+    out: set[str] = set()
+    for record in records:
+        slot = record.get("surprise_delta") or {}
+        source_ids = slot.get("source_ids") or []
+        value = slot.get("value") or {}
+        prediction_id = value.get("prediction_record_id") if isinstance(value, dict) else None
+        if prediction_id and source_ids == [prediction_id]:
+            out.add(str(prediction_id))
+    return out
+
+
+def find_latest_unreconciled_anticipation(
+    *,
+    log_path: Path = DEFAULT_LOG_PATH,
+) -> dict[str, Any] | None:
+    records = _read_diagnostic_records(log_path)
+    reconciled = _reconciled_prediction_record_ids(records)
+    for record in reversed(records):
+        slot = record.get("anticipation") or {}
+        if slot.get("state") != DiagnosticState.EMITTED_VALUE.value:
+            continue
+        record_id = str(record.get("record_id") or "")
+        if not record_id or record_id in reconciled:
+            continue
+        value = slot.get("value") or {}
+        if not isinstance(value, dict):
+            continue
+        if int(value.get("expires_after_turns") or 0) <= 0:
+            continue
+        return record
+    return None
+
+
+def reconcile_latest_anticipation(
+    *,
+    surface: str,
+    turn_id: str | None,
+    observed_surface: str,
+    observed_pressure_delta: dict[str, str],
+    observed_self_workspace_need: list[str],
+    log_path: Path = DEFAULT_LOG_PATH,
+) -> str | None:
+    prediction = find_latest_unreconciled_anticipation(log_path=log_path)
+    if prediction is None:
+        return None
+    targets = prediction["anticipation"]["value"]["targets"]
+    predicted_pressure = targets["next_pressure_delta"]
+    matched_pressure_count = sum(
+        1
+        for name in PRESSURE_NAMES
+        if predicted_pressure.get(name) == observed_pressure_delta.get(name)
+    )
+    surprise_delta = build_surprise_delta_slot(
+        prediction_record_id=str(prediction["record_id"]),
+        matched_surface=targets["next_surface"] == observed_surface,
+        matched_pressure_count=matched_pressure_count,
+        total_pressure_count=len(PRESSURE_NAMES),
+        matched_workspace_need=set(targets["next_self_workspace_need"])
+        == set(observed_self_workspace_need),
+    )
+    source_id = str(turn_id) if turn_id else f"completion:{surface}:{uuid4()}"
+    record = build_diagnostic_record(
+        surface=surface,
+        source_ids=[source_id],
+        assembly_path="observed",
+        anticipation=_default_slot(DiagnosticState.NOT_OBSERVED),
+        surprise_delta=surprise_delta,
+        source_id_synthetic=not bool(turn_id),
+    )
+    write_diagnostic_record(record=record, log_path=log_path)
+    return str(record["record_id"])
+
+
+def expire_latest_anticipation(
+    *,
+    surface: str,
+    turn_id: str | None,
+    log_path: Path = DEFAULT_LOG_PATH,
+) -> str | None:
+    prediction = find_latest_unreconciled_anticipation(log_path=log_path)
+    if prediction is None:
+        return None
+    surprise_delta = build_surprise_delta_slot(
+        prediction_record_id=str(prediction["record_id"]),
+        expired_without_observation=True,
+    )
+    source_id = str(turn_id) if turn_id else f"completion:{surface}:{uuid4()}"
+    record = build_diagnostic_record(
+        surface=surface,
+        source_ids=[source_id],
+        assembly_path="observed",
+        anticipation=_default_slot(DiagnosticState.NOT_OBSERVED),
+        surprise_delta=surprise_delta,
+        source_id_synthetic=not bool(turn_id),
+    )
+    write_diagnostic_record(record=record, log_path=log_path)
+    return str(record["record_id"])
+
+
 def write_bypassed_record(*, surface: str, turn_id: str, log_path: Path) -> None:
     record = build_bypassed_record(
         surface=surface,
@@ -452,6 +907,7 @@ class MomentAssemblyTurn:
         self.lifecycle_phase = lifecycle_phase
         self.log_path = log_path
         self._completed = False
+        self.observed_record_id = ""
         self._token: contextvars.Token[MomentAssemblyTurn | None] | None = None
 
     def __enter__(self) -> MomentAssemblyTurn:
@@ -476,6 +932,9 @@ class MomentAssemblyTurn:
     def mark_observed(self, *, record_id: str = "") -> None:
         if self._completed:
             raise RuntimeError("moment assembly turn already completed")
+        if not record_id:
+            raise ValueError("record_id is required for observed moment assembly turns")
+        self.observed_record_id = record_id
         self._completed = True
 
     def _write_bypass(self, *, reason: str, note: str) -> None:

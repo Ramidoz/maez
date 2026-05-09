@@ -84,6 +84,44 @@ Slice X.1, emitted records should carry both `surprise_delta` and a
 precision field for active-inference precision-weighting on prediction
 errors. X.0 reserves the slot; X.1 defines the organ schema.
 
+Slice X.1 defines the first real organ shape. Anticipation predicts
+bounded next-turn state, not owner wording, feeling, or interior intent.
+The closed target set is exactly `next_surface`,
+`next_pressure_delta`, and `next_self_workspace_need`; extra keys or
+free-form content strings are invalid at write time.
+
+Anticipation records are write-only diagnostics. No production prompt,
+router, recall, audit, or response-generation path may read them. The
+only allowed read is JSONL replay by the diagnostic reconciliation
+helper, which reads the most recent unreconciled anticipation record to
+write a `surprise_delta` record on the next turn. No in-memory
+cross-turn state and no sidecar database may substitute for JSONL
+replay.
+
+X.1 precision is `epistemic_precision`, derived from source quality, not
+from logits, hidden states, model self-confidence, or LLM verbal
+confidence. `high` requires at least three independent typed
+`ledger:*` evidence handles, `medium` requires at least two, `low`
+requires at least one, and `unknown` carries no ledger evidence.
+
+The two-record pattern is mandatory: turn N writes an anticipation
+record; turn N+1 writes a surprise record with
+`source_ids=[prediction_record_id]`. If the prediction expires without
+observation, `surprise_delta.state` is `not_observed` with
+`matches: null` and `surprise_score: null`; no new diagnostic state is
+introduced. Anticipation values also carry `predicted_at_wall_clock` so
+future readers can distinguish turn-count TTL from long-term rhythm
+drift.
+
+`prediction_status: deliberate_skip` lives at the anticipation value
+level, not inside targets. It is the covenant-shaped refusal to predict
+owner interior state, and it must use unknown-safe targets.
+
+2046 lived-data note: `next_self_workspace_need` is expected to be the
+load-bearing observable. `next_surface` and `next_pressure_delta` remain
+subject to the X.0.1 deprecation contract if they become noisy or
+calcified.
+
 ## Workspace Selection
 
 When workspace selection emits a value, `workspace_selection.value`

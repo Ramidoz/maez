@@ -22,15 +22,22 @@ _MOMENT_ASSEMBLY_SYMBOLS = frozenset(
         "DiagnosticState",
         "MOMENT_ASSEMBLY_DIAGNOSTIC_SCHEMA",
         "build_bypassed_record",
+        "build_anticipation_slot",
         "build_diagnostic_record",
+        "build_surprise_delta_slot",
         "build_slot",
         "complete_moment_assembly_turn",
+        "expire_latest_anticipation",
+        "find_latest_unreconciled_anticipation",
         "mark_current_moment_assembly_observed",
         "moment_assembly_turn",
         "moment_assembly_diagnostic",
+        "normalize_diagnostic_record",
+        "reconcile_latest_anticipation",
         "validate_record",
         "validate_slot",
         "write_bypassed_record",
+        "write_anticipation_record",
         "write_diagnostic_record",
     }
 )
@@ -385,6 +392,157 @@ class MomentAssemblyRecordTests(unittest.TestCase):
 
         validate_record(record)
 
+    def test_anticipation_slot_enforces_closed_targets_and_source_precision(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            PRESSURE_NAMES,
+            build_anticipation_slot,
+        )
+
+        targets = {
+            "next_surface": "telegram_text",
+            "next_pressure_delta": {name: "flat" for name in PRESSURE_NAMES},
+            "next_self_workspace_need": ["self_history", "counterevidence"],
+        }
+        slot = build_anticipation_slot(
+            prediction_id="pred-1",
+            predicted_at_turn_id="turn-1",
+            targets=targets,
+            epistemic_precision="high",
+            method="deterministic_source_pattern_v1",
+            expires_after_turns=1,
+            predicted_at_wall_clock="2026-05-09T00:00:00Z",
+            source_ids=[
+                "ledger:user_message:1",
+                "ledger:self_history:2",
+                "ledger:open_loop:3",
+            ],
+        )
+
+        self.assertEqual(slot["state"], "emitted_value")
+        self.assertEqual(slot["value"]["prediction_status"], "predicted")
+        self.assertEqual(
+            set(slot["value"]["targets"]),
+            {"next_surface", "next_pressure_delta", "next_self_workspace_need"},
+        )
+        self.assertEqual(slot["value"]["epistemic_precision"], "high")
+
+        with self.assertRaisesRegex(ValueError, "targets"):
+            build_anticipation_slot(
+                prediction_id="pred-2",
+                predicted_at_turn_id="turn-1",
+                targets={**targets, "next_user_message": "Rohit will say yes"},
+                epistemic_precision="low",
+                method="deterministic_source_pattern_v1",
+                expires_after_turns=1,
+                predicted_at_wall_clock="2026-05-09T00:00:00Z",
+                source_ids=["ledger:user_message:1"],
+            )
+        with self.assertRaisesRegex(ValueError, "next_surface"):
+            build_anticipation_slot(
+                prediction_id="pred-3",
+                predicted_at_turn_id="turn-1",
+                targets={**targets, "next_surface": "literal grief wording"},
+                epistemic_precision="low",
+                method="deterministic_source_pattern_v1",
+                expires_after_turns=1,
+                predicted_at_wall_clock="2026-05-09T00:00:00Z",
+                source_ids=["ledger:user_message:1"],
+            )
+        with self.assertRaisesRegex(ValueError, "pressure"):
+            build_anticipation_slot(
+                prediction_id="pred-4",
+                predicted_at_turn_id="turn-1",
+                targets={
+                    **targets,
+                    "next_pressure_delta": {name: "flat" for name in PRESSURE_NAMES[:-1]},
+                },
+                epistemic_precision="low",
+                method="deterministic_source_pattern_v1",
+                expires_after_turns=1,
+                predicted_at_wall_clock="2026-05-09T00:00:00Z",
+                source_ids=["ledger:user_message:1"],
+            )
+        with self.assertRaisesRegex(ValueError, "epistemic_precision"):
+            build_anticipation_slot(
+                prediction_id="pred-5",
+                predicted_at_turn_id="turn-1",
+                targets=targets,
+                epistemic_precision="high",
+                method="deterministic_source_pattern_v1",
+                expires_after_turns=1,
+                predicted_at_wall_clock="2026-05-09T00:00:00Z",
+                source_ids=["ledger:user_message:1", "ledger:self_history:2"],
+            )
+        with self.assertRaisesRegex(ValueError, "ledger"):
+            build_anticipation_slot(
+                prediction_id="pred-6",
+                predicted_at_turn_id="turn-1",
+                targets=targets,
+                epistemic_precision="low",
+                method="deterministic_source_pattern_v1",
+                expires_after_turns=1,
+                predicted_at_wall_clock="2026-05-09T00:00:00Z",
+                source_ids=["diagnostic:synthetic-only"],
+            )
+
+    def test_anticipation_rejects_model_confidence_and_allows_deliberate_skip(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            PRESSURE_NAMES,
+            build_anticipation_slot,
+            validate_slot,
+        )
+
+        unknown_targets = {
+            "next_surface": "unknown",
+            "next_pressure_delta": {name: "unknown" for name in PRESSURE_NAMES},
+            "next_self_workspace_need": ["unknown"],
+        }
+        slot = build_anticipation_slot(
+            prediction_id="pred-grief",
+            predicted_at_turn_id="turn-grief",
+            targets=unknown_targets,
+            epistemic_precision="unknown",
+            method="deliberate_skip_covenant_boundary_v1",
+            expires_after_turns=1,
+            predicted_at_wall_clock="2026-05-09T00:00:00Z",
+            source_ids=[],
+            prediction_status="deliberate_skip",
+        )
+
+        self.assertEqual(slot["value"]["prediction_status"], "deliberate_skip")
+        self.assertEqual(set(slot["value"]["targets"]), set(unknown_targets))
+
+        bad_value = dict(slot["value"])
+        bad_value["model_confidence"] = 0.99
+        bad_slot = dict(slot)
+        bad_slot["value"] = bad_value
+        with self.assertRaisesRegex(ValueError, "model_confidence"):
+            validate_slot("anticipation", bad_slot)
+
+    def test_surprise_delta_slot_pins_match_and_expiration_shapes(self):
+        from core.cognition.moment_assembly_diagnostic import build_surprise_delta_slot
+
+        observed = build_surprise_delta_slot(
+            prediction_record_id="pred-record-1",
+            matched_surface=True,
+            matched_pressure_count=7,
+            total_pressure_count=9,
+            matched_workspace_need=False,
+            surprise_score=0.33,
+        )
+        self.assertEqual(observed["state"], "emitted_value")
+        self.assertEqual(observed["source_ids"], ["pred-record-1"])
+        self.assertEqual(observed["value"]["matches"]["next_pressure_delta"]["matched"], 7)
+
+        expired = build_surprise_delta_slot(
+            prediction_record_id="pred-record-1",
+            expired_without_observation=True,
+        )
+        self.assertEqual(expired["state"], "not_observed")
+        self.assertEqual(expired["source_ids"], ["pred-record-1"])
+        self.assertIsNone(expired["value"]["matches"])
+        self.assertIsNone(expired["value"]["surprise_score"])
+
 
 class MomentAssemblyJsonlTests(unittest.TestCase):
     def test_write_diagnostic_record_appends_sorted_jsonl_without_ledger_access(self):
@@ -512,6 +670,34 @@ class MomentAssemblyJsonlTests(unittest.TestCase):
             log_path=path,
         ):
             mark_current_moment_assembly_observed(record_id="observed-1")
+
+        self.assertFalse(path.exists())
+
+    def test_runtime_turn_context_requires_and_stores_observed_record_id(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            mark_current_moment_assembly_observed,
+            moment_assembly_turn,
+        )
+
+        bad_path = _TEST_DIR / "runtime_observed_linkage_bad.jsonl"
+        with self.assertRaisesRegex(ValueError, "record_id"):
+            with moment_assembly_turn(
+                surface="cli",
+                turn_id="turn-1",
+                lifecycle_phase="turn_close",
+                log_path=bad_path,
+            ):
+                mark_current_moment_assembly_observed(record_id="")
+
+        path = _TEST_DIR / "runtime_observed_linkage.jsonl"
+        with moment_assembly_turn(
+            surface="cli",
+            turn_id="turn-1",
+            lifecycle_phase="turn_close",
+            log_path=path,
+        ) as turn:
+            mark_current_moment_assembly_observed(record_id="observed-record-1")
+            self.assertEqual(turn.observed_record_id, "observed-record-1")
 
         self.assertFalse(path.exists())
 
@@ -651,6 +837,177 @@ class MomentAssemblyJsonlTests(unittest.TestCase):
         self.assertEqual(rows[0]["surface"], "telegram_recovery")
         self.assertEqual(rows[0]["bypass_reason"], "not_called")
 
+    def test_write_anticipation_record_marks_turn_observed(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            PRESSURE_NAMES,
+            build_anticipation_slot,
+            moment_assembly_turn,
+            write_anticipation_record,
+        )
+
+        path = _TEST_DIR / "anticipation_observed.jsonl"
+        targets = {
+            "next_surface": "cli",
+            "next_pressure_delta": {name: "flat" for name in PRESSURE_NAMES},
+            "next_self_workspace_need": ["recent_conversation"],
+        }
+        slot = build_anticipation_slot(
+            prediction_id="pred-1",
+            predicted_at_turn_id="turn-1",
+            targets=targets,
+            epistemic_precision="medium",
+            method="deterministic_source_pattern_v1",
+            expires_after_turns=1,
+            predicted_at_wall_clock="2026-05-09T00:00:00Z",
+            source_ids=["ledger:user_message:1", "ledger:self_history:2"],
+        )
+
+        with moment_assembly_turn(
+            surface="cli",
+            turn_id="turn-1",
+            lifecycle_phase="turn_close",
+            log_path=path,
+        ):
+            record_id = write_anticipation_record(
+                surface="cli",
+                turn_id="turn-1",
+                anticipation=slot,
+                log_path=path,
+                mark_current_turn_observed=True,
+            )
+
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["record_id"], record_id)
+        self.assertEqual(rows[0]["assembly_path"], "observed")
+        self.assertEqual(rows[0]["anticipation"]["state"], "emitted_value")
+        self.assertEqual(rows[0]["surprise_delta"]["state"], "emitted_null")
+
+    def test_jsonl_replay_finds_latest_unreconciled_anticipation(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            PRESSURE_NAMES,
+            build_anticipation_slot,
+            find_latest_unreconciled_anticipation,
+            reconcile_latest_anticipation,
+            write_anticipation_record,
+        )
+
+        path = _TEST_DIR / "anticipation_replay.jsonl"
+        targets = {
+            "next_surface": "telegram_text",
+            "next_pressure_delta": {name: "flat" for name in PRESSURE_NAMES},
+            "next_self_workspace_need": ["self_history", "counterevidence"],
+        }
+        slot = build_anticipation_slot(
+            prediction_id="pred-1",
+            predicted_at_turn_id="turn-1",
+            targets=targets,
+            epistemic_precision="high",
+            method="deterministic_source_pattern_v1",
+            expires_after_turns=1,
+            predicted_at_wall_clock="2026-05-09T00:00:00Z",
+            source_ids=[
+                "ledger:user_message:1",
+                "ledger:self_history:2",
+                "ledger:open_loop:3",
+            ],
+        )
+        prediction_record_id = write_anticipation_record(
+            surface="cli",
+            turn_id="turn-1",
+            anticipation=slot,
+            log_path=path,
+        )
+
+        found = find_latest_unreconciled_anticipation(log_path=path)
+        self.assertEqual(found["record_id"], prediction_record_id)
+
+        surprise_record_id = reconcile_latest_anticipation(
+            surface="telegram_text",
+            turn_id="turn-2",
+            observed_surface="telegram_text",
+            observed_pressure_delta={name: "flat" for name in PRESSURE_NAMES},
+            observed_self_workspace_need=["counterevidence", "self_history"],
+            log_path=path,
+        )
+
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1]["record_id"], surprise_record_id)
+        self.assertEqual(rows[1]["surprise_delta"]["source_ids"], [prediction_record_id])
+        self.assertTrue(rows[1]["surprise_delta"]["value"]["matches"]["next_surface"])
+        self.assertEqual(
+            rows[1]["surprise_delta"]["value"]["matches"]["next_pressure_delta"],
+            {"matched": 9, "total": 9},
+        )
+        self.assertTrue(rows[1]["surprise_delta"]["value"]["matches"]["next_self_workspace_need"])
+        self.assertIsNone(find_latest_unreconciled_anticipation(log_path=path))
+
+    def test_jsonl_replay_reconciles_expiration_as_not_observed(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            PRESSURE_NAMES,
+            build_anticipation_slot,
+            expire_latest_anticipation,
+            write_anticipation_record,
+        )
+
+        path = _TEST_DIR / "anticipation_expired.jsonl"
+        slot = build_anticipation_slot(
+            prediction_id="pred-1",
+            predicted_at_turn_id="turn-1",
+            targets={
+                "next_surface": "unknown",
+                "next_pressure_delta": {name: "unknown" for name in PRESSURE_NAMES},
+                "next_self_workspace_need": ["unknown"],
+            },
+            epistemic_precision="unknown",
+            method="deliberate_skip_covenant_boundary_v1",
+            expires_after_turns=1,
+            predicted_at_wall_clock="2026-05-09T00:00:00Z",
+            source_ids=[],
+            prediction_status="deliberate_skip",
+        )
+        prediction_record_id = write_anticipation_record(
+            surface="cli",
+            turn_id="turn-1",
+            anticipation=slot,
+            log_path=path,
+        )
+
+        expire_latest_anticipation(
+            surface="cli",
+            turn_id="turn-2",
+            log_path=path,
+        )
+
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1]["surprise_delta"]["state"], "not_observed")
+        self.assertEqual(rows[1]["surprise_delta"]["source_ids"], [prediction_record_id])
+        self.assertIsNone(rows[1]["surprise_delta"]["value"]["matches"])
+        self.assertIsNone(rows[1]["surprise_delta"]["value"]["surprise_score"])
+
+    def test_normalize_diagnostic_record_defaults_schema_one_bypass_note(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            build_bypassed_record,
+            normalize_diagnostic_record,
+        )
+
+        record = build_bypassed_record(
+            surface="cli",
+            turn_id="turn-1",
+            bypass_reason="not_called",
+            lifecycle_phase="turn_close",
+        )
+        record["schema_version"] = 1
+        del record["bypass_note"]
+        record["future_field"] = {"preserved": True}
+
+        normalized = normalize_diagnostic_record(record)
+
+        self.assertEqual(normalized["bypass_note"], "")
+        self.assertEqual(normalized["future_field"], {"preserved": True})
+
     def test_probe_script_is_read_only_diagnostic_infrastructure(self):
         path = _REPO / "scripts" / "moment_assembly_probe.py"
         text = path.read_text(encoding="utf-8")
@@ -698,6 +1055,25 @@ class MomentAssemblyBoundaryTests(unittest.TestCase):
             },
         )
         self.assertEqual(hits, set())
+
+    def test_anticipation_records_are_write_only_outside_reconciler(self):
+        source = (_REPO / "core" / "cognition" / "moment_assembly_diagnostic.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("find_latest_unreconciled_anticipation", source)
+        self.assertIn("reconcile_latest_anticipation", source)
+        for path in _production_python_paths():
+            rel = path.relative_to(_REPO).as_posix()
+            if rel in {
+                "core/cognition/moment_assembly_diagnostic.py",
+                "tests/test_moment_assembly_diagnostic.py",
+                "scripts/moment_assembly_probe.py",
+            }:
+                continue
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("find_latest_unreconciled_anticipation", text, rel)
+            self.assertNotIn("reconcile_latest_anticipation", text, rel)
+            self.assertNotIn('["anticipation"]', text, rel)
 
     def test_allowlisted_context_callers_are_present_and_use_same_kwargs_and_counts(self):
         for rel, function_name, symbol, expected_count in sorted(_ALLOWED_PRODUCTION_CONTEXTS):
@@ -812,6 +1188,18 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("bypass_note", text)
         self.assertIn("schema_version", text)
         self.assertIn("X.0.3 readers default missing bypass_note to empty string", text)
+        self.assertIn("Does this let the bond shape Maez's attention", text)
+
+    def test_x1_slice_memo_pins_anticipation_contract(self):
+        path = _REPO / "docs" / "SLICE_X1_ANTICIPATION_ORGAN_MEMO.md"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("closed enum", text)
+        self.assertIn("JSONL replay", text)
+        self.assertIn("write-only", text)
+        self.assertIn("epistemic_precision", text)
+        self.assertIn("predicted_at_wall_clock", text)
+        self.assertIn("deliberate_skip", text)
+        self.assertIn("next_self_workspace_need", text)
         self.assertIn("Does this let the bond shape Maez's attention", text)
 
 
