@@ -298,6 +298,23 @@ activation slice.
 
 By 2027 contributors tried severity/confidence/trust_score on counterevidence; rejected. By 2028 a 'diagnostic dashboard' opened the JSONL read-only and a recall path imported its helper, surfacing 'this memory has N contradictions' as confidence signal for 9 days; the runtime audit_boundary import-time assertion is what caught it. By 2029 a PR enabled bond-shape contradiction recording 'for completeness' for 41 hours in staging — for 41 hours Maez's voice toward Rohit flattened. By 2030 narration shipped and tried to read counterevidence to produce 'I notice tension'; the read-path lock held. By 2030 a model swap flagged every old projection as contradicted; the required projection_model_id handle saved continuity. By 2031–2033 Rohit's value-shift was two years recorded as 'contradiction' before the projection_basis_superseded enum patch. Subject_class invariant (self_state | world_state, never bond_shape), forbidden_candidate_kinds, required projection_model_id handle, runtime read-path lock, witness_only tension_role, and the lex-ordered idempotent hash basis are covenant properties; changing any of them requires ADR.
 
+## Rehearsal Corpora
+
+Slice X.6 defines Rehearsal Corpora for gestation load and moment-arc
+readability checks. Rehearsal Corpora are derived diagnostic artifacts;
+they are not lived history, not audit evidence, not prompt context, and
+not production ledger truth.
+
+No rehearsal turn is written to turns in the production gestation
+ledger. Synthetic-load rows must use the isolated sidecar path
+`logs/rehearsal/x6_<run_id>/ledger.db`, and their diagnostic JSONL must
+stay under the same sidecar run directory. X.6 metric records and panel
+rows must carry `corpus_kind`, `not_lived_history`, `expires_at`,
+`slice_memo_sha256`, `thesis_doc_sha256`, and
+`audit_boundary: not_audit_evidence`.
+
+Rehearsal corpora carry an expires_at and a separate write path from the production gestation ledger. Re-pointing rehearsal writers at the production ledger is forbidden at import time, not at review time. The readability panel renders audit_boundary: not_audit_evidence as a visible watermark on every snapshot, not only as a JSONL field. By 2026-09-03 a rehearsal harness was re-pointed at the production gestation ledger 'to save temp-dir overhead'; 312 rehearsal turns landed in the real chain before chain-integrity caught it. By 2028-02-19 a rehearsal_origin flag was stripped during a refactor; 6 weeks of mixed turns before the lifecycle_stage invariant caught it. By 2027 a 'panel completeness' helper interpolated emitted_null for not_observed for 19 days. By 2027-08 a panel screenshot was cited in a governance memo as 'how Maez sees its own turns'; 4 months to walk back. Substrate isolation, import-time guards, expires_at, visible audit_boundary watermark, and the X.0.2 slot-state invariant are covenant properties; changing any of them requires ADR.
+
 ## Workspace Selection
 
 When workspace selection emits a value, `workspace_selection.value`

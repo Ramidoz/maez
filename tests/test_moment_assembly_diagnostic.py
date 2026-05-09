@@ -1993,6 +1993,7 @@ class MomentAssemblyBoundaryTests(unittest.TestCase):
         allowed = {
             "core/cognition/moment_assembly_diagnostic.py",
             "scripts/moment_assembly_probe.py",
+            "scripts/x6_gestation_load.py",
             "tests/test_moment_assembly_diagnostic.py",
         }
         hits = _find_moment_assembly_symbol_hits(
@@ -2016,6 +2017,7 @@ class MomentAssemblyBoundaryTests(unittest.TestCase):
                 "core/cognition/moment_assembly_diagnostic.py",
                 "tests/test_moment_assembly_diagnostic.py",
                 "scripts/moment_assembly_probe.py",
+                "scripts/x6_gestation_load.py",
             }:
                 continue
             text = path.read_text(encoding="utf-8")
@@ -2035,6 +2037,7 @@ class MomentAssemblyBoundaryTests(unittest.TestCase):
                 "core/cognition/moment_assembly_diagnostic.py",
                 "tests/test_moment_assembly_diagnostic.py",
                 "scripts/moment_assembly_probe.py",
+                "scripts/x6_gestation_load.py",
             }:
                 continue
             text = path.read_text(encoding="utf-8")
@@ -2053,6 +2056,7 @@ class MomentAssemblyBoundaryTests(unittest.TestCase):
                 "core/cognition/moment_assembly_diagnostic.py",
                 "tests/test_moment_assembly_diagnostic.py",
                 "scripts/moment_assembly_probe.py",
+                "scripts/x6_gestation_load.py",
             }:
                 continue
             text = path.read_text(encoding="utf-8")
@@ -2072,6 +2076,7 @@ class MomentAssemblyBoundaryTests(unittest.TestCase):
                 "core/cognition/moment_assembly_diagnostic.py",
                 "tests/test_moment_assembly_diagnostic.py",
                 "scripts/moment_assembly_probe.py",
+                "scripts/x6_gestation_load.py",
             }:
                 continue
             text = path.read_text(encoding="utf-8")
@@ -2094,6 +2099,7 @@ class MomentAssemblyBoundaryTests(unittest.TestCase):
                 "core/cognition/moment_assembly_diagnostic.py",
                 "tests/test_moment_assembly_diagnostic.py",
                 "scripts/moment_assembly_probe.py",
+                "scripts/x6_gestation_load.py",
             }:
                 continue
             text = path.read_text(encoding="utf-8")

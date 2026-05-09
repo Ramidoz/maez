@@ -50,6 +50,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from pathlib import Path
 
 from core.cognition import audit_policy as _audit_policy
 from core.ledger import chain
@@ -62,6 +63,7 @@ _LOGGER = logging.getLogger("core.ledger.writer")
 
 _TRUE_VALUES = {"1", "true"}
 _FALSE_VALUES = {"0", "false", "no", "off", ""}
+_REHEARSAL_ROOT = Path(__file__).resolve().parents[2] / "logs" / "rehearsal"
 
 # Per-kind contract from LEDGER_ENVELOPE_SCHEMA.md §4.2.
 # Field names below are the kwarg base names used by write_turn — they
@@ -145,6 +147,16 @@ _TURN_COLUMNS: tuple[str, ...] = (
 )
 
 
+def _is_rehearsal_sidecar_ledger_path(db_path: str, *, rehearsal_root: Path) -> bool:
+    try:
+        path = Path(db_path).resolve()
+        root = rehearsal_root.resolve()
+        path.relative_to(root)
+    except (OSError, ValueError):
+        return False
+    return path.name == "ledger.db" and path.parent.name.startswith("x6_")
+
+
 def _canonical_json(obj) -> str:
     """Canonical JSON encoding matching chain.canonical_row_bytes."""
     return json.dumps(
@@ -158,8 +170,23 @@ def _canonical_json(obj) -> str:
 class LedgerWriter:
     """Append-only writer for the Maez ledger turns table."""
 
-    def __init__(self, db_path: str) -> None:
+    def __init__(
+        self,
+        db_path: str,
+        *,
+        rehearsal_mode: bool = False,
+        rehearsal_root: str | Path | None = None,
+    ) -> None:
+        root = Path(rehearsal_root) if rehearsal_root is not None else _REHEARSAL_ROOT
+        if rehearsal_mode and not _is_rehearsal_sidecar_ledger_path(
+            db_path,
+            rehearsal_root=root,
+        ):
+            raise ImportError(
+                "rehearsal ledger writers must use logs/rehearsal/x6_<run_id>/ledger.db"
+            )
         self._db_path = db_path
+        self._rehearsal_mode = rehearsal_mode
         self._lock = threading.Lock()
         self._enabled = self._parse_flag()
         # check_same_thread=False so the threading.Lock is the
@@ -234,7 +261,15 @@ class LedgerWriter:
         audit_trace_value_schema: int | None = None,
         audit_trace_metadata_shape: int | None = None,
         audit_trace_lineage: dict | None = None,
+        lifecycle_stage: str | None = None,
     ) -> str | None:
+        if self._rehearsal_mode and lifecycle_stage != "rehearsal":
+            raise ValueError("rehearsal ledger writer requires lifecycle_stage='rehearsal'")
+        if lifecycle_stage == "rehearsal" and not self._rehearsal_mode:
+            raise ValueError("production ledger writer refuses rehearsal lifecycle_stage rows")
+        if lifecycle_stage is not None and lifecycle_stage != "rehearsal":
+            raise ValueError(f"unknown explicit lifecycle_stage {lifecycle_stage!r}")
+
         # Disabled writer is a silent no-op — no validation, no SQL.
         if not self._enabled:
             return None
@@ -385,7 +420,10 @@ class LedgerWriter:
                     prev_chain_hash,
                     new_chain_hash,
                 ]
-                if post_birth:
+                if lifecycle_stage == "rehearsal":
+                    cols.append("lifecycle_stage")
+                    values.append("rehearsal")
+                elif post_birth:
                     cols.append("lifecycle_stage")
                     values.append("lived")
                 if audit_trace_label is not None:
