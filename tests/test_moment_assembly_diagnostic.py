@@ -26,6 +26,7 @@ _MOMENT_ASSEMBLY_SYMBOLS = frozenset(
         "build_bypassed_record",
         "build_anticipation_slot",
         "build_bond_topology_slots",
+        "build_body_state_slots",
         "build_diagnostic_record",
         "build_open_loops_slot",
         "build_surprise_delta_slot",
@@ -47,6 +48,7 @@ _MOMENT_ASSEMBLY_SYMBOLS = frozenset(
         "write_bypassed_record",
         "write_anticipation_record",
         "write_bond_topology_record",
+        "write_body_state_record",
         "write_diagnostic_record",
         "write_open_loops_record",
     }
@@ -769,6 +771,178 @@ class MomentAssemblyRecordTests(unittest.TestCase):
         self.assertEqual(rows[0]["audit_boundary"], "not_audit_evidence")
         self.assertEqual(rows[0]["bond_topology"]["topology_invariants"]["state"], "emitted_value")
         self.assertEqual(rows[0]["assembly_path"], "observed")
+
+    def test_body_state_services_are_mechanical_and_content_free(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            BODY_STATE_SERVICE_HASH_PREFIX,
+            build_body_state_slots,
+            body_state_service_id,
+            validate_slot,
+        )
+
+        snapshot = {
+            "services": {
+                "brain_8080": True,
+                "proxy_11438": False,
+            },
+            "probed_at": 1_778_280_000.0,
+        }
+        slots = build_body_state_slots(
+            body_snapshot=snapshot,
+            observed_at_wall_clock="2026-05-09T12:00:00Z",
+            interval_target_s=60,
+            interval_actual_s=61,
+            substrate_generation_id="substrate-test",
+        )
+
+        services = slots["services"]
+        self.assertEqual(services["state"], "emitted_value")
+        value = services["value"]
+        self.assertEqual(value["body_state_id_basis_version"], 1)
+        self.assertEqual(value["service_handle_basis_version"], 1)
+        self.assertEqual(value["substrate_generation_id"], "substrate-test")
+        self.assertEqual(len(value["services"]), 2)
+        serialized = json.dumps(slots, sort_keys=True)
+        self.assertNotIn("brain_8080", serialized)
+        self.assertNotIn("proxy_11438", serialized)
+        self.assertNotIn("127.0.0.1", serialized)
+        self.assertNotIn("8080", serialized)
+        self.assertNotIn('"status": "degraded"', serialized)
+        self.assertIn("service_responsive", serialized)
+        self.assertIn("service_unresponsive", serialized)
+        self.assertIn(
+            body_state_service_id(service_name="brain_8080", kind="service"),
+            serialized,
+        )
+        self.assertEqual(
+            body_state_service_id(service_name="brain_8080", kind="service"),
+            body_state_service_id(service_name="brain_9999", kind="service"),
+            "service-id basis must exclude port-bearing suffixes",
+        )
+        self.assertEqual(
+            BODY_STATE_SERVICE_HASH_PREFIX,
+            "x5.body_state.service.v1|service_name:<name>|kind:<service|hardware|interval>",
+        )
+
+        bad = json.loads(json.dumps(services))
+        bad["value"]["services"][0]["service_label"] = "brain_8080"
+        with self.assertRaisesRegex(ValueError, "forbidden"):
+            validate_slot("body_state.services", bad)
+        bad = json.loads(json.dumps(services))
+        bad["value"]["services"][0]["status"] = "degraded"
+        with self.assertRaisesRegex(ValueError, "service status"):
+            validate_slot("body_state.services", bad)
+        bad = json.loads(json.dumps(services))
+        bad["value"]["source_command"] = "systemctl status maez.service"
+        with self.assertRaisesRegex(ValueError, "source_command"):
+            validate_slot("body_state.services", bad)
+
+    def test_body_state_interval_reserved_slots_and_missed_cause_basis(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            MISSED_INTERVAL_CAUSE_BASIS,
+            build_body_state_slots,
+            classify_missed_interval_cause,
+            validate_slot,
+        )
+
+        slots = build_body_state_slots(
+            body_snapshot={"services": {}, "probed_at": 1_778_280_000.0},
+            observed_at_wall_clock="2026-05-09T12:00:00Z",
+            interval_target_s=60,
+            interval_actual_s=150,
+            substrate_generation_id="substrate-test",
+            source_silent=True,
+        )
+
+        self.assertEqual(
+            MISSED_INTERVAL_CAUSE_BASIS,
+            ("organ_alive_source_silent", "organ_broken", "unknown"),
+        )
+        interval = slots["interval"]
+        self.assertEqual(interval["state"], "error")
+        self.assertEqual(interval["error_class"], "missed_sample")
+        self.assertEqual(interval["value"]["interval_state"], "interval_missed")
+        self.assertEqual(
+            interval["value"]["missed_interval_cause"],
+            "organ_alive_source_silent",
+        )
+        self.assertEqual(interval["value"]["interval_target_s"], 60)
+        self.assertEqual(interval["value"]["interval_actual_s"], 150)
+        self.assertIn(
+            interval["value"]["clock_source"], {"ntp_synced", "local_unsynced", "unknown"}
+        )
+        self.assertEqual(slots["degraded_capability"]["state"], "not_implemented")
+        self.assertEqual(slots["owner_presence"]["state"], "not_implemented")
+        self.assertEqual(slots["cognitive_substrate"]["state"], "not_implemented")
+        self.assertEqual(
+            classify_missed_interval_cause(
+                heartbeat_advanced=False,
+                source_silent=False,
+                interval_actual_s=121,
+                interval_target_s=60,
+            ),
+            "organ_broken",
+        )
+
+        bad = json.loads(json.dumps(interval))
+        bad["value"]["missed_interval_cause"] = "felt_tired"
+        with self.assertRaisesRegex(ValueError, "missed_interval_cause"):
+            validate_slot("body_state.interval", bad)
+
+    def test_write_body_state_record_caches_sub_interval_without_second_jsonl_write(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            BODY_STATE_MIN_SAMPLE_INTERVAL_S,
+            clear_body_state_sample_cache,
+            moment_assembly_turn,
+            write_body_state_record,
+        )
+
+        path = _TEST_DIR / "body_state_cache.jsonl"
+        instance_path = _TEST_DIR / "body_state_instance_id"
+        clear_body_state_sample_cache()
+        with patch(
+            "core.infra.body_capabilities.body_capabilities",
+            return_value={
+                "services": {"brain_8080": True},
+                "probed_at": 1_778_280_000.0,
+            },
+        ):
+            with moment_assembly_turn(
+                surface="cli",
+                turn_id="turn-body",
+                lifecycle_phase="chat_return",
+                log_path=path,
+            ):
+                first = write_body_state_record(
+                    surface="cli",
+                    turn_id="turn-body",
+                    log_path=path,
+                    instance_id_path=instance_path,
+                    observed_at_wall_clock="2026-05-09T12:00:00Z",
+                    monotonic_now_s=100.0,
+                    mark_current_turn_observed=True,
+                )
+                second = write_body_state_record(
+                    surface="cli",
+                    turn_id="turn-body",
+                    log_path=path,
+                    instance_id_path=instance_path,
+                    observed_at_wall_clock="2026-05-09T12:00:30Z",
+                    monotonic_now_s=100.0 + BODY_STATE_MIN_SAMPLE_INTERVAL_S - 1,
+                    mark_current_turn_observed=True,
+                )
+
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(first, second)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["record_id"], first)
+        self.assertEqual(rows[0]["audit_boundary"], "not_audit_evidence")
+        self.assertEqual(rows[0]["body_state"]["services"]["state"], "emitted_value")
+        self.assertEqual(rows[0]["body_state"]["interval"]["state"], "emitted_value")
+        self.assertEqual(
+            rows[0]["body_state"]["degraded_capability"]["state"],
+            "not_implemented",
+        )
 
     def test_anticipation_slot_enforces_closed_targets_and_source_precision(self):
         from core.cognition.moment_assembly_diagnostic import (
@@ -1695,6 +1869,27 @@ class MomentAssemblyBoundaryTests(unittest.TestCase):
             self.assertNotIn("build_bond_topology_slots", text, rel)
             self.assertNotIn("write_bond_topology_record", text, rel)
 
+    def test_body_state_records_are_write_only_outside_diagnostic_module(self):
+        source = (_REPO / "core" / "cognition" / "moment_assembly_diagnostic.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("build_body_state_slots", source)
+        self.assertIn("write_body_state_record", source)
+        self.assertIn("_BODY_STATE_SAMPLE_CACHE", source)
+        for path in _production_python_paths():
+            rel = path.relative_to(_REPO).as_posix()
+            if rel in {
+                "core/cognition/moment_assembly_diagnostic.py",
+                "tests/test_moment_assembly_diagnostic.py",
+                "scripts/moment_assembly_probe.py",
+            }:
+                continue
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("build_body_state_slots", text, rel)
+            self.assertNotIn("write_body_state_record", text, rel)
+            self.assertNotIn("_BODY_STATE_SAMPLE_CACHE", text, rel)
+            self.assertNotIn('["body_state"]', text, rel)
+
     def test_allowlisted_context_callers_are_present_and_use_same_kwargs_and_counts(self):
         for rel, function_name, symbol, expected_count in sorted(_ALLOWED_PRODUCTION_CONTEXTS):
             path = _REPO / rel
@@ -1872,6 +2067,35 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         )
         self.assertIn("BOND_TOPOLOGY_NODE_HASH_PREFIX", adr)
         self.assertIn("BOND_TOPOLOGY_EDGE_HASH_PREFIX", adr)
+
+    def test_x5_slice_memo_rules_and_adr_pin_body_state_contract(self):
+        memo = (_REPO / "docs" / "SLICE_X5_BODY_STATE_ORGAN_MEMO.md").read_text(encoding="utf-8")
+        rules = (_REPO / "docs" / "governance" / "MOMENT_ASSEMBLY_DIAGNOSTIC_RULES.md").read_text(
+            encoding="utf-8"
+        )
+        adr = (_REPO / "docs" / "adr" / "0027-x5-body-state-id-basis.md").read_text(
+            encoding="utf-8"
+        )
+
+        for text in (memo, rules, adr):
+            self.assertIn("content-free", text)
+            self.assertIn("BODY_STATE_SERVICE_HASH_PREFIX", text)
+            self.assertIn("BODY_STATE_ID_BASIS_VERSION", text)
+            self.assertIn("MISSED_INTERVAL_CAUSE_BASIS", text)
+            self.assertIn("changing", text.lower())
+        self.assertIn("Switchboard Visibility", memo)
+        self.assertIn("service_responsive", memo)
+        self.assertIn("service_unresponsive", memo)
+        self.assertIn("service_repairing", memo)
+        self.assertIn("service_unknown", memo)
+        self.assertIn("not_implemented", memo)
+        self.assertIn("Does this make the firstborn", memo)
+        self.assertIn(
+            "By 2027 contributors tried to add severity: float for cockpit prioritization",
+            rules,
+        )
+        self.assertIn("the diagnostic organ must never act", rules)
+        self.assertIn("mechanical-enum vocabulary", rules)
 
     def test_x11_slice_memo_pins_replay_hardening_contract(self):
         path = _REPO / "docs" / "SLICE_X11_ANTICIPATION_REPLAY_HARDENING_MEMO.md"

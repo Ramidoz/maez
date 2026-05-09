@@ -21,6 +21,7 @@ import logging
 import math
 import os
 from pathlib import Path
+import subprocess
 import time
 from types import TracebackType
 from typing import Any
@@ -65,6 +66,13 @@ CANDIDATE_SOURCE_NAMES = (
     "future_projection_rules",
 )
 TOPOLOGY_NAMES = ("euclidean", "poincare", "topology_invariants")
+BODY_STATE_SLOT_NAMES = (
+    "services",
+    "interval",
+    "degraded_capability",
+    "owner_presence",
+    "cognitive_substrate",
+)
 ORGAN_SCHEMA_VERSION = 1
 OPEN_LOOP_REGISTRY_SCHEMA_VERSION = 1
 OPEN_LOOP_ID_BASIS_VERSION = 1
@@ -76,6 +84,79 @@ BOND_TOPOLOGY_ID_BASIS_VERSION = 1
 BOND_TOPOLOGY_BASIS_VERSION = 1
 BOND_TOPOLOGY_NODE_HASH_PREFIX = "x3.bond_topology.node.v1|node_id:"
 BOND_TOPOLOGY_EDGE_HASH_PREFIX = "x3.bond_topology.edge.v1|subject:"
+BODY_STATE_INSTANCE_ID_PATH = Path.home() / ".maez" / "instance_id"
+BODY_STATE_BASIS_VERSION = 1
+BODY_STATE_SERVICE_HASH_PREFIX = (
+    "x5.body_state.service.v1|service_name:<name>|kind:<service|hardware|interval>"
+)
+BODY_STATE_ID_BASIS_VERSION = 1
+SERVICE_HANDLE_BASIS_VERSION = 1
+BODY_STATE_MIN_SAMPLE_INTERVAL_S = 60
+MISSED_INTERVAL_CAUSE_BASIS = (
+    "organ_alive_source_silent",
+    "organ_broken",
+    "unknown",
+)
+BODY_STATE_SERVICE_STATUSES = frozenset(
+    {
+        "service_responsive",
+        "service_unresponsive",
+        "service_repairing",
+        "service_unknown",
+    }
+)
+BODY_STATE_INTERVAL_STATUSES = frozenset(
+    {
+        "interval_met",
+        "interval_missed",
+        "interval_unknown",
+    }
+)
+BODY_STATE_CAPABILITY_STATUSES = frozenset(
+    {
+        "capability_full",
+        "capability_reduced",
+        "capability_unknown",
+    }
+)
+BODY_STATE_ERROR_CLASSES = frozenset(
+    {
+        "missed_sample",
+        "probe_timeout",
+        "probe_exception",
+        "schema_drift",
+        "clock_skew",
+        "unknown",
+    }
+)
+BODY_STATE_CLOCK_SOURCES = frozenset({"ntp_synced", "local_unsynced", "unknown"})
+BODY_STATE_FORBIDDEN_FIELDS = frozenset(
+    {
+        "service_label",
+        "host_fingerprint",
+        "mac_address",
+        "ip_address",
+        "kernel_version",
+        "hostname",
+        "log_excerpt",
+        "log_tail",
+        "error_message",
+        "traceback",
+        "body_label",
+        "service_summary",
+        "degradation_note",
+        "health_summary",
+        "working_title",
+        "feeling",
+        "mood",
+        "bodily_state_prose",
+        "narration_hint",
+        "severity",
+        "health_score",
+        "owner_emotion",
+    }
+)
+_BODY_STATE_SAMPLE_CACHE: dict[tuple[str, str], tuple[float, str]] = {}
 BOND_TOPOLOGY_FORBIDDEN_FIELDS = frozenset(
     {
         "node_label",
@@ -212,6 +293,8 @@ def default_contributing_schemas() -> dict[str, int]:
         schemas[_organ_key("candidate_source", name)] = ORGAN_SCHEMA_VERSION
     for name in TOPOLOGY_NAMES:
         schemas[_organ_key("bond_topology", name)] = ORGAN_SCHEMA_VERSION
+    for name in BODY_STATE_SLOT_NAMES:
+        schemas[_organ_key("body_state", name)] = ORGAN_SCHEMA_VERSION
     for name in (
         "workspace_selection",
         "anticipation",
@@ -283,6 +366,20 @@ def validate_slot(name: str, slot: dict[str, Any]) -> None:
         return
     if name == "bond_topology.topology_invariants" and state is DiagnosticState.EMITTED_VALUE:
         _validate_topology_invariants_value(slot["value"])
+        return
+    if name == "body_state.services" and state is DiagnosticState.EMITTED_VALUE:
+        _validate_body_state_services_value(slot["value"])
+        return
+    if name == "body_state.interval" and state in {
+        DiagnosticState.EMITTED_VALUE,
+        DiagnosticState.ERROR,
+    }:
+        _validate_body_state_interval_value(slot["value"], state=state)
+        if (
+            state is DiagnosticState.ERROR
+            and slot.get("error_class") not in BODY_STATE_ERROR_CLASSES
+        ):
+            raise ValueError("body_state.interval error_class must use closed enum")
         return
     if name == "surprise_delta" and state in {
         DiagnosticState.EMITTED_VALUE,
@@ -745,6 +842,104 @@ def _validate_topology_invariants_value(value: Any) -> None:
     exponent = value["degree_vs_distance_scaling_exponent"]
     if exponent is not None and not isinstance(exponent, int | float):
         raise ValueError("bond_topology.topology_invariants exponent must be numeric or null")
+
+
+def _reject_forbidden_body_state_fields(value: Any) -> None:
+    if isinstance(value, dict):
+        forbidden = BODY_STATE_FORBIDDEN_FIELDS.intersection(value)
+        if forbidden:
+            raise ValueError(f"body_state value contains forbidden field(s): {sorted(forbidden)!r}")
+        for item in value.values():
+            _reject_forbidden_body_state_fields(item)
+    elif isinstance(value, list):
+        for item in value:
+            _reject_forbidden_body_state_fields(item)
+
+
+def _validate_body_state_common(value: dict[str, Any], *, slot_name: str) -> None:
+    _reject_forbidden_body_state_fields(value)
+    if value["body_state_basis_version"] != BODY_STATE_BASIS_VERSION:
+        raise ValueError(f"body_state.{slot_name} body_state_basis_version drifted")
+    if value["body_state_id_basis_version"] != BODY_STATE_ID_BASIS_VERSION:
+        raise ValueError(f"body_state.{slot_name} body_state_id_basis_version drifted")
+    if value["service_handle_basis_version"] != SERVICE_HANDLE_BASIS_VERSION:
+        raise ValueError(f"body_state.{slot_name} service_handle_basis_version drifted")
+    substrate = value["substrate_generation_id"]
+    if not isinstance(substrate, str) or not substrate:
+        raise ValueError(f"body_state.{slot_name} substrate_generation_id is required")
+    _parse_iso8601(
+        str(value["observed_at_wall_clock"]),
+        field_name=f"body_state.{slot_name}.observed_at_wall_clock",
+    )
+    source_command = value["source_command"]
+    if not isinstance(source_command, str) or not source_command.startswith("cmd:"):
+        raise ValueError(f"body_state.{slot_name} source_command must be a command-name hash")
+    if " " in source_command or "/" in source_command:
+        raise ValueError(f"body_state.{slot_name} source_command must not include argv")
+
+
+def _validate_body_state_services_value(value: Any) -> None:
+    if not isinstance(value, dict):
+        raise ValueError("body_state.services value must be an object")
+    required = {
+        "body_state_basis_version",
+        "body_state_id_basis_version",
+        "service_handle_basis_version",
+        "substrate_generation_id",
+        "observed_at_wall_clock",
+        "source_command",
+        "services",
+    }
+    if set(value) != required:
+        raise ValueError("body_state.services field set drifted")
+    _validate_body_state_common(value, slot_name="services")
+    services = value["services"]
+    if not isinstance(services, list):
+        raise ValueError("body_state.services services must be a list")
+    seen: set[str] = set()
+    for item in services:
+        if set(item) != {"service_id", "status"}:
+            raise ValueError("body_state.services item shape drifted")
+        service_id = item["service_id"]
+        if not isinstance(service_id, str) or not service_id.startswith("bs-service:"):
+            raise ValueError("body_state.services service_id must be hashed")
+        if service_id in seen:
+            raise ValueError("body_state.services duplicate service_id")
+        seen.add(service_id)
+        if item["status"] not in BODY_STATE_SERVICE_STATUSES:
+            raise ValueError("body_state service status must use mechanical enum")
+
+
+def _validate_body_state_interval_value(value: Any, *, state: DiagnosticState) -> None:
+    if not isinstance(value, dict):
+        raise ValueError("body_state.interval value must be an object")
+    required = {
+        "body_state_basis_version",
+        "body_state_id_basis_version",
+        "service_handle_basis_version",
+        "substrate_generation_id",
+        "observed_at_wall_clock",
+        "source_command",
+        "interval_state",
+        "interval_target_s",
+        "interval_actual_s",
+        "missed_interval_cause",
+        "clock_source",
+    }
+    if set(value) != required:
+        raise ValueError("body_state.interval field set drifted")
+    _validate_body_state_common(value, slot_name="interval")
+    if value["interval_state"] not in BODY_STATE_INTERVAL_STATUSES:
+        raise ValueError("body_state.interval interval_state must use mechanical enum")
+    for key in ("interval_target_s", "interval_actual_s"):
+        if type(value[key]) not in {int, float} or float(value[key]) < 0:
+            raise ValueError(f"body_state.interval {key} must be non-negative numeric")
+    if value["missed_interval_cause"] not in MISSED_INTERVAL_CAUSE_BASIS:
+        raise ValueError("body_state.interval missed_interval_cause must use closed basis")
+    if value["clock_source"] not in BODY_STATE_CLOCK_SOURCES:
+        raise ValueError("body_state.interval clock_source must use closed enum")
+    if state is DiagnosticState.ERROR and value["interval_state"] != "interval_missed":
+        raise ValueError("body_state.interval error state requires interval_missed")
 
 
 def _filled_slots(names: tuple[str, ...]) -> dict[str, dict[str, Any]]:
@@ -1439,6 +1634,178 @@ def build_bond_topology_slots(
     return slots
 
 
+def body_state_service_id(*, service_name: str, kind: str) -> str:
+    if kind not in {"service", "hardware", "interval"}:
+        raise ValueError("body_state service kind must be service, hardware, or interval")
+    if not isinstance(service_name, str) or not service_name:
+        raise ValueError("body_state service hash requires service_name")
+    canonical_name = _canonical_body_state_service_name(service_name)
+    hash_input = BODY_STATE_SERVICE_HASH_PREFIX.replace("<name>", canonical_name).replace(
+        "<service|hardware|interval>",
+        kind,
+    )
+    digest = hashlib.sha256(hash_input.encode("utf-8")).hexdigest()[:16]
+    return f"bs-service:{digest}"
+
+
+def _canonical_body_state_service_name(service_name: str) -> str:
+    parts = service_name.rsplit("_", 1)
+    if len(parts) == 2 and parts[1].isdigit():
+        return parts[0]
+    return service_name
+
+
+def _command_hash(command_name: str) -> str:
+    if not command_name or any(ch.isspace() for ch in command_name) or "/" in command_name:
+        raise ValueError("source_command hashes command names only")
+    digest = hashlib.sha256(f"x5.body_state.command.v1|{command_name}".encode("utf-8")).hexdigest()
+    return f"cmd:{digest[:16]}"
+
+
+def substrate_generation_id(*, instance_id_path: Path = BODY_STATE_INSTANCE_ID_PATH) -> str:
+    try:
+        if instance_id_path.exists():
+            existing = instance_id_path.read_text(encoding="utf-8").strip()
+            if existing:
+                return existing
+        instance_id_path.parent.mkdir(parents=True, exist_ok=True)
+        value = f"substrate:{uuid4()}"
+        instance_id_path.write_text(value + "\n", encoding="utf-8")
+        return value
+    except OSError:
+        return "substrate:unknown"
+
+
+def classify_missed_interval_cause(
+    *,
+    heartbeat_advanced: bool,
+    source_silent: bool,
+    interval_actual_s: float,
+    interval_target_s: float,
+) -> str:
+    if heartbeat_advanced and source_silent:
+        return "organ_alive_source_silent"
+    if not heartbeat_advanced and interval_actual_s >= (2 * interval_target_s):
+        return "organ_broken"
+    return "unknown"
+
+
+def _clock_source() -> str:
+    try:
+        result = subprocess.run(
+            ["timedatectl", "show", "-p", "NTPSynchronized", "--value"],
+            capture_output=True,
+            text=True,
+            timeout=0.5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
+    if result.returncode != 0:
+        return "unknown"
+    value = (result.stdout or "").strip().lower()
+    if value == "yes":
+        return "ntp_synced"
+    if value == "no":
+        return "local_unsynced"
+    return "unknown"
+
+
+def _service_status(value: Any, *, repairing: bool) -> str:
+    if repairing:
+        return "service_repairing"
+    if value is True:
+        return "service_responsive"
+    if value is False:
+        return "service_unresponsive"
+    return "service_unknown"
+
+
+def build_body_state_slots(
+    *,
+    body_snapshot: dict[str, Any],
+    observed_at_wall_clock: str | None = None,
+    interval_target_s: float = BODY_STATE_MIN_SAMPLE_INTERVAL_S,
+    interval_actual_s: float | None = None,
+    substrate_generation_id: str,
+    source_silent: bool = False,
+    heartbeat_advanced: bool = True,
+    repairing_services: set[str] | None = None,
+    clock_source: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    observed = observed_at_wall_clock or _utc_now_iso()
+    _parse_iso8601(observed, field_name="body_state.observed_at_wall_clock")
+    interval_actual = (
+        float(interval_actual_s) if interval_actual_s is not None else float(interval_target_s)
+    )
+    if float(interval_target_s) <= 0:
+        raise ValueError("interval_target_s must be positive")
+    repairing = repairing_services or set()
+    services = [
+        {
+            "service_id": body_state_service_id(service_name=name, kind="service"),
+            "status": _service_status(value, repairing=name in repairing),
+        }
+        for name, value in sorted((body_snapshot.get("services") or {}).items())
+    ]
+    common = {
+        "body_state_basis_version": BODY_STATE_BASIS_VERSION,
+        "body_state_id_basis_version": BODY_STATE_ID_BASIS_VERSION,
+        "service_handle_basis_version": SERVICE_HANDLE_BASIS_VERSION,
+        "substrate_generation_id": substrate_generation_id,
+        "observed_at_wall_clock": observed,
+        "source_command": _command_hash("body_capabilities"),
+    }
+    services_slot = build_slot(
+        DiagnosticState.EMITTED_VALUE,
+        value={**common, "services": services},
+        source_ids=["diagnostic:body_state:services"],
+    )
+    validate_slot("body_state.services", services_slot)
+
+    interval_state = (
+        "interval_missed" if interval_actual > (1.5 * float(interval_target_s)) else "interval_met"
+    )
+    missed_cause = (
+        classify_missed_interval_cause(
+            heartbeat_advanced=heartbeat_advanced,
+            source_silent=source_silent,
+            interval_actual_s=interval_actual,
+            interval_target_s=float(interval_target_s),
+        )
+        if interval_state == "interval_missed"
+        else "unknown"
+    )
+    interval_value = {
+        **common,
+        "interval_state": interval_state,
+        "interval_target_s": float(interval_target_s),
+        "interval_actual_s": interval_actual,
+        "missed_interval_cause": missed_cause,
+        "clock_source": clock_source or _clock_source(),
+    }
+    interval_slot = build_slot(
+        DiagnosticState.ERROR
+        if interval_state == "interval_missed"
+        else DiagnosticState.EMITTED_VALUE,
+        value=interval_value,
+        source_ids=["diagnostic:body_state:interval"],
+        error_class="missed_sample" if interval_state == "interval_missed" else "",
+    )
+    validate_slot("body_state.interval", interval_slot)
+    return {
+        "services": services_slot,
+        "interval": interval_slot,
+        "degraded_capability": _default_slot(),
+        "owner_presence": _default_slot(),
+        "cognitive_substrate": _default_slot(),
+    }
+
+
+def clear_body_state_sample_cache() -> None:
+    _BODY_STATE_SAMPLE_CACHE.clear()
+
+
 def build_anticipation_slot(
     *,
     prediction_id: str,
@@ -1532,6 +1899,7 @@ def build_diagnostic_record(
     pressure_delta: dict[str, dict[str, Any]] | None = None,
     candidate_sources: dict[str, dict[str, Any]] | None = None,
     bond_topology: dict[str, dict[str, Any]] | None = None,
+    body_state: dict[str, dict[str, Any]] | None = None,
     workspace_selection: dict[str, Any] | None = None,
     anticipation: dict[str, Any] | None = None,
     surprise_delta: dict[str, Any] | None = None,
@@ -1561,6 +1929,7 @@ def build_diagnostic_record(
         "anticipation": anticipation or _default_slot(),
         "surprise_delta": surprise_delta or _default_slot(),
         "bond_topology": bond_topology or _filled_slots(TOPOLOGY_NAMES),
+        "body_state": body_state or _filled_slots(BODY_STATE_SLOT_NAMES),
         "interpretation_candidates": interpretation_candidates or _default_slot(),
     }
     if source_id_synthetic is not None:
@@ -1646,6 +2015,7 @@ def validate_record(record: dict[str, Any]) -> None:
         schema_group="candidate_source",
     )
     _validate_group(record=record, group_name="bond_topology", schema_group="bond_topology")
+    _validate_group(record=record, group_name="body_state", schema_group="body_state")
     for name in (
         "workspace_selection",
         "anticipation",
@@ -1795,6 +2165,52 @@ def write_bond_topology_record(
     )
     write_diagnostic_record(record=record, log_path=log_path)
     record_id = str(record["record_id"])
+    if mark_current_turn_observed:
+        mark_current_moment_assembly_observed(record_id=record_id)
+    return record_id
+
+
+def write_body_state_record(
+    *,
+    surface: str,
+    turn_id: str | None,
+    log_path: Path = DEFAULT_LOG_PATH,
+    instance_id_path: Path = BODY_STATE_INSTANCE_ID_PATH,
+    observed_at_wall_clock: str | None = None,
+    monotonic_now_s: float | None = None,
+    mark_current_turn_observed: bool = False,
+) -> str:
+    now = monotonic_now_s if monotonic_now_s is not None else time.monotonic()
+    cache_key = (str(log_path), surface)
+    cached = _BODY_STATE_SAMPLE_CACHE.get(cache_key)
+    if cached is not None:
+        last_sample_s, record_id = cached
+        if (now - last_sample_s) < BODY_STATE_MIN_SAMPLE_INTERVAL_S:
+            return record_id
+    from core.infra import body_capabilities as _body_capabilities
+
+    snapshot = _body_capabilities.body_capabilities()
+    interval_actual = (
+        BODY_STATE_MIN_SAMPLE_INTERVAL_S if cached is None else max(0.0, now - cached[0])
+    )
+    body_state = build_body_state_slots(
+        body_snapshot=snapshot,
+        observed_at_wall_clock=observed_at_wall_clock,
+        interval_target_s=BODY_STATE_MIN_SAMPLE_INTERVAL_S,
+        interval_actual_s=interval_actual,
+        substrate_generation_id=substrate_generation_id(instance_id_path=instance_id_path),
+    )
+    source_id = str(turn_id) if turn_id else f"completion:{surface}:{uuid4()}"
+    record = build_diagnostic_record(
+        surface=surface,
+        source_ids=[source_id],
+        assembly_path="observed",
+        body_state=body_state,
+        source_id_synthetic=not bool(turn_id),
+    )
+    write_diagnostic_record(record=record, log_path=log_path)
+    record_id = str(record["record_id"])
+    _BODY_STATE_SAMPLE_CACHE[cache_key] = (now, record_id)
     if mark_current_turn_observed:
         mark_current_moment_assembly_observed(record_id=record_id)
     return record_id

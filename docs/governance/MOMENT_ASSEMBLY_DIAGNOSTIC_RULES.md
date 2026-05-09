@@ -210,6 +210,49 @@ By 2030 contributors tried to seed coordinates from external graph-embedding mod
 RelationshipGraph tombstone slice may populate it without changing the
 topology record shape.
 
+## Body State
+
+Slice X.5 defines the fourth real organ shape. The body-state organ is a
+diagnostic adapter over `core/infra/body_capabilities.py`; it does not
+create a new probing substrate, narrate health, restart services, route
+prompts, or change production behavior.
+
+X.5 emits `body_state.services`, `body_state.interval`,
+`body_state.degraded_capability`, `body_state.owner_presence`, and
+`body_state.cognitive_substrate`. The last three slots are reserved at
+`state: not_implemented` in v1. Activating `degraded_capability`
+requires a follow-up slice that binds it to X.1 epistemic precision.
+Activating `owner_presence` requires an independent observer. Activating
+`cognitive_substrate` requires separate scoping.
+
+Body-state service ids are content-free typed-handle hashes locked by
+ADR 0027:
+`BODY_STATE_SERVICE_HASH_PREFIX = "x5.body_state.service.v1|service_name:<name>|kind:<service|hardware|interval>"`.
+Each emitted value carries `BODY_STATE_ID_BASIS_VERSION`,
+`SERVICE_HANDLE_BASIS_VERSION`, and `substrate_generation_id`.
+
+The mechanical service vocabulary is exactly `service_responsive`,
+`service_unresponsive`, `service_repairing`, and `service_unknown`.
+Interval vocabulary is exactly `interval_met`, `interval_missed`, and
+`interval_unknown`. Capability vocabulary is reserved as
+`capability_full`, `capability_reduced`, and `capability_unknown`.
+Health, sickbed, tiredness, severity, score, feeling, mood, and
+narration fields are forbidden.
+
+`MISSED_INTERVAL_CAUSE_BASIS` is exactly
+`("organ_alive_source_silent", "organ_broken", "unknown")`. Every
+`interval_missed` row carries one of these values. X.5 records both
+`interval_target_s` and `interval_actual_s`, plus `clock_source` from
+`ntp_synced`, `local_unsynced`, or `unknown`.
+
+Body-state diagnostics are write-only. No production router, prompt,
+recall, narration, anticipation, response generator, owner-load,
+covenant, audit, or grounding path may read `body_state.*`. The only
+allowed read is a future JSONL replay reconciliation helper. Opening any
+production read path requires ADR.
+
+By 2027 contributors tried to add severity: float for cockpit prioritization — severity is interpretation, the organ observes. By 2029 a contributor proposed an auto-recovery hook (if status=degraded for N intervals, restart) — the diagnostic organ must never act. By 2031 the narration layer tried to write health_label: 'tired' — sentiment-coded enums dramatize. Hash basis, forbidden-fields, mechanical-enum vocabulary, MISSED_INTERVAL_CAUSE_BASIS, and the read-path lock are covenant properties; changing any of them requires ADR.
+
 ## Workspace Selection
 
 When workspace selection emits a value, `workspace_selection.value`
