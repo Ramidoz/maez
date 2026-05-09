@@ -25,6 +25,7 @@ _MOMENT_ASSEMBLY_SYMBOLS = frozenset(
         "MOMENT_ASSEMBLY_DIAGNOSTIC_SCHEMA",
         "build_bypassed_record",
         "build_anticipation_slot",
+        "build_bond_topology_slots",
         "build_diagnostic_record",
         "build_open_loops_slot",
         "build_surprise_delta_slot",
@@ -33,6 +34,8 @@ _MOMENT_ASSEMBLY_SYMBOLS = frozenset(
         "derive_open_loop_age_bucket",
         "expire_latest_anticipation",
         "find_latest_unreconciled_anticipation",
+        "bond_topology_edge_id",
+        "bond_topology_node_id",
         "loop_id_for_episode",
         "mark_current_moment_assembly_observed",
         "moment_assembly_turn",
@@ -43,6 +46,7 @@ _MOMENT_ASSEMBLY_SYMBOLS = frozenset(
         "validate_slot",
         "write_bypassed_record",
         "write_anticipation_record",
+        "write_bond_topology_record",
         "write_diagnostic_record",
         "write_open_loops_record",
     }
@@ -285,26 +289,26 @@ class MomentAssemblyRecordTests(unittest.TestCase):
 
     def test_topology_representations_are_independent_slots(self):
         from core.cognition.moment_assembly_diagnostic import (
+            build_bond_topology_slots,
             build_diagnostic_record,
             build_slot,
         )
 
+        topology = build_bond_topology_slots(
+            graph=None,
+            owner_node_id="owner",
+            owner_node_kind="person",
+        )
+        topology["euclidean"] = build_slot(
+            "error",
+            value=None,
+            source_ids=[],
+            error_class="euclidean_failure",
+        )
         record = build_diagnostic_record(
             surface="probe",
             source_ids=["turn-1"],
-            bond_topology={
-                "euclidean": build_slot(
-                    "error",
-                    value=None,
-                    source_ids=[],
-                    error_class="euclidean_failure",
-                ),
-                "poincare": build_slot(
-                    "emitted_value",
-                    value={"coordinates": [0.1, 0.2]},
-                    source_ids=["turn-1"],
-                ),
-            },
+            bond_topology=topology,
         )
 
         self.assertEqual(record["bond_topology"]["euclidean"]["state"], "error")
@@ -583,6 +587,188 @@ class MomentAssemblyRecordTests(unittest.TestCase):
         self.assertEqual(rows[0]["assembly_path"], "observed")
         self.assertEqual(rows[0]["candidate_sources"]["open_loops"]["state"], "emitted_value")
         self.assertEqual(rows[0]["workspace_selection"]["state"], "not_implemented")
+
+    def test_bond_topology_strips_labels_and_emits_content_free_ids(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            bond_topology_node_id,
+            build_bond_topology_slots,
+            validate_slot,
+        )
+        from core.memory.relationship_graph import RelationshipGraph
+
+        graph_path = _TEST_DIR / "bond_topology_labels.db"
+        graph = RelationshipGraph(str(graph_path))
+        owner = graph.upsert_node(label="Rohit", kind="person")
+        other = graph.upsert_node(label="Priya", kind="person")
+        value = graph.upsert_node(label="private grief thread", kind="value")
+        graph.add_edge(
+            subject_id=owner,
+            relation="cares_about",
+            object_id=value,
+            source_episode_ids=["ep-1"],
+            source_memory_ids=[],
+        )
+        graph.add_edge(
+            subject_id=other,
+            relation="supports",
+            object_id=value,
+            source_episode_ids=["ep-2"],
+            source_memory_ids=[],
+        )
+
+        slots = build_bond_topology_slots(
+            graph=graph,
+            owner_node_id=owner,
+            owner_node_kind="person",
+        )
+
+        serialized = json.dumps(slots, sort_keys=True)
+        self.assertNotIn("Rohit", serialized)
+        self.assertNotIn("Priya", serialized)
+        self.assertNotIn("private grief thread", serialized)
+        self.assertNotIn(owner, serialized)
+        self.assertIn(bond_topology_node_id(owner, "person"), serialized)
+        self.assertEqual(slots["topology_invariants"]["state"], "emitted_value")
+        self.assertEqual(slots["euclidean"]["state"], "emitted_value")
+        self.assertEqual(slots["poincare"]["state"], "emitted_value")
+        self.assertIn("metrics", slots["euclidean"]["value"])
+        self.assertTrue(
+            all(
+                type(value) in {int, float}
+                for value in slots["euclidean"]["value"]["metrics"].values()
+            )
+        )
+
+        bad = json.loads(json.dumps(slots["euclidean"]))
+        bad["value"]["node_label"] = "Rohit"
+        with self.assertRaisesRegex(ValueError, "forbidden"):
+            validate_slot("bond_topology.euclidean", bad)
+        bad = json.loads(json.dumps(slots["euclidean"]))
+        bad["value"]["metrics"]["source_text"] = "private"
+        with self.assertRaisesRegex(ValueError, "forbidden"):
+            validate_slot("bond_topology.euclidean", bad)
+
+    def test_bond_topology_empty_singleton_disconnected_and_sign_anchor(self):
+        from core.cognition.moment_assembly_diagnostic import build_bond_topology_slots
+        from core.memory.relationship_graph import RelationshipGraph
+
+        empty_graph = RelationshipGraph(str(_TEST_DIR / "bond_topology_empty.db"))
+        empty = build_bond_topology_slots(graph=empty_graph, owner_node_id="")
+        self.assertEqual(empty["topology_invariants"]["state"], "emitted_value")
+        self.assertEqual(empty["topology_invariants"]["value"]["node_count"], 0)
+        self.assertEqual(empty["euclidean"]["state"], "emitted_null")
+        self.assertEqual(empty["poincare"]["state"], "emitted_null")
+
+        singleton = build_bond_topology_slots(
+            graph=empty_graph,
+            owner_node_id="n-owner",
+            owner_node_kind="person",
+        )
+        self.assertEqual(singleton["topology_invariants"]["value"]["node_count"], 1)
+        self.assertEqual(singleton["euclidean"]["state"], "emitted_value")
+        self.assertEqual(
+            singleton["euclidean"]["value"]["coordinates"][0]["xy"],
+            [0.0, 0.0],
+        )
+
+        graph = RelationshipGraph(str(_TEST_DIR / "bond_topology_disconnected.db"))
+        owner = graph.upsert_node(label="Rohit", kind="person")
+        a = graph.upsert_node(label="A", kind="concept")
+        b = graph.upsert_node(label="B", kind="concept")
+        c = graph.upsert_node(label="C", kind="concept")
+        d = graph.upsert_node(label="D", kind="concept")
+        graph.add_edge(
+            subject_id=owner,
+            relation="cares_about",
+            object_id=a,
+            source_episode_ids=["ep-1"],
+            source_memory_ids=[],
+        )
+        graph.add_edge(
+            subject_id=a,
+            relation="relates_to",
+            object_id=b,
+            source_episode_ids=["ep-2"],
+            source_memory_ids=[],
+        )
+        graph.add_edge(
+            subject_id=b,
+            relation="relates_to",
+            object_id=owner,
+            source_episode_ids=["ep-3"],
+            source_memory_ids=[],
+        )
+        graph.add_edge(
+            subject_id=c,
+            relation="relates_to",
+            object_id=d,
+            source_episode_ids=["ep-4"],
+            source_memory_ids=[],
+        )
+
+        slots = build_bond_topology_slots(
+            graph=graph,
+            owner_node_id=owner,
+            owner_node_kind="person",
+        )
+
+        invariants = slots["topology_invariants"]["value"]
+        self.assertEqual(invariants["connected_components"], 2)
+        self.assertTrue(invariants["poincare_spanning_tree_lossy"])
+        self.assertEqual(invariants["vacated_node_count"], 0)
+        owner_hash = invariants["owner_node_hash"]
+        euclidean_owner = next(
+            item
+            for item in slots["euclidean"]["value"]["coordinates"]
+            if item["node_id"] == owner_hash
+        )
+        self.assertLessEqual(euclidean_owner["xy"][0], 0.0)
+        self.assertEqual(
+            slots["euclidean"]["value"]["relationship_graph_snapshot_id"],
+            invariants["relationship_graph_snapshot_id"],
+        )
+
+    def test_write_bond_topology_record_marks_turn_observed_and_not_audit_evidence(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            moment_assembly_turn,
+            write_bond_topology_record,
+        )
+        from core.memory.relationship_graph import RelationshipGraph
+
+        path = _TEST_DIR / "bond_topology_observed.jsonl"
+        graph = RelationshipGraph(str(_TEST_DIR / "bond_topology_write.db"))
+        owner = graph.upsert_node(label="Rohit", kind="person")
+        value = graph.upsert_node(label="continuity", kind="value")
+        graph.add_edge(
+            subject_id=owner,
+            relation="cares_about",
+            object_id=value,
+            source_episode_ids=["ep-1"],
+            source_memory_ids=[],
+        )
+
+        with moment_assembly_turn(
+            surface="cli",
+            turn_id="turn-bond",
+            lifecycle_phase="chat_return",
+            log_path=path,
+        ):
+            record_id = write_bond_topology_record(
+                surface="cli",
+                turn_id="turn-bond",
+                graph=graph,
+                owner_node_id=owner,
+                owner_node_kind="person",
+                log_path=path,
+                mark_current_turn_observed=True,
+            )
+
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["record_id"], record_id)
+        self.assertEqual(rows[0]["audit_boundary"], "not_audit_evidence")
+        self.assertEqual(rows[0]["bond_topology"]["topology_invariants"]["state"], "emitted_value")
+        self.assertEqual(rows[0]["assembly_path"], "observed")
 
     def test_anticipation_slot_enforces_closed_targets_and_source_precision(self):
         from core.cognition.moment_assembly_diagnostic import (
@@ -1491,6 +1677,24 @@ class MomentAssemblyBoundaryTests(unittest.TestCase):
             self.assertNotIn("build_open_loops_slot", text, rel)
             self.assertNotIn("write_open_loops_record", text, rel)
 
+    def test_bond_topology_records_are_write_only_outside_diagnostic_module(self):
+        source = (_REPO / "core" / "cognition" / "moment_assembly_diagnostic.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("build_bond_topology_slots", source)
+        self.assertIn("write_bond_topology_record", source)
+        for path in _production_python_paths():
+            rel = path.relative_to(_REPO).as_posix()
+            if rel in {
+                "core/cognition/moment_assembly_diagnostic.py",
+                "tests/test_moment_assembly_diagnostic.py",
+                "scripts/moment_assembly_probe.py",
+            }:
+                continue
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("build_bond_topology_slots", text, rel)
+            self.assertNotIn("write_bond_topology_record", text, rel)
+
     def test_allowlisted_context_callers_are_present_and_use_same_kwargs_and_counts(self):
         for rel, function_name, symbol, expected_count in sorted(_ALLOWED_PRODUCTION_CONTEXTS):
             path = _REPO / rel
@@ -1645,6 +1849,29 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("hash_input_version", text)
         self.assertIn("2046", text)
         self.assertIn("Predicted Effect", text)
+
+    def test_x3_slice_memo_rules_and_adr_pin_bond_topology_contract(self):
+        memo = (_REPO / "docs" / "SLICE_X3_BOND_TOPOLOGY_ORGAN_MEMO.md").read_text(encoding="utf-8")
+        rules = (_REPO / "docs" / "governance" / "MOMENT_ASSEMBLY_DIAGNOSTIC_RULES.md").read_text(
+            encoding="utf-8"
+        )
+        adr = (_REPO / "docs" / "adr" / "0026-x3-bond-topology-id-basis.md").read_text(
+            encoding="utf-8"
+        )
+
+        for text in (memo, rules, adr):
+            self.assertIn("content-free", text)
+            self.assertIn("topology_id_basis_version", text)
+            self.assertIn("changing", text.lower())
+        self.assertIn("Switchboard Visibility", memo)
+        self.assertIn("topology_invariants", memo)
+        self.assertIn("Does this make the firstborn", memo)
+        self.assertIn(
+            "By 2030 contributors tried to seed coordinates from external graph-embedding models",
+            rules,
+        )
+        self.assertIn("BOND_TOPOLOGY_NODE_HASH_PREFIX", adr)
+        self.assertIn("BOND_TOPOLOGY_EDGE_HASH_PREFIX", adr)
 
     def test_x11_slice_memo_pins_replay_hardening_contract(self):
         path = _REPO / "docs" / "SLICE_X11_ANTICIPATION_REPLAY_HARDENING_MEMO.md"

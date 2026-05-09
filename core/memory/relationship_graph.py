@@ -92,9 +92,7 @@ def _canonicalise_iso(value: Optional[str], *, field_name: str) -> Optional[str]
     try:
         dt = datetime.fromisoformat(text)
     except ValueError as exc:
-        raise ValueError(
-            f"{field_name}: not a valid ISO-8601 timestamp: {text!r}"
-        ) from exc
+        raise ValueError(f"{field_name}: not a valid ISO-8601 timestamp: {text!r}") from exc
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     else:
@@ -120,10 +118,7 @@ class RelationshipGraph:
             # "what was true at time T?" against the historical
             # record. Idempotent — ``WHERE valid_from IS NULL``
             # only updates rows that haven't been migrated yet.
-            c.execute(
-                "UPDATE edges SET valid_from = created_at "
-                "WHERE valid_from IS NULL"
-            )
+            c.execute("UPDATE edges SET valid_from = created_at WHERE valid_from IS NULL")
 
     def _connect(self) -> sqlite3.Connection:
         c = sqlite3.connect(str(self._path))
@@ -280,22 +275,20 @@ class RelationshipGraph:
             base_sql = (
                 "SELECT e.*, "
                 "       s.label AS subject_label, "
-                "       o.label AS object_label "
+                "       s.kind AS subject_kind, "
+                "       o.label AS object_label, "
+                "       o.kind AS object_kind "
                 "FROM edges e "
                 "JOIN nodes s ON s.id = e.subject_id "
                 "JOIN nodes o ON o.id = e.object_id "
             )
             if at_time is None:
-                rows = c.execute(
-                    base_sql + "WHERE e.status = 'active'"
-                ).fetchall()
+                rows = c.execute(base_sql + "WHERE e.status = 'active'").fetchall()
             else:
                 # Audit M1+M2: canonicalise + validate at function
                 # entry so the predicate operates on the same
                 # +00:00 form the stored timestamps now use.
-                at_time_canonical = _canonicalise_iso(
-                    at_time, field_name="at_time"
-                )
+                at_time_canonical = _canonicalise_iso(at_time, field_name="at_time")
                 rows = c.execute(
                     base_sql
                     + "WHERE (e.valid_from IS NULL OR e.valid_from <= ?) "
@@ -307,25 +300,25 @@ class RelationshipGraph:
             d = dict(row)
             subject_label = d.pop("subject_label")
             object_label = d.pop("object_label")
+            subject_kind = d.pop("subject_kind")
+            object_kind = d.pop("object_kind")
             # Audit N1: defensive per-row JSON decode. One corrupt
             # cell shouldn't break the whole query for every other
             # caller. Empty list is the fail-open semantic here.
             try:
-                d["source_episode_ids"] = json.loads(
-                    d.pop("source_episode_ids_json")
-                )
+                d["source_episode_ids"] = json.loads(d.pop("source_episode_ids_json"))
             except (json.JSONDecodeError, TypeError):
                 d.pop("source_episode_ids_json", None)
                 d["source_episode_ids"] = []
             try:
-                d["source_memory_ids"] = json.loads(
-                    d.pop("source_memory_ids_json")
-                )
+                d["source_memory_ids"] = json.loads(d.pop("source_memory_ids_json"))
             except (json.JSONDecodeError, TypeError):
                 d.pop("source_memory_ids_json", None)
                 d["source_memory_ids"] = []
             d["subject_label"] = subject_label
             d["object_label"] = object_label
+            d["subject_kind"] = subject_kind
+            d["object_kind"] = object_kind
             out.append(d)
         return out
 

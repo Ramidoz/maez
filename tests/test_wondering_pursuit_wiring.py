@@ -65,8 +65,7 @@ class TraceCarriesPursuitFields(unittest.TestCase):
             "pursuit_question",
             "pursuit_components",
         ):
-            self.assertTrue(hasattr(t, field),
-                            f"Trace missing field: {field}")
+            self.assertTrue(hasattr(t, field), f"Trace missing field: {field}")
 
     def test_pursuit_fields_default_empty(self):
         from core.turn_traces.trace_schema import Trace
@@ -85,8 +84,10 @@ class TraceCarriesPursuitFields(unittest.TestCase):
         t.pursuit_score = 0.72
         t.pursuit_question = "how does continuity hold"
         t.pursuit_components = {
-            "goal": 0.8, "recency": 1.0,
-            "register": 0.9, "quality": 0.5,
+            "goal": 0.8,
+            "recency": 1.0,
+            "register": 0.9,
+            "quality": 0.5,
         }
         loaded = json.loads(t.to_jsonl_line())
         self.assertEqual(loaded["pursuit_decision"], "surface")
@@ -111,8 +112,7 @@ class DaemonImportsPursuit(unittest.TestCase):
         # daemon — decide_pursuit for the decision, and
         # format_pursuit_utterance for the surface phrasing.
         for symbol in ("decide_pursuit", "format_pursuit_utterance"):
-            self.assertIn(symbol, _DAEMON_SRC,
-                          f"daemon must reference {symbol}")
+            self.assertIn(symbol, _DAEMON_SRC, f"daemon must reference {symbol}")
 
 
 # ── env gate ─────────────────────────────────────────────────────────
@@ -166,15 +166,13 @@ class PursuitFailureIsSilent(unittest.TestCase):
 
     def test_decide_pursuit_in_try_except(self):
         idx = _DAEMON_SRC.find("decide_pursuit(")
-        self.assertGreater(idx, 0,
-                           "decide_pursuit callsite missing")
-        before = _DAEMON_SRC[max(0, idx - 600):idx]
-        after = _DAEMON_SRC[idx:idx + 1500]
-        self.assertIn("try:", before,
-                      "decide_pursuit must be inside a try: block")
-        self.assertRegex(after, r"except\s+Exception",
-                         "decide_pursuit must catch Exception "
-                         "(silent fail-open)")
+        self.assertGreater(idx, 0, "decide_pursuit callsite missing")
+        before = _DAEMON_SRC[max(0, idx - 600) : idx]
+        after = _DAEMON_SRC[idx : idx + 1500]
+        self.assertIn("try:", before, "decide_pursuit must be inside a try: block")
+        self.assertRegex(
+            after, r"except\s+Exception", "decide_pursuit must catch Exception (silent fail-open)"
+        )
 
 
 # ── trace capture ────────────────────────────────────────────────────
@@ -211,8 +209,7 @@ class SidecarRoundtrip(unittest.TestCase):
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             sidecar = f.name
         try:
-            ts = datetime(2026, 4, 30, 18, 0, 0,
-                          tzinfo=timezone.utc).timestamp()
+            ts = datetime(2026, 4, 30, 18, 0, 0, tzinfo=timezone.utc).timestamp()
             save_last_pursuit_at(ts, wondering_id=42, sidecar_path=sidecar)
             loaded = load_last_pursuit_at(sidecar_path=sidecar)
             self.assertAlmostEqual(loaded, ts, places=2)
@@ -229,9 +226,7 @@ class SidecarRoundtrip(unittest.TestCase):
     def test_load_returns_none_on_corrupt_file(self):
         from core.evolution.wondering_pursuit import load_last_pursuit_at
 
-        with tempfile.NamedTemporaryFile(
-            suffix=".json", delete=False, mode="w"
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
             f.write("not valid json {{{")
             corrupt = f.name
         try:
@@ -246,7 +241,8 @@ class SidecarRoundtrip(unittest.TestCase):
         # must not raise. Best-effort design.
         try:
             save_last_pursuit_at(
-                12345.0, wondering_id=1,
+                12345.0,
+                wondering_id=1,
                 sidecar_path="/proc/1/cant_write_here.json",
             )
         except Exception as exc:
@@ -269,17 +265,17 @@ class PursuitOrderingBeforeAudit(unittest.TestCase):
         # other audit callsites elsewhere in the file. Anchor the
         # search to handle_message's body.
         hm_idx = _DAEMON_SRC.find("def handle_message")
-        self.assertGreater(hm_idx, 0,
-                           "handle_message function missing")
-        body = _DAEMON_SRC[hm_idx:hm_idx + 80000]
+        self.assertGreater(hm_idx, 0, "handle_message function missing")
+        body = _DAEMON_SRC[hm_idx : hm_idx + 80000]
         idx_pursuit = body.find("decide_pursuit(")
         idx_audit = body.find("reply = audit_assistant_text(")
-        self.assertGreater(idx_pursuit, 0,
-                           "decide_pursuit callsite missing inside handle_message")
-        self.assertGreater(idx_audit, 0,
-                           "reply = audit_assistant_text callsite missing inside handle_message")
+        self.assertGreater(idx_pursuit, 0, "decide_pursuit callsite missing inside handle_message")
+        self.assertGreater(
+            idx_audit, 0, "reply = audit_assistant_text callsite missing inside handle_message"
+        )
         self.assertLess(
-            idx_pursuit, idx_audit,
+            idx_pursuit,
+            idx_audit,
             "pursuit utterance must be appended BEFORE the handle_message "
             "audit so the audit pass screens the wondering question for "
             "fabrication / self-claim leaks (audit B1+B2 fix)",
@@ -296,17 +292,19 @@ class TriStatePursuitDecision(unittest.TestCase):
         # Source-level: the daemon must distinguish "hold" from
         # "errored" in trace.pursuit_decision assignment.
         self.assertIn(
-            '"errored"', _DAEMON_SRC,
+            '"errored"',
+            _DAEMON_SRC,
             "tri-state pursuit_decision must include 'errored' for "
             "exception-path observability (audit M2)",
         )
         self.assertIn(
-            '"hold"', _DAEMON_SRC,
-            "tri-state pursuit_decision must include 'hold' for "
-            "evaluator-returned-None path",
+            '"hold"',
+            _DAEMON_SRC,
+            "tri-state pursuit_decision must include 'hold' for evaluator-returned-None path",
         )
         self.assertIn(
-            '"surface"', _DAEMON_SRC,
+            '"surface"',
+            _DAEMON_SRC,
             "tri-state pursuit_decision must include 'surface' for "
             "the actual proactive utterance path",
         )
@@ -328,8 +326,7 @@ class AtomicSidecarWrite(unittest.TestCase):
         # the source — same-process atomicity is hard to test
         # behaviourally without a fault injector.
         src = (
-            Path(__file__).resolve().parent.parent
-            / "core" / "evolution" / "wondering_pursuit.py"
+            Path(__file__).resolve().parent.parent / "core" / "evolution" / "wondering_pursuit.py"
         ).read_text()
         # Search inside the save_last_pursuit_at function specifically.
         save_idx = src.find("def save_last_pursuit_at")
@@ -340,7 +337,8 @@ class AtomicSidecarWrite(unittest.TestCase):
             next_def = len(src)
         save_block = src[save_idx:next_def]
         self.assertIn(
-            "os.replace", save_block,
+            "os.replace",
+            save_block,
             "save_last_pursuit_at must use os.replace for atomic "
             "rename (audit M1 fix — concurrent writers)",
         )
@@ -358,20 +356,18 @@ class AtomicSidecarWrite(unittest.TestCase):
             save_last_pursuit_at,
         )
 
-        with tempfile.NamedTemporaryFile(
-            suffix=".json", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             sidecar = f.name
 
         def writer(tag: int):
             for i in range(20):
                 save_last_pursuit_at(
-                    _t.time(), wondering_id=tag * 100 + i,
+                    _t.time(),
+                    wondering_id=tag * 100 + i,
                     sidecar_path=sidecar,
                 )
 
-        threads = [threading.Thread(target=writer, args=(t,))
-                   for t in range(8)]
+        threads = [threading.Thread(target=writer, args=(t,)) for t in range(8)]
         for th in threads:
             th.start()
         for th in threads:

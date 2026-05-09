@@ -11,18 +11,22 @@ enum values must fail in old readers instead of being silently accepted.
 from __future__ import annotations
 
 import contextvars
+from collections import Counter, deque
 from copy import deepcopy
 from datetime import UTC, datetime
 from enum import StrEnum
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import time
 from types import TracebackType
 from typing import Any
 from uuid import uuid4
+
+import numpy as np
 
 
 MOMENT_ASSEMBLY_DIAGNOSTIC_SCHEMA = 2
@@ -60,13 +64,32 @@ CANDIDATE_SOURCE_NAMES = (
     "covenant_boundaries",
     "future_projection_rules",
 )
-TOPOLOGY_NAMES = ("euclidean", "poincare")
+TOPOLOGY_NAMES = ("euclidean", "poincare", "topology_invariants")
 ORGAN_SCHEMA_VERSION = 1
 OPEN_LOOP_REGISTRY_SCHEMA_VERSION = 1
 OPEN_LOOP_ID_BASIS_VERSION = 1
 OPEN_LOOP_HASH_INPUT_PREFIX = "x2.open_loop.v1|episode:"
 OPEN_LOOP_AGE_BUCKET_CUTOFF_VERSION = 1
 OPEN_LOOP_AGE_HYSTERESIS_DAYS = 0.25
+BOND_TOPOLOGY_COORD_SIGN_ANCHOR = "owner_node_id"
+BOND_TOPOLOGY_ID_BASIS_VERSION = 1
+BOND_TOPOLOGY_BASIS_VERSION = 1
+BOND_TOPOLOGY_NODE_HASH_PREFIX = "x3.bond_topology.node.v1|node_id:"
+BOND_TOPOLOGY_EDGE_HASH_PREFIX = "x3.bond_topology.edge.v1|subject:"
+BOND_TOPOLOGY_FORBIDDEN_FIELDS = frozenset(
+    {
+        "node_label",
+        "edge_label",
+        "relation_summary",
+        "cluster_name",
+        "community_name",
+        "working_title",
+        "embedding",
+        "embedding_vector",
+        "embedding_vectors",
+        "source_text",
+    }
+)
 DEPRECATION_REASONS = frozenset(
     {
         "superseded",
@@ -250,6 +273,16 @@ def validate_slot(name: str, slot: dict[str, Any]) -> None:
         and state is DiagnosticState.EMITTED_VALUE
     ):
         _validate_open_loops_value(slot["value"], slot["source_ids"])
+        return
+    if (
+        name in {"bond_topology.euclidean", "bond_topology.poincare"}
+        and state is DiagnosticState.EMITTED_VALUE
+    ):
+        representation = name.rsplit(".", 1)[1]
+        _validate_topology_coordinate_value(slot["value"], representation)
+        return
+    if name == "bond_topology.topology_invariants" and state is DiagnosticState.EMITTED_VALUE:
+        _validate_topology_invariants_value(slot["value"])
         return
     if name == "surprise_delta" and state in {
         DiagnosticState.EMITTED_VALUE,
@@ -579,6 +612,141 @@ def _validate_open_loops_value(value: Any, source_ids: list[str]) -> None:
         raise ValueError("open_loops source_ids must match top_loop evidence ids")
 
 
+def _reject_forbidden_topology_fields(value: Any) -> None:
+    if isinstance(value, dict):
+        forbidden = BOND_TOPOLOGY_FORBIDDEN_FIELDS.intersection(value)
+        if forbidden:
+            raise ValueError(
+                f"bond_topology value contains forbidden field(s): {sorted(forbidden)!r}"
+            )
+        for item in value.values():
+            _reject_forbidden_topology_fields(item)
+    elif isinstance(value, list):
+        for item in value:
+            _reject_forbidden_topology_fields(item)
+
+
+def _validate_topology_coordinate_value(value: Any, representation: str) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"bond_topology.{representation} value must be an object")
+    _reject_forbidden_topology_fields(value)
+    required = {
+        "topology_basis_version",
+        "topology_id_basis_version",
+        "relationship_graph_snapshot_id",
+        "representation",
+        "sign_anchor",
+        "node_count",
+        "edge_count",
+        "connected_components",
+        "vacated_node_count",
+        "coordinates",
+        "metrics",
+    }
+    if representation == "poincare":
+        required.add("poincare_spanning_tree_lossy")
+    extra = sorted(set(value) - required)
+    if extra:
+        raise ValueError(f"bond_topology.{representation} has unknown field(s): {extra!r}")
+    missing = sorted(required - set(value))
+    if missing:
+        raise ValueError(f"bond_topology.{representation} missing required field(s): {missing!r}")
+    if value["topology_basis_version"] != BOND_TOPOLOGY_BASIS_VERSION:
+        raise ValueError(f"bond_topology.{representation} topology_basis_version drifted")
+    if value["topology_id_basis_version"] != BOND_TOPOLOGY_ID_BASIS_VERSION:
+        raise ValueError(f"bond_topology.{representation} topology_id_basis_version drifted")
+    if value["representation"] != representation:
+        raise ValueError(f"bond_topology.{representation} representation mismatch")
+    if value["sign_anchor"] != BOND_TOPOLOGY_COORD_SIGN_ANCHOR:
+        raise ValueError(f"bond_topology.{representation} sign_anchor mismatch")
+    for key in ("node_count", "edge_count", "connected_components", "vacated_node_count"):
+        if not isinstance(value[key], int) or value[key] < 0:
+            raise ValueError(f"bond_topology.{representation} {key} must be non-negative int")
+    coordinates = value["coordinates"]
+    if not isinstance(coordinates, list):
+        raise ValueError(f"bond_topology.{representation} coordinates must be a list")
+    if len(coordinates) != value["node_count"]:
+        raise ValueError(f"bond_topology.{representation} coordinate count mismatch")
+    seen: set[str] = set()
+    for item in coordinates:
+        if set(item) != {"node_id", "xy", "component_index"}:
+            raise ValueError(f"bond_topology.{representation} coordinate item shape drifted")
+        node_id = item["node_id"]
+        if not isinstance(node_id, str) or not node_id.startswith("bt-node:"):
+            raise ValueError(f"bond_topology.{representation} coordinate node_id must be hashed")
+        if node_id in seen:
+            raise ValueError(f"bond_topology.{representation} duplicate coordinate node_id")
+        seen.add(node_id)
+        xy = item["xy"]
+        if (
+            not isinstance(xy, list)
+            or len(xy) != 2
+            or not all(isinstance(coord, int | float) for coord in xy)
+        ):
+            raise ValueError(f"bond_topology.{representation} xy must be two numeric values")
+    metrics = value["metrics"]
+    if not isinstance(metrics, dict):
+        raise ValueError(f"bond_topology.{representation} metrics must be an object")
+    for metric_name, metric_value in metrics.items():
+        if type(metric_value) not in {int, float}:
+            raise ValueError(
+                f"bond_topology.{representation} metrics.{metric_name} must be numeric"
+            )
+
+
+def _validate_topology_invariants_value(value: Any) -> None:
+    if not isinstance(value, dict):
+        raise ValueError("bond_topology.topology_invariants value must be an object")
+    _reject_forbidden_topology_fields(value)
+    required = {
+        "topology_basis_version",
+        "topology_id_basis_version",
+        "relationship_graph_snapshot_id",
+        "owner_node_hash",
+        "node_count",
+        "edge_count",
+        "connected_components",
+        "vacated_node_count",
+        "poincare_spanning_tree_lossy",
+        "relation_histogram",
+        "owner_distance_shell_histogram",
+        "triangle_inequality_slack_distribution",
+        "curvature_of_shells_signature",
+        "degree_vs_distance_scaling_exponent",
+        "cycle_edge_count",
+    }
+    if set(value) != required:
+        raise ValueError("bond_topology.topology_invariants field set drifted")
+    if value["topology_basis_version"] != BOND_TOPOLOGY_BASIS_VERSION:
+        raise ValueError("bond_topology.topology_invariants topology_basis_version drifted")
+    if value["topology_id_basis_version"] != BOND_TOPOLOGY_ID_BASIS_VERSION:
+        raise ValueError("bond_topology.topology_invariants topology_id_basis_version drifted")
+    if value["owner_node_hash"] and not str(value["owner_node_hash"]).startswith("bt-node:"):
+        raise ValueError("bond_topology.topology_invariants owner_node_hash must be hashed")
+    for key in (
+        "node_count",
+        "edge_count",
+        "connected_components",
+        "vacated_node_count",
+        "cycle_edge_count",
+    ):
+        if not isinstance(value[key], int) or value[key] < 0:
+            raise ValueError(f"bond_topology.topology_invariants {key} must be non-negative int")
+    if not isinstance(value["poincare_spanning_tree_lossy"], bool):
+        raise ValueError("bond_topology.topology_invariants lossy flag must be bool")
+    for key in (
+        "relation_histogram",
+        "owner_distance_shell_histogram",
+        "triangle_inequality_slack_distribution",
+        "curvature_of_shells_signature",
+    ):
+        if not isinstance(value[key], dict):
+            raise ValueError(f"bond_topology.topology_invariants {key} must be object")
+    exponent = value["degree_vs_distance_scaling_exponent"]
+    if exponent is not None and not isinstance(exponent, int | float):
+        raise ValueError("bond_topology.topology_invariants exponent must be numeric or null")
+
+
 def _filled_slots(names: tuple[str, ...]) -> dict[str, dict[str, Any]]:
     return {name: _default_slot() for name in names}
 
@@ -785,6 +953,490 @@ def build_open_loops_slot(
     }
     validate_slot("candidate_sources.open_loops", slot)
     return slot
+
+
+def bond_topology_node_id(node_id: str, kind: str) -> str:
+    if not node_id or not kind:
+        raise ValueError("bond topology node hash requires node_id and kind")
+    digest = hashlib.sha256(
+        f"{BOND_TOPOLOGY_NODE_HASH_PREFIX}{node_id}|kind:{kind}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"bt-node:{digest}"
+
+
+def bond_topology_edge_id(
+    *,
+    subject_node_hash: str,
+    relation: str,
+    object_node_hash: str,
+) -> str:
+    if not subject_node_hash.startswith("bt-node:") or not object_node_hash.startswith("bt-node:"):
+        raise ValueError("bond topology edge hash requires hashed node ids")
+    if not relation:
+        raise ValueError("bond topology edge hash requires relation")
+    digest = hashlib.sha256(
+        (
+            f"{BOND_TOPOLOGY_EDGE_HASH_PREFIX}{subject_node_hash}"
+            f"|relation:{relation}|object:{object_node_hash}"
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"bt-edge:{digest}"
+
+
+def _snapshot_relationship_graph(
+    *,
+    graph: Any,
+    owner_node_id: str,
+    owner_node_kind: str,
+) -> dict[str, Any]:
+    rows = list(graph.list_active()) if graph is not None else []
+    nodes: dict[str, dict[str, str]] = {}
+    edges: list[dict[str, str]] = []
+    for row in rows:
+        subject_id = str(row.get("subject_id") or "")
+        object_id = str(row.get("object_id") or "")
+        subject_kind = str(row.get("subject_kind") or "unknown")
+        object_kind = str(row.get("object_kind") or "unknown")
+        relation = str(row.get("relation") or "")
+        if not subject_id or not object_id or not relation:
+            continue
+        nodes[subject_id] = {
+            "node_hash": bond_topology_node_id(subject_id, subject_kind),
+            "kind": subject_kind,
+        }
+        nodes[object_id] = {
+            "node_hash": bond_topology_node_id(object_id, object_kind),
+            "kind": object_kind,
+        }
+        subject_hash = nodes[subject_id]["node_hash"]
+        object_hash = nodes[object_id]["node_hash"]
+        edges.append(
+            {
+                "edge_id": str(row.get("id") or ""),
+                "edge_hash": bond_topology_edge_id(
+                    subject_node_hash=subject_hash,
+                    relation=relation,
+                    object_node_hash=object_hash,
+                ),
+                "subject_hash": subject_hash,
+                "object_hash": object_hash,
+                "relation": relation,
+            }
+        )
+    if owner_node_id:
+        nodes.setdefault(
+            owner_node_id,
+            {
+                "node_hash": bond_topology_node_id(owner_node_id, owner_node_kind),
+                "kind": owner_node_kind,
+            },
+        )
+    node_hashes = sorted(node["node_hash"] for node in nodes.values())
+    edge_hashes = sorted(edge["edge_hash"] for edge in edges)
+    snapshot_payload = {
+        "basis": BOND_TOPOLOGY_BASIS_VERSION,
+        "id_basis": BOND_TOPOLOGY_ID_BASIS_VERSION,
+        "nodes": node_hashes,
+        "edges": edge_hashes,
+    }
+    snapshot_digest = hashlib.sha256(
+        json.dumps(snapshot_payload, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:16]
+    return {
+        "nodes": nodes,
+        "edges": sorted(edges, key=lambda edge: edge["edge_hash"]),
+        "owner_node_hash": nodes.get(owner_node_id, {}).get("node_hash", ""),
+        "relationship_graph_snapshot_id": f"bt-snapshot:{snapshot_digest}",
+    }
+
+
+def _adjacency(nodes: list[str], edges: list[dict[str, str]]) -> dict[str, set[str]]:
+    adjacency = {node: set() for node in nodes}
+    for edge in edges:
+        subject = edge["subject_hash"]
+        obj = edge["object_hash"]
+        adjacency.setdefault(subject, set()).add(obj)
+        adjacency.setdefault(obj, set()).add(subject)
+    return adjacency
+
+
+def _components(nodes: list[str], adjacency: dict[str, set[str]]) -> list[list[str]]:
+    remaining = set(nodes)
+    components: list[list[str]] = []
+    while remaining:
+        root = min(remaining)
+        queue: deque[str] = deque([root])
+        remaining.remove(root)
+        component: list[str] = []
+        while queue:
+            node = queue.popleft()
+            component.append(node)
+            for neighbor in sorted(adjacency.get(node, ())):
+                if neighbor in remaining:
+                    remaining.remove(neighbor)
+                    queue.append(neighbor)
+        components.append(sorted(component))
+    return components
+
+
+def _owner_distances(
+    *,
+    owner_node_hash: str,
+    nodes: list[str],
+    adjacency: dict[str, set[str]],
+) -> dict[str, int]:
+    if not owner_node_hash or owner_node_hash not in nodes:
+        return {}
+    distances = {owner_node_hash: 0}
+    queue: deque[str] = deque([owner_node_hash])
+    while queue:
+        node = queue.popleft()
+        for neighbor in sorted(adjacency.get(node, ())):
+            if neighbor not in distances:
+                distances[neighbor] = distances[node] + 1
+                queue.append(neighbor)
+    return distances
+
+
+def _canonicalize_coordinate_sign(
+    coordinates: dict[str, list[float]],
+    *,
+    owner_node_hash: str,
+) -> None:
+    if not coordinates:
+        return
+    ordered = sorted(coordinates)
+    anchor = owner_node_hash if owner_node_hash in coordinates else ordered[0]
+    for dim in (0, 1):
+        basis = coordinates[anchor][dim]
+        if abs(basis) <= 1e-12:
+            for node in ordered:
+                if abs(coordinates[node][dim]) > 1e-12:
+                    basis = coordinates[node][dim]
+                    break
+        if basis > 0:
+            for node in coordinates:
+                coordinates[node][dim] *= -1.0
+
+
+def _round_xy(x: float, y: float) -> list[float]:
+    return [round(float(x), 6), round(float(y), 6)]
+
+
+def _euclidean_coordinates(
+    *,
+    nodes: list[str],
+    edges: list[dict[str, str]],
+    components: list[list[str]],
+    owner_node_hash: str,
+) -> list[dict[str, Any]]:
+    adjacency = _adjacency(nodes, edges)
+    coordinates: dict[str, list[float]] = {}
+    component_index: dict[str, int] = {}
+    for idx, component in enumerate(components):
+        for node in component:
+            component_index[node] = idx
+        if len(component) == 1:
+            coordinates[component[0]] = [0.0, float(idx)]
+            continue
+        matrix = np.zeros((len(component), len(component)), dtype=float)
+        index = {node: pos for pos, node in enumerate(component)}
+        for node in component:
+            for neighbor in adjacency[node]:
+                if neighbor in index:
+                    matrix[index[node], index[neighbor]] = 1.0
+        degrees = np.diag(matrix.sum(axis=1))
+        laplacian = degrees - matrix
+        _, vectors = np.linalg.eigh(laplacian)
+        x_vec = vectors[:, 1] if len(component) > 1 else np.zeros(len(component))
+        y_vec = vectors[:, 2] if len(component) > 2 else np.zeros(len(component))
+        for node, x, y in zip(component, x_vec, y_vec, strict=True):
+            coordinates[node] = [float(x), float(y) + float(idx)]
+    _canonicalize_coordinate_sign(coordinates, owner_node_hash=owner_node_hash)
+    return [
+        {
+            "node_id": node,
+            "xy": _round_xy(*coordinates[node]),
+            "component_index": component_index[node],
+        }
+        for node in sorted(coordinates)
+    ]
+
+
+def _bfs_tree_distances(
+    *,
+    root: str,
+    component: list[str],
+    adjacency: dict[str, set[str]],
+) -> dict[str, int]:
+    distances = {root: 0}
+    queue: deque[str] = deque([root])
+    component_set = set(component)
+    while queue:
+        node = queue.popleft()
+        for neighbor in sorted(adjacency[node]):
+            if neighbor in component_set and neighbor not in distances:
+                distances[neighbor] = distances[node] + 1
+                queue.append(neighbor)
+    return distances
+
+
+def _poincare_coordinates(
+    *,
+    nodes: list[str],
+    edges: list[dict[str, str]],
+    components: list[list[str]],
+    owner_node_hash: str,
+) -> list[dict[str, Any]]:
+    adjacency = _adjacency(nodes, edges)
+    coordinates: dict[str, list[float]] = {}
+    component_index: dict[str, int] = {}
+    for idx, component in enumerate(components):
+        root = owner_node_hash if owner_node_hash in component else component[0]
+        distances = _bfs_tree_distances(root=root, component=component, adjacency=adjacency)
+        ordered = sorted(component, key=lambda node: (distances.get(node, 999), node))
+        max_depth = max(distances.values(), default=0)
+        sector_offset = 0.0 if root == owner_node_hash else (2.0 * math.pi * idx / len(components))
+        for pos, node in enumerate(ordered):
+            component_index[node] = idx
+            depth = distances.get(node, 0)
+            if node == root and root == owner_node_hash:
+                coordinates[node] = [0.0, 0.0]
+                continue
+            radius = math.tanh((depth + (0.35 * idx)) / max(2.0, max_depth + 1.0))
+            angle = sector_offset + (2.0 * math.pi * pos / max(1, len(ordered)))
+            coordinates[node] = [radius * math.cos(angle), radius * math.sin(angle)]
+    return [
+        {
+            "node_id": node,
+            "xy": _round_xy(*coordinates[node]),
+            "component_index": component_index[node],
+        }
+        for node in sorted(coordinates)
+    ]
+
+
+def _degree_distance_exponent(
+    *,
+    nodes: list[str],
+    adjacency: dict[str, set[str]],
+    distances: dict[str, int],
+) -> float | None:
+    pairs = [
+        (distances[node], len(adjacency[node]))
+        for node in nodes
+        if node in distances and distances[node] > 0 and len(adjacency[node]) > 0
+    ]
+    if len(pairs) < 2:
+        return None
+    xs = np.array([math.log(distance + 1.0) for distance, _ in pairs], dtype=float)
+    ys = np.array([math.log(degree + 1.0) for _, degree in pairs], dtype=float)
+    if np.allclose(xs, xs[0]):
+        return 0.0
+    slope, _ = np.polyfit(xs, ys, 1)
+    return round(float(slope), 6)
+
+
+def _triangle_slack_distribution(
+    nodes: list[str],
+    adjacency: dict[str, set[str]],
+) -> dict[str, float]:
+    closed = 0
+    open_triplets = 0
+    for center in nodes:
+        neighbors = sorted(adjacency[center])
+        for i, left in enumerate(neighbors):
+            for right in neighbors[i + 1 :]:
+                open_triplets += 1
+                if right in adjacency[left]:
+                    closed += 1
+    if open_triplets == 0:
+        return {"sampled_triplets": 0, "closed_ratio": 0.0, "open_ratio": 0.0}
+    closed_ratio = closed / open_triplets
+    return {
+        "sampled_triplets": open_triplets,
+        "closed_ratio": round(closed_ratio, 6),
+        "open_ratio": round(1.0 - closed_ratio, 6),
+    }
+
+
+def _invariants_value(snapshot: dict[str, Any]) -> dict[str, Any]:
+    nodes = sorted(node["node_hash"] for node in snapshot["nodes"].values())
+    edges = snapshot["edges"]
+    adjacency = _adjacency(nodes, edges)
+    components = _components(nodes, adjacency)
+    owner_node_hash = snapshot["owner_node_hash"]
+    distances = _owner_distances(
+        owner_node_hash=owner_node_hash,
+        nodes=nodes,
+        adjacency=adjacency,
+    )
+    shell_histogram = Counter(str(distance) for distance in distances.values())
+    relation_histogram = Counter(edge["relation"] for edge in edges)
+    tree_edge_count = max(0, len(nodes) - len(components))
+    cycle_edge_count = max(0, len(edges) - tree_edge_count)
+    return {
+        "topology_basis_version": BOND_TOPOLOGY_BASIS_VERSION,
+        "topology_id_basis_version": BOND_TOPOLOGY_ID_BASIS_VERSION,
+        "relationship_graph_snapshot_id": snapshot["relationship_graph_snapshot_id"],
+        "owner_node_hash": owner_node_hash,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "connected_components": len(components) if nodes else 0,
+        "vacated_node_count": 0,
+        "poincare_spanning_tree_lossy": bool(cycle_edge_count or (len(components) > 1)),
+        "relation_histogram": dict(sorted(relation_histogram.items())),
+        "owner_distance_shell_histogram": dict(sorted(shell_histogram.items())),
+        "triangle_inequality_slack_distribution": _triangle_slack_distribution(nodes, adjacency),
+        "curvature_of_shells_signature": {
+            "max_owner_distance": max(distances.values(), default=0),
+            "reachable_node_count": len(distances),
+            "unreachable_node_count": max(0, len(nodes) - len(distances)),
+        },
+        "degree_vs_distance_scaling_exponent": _degree_distance_exponent(
+            nodes=nodes,
+            adjacency=adjacency,
+            distances=distances,
+        ),
+        "cycle_edge_count": cycle_edge_count,
+    }
+
+
+def _coordinate_value(
+    *,
+    representation: str,
+    snapshot: dict[str, Any],
+    coordinates: list[dict[str, Any]],
+    invariants: dict[str, Any],
+) -> dict[str, Any]:
+    value = {
+        "topology_basis_version": BOND_TOPOLOGY_BASIS_VERSION,
+        "topology_id_basis_version": BOND_TOPOLOGY_ID_BASIS_VERSION,
+        "relationship_graph_snapshot_id": snapshot["relationship_graph_snapshot_id"],
+        "representation": representation,
+        "sign_anchor": BOND_TOPOLOGY_COORD_SIGN_ANCHOR,
+        "node_count": invariants["node_count"],
+        "edge_count": invariants["edge_count"],
+        "connected_components": invariants["connected_components"],
+        "vacated_node_count": invariants["vacated_node_count"],
+        "coordinates": coordinates,
+        "metrics": _coordinate_metrics(
+            coordinates=coordinates,
+            edges=snapshot["edges"],
+            invariants=invariants,
+        ),
+    }
+    if representation == "poincare":
+        value["poincare_spanning_tree_lossy"] = invariants["poincare_spanning_tree_lossy"]
+    return value
+
+
+def _coordinate_metrics(
+    *,
+    coordinates: list[dict[str, Any]],
+    edges: list[dict[str, str]],
+    invariants: dict[str, Any],
+) -> dict[str, int | float]:
+    by_node = {item["node_id"]: item["xy"] for item in coordinates}
+    edge_lengths: list[float] = []
+    for edge in edges:
+        subject = edge["subject_hash"]
+        obj = edge["object_hash"]
+        if subject not in by_node or obj not in by_node:
+            continue
+        sx, sy = by_node[subject]
+        ox, oy = by_node[obj]
+        edge_lengths.append(math.dist((float(sx), float(sy)), (float(ox), float(oy))))
+    mean_edge_length = sum(edge_lengths) / len(edge_lengths) if edge_lengths else 0.0
+    return {
+        "node_count": int(invariants["node_count"]),
+        "edge_count": int(invariants["edge_count"]),
+        "connected_components": int(invariants["connected_components"]),
+        "cycle_edge_count": int(invariants["cycle_edge_count"]),
+        "coordinate_edge_sample_count": len(edge_lengths),
+        "mean_edge_length": round(mean_edge_length, 6),
+        "max_edge_length": round(max(edge_lengths), 6) if edge_lengths else 0.0,
+    }
+
+
+def build_bond_topology_slots(
+    *,
+    graph: Any,
+    owner_node_id: str,
+    owner_node_kind: str = "person",
+) -> dict[str, dict[str, Any]]:
+    snapshot = _snapshot_relationship_graph(
+        graph=graph,
+        owner_node_id=owner_node_id,
+        owner_node_kind=owner_node_kind,
+    )
+    invariants = _invariants_value(snapshot)
+    source_ids = [snapshot["relationship_graph_snapshot_id"]]
+    invariant_slot = build_slot(
+        DiagnosticState.EMITTED_VALUE,
+        value=invariants,
+        source_ids=source_ids,
+    )
+    validate_slot("bond_topology.topology_invariants", invariant_slot)
+    if invariants["node_count"] == 0:
+        slots = {
+            "euclidean": build_slot(
+                DiagnosticState.EMITTED_NULL,
+                value=None,
+                source_ids=source_ids,
+            ),
+            "poincare": build_slot(
+                DiagnosticState.EMITTED_NULL,
+                value=None,
+                source_ids=source_ids,
+            ),
+            "topology_invariants": invariant_slot,
+        }
+        validate_slot("bond_topology.euclidean", slots["euclidean"])
+        validate_slot("bond_topology.poincare", slots["poincare"])
+        return slots
+    nodes = sorted(node["node_hash"] for node in snapshot["nodes"].values())
+    edges = snapshot["edges"]
+    adjacency = _adjacency(nodes, edges)
+    components = _components(nodes, adjacency)
+    euclidean = _coordinate_value(
+        representation="euclidean",
+        snapshot=snapshot,
+        coordinates=_euclidean_coordinates(
+            nodes=nodes,
+            edges=edges,
+            components=components,
+            owner_node_hash=snapshot["owner_node_hash"],
+        ),
+        invariants=invariants,
+    )
+    poincare = _coordinate_value(
+        representation="poincare",
+        snapshot=snapshot,
+        coordinates=_poincare_coordinates(
+            nodes=nodes,
+            edges=edges,
+            components=components,
+            owner_node_hash=snapshot["owner_node_hash"],
+        ),
+        invariants=invariants,
+    )
+    slots = {
+        "euclidean": build_slot(
+            DiagnosticState.EMITTED_VALUE,
+            value=euclidean,
+            source_ids=source_ids,
+        ),
+        "poincare": build_slot(
+            DiagnosticState.EMITTED_VALUE,
+            value=poincare,
+            source_ids=source_ids,
+        ),
+        "topology_invariants": invariant_slot,
+    }
+    validate_slot("bond_topology.euclidean", slots["euclidean"])
+    validate_slot("bond_topology.poincare", slots["poincare"])
+    return slots
 
 
 def build_anticipation_slot(
@@ -1110,6 +1762,35 @@ def write_open_loops_record(
         source_ids=[source_id],
         assembly_path="observed",
         candidate_sources=candidate_sources,
+        source_id_synthetic=not bool(turn_id),
+    )
+    write_diagnostic_record(record=record, log_path=log_path)
+    record_id = str(record["record_id"])
+    if mark_current_turn_observed:
+        mark_current_moment_assembly_observed(record_id=record_id)
+    return record_id
+
+
+def write_bond_topology_record(
+    *,
+    surface: str,
+    turn_id: str | None,
+    graph: Any,
+    owner_node_id: str,
+    owner_node_kind: str = "person",
+    log_path: Path = DEFAULT_LOG_PATH,
+    mark_current_turn_observed: bool = False,
+) -> str:
+    source_id = str(turn_id) if turn_id else f"completion:{surface}:{uuid4()}"
+    record = build_diagnostic_record(
+        surface=surface,
+        source_ids=[source_id],
+        assembly_path="observed",
+        bond_topology=build_bond_topology_slots(
+            graph=graph,
+            owner_node_id=owner_node_id,
+            owner_node_kind=owner_node_kind,
+        ),
         source_id_synthetic=not bool(turn_id),
     )
     write_diagnostic_record(record=record, log_path=log_path)

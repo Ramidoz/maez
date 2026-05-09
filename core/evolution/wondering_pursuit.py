@@ -142,18 +142,35 @@ PURSUIT_FREQUENCY_BUDGET_HOURS: float = 12.0
 # casual conversation is overwhelmingly distress-coloured. Words
 # with technical / casual senses are handled by the phrase
 # patterns below, not as bare tokens.
-_VULNERABLE_REGISTER_TOKENS: frozenset[str] = frozenset({
-    # explicit emotional disclosure (rarely casual)
-    "lonely", "scared", "afraid", "anxious", "panic", "panicking",
-    "terrified", "overwhelmed", "depressed", "depression",
-    "hopeless", "pointless", "worthless", "grief", "grieving",
-    "mourning",
-    # explicit grief / loss verbs (compound usage caught by phrases)
-    "crying", "sobbing", "weeping",
-    # safety-critical (audit B1 fix — fresh-eyes pass exposed
-    # these were missing entirely)
-    "suicidal", "numb",
-})
+_VULNERABLE_REGISTER_TOKENS: frozenset[str] = frozenset(
+    {
+        # explicit emotional disclosure (rarely casual)
+        "lonely",
+        "scared",
+        "afraid",
+        "anxious",
+        "panic",
+        "panicking",
+        "terrified",
+        "overwhelmed",
+        "depressed",
+        "depression",
+        "hopeless",
+        "pointless",
+        "worthless",
+        "grief",
+        "grieving",
+        "mourning",
+        # explicit grief / loss verbs (compound usage caught by phrases)
+        "crying",
+        "sobbing",
+        "weeping",
+        # safety-critical (audit B1 fix — fresh-eyes pass exposed
+        # these were missing entirely)
+        "suicidal",
+        "numb",
+    }
+)
 
 # Phrase patterns that signal distress regardless of token-level
 # false positives. Lexicons of single tokens collide with casual
@@ -168,60 +185,104 @@ _VULNERABLE_REGISTER_TOKENS: frozenset[str] = frozenset({
 # everyday vulnerable contexts (grief, fear, exhaustion).
 _SAFETY_CRITICAL_PHRASES: tuple[str, ...] = (
     # suicidal ideation
-    "kill myself", "kill my self",
-    "i want to die", "wanting to die",
-    "i wish i was dead", "i wish i were dead", "wish i was dead",
+    "kill myself",
+    "kill my self",
+    "i want to die",
+    "wanting to die",
+    "i wish i was dead",
+    "i wish i were dead",
+    "wish i was dead",
     "wish i were dead",
-    "better off dead", "better off without me",
-    "end my life", "end it all",
+    "better off dead",
+    "better off without me",
+    "end my life",
+    "end it all",
     "no point in living",
-    "don't want to be here", "dont want to be here",
+    "don't want to be here",
+    "dont want to be here",
     # self-harm
-    "i hate myself", "hate myself",
-    "hurting myself", "self harm", "self-harm",
+    "i hate myself",
+    "hate myself",
+    "hurting myself",
+    "self harm",
+    "self-harm",
     # despair phrases that previously slipped through via
     # function-word open-register inflation (``why bother`` →
     # 0.80 OPEN was the worst case)
-    "why bother", "what's the point", "whats the point",
+    "why bother",
+    "what's the point",
+    "whats the point",
     "no one cares",
     "nothing matters",
     # inability / collapse
-    "can't go on", "cant go on",
-    "i can't take it", "cant take it",
-    "i can't cope", "cant cope",
-    "falling apart", "having a breakdown",
+    "can't go on",
+    "cant go on",
+    "i can't take it",
+    "cant take it",
+    "i can't cope",
+    "cant cope",
+    "falling apart",
+    "having a breakdown",
     # numbness / emptiness (phrase-bound — bare ``empty``/``numb``
     # are too casual to block alone, but the phrase form is
     # unambiguous)
-    "i feel empty", "feel numb", "i'm numb", "im numb",
+    "i feel empty",
+    "feel numb",
+    "i'm numb",
+    "im numb",
     # explicit collapse-state phrasing
-    "feeling like shit", "i'm done", "im done",
+    "feeling like shit",
+    "i'm done",
+    "im done",
 )
 
 _VULNERABLE_REGISTER_PHRASES: tuple[str, ...] = (
     # first-person grief / missing
-    "i miss her", "i miss him", "i miss them", "i miss you",
-    "miss her so", "miss him so", "miss them so",
+    "i miss her",
+    "i miss him",
+    "i miss them",
+    "i miss you",
+    "miss her so",
+    "miss him so",
+    "miss them so",
     # despair / inability (the everyday-vulnerable pool, not the
     # safety-critical one)
-    "i can't anymore", "cant anymore", "can not anymore",
-    "i don't know if i can", "dont know if i can",
-    "i give up", "giving up",
+    "i can't anymore",
+    "cant anymore",
+    "can not anymore",
+    "i don't know if i can",
+    "dont know if i can",
+    "i give up",
+    "giving up",
     # fear / disclosure
-    "i'm scared", "im scared", "i am scared",
-    "i'm afraid", "im afraid",
-    "i'm worried", "im worried",
-    "i'm hurting", "im hurting",
+    "i'm scared",
+    "im scared",
+    "i am scared",
+    "i'm afraid",
+    "im afraid",
+    "i'm worried",
+    "im worried",
+    "i'm hurting",
+    "im hurting",
     # exhaustion + emotional weight
-    "i'm tired of", "im tired of",
-    "i'm exhausted", "im exhausted",
+    "i'm tired of",
+    "im tired of",
+    "i'm exhausted",
+    "im exhausted",
     # heaviness / burden
-    "feels heavy", "too heavy", "weight of",
-    "i'm a burden", "im a burden",
+    "feels heavy",
+    "too heavy",
+    "weight of",
+    "i'm a burden",
+    "im a burden",
     # rough emotional state
-    "had a rough", "rough day", "rough night", "rough one",
+    "had a rough",
+    "rough day",
+    "rough night",
+    "rough one",
     # explicit "had it"
-    "had it", "had enough",
+    "had it",
+    "had enough",
 )
 
 # Words signalling curiosity, openness — inviting registers where
@@ -231,10 +292,19 @@ _VULNERABLE_REGISTER_PHRASES: tuple[str, ...] = (
 # questions AND actively scoring despair phrases as inviting.
 # Remaining tokens are ones that genuinely signal "I am curious /
 # inviting your input."
-_OPEN_REGISTER_TOKENS: frozenset[str] = frozenset({
-    "curious", "wondering", "wonder", "thinking", "interesting",
-    "tell", "explain", "describe", "share",
-})
+_OPEN_REGISTER_TOKENS: frozenset[str] = frozenset(
+    {
+        "curious",
+        "wondering",
+        "wonder",
+        "thinking",
+        "interesting",
+        "tell",
+        "explain",
+        "describe",
+        "share",
+    }
+)
 
 # Token regex matching the lived_recall convention.
 _TOKEN_RE = re.compile(r"[A-Za-z]+")
@@ -745,30 +815,46 @@ def save_last_pursuit_at(
     """
     import json as _json
     import os as _os
+    import tempfile as _tempfile
     from pathlib import Path as _Path
 
     if sidecar_path is None:
         sidecar_path = _default_sidecar_path()
         if sidecar_path is None:
             return
+    tmp_path: _Path | None = None
     try:
         p = _Path(sidecar_path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        # Write to a tmp file in the same directory, then atomic
-        # rename. Same-directory tmp guarantees os.replace is
-        # atomic (cross-FS rename is not).
-        tmp_path = p.with_suffix(p.suffix + ".tmp")
-        tmp_path.write_text(
-            _json.dumps({
+        payload = _json.dumps(
+            {
                 "timestamp": float(timestamp),
                 "wondering_id": int(wondering_id),
-            }),
-            encoding="utf-8",
+            }
         )
+        # Unique same-directory tmp files avoid concurrent writers
+        # replacing/unlinking one another's shared ``.tmp`` path.
+        with _tempfile.NamedTemporaryFile(
+            "w",
+            dir=p.parent,
+            prefix=f".{p.name}.",
+            suffix=".tmp",
+            encoding="utf-8",
+            delete=False,
+        ) as tmp:
+            tmp_path = _Path(tmp.name)
+            tmp.write(payload)
+            tmp.flush()
+            _os.fsync(tmp.fileno())
         _os.replace(str(tmp_path), str(p))
     except (OSError, TypeError, ValueError):
         # Sidecar write failure must never break the reply path.
         # The freq-budget will simply be liberal on next call.
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         pass
 
 

@@ -173,6 +173,43 @@ summary, or debug-name fields are forbidden in X.2 records.
 Future X.2.x work may add closure tracking with a two-record lifecycle
 pattern. X.2 itself observes open-loop state only.
 
+## Bond Topology
+
+Slice X.3 defines the third real organ shape. The bond-topology organ
+observes ADR 0019 relationship-graph structure as diagnostic topology,
+not prompt truth, audit evidence, learned routing, or named threads.
+
+X.3 emits `bond_topology.euclidean`, `bond_topology.poincare`, and
+`bond_topology.topology_invariants`. The pilot review reads invariants
+primarily and coordinates illustratively. Euclidean coordinates use
+per-component spectral Laplacian coordinates sign-anchored on
+`owner_node_id`; Poincare coordinates use a deterministic BFS spanning
+tree rooted at the owner when present. Disconnected graphs emit
+per-component coordinates and carry `connected_components`; lossy
+spanning-tree use is explicit via `poincare_spanning_tree_lossy`.
+Coordinate representation metrics must be numeric-only and may carry
+cycle/edge-count context; they must not carry prose, labels, summaries,
+embeddings, or source text.
+
+Bond-topology IDs are content-free typed-handle hashes locked by ADR
+0026. Each emitted value carries `relationship_graph_snapshot_id`,
+`topology_basis_version`, and `topology_id_basis_version`. The hash
+basis must never include labels, summaries, thread names, source text,
+embedding vectors, UUID allocation order, or autoincrement IDs minted
+inside the diagnostic writer.
+
+X.3 rejects `node_label`, `edge_label`, `relation_summary`,
+`cluster_name`, `community_name`, `working_title`, embedding vectors,
+and `source_text` in emitted topology values. Clustering and named
+threads remain reserved for Living Mythology; they are not part of the
+bond-topology diagnostic layer.
+
+By 2030 contributors tried to seed coordinates from external graph-embedding models. By 2031 named threads tried to return as 'opaque hashes' that were silently salted with thread titles. Hash basis and forbidden-fields are covenant properties; changing them requires ADR.
+
+`vacated_node_count` is present from X.3 v1 and starts at zero. A future
+RelationshipGraph tombstone slice may populate it without changing the
+topology record shape.
+
 ## Workspace Selection
 
 When workspace selection emits a value, `workspace_selection.value`
