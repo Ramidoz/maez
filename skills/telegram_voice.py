@@ -1124,6 +1124,24 @@ class TelegramVoice:
                                 )
                             except Exception as e:
                                 logger.debug("recovery memory store failed: %s", e)
+                            try:
+                                from core.cognition.moment_assembly_diagnostic import (
+                                    complete_moment_assembly_turn,
+                                )
+
+                                complete_moment_assembly_turn(
+                                    surface="telegram_recovery",
+                                    turn_id=None,
+                                    diagnostic_observed=False,
+                                    bypass_reason="not_called",
+                                    lifecycle_phase="recovery_synthesis_close",
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    "telegram recovery moment assembly completion "
+                                    "diagnostic skipped: %s",
+                                    e,
+                                )
         except Exception as e:
             logger.warning("recovery pass failed: %s", e)
 
@@ -3516,6 +3534,23 @@ class TelegramVoice:
             provenance_source="user_utterance",
             trust_tier="lived",
         )
+        try:
+            from core.cognition.moment_assembly_diagnostic import (
+                complete_moment_assembly_turn,
+            )
+
+            complete_moment_assembly_turn(
+                surface="telegram_text",
+                turn_id=_telegram_user_msg_turn_id,
+                diagnostic_observed=False,
+                bypass_reason="not_called",
+                lifecycle_phase="turn_close",
+            )
+        except Exception as e:
+            logger.warning(
+                "telegram_text moment assembly completion diagnostic skipped: %s",
+                e,
+            )
 
         return reply
 

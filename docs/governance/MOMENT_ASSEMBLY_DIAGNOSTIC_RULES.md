@@ -91,12 +91,38 @@ should include `selected_candidate_ids` and `rejection_reasons`. Rejection
 reasons are diagnostic interpretation only; they are not audit evidence
 and must cite candidate ids rather than inventing factual claims.
 
-## Bypass Auto-Fire Prerequisite
+## Completion Instrumentation
 
-Before Slice X.1 or any non-probe wiring can ship, a turn-completion hook
-must call `write_bypassed_record` when a turn completes without an
-observed diagnostic. The required test shape is: diagnostic JSONL gains a
-row per turn whether the assembly path is `observed` or `bypassed`.
+Slice X.0.2 transitions moment-assembly diagnostics from probe-only to
+allowlisted owner-private completion instrumentation. The only
+production turn-completion hook is `complete_moment_assembly_turn`; raw
+diagnostic writers and builders, including `write_bypassed_record`,
+remain forbidden in production callers.
+
+Every owner-private turn closure must produce exactly one completion row
+per surface per turn id, with `assembly_path` either `observed` or
+`bypassed`. X.0.2 enforces this at test time and by covenant clause. The
+runtime closure-coverage context manager is deferred to X.0.3, which
+must ship before Slice X.1 wires the first observed-diagnostic consumer.
+
+Bypass records must carry bounded `bypass_reason` metadata:
+`not_called`, `early_return`, `exception`, `deliberate_skip`, or
+`unspecified`; they must also carry `lifecycle_phase`. When no real
+ledger turn id exists, the synthetic source id must use the
+`completion:<surface>:<uuid>` shape and the record must carry
+`source_id_synthetic: true`. Real turn-id records carry
+`source_id_synthetic: false`.
+
+Any organ-level observation flips the turn to `observed`. Partial
+observation is represented inside the diagnostic record through
+per-organ slot states (`not_observed`, `emitted_null`, `emitted_value`,
+`error`, etc.); there is no `partial_observed` assembly path.
+
+The production allowlist is a set of `(path, symbol)` pairs, not trusted
+files. Extending it requires a named slice and governance citation. Any
+new owner-private turn surface must call `complete_moment_assembly_turn`
+or explicitly document why it is outside autobiographical owner-private
+scope.
 
 ## Storage Lifecycle
 

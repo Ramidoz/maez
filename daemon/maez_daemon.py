@@ -2358,6 +2358,24 @@ class MaezDaemon:
         except Exception as _trace_exc:
             logger.warning("trace emission failed (skipping): %s", _trace_exc)
 
+        try:
+            from core.cognition.moment_assembly_diagnostic import (
+                complete_moment_assembly_turn,
+            )
+
+            complete_moment_assembly_turn(
+                surface=source,
+                turn_id=_user_msg_turn_id,
+                diagnostic_observed=False,
+                bypass_reason="not_called",
+                lifecycle_phase="turn_close",
+            )
+        except Exception as _moment_diag_exc:
+            logger.warning(
+                "moment assembly completion diagnostic skipped: %s",
+                _moment_diag_exc,
+            )
+
         return reply
 
     def _get_public_context(self) -> str:

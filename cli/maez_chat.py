@@ -1187,6 +1187,23 @@ class ChatSession:
             })
         except Exception:
             pass
+        try:
+            from core.cognition.moment_assembly_diagnostic import (
+                complete_moment_assembly_turn,
+            )
+
+            complete_moment_assembly_turn(
+                surface="cli",
+                turn_id=_cli_user_msg_turn_id,
+                diagnostic_observed=False,
+                bypass_reason="not_called",
+                lifecycle_phase="turn_close",
+            )
+        except Exception as _moment_diag_exc:
+            logger.warning(
+                "moment assembly completion diagnostic skipped: %s",
+                _moment_diag_exc,
+            )
 
 
 def main():

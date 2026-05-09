@@ -58,6 +58,15 @@ DEPRECATION_REASONS = frozenset(
         "retired_for_clarity",
     }
 )
+BYPASS_REASONS = frozenset(
+    {
+        "not_called",
+        "early_return",
+        "exception",
+        "deliberate_skip",
+        "unspecified",
+    }
+)
 
 
 class DiagnosticState(StrEnum):
@@ -208,6 +217,9 @@ def build_diagnostic_record(
     surprise_delta: dict[str, Any] | None = None,
     interpretation_candidates: dict[str, Any] | None = None,
     assembly_path: str = "observed",
+    source_id_synthetic: bool | None = None,
+    bypass_reason: str = "",
+    lifecycle_phase: str = "",
 ) -> dict[str, Any]:
     thesis_sha = _sha256_repo_file(THESIS_DOC_PATH)
     record = {
@@ -230,16 +242,32 @@ def build_diagnostic_record(
         "bond_topology": bond_topology or _filled_slots(TOPOLOGY_NAMES),
         "interpretation_candidates": interpretation_candidates or _default_slot(),
     }
+    if source_id_synthetic is not None:
+        record["source_id_synthetic"] = bool(source_id_synthetic)
+    if bypass_reason:
+        record["bypass_reason"] = bypass_reason
+    if lifecycle_phase:
+        record["lifecycle_phase"] = lifecycle_phase
     validate_record(record)
     return record
 
 
-def build_bypassed_record(*, surface: str, turn_id: str) -> dict[str, Any]:
+def build_bypassed_record(
+    *,
+    surface: str,
+    turn_id: str,
+    bypass_reason: str,
+    lifecycle_phase: str,
+    source_id_synthetic: bool = False,
+) -> dict[str, Any]:
     return build_diagnostic_record(
         surface=surface,
         source_ids=[turn_id],
         assembly_path="bypassed",
         workspace_selection=_default_slot(DiagnosticState.NOT_OBSERVED),
+        source_id_synthetic=source_id_synthetic,
+        bypass_reason=bypass_reason,
+        lifecycle_phase=lifecycle_phase,
     )
 
 
@@ -268,6 +296,14 @@ def validate_record(record: dict[str, Any]) -> None:
         raise ValueError("record source_ids must be non-empty")
     if "thesis_doc_sha256" not in record:
         raise ValueError("thesis_doc_sha256 is required")
+    if record.get("assembly_path") == "bypassed":
+        if "source_id_synthetic" not in record:
+            raise ValueError("bypassed record requires source_id_synthetic")
+        reason = record.get("bypass_reason")
+        if reason not in BYPASS_REASONS:
+            raise ValueError(f"unknown bypass_reason {reason!r}")
+        if not record.get("lifecycle_phase"):
+            raise ValueError("bypassed record requires lifecycle_phase")
     schemas = record.get("contributing_schemas")
     if not isinstance(schemas, dict):
         raise ValueError("contributing_schemas is required")
@@ -305,7 +341,40 @@ def write_diagnostic_record(*, record: dict[str, Any], log_path: Path) -> None:
 
 
 def write_bypassed_record(*, surface: str, turn_id: str, log_path: Path) -> None:
-    write_diagnostic_record(
-        record=build_bypassed_record(surface=surface, turn_id=turn_id),
-        log_path=log_path,
+    record = build_bypassed_record(
+        surface=surface,
+        turn_id=turn_id,
+        bypass_reason="not_called",
+        lifecycle_phase="turn_close",
     )
+    write_diagnostic_record(record=record, log_path=log_path)
+
+
+def complete_moment_assembly_turn(
+    *,
+    surface: str,
+    turn_id: str | None,
+    diagnostic_observed: bool,
+    bypass_reason: str,
+    lifecycle_phase: str,
+    log_path: Path = DEFAULT_LOG_PATH,
+) -> str | None:
+    """Close an owner-private turn with exactly one diagnostic completion row.
+
+    X.0.2 uses this as an allowlisted production seam. When a future
+    organ has already emitted an observed diagnostic row, callers pass
+    ``diagnostic_observed=True`` and this helper does not add a bypass row.
+    """
+    if diagnostic_observed:
+        return None
+    source_id_synthetic = not bool(turn_id)
+    source_id = str(turn_id) if turn_id else f"completion:{surface}:{uuid4()}"
+    record = build_bypassed_record(
+        surface=surface,
+        turn_id=source_id,
+        bypass_reason=bypass_reason,
+        lifecycle_phase=lifecycle_phase,
+        source_id_synthetic=source_id_synthetic,
+    )
+    write_diagnostic_record(record=record, log_path=log_path)
+    return str(record["record_id"])
