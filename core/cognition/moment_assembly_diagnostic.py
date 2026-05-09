@@ -10,21 +10,31 @@ enum values must fail in old readers instead of being silently accepted.
 
 from __future__ import annotations
 
+import contextvars
 from enum import StrEnum
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import time
+from types import TracebackType
 from typing import Any
 from uuid import uuid4
 
 
-MOMENT_ASSEMBLY_DIAGNOSTIC_SCHEMA = 1
+MOMENT_ASSEMBLY_DIAGNOSTIC_SCHEMA = 2
 AUDIT_BOUNDARY = "not_audit_evidence"
 DEFAULT_LOG_PATH = Path("logs/moment_assembly_diagnostic.jsonl")
 THESIS_DOC_PATH = "docs/governance/ARCHITECTURAL_THESIS.md"
 ARCHITECTURAL_THESIS_ADR_ID = "ARCHITECTURAL_THESIS"
+BYPASS_NOTE_MAX_CHARS = 500
+_LOGGER = logging.getLogger(__name__)
+_WRITE_FAILURE_WARNED_KEYS: set[tuple[str, str]] = set()
+_CURRENT_TURN: contextvars.ContextVar[MomentAssemblyTurn | None] = contextvars.ContextVar(
+    "moment_assembly_turn",
+    default=None,
+)
 
 PRESSURE_NAMES = (
     "truth",
@@ -219,6 +229,7 @@ def build_diagnostic_record(
     assembly_path: str = "observed",
     source_id_synthetic: bool | None = None,
     bypass_reason: str = "",
+    bypass_note: str = "",
     lifecycle_phase: str = "",
 ) -> dict[str, Any]:
     thesis_sha = _sha256_repo_file(THESIS_DOC_PATH)
@@ -246,6 +257,8 @@ def build_diagnostic_record(
         record["source_id_synthetic"] = bool(source_id_synthetic)
     if bypass_reason:
         record["bypass_reason"] = bypass_reason
+    if assembly_path == "bypassed" or bypass_note:
+        record["bypass_note"] = bypass_note
     if lifecycle_phase:
         record["lifecycle_phase"] = lifecycle_phase
     validate_record(record)
@@ -259,6 +272,7 @@ def build_bypassed_record(
     bypass_reason: str,
     lifecycle_phase: str,
     source_id_synthetic: bool = False,
+    bypass_note: str = "",
 ) -> dict[str, Any]:
     return build_diagnostic_record(
         surface=surface,
@@ -267,6 +281,7 @@ def build_bypassed_record(
         workspace_selection=_default_slot(DiagnosticState.NOT_OBSERVED),
         source_id_synthetic=source_id_synthetic,
         bypass_reason=bypass_reason,
+        bypass_note=bypass_note,
         lifecycle_phase=lifecycle_phase,
     )
 
@@ -288,7 +303,7 @@ def _validate_group(
 
 
 def validate_record(record: dict[str, Any]) -> None:
-    if record.get("schema_version") != MOMENT_ASSEMBLY_DIAGNOSTIC_SCHEMA:
+    if record.get("schema_version") not in {1, MOMENT_ASSEMBLY_DIAGNOSTIC_SCHEMA}:
         raise ValueError("schema_version mismatch")
     if record.get("audit_boundary") != AUDIT_BOUNDARY:
         raise ValueError("audit_boundary must be not_audit_evidence")
@@ -302,6 +317,8 @@ def validate_record(record: dict[str, Any]) -> None:
         reason = record.get("bypass_reason")
         if reason not in BYPASS_REASONS:
             raise ValueError(f"unknown bypass_reason {reason!r}")
+        if record.get("schema_version") >= 2 or "bypass_note" in record:
+            _validate_bypass_note(record.get("bypass_note", ""))
         if not record.get("lifecycle_phase"):
             raise ValueError("bypassed record requires lifecycle_phase")
     schemas = record.get("contributing_schemas")
@@ -346,6 +363,7 @@ def write_bypassed_record(*, surface: str, turn_id: str, log_path: Path) -> None
         turn_id=turn_id,
         bypass_reason="not_called",
         lifecycle_phase="turn_close",
+        bypass_note="",
     )
     write_diagnostic_record(record=record, log_path=log_path)
 
@@ -357,6 +375,7 @@ def complete_moment_assembly_turn(
     diagnostic_observed: bool,
     bypass_reason: str,
     lifecycle_phase: str,
+    bypass_note: str = "",
     log_path: Path = DEFAULT_LOG_PATH,
 ) -> str | None:
     """Close an owner-private turn with exactly one diagnostic completion row.
@@ -375,6 +394,130 @@ def complete_moment_assembly_turn(
         bypass_reason=bypass_reason,
         lifecycle_phase=lifecycle_phase,
         source_id_synthetic=source_id_synthetic,
+        bypass_note=bypass_note,
     )
     write_diagnostic_record(record=record, log_path=log_path)
     return str(record["record_id"])
+
+
+def _validate_bypass_note(note: Any) -> None:
+    if not isinstance(note, str):
+        raise ValueError("bypass_note must be a string")
+    if len(note) > BYPASS_NOTE_MAX_CHARS:
+        raise ValueError("bypass_note exceeds 500 characters")
+    if "\n" in note or "\r" in note:
+        raise ValueError("bypass_note must be single-line")
+    if "Traceback (" in note:
+        raise ValueError("bypass_note must not contain tracebacks")
+
+
+def _exception_bypass_note(exc: BaseException | None) -> str:
+    if exc is None:
+        return ""
+    note = f"{type(exc).__name__}: {exc}"
+    return note[:BYPASS_NOTE_MAX_CHARS]
+
+
+def _warn_diagnostic_write_failure_once(
+    *,
+    surface: str,
+    lifecycle_phase: str,
+    error: BaseException,
+) -> None:
+    key = (surface, lifecycle_phase)
+    if key in _WRITE_FAILURE_WARNED_KEYS:
+        return
+    _WRITE_FAILURE_WARNED_KEYS.add(key)
+    _LOGGER.warning(
+        "moment assembly diagnostic write failed (surface=%s lifecycle_phase=%s): %s",
+        surface,
+        lifecycle_phase,
+        error,
+    )
+
+
+class MomentAssemblyTurn:
+    """Runtime closure guard for one owner-private turn."""
+
+    def __init__(
+        self,
+        *,
+        surface: str,
+        turn_id: str | None,
+        lifecycle_phase: str,
+        log_path: Path = DEFAULT_LOG_PATH,
+    ) -> None:
+        self.surface = surface
+        self.turn_id = turn_id
+        self.lifecycle_phase = lifecycle_phase
+        self.log_path = log_path
+        self._completed = False
+        self._token: contextvars.Token[MomentAssemblyTurn | None] | None = None
+
+    def __enter__(self) -> MomentAssemblyTurn:
+        self._token = _CURRENT_TURN.set(self)
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
+        if self._token is not None:
+            _CURRENT_TURN.reset(self._token)
+            self._token = None
+        if not self._completed:
+            reason = "exception" if exc_type is not None else "not_called"
+            note = _exception_bypass_note(exc) if exc_type is not None else ""
+            self._write_bypass(reason=reason, note=note)
+        return False
+
+    def mark_observed(self, *, record_id: str = "") -> None:
+        if self._completed:
+            raise RuntimeError("moment assembly turn already completed")
+        self._completed = True
+
+    def _write_bypass(self, *, reason: str, note: str) -> None:
+        if self._completed:
+            raise RuntimeError("moment assembly turn already completed")
+        try:
+            complete_moment_assembly_turn(
+                surface=self.surface,
+                turn_id=self.turn_id,
+                diagnostic_observed=False,
+                bypass_reason=reason,
+                bypass_note=note,
+                lifecycle_phase=self.lifecycle_phase,
+                log_path=self.log_path,
+            )
+            self._completed = True
+        except Exception as write_exc:
+            _warn_diagnostic_write_failure_once(
+                surface=self.surface,
+                lifecycle_phase=self.lifecycle_phase,
+                error=write_exc,
+            )
+            self._completed = True
+
+
+def moment_assembly_turn(
+    *,
+    surface: str,
+    turn_id: str | None,
+    lifecycle_phase: str,
+    log_path: Path = DEFAULT_LOG_PATH,
+) -> MomentAssemblyTurn:
+    return MomentAssemblyTurn(
+        surface=surface,
+        turn_id=turn_id,
+        lifecycle_phase=lifecycle_phase,
+        log_path=log_path,
+    )
+
+
+def mark_current_moment_assembly_observed(*, record_id: str = "") -> None:
+    current = _CURRENT_TURN.get()
+    if current is None:
+        raise RuntimeError("no active moment assembly turn")
+    current.mark_observed(record_id=record_id)

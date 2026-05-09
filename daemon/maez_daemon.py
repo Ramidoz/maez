@@ -2360,16 +2360,15 @@ class MaezDaemon:
 
         try:
             from core.cognition.moment_assembly_diagnostic import (
-                complete_moment_assembly_turn,
+                moment_assembly_turn,
             )
 
-            complete_moment_assembly_turn(
+            with moment_assembly_turn(
                 surface=source,
                 turn_id=_user_msg_turn_id,
-                diagnostic_observed=False,
-                bypass_reason="not_called",
                 lifecycle_phase="turn_close",
-            )
+            ):
+                pass
         except Exception as _moment_diag_exc:
             logger.warning(
                 "moment assembly completion diagnostic skipped: %s",

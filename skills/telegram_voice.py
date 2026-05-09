@@ -1085,63 +1085,54 @@ class TelegramVoice:
                     import time as _time_mod
                     recovery_started_at = _time_mod.time()
                     loop = asyncio.get_event_loop()
-                    recovery_transcript = await loop.run_in_executor(
-                        get_shared_executor(),
-                        lambda: self._run_jarvis_loop("", recovery_seed=recovery_seed),
+                    from core.cognition.moment_assembly_diagnostic import (
+                        moment_assembly_turn,
                     )
-                    if recovery_transcript:
-                        # 2026-04-16 fix: recovery narrative must match
-                        # the actual card the recovery queued. Fetch the
-                        # newest open card created since recovery started
-                        # and pass its cmd verbatim to the synthesis so
-                        # the LLM can't hallucinate a generic "PPA / snap"
-                        # alternative when the real queued card is
-                        # something different.
-                        new_card_cmd = self._find_recovery_new_card_cmd(
-                            recovery_started_at
-                        )
-                        reply_text = await loop.run_in_executor(
-                            get_shared_executor(),
-                            lambda: self._synthesize_recovery_reply(
-                                recovery_seed, recovery_transcript,
-                                new_card_cmd=new_card_cmd,
-                            ),
-                        )
-                        if reply_text:
-                            reply_text = _audit_telegram_reply(
-                                reply_text, surface="telegram_recovery",
-                            )
-                            try:
-                                await update.message.reply_text(reply_text)
-                            except Exception as e:
-                                logger.debug("recovery reply send failed: %s", e)
-                            try:
-                                # 5x.B Pass 1: Maez self-narrating recovery iteration.
-                                self.memory.store_telegram(
-                                    f"Maez recovery pass {depth}: {reply_text[:500]}",
-                                    provenance_source="introspection",
-                                    trust_tier="lived",
-                                )
-                            except Exception as e:
-                                logger.debug("recovery memory store failed: %s", e)
-                            try:
-                                from core.cognition.moment_assembly_diagnostic import (
-                                    complete_moment_assembly_turn,
-                                )
 
-                                complete_moment_assembly_turn(
-                                    surface="telegram_recovery",
-                                    turn_id=None,
-                                    diagnostic_observed=False,
-                                    bypass_reason="not_called",
-                                    lifecycle_phase="recovery_synthesis_close",
+                    with moment_assembly_turn(
+                        surface="telegram_recovery",
+                        turn_id=None,
+                        lifecycle_phase="recovery_synthesis_close",
+                    ):
+                        recovery_transcript = await loop.run_in_executor(
+                            get_shared_executor(),
+                            lambda: self._run_jarvis_loop("", recovery_seed=recovery_seed),
+                        )
+                        if recovery_transcript:
+                            # 2026-04-16 fix: recovery narrative must match
+                            # the actual card the recovery queued. Fetch the
+                            # newest open card created since recovery started
+                            # and pass its cmd verbatim to the synthesis so
+                            # the LLM can't hallucinate a generic "PPA / snap"
+                            # alternative when the real queued card is
+                            # something different.
+                            new_card_cmd = self._find_recovery_new_card_cmd(
+                                recovery_started_at
+                            )
+                            reply_text = await loop.run_in_executor(
+                                get_shared_executor(),
+                                lambda: self._synthesize_recovery_reply(
+                                    recovery_seed, recovery_transcript,
+                                    new_card_cmd=new_card_cmd,
+                                ),
+                            )
+                            if reply_text:
+                                reply_text = _audit_telegram_reply(
+                                    reply_text, surface="telegram_recovery",
                                 )
-                            except Exception as e:
-                                logger.warning(
-                                    "telegram recovery moment assembly completion "
-                                    "diagnostic skipped: %s",
-                                    e,
-                                )
+                                try:
+                                    await update.message.reply_text(reply_text)
+                                except Exception as e:
+                                    logger.debug("recovery reply send failed: %s", e)
+                                try:
+                                    # 5x.B Pass 1: Maez self-narrating recovery iteration.
+                                    self.memory.store_telegram(
+                                        f"Maez recovery pass {depth}: {reply_text[:500]}",
+                                        provenance_source="introspection",
+                                        trust_tier="lived",
+                                    )
+                                except Exception as e:
+                                    logger.debug("recovery memory store failed: %s", e)
         except Exception as e:
             logger.warning("recovery pass failed: %s", e)
 
@@ -3536,16 +3527,15 @@ class TelegramVoice:
         )
         try:
             from core.cognition.moment_assembly_diagnostic import (
-                complete_moment_assembly_turn,
+                moment_assembly_turn,
             )
 
-            complete_moment_assembly_turn(
+            with moment_assembly_turn(
                 surface="telegram_text",
                 turn_id=_telegram_user_msg_turn_id,
-                diagnostic_observed=False,
-                bypass_reason="not_called",
                 lifecycle_phase="turn_close",
-            )
+            ):
+                pass
         except Exception as e:
             logger.warning(
                 "telegram_text moment assembly completion diagnostic skipped: %s",

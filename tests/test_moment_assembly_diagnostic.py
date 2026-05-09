@@ -5,10 +5,12 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 _REPO = Path(__file__).resolve().parent.parent
@@ -23,6 +25,8 @@ _MOMENT_ASSEMBLY_SYMBOLS = frozenset(
         "build_diagnostic_record",
         "build_slot",
         "complete_moment_assembly_turn",
+        "mark_current_moment_assembly_observed",
+        "moment_assembly_turn",
         "moment_assembly_diagnostic",
         "validate_record",
         "validate_slot",
@@ -30,17 +34,16 @@ _MOMENT_ASSEMBLY_SYMBOLS = frozenset(
         "write_diagnostic_record",
     }
 )
-_ALLOWED_PRODUCTION_COMPLETION_CALLS = {
-    ("daemon/maez_daemon.py", "complete_moment_assembly_turn"),
-    ("cli/maez_chat.py", "complete_moment_assembly_turn"),
-    ("skills/web_interface.py", "complete_moment_assembly_turn"),
-    ("skills/telegram_voice.py", "complete_moment_assembly_turn"),
+_ALLOWED_PRODUCTION_CONTEXTS = {
+    ("daemon/maez_daemon.py", "handle_message", "moment_assembly_turn", 1),
+    ("cli/maez_chat.py", "_handle_chat", "moment_assembly_turn", 1),
+    ("skills/web_interface.py", "chat", "moment_assembly_turn", 1),
+    ("skills/telegram_voice.py", "_try_card_reply_intent", "moment_assembly_turn", 1),
+    ("skills/telegram_voice.py", "_process_message", "moment_assembly_turn", 1),
 }
 _COMPLETION_KWARGS = {
     "surface",
     "turn_id",
-    "diagnostic_observed",
-    "bypass_reason",
     "lifecycle_phase",
 }
 
@@ -120,6 +123,32 @@ def _completion_call_nodes(path: Path) -> list[ast.Call]:
             calls.append(node)
         elif isinstance(func, ast.Attribute) and func.attr == "complete_moment_assembly_turn":
             calls.append(node)
+    return calls
+
+
+def _function_node(path: Path, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return node
+    raise AssertionError(f"{path} has no function named {name}")
+
+
+def _context_call_nodes(path: Path, function_name: str) -> list[ast.Call]:
+    function = _function_node(path, function_name)
+    calls: list[ast.Call] = []
+    for node in ast.walk(function):
+        if not isinstance(node, ast.With | ast.AsyncWith):
+            continue
+        for item in node.items:
+            context_expr = item.context_expr
+            if not isinstance(context_expr, ast.Call):
+                continue
+            func = context_expr.func
+            if isinstance(func, ast.Name) and func.id == "moment_assembly_turn":
+                calls.append(context_expr)
+            elif isinstance(func, ast.Attribute) and func.attr == "moment_assembly_turn":
+                calls.append(context_expr)
     return calls
 
 
@@ -286,6 +315,9 @@ class MomentAssemblyRecordTests(unittest.TestCase):
         self.assertFalse(record["source_id_synthetic"])
         self.assertEqual(record["bypass_reason"], "not_called")
         self.assertEqual(record["lifecycle_phase"], "turn_close")
+        self.assertEqual(record["bypass_note"], "")
+        self.assertEqual(record["schema_version"], 2)
+        self.assertRegex(record["thesis_doc_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(record["workspace_selection"]["state"], "not_observed")
 
     def test_bypassed_record_rejects_unknown_reason(self):
@@ -298,6 +330,60 @@ class MomentAssemblyRecordTests(unittest.TestCase):
                 bypass_reason="because",
                 lifecycle_phase="turn_close",
             )
+
+    def test_bypassed_record_enforces_bypass_note_discipline(self):
+        from core.cognition.moment_assembly_diagnostic import build_bypassed_record
+
+        record = build_bypassed_record(
+            surface="probe",
+            turn_id="turn-1",
+            bypass_reason="early_return",
+            lifecycle_phase="turn_close",
+            bypass_note="owner interrupted before assembly",
+        )
+        self.assertEqual(record["bypass_note"], "owner interrupted before assembly")
+
+        with self.assertRaisesRegex(ValueError, "bypass_note"):
+            build_bypassed_record(
+                surface="probe",
+                turn_id="turn-1",
+                bypass_reason="early_return",
+                lifecycle_phase="turn_close",
+                bypass_note="line one\nline two",
+            )
+        with self.assertRaisesRegex(ValueError, "bypass_note"):
+            build_bypassed_record(
+                surface="probe",
+                turn_id="turn-1",
+                bypass_reason="exception",
+                lifecycle_phase="turn_close",
+                bypass_note="Traceback (most recent call last):",
+            )
+        with self.assertRaisesRegex(ValueError, "bypass_note"):
+            build_bypassed_record(
+                surface="probe",
+                turn_id="turn-1",
+                bypass_reason="exception",
+                lifecycle_phase="turn_close",
+                bypass_note="x" * 501,
+            )
+
+    def test_schema_v2_reader_accepts_x02_bypass_rows_without_bypass_note(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            build_bypassed_record,
+            validate_record,
+        )
+
+        record = build_bypassed_record(
+            surface="probe",
+            turn_id="turn-1",
+            bypass_reason="not_called",
+            lifecycle_phase="turn_close",
+        )
+        record["schema_version"] = 1
+        del record["bypass_note"]
+
+        validate_record(record)
 
 
 class MomentAssemblyJsonlTests(unittest.TestCase):
@@ -393,6 +479,178 @@ class MomentAssemblyJsonlTests(unittest.TestCase):
         self.assertRegex(rows[0]["source_ids"][0], r"^completion:web_owner:")
         self.assertEqual(rows[0]["bypass_reason"], "early_return")
 
+    def test_runtime_turn_context_writes_bypass_on_clean_exit(self):
+        from core.cognition.moment_assembly_diagnostic import moment_assembly_turn
+
+        path = _TEST_DIR / "runtime_clean_exit.jsonl"
+        with moment_assembly_turn(
+            surface="cli",
+            turn_id="turn-1",
+            lifecycle_phase="turn_close",
+            log_path=path,
+        ):
+            pass
+
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["assembly_path"], "bypassed")
+        self.assertEqual(rows[0]["bypass_reason"], "not_called")
+        self.assertEqual(rows[0]["bypass_note"], "")
+        self.assertEqual(rows[0]["schema_version"], 2)
+
+    def test_runtime_turn_context_suppresses_bypass_when_observed(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            mark_current_moment_assembly_observed,
+            moment_assembly_turn,
+        )
+
+        path = _TEST_DIR / "runtime_observed.jsonl"
+        with moment_assembly_turn(
+            surface="cli",
+            turn_id="turn-1",
+            lifecycle_phase="turn_close",
+            log_path=path,
+        ):
+            mark_current_moment_assembly_observed(record_id="observed-1")
+
+        self.assertFalse(path.exists())
+
+    def test_runtime_turn_context_rejects_double_completion(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            mark_current_moment_assembly_observed,
+            moment_assembly_turn,
+        )
+
+        path = _TEST_DIR / "runtime_double_completion.jsonl"
+        with self.assertRaisesRegex(RuntimeError, "already completed"):
+            with moment_assembly_turn(
+                surface="cli",
+                turn_id="turn-1",
+                lifecycle_phase="turn_close",
+                log_path=path,
+            ):
+                mark_current_moment_assembly_observed(record_id="observed-1")
+                mark_current_moment_assembly_observed(record_id="observed-2")
+        self.assertFalse(path.exists())
+
+    def test_runtime_turn_context_writes_bypass_and_reraises_original_exception(self):
+        from core.cognition.moment_assembly_diagnostic import moment_assembly_turn
+
+        path = _TEST_DIR / "runtime_exception.jsonl"
+        with self.assertRaisesRegex(RuntimeError, "owner path exploded"):
+            with moment_assembly_turn(
+                surface="daemon",
+                turn_id="turn-1",
+                lifecycle_phase="turn_close",
+                log_path=path,
+            ):
+                raise RuntimeError("owner path exploded")
+
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["bypass_reason"], "exception")
+        self.assertEqual(rows[0]["bypass_note"], "RuntimeError: owner path exploded")
+
+    def test_runtime_turn_context_preserves_original_exception_when_diagnostic_write_fails(self):
+        from core.cognition.moment_assembly_diagnostic import moment_assembly_turn
+
+        path = _TEST_DIR / "runtime_exception_write_fails.jsonl"
+        with (
+            patch(
+                "core.cognition.moment_assembly_diagnostic.write_diagnostic_record",
+                side_effect=OSError("disk full"),
+            ),
+            self.assertLogs("core.cognition.moment_assembly_diagnostic", level="WARNING") as logs,
+            self.assertRaisesRegex(RuntimeError, "owner path exploded"),
+        ):
+            with moment_assembly_turn(
+                surface="daemon",
+                turn_id="turn-1",
+                lifecycle_phase="turn_close",
+                log_path=path,
+            ):
+                raise RuntimeError("owner path exploded")
+
+        self.assertIn("moment assembly diagnostic write failed", "\n".join(logs.output))
+        self.assertFalse(path.exists())
+
+    def test_runtime_turn_context_logs_clean_exit_write_failure_without_propagating(self):
+        from core.cognition.moment_assembly_diagnostic import moment_assembly_turn
+
+        path = _TEST_DIR / "runtime_clean_write_fails.jsonl"
+        with (
+            patch(
+                "core.cognition.moment_assembly_diagnostic.write_diagnostic_record",
+                side_effect=OSError("disk full"),
+            ),
+            self.assertLogs("core.cognition.moment_assembly_diagnostic", level="WARNING") as logs,
+        ):
+            with moment_assembly_turn(
+                surface="web_owner",
+                turn_id="turn-1",
+                lifecycle_phase="turn_close",
+                log_path=path,
+            ):
+                pass
+
+        self.assertIn("moment assembly diagnostic write failed", "\n".join(logs.output))
+        self.assertFalse(path.exists())
+
+    def test_runtime_turn_context_warns_once_per_surface_and_phase(self):
+        from core.cognition.moment_assembly_diagnostic import moment_assembly_turn
+
+        path = _TEST_DIR / "runtime_warn_once.jsonl"
+        with (
+            patch(
+                "core.cognition.moment_assembly_diagnostic.write_diagnostic_record",
+                side_effect=OSError("disk full"),
+            ),
+            self.assertLogs("core.cognition.moment_assembly_diagnostic", level="WARNING") as logs,
+        ):
+            for _ in range(2):
+                with moment_assembly_turn(
+                    surface="telegram_text",
+                    turn_id="turn-1",
+                    lifecycle_phase="turn_close",
+                    log_path=path,
+                ):
+                    pass
+            with moment_assembly_turn(
+                surface="telegram_text",
+                turn_id="turn-1",
+                lifecycle_phase="different_phase",
+                log_path=path,
+            ):
+                pass
+
+        warnings = [
+            line for line in logs.output if "moment assembly diagnostic write failed" in line
+        ]
+        self.assertEqual(len(warnings), 2)
+
+    def test_runtime_turn_context_survives_executor_work_inside_recovery_wrap(self):
+        from core.cognition.moment_assembly_diagnostic import moment_assembly_turn
+
+        path = _TEST_DIR / "runtime_executor_recovery.jsonl"
+
+        async def run_recovery_work():
+            with moment_assembly_turn(
+                surface="telegram_recovery",
+                turn_id=None,
+                lifecycle_phase="recovery_synthesis_close",
+                log_path=path,
+            ):
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(None, lambda: "recovery reply")
+                self.assertEqual(result, "recovery reply")
+
+        asyncio.run(run_recovery_work())
+
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["surface"], "telegram_recovery")
+        self.assertEqual(rows[0]["bypass_reason"], "not_called")
+
     def test_probe_script_is_read_only_diagnostic_infrastructure(self):
         path = _REPO / "scripts" / "moment_assembly_probe.py"
         text = path.read_text(encoding="utf-8")
@@ -426,7 +684,7 @@ class MomentAssemblyBoundaryTests(unittest.TestCase):
         self.assertIn(f"{path}:build_diagnostic_record", hits)
         self.assertIn(f"{path}:write_diagnostic_record", hits)
 
-    def test_moment_assembly_diagnostic_has_only_path_symbol_allowlisted_callers(self):
+    def test_moment_assembly_diagnostic_has_only_context_manager_production_callers(self):
         allowed = {
             "core/cognition/moment_assembly_diagnostic.py",
             "scripts/moment_assembly_probe.py",
@@ -435,29 +693,31 @@ class MomentAssemblyBoundaryTests(unittest.TestCase):
         hits = _find_moment_assembly_symbol_hits(
             _production_python_paths(),
             allowed_paths=allowed,
-            allowed_path_symbols=_ALLOWED_PRODUCTION_COMPLETION_CALLS,
+            allowed_path_symbols={
+                (path, symbol) for path, _, symbol, _ in _ALLOWED_PRODUCTION_CONTEXTS
+            },
         )
         self.assertEqual(hits, set())
 
-    def test_allowlisted_completion_callers_are_present_and_use_same_kwargs(self):
-        for rel, symbol in sorted(_ALLOWED_PRODUCTION_COMPLETION_CALLS):
+    def test_allowlisted_context_callers_are_present_and_use_same_kwargs_and_counts(self):
+        for rel, function_name, symbol, expected_count in sorted(_ALLOWED_PRODUCTION_CONTEXTS):
             path = _REPO / rel
-            calls = _completion_call_nodes(path)
-            self.assertGreaterEqual(
+            calls = _context_call_nodes(path, function_name)
+            self.assertEqual(
                 len(calls),
-                1,
-                f"{rel} must call {symbol}",
+                expected_count,
+                f"{rel}:{function_name} must call {symbol} exactly {expected_count} time(s)",
             )
             for call in calls:
                 self.assertEqual(
                     {kw.arg for kw in call.keywords},
                     _COMPLETION_KWARGS,
-                    f"{rel} must use the locked completion kwarg shape",
+                    f"{rel}:{function_name} must use the locked context kwarg shape",
                 )
 
     def test_web_completion_hook_is_owner_bridge_gated(self):
         src = (_REPO / "skills" / "web_interface.py").read_text(encoding="utf-8")
-        call_idx = src.find("complete_moment_assembly_turn(")
+        call_idx = src.find("moment_assembly_turn(")
         self.assertGreater(call_idx, 0, "web chat must call completion hook")
         owner_bridge_idx = src.rfind("if owner_bridge:", 0, call_idx)
         public_else_idx = src.rfind("\n    else:", 0, call_idx)
@@ -469,17 +729,18 @@ class MomentAssemblyBoundaryTests(unittest.TestCase):
 
     def test_public_telegram_has_no_completion_hook(self):
         src = (_REPO / "skills" / "telegram_public.py").read_text(encoding="utf-8")
-        self.assertNotIn("complete_moment_assembly_turn", src)
+        self.assertNotIn("moment_assembly_turn", src)
 
     def test_telegram_recovery_synthesis_path_is_covered(self):
         src = (_REPO / "skills" / "telegram_voice.py").read_text(encoding="utf-8")
         recovery_idx = src.find("_synthesize_recovery_reply(")
         self.assertGreater(recovery_idx, 0, "recovery synthesis path must exist")
-        hook_idx = src.find("complete_moment_assembly_turn(", recovery_idx)
+        context_idx = src.rfind("moment_assembly_turn(", 0, recovery_idx)
+        self.assertGreater(context_idx, 0, "recovery synthesis must be inside context wrap")
+        store_idx = src.find("self.memory.store_telegram(", recovery_idx)
+        self.assertGreater(store_idx, recovery_idx, "recovery memory store path must exist")
         self.assertGreater(
-            hook_idx,
-            recovery_idx,
-            "telegram recovery synthesis path must close with completion hook",
+            store_idx, context_idx, "recovery memory store must be inside context wrap"
         )
 
 
@@ -506,10 +767,15 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("rejection_reasons", text)
         self.assertIn("turn-completion hook", text)
         self.assertIn("write_bypassed_record", text)
-        self.assertIn("complete_moment_assembly_turn", text)
+        self.assertIn("moment_assembly_turn", text)
         self.assertIn("bypass_reason", text)
+        self.assertIn("bypass_note", text)
         self.assertIn("source_id_synthetic", text)
         self.assertIn("X.0.3", text)
+        self.assertIn(
+            "Covenant clauses are documentation discipline, not enforcement",
+            text,
+        )
 
     def test_slice_memo_answers_thesis_question(self):
         path = _REPO / "docs" / "SLICE_X0_MOMENT_ASSEMBLY_DIAGNOSTIC_MEMO.md"
@@ -532,6 +798,20 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("source_id_synthetic", text)
         self.assertIn("X.0.3", text)
         self.assertIn("runtime closure-coverage enforcement", text)
+        self.assertIn("Does this let the bond shape Maez's attention", text)
+
+    def test_x03_slice_memo_pins_runtime_enforcement_contract(self):
+        path = _REPO / "docs" / "SLICE_X03_RUNTIME_CLOSURE_COVERAGE_MEMO.md"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn(
+            "Covenant clauses are documentation discipline, not enforcement. "
+            "Closure coverage is load-bearing only when backed by tests or runtime checks.",
+            text,
+        )
+        self.assertIn("Diagnostic failure cannot cascade into ledger, audit, or prompt paths", text)
+        self.assertIn("bypass_note", text)
+        self.assertIn("schema_version", text)
+        self.assertIn("X.0.3 readers default missing bypass_note to empty string", text)
         self.assertIn("Does this let the bond shape Maez's attention", text)
 
 

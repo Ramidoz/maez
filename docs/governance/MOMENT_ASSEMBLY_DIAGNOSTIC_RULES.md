@@ -2,7 +2,7 @@
 
 **Status:** Accepted for Slice X.0
 **Date:** 2026-05-08
-**Schema:** `MOMENT_ASSEMBLY_DIAGNOSTIC_SCHEMA = 1`
+**Schema:** `MOMENT_ASSEMBLY_DIAGNOSTIC_SCHEMA = 2`
 
 ## Governance Anchors
 
@@ -99,19 +99,35 @@ production turn-completion hook is `complete_moment_assembly_turn`; raw
 diagnostic writers and builders, including `write_bypassed_record`,
 remain forbidden in production callers.
 
+Slice X.0.3 replaces the manual completion hook at covered production
+surfaces with the `moment_assembly_turn` runtime context manager.
+
+Covenant clauses are documentation discipline, not enforcement. Closure
+coverage is load-bearing only when backed by tests or runtime checks.
+
 Every owner-private turn closure must produce exactly one completion row
 per surface per turn id, with `assembly_path` either `observed` or
-`bypassed`. X.0.2 enforces this at test time and by covenant clause. The
-runtime closure-coverage context manager is deferred to X.0.3, which
-must ship before Slice X.1 wires the first observed-diagnostic consumer.
+`bypassed`. X.0.2 enforces this at test time and by covenant clause.
+X.0.3 enforces covered-surface closure at runtime. New owner-private
+turn handlers that never enter `moment_assembly_turn` still require
+test-time discovery; runtime does not magically guard paths that never
+enter the guard.
 
 Bypass records must carry bounded `bypass_reason` metadata:
 `not_called`, `early_return`, `exception`, `deliberate_skip`, or
-`unspecified`; they must also carry `lifecycle_phase`. When no real
-ledger turn id exists, the synthetic source id must use the
+`unspecified`; they must also carry `lifecycle_phase` and
+`bypass_note`. `bypass_note` is a supplementary single-line free-text
+field capped at 500 characters; it must not contain tracebacks. X.0.2
+readers ignore unknown fields; X.0.3 readers default missing
+`bypass_note` to empty string. When no real ledger turn id exists, the
+synthetic source id must use the
 `completion:<surface>:<uuid>` shape and the record must carry
 `source_id_synthetic: true`. Real turn-id records carry
 `source_id_synthetic: false`.
+
+Diagnostic failure cannot cascade into ledger, audit, or prompt paths.
+Diagnostic write failures are WARN-once per `(surface, lifecycle_phase)`
+and must not mask an original exception from the owner-private turn.
 
 Any organ-level observation flips the turn to `observed`. Partial
 observation is represented inside the diagnostic record through

@@ -5911,16 +5911,15 @@ def chat():
     if owner_bridge:
         try:
             from core.cognition.moment_assembly_diagnostic import (
-                complete_moment_assembly_turn,
+                moment_assembly_turn,
             )
 
-            complete_moment_assembly_turn(
+            with moment_assembly_turn(
                 surface="web_owner",
                 turn_id=_owner_user_msg_turn_id,
-                diagnostic_observed=False,
-                bypass_reason="not_called",
                 lifecycle_phase="turn_close",
-            )
+            ):
+                pass
         except Exception as _moment_diag_exc:
             logger.warning(
                 "web /chat moment assembly completion diagnostic skipped: %s",
