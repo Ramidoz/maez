@@ -307,11 +307,13 @@ class ReadBoundaryPolicyTests(unittest.TestCase):
             logger.setLevel(old_level)
 
         text = stream.getvalue()
-        self.assertIn("skipped_trace_labeled", text)
-        self.assertIn(traced, text)
-        self.assertIn("unit.envelope", text)
-        self.assertIn("owner_private", text)
-        self.assertIn("refuse_v1", text)
+        payload = json.loads(text)
+        self.assertEqual(payload["reason"], "skipped_trace_labeled")
+        self.assertEqual(payload["row_id"], traced)
+        self.assertEqual(payload["audit_path"], "unit.envelope")
+        self.assertEqual(payload["would_have_consumed_surface"], "owner_private")
+        self.assertEqual(payload["policy_version"], "refuse_v1")
+        self.assertNotIn("would-have-consumed-surface", payload)
 
 
 class DelayedFeedbackReplayTests(unittest.TestCase):
@@ -443,4 +445,7 @@ class GovernanceDocTests(unittest.TestCase):
         self.assertIn("requires an ADR", text)
         self.assertIn("golden", text.lower())
         self.assertIn("derived rows", text)
+        self.assertIn("idempotent-retry semantics", text)
+        self.assertIn("INSERT OR IGNORE", text)
+        self.assertIn("idempotency-key validation", text)
         self.assertIn("trace-rows", text)

@@ -282,6 +282,11 @@ consolidation, dreaming, or any derived rows MUST propagate trace labels
 to derived rows or refuse traced inputs. Derived rows may not launder
 projection influence into apparently untraced evidence.
 
+If 4d activation introduces idempotent-retry semantics for
+projection-labeled writes, lineage INSERT must use INSERT OR IGNORE
+semantics with idempotency-key validation. Retries may not create
+duplicate lineage records or silently attach lineage to the wrong turn.
+
 Deferred follow-ups: a `trace-rows` diagnostic CLI and sampled refusal
 episodes as ledger events are post-activation follow-up slices. They do
 not block 4c.5b, but should ship before trace metadata is operated for

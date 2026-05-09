@@ -141,7 +141,7 @@ class TraceAuditPolicy:
                     "reason": "skipped_trace_labeled",
                     "row_id": row.get("turn_id"),
                     "audit_path": audit_path,
-                    "would-have-consumed-surface": would_have_consumed_surface,
+                    "would_have_consumed_surface": would_have_consumed_surface,
                     "policy_version": self.policy_version,
                 }
                 _log.info("%s", json.dumps(payload, sort_keys=True))
