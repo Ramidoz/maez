@@ -141,6 +141,14 @@ Maez-specific invariants above.
 - **Open loops persist.** *"We need to revisit X"* becomes an
   episode with `open_loop` set; the recall planner can surface
   unresolved threads without re-prompting.
+- **Open-loop diagnostic IDs must be content-free.** Moment-assembly
+  diagnostics that reference open loops derive loop ids only from
+  typed evidence handles, never from `open_loop` prose, labels,
+  summaries, embeddings, UUID/autoincrement allocation, or text
+  hashes. The X.2 v1 shape is
+  `loop:<sha256("x2.open_loop.v1|episode:<episode_id>")[:16]>`.
+  Therefore, changing hash basis requires ADR because the hash basis
+  is a covenant property, not an implementation detail.
 - **Corrections preserve history.** Superseding edges keeps the
   audit trail of what Maez believed and when, satisfying the
   never-delete rule structurally rather than via tagging.

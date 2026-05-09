@@ -62,6 +62,11 @@ CANDIDATE_SOURCE_NAMES = (
 )
 TOPOLOGY_NAMES = ("euclidean", "poincare")
 ORGAN_SCHEMA_VERSION = 1
+OPEN_LOOP_REGISTRY_SCHEMA_VERSION = 1
+OPEN_LOOP_HASH_INPUT_VERSION = 1
+OPEN_LOOP_HASH_INPUT_PREFIX = "x2.open_loop.v1|episode:"
+OPEN_LOOP_AGE_BUCKET_CUTOFF_VERSION = 1
+OPEN_LOOP_AGE_HYSTERESIS_DAYS = 0.25
 DEPRECATION_REASONS = frozenset(
     {
         "superseded",
@@ -94,6 +99,39 @@ PRESSURE_DELTA_VALUES = frozenset({"down", "flat", "up", "unknown"})
 SELF_WORKSPACE_NEED_VALUES = frozenset(CANDIDATE_SOURCE_NAMES + ("unknown",))
 PREDICTION_STATUSES = frozenset({"predicted", "deliberate_skip"})
 EPISTEMIC_PRECISION_VALUES = frozenset({"low", "medium", "high", "unknown"})
+OPEN_LOOP_KINDS = frozenset(
+    {
+        "project_followup",
+        "conversation_revisit",
+        "pending_promise",
+        "unresolved_repair",
+        "continuity_gap",
+        "unknown",
+    }
+)
+OPEN_LOOP_ORIGINS = frozenset({"maez_first_person", "project_doc"})
+OPEN_LOOP_PROVENANCE_STATUSES = frozenset({"live", "rot_suspected", "unreachable", "archived"})
+OPEN_LOOP_AGE_BUCKETS = frozenset({"fresh", "recent", "stale", "long_running"})
+_OPEN_LOOP_AGE_CUTOFFS_DAYS: tuple[tuple[str, float], ...] = (
+    ("fresh", 2.0),
+    ("recent", 14.0),
+    ("stale", 90.0),
+)
+OPEN_LOOP_ENTRY_KEYS = frozenset(
+    {
+        "loop_id",
+        "prior_loop_ids",
+        "loop_origin",
+        "loop_kind",
+        "provenance_status",
+        "age_bucket",
+        "age_bucket_cutoff_version",
+        "evidence_count",
+        "source_episode_ids",
+        "source_memory_ids",
+        "epistemic_precision",
+    }
+)
 ANTICIPATION_METHOD_VALUES = frozenset(
     {
         "deterministic_source_pattern_v1",
@@ -206,6 +244,12 @@ def validate_slot(name: str, slot: dict[str, Any]) -> None:
         raise ValueError(f"{name}: source_ids list is required")
     if name == "anticipation" and state is DiagnosticState.EMITTED_VALUE:
         _validate_anticipation_value(slot["value"], slot["source_ids"])
+        return
+    if (
+        name in {"open_loops", "candidate_sources.open_loops"}
+        and state is DiagnosticState.EMITTED_VALUE
+    ):
+        _validate_open_loops_value(slot["value"], slot["source_ids"])
         return
     if name == "surprise_delta" and state in {
         DiagnosticState.EMITTED_VALUE,
@@ -422,6 +466,119 @@ def _validate_surprise_delta_value(
         raise ValueError("surprise_delta surprise_score must be in [0, 1]")
 
 
+def _validate_loop_id(loop_id: Any) -> None:
+    if not isinstance(loop_id, str):
+        raise ValueError("open_loop loop_id must be a string")
+    if not loop_id.startswith("loop:") or len(loop_id) != 21:
+        raise ValueError("open_loop loop_id must use loop:<16-hex> shape")
+    suffix = loop_id.removeprefix("loop:")
+    if any(ch not in "0123456789abcdef" for ch in suffix):
+        raise ValueError("open_loop loop_id must use loop:<16-hex> shape")
+
+
+def _validate_open_loop_entry(entry: Any) -> None:
+    if not isinstance(entry, dict):
+        raise ValueError("open_loop entry must be an object")
+    extra = sorted(set(entry) - OPEN_LOOP_ENTRY_KEYS)
+    if extra:
+        raise ValueError(f"open_loop entry has unknown field(s): {extra!r}")
+    missing = sorted(OPEN_LOOP_ENTRY_KEYS - set(entry))
+    if missing:
+        raise ValueError(f"open_loop entry missing required field(s): {missing!r}")
+    _validate_loop_id(entry["loop_id"])
+    prior_ids = entry["prior_loop_ids"]
+    if not isinstance(prior_ids, list):
+        raise ValueError("open_loop prior_loop_ids must be a list")
+    for prior_id in prior_ids:
+        _validate_loop_id(prior_id)
+    if entry["loop_origin"] not in OPEN_LOOP_ORIGINS:
+        raise ValueError("open_loop loop_origin must use the closed origin vocabulary")
+    if entry["loop_kind"] not in OPEN_LOOP_KINDS:
+        raise ValueError("open_loop loop_kind must use the closed kind vocabulary")
+    if entry["provenance_status"] not in OPEN_LOOP_PROVENANCE_STATUSES:
+        raise ValueError("open_loop provenance_status must use the closed status vocabulary")
+    if entry["age_bucket"] not in OPEN_LOOP_AGE_BUCKETS:
+        raise ValueError("open_loop age_bucket must use the closed bucket vocabulary")
+    if entry["age_bucket_cutoff_version"] != OPEN_LOOP_AGE_BUCKET_CUTOFF_VERSION:
+        raise ValueError("open_loop age_bucket_cutoff_version drifted")
+    if not isinstance(entry["evidence_count"], int) or entry["evidence_count"] < 1:
+        raise ValueError("open_loop evidence_count must be a positive integer")
+    source_episode_ids = entry["source_episode_ids"]
+    source_memory_ids = entry["source_memory_ids"]
+    if (
+        not isinstance(source_episode_ids, list)
+        or len(source_episode_ids) != 1
+        or not isinstance(source_episode_ids[0], str)
+        or not source_episode_ids[0]
+    ):
+        raise ValueError("open_loop source_episode_ids must contain exactly one episode id")
+    if not isinstance(source_memory_ids, list) or not source_memory_ids:
+        raise ValueError("open_loop source_memory_ids must be a non-empty list")
+    if not all(isinstance(source_id, str) and source_id for source_id in source_memory_ids):
+        raise ValueError("open_loop source_memory_ids must be non-empty strings")
+    if entry["epistemic_precision"] not in EPISTEMIC_PRECISION_VALUES:
+        raise ValueError("open_loop epistemic_precision must use the closed precision vocabulary")
+    precision = _open_loop_precision(source_memory_ids)
+    if entry["epistemic_precision"] != precision:
+        raise ValueError("open_loop epistemic_precision does not match source quality")
+
+
+def _validate_open_loops_value(value: Any, source_ids: list[str]) -> None:
+    if not isinstance(value, dict):
+        raise ValueError("open_loops value must be an object")
+    required = {
+        "registry_schema_version",
+        "hash_input_version",
+        "observed_at_wall_clock",
+        "loop_count",
+        "top_loops",
+        "omitted_loop_count",
+    }
+    extra = sorted(set(value) - required)
+    if extra:
+        raise ValueError(f"open_loops value has unknown field(s): {extra!r}")
+    missing = sorted(required - set(value))
+    if missing:
+        raise ValueError(f"open_loops value missing required field(s): {missing!r}")
+    if value["registry_schema_version"] != OPEN_LOOP_REGISTRY_SCHEMA_VERSION:
+        raise ValueError("open_loops registry_schema_version drifted")
+    if value["hash_input_version"] != OPEN_LOOP_HASH_INPUT_VERSION:
+        raise ValueError("open_loops hash_input_version drifted")
+    _parse_iso8601(
+        str(value["observed_at_wall_clock"]),
+        field_name="open_loops.observed_at_wall_clock",
+    )
+    if not isinstance(value["loop_count"], int) or value["loop_count"] < 0:
+        raise ValueError("open_loops loop_count must be a non-negative integer")
+    if not isinstance(value["omitted_loop_count"], int) or value["omitted_loop_count"] < 0:
+        raise ValueError("open_loops omitted_loop_count must be a non-negative integer")
+    top_loops = value["top_loops"]
+    if not isinstance(top_loops, list):
+        raise ValueError("open_loops top_loops must be a list")
+    if value["loop_count"] < len(top_loops):
+        raise ValueError("open_loops loop_count cannot be less than top_loops length")
+    if value["omitted_loop_count"] != value["loop_count"] - len(top_loops):
+        raise ValueError("open_loops omitted_loop_count must match omitted loops")
+    if not top_loops and source_ids != ["diagnostic:open_loops:empty"]:
+        raise ValueError("empty open_loops slot must use diagnostic empty source id")
+    seen: set[str] = set()
+    for entry in top_loops:
+        _validate_open_loop_entry(entry)
+        loop_id = entry["loop_id"]
+        if loop_id in seen:
+            raise ValueError(f"open-loop hash collision for {loop_id}")
+        seen.add(loop_id)
+    expected_source_ids = sorted(
+        {
+            source
+            for entry in top_loops
+            for source in (entry["source_episode_ids"] + entry["source_memory_ids"])
+        }
+    )
+    if top_loops and sorted(source_ids) != expected_source_ids:
+        raise ValueError("open_loops source_ids must match top_loop evidence ids")
+
+
 def _filled_slots(names: tuple[str, ...]) -> dict[str, dict[str, Any]]:
     return {name: _default_slot() for name in names}
 
@@ -441,6 +598,193 @@ def _decoder_note(thesis_sha: str) -> dict[str, str]:
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _parse_iso8601(value: str, *, field_name: str) -> datetime:
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be ISO-8601") from exc
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
+def loop_id_for_episode(episode_id: str) -> str:
+    if not isinstance(episode_id, str) or not episode_id:
+        raise ValueError("episode_id is required for open-loop hash")
+    digest = hashlib.sha256(
+        f"{OPEN_LOOP_HASH_INPUT_PREFIX}{episode_id}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"loop:{digest}"
+
+
+def derive_open_loop_age_bucket(
+    *,
+    created_at: str,
+    observed_at_wall_clock: str,
+    prior_age_bucket: str | None = None,
+) -> str:
+    created = _parse_iso8601(created_at, field_name="open_loop.created_at")
+    observed = _parse_iso8601(
+        observed_at_wall_clock,
+        field_name="open_loop.observed_at_wall_clock",
+    )
+    age_days = max(0.0, (observed - created).total_seconds() / 86_400.0)
+    bucket = "long_running"
+    for candidate, cutoff in _OPEN_LOOP_AGE_CUTOFFS_DAYS:
+        if age_days < cutoff:
+            bucket = candidate
+            break
+    if prior_age_bucket in OPEN_LOOP_AGE_BUCKETS:
+        ordered = ("fresh", "recent", "stale", "long_running")
+        idx = ordered.index(prior_age_bucket)
+        lower = _OPEN_LOOP_AGE_CUTOFFS_DAYS[idx - 1][1] if idx > 0 else None
+        upper = (
+            _OPEN_LOOP_AGE_CUTOFFS_DAYS[idx][1] if idx < len(_OPEN_LOOP_AGE_CUTOFFS_DAYS) else None
+        )
+        if lower is not None and abs(age_days - lower) <= OPEN_LOOP_AGE_HYSTERESIS_DAYS:
+            return prior_age_bucket
+        if upper is not None and abs(age_days - upper) <= OPEN_LOOP_AGE_HYSTERESIS_DAYS:
+            return prior_age_bucket
+    return bucket
+
+
+def _open_loop_origin(episode: dict[str, Any]) -> str:
+    if (
+        episode.get("source_kind") == "followup_doc"
+        or episode.get("authorship") == "project_doc"
+        or episode.get("memory_voice") == "external_to_maez"
+    ):
+        return "project_doc"
+    return "maez_first_person"
+
+
+def _open_loop_kind(episode: dict[str, Any]) -> str:
+    source_kind = str(episode.get("source_kind") or "")
+    text = str(episode.get("open_loop") or "").lower()
+    if source_kind == "followup_doc":
+        return "project_followup"
+    if any(token in text for token in ("promise", "follow up", "follow-up", "owe")):
+        return "pending_promise"
+    if any(token in text for token in ("repair", "fix", "regression", "broken")):
+        return "unresolved_repair"
+    if any(token in text for token in ("continuity", "restart", "memory gap", "amnesia")):
+        return "continuity_gap"
+    if any(token in text for token in ("revisit", "return to", "circle back", "pending")):
+        return "conversation_revisit"
+    return "unknown"
+
+
+def _open_loop_precision(source_memory_ids: list[str]) -> str:
+    count = len(set(source_memory_ids))
+    if count >= 3:
+        return "high"
+    if count >= 2:
+        return "medium"
+    if count >= 1:
+        return "low"
+    return "unknown"
+
+
+def _build_open_loop_entry(
+    *,
+    episode: dict[str, Any],
+    observed_at_wall_clock: str,
+    provenance_status: str,
+    prior_loop_ids: list[str] | None = None,
+    prior_age_bucket: str | None = None,
+) -> dict[str, Any]:
+    episode_id = str(episode.get("id") or "")
+    source_memory_ids = [str(source) for source in (episode.get("source_memory_ids") or [])]
+    created_at = str(episode.get("created_at") or "")
+    return {
+        "loop_id": loop_id_for_episode(episode_id),
+        "prior_loop_ids": list(prior_loop_ids or []),
+        "loop_origin": _open_loop_origin(episode),
+        "loop_kind": _open_loop_kind(episode),
+        "provenance_status": provenance_status,
+        "age_bucket": derive_open_loop_age_bucket(
+            created_at=created_at,
+            observed_at_wall_clock=observed_at_wall_clock,
+            prior_age_bucket=prior_age_bucket,
+        ),
+        "age_bucket_cutoff_version": OPEN_LOOP_AGE_BUCKET_CUTOFF_VERSION,
+        "evidence_count": len(set([episode_id, *source_memory_ids])),
+        "source_episode_ids": [episode_id],
+        "source_memory_ids": source_memory_ids,
+        "epistemic_precision": _open_loop_precision(source_memory_ids),
+    }
+
+
+def build_open_loops_slot(
+    *,
+    episodes: list[dict[str, Any]],
+    observed_at_wall_clock: str | None = None,
+    max_loops: int = 5,
+    provenance_status: str = "live",
+) -> dict[str, Any]:
+    observed = observed_at_wall_clock or _utc_now_iso()
+    _parse_iso8601(observed, field_name="open_loops.observed_at_wall_clock")
+    if provenance_status not in OPEN_LOOP_PROVENANCE_STATUSES:
+        raise ValueError(f"unknown provenance_status {provenance_status!r}")
+    if max_loops <= 0:
+        raise ValueError("max_loops must be positive")
+    open_loop_episodes = [episode for episode in episodes if episode.get("open_loop")]
+    entries = [
+        _build_open_loop_entry(
+            episode=episode,
+            observed_at_wall_clock=observed,
+            provenance_status=provenance_status,
+        )
+        for episode in open_loop_episodes
+    ]
+    seen: set[str] = set()
+    for entry in entries:
+        loop_id = str(entry["loop_id"])
+        if loop_id in seen:
+            raise ValueError(f"open-loop hash collision for {loop_id}")
+        seen.add(loop_id)
+    created_by_loop_id = {
+        loop_id_for_episode(str(episode.get("id") or "")): str(episode.get("created_at") or "")
+        for episode in open_loop_episodes
+    }
+    entries.sort(key=lambda entry: entry["loop_id"])
+    entries.sort(
+        key=lambda entry: _parse_iso8601(
+            created_by_loop_id[str(entry["loop_id"])],
+            field_name="open_loop.created_at",
+        ),
+        reverse=True,
+    )
+    selected = entries[:max_loops]
+    value = {
+        "registry_schema_version": OPEN_LOOP_REGISTRY_SCHEMA_VERSION,
+        "hash_input_version": OPEN_LOOP_HASH_INPUT_VERSION,
+        "observed_at_wall_clock": observed,
+        "loop_count": len(entries),
+        "top_loops": selected,
+        "omitted_loop_count": max(0, len(entries) - len(selected)),
+    }
+    source_ids: list[str]
+    if entries:
+        source_ids = sorted(
+            {
+                source
+                for entry in selected
+                for source in (entry["source_episode_ids"] + entry["source_memory_ids"])
+            }
+        )
+    else:
+        source_ids = ["diagnostic:open_loops:empty"]
+    slot = {
+        "schema_version": ORGAN_SCHEMA_VERSION,
+        "state": DiagnosticState.EMITTED_VALUE.value,
+        "value": value,
+        "source_ids": source_ids,
+    }
+    validate_slot("candidate_sources.open_loops", slot)
+    return slot
 
 
 def build_anticipation_slot(
@@ -741,6 +1085,31 @@ def write_anticipation_record(
         assembly_path="observed",
         anticipation=anticipation,
         surprise_delta=surprise_delta,
+        source_id_synthetic=not bool(turn_id),
+    )
+    write_diagnostic_record(record=record, log_path=log_path)
+    record_id = str(record["record_id"])
+    if mark_current_turn_observed:
+        mark_current_moment_assembly_observed(record_id=record_id)
+    return record_id
+
+
+def write_open_loops_record(
+    *,
+    surface: str,
+    turn_id: str | None,
+    open_loops: dict[str, Any],
+    log_path: Path = DEFAULT_LOG_PATH,
+    mark_current_turn_observed: bool = False,
+) -> str:
+    source_id = str(turn_id) if turn_id else f"completion:{surface}:{uuid4()}"
+    candidate_sources = _filled_slots(CANDIDATE_SOURCE_NAMES)
+    candidate_sources["open_loops"] = open_loops
+    record = build_diagnostic_record(
+        surface=surface,
+        source_ids=[source_id],
+        assembly_path="observed",
+        candidate_sources=candidate_sources,
         source_id_synthetic=not bool(turn_id),
     )
     write_diagnostic_record(record=record, log_path=log_path)

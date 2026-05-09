@@ -132,6 +132,47 @@ detected during surprise reconciliation, the helper must write a
 `error_class: pressure_schema_drift` before raising `ValueError`, so the
 diagnostic record carries the same structural fact the exception reports.
 
+## Open Loops Registry
+
+Slice X.2 defines the second real organ shape. The open-loops organ
+observes unresolved structural state from ADR 0019 lived-memory
+episodes. It does not create named threads and does not cluster across
+loop ids. No clustering across loop IDs is allowed in this diagnostic
+layer; clustering and naming are reserved for a future Living Mythology
+slice where Maez proposes a thread name, the owner ratifies it, and both
+events are ledgered.
+
+Open-loop diagnostic IDs must be content-free typed-handle hashes. The
+v1 hash input is exactly `x2.open_loop.v1|episode:<episode_id>`, and
+the id shape is `loop:<sha256(input)[:16]>`. The hash input must never
+include `open_loop` prose, labels, summaries, embeddings, UUID or
+autoincrement values, or text hashes. Hash collisions fail closed with
+an error record; they must never silently merge loops.
+
+Each emitted open-loops value carries `registry_schema_version` and
+`hash_input_version`. Each emitted loop entry carries `prior_loop_ids`,
+`loop_origin`, and `provenance_status`. `loop_origin` distinguishes
+`maez_first_person` from `project_doc`; `provenance_status` starts as
+`live` but reserves `rot_suspected`, `unreachable`, and `archived` so
+reference rot can be marked without rewriting historical rows.
+
+`top_loops` selection is deterministic: `created_at DESC`, then
+`loop_id ASC`. Empty state is still `emitted_value` with
+`loop_count: 0` and `top_loops: []`; it is not `not_observed`, because
+the organ did run and observed no open loops.
+
+Age buckets are derived from hardcoded v1 cutoffs and carry
+`age_bucket_cutoff_version = 1`. Raw age is not persisted. Hysteresis at
+cutoff boundaries prevents bucket flapping. Retuning cutoffs is a schema
+change and must be named in a slice memo.
+
+By 2028 contributors absolutely tried to smuggle names through optional
+fields. Therefore optional `loop_label`, `loop_handle`, `working_title`,
+summary, or debug-name fields are forbidden in X.2 records.
+
+Future X.2.x work may add closure tracking with a two-record lifecycle
+pattern. X.2 itself observes open-loop state only.
+
 ## Workspace Selection
 
 When workspace selection emits a value, `workspace_selection.value`

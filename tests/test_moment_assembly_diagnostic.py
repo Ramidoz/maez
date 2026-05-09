@@ -26,11 +26,14 @@ _MOMENT_ASSEMBLY_SYMBOLS = frozenset(
         "build_bypassed_record",
         "build_anticipation_slot",
         "build_diagnostic_record",
+        "build_open_loops_slot",
         "build_surprise_delta_slot",
         "build_slot",
         "complete_moment_assembly_turn",
+        "derive_open_loop_age_bucket",
         "expire_latest_anticipation",
         "find_latest_unreconciled_anticipation",
+        "loop_id_for_episode",
         "mark_current_moment_assembly_observed",
         "moment_assembly_turn",
         "moment_assembly_diagnostic",
@@ -41,6 +44,7 @@ _MOMENT_ASSEMBLY_SYMBOLS = frozenset(
         "write_bypassed_record",
         "write_anticipation_record",
         "write_diagnostic_record",
+        "write_open_loops_record",
     }
 )
 _ALLOWED_PRODUCTION_CONTEXTS = {
@@ -393,6 +397,190 @@ class MomentAssemblyRecordTests(unittest.TestCase):
         del record["bypass_note"]
 
         validate_record(record)
+
+    def test_open_loops_slot_uses_content_free_loop_ids_and_rejects_labels(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            build_open_loops_slot,
+            loop_id_for_episode,
+            validate_slot,
+        )
+
+        episode_a = {
+            "id": "ep-alpha",
+            "created_at": "2026-05-08T12:00:00+00:00",
+            "open_loop": "Rohit's original private prose should not enter the id",
+            "source_kind": "conversation",
+            "source_memory_ids": ["ledger:raw:1"],
+        }
+        episode_b = {
+            **episode_a,
+            "open_loop": "Completely different private prose",
+        }
+
+        slot_a = build_open_loops_slot(
+            episodes=[episode_a],
+            observed_at_wall_clock="2026-05-09T12:00:00Z",
+        )
+        slot_b = build_open_loops_slot(
+            episodes=[episode_b],
+            observed_at_wall_clock="2026-05-09T12:00:00Z",
+        )
+
+        self.assertEqual(slot_a["state"], "emitted_value")
+        self.assertEqual(slot_a["value"]["loop_count"], 1)
+        self.assertEqual(
+            slot_a["value"]["top_loops"][0]["loop_id"],
+            loop_id_for_episode("ep-alpha"),
+        )
+        self.assertEqual(
+            slot_a["value"]["top_loops"][0]["loop_id"],
+            slot_b["value"]["top_loops"][0]["loop_id"],
+        )
+        self.assertNotIn("open_loop_text", slot_a["value"]["top_loops"][0])
+        self.assertNotIn("label", slot_a["value"]["top_loops"][0])
+        self.assertNotIn("summary", slot_a["value"]["top_loops"][0])
+
+        bad = json.loads(json.dumps(slot_a))
+        bad["value"]["top_loops"][0]["loop_label"] = "just for debugging"
+        with self.assertRaisesRegex(ValueError, "unknown field"):
+            validate_slot("candidate_sources.open_loops", bad)
+
+    def test_open_loops_slot_pins_provenance_empty_state_order_and_collision(self):
+        from core.cognition.moment_assembly_diagnostic import build_open_loops_slot
+
+        empty = build_open_loops_slot(
+            episodes=[],
+            observed_at_wall_clock="2026-05-09T12:00:00Z",
+        )
+        self.assertEqual(empty["state"], "emitted_value")
+        self.assertEqual(empty["source_ids"], ["diagnostic:open_loops:empty"])
+        self.assertEqual(empty["value"]["loop_count"], 0)
+        self.assertEqual(empty["value"]["top_loops"], [])
+        self.assertEqual(empty["value"]["omitted_loop_count"], 0)
+
+        older = {
+            "id": "ep-b",
+            "created_at": "2026-05-08T12:00:00+00:00",
+            "open_loop": "still pending",
+            "source_kind": "conversation",
+            "source_memory_ids": ["ledger:raw:2"],
+        }
+        newer_z = {
+            **older,
+            "id": "ep-z",
+            "created_at": "2026-05-09T09:00:00+00:00",
+            "source_memory_ids": ["ledger:raw:3"],
+        }
+        newer_a = {
+            **older,
+            "id": "ep-a",
+            "created_at": "2026-05-09T09:00:00+00:00",
+            "source_kind": "followup_doc",
+            "authorship": "project_doc",
+            "memory_voice": "external_to_maez",
+            "source_memory_ids": ["followup-doc:docs/followups/x.md"],
+        }
+        slot = build_open_loops_slot(
+            episodes=[older, newer_z, newer_a],
+            observed_at_wall_clock="2026-05-09T12:00:00Z",
+            max_loops=2,
+        )
+        loops = slot["value"]["top_loops"]
+        self.assertEqual(
+            [entry["loop_id"] for entry in loops],
+            sorted(entry["loop_id"] for entry in loops),
+        )
+        project_entry = next(entry for entry in loops if entry["source_episode_ids"] == ["ep-a"])
+        self.assertEqual(project_entry["loop_origin"], "project_doc")
+        self.assertEqual(project_entry["provenance_status"], "live")
+        self.assertEqual(slot["value"]["omitted_loop_count"], 1)
+
+        with self.assertRaisesRegex(ValueError, "hash collision"):
+            build_open_loops_slot(
+                episodes=[older, {**older, "open_loop": "different row same episode id"}],
+                observed_at_wall_clock="2026-05-09T12:00:00Z",
+            )
+
+    def test_open_loops_age_bucket_is_derived_with_hysteresis_not_persisted_raw(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            build_open_loops_slot,
+            derive_open_loop_age_bucket,
+        )
+
+        self.assertEqual(
+            derive_open_loop_age_bucket(
+                created_at="2026-05-07T12:00:00Z",
+                observed_at_wall_clock="2026-05-09T12:00:00Z",
+            ),
+            "recent",
+        )
+        self.assertEqual(
+            derive_open_loop_age_bucket(
+                created_at="2026-05-07T10:00:00Z",
+                observed_at_wall_clock="2026-05-09T12:00:00Z",
+                prior_age_bucket="fresh",
+            ),
+            "fresh",
+        )
+
+        slot = build_open_loops_slot(
+            episodes=[
+                {
+                    "id": "ep-age",
+                    "created_at": "2026-05-07T12:00:00+00:00",
+                    "open_loop": "pending",
+                    "source_kind": "conversation",
+                    "source_memory_ids": ["ledger:raw:1"],
+                }
+            ],
+            observed_at_wall_clock="2026-05-09T12:00:00Z",
+        )
+        entry = slot["value"]["top_loops"][0]
+        self.assertEqual(entry["age_bucket_cutoff_version"], 1)
+        self.assertNotIn("age_days", entry)
+        self.assertNotIn("raw_age", entry)
+
+    def test_write_open_loops_record_marks_turn_observed_and_remains_write_only(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            build_open_loops_slot,
+            moment_assembly_turn,
+            write_open_loops_record,
+        )
+
+        path = _TEST_DIR / "open_loops_observed.jsonl"
+        slot = build_open_loops_slot(
+            episodes=[
+                {
+                    "id": "ep-loop",
+                    "created_at": "2026-05-08T12:00:00+00:00",
+                    "open_loop": "revisit trace policy",
+                    "source_kind": "conversation",
+                    "source_memory_ids": ["ledger:raw:1"],
+                }
+            ],
+            observed_at_wall_clock="2026-05-09T12:00:00Z",
+        )
+
+        with moment_assembly_turn(
+            surface="cli",
+            turn_id="turn-1",
+            lifecycle_phase="chat_return",
+            log_path=path,
+        ):
+            record_id = write_open_loops_record(
+                surface="cli",
+                turn_id="turn-1",
+                open_loops=slot,
+                log_path=path,
+                mark_current_turn_observed=True,
+            )
+
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["record_id"], record_id)
+        self.assertEqual(rows[0]["assembly_path"], "observed")
+        self.assertEqual(rows[0]["candidate_sources"]["open_loops"]["state"], "emitted_value")
+        self.assertEqual(rows[0]["workspace_selection"]["state"], "not_implemented")
 
     def test_anticipation_slot_enforces_closed_targets_and_source_precision(self):
         from core.cognition.moment_assembly_diagnostic import (
@@ -1283,6 +1471,24 @@ class MomentAssemblyBoundaryTests(unittest.TestCase):
             self.assertNotIn("reconcile_latest_anticipation", text, rel)
             self.assertNotIn('["anticipation"]', text, rel)
 
+    def test_open_loop_records_are_write_only_outside_diagnostic_module(self):
+        source = (_REPO / "core" / "cognition" / "moment_assembly_diagnostic.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("build_open_loops_slot", source)
+        self.assertIn("write_open_loops_record", source)
+        for path in _production_python_paths():
+            rel = path.relative_to(_REPO).as_posix()
+            if rel in {
+                "core/cognition/moment_assembly_diagnostic.py",
+                "tests/test_moment_assembly_diagnostic.py",
+                "scripts/moment_assembly_probe.py",
+            }:
+                continue
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("build_open_loops_slot", text, rel)
+            self.assertNotIn("write_open_loops_record", text, rel)
+
     def test_allowlisted_context_callers_are_present_and_use_same_kwargs_and_counts(self):
         for rel, function_name, symbol, expected_count in sorted(_ALLOWED_PRODUCTION_CONTEXTS):
             path = _REPO / rel
@@ -1409,6 +1615,25 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("deliberate_skip", text)
         self.assertIn("next_self_workspace_need", text)
         self.assertIn("Does this let the bond shape Maez's attention", text)
+
+    def test_x2_slice_memo_and_rules_pin_open_loop_contract(self):
+        memo = (_REPO / "docs" / "SLICE_X2_OPEN_LOOPS_ORGAN_MEMO.md").read_text(encoding="utf-8")
+        rules = (_REPO / "docs" / "governance" / "MOMENT_ASSEMBLY_DIAGNOSTIC_RULES.md").read_text(
+            encoding="utf-8"
+        )
+        adr = (_REPO / "docs" / "adr" / "0019-lived-memory-architecture.md").read_text(
+            encoding="utf-8"
+        )
+
+        for text in (memo, rules):
+            self.assertIn("content-free", text)
+            self.assertIn("provenance_status", text)
+            self.assertIn("no clustering", text.lower())
+            self.assertIn("Living Mythology", text)
+            self.assertIn("By 2028 contributors absolutely tried to smuggle names", text)
+        self.assertIn("Does this let the bond shape Maez's attention", memo)
+        self.assertIn("Open-loop diagnostic IDs must be content-free", adr)
+        self.assertIn("changing hash basis requires ADR", adr)
 
     def test_x11_slice_memo_pins_replay_hardening_contract(self):
         path = _REPO / "docs" / "SLICE_X11_ANTICIPATION_REPLAY_HARDENING_MEMO.md"
