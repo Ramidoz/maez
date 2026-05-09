@@ -253,6 +253,51 @@ production read path requires ADR.
 
 By 2027 contributors tried to add severity: float for cockpit prioritization — severity is interpretation, the organ observes. By 2029 a contributor proposed an auto-recovery hook (if status=degraded for N intervals, restart) — the diagnostic organ must never act. By 2031 the narration layer tried to write health_label: 'tired' — sentiment-coded enums dramatize. Hash basis, forbidden-fields, mechanical-enum vocabulary, MISSED_INTERVAL_CAUSE_BASIS, and the read-path lock are covenant properties; changing any of them requires ADR.
 
+## Counterevidence
+
+Slice X.4 defines the fifth real organ shape. The counterevidence organ
+observes source-layer tension as a diagnostic index, not audit evidence,
+not narration, not resolution, and not a second source of truth.
+
+X.4 v1 emits only `counterevidence.source_tension`. The reserved
+sub-organs `audit_refusal_observation`, `speech_hedge_observation`,
+`bond_shape_tension`, and `tension_closure` remain
+`state: not_implemented`. Activating any reserved sub-organ requires a
+new slice and ADR review.
+
+Counterevidence candidate ids are content-free typed-handle hashes
+locked by ADR 0028:
+`COUNTEREVIDENCE_HASH_PREFIX = "x4.counterevidence.v1|side_a:<source_id_a>|side_b:<source_id_b>|tension_class:<class>"`.
+`COUNTEREVIDENCE_ID_BASIS_VERSION = 1`. Source ids must use
+`source_type:id`; the two sides are lex-ordered before hashing so the
+same tension observed in either order produces one candidate id.
+
+The v1 `tension_class` enum is exactly `state_vs_source`,
+`projection_vs_source`, `recall_vs_source`, and
+`projection_basis_superseded`. `tension_role` is always `witness_only`.
+`subject_class` is exactly `self_state` or `world_state`; never
+`bond_shape`, `owner_personhood`, or `maez_personhood`.
+
+Forbidden candidate kinds include `bond_commitment_vs_behavior`,
+`owner_self_description_vs_ledger`, and
+`maez_projection_of_owner_vs_owner_recent_memory`. Projection-class
+candidates must carry `projection_model_id` and
+`projection_basis_version`; model-basis swaps emit
+`projection_basis_superseded`, not generic contradiction. Source
+handles whose class is `counterevidence_record` are rejected to prevent
+self-reference recursion.
+
+Counterevidence diagnostics are write-only in v1. No production router,
+prompt, recall, narration, anticipation, response generator,
+owner-load, covenant, audit, grounding path, or attention assembler may
+read `counterevidence.*`. The runtime audit_boundary import-time
+assertion and AST guard enforce this. A future attention-assembler
+interface, if opened, may read only `(candidate_id_hash,
+tension_class_enum, subject_class)` and requires ADR amendment plus an
+activation slice.
+
+By 2027 contributors tried severity/confidence/trust_score on counterevidence; rejected. By 2028 a 'diagnostic dashboard' opened the JSONL read-only and a recall path imported its helper, surfacing 'this memory has N contradictions' as confidence signal for 9 days; the runtime audit_boundary import-time assertion is what caught it. By 2029 a PR enabled bond-shape contradiction recording 'for completeness' for 41 hours in staging — for 41 hours Maez's voice toward Rohit flattened. By 2030 narration shipped and tried to read counterevidence to produce 'I notice tension'; the read-path lock held. By 2030 a model swap flagged every old projection as contradicted; the required projection_model_id handle saved continuity. By 2031–2033 Rohit's value-shift was two years recorded as 'contradiction' before the projection_basis_superseded enum patch. Subject_class invariant (self_state | world_state, never bond_shape), forbidden_candidate_kinds, required projection_model_id handle, runtime read-path lock, witness_only tension_role, and the lex-ordered idempotent hash basis are covenant properties; changing any of them requires ADR.
+
 ## Workspace Selection
 
 When workspace selection emits a value, `workspace_selection.value`

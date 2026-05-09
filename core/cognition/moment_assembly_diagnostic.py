@@ -16,6 +16,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from enum import StrEnum
 import hashlib
+import inspect
 import json
 import logging
 import math
@@ -72,6 +73,13 @@ BODY_STATE_SLOT_NAMES = (
     "degraded_capability",
     "owner_presence",
     "cognitive_substrate",
+)
+COUNTEREVIDENCE_SLOT_NAMES = (
+    "source_tension",
+    "audit_refusal_observation",
+    "speech_hedge_observation",
+    "bond_shape_tension",
+    "tension_closure",
 )
 ORGAN_SCHEMA_VERSION = 1
 OPEN_LOOP_REGISTRY_SCHEMA_VERSION = 1
@@ -157,6 +165,80 @@ BODY_STATE_FORBIDDEN_FIELDS = frozenset(
     }
 )
 _BODY_STATE_SAMPLE_CACHE: dict[tuple[str, str], tuple[float, str]] = {}
+COUNTEREVIDENCE_BASIS_VERSION = 1
+COUNTEREVIDENCE_ID_BASIS_VERSION = 1
+COUNTEREVIDENCE_HASH_PREFIX = (
+    "x4.counterevidence.v1|side_a:<source_id_a>|side_b:<source_id_b>|tension_class:<class>"
+)
+COUNTEREVIDENCE_TENSION_CLASSES = frozenset(
+    {
+        "state_vs_source",
+        "projection_vs_source",
+        "recall_vs_source",
+        "projection_basis_superseded",
+    }
+)
+COUNTEREVIDENCE_FORBIDDEN_TENSION_CLASSES = frozenset(
+    {
+        "audit_refusal_recurrence",
+        "speech_vs_source",
+        "belief_vs_belief",
+        "value_conflict",
+        "identity_tension",
+        "feeling_vs_fact",
+        "painful",
+        "trivial",
+        "critical",
+    }
+)
+COUNTEREVIDENCE_SUBJECT_CLASSES = frozenset({"self_state", "world_state"})
+COUNTEREVIDENCE_FORBIDDEN_SUBJECT_CLASSES = frozenset(
+    {"bond_shape", "owner_personhood", "maez_personhood"}
+)
+COUNTEREVIDENCE_FORBIDDEN_CANDIDATE_KINDS = frozenset(
+    {
+        "bond_commitment_vs_behavior",
+        "owner_self_description_vs_ledger",
+        "maez_projection_of_owner_vs_owner_recent_memory",
+    }
+)
+COUNTEREVIDENCE_FORBIDDEN_SOURCE_CLASSES = frozenset({"counterevidence_record"})
+COUNTEREVIDENCE_FORBIDDEN_FIELDS = frozenset(
+    {
+        "trust_score",
+        "self_doubt_score",
+        "self_doubt_intensity",
+        "conflicted",
+        "coherence_score",
+        "identity_drift_signal",
+        "severity",
+        "intensity",
+        "narrative_summary",
+        "working_title",
+        "loop_label",
+        "resolved_by",
+        "adjudicated",
+        "resolved",
+        "reconciled",
+        "winner",
+        "truth_score",
+        "confidence",
+        "uncertainty_explanation",
+        "tension_narrative",
+        "refusal_text",
+        "hedge_quote",
+        "contradiction_summary",
+        "feeling",
+        "mood",
+    }
+)
+_COUNTEREVIDENCE_READER_ALLOWED_MODULES = frozenset(
+    {
+        "core.cognition.moment_assembly_diagnostic",
+        "test_moment_assembly_diagnostic",
+        "tests.test_moment_assembly_diagnostic",
+    }
+)
 BOND_TOPOLOGY_FORBIDDEN_FIELDS = frozenset(
     {
         "node_label",
@@ -295,6 +377,8 @@ def default_contributing_schemas() -> dict[str, int]:
         schemas[_organ_key("bond_topology", name)] = ORGAN_SCHEMA_VERSION
     for name in BODY_STATE_SLOT_NAMES:
         schemas[_organ_key("body_state", name)] = ORGAN_SCHEMA_VERSION
+    for name in COUNTEREVIDENCE_SLOT_NAMES:
+        schemas[_organ_key("counterevidence", name)] = ORGAN_SCHEMA_VERSION
     for name in (
         "workspace_selection",
         "anticipation",
@@ -380,6 +464,9 @@ def validate_slot(name: str, slot: dict[str, Any]) -> None:
             and slot.get("error_class") not in BODY_STATE_ERROR_CLASSES
         ):
             raise ValueError("body_state.interval error_class must use closed enum")
+        return
+    if name == "counterevidence.source_tension" and state is DiagnosticState.EMITTED_VALUE:
+        _validate_counterevidence_source_tension_value(slot["value"], slot["source_ids"])
         return
     if name == "surprise_delta" and state in {
         DiagnosticState.EMITTED_VALUE,
@@ -940,6 +1027,153 @@ def _validate_body_state_interval_value(value: Any, *, state: DiagnosticState) -
         raise ValueError("body_state.interval clock_source must use closed enum")
     if state is DiagnosticState.ERROR and value["interval_state"] != "interval_missed":
         raise ValueError("body_state.interval error state requires interval_missed")
+
+
+def _reject_forbidden_counterevidence_fields(value: Any) -> None:
+    if isinstance(value, dict):
+        forbidden = COUNTEREVIDENCE_FORBIDDEN_FIELDS.intersection(value)
+        if forbidden:
+            raise ValueError(
+                f"counterevidence value contains forbidden field(s): {sorted(forbidden)!r}"
+            )
+        for item in value.values():
+            _reject_forbidden_counterevidence_fields(item)
+    elif isinstance(value, list):
+        for item in value:
+            _reject_forbidden_counterevidence_fields(item)
+
+
+def _validate_counterevidence_source_id(source_id: Any) -> str:
+    if not isinstance(source_id, str) or not source_id:
+        raise ValueError("counterevidence source_id must be a non-empty typed id")
+    if ":" not in source_id:
+        raise ValueError("counterevidence typed source_id must use source_type:id shape")
+    source_type, source_value = source_id.split(":", 1)
+    if not source_type or not source_value or any(ch.isspace() for ch in source_id):
+        raise ValueError("counterevidence typed source_id must use source_type:id shape")
+    return source_id
+
+
+def _canonical_counterevidence_pair(source_id_a: str, source_id_b: str) -> tuple[str, str]:
+    left = _validate_counterevidence_source_id(source_id_a)
+    right = _validate_counterevidence_source_id(source_id_b)
+    return tuple(sorted((left, right)))
+
+
+def counterevidence_candidate_id(
+    *,
+    source_id_a: str,
+    source_id_b: str,
+    tension_class: str,
+) -> str:
+    if tension_class in COUNTEREVIDENCE_FORBIDDEN_TENSION_CLASSES:
+        raise ValueError(f"counterevidence tension_class forbidden in v1: {tension_class!r}")
+    if tension_class not in COUNTEREVIDENCE_TENSION_CLASSES:
+        raise ValueError("counterevidence tension_class must use the closed v1 enum")
+    side_a, side_b = _canonical_counterevidence_pair(source_id_a, source_id_b)
+    hash_input = (
+        COUNTEREVIDENCE_HASH_PREFIX.replace("<source_id_a>", side_a)
+        .replace("<source_id_b>", side_b)
+        .replace("<class>", tension_class)
+    )
+    digest = hashlib.sha256(hash_input.encode("utf-8")).hexdigest()[:16]
+    return f"ce:{digest}"
+
+
+def classify_projection_tension(*, candidate_model_id: str, current_model_id: str) -> str:
+    if not candidate_model_id or not current_model_id:
+        raise ValueError("projection tension classification requires model ids")
+    if candidate_model_id != current_model_id:
+        return "projection_basis_superseded"
+    return "projection_vs_source"
+
+
+def _validate_counterevidence_source_handle(
+    handle: Any,
+    *,
+    tension_class: str,
+) -> dict[str, Any]:
+    if not isinstance(handle, dict):
+        raise ValueError("counterevidence source handle must be an object")
+    _reject_forbidden_counterevidence_fields(handle)
+    allowed = {
+        "source_id",
+        "source_class",
+        "candidate_kind",
+        "projection_model_id",
+        "projection_basis_version",
+    }
+    extra = sorted(set(handle) - allowed)
+    if extra:
+        raise ValueError(f"counterevidence source handle has unknown field(s): {extra!r}")
+    missing = sorted({"source_id", "source_class"} - set(handle))
+    if missing:
+        raise ValueError(f"counterevidence source handle missing field(s): {missing!r}")
+    source_id = _validate_counterevidence_source_id(handle["source_id"])
+    source_class = handle["source_class"]
+    if not isinstance(source_class, str) or not source_class:
+        raise ValueError("counterevidence source_class must be non-empty")
+    if source_class in COUNTEREVIDENCE_FORBIDDEN_SOURCE_CLASSES:
+        raise ValueError("counterevidence_record source_class is forbidden")
+    candidate_kind = handle.get("candidate_kind", "")
+    if candidate_kind in COUNTEREVIDENCE_FORBIDDEN_CANDIDATE_KINDS:
+        raise ValueError("counterevidence candidate_kind is forbidden in v1")
+    projection_involved = source_class == "projection" or source_id.startswith("projection:")
+    if tension_class in {"projection_vs_source", "projection_basis_superseded"}:
+        if projection_involved:
+            for key in ("projection_model_id", "projection_basis_version"):
+                if not handle.get(key):
+                    raise ValueError(f"counterevidence projection source requires {key}")
+        return dict(handle)
+    if "projection_model_id" in handle or "projection_basis_version" in handle:
+        raise ValueError("counterevidence projection handles require projection tension class")
+    return dict(handle)
+
+
+def _validate_counterevidence_source_tension_value(value: Any, source_ids: list[str]) -> None:
+    if not isinstance(value, dict):
+        raise ValueError("counterevidence.source_tension value must be an object")
+    _reject_forbidden_counterevidence_fields(value)
+    required = {
+        "counterevidence_basis_version",
+        "counterevidence_id_basis_version",
+        "candidate_id",
+        "tension_class",
+        "tension_role",
+        "subject_class",
+        "side_a",
+        "side_b",
+    }
+    if set(value) != required:
+        raise ValueError("counterevidence.source_tension field set drifted")
+    if value["counterevidence_basis_version"] != COUNTEREVIDENCE_BASIS_VERSION:
+        raise ValueError("counterevidence_basis_version drifted")
+    if value["counterevidence_id_basis_version"] != COUNTEREVIDENCE_ID_BASIS_VERSION:
+        raise ValueError("counterevidence_id_basis_version drifted")
+    tension_class = value["tension_class"]
+    if tension_class in COUNTEREVIDENCE_FORBIDDEN_TENSION_CLASSES:
+        raise ValueError("counterevidence tension_class forbidden in v1")
+    if tension_class not in COUNTEREVIDENCE_TENSION_CLASSES:
+        raise ValueError("counterevidence tension_class must use the closed v1 enum")
+    if value["tension_role"] != "witness_only":
+        raise ValueError("counterevidence tension_role must be witness_only")
+    subject_class = value["subject_class"]
+    if subject_class in COUNTEREVIDENCE_FORBIDDEN_SUBJECT_CLASSES:
+        raise ValueError("counterevidence subject_class forbidden in v1")
+    if subject_class not in COUNTEREVIDENCE_SUBJECT_CLASSES:
+        raise ValueError("counterevidence subject_class must be self_state or world_state")
+    side_a = _validate_counterevidence_source_handle(value["side_a"], tension_class=tension_class)
+    side_b = _validate_counterevidence_source_handle(value["side_b"], tension_class=tension_class)
+    expected_pair = _canonical_counterevidence_pair(side_a["source_id"], side_b["source_id"])
+    if sorted(source_ids) != list(expected_pair):
+        raise ValueError("counterevidence source_ids must match canonical source pair")
+    expected_candidate_id = counterevidence_candidate_id(
+        source_id_a=side_a["source_id"],
+        source_id_b=side_b["source_id"],
+        tension_class=tension_class,
+    )
+    if value["candidate_id"] != expected_candidate_id:
+        raise ValueError("counterevidence candidate_id does not match source pair")
 
 
 def _filled_slots(names: tuple[str, ...]) -> dict[str, dict[str, Any]]:
@@ -1802,6 +2036,43 @@ def build_body_state_slots(
     }
 
 
+def build_counterevidence_source_tension_slot(
+    *,
+    source_a: dict[str, Any],
+    source_b: dict[str, Any],
+    tension_class: str,
+    subject_class: str,
+) -> dict[str, Any]:
+    side_a = _validate_counterevidence_source_handle(source_a, tension_class=tension_class)
+    side_b = _validate_counterevidence_source_handle(source_b, tension_class=tension_class)
+    canonical_a, canonical_b = _canonical_counterevidence_pair(
+        side_a["source_id"],
+        side_b["source_id"],
+    )
+    ordered = {side_a["source_id"]: side_a, side_b["source_id"]: side_b}
+    value = {
+        "counterevidence_basis_version": COUNTEREVIDENCE_BASIS_VERSION,
+        "counterevidence_id_basis_version": COUNTEREVIDENCE_ID_BASIS_VERSION,
+        "candidate_id": counterevidence_candidate_id(
+            source_id_a=canonical_a,
+            source_id_b=canonical_b,
+            tension_class=tension_class,
+        ),
+        "tension_class": tension_class,
+        "tension_role": "witness_only",
+        "subject_class": subject_class,
+        "side_a": ordered[canonical_a],
+        "side_b": ordered[canonical_b],
+    }
+    slot = build_slot(
+        DiagnosticState.EMITTED_VALUE,
+        value=value,
+        source_ids=[canonical_a, canonical_b],
+    )
+    validate_slot("counterevidence.source_tension", slot)
+    return slot
+
+
 def clear_body_state_sample_cache() -> None:
     _BODY_STATE_SAMPLE_CACHE.clear()
 
@@ -1900,6 +2171,7 @@ def build_diagnostic_record(
     candidate_sources: dict[str, dict[str, Any]] | None = None,
     bond_topology: dict[str, dict[str, Any]] | None = None,
     body_state: dict[str, dict[str, Any]] | None = None,
+    counterevidence: dict[str, dict[str, Any]] | None = None,
     workspace_selection: dict[str, Any] | None = None,
     anticipation: dict[str, Any] | None = None,
     surprise_delta: dict[str, Any] | None = None,
@@ -1930,6 +2202,7 @@ def build_diagnostic_record(
         "surprise_delta": surprise_delta or _default_slot(),
         "bond_topology": bond_topology or _filled_slots(TOPOLOGY_NAMES),
         "body_state": body_state or _filled_slots(BODY_STATE_SLOT_NAMES),
+        "counterevidence": counterevidence or _filled_slots(COUNTEREVIDENCE_SLOT_NAMES),
         "interpretation_candidates": interpretation_candidates or _default_slot(),
     }
     if source_id_synthetic is not None:
@@ -2016,6 +2289,7 @@ def validate_record(record: dict[str, Any]) -> None:
     )
     _validate_group(record=record, group_name="bond_topology", schema_group="bond_topology")
     _validate_group(record=record, group_name="body_state", schema_group="body_state")
+    _validate_group(record=record, group_name="counterevidence", schema_group="counterevidence")
     for name in (
         "workspace_selection",
         "anticipation",
@@ -2064,6 +2338,34 @@ def _read_diagnostic_records(log_path: Path) -> list[dict[str, Any]]:
                 error=exc,
             )
     return records
+
+
+def _assert_counterevidence_reader_allowed() -> None:
+    for frame_info in inspect.stack()[1:]:
+        module = inspect.getmodule(frame_info.frame)
+        module_name = module.__name__ if module is not None else ""
+        if module_name in _COUNTEREVIDENCE_READER_ALLOWED_MODULES and module_name != __name__:
+            return
+    raise ImportError("counterevidence reader is diagnostic-only")
+
+
+def _read_counterevidence_records_impl(
+    *,
+    log_path: Path = DEFAULT_LOG_PATH,
+) -> list[dict[str, Any]]:
+    return [
+        record
+        for record in _read_diagnostic_records(log_path)
+        if ((record.get("counterevidence") or {}).get("source_tension") or {}).get("state")
+        == DiagnosticState.EMITTED_VALUE.value
+    ]
+
+
+def __getattr__(name: str) -> Any:
+    if name == "read_counterevidence_records":
+        _assert_counterevidence_reader_allowed()
+        return _read_counterevidence_records_impl
+    raise AttributeError(name)
 
 
 def _warn_jsonl_replay_skip_once(
@@ -2211,6 +2513,31 @@ def write_body_state_record(
     write_diagnostic_record(record=record, log_path=log_path)
     record_id = str(record["record_id"])
     _BODY_STATE_SAMPLE_CACHE[cache_key] = (now, record_id)
+    if mark_current_turn_observed:
+        mark_current_moment_assembly_observed(record_id=record_id)
+    return record_id
+
+
+def write_counterevidence_record(
+    *,
+    surface: str,
+    turn_id: str | None,
+    source_tension: dict[str, Any],
+    log_path: Path = DEFAULT_LOG_PATH,
+    mark_current_turn_observed: bool = False,
+) -> str:
+    source_id = str(turn_id) if turn_id else f"completion:{surface}:{uuid4()}"
+    counterevidence = _filled_slots(COUNTEREVIDENCE_SLOT_NAMES)
+    counterevidence["source_tension"] = source_tension
+    record = build_diagnostic_record(
+        surface=surface,
+        source_ids=[source_id],
+        assembly_path="observed",
+        counterevidence=counterevidence,
+        source_id_synthetic=not bool(turn_id),
+    )
+    write_diagnostic_record(record=record, log_path=log_path)
+    record_id = str(record["record_id"])
     if mark_current_turn_observed:
         mark_current_moment_assembly_observed(record_id=record_id)
     return record_id

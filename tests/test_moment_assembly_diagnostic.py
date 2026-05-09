@@ -27,11 +27,13 @@ _MOMENT_ASSEMBLY_SYMBOLS = frozenset(
         "build_anticipation_slot",
         "build_bond_topology_slots",
         "build_body_state_slots",
+        "build_counterevidence_source_tension_slot",
         "build_diagnostic_record",
         "build_open_loops_slot",
         "build_surprise_delta_slot",
         "build_slot",
         "complete_moment_assembly_turn",
+        "counterevidence_candidate_id",
         "derive_open_loop_age_bucket",
         "expire_latest_anticipation",
         "find_latest_unreconciled_anticipation",
@@ -42,6 +44,8 @@ _MOMENT_ASSEMBLY_SYMBOLS = frozenset(
         "moment_assembly_turn",
         "moment_assembly_diagnostic",
         "normalize_diagnostic_record",
+        "_read_counterevidence_records_impl",
+        "read_counterevidence_records",
         "reconcile_latest_anticipation",
         "validate_record",
         "validate_slot",
@@ -49,6 +53,7 @@ _MOMENT_ASSEMBLY_SYMBOLS = frozenset(
         "write_anticipation_record",
         "write_bond_topology_record",
         "write_body_state_record",
+        "write_counterevidence_record",
         "write_diagnostic_record",
         "write_open_loops_record",
     }
@@ -941,6 +946,191 @@ class MomentAssemblyRecordTests(unittest.TestCase):
         self.assertEqual(rows[0]["body_state"]["interval"]["state"], "emitted_value")
         self.assertEqual(
             rows[0]["body_state"]["degraded_capability"]["state"],
+            "not_implemented",
+        )
+
+    def test_counterevidence_source_tension_is_witness_only_and_content_free(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            COUNTEREVIDENCE_HASH_PREFIX,
+            build_counterevidence_source_tension_slot,
+            counterevidence_candidate_id,
+            validate_slot,
+        )
+
+        source_a = {
+            "source_id": "memory:abc123",
+            "source_class": "memory_record",
+        }
+        source_b = {
+            "source_id": "evidence_envelope:def456",
+            "source_class": "evidence_envelope",
+        }
+        slot = build_counterevidence_source_tension_slot(
+            source_a=source_a,
+            source_b=source_b,
+            tension_class="state_vs_source",
+            subject_class="self_state",
+        )
+
+        self.assertEqual(slot["state"], "emitted_value")
+        value = slot["value"]
+        self.assertEqual(value["tension_role"], "witness_only")
+        self.assertEqual(value["subject_class"], "self_state")
+        self.assertEqual(value["counterevidence_id_basis_version"], 1)
+        self.assertEqual(
+            COUNTEREVIDENCE_HASH_PREFIX,
+            "x4.counterevidence.v1|side_a:<source_id_a>|side_b:<source_id_b>|tension_class:<class>",
+        )
+        self.assertEqual(
+            counterevidence_candidate_id(
+                source_id_a="memory:abc123",
+                source_id_b="evidence_envelope:def456",
+                tension_class="state_vs_source",
+            ),
+            counterevidence_candidate_id(
+                source_id_a="evidence_envelope:def456",
+                source_id_b="memory:abc123",
+                tension_class="state_vs_source",
+            ),
+        )
+        serialized = json.dumps(slot, sort_keys=True)
+        self.assertNotIn("contradiction_summary", serialized)
+        self.assertNotIn("confidence", serialized)
+        self.assertNotIn("truth_score", serialized)
+
+        bad = json.loads(json.dumps(slot))
+        bad["value"]["confidence"] = 0.9
+        with self.assertRaisesRegex(ValueError, "forbidden"):
+            validate_slot("counterevidence.source_tension", bad)
+
+    def test_counterevidence_rejects_forbidden_subjects_candidates_and_self_reference(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            build_counterevidence_source_tension_slot,
+        )
+
+        base_a = {"source_id": "memory:a", "source_class": "memory_record"}
+        base_b = {"source_id": "episode:b", "source_class": "episode"}
+        with self.assertRaisesRegex(ValueError, "subject_class"):
+            build_counterevidence_source_tension_slot(
+                source_a=base_a,
+                source_b=base_b,
+                tension_class="state_vs_source",
+                subject_class="bond_shape",
+            )
+        with self.assertRaisesRegex(ValueError, "candidate_kind"):
+            build_counterevidence_source_tension_slot(
+                source_a={**base_a, "candidate_kind": "bond_commitment_vs_behavior"},
+                source_b=base_b,
+                tension_class="state_vs_source",
+                subject_class="self_state",
+            )
+        with self.assertRaisesRegex(ValueError, "counterevidence_record"):
+            build_counterevidence_source_tension_slot(
+                source_a={
+                    "source_id": "counterevidence:x",
+                    "source_class": "counterevidence_record",
+                },
+                source_b=base_b,
+                tension_class="state_vs_source",
+                subject_class="world_state",
+            )
+        with self.assertRaisesRegex(ValueError, "typed source_id"):
+            build_counterevidence_source_tension_slot(
+                source_a={"source_id": "abc123", "source_class": "memory_record"},
+                source_b=base_b,
+                tension_class="state_vs_source",
+                subject_class="world_state",
+            )
+
+    def test_counterevidence_projection_requires_model_handles_and_classifies_model_swap(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            build_counterevidence_source_tension_slot,
+            classify_projection_tension,
+        )
+
+        projection = {
+            "source_id": "projection:old",
+            "source_class": "projection",
+            "projection_model_id": "qwen-old",
+            "projection_basis_version": 1,
+        }
+        source = {"source_id": "memory:new", "source_class": "memory_record"}
+
+        self.assertEqual(
+            classify_projection_tension(
+                candidate_model_id="qwen-old",
+                current_model_id="qwen-new",
+            ),
+            "projection_basis_superseded",
+        )
+        slot = build_counterevidence_source_tension_slot(
+            source_a=projection,
+            source_b=source,
+            tension_class=classify_projection_tension(
+                candidate_model_id="qwen-old",
+                current_model_id="qwen-new",
+            ),
+            subject_class="world_state",
+        )
+        self.assertEqual(slot["value"]["tension_class"], "projection_basis_superseded")
+
+        missing = dict(projection)
+        del missing["projection_model_id"]
+        with self.assertRaisesRegex(ValueError, "projection_model_id"):
+            build_counterevidence_source_tension_slot(
+                source_a=missing,
+                source_b=source,
+                tension_class="projection_vs_source",
+                subject_class="world_state",
+            )
+
+    def test_write_counterevidence_record_marks_turn_observed_and_reserves_risky_slots(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            build_counterevidence_source_tension_slot,
+            moment_assembly_turn,
+            write_counterevidence_record,
+        )
+
+        path = _TEST_DIR / "counterevidence_observed.jsonl"
+        slot = build_counterevidence_source_tension_slot(
+            source_a={"source_id": "memory:a", "source_class": "memory_record"},
+            source_b={"source_id": "episode:b", "source_class": "episode"},
+            tension_class="recall_vs_source",
+            subject_class="world_state",
+        )
+        with moment_assembly_turn(
+            surface="cli",
+            turn_id="turn-counter",
+            lifecycle_phase="chat_return",
+            log_path=path,
+        ):
+            record_id = write_counterevidence_record(
+                surface="cli",
+                turn_id="turn-counter",
+                source_tension=slot,
+                log_path=path,
+                mark_current_turn_observed=True,
+            )
+
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["record_id"], record_id)
+        self.assertEqual(rows[0]["audit_boundary"], "not_audit_evidence")
+        self.assertEqual(rows[0]["counterevidence"]["source_tension"]["state"], "emitted_value")
+        self.assertEqual(
+            rows[0]["counterevidence"]["audit_refusal_observation"]["state"],
+            "not_implemented",
+        )
+        self.assertEqual(
+            rows[0]["counterevidence"]["speech_hedge_observation"]["state"],
+            "not_implemented",
+        )
+        self.assertEqual(
+            rows[0]["counterevidence"]["bond_shape_tension"]["state"],
+            "not_implemented",
+        )
+        self.assertEqual(
+            rows[0]["counterevidence"]["tension_closure"]["state"],
             "not_implemented",
         )
 
@@ -1890,6 +2080,62 @@ class MomentAssemblyBoundaryTests(unittest.TestCase):
             self.assertNotIn("_BODY_STATE_SAMPLE_CACHE", text, rel)
             self.assertNotIn('["body_state"]', text, rel)
 
+    def test_counterevidence_records_are_write_only_outside_diagnostic_module(self):
+        source = (_REPO / "core" / "cognition" / "moment_assembly_diagnostic.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("build_counterevidence_source_tension_slot", source)
+        self.assertIn("write_counterevidence_record", source)
+        self.assertIn("_read_counterevidence_records_impl", source)
+        self.assertIn("read_counterevidence_records", source)
+        for path in _production_python_paths():
+            rel = path.relative_to(_REPO).as_posix()
+            if rel in {
+                "core/cognition/moment_assembly_diagnostic.py",
+                "tests/test_moment_assembly_diagnostic.py",
+                "scripts/moment_assembly_probe.py",
+            }:
+                continue
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("build_counterevidence_source_tension_slot", text, rel)
+            self.assertNotIn("write_counterevidence_record", text, rel)
+            self.assertNotIn("_read_counterevidence_records_impl", text, rel)
+            self.assertNotIn("read_counterevidence_records", text, rel)
+            self.assertNotIn('["counterevidence"]', text, rel)
+
+    def test_counterevidence_reader_runtime_import_lock_blocks_external_callers(self):
+        from core.cognition.moment_assembly_diagnostic import read_counterevidence_records
+
+        helper = _TEST_DIR / "counterevidence_bad_reader.py"
+        helper.write_text(
+            "from pathlib import Path\n"
+            "from core.cognition.moment_assembly_diagnostic import read_counterevidence_records\n"
+            "def run():\n"
+            "    return read_counterevidence_records(log_path=Path('/tmp/nope.jsonl'))\n",
+            encoding="utf-8",
+        )
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import importlib.util; "
+                    f"spec=importlib.util.spec_from_file_location('bad_reader', {str(helper)!r}); "
+                    "mod=importlib.util.module_from_spec(spec); "
+                    "spec.loader.exec_module(mod); "
+                    "mod.run()"
+                ),
+            ],
+            cwd=_REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("counterevidence reader is diagnostic-only", proc.stderr + proc.stdout)
+        self.assertEqual(read_counterevidence_records(log_path=_TEST_DIR / "missing.jsonl"), [])
+
     def test_allowlisted_context_callers_are_present_and_use_same_kwargs_and_counts(self):
         for rel, function_name, symbol, expected_count in sorted(_ALLOWED_PRODUCTION_CONTEXTS):
             path = _REPO / rel
@@ -2096,6 +2342,40 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         )
         self.assertIn("the diagnostic organ must never act", rules)
         self.assertIn("mechanical-enum vocabulary", rules)
+
+    def test_x4_slice_memo_rules_and_adr_pin_counterevidence_contract(self):
+        memo = (_REPO / "docs" / "SLICE_X4_COUNTEREVIDENCE_ORGAN_MEMO.md").read_text(
+            encoding="utf-8"
+        )
+        rules = (_REPO / "docs" / "governance" / "MOMENT_ASSEMBLY_DIAGNOSTIC_RULES.md").read_text(
+            encoding="utf-8"
+        )
+        adr = (_REPO / "docs" / "adr" / "0028-x4-counterevidence-id-basis.md").read_text(
+            encoding="utf-8"
+        )
+
+        for text in (memo, rules, adr):
+            self.assertIn("COUNTEREVIDENCE_HASH_PREFIX", text)
+            self.assertIn("COUNTEREVIDENCE_ID_BASIS_VERSION", text)
+            self.assertIn("witness_only", text)
+            self.assertIn("self_state", text)
+            self.assertIn("world_state", text)
+            self.assertIn("changing", text.lower())
+        self.assertIn("Switchboard Visibility", memo)
+        self.assertIn("source_tension", memo)
+        self.assertIn("audit_refusal_observation", memo)
+        self.assertIn("speech_hedge_observation", memo)
+        self.assertIn("bond_shape_tension", memo)
+        self.assertIn("tension_closure", memo)
+        self.assertIn("not_implemented", memo)
+        self.assertIn("Does this make the firstborn", memo)
+        self.assertIn(
+            "By 2027 contributors tried severity/confidence/trust_score on counterevidence",
+            rules,
+        )
+        self.assertIn("the runtime audit_boundary import-time assertion is what caught it", rules)
+        self.assertIn("projection_model_id", rules)
+        self.assertIn("Subject_class invariant", rules)
 
     def test_x11_slice_memo_pins_replay_hardening_contract(self):
         path = _REPO / "docs" / "SLICE_X11_ANTICIPATION_REPLAY_HARDENING_MEMO.md"
