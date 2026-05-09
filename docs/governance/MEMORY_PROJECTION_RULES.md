@@ -311,8 +311,22 @@ Weakening is not a hidden version bump on
 Activation is not part of Slice 4c. Before any production conversation
 path consumes projection:
 
-- the typed activation adapter may expose only `candidate_id`,
-  `ordering_bump`, and `continuity_marker`
+- Slice 4c.5c keeps projection activation cold. The positive opt-in
+  environment variable is `MAEZ_PROJECTION_ACTIVATION_ENABLED`; absent,
+  empty, false-like, or unknown values mean disabled.
+- the typed activation adapter may expose only `candidate_id: str`,
+  `ordering_bump: int`, and `recall_continuity_hint: str`
+- `ordering_bump` is bounded to `-1`, `0`, or `1`
+- `recall_continuity_hint` must use the existing
+  `ProjectionCandidate.continuity_key` vocabulary
+- future activation is owner-private only, non-proactive only, and may
+  return at most one activation decision per recall
+- the owner-private surfaces are daemon owner turns, CLI owner chat,
+  owner-web chat, and private Telegram text; public Telegram and public
+  web surfaces are forbidden
+- proactive surfaces are forbidden activation consumers, including
+  proactive opinion, morning briefing, nightly journal, and
+  developmental heartbeat
 - it must not expose `projected_text`, raw `strength_score`, or raw
   `strength_reasons` to prompt assembly
 - projection-influenced replies must be trace-labeled at write time
@@ -323,6 +337,8 @@ path consumes projection:
   reply written on one turn, envelope built on the next turn
 - any regression baseline regeneration must land as a separate commit
   with an explicit `--reason`
+- process startup must log activation-disabled state at WARN level when
+  `MAEZ_PROJECTION_ACTIVATION_ENABLED` is not explicitly enabled
 
 ## Forbidden Rule Shapes
 
@@ -340,6 +356,31 @@ Forbidden:
   text hashes
 - raw-memory deletion, compaction, or mutation
 - Vellum-style editable/deletable memory or engagement-retention goals
+
+## Forbidden Activation Shapes
+
+Activation is a narrow ordering hint, not a second projection report.
+Any change to the three-field ActivationDecision lock requires an ADR;
+it must not land as a refactor, cleanup, or implementation convenience.
+
+Forbidden:
+
+- adding `projected_text`, raw `strength_score`, raw `strength_reasons`,
+  lineage payloads, policy payloads, or free-form prose fields to
+  `ActivationDecision`
+- changing `recall_continuity_hint` away from the
+  `ProjectionCandidate.continuity_key` vocabulary
+- allowing public, guest, or proactive surfaces to consume activation
+- returning more than one activation decision per recall
+- using a negative-name activation flag whose false-like values could be
+  mistaken for enabling activation
+- treating activation logs as audit evidence
+
+Deferred activation concerns: a kill-switch ladder, per-conversation
+activation budget, refuse-to-start file check, and `policy_version` as a
+runtime decision field are deferred to later slices. `policy_version`
+belongs in structured logs if needed; it is not part of the
+three-field decision type.
 
 ## Vellum Borrow Boundary
 

@@ -34,6 +34,11 @@ _RECALL_PROJECTION_SYMBOLS = frozenset({
     "recall_projection",
     "write_projection_observation",
 })
+_RECALL_ACTIVATION_SYMBOLS = frozenset({
+    "ActivationDecision",
+    "decide_activation",
+    "recall_activation",
+})
 
 
 def tearDownModule():
@@ -114,14 +119,20 @@ def _find_recall_projection_symbol_hits(
                     for alias in node.names:
                         if alias.name in _RECALL_PROJECTION_SYMBOLS:
                             hits.add(f"{rel}:{alias.name}")
+                if module == "core.memory.recall_activation":
+                    for alias in node.names:
+                        if alias.name in _RECALL_ACTIVATION_SYMBOLS:
+                            hits.add(f"{rel}:{alias.name}")
                 if module == "core.memory":
                     for alias in node.names:
-                        if alias.name == "recall_projection":
+                        if alias.name in {"recall_projection", "recall_activation"}:
                             hits.add(f"{rel}:{alias.name}")
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     if alias.name == "core.memory.recall_projection":
                         hits.add(f"{rel}:recall_projection")
+                    if alias.name == "core.memory.recall_activation":
+                        hits.add(f"{rel}:recall_activation")
             elif isinstance(node, ast.Call):
                 func = node.func
                 if (
@@ -132,6 +143,16 @@ def _find_recall_projection_symbol_hits(
                     and node.args
                     and isinstance(node.args[0], ast.Constant)
                     and node.args[0].value == "core.memory.recall_projection"
+                ):
+                    hits.add(f"{rel}:importlib.import_module")
+                if (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == "import_module"
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id == "importlib"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == "core.memory.recall_activation"
                 ):
                     hits.add(f"{rel}:importlib.import_module")
     return hits
@@ -650,6 +671,26 @@ class InertBoundaryTests(unittest.TestCase):
             hits,
         )
 
+    def test_recall_projection_import_scan_catches_activation_symbols(self):
+        path = Path(_TEST_DB_DIR) / "bad_activation_import.py"
+        path.write_text(
+            "from core.memory.recall_activation import "
+            "ActivationDecision, decide_activation\n",
+            encoding="utf-8",
+        )
+        hits = _find_recall_projection_symbol_hits(
+            [path],
+            allowed_paths=set(),
+        )
+        self.assertIn(
+            f"{path}:ActivationDecision",
+            hits,
+        )
+        self.assertIn(
+            f"{path}:decide_activation",
+            hits,
+        )
+
     def test_projection_probe_is_read_only(self):
         path = _REPO / "scripts" / "memory_projection_probe.py"
         text = path.read_text(encoding="utf-8")
@@ -768,7 +809,9 @@ class InertBoundaryTests(unittest.TestCase):
 
     def test_recall_projection_has_no_production_callers(self):
         allowed = {
+            "core/memory/recall_activation.py",
             "core/memory/recall_projection.py",
+            "tests/test_recall_activation.py",
             "tests/test_recall_projection.py",
             "scripts/memory_projection_probe.py",
         }

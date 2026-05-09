@@ -1190,6 +1190,9 @@ class ChatSession:
 
 
 def main():
+    from core.memory.recall_activation_config import log_activation_startup_state
+
+    log_activation_startup_state()
     try:
         ChatSession().run()
     except KeyboardInterrupt:

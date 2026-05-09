@@ -9287,4 +9287,7 @@ def api_debug_stats():
 
 
 if __name__ == "__main__":
+    from core.memory.recall_activation_config import log_activation_startup_state
+
+    log_activation_startup_state()
     app.run(host="127.0.0.1", port=11437, debug=False)

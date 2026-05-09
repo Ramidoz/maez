@@ -4436,6 +4436,9 @@ class MaezDaemon:
     def start(self):
         """Start the daemon: verify model, launch loop and health server."""
         logger.info("=== Maez Daemon starting ===")
+        from core.memory.recall_activation_config import log_activation_startup_state
+
+        log_activation_startup_state()
         self.boot_time = datetime.now(timezone.utc).isoformat()
         self._write_pid()
 
