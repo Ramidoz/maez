@@ -7,6 +7,8 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -519,6 +521,71 @@ class MomentAssemblyRecordTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "model_confidence"):
             validate_slot("anticipation", bad_slot)
 
+    def test_anticipation_value_rejects_bad_wall_clock_and_required_field_drift(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            PRESSURE_NAMES,
+            build_anticipation_slot,
+            validate_slot,
+        )
+
+        targets = {
+            "next_surface": "cli",
+            "next_pressure_delta": {name: "flat" for name in PRESSURE_NAMES},
+            "next_self_workspace_need": ["recent_conversation"],
+        }
+        valid_slot = build_anticipation_slot(
+            prediction_id="pred-1",
+            predicted_at_turn_id="turn-1",
+            targets=targets,
+            epistemic_precision="low",
+            method="deterministic_source_pattern_v1",
+            expires_after_turns=1,
+            predicted_at_wall_clock="2026-05-09T00:00:00Z",
+            source_ids=["ledger:user_message:1"],
+        )
+
+        bad_clock = dict(valid_slot)
+        bad_clock["value"] = dict(valid_slot["value"])
+        bad_clock["value"]["predicted_at_wall_clock"] = "lol"
+        with self.assertRaisesRegex(ValueError, "predicted_at_wall_clock"):
+            validate_slot("anticipation", bad_clock)
+
+        for missing_field in (
+            "prediction_id",
+            "predicted_at_wall_clock",
+            "targets",
+            "epistemic_precision",
+        ):
+            bad_slot = dict(valid_slot)
+            bad_slot["value"] = dict(valid_slot["value"])
+            del bad_slot["value"][missing_field]
+            with self.subTest(missing_field=missing_field):
+                with self.assertRaisesRegex(ValueError, missing_field):
+                    validate_slot("anticipation", bad_slot)
+
+        with self.assertRaisesRegex(ValueError, "expires_after_turns"):
+            build_anticipation_slot(
+                prediction_id="pred-negative-expiry",
+                predicted_at_turn_id="turn-1",
+                targets=targets,
+                epistemic_precision="low",
+                method="deterministic_source_pattern_v1",
+                expires_after_turns=-1,
+                predicted_at_wall_clock="2026-05-09T00:00:00Z",
+                source_ids=["ledger:user_message:1"],
+            )
+        with self.assertRaisesRegex(ValueError, "method"):
+            build_anticipation_slot(
+                prediction_id="pred-unknown-method",
+                predicted_at_turn_id="turn-1",
+                targets=targets,
+                epistemic_precision="low",
+                method="model_introspection_v1",
+                expires_after_turns=1,
+                predicted_at_wall_clock="2026-05-09T00:00:00Z",
+                source_ids=["ledger:user_message:1"],
+            )
+
     def test_surprise_delta_slot_pins_match_and_expiration_shapes(self):
         from core.cognition.moment_assembly_diagnostic import build_surprise_delta_slot
 
@@ -943,6 +1010,147 @@ class MomentAssemblyJsonlTests(unittest.TestCase):
         self.assertTrue(rows[1]["surprise_delta"]["value"]["matches"]["next_self_workspace_need"])
         self.assertIsNone(find_latest_unreconciled_anticipation(log_path=path))
 
+    def test_jsonl_replay_skips_partial_final_line_and_warns_once(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            PRESSURE_NAMES,
+            build_anticipation_slot,
+            find_latest_unreconciled_anticipation,
+            write_anticipation_record,
+        )
+
+        path = _TEST_DIR / "anticipation_partial_line.jsonl"
+        slot = build_anticipation_slot(
+            prediction_id="pred-1",
+            predicted_at_turn_id="turn-1",
+            targets={
+                "next_surface": "cli",
+                "next_pressure_delta": {name: "flat" for name in PRESSURE_NAMES},
+                "next_self_workspace_need": ["recent_conversation"],
+            },
+            epistemic_precision="low",
+            method="deterministic_source_pattern_v1",
+            expires_after_turns=1,
+            predicted_at_wall_clock="2026-05-09T00:00:00Z",
+            source_ids=["ledger:user_message:1"],
+        )
+        prediction_record_id = write_anticipation_record(
+            surface="cli",
+            turn_id="turn-1",
+            anticipation=slot,
+            log_path=path,
+        )
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write('{"record_id": "partial"')
+
+        with self.assertLogs(
+            "core.cognition.moment_assembly_diagnostic",
+            level="WARNING",
+        ) as logs:
+            found = find_latest_unreconciled_anticipation(log_path=path)
+            found_again = find_latest_unreconciled_anticipation(log_path=path)
+
+        self.assertEqual(found["record_id"], prediction_record_id)
+        self.assertEqual(found_again["record_id"], prediction_record_id)
+        self.assertEqual(
+            sum("jsonl_replay_skip" in message for message in logs.output),
+            1,
+        )
+
+    def test_jsonl_replay_survives_process_style_reload(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            PRESSURE_NAMES,
+            build_anticipation_slot,
+            write_anticipation_record,
+        )
+
+        path = _TEST_DIR / "anticipation_process_reload.jsonl"
+        slot = build_anticipation_slot(
+            prediction_id="pred-1",
+            predicted_at_turn_id="turn-1",
+            targets={
+                "next_surface": "cli",
+                "next_pressure_delta": {name: "flat" for name in PRESSURE_NAMES},
+                "next_self_workspace_need": ["recent_conversation"],
+            },
+            epistemic_precision="low",
+            method="deterministic_source_pattern_v1",
+            expires_after_turns=1,
+            predicted_at_wall_clock="2026-05-09T00:00:00Z",
+            source_ids=["ledger:user_message:1"],
+        )
+        prediction_record_id = write_anticipation_record(
+            surface="cli",
+            turn_id="turn-1",
+            anticipation=slot,
+            log_path=path,
+        )
+
+        probe = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "from pathlib import Path; "
+                    "from core.cognition.moment_assembly_diagnostic "
+                    "import find_latest_unreconciled_anticipation; "
+                    f"r=find_latest_unreconciled_anticipation(log_path=Path({str(path)!r})); "
+                    "print(r['record_id'])"
+                ),
+            ],
+            cwd=_REPO,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(probe.stdout.strip(), prediction_record_id)
+
+    def test_pressure_schema_drift_writes_error_record_before_raising(self):
+        from core.cognition.moment_assembly_diagnostic import (
+            PRESSURE_NAMES,
+            build_anticipation_slot,
+            reconcile_latest_anticipation,
+            write_anticipation_record,
+        )
+
+        path = _TEST_DIR / "anticipation_pressure_schema_drift.jsonl"
+        slot = build_anticipation_slot(
+            prediction_id="pred-1",
+            predicted_at_turn_id="turn-1",
+            targets={
+                "next_surface": "cli",
+                "next_pressure_delta": {name: "flat" for name in PRESSURE_NAMES},
+                "next_self_workspace_need": ["recent_conversation"],
+            },
+            epistemic_precision="low",
+            method="deterministic_source_pattern_v1",
+            expires_after_turns=1,
+            predicted_at_wall_clock="2026-05-09T00:00:00Z",
+            source_ids=["ledger:user_message:1"],
+        )
+        prediction_record_id = write_anticipation_record(
+            surface="cli",
+            turn_id="turn-1",
+            anticipation=slot,
+            log_path=path,
+        )
+
+        with self.assertRaisesRegex(ValueError, "pressure_schema_drift"):
+            reconcile_latest_anticipation(
+                surface="cli",
+                turn_id="turn-2",
+                observed_surface="cli",
+                observed_pressure_delta={name: "flat" for name in PRESSURE_NAMES[:-1]},
+                observed_self_workspace_need=["recent_conversation"],
+                log_path=path,
+            )
+
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1]["surprise_delta"]["state"], "error")
+        self.assertEqual(rows[1]["surprise_delta"]["error_class"], "pressure_schema_drift")
+        self.assertEqual(rows[1]["surprise_delta"]["source_ids"], [prediction_record_id])
+
     def test_jsonl_replay_reconciles_expiration_as_not_observed(self):
         from core.cognition.moment_assembly_diagnostic import (
             PRESSURE_NAMES,
@@ -1201,6 +1409,16 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("deliberate_skip", text)
         self.assertIn("next_self_workspace_need", text)
         self.assertIn("Does this let the bond shape Maez's attention", text)
+
+    def test_x11_slice_memo_pins_replay_hardening_contract(self):
+        path = _REPO / "docs" / "SLICE_X11_ANTICIPATION_REPLAY_HARDENING_MEMO.md"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("partial rows", text)
+        self.assertIn("warns once", text.lower())
+        self.assertIn("predicted_at_wall_clock", text)
+        self.assertIn("pressure_schema_drift", text)
+        self.assertIn("not_audit_evidence", text)
+        self.assertIn("Predicted Effect", text)
 
 
 if __name__ == "__main__":

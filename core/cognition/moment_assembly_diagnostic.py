@@ -33,6 +33,7 @@ ARCHITECTURAL_THESIS_ADR_ID = "ARCHITECTURAL_THESIS"
 BYPASS_NOTE_MAX_CHARS = 500
 _LOGGER = logging.getLogger(__name__)
 _WRITE_FAILURE_WARNED_KEYS: set[tuple[str, str]] = set()
+_READ_FAILURE_WARNED_PATHS: set[Path] = set()
 _CURRENT_TURN: contextvars.ContextVar[MomentAssemblyTurn | None] = contextvars.ContextVar(
     "moment_assembly_turn",
     default=None,
@@ -342,11 +343,20 @@ def _validate_anticipation_value(value: Any, source_ids: list[str]) -> None:
         "expires_after_turns",
         "predicted_at_wall_clock",
     }
-    if set(value) != required:
-        raise ValueError("anticipation value must use the exact X.1 field set")
+    actual = set(value)
+    missing = sorted(required - actual)
+    if missing:
+        raise ValueError(f"anticipation value missing required field(s): {missing!r}")
+    extra = sorted(actual - required)
+    if extra:
+        raise ValueError(f"anticipation value has unknown field(s): {extra!r}")
     for key in ("prediction_id", "predicted_at_turn_id", "predicted_at_wall_clock"):
         if not isinstance(value[key], str) or not value[key]:
             raise ValueError(f"anticipation {key} must be a non-empty string")
+    try:
+        datetime.fromisoformat(value["predicted_at_wall_clock"].replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("anticipation predicted_at_wall_clock must be ISO-8601") from exc
     if value["prediction_status"] not in PREDICTION_STATUSES:
         raise ValueError("prediction_status must use the closed status vocabulary")
     if value["method"] not in ANTICIPATION_METHOD_VALUES:
@@ -676,11 +686,39 @@ def _read_diagnostic_records(log_path: Path) -> list[dict[str, Any]]:
     if not log_path.exists():
         return []
     records: list[dict[str, Any]] = []
-    for line in log_path.read_text(encoding="utf-8").splitlines():
+    for line_no, line in enumerate(log_path.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip():
             continue
-        records.append(normalize_diagnostic_record(json.loads(line)))
+        try:
+            records.append(normalize_diagnostic_record(json.loads(line)))
+        except json.JSONDecodeError as exc:
+            _warn_jsonl_replay_skip_once(
+                log_path=log_path,
+                line_no=line_no,
+                error=exc,
+            )
     return records
+
+
+def _warn_jsonl_replay_skip_once(
+    *,
+    log_path: Path,
+    line_no: int,
+    error: json.JSONDecodeError,
+) -> None:
+    try:
+        key = log_path.resolve()
+    except OSError:
+        key = log_path
+    if key in _READ_FAILURE_WARNED_PATHS:
+        return
+    _READ_FAILURE_WARNED_PATHS.add(key)
+    _LOGGER.warning(
+        "jsonl_replay_skip path=%s line=%s error=%s",
+        log_path,
+        line_no,
+        error,
+    )
 
 
 def write_anticipation_record(
@@ -759,6 +797,14 @@ def reconcile_latest_anticipation(
     if prediction is None:
         return None
     targets = prediction["anticipation"]["value"]["targets"]
+    if set(observed_pressure_delta) != set(PRESSURE_NAMES):
+        _write_pressure_schema_drift_record(
+            surface=surface,
+            turn_id=turn_id,
+            prediction_record_id=str(prediction["record_id"]),
+            log_path=log_path,
+        )
+        raise ValueError("pressure_schema_drift: observed_pressure_delta keys drifted")
     predicted_pressure = targets["next_pressure_delta"]
     matched_pressure_count = sum(
         1
@@ -780,6 +826,31 @@ def reconcile_latest_anticipation(
         assembly_path="observed",
         anticipation=_default_slot(DiagnosticState.NOT_OBSERVED),
         surprise_delta=surprise_delta,
+        source_id_synthetic=not bool(turn_id),
+    )
+    write_diagnostic_record(record=record, log_path=log_path)
+    return str(record["record_id"])
+
+
+def _write_pressure_schema_drift_record(
+    *,
+    surface: str,
+    turn_id: str | None,
+    prediction_record_id: str,
+    log_path: Path,
+) -> str:
+    source_id = str(turn_id) if turn_id else f"completion:{surface}:{uuid4()}"
+    record = build_diagnostic_record(
+        surface=surface,
+        source_ids=[source_id],
+        assembly_path="observed",
+        anticipation=_default_slot(DiagnosticState.NOT_OBSERVED),
+        surprise_delta=build_slot(
+            DiagnosticState.ERROR,
+            value=None,
+            source_ids=[prediction_record_id],
+            error_class="pressure_schema_drift",
+        ),
         source_id_synthetic=not bool(turn_id),
     )
     write_diagnostic_record(record=record, log_path=log_path)

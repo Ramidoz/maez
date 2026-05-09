@@ -122,6 +122,16 @@ load-bearing observable. `next_surface` and `next_pressure_delta` remain
 subject to the X.0.1 deprecation contract if they become noisy or
 calcified.
 
+Slice X.1.1 hardens anticipation replay after the X.1 review. JSONL
+replay readers must tolerate malformed or partial lines, skip the bad
+row, and WARN once per file; strict append-only writing is not enough
+for disk-full or process-kill durability. `predicted_at_wall_clock` must
+parse as ISO-8601, not merely be non-empty. If pressure schema drift is
+detected during surprise reconciliation, the helper must write a
+`surprise_delta` slot with `state: error` and
+`error_class: pressure_schema_drift` before raising `ValueError`, so the
+diagnostic record carries the same structural fact the exception reports.
+
 ## Workspace Selection
 
 When workspace selection emits a value, `workspace_selection.value`
