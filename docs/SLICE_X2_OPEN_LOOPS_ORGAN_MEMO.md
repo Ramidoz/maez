@@ -50,7 +50,7 @@ fields. X.2 therefore rejects `loop_label`, `loop_handle`,
 ## Shape
 
 Each emitted value carries `registry_schema_version`,
-`hash_input_version`, `observed_at_wall_clock`, `loop_count`,
+`loop_id_basis_version`, `observed_at_wall_clock`, `loop_count`,
 `top_loops`, and `omitted_loop_count`.
 
 Each loop entry carries `loop_id`, `prior_loop_ids`, `loop_origin`,

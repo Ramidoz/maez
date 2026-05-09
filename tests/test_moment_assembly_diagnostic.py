@@ -454,6 +454,8 @@ class MomentAssemblyRecordTests(unittest.TestCase):
         )
         self.assertEqual(empty["state"], "emitted_value")
         self.assertEqual(empty["source_ids"], ["diagnostic:open_loops:empty"])
+        self.assertEqual(empty["value"]["loop_id_basis_version"], 1)
+        self.assertNotIn("hash_input_version", empty["value"])
         self.assertEqual(empty["value"]["loop_count"], 0)
         self.assertEqual(empty["value"]["top_loops"], [])
         self.assertEqual(empty["value"]["omitted_loop_count"], 0)
@@ -1634,6 +1636,15 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("Does this let the bond shape Maez's attention", memo)
         self.assertIn("Open-loop diagnostic IDs must be content-free", adr)
         self.assertIn("changing hash basis requires ADR", adr)
+
+    def test_x21_slice_memo_pins_loop_id_basis_rename(self):
+        path = _REPO / "docs" / "SLICE_X21_OPEN_LOOP_VERSION_RENAME_MEMO.md"
+        text = path.read_text(encoding="utf-8")
+
+        self.assertIn("loop_id_basis_version", text)
+        self.assertIn("hash_input_version", text)
+        self.assertIn("2046", text)
+        self.assertIn("Predicted Effect", text)
 
     def test_x11_slice_memo_pins_replay_hardening_contract(self):
         path = _REPO / "docs" / "SLICE_X11_ANTICIPATION_REPLAY_HARDENING_MEMO.md"

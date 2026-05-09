@@ -150,7 +150,7 @@ autoincrement values, or text hashes. Hash collisions fail closed with
 an error record; they must never silently merge loops.
 
 Each emitted open-loops value carries `registry_schema_version` and
-`hash_input_version`. Each emitted loop entry carries `prior_loop_ids`,
+`loop_id_basis_version`. Each emitted loop entry carries `prior_loop_ids`,
 `loop_origin`, and `provenance_status`. `loop_origin` distinguishes
 `maez_first_person` from `project_doc`; `provenance_status` starts as
 `live` but reserves `rot_suspected`, `unreachable`, and `archived` so

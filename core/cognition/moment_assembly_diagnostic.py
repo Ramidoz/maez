@@ -63,7 +63,7 @@ CANDIDATE_SOURCE_NAMES = (
 TOPOLOGY_NAMES = ("euclidean", "poincare")
 ORGAN_SCHEMA_VERSION = 1
 OPEN_LOOP_REGISTRY_SCHEMA_VERSION = 1
-OPEN_LOOP_HASH_INPUT_VERSION = 1
+OPEN_LOOP_ID_BASIS_VERSION = 1
 OPEN_LOOP_HASH_INPUT_PREFIX = "x2.open_loop.v1|episode:"
 OPEN_LOOP_AGE_BUCKET_CUTOFF_VERSION = 1
 OPEN_LOOP_AGE_HYSTERESIS_DAYS = 0.25
@@ -528,7 +528,7 @@ def _validate_open_loops_value(value: Any, source_ids: list[str]) -> None:
         raise ValueError("open_loops value must be an object")
     required = {
         "registry_schema_version",
-        "hash_input_version",
+        "loop_id_basis_version",
         "observed_at_wall_clock",
         "loop_count",
         "top_loops",
@@ -542,8 +542,8 @@ def _validate_open_loops_value(value: Any, source_ids: list[str]) -> None:
         raise ValueError(f"open_loops value missing required field(s): {missing!r}")
     if value["registry_schema_version"] != OPEN_LOOP_REGISTRY_SCHEMA_VERSION:
         raise ValueError("open_loops registry_schema_version drifted")
-    if value["hash_input_version"] != OPEN_LOOP_HASH_INPUT_VERSION:
-        raise ValueError("open_loops hash_input_version drifted")
+    if value["loop_id_basis_version"] != OPEN_LOOP_ID_BASIS_VERSION:
+        raise ValueError("open_loops loop_id_basis_version drifted")
     _parse_iso8601(
         str(value["observed_at_wall_clock"]),
         field_name="open_loops.observed_at_wall_clock",
@@ -760,7 +760,7 @@ def build_open_loops_slot(
     selected = entries[:max_loops]
     value = {
         "registry_schema_version": OPEN_LOOP_REGISTRY_SCHEMA_VERSION,
-        "hash_input_version": OPEN_LOOP_HASH_INPUT_VERSION,
+        "loop_id_basis_version": OPEN_LOOP_ID_BASIS_VERSION,
         "observed_at_wall_clock": observed,
         "loop_count": len(entries),
         "top_loops": selected,
