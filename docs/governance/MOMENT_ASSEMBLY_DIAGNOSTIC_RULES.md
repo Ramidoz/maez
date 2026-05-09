@@ -42,7 +42,9 @@ The distinction is load-bearing:
 
 Retired pressure variables or candidate sources must be marked
 deprecated for one schema version, then dropped. Retirement requires an
-ADR.
+ADR. Deprecated slots must carry `deprecation_reason` from this bounded
+vocabulary: `superseded`, `obsolete`, `consolidated`, `retired_for_audit`,
+or `retired_for_clarity`.
 
 ## Per-Organ Schemas
 
@@ -82,6 +84,20 @@ Slice X.1, emitted records should carry both `surprise_delta` and a
 precision field for active-inference precision-weighting on prediction
 errors. X.0 reserves the slot; X.1 defines the organ schema.
 
+## Workspace Selection
+
+When workspace selection emits a value, `workspace_selection.value`
+should include `selected_candidate_ids` and `rejection_reasons`. Rejection
+reasons are diagnostic interpretation only; they are not audit evidence
+and must cite candidate ids rather than inventing factual claims.
+
+## Bypass Auto-Fire Prerequisite
+
+Before Slice X.1 or any non-probe wiring can ship, a turn-completion hook
+must call `write_bypassed_record` when a turn completes without an
+observed diagnostic. The required test shape is: diagnostic JSONL gains a
+row per turn whether the assembly path is `observed` or `bypassed`.
+
 ## Storage Lifecycle
 
 Diagnostics write to `logs/moment_assembly_diagnostic.jsonl` as
@@ -95,4 +111,7 @@ The future read shape is a bounded query over diagnostic records that
 returns record id, created_at, surface, source_ids, audit_boundary,
 pressure_vector, pressure_delta, candidate_sources, workspace_selection,
 topology slots, and decoder_note. The read API is not implemented in X.0.
-ADR required to open production or operator read paths.
+ADR required to open production or operator read paths. Any future ADR
+that opens this read API must include query-log rotation with the same
+size-threshold, archival-cadence, and sha256-manifest discipline as the
+diagnostic JSONL itself.

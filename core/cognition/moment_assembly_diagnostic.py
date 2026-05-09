@@ -49,6 +49,15 @@ CANDIDATE_SOURCE_NAMES = (
 )
 TOPOLOGY_NAMES = ("euclidean", "poincare")
 ORGAN_SCHEMA_VERSION = 1
+DEPRECATION_REASONS = frozenset(
+    {
+        "superseded",
+        "obsolete",
+        "consolidated",
+        "retired_for_audit",
+        "retired_for_clarity",
+    }
+)
 
 
 class DiagnosticState(StrEnum):
@@ -102,6 +111,7 @@ def build_slot(
     schema_version: int = ORGAN_SCHEMA_VERSION,
     error_class: str = "",
     deprecated_at_schema_version: int | None = None,
+    deprecation_reason: str = "",
 ) -> dict[str, Any]:
     try:
         state_value = DiagnosticState(state).value
@@ -117,6 +127,8 @@ def build_slot(
         slot["error_class"] = error_class
     if deprecated_at_schema_version is not None:
         slot["deprecated_at_schema_version"] = deprecated_at_schema_version
+    if deprecation_reason:
+        slot["deprecation_reason"] = deprecation_reason
     validate_slot("slot", slot)
     return slot
 
@@ -155,6 +167,11 @@ def validate_slot(name: str, slot: dict[str, Any]) -> None:
             raise ValueError(f"{name}: deprecated requires empty source_ids")
         if "deprecated_at_schema_version" not in slot:
             raise ValueError(f"{name}: deprecated requires deprecated_at_schema_version")
+        reason = slot.get("deprecation_reason")
+        if not reason:
+            raise ValueError(f"{name}: deprecated requires deprecation_reason")
+        if reason not in DEPRECATION_REASONS:
+            raise ValueError(f"{name}: unknown deprecation_reason {reason!r}")
 
 
 def _default_slot(state: DiagnosticState = DiagnosticState.NOT_IMPLEMENTED) -> dict[str, Any]:

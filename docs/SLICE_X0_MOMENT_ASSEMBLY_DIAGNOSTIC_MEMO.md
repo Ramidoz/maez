@@ -24,6 +24,10 @@ source ids, per-organ schema versions, explicit missing-organ states,
 pressure deltas, and a decoder note pinned to `ARCHITECTURAL_THESIS.md`
 by SHA-256.
 
+The coordination axis is intentionally omitted from the X.0 candidate-source list;
+`MOMENT_ASSEMBLY_DIAGNOSTIC_RULES.md` pins that it becomes relevant only
+at the multi-Maez beta phase per ADR 0005 and ADR 0006.
+
 ## Thesis Question
 
 Does this let the bond shape Maez's attention without corrupting what Maez knows to be true?

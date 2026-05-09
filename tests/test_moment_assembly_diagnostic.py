@@ -146,11 +146,35 @@ class MomentAssemblyRecordTests(unittest.TestCase):
             build_slot("not_implemented", value=None, source_ids=["turn-1"])
         with self.assertRaisesRegex(ValueError, "source_ids"):
             build_slot("emitted_value", value={"x": 1}, source_ids=[])
+        with self.assertRaisesRegex(ValueError, "deprecation_reason"):
+            build_slot(
+                "deprecated",
+                value=None,
+                source_ids=[],
+                deprecated_at_schema_version=2,
+            )
+        with self.assertRaisesRegex(ValueError, "unknown deprecation_reason"):
+            build_slot(
+                "deprecated",
+                value=None,
+                source_ids=[],
+                deprecated_at_schema_version=2,
+                deprecation_reason="because",
+            )
 
         slot = build_slot("emitted_value", value=None, source_ids=["turn-1"])
         self.assertEqual(slot["state"], "emitted_value")
         self.assertIsNone(slot["value"])
         self.assertEqual(slot["source_ids"], ["turn-1"])
+
+        deprecated = build_slot(
+            "deprecated",
+            value=None,
+            source_ids=[],
+            deprecated_at_schema_version=2,
+            deprecation_reason="superseded",
+        )
+        self.assertEqual(deprecated["deprecation_reason"], "superseded")
 
     def test_per_organ_schema_versions_must_match_contributing_map(self):
         from core.cognition.moment_assembly_diagnostic import (
@@ -305,6 +329,11 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("precision", text)
         self.assertIn("sha256 manifest", text)
         self.assertIn("ADR required to open", text)
+        self.assertIn("deprecation_reason", text)
+        self.assertIn("query-log rotation", text)
+        self.assertIn("rejection_reasons", text)
+        self.assertIn("turn-completion hook", text)
+        self.assertIn("write_bypassed_record", text)
 
     def test_slice_memo_answers_thesis_question(self):
         path = _REPO / "docs" / "SLICE_X0_MOMENT_ASSEMBLY_DIAGNOSTIC_MEMO.md"
@@ -317,6 +346,7 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("separate JSONL", text)
         self.assertIn("not_audit_evidence", text)
         self.assertIn("no production code path reads", text)
+        self.assertIn("coordination", text)
 
 
 if __name__ == "__main__":
