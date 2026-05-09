@@ -183,6 +183,12 @@ class RecallActivationDocsTests(unittest.TestCase):
         self.assertIn("at most one activation decision per recall", text)
         self.assertIn("Forbidden Activation Shapes", text)
         self.assertIn("Any change to the three-field ActivationDecision lock requires an ADR", text)
+        self.assertIn("_emit(shape, **fields)", text)
+        self.assertIn("validates per-shape required keys", text)
+        self.assertIn("runtime vocabulary lock", text)
+        self.assertIn("recall_activation_config.py may not import recall_activation", text)
+        self.assertIn("warm-path rehearsal", text)
+        self.assertIn("log the toggle's exact identifier", text)
         self.assertNotIn("continuity_marker", text)
 
 

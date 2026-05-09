@@ -339,6 +339,28 @@ path consumes projection:
   with an explicit `--reason`
 - process startup must log activation-disabled state at WARN level when
   `MAEZ_PROJECTION_ACTIVATION_ENABLED` is not explicitly enabled
+- activation logging must use an `_emit(shape, **fields)` helper that
+  asserts the shape is one of the locked activation log shapes and
+  validates per-shape required keys. The helper must cover at least
+  `disabled`, `declined`, and `decided`; the `decided` shape must carry
+  the selected `candidate_id`, `ordering_bump`, and
+  `recall_continuity_hint`, while `declined` must carry a refusal reason.
+- activation must enforce a runtime vocabulary lock for
+  `recall_continuity_hint`, proving that the hint came from the
+  `ProjectionCandidate.continuity_key` namespace rather than arbitrary
+  prose.
+- `core/memory/recall_activation_config.py` is a configuration gateway,
+  not an activation consumer. It may not import `recall_activation`
+  symbols or transitively invoke `decide_activation`; an AST guard must
+  pin this before activation lands.
+  In short: `recall_activation_config.py may not import recall_activation`.
+- activation tests must include warm-path rehearsal while production is
+  cold: a periodic CI exercise that constructs the hypothetical warm
+  decision path, validates the disabled/declined/decided log contract,
+  and proves cold production semantics still return no decision until
+  the activation slice explicitly enables the path.
+- future kill switches must log the toggle's exact identifier verbatim
+  in WARN-level disabled-state logs, not only the current state.
 
 ## Forbidden Rule Shapes
 
