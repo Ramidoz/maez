@@ -1035,7 +1035,7 @@ class DecisionPipeline:
                 card=fresh,
             )
         # Enrich params for actions whose handlers need the surrounding
-        # card metadata (request_id / reason / plain_english). The
+        # card metadata (request_id / reason / proposed summary). The
         # default _execute_action contract passes only card.action +
         # card.params, which loses metadata that lives on the card
         # row itself. capability.acquire's handler stores
@@ -1048,8 +1048,12 @@ class DecisionPipeline:
             execute_params.setdefault("card_request_id", card.request_id)
             if card.reason is not None:
                 execute_params.setdefault("reason", card.reason)
-            if card.plain_english is not None:
-                execute_params.setdefault("plain_english", card.plain_english)
+            summary = card.proposed_action_summary or card.plain_english
+            if summary is not None:
+                # The capability queue still stores this under its
+                # legacy column name. The pending-card row now keeps
+                # the truth-boundary split as proposed_action_summary.
+                execute_params.setdefault("plain_english", summary)
         try:
             result = self.action_engine._execute_action(
                 card.action, execute_params,

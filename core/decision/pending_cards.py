@@ -57,6 +57,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import sqlite3
 import time
@@ -124,6 +125,8 @@ CREATE TABLE IF NOT EXISTS pending_cards (
     params_json             TEXT    NOT NULL,
     reason                  TEXT,
     plain_english           TEXT,
+    proposed_action_summary TEXT,
+    completed_action_summary TEXT,
 
     audit_decision          TEXT,
     audit_confidence        REAL,
@@ -199,6 +202,8 @@ class CardRecord:
     params: dict
     reason: Optional[str] = None
     plain_english: Optional[str] = None
+    proposed_action_summary: Optional[str] = None
+    completed_action_summary: Optional[str] = None
 
     audit_decision: Optional[str] = None
     audit_confidence: float = 0.0
@@ -262,6 +267,16 @@ def _row_to_record(row: sqlite3.Row) -> CardRecord:
         params=_loads(row["params_json"], {}),
         reason=row["reason"],
         plain_english=row["plain_english"] if "plain_english" in row.keys() else None,
+        proposed_action_summary=(
+            row["proposed_action_summary"]
+            if "proposed_action_summary" in row.keys()
+            else None
+        ),
+        completed_action_summary=(
+            row["completed_action_summary"]
+            if "completed_action_summary" in row.keys()
+            else None
+        ),
         audit_decision=row["audit_decision"],
         audit_confidence=row["audit_confidence"] or 0.0,
         audit_reasoning=row["audit_reasoning"] or "",
@@ -300,6 +315,33 @@ class CardStoreError(RuntimeError):
     pass
 
 
+_COMPLETED_SUMMARY_RE = re.compile(
+    r"^\s*(?:"
+    r"created|wrote|sent|deleted|marked|removed|completed|done|finished|"
+    r"installed|updated|changed|modified|renamed|moved|copied|saved"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_optional_summary(summary: Optional[str]) -> Optional[str]:
+    if summary is None:
+        return None
+    text = str(summary).strip()
+    return text or None
+
+
+def _validate_proposed_action_summary(summary: Optional[str]) -> None:
+    """Pending cards must describe proposed action, not completed events."""
+    if summary is None:
+        return
+    if _COMPLETED_SUMMARY_RE.search(summary):
+        raise CardStoreError(
+            "proposed_action_summary must describe a proposed action, "
+            "not a completed event",
+        )
+
+
 class PendingCardStore:
     """SQLite-backed store of outstanding approval cards."""
 
@@ -310,6 +352,18 @@ class PendingCardStore:
             conn.executescript(_SCHEMA)
             try:
                 conn.execute("ALTER TABLE pending_cards ADD COLUMN plain_english TEXT")
+            except Exception:
+                pass  # column already exists
+            try:
+                conn.execute(
+                    "ALTER TABLE pending_cards ADD COLUMN proposed_action_summary TEXT"
+                )
+            except Exception:
+                pass  # column already exists
+            try:
+                conn.execute(
+                    "ALTER TABLE pending_cards ADD COLUMN completed_action_summary TEXT"
+                )
             except Exception:
                 pass  # column already exists
 
@@ -329,6 +383,8 @@ class PendingCardStore:
         params: dict,
         reason: Optional[str] = None,
         plain_english: Optional[str] = None,
+        proposed_action_summary: Optional[str] = None,
+        completed_action_summary: Optional[str] = None,
         audit_verdict: Any = None,
         audit_request_id: Optional[str] = None,
         classification: Any = None,
@@ -340,6 +396,23 @@ class PendingCardStore:
         request_id = secrets.token_hex(12)
         now = time.time()
         state_hash = compute_state_hash(state_fields)
+        proposed_action_summary = _normalize_optional_summary(
+            proposed_action_summary
+        )
+        plain_english = _normalize_optional_summary(plain_english)
+        completed_action_summary = _normalize_optional_summary(
+            completed_action_summary
+        )
+        if proposed_action_summary is None:
+            proposed_action_summary = plain_english
+        _validate_proposed_action_summary(proposed_action_summary)
+        if completed_action_summary is not None:
+            raise CardStoreError(
+                "completed_action_summary can only be set when a card finishes"
+            )
+        # plain_english is a legacy input alias. New records write the
+        # purpose-specific proposed_action_summary field instead.
+        plain_english = None
 
         # Pull classification
         if classification is None:
@@ -409,6 +482,7 @@ class PendingCardStore:
                 INSERT INTO pending_cards (
                     request_id, created_at, updated_at, status,
                     action, params_json, reason, plain_english,
+                    proposed_action_summary, completed_action_summary,
                     audit_decision, audit_confidence, audit_reasoning,
                     audit_concerns_json, audit_mitigations_json,
                     audit_summary, audit_answers_json, audit_request_id,
@@ -418,7 +492,7 @@ class PendingCardStore:
                     remind_at, defer_reason, defer_count
                 ) VALUES (
                     ?, ?, ?, ?,
-                    ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?,
                     ?, ?, ?,
                     ?, ?,
                     ?, ?, ?,
@@ -430,7 +504,12 @@ class PendingCardStore:
                 """,
                 (
                     request_id, now, now, CardStatus.OPEN.value,
-                    action, json.dumps(params or {}), reason, plain_english,
+                    action,
+                    json.dumps(params or {}),
+                    reason,
+                    plain_english,
+                    proposed_action_summary,
+                    None,
                     audit_decision, audit_confidence, audit_reasoning,
                     json.dumps(concerns), json.dumps(mitigations),
                     summary, json.dumps(answers), audit_request_id,
@@ -727,7 +806,15 @@ class PendingCardStore:
             extras={"executed_at": time.time()},
         )
 
-    def mark_done(self, request_id: str, output: str = "") -> CardRecord:
+    def mark_done(
+        self,
+        request_id: str,
+        output: str = "",
+        completed_action_summary: Optional[str] = None,
+    ) -> CardRecord:
+        completed_action_summary = _normalize_optional_summary(
+            completed_action_summary
+        )
         return self._transition(
             request_id,
             CardStatus.DONE.value,
@@ -735,6 +822,7 @@ class PendingCardStore:
             extras={
                 "execution_success": 1,
                 "execution_output": output,
+                "completed_action_summary": completed_action_summary,
             },
         )
 

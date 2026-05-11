@@ -102,5 +102,150 @@ class StateGuardForEmptySentinel(unittest.TestCase):
         self.assertEqual(result.status, "approved")
 
 
+class PendingCardTruthBoundary(unittest.TestCase):
+    """Pending cards describe proposed actions, never completed events."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        from core.pending_cards import PendingCardStore
+        self.store = PendingCardStore(
+            db_path=Path(self._tmp.name) / "pc.db",
+        )
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_create_card_rejects_completed_language_for_pending_summary(self):
+        from core.pending_cards import CardStoreError
+
+        for summary in (
+            "Created a text file named 'Hi Rohit.txt'.",
+            "Wrote the note to disk.",
+            "Deleted the cache.",
+            "Removed the old file.",
+            "Completed the setup.",
+            "Done: created the file.",
+        ):
+            with self.subTest(summary=summary):
+                with self.assertRaisesRegex(CardStoreError, "proposed_action_summary"):
+                    self.store.create_card(
+                        action="write_any_file",
+                        params={"path": "/tmp/hi.txt", "content": "hi"},
+                        reason="truth-boundary regression",
+                        proposed_action_summary=summary,
+                    )
+
+    def test_create_card_stores_proposed_summary_separate_from_legacy_plain_english(self):
+        card = self.store.create_card(
+            action="write_any_file",
+            params={"path": "/tmp/hi.txt", "content": "hi"},
+            reason="truth-boundary regression",
+            proposed_action_summary="Write a text file named 'hi.txt'.",
+        )
+
+        self.assertEqual(
+            card.proposed_action_summary,
+            "Write a text file named 'hi.txt'.",
+        )
+        self.assertIsNone(card.completed_action_summary)
+        self.assertIsNone(card.plain_english)
+
+    def test_legacy_plain_english_is_treated_as_proposed_summary_and_validated(self):
+        from core.pending_cards import CardStoreError
+
+        with self.assertRaisesRegex(CardStoreError, "proposed_action_summary"):
+            self.store.create_card(
+                action="write_any_file",
+                params={"path": "/tmp/hi.txt", "content": "hi"},
+                reason="legacy bad phrasing",
+                plain_english="Created a text file named 'hi.txt'.",
+            )
+
+        card = self.store.create_card(
+            action="write_any_file",
+            params={"path": "/tmp/hi.txt", "content": "hi"},
+            reason="legacy good phrasing",
+            plain_english="Write a text file named 'hi.txt'.",
+        )
+        self.assertEqual(
+            card.proposed_action_summary,
+            "Write a text file named 'hi.txt'.",
+        )
+
+    def test_completed_summary_can_only_be_written_when_card_finishes(self):
+        from core.pending_cards import CardStoreError
+
+        with self.assertRaisesRegex(CardStoreError, "completed_action_summary"):
+            self.store.create_card(
+                action="write_any_file",
+                params={"path": "/tmp/hi.txt", "content": "hi"},
+                reason="truth-boundary regression",
+                proposed_action_summary="Write a text file named 'hi.txt'.",
+                completed_action_summary="Wrote a text file named 'hi.txt'.",
+            )
+
+        card = self.store.create_card(
+            action="write_any_file",
+            params={"path": "/tmp/hi.txt", "content": "hi"},
+            reason="truth-boundary regression",
+            proposed_action_summary="Write a text file named 'hi.txt'.",
+        )
+        approved = self.store.approve(card.request_id, user_id="test", via="unit")
+        self.store.mark_running(approved.request_id)
+        done = self.store.mark_done(
+            approved.request_id,
+            output="Written: /tmp/hi.txt (2 chars)",
+            completed_action_summary="Wrote a text file named 'hi.txt'.",
+        )
+
+        self.assertEqual(done.status, "done")
+        self.assertEqual(
+            done.completed_action_summary,
+            "Wrote a text file named 'hi.txt'.",
+        )
+        self.assertEqual(
+            done.proposed_action_summary,
+            "Write a text file named 'hi.txt'.",
+        )
+
+    def test_renderer_uses_proposed_summary_for_pending_card(self):
+        from skills.approval_card import format_card_text
+
+        card = self.store.create_card(
+            action="write_any_file",
+            params={"path": "/tmp/hi.txt", "content": "hi"},
+            reason="truth-boundary regression",
+            proposed_action_summary="Write a text file named 'hi.txt'.",
+        )
+
+        rendered = format_card_text(card)
+
+        self.assertIn("Write a text file named 'hi.txt'.", rendered)
+        self.assertNotIn("Wrote a text file", rendered)
+        self.assertNotIn("Created a text file", rendered)
+
+    def test_resolution_uses_completed_summary_after_execution(self):
+        from skills.approval_card import format_resolution_text
+
+        card = self.store.create_card(
+            action="write_any_file",
+            params={"path": "/tmp/hi.txt", "content": "hi"},
+            reason="truth-boundary regression",
+            proposed_action_summary="Write a text file named 'hi.txt'.",
+        )
+        approved = self.store.approve(card.request_id, user_id="test", via="unit")
+        self.store.mark_running(approved.request_id)
+        done = self.store.mark_done(
+            approved.request_id,
+            output="Written: /tmp/hi.txt (2 chars)",
+            completed_action_summary="Wrote a text file named 'hi.txt'.",
+        )
+
+        rendered = format_resolution_text(done)
+
+        self.assertIn("Wrote a text file named 'hi.txt'.", rendered)
+        self.assertIn("Written: /tmp/hi.txt", rendered)
+
+
 if __name__ == "__main__":
     unittest.main()

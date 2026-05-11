@@ -609,7 +609,7 @@ class TestProposalIdPropagatesThroughCardPayload(unittest.TestCase):
 class TestRealApprovalPathEnrichesParams(unittest.TestCase):
     """Patch (the load-bearing one): DecisionPipeline._on_approve
     calls action_engine._execute_action(card.action, card.params,
-    ...) — dropping card.reason / card.plain_english /
+    ...) — dropping card.reason / proposed summary /
     card.request_id. Real-card approvals would land queue rows
     missing those fields. Patch must enrich params for
     capability.acquire before execution."""
@@ -624,7 +624,7 @@ class TestRealApprovalPathEnrichesParams(unittest.TestCase):
 
         # Build a CardRecord that mimics one created from a real
         # proposal — params lacks card_request_id / reason /
-        # plain_english (those live on the card row itself).
+        # proposed_action_summary (those live on the card row itself).
         with tempfile.TemporaryDirectory() as td:
             q_path = Path(td) / "queue.db"
             params_only = {
@@ -643,7 +643,7 @@ class TestRealApprovalPathEnrichesParams(unittest.TestCase):
                 action="capability.acquire",
                 params=params_only,
                 reason="operator-driven gap match: 'test query'",
-                plain_english="Test plain english from card.",
+                proposed_action_summary="Test proposed summary from card.",
             )
 
             # Fake card_store + audit_log so DecisionPipeline can
@@ -703,8 +703,8 @@ class TestRealApprovalPathEnrichesParams(unittest.TestCase):
             "card.reason must propagate into queue row",
         )
         self.assertEqual(
-            row["plain_english"], "Test plain english from card.",
-            "card.plain_english must propagate into queue row",
+            row["plain_english"], "Test proposed summary from card.",
+            "card.proposed_action_summary must propagate into queue row",
         )
 
 

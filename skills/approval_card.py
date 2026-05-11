@@ -70,6 +70,10 @@ def _truncate(s: str, limit: int) -> str:
 
 def _infer_what(card: CardRecord) -> str:
     """Plain-English description of what this action does."""
+    proposed = getattr(card, "proposed_action_summary", None)
+    if proposed:
+        return str(proposed).strip()
+
     plain = getattr(card, "plain_english", None)
     if plain:
         return str(plain).strip()
@@ -181,6 +185,10 @@ def format_resolution_text(card: CardRecord) -> str:
     to the original card message so it threads cleanly."""
     if card.status == CardStatus.DONE.value:
         out = _truncate(card.execution_output or "", 400)
+        completed = getattr(card, "completed_action_summary", None)
+        if completed:
+            header = f"✅ {str(completed).strip()}"
+            return f"{header}\n```\n{out}\n```" if out else header
         # Enriched user-facing reply for run_shell. The 2026-04-20
         # Telegram conversation surfaced this: a `systemctl is-active`
         # auto-execute rendered as bare `✅ Done.\n```\nactive\n```` —
