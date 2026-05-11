@@ -16,8 +16,6 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 
-import chromadb
-from chromadb.config import Settings
 from core.llm_client import sanitize_prompt_text
 from core.birth import memory_phase_tag as _memory_phase_tag
 
@@ -425,7 +423,13 @@ def _consolidate_with_chunking(*, memory_texts: list[str], soul: str,
     return final or sub_summaries[-1]
 
 
-def _make_client(subdir: str) -> chromadb.PersistentClient:
+def _make_client(subdir: str):
+    # Chroma loads native/vector dependencies and has segfaulted during
+    # daemon import in subprocess tests. Keep it behind the actual client
+    # construction boundary so importing daemon constants stays safe.
+    import chromadb
+    from chromadb.config import Settings
+
     path = BASE_DB / subdir
     path.mkdir(parents=True, exist_ok=True)
     return chromadb.PersistentClient(

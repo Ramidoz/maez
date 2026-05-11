@@ -21,12 +21,9 @@ import threading
 import uuid
 from datetime import datetime
 
-import chromadb
-
 # 2026-04-23 Commit 7b: public-bot reply model now tracks the current
 # primary brain via /etc/maez/model.env, not a hardcoded "gemma4:26b".
 from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
-from chromadb.config import Settings
 from dotenv import load_dotenv
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
@@ -47,6 +44,12 @@ class UserProfileStore:
     """Per-user persistent memory. Completely separate from the owner's three-tier memory."""
 
     def __init__(self):
+        # Keep Chroma behind store construction. Importing the daemon
+        # should not load vector DB native dependencies before the
+        # public bot is actually started.
+        import chromadb
+        from chromadb.config import Settings
+
         self.client = chromadb.PersistentClient(
             str(_MAEZ_HOME_PATH / "memory" / "db" / "public_users"),
             settings=Settings(anonymized_telemetry=False),

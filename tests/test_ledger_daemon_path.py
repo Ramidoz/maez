@@ -49,6 +49,41 @@ def _read_daemon_ledger_path(env_extra: dict[str, str] | None = None) -> dict:
 
 
 class DaemonLedgerPathTests(unittest.TestCase):
+    def test_daemon_path_import_does_not_load_chromadb(self):
+        code = r"""
+import builtins
+import json
+
+_real_import = builtins.__import__
+
+
+def _guarded_import(name, *args, **kwargs):
+    if name == "chromadb" or name.startswith("chromadb."):
+        raise RuntimeError(f"unexpected chromadb import: {name}")
+    return _real_import(name, *args, **kwargs)
+
+
+builtins.__import__ = _guarded_import
+from daemon import maez_daemon as md
+print(json.dumps({"ledger": str(md.LEDGER_DB_PATH)}))
+"""
+        env = os.environ.copy()
+        env["MAEZ_TEST_MODE"] = "1"
+        res = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=str(REPO),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        self.assertEqual(
+            res.returncode,
+            0,
+            "daemon path import should not load Chroma/native vector DB "
+            f"dependencies\nstdout={res.stdout}\nstderr={res.stderr}",
+        )
+
     def test_default_ledger_path_is_memory_ledger_db(self):
         payload = _read_daemon_ledger_path()
         self.assertEqual(
