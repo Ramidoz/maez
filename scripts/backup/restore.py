@@ -143,7 +143,7 @@ def run_restore(
     # 2. Pre-restore snapshot of current state.
     rollback_path = _pre_restore_target(src_root, pre_restore_label)
     if src_root.exists():
-        shutil.copytree(src_root, rollback_path, symlinks=False,
+        shutil.copytree(src_root, rollback_path, symlinks=True,
                         dirs_exist_ok=False)
     else:
         rollback_path.mkdir(parents=True)
