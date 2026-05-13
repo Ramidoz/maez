@@ -36,17 +36,34 @@ logger = logging.getLogger("maez")
 
 try:
     from core.infra import paths as _paths
+
     TOKEN_PATH = str(_paths.config_dir() / "token.json")
     CREDS_PATH = str(_paths.config_dir() / "credentials.json")
 except Exception:
     from pathlib import Path as _Path
+
     _CFG_FALLBACK = _Path(__file__).resolve().parent.parent / "config"
     TOKEN_PATH = str(_CFG_FALLBACK / "token.json")
     CREDS_PATH = str(_CFG_FALLBACK / "credentials.json")
-SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
+SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
 LOOKAHEAD_HOURS = 8
 ALERT_MINUTES_BEFORE = [15, 5]
+INVALID_GRANT_BACKOFF_SECONDS = 60 * 60
+
+_credential_error: Optional[str] = None
+_invalid_grant_blocked_until: float = 0.0
+_invalid_grant_logged: bool = False
+
+
+def _is_invalid_grant_error(error: Exception) -> bool:
+    """Return True when Google OAuth reports a revoked/expired grant."""
+    if "invalid_grant" in str(error):
+        return True
+    for arg in getattr(error, "args", ()):
+        if isinstance(arg, dict) and arg.get("error") == "invalid_grant":
+            return True
+    return False
 
 
 @dataclass
@@ -77,7 +94,7 @@ class CalendarEvent:
         elif mins < 60:
             timing = f"in {int(mins)}m"
         else:
-            timing = f"in {mins/60:.1f}h"
+            timing = f"in {mins / 60:.1f}h"
         loc = f" @ {self.location}" if self.location else ""
         return f"  - {self.title}{loc} — {timing}"
 
@@ -131,6 +148,11 @@ class CalendarSnapshot:
 def _get_credentials() -> Optional[Any]:
     """Load and refresh OAuth2 credentials. Returns None if google-auth
     isn't installed or credentials are missing/invalid."""
+    global _credential_error, _invalid_grant_blocked_until, _invalid_grant_logged
+
+    if _invalid_grant_blocked_until and time.time() < _invalid_grant_blocked_until:
+        return None
+
     try:
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
@@ -143,6 +165,7 @@ def _get_credentials() -> Optional[Any]:
     try:
         if not os.path.exists(TOKEN_PATH):
             logger.error("Token not found at %s. Run auth flow first.", TOKEN_PATH)
+            _credential_error = "OAuth token unavailable"
             return None
 
         creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
@@ -150,60 +173,79 @@ def _get_credentials() -> Optional[Any]:
         if not creds.valid:
             if creds.expired and creds.refresh_token:
                 creds.refresh(Request())
-                with open(TOKEN_PATH, 'w') as f:
+                with open(TOKEN_PATH, "w") as f:
                     f.write(creds.to_json())
                 logger.debug("OAuth token refreshed")
             else:
                 logger.error("Credentials invalid and cannot be refreshed")
+                _credential_error = "OAuth credentials invalid and cannot be refreshed"
                 return None
 
+        _credential_error = None
+        _invalid_grant_blocked_until = 0.0
+        _invalid_grant_logged = False
         return creds
     except Exception as e:
+        if _is_invalid_grant_error(e):
+            _credential_error = "Google Calendar OAuth invalid_grant; reauthorization required"
+            _invalid_grant_blocked_until = time.time() + INVALID_GRANT_BACKOFF_SECONDS
+            if not _invalid_grant_logged:
+                logger.warning(_credential_error)
+                _invalid_grant_logged = True
+            return None
         logger.error("Credential error: %s", e)
+        _credential_error = "OAuth credential error"
         return None
 
 
 def _fetch_events(creds: Any) -> list:
     """Fetch upcoming events from Google Calendar API."""
     from googleapiclient.discovery import build
-    service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
+
+    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
 
     now = datetime.now(timezone.utc)
     time_min = now.isoformat()
     time_max = (now + timedelta(hours=LOOKAHEAD_HOURS)).isoformat()
 
-    result = service.events().list(
-        calendarId='primary',
-        timeMin=time_min,
-        timeMax=time_max,
-        singleEvents=True,
-        orderBy='startTime',
-        maxResults=20,
-    ).execute()
+    result = (
+        service.events()
+        .list(
+            calendarId="primary",
+            timeMin=time_min,
+            timeMax=time_max,
+            singleEvents=True,
+            orderBy="startTime",
+            maxResults=20,
+        )
+        .execute()
+    )
 
-    raw_events = result.get('items', [])
+    raw_events = result.get("items", [])
     events = []
 
     for item in raw_events:
         try:
-            start_raw = item['start'].get('dateTime', item['start'].get('date'))
-            end_raw = item['end'].get('dateTime', item['end'].get('date'))
+            start_raw = item["start"].get("dateTime", item["start"].get("date"))
+            end_raw = item["end"].get("dateTime", item["end"].get("date"))
 
-            if 'T' not in start_raw:
+            if "T" not in start_raw:
                 start_dt = datetime.fromisoformat(start_raw).replace(tzinfo=timezone.utc)
                 end_dt = datetime.fromisoformat(end_raw).replace(tzinfo=timezone.utc)
             else:
-                start_dt = datetime.fromisoformat(start_raw.replace('Z', '+00:00'))
-                end_dt = datetime.fromisoformat(end_raw.replace('Z', '+00:00'))
+                start_dt = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+                end_dt = datetime.fromisoformat(end_raw.replace("Z", "+00:00"))
 
-            events.append(CalendarEvent(
-                title=item.get('summary', 'Untitled'),
-                start_time=start_dt,
-                end_time=end_dt,
-                location=item.get('location', ''),
-                description=item.get('description', '')[:200],
-                event_id=item.get('id', ''),
-            ))
+            events.append(
+                CalendarEvent(
+                    title=item.get("summary", "Untitled"),
+                    start_time=start_dt,
+                    end_time=end_dt,
+                    location=item.get("location", ""),
+                    description=item.get("description", "")[:200],
+                    event_id=item.get("id", ""),
+                )
+            )
         except Exception as e:
             logger.debug("Skipping malformed event: %s", e)
             continue
@@ -213,11 +255,14 @@ def _fetch_events(creds: Any) -> list:
 
 def observe(force_refresh: bool = False) -> CalendarSnapshot:
     """Main entry point. Returns a CalendarSnapshot, never raises."""
-    global _cache, _cache_time
+    global _cache, _cache_time, _invalid_grant_blocked_until, _invalid_grant_logged
 
     now = time.time()
     if not force_refresh and _cache is not None and (now - _cache_time) < 300:
         return _cache
+    if force_refresh:
+        _invalid_grant_blocked_until = 0.0
+        _invalid_grant_logged = False
 
     # HttpError is imported lazily — same reason as the helpers above.
     # If googleapiclient isn't installed, _get_credentials() already
@@ -230,7 +275,10 @@ def observe(force_refresh: bool = False) -> CalendarSnapshot:
     try:
         creds = _get_credentials()
         if creds is None:
-            snap = CalendarSnapshot(success=False, error="OAuth credentials unavailable")
+            snap = CalendarSnapshot(
+                success=False,
+                error=_credential_error or "OAuth credentials unavailable",
+            )
         else:
             events = _fetch_events(creds)
             current = next((e for e in events if e.is_now), None)
@@ -273,8 +321,9 @@ def test():
     return snap.success
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import sys
+
     logging.basicConfig(level=logging.DEBUG)
     ok = test()
     sys.exit(0 if ok else 1)

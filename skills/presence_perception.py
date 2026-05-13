@@ -24,9 +24,11 @@ logger = logging.getLogger("maez")
 CAMERA_INDEX = 0
 try:
     from core.infra import paths as _paths
+
     _MODELS_DIR = _paths.models_dir()
 except Exception:
     from pathlib import Path as _Path
+
     _MODELS_DIR = _Path(__file__).resolve().parent.parent / "models"
 MODEL_PATH = str(_MODELS_DIR / "blaze_face.tflite")
 MIN_CONFIDENCE = 0.6
@@ -39,6 +41,22 @@ RECOGNITION_THRESHOLD = 0.55  # lower = stricter
 
 # Persistent face detector — initialized once, reused forever
 _detector = None
+_detection_error: Optional[str] = None
+_missing_dependency_logged: set[str] = set()
+
+
+def _mark_detection_unavailable(reason: str, dependency: Optional[str] = None) -> tuple:
+    """Record a sensor/dependency failure without converting it into absence."""
+    global _detection_error
+    _detection_error = reason
+    if dependency is not None:
+        if dependency not in _missing_dependency_logged:
+            logger.warning("Presence detection disabled: %s", reason)
+            _missing_dependency_logged.add(dependency)
+    else:
+        logger.warning("Presence detection unavailable: %s", reason)
+    return 0, 0.0, "unknown"
+
 
 def _get_detector():
     """Initialize MediaPipe face detector once and reuse."""
@@ -48,6 +66,7 @@ def _get_detector():
     try:
         from mediapipe.tasks import python as mp_python
         from mediapipe.tasks.python import vision as mp_vision
+
         base_options = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
         options = mp_vision.FaceDetectorOptions(
             base_options=base_options,
@@ -63,12 +82,12 @@ def _get_detector():
 
 # Module-level state
 _presence_state = {
-    'present': False,
-    'session_start': None,
-    'absent_since': None,
-    'last_seen': None,
-    'total_sessions_today': 0,
-    'person': 'unknown',
+    "present": False,
+    "session_start": None,
+    "absent_since": None,
+    "last_seen": None,
+    "total_sessions_today": 0,
+    "person": "unknown",
 }
 
 _enrollment = None
@@ -85,10 +104,13 @@ def _load_enrollment():
         logger.info("No face enrollment found — detection only, no recognition")
         return None
     try:
-        with open(ENROLLMENT_PATH, 'rb') as f:
+        with open(ENROLLMENT_PATH, "rb") as f:
             _enrollment = pickle.load(f)
-        logger.info("Face enrollment loaded: %s, %d reference frames",
-                     _enrollment['name'], _enrollment['frame_count'])
+        logger.info(
+            "Face enrollment loaded: %s, %d reference frames",
+            _enrollment["name"],
+            _enrollment["frame_count"],
+        )
         return _enrollment
     except Exception as e:
         logger.error("Failed to load enrollment: %s", e)
@@ -131,7 +153,7 @@ class PresenceSnapshot:
             elif mins < 60:
                 return f"[PRESENCE] {who} at desk — {int(mins)} minutes."
             else:
-                return f"[PRESENCE] {who} at desk — {mins/60:.1f} hours."
+                return f"[PRESENCE] {who} at desk — {mins / 60:.1f} hours."
         else:
             if self.absent_minutes < 2:
                 return "[PRESENCE] the owner stepped away briefly."
@@ -154,23 +176,35 @@ def _detect_and_recognize() -> tuple:
     Open camera, detect faces with MediaPipe, recognize with face_recognition.
     Returns (detection_count, max_confidence, person_identified).
     """
+    global _detection_error
+    _detection_error = None
     try:
-        import cv2
-        import mediapipe as mp
+        try:
+            import cv2
+        except Exception as e:
+            return _mark_detection_unavailable(f"cv2 unavailable: {e}", "cv2")
+        try:
+            import mediapipe as mp
+        except Exception as e:
+            return _mark_detection_unavailable(
+                f"mediapipe unavailable: {e}",
+                "mediapipe",
+            )
 
         if not os.path.exists(MODEL_PATH):
-            return 0, 0.0, "unknown"
+            return _mark_detection_unavailable(
+                f"face detection model unavailable: {MODEL_PATH}",
+                "blaze_face_model",
+            )
 
         # Use persistent detector — initialized once at module level
         detector = _get_detector()
         if detector is None:
-            return 0, 0.0, "unknown"
-
+            return _mark_detection_unavailable("face detector failed to initialize")
 
         cap = cv2.VideoCapture(CAMERA_INDEX)
         if not cap.isOpened():
-            logger.warning("Camera %d not available", CAMERA_INDEX)
-            return 0, 0.0, "unknown"
+            return _mark_detection_unavailable(f"camera {CAMERA_INDEX} not available")
 
         detections = 0
         max_conf = 0.0
@@ -201,30 +235,28 @@ def _detect_and_recognize() -> tuple:
             if enrollment is not None:
                 try:
                     import face_recognition as fr
-                    locations = fr.face_locations(best_rgb, model='hog')
+
+                    locations = fr.face_locations(best_rgb, model="hog")
                     if locations:
                         encodings = fr.face_encodings(best_rgb, locations)
                         if encodings:
                             distances = fr.face_distance(
-                                [enrollment['mean_embedding']], encodings[0]
+                                [enrollment["mean_embedding"]], encodings[0]
                             )
                             distance = distances[0]
                             if distance < RECOGNITION_THRESHOLD:
-                                person = enrollment['name']
-                                logger.debug("Recognized: %s (distance=%.3f)",
-                                             person, distance)
+                                person = enrollment["name"]
+                                logger.debug("Recognized: %s (distance=%.3f)", person, distance)
                             else:
                                 person = "stranger"
-                                logger.debug("Unrecognized face (distance=%.3f)",
-                                             distance)
+                                logger.debug("Unrecognized face (distance=%.3f)", distance)
                 except Exception as e:
                     logger.debug("Recognition error: %s", e)
 
         return detections, max_conf, person
 
     except Exception as e:
-        logger.debug("Face detection error: %s", e)
-        return 0, 0.0, "unknown"
+        return _mark_detection_unavailable(f"face detection error: {e}")
 
 
 def observe() -> PresenceSnapshot:
@@ -233,10 +265,23 @@ def observe() -> PresenceSnapshot:
 
     try:
         detections, confidence, person = _detect_and_recognize()
+        if _detection_error is not None:
+            return PresenceSnapshot(
+                rohit_present=False,
+                confidence=0.0,
+                session_minutes=0.0,
+                absent_minutes=0.0,
+                just_arrived=False,
+                just_left=False,
+                person_identified="unknown",
+                success=False,
+                error=_detection_error,
+            )
+
         present_now = detections >= PRESENCE_THRESHOLD
         now = time.time()
 
-        prev_present = _presence_state['present']
+        prev_present = _presence_state["present"]
 
         # Only count as "arrived" if it's the owner or unknown (no enrollment)
         is_rohit = person in ("the owner", "unknown")
@@ -244,48 +289,57 @@ def observe() -> PresenceSnapshot:
         just_left = not present_now and prev_present
 
         if just_arrived:
-            _presence_state['session_start'] = now
-            _presence_state['absent_since'] = None
-            _presence_state['total_sessions_today'] += 1
+            _presence_state["session_start"] = now
+            _presence_state["absent_since"] = None
+            _presence_state["total_sessions_today"] += 1
             logger.info("the owner arrived at desk")
         elif present_now and not prev_present and person == "stranger":
             logger.info("Stranger detected at desk")
         elif just_left:
-            _presence_state['absent_since'] = now
-            _presence_state['session_start'] = None
+            _presence_state["absent_since"] = now
+            _presence_state["session_start"] = None
             logger.info("the owner left desk")
 
         if present_now:
-            _presence_state['last_seen'] = now
-        _presence_state['present'] = present_now
-        _presence_state['person'] = person
+            _presence_state["last_seen"] = now
+        _presence_state["present"] = present_now
+        _presence_state["person"] = person
 
         session_mins = 0.0
         absent_mins = 0.0
-        if present_now and _presence_state['session_start']:
-            session_mins = (now - _presence_state['session_start']) / 60
-        if not present_now and _presence_state['absent_since']:
-            absent_mins = (now - _presence_state['absent_since']) / 60
+        if present_now and _presence_state["session_start"]:
+            session_mins = (now - _presence_state["session_start"]) / 60
+        if not present_now and _presence_state["absent_since"]:
+            absent_mins = (now - _presence_state["absent_since"]) / 60
 
         return PresenceSnapshot(
-            rohit_present=present_now, confidence=confidence,
-            session_minutes=session_mins, absent_minutes=absent_mins,
-            just_arrived=just_arrived, just_left=just_left,
-            person_identified=person, success=True,
+            rohit_present=present_now,
+            confidence=confidence,
+            session_minutes=session_mins,
+            absent_minutes=absent_mins,
+            just_arrived=just_arrived,
+            just_left=just_left,
+            person_identified=person,
+            success=True,
         )
 
     except Exception as e:
         logger.error("Presence observation error: %s", e)
         return PresenceSnapshot(
-            rohit_present=False, confidence=0.0,
-            session_minutes=0.0, absent_minutes=0.0,
-            just_arrived=False, just_left=False,
-            person_identified="unknown", success=False, error=str(e),
+            rohit_present=False,
+            confidence=0.0,
+            session_minutes=0.0,
+            absent_minutes=0.0,
+            just_arrived=False,
+            just_left=False,
+            person_identified="unknown",
+            success=False,
+            error=str(e),
         )
 
 
 def is_present() -> bool:
-    return _presence_state.get('present', False)
+    return _presence_state.get("present", False)
 
 
 def test():
@@ -300,13 +354,14 @@ def test():
                 extra = " <- ARRIVED"
             elif snap.just_left:
                 extra = " <- LEFT"
-            print(f"  {status} | person={snap.person_identified} | "
-                  f"conf={snap.confidence:.2f}{extra}")
+            print(
+                f"  {status} | person={snap.person_identified} | conf={snap.confidence:.2f}{extra}"
+            )
         else:
             print(f"  ERROR: {snap.error}")
         time.sleep(3)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     test()

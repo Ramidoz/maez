@@ -142,6 +142,44 @@ HEALTH_PORT = 11435
 WS_PORT = 11436
 
 
+def _is_ws_invalid_handshake_noise(record: logging.LogRecord) -> bool:
+    """Classify browser/health-probe hits on the WS port without hiding real WS faults."""
+    if record.name != "websockets.server":
+        return False
+    if "opening handshake failed" not in record.getMessage().lower():
+        return False
+    if not record.exc_info:
+        return True
+
+    exc = record.exc_info[1]
+    while exc is not None:
+        exc_name = exc.__class__.__name__
+        exc_text = str(exc).lower()
+        if exc_name in {"InvalidMessage", "EOFError"}:
+            return True
+        if "did not receive a valid http request" in exc_text:
+            return True
+        exc = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+    return False
+
+
+class _WebsocketInvalidHandshakeFilter(logging.Filter):
+    _maez_ws_invalid_handshake_filter = True
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not _is_ws_invalid_handshake_noise(record)
+
+
+def _install_websocket_noise_filter() -> None:
+    ws_logger = logging.getLogger("websockets.server")
+    if any(
+        getattr(existing, "_maez_ws_invalid_handshake_filter", False)
+        for existing in ws_logger.filters
+    ):
+        return
+    ws_logger.addFilter(_WebsocketInvalidHandshakeFilter())
+
+
 def _authoritative_tool_reply(tool_calls: "list[dict] | None") -> str:
     """Return a final reply when a deterministic tool already answered.
 
@@ -2874,6 +2912,7 @@ class MaezDaemon:
         (`self.running` is False). A real loop-crash during
         operation still surfaces as ERROR.
         """
+        _install_websocket_noise_filter()
         self._ws_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._ws_loop)
 
