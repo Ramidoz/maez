@@ -153,17 +153,15 @@ class DecideActivationColdContractTests(unittest.TestCase):
             self.assertIsNone(decide_activation([candidate]))
 
     def test_decide_activation_signature_uses_projection_candidate_iterable(self):
-        from core.memory.recall_activation import decide_activation
+        from typing import get_args, get_origin
+
+        from core.memory.recall_activation import ActivationDecision, decide_activation
+        from core.memory.recall_projection import ProjectionCandidate
 
         hints = get_type_hints(decide_activation)
-        self.assertEqual(
-            str(hints["candidates"]),
-            "typing.Iterable[core.memory.recall_projection.ProjectionCandidate]",
-        )
-        self.assertEqual(
-            str(hints["return"]),
-            "typing.Optional[core.memory.recall_activation.ActivationDecision]",
-        )
+        self.assertIs(get_args(hints["candidates"])[0], ProjectionCandidate)
+        self.assertIn("Iterable", str(get_origin(hints["candidates"])))
+        self.assertEqual(set(get_args(hints["return"])), {ActivationDecision, type(None)})
 
 
 class RecallActivationDocsTests(unittest.TestCase):

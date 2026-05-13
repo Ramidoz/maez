@@ -15,10 +15,6 @@ import pickle
 import sys
 import time
 
-import cv2
-import face_recognition
-import numpy as np
-
 logger = logging.getLogger(__name__)
 
 CAMERA_INDEX = 0
@@ -36,6 +32,10 @@ CAPTURE_INTERVAL = 0.5
 
 
 def enroll(name: str = "the owner") -> bool:
+    import cv2
+    import face_recognition
+    import numpy as np
+
     os.makedirs(os.path.dirname(ENROLLMENT_PATH), exist_ok=True)
 
     print(f"\nEnrolling face for: {name}")

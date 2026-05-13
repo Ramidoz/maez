@@ -2074,7 +2074,27 @@ class MaezDaemon:
                 )
                 reply = (response.message.content or "").strip() or "(no response)"
             except Exception as e:
-                reply = f"Error: {e}"
+                try:
+                    from core.error_classifier import (
+                        classify as _classify_backend_error,
+                        emit_telemetry as _emit_backend_error,
+                        owner_visible_message,
+                    )
+
+                    _classified_error = _classify_backend_error(e)
+                    _emit_backend_error(_classified_error, surface="telegram_chat")
+                    reply = owner_visible_message(_classified_error)
+                    logger.error(
+                        "telegram chat synthesis failed (%s): %s",
+                        _classified_error.error_class.value,
+                        e,
+                    )
+                except Exception:
+                    logger.exception("telegram chat synthesis failed")
+                    reply = (
+                        "I hit a local brain error while answering. "
+                        "Try me again in a moment."
+                    )
 
         # 2026-04-23 Commit 7b: strip tool-call JSON leaks from the raw
         # model output BEFORE audit and BEFORE store. Models occasionally

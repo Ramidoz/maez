@@ -15,6 +15,7 @@ from core.error_classifier import (
     classify, emit_telemetry,
     ErrorClass, ClassifiedError,
     _diag_class_names,
+    owner_visible_message,
 )
 
 
@@ -73,6 +74,25 @@ class ClassifyContext(unittest.TestCase):
     def test_llama_cpp_slot_context(self):
         r = classify(Exception("slot context: 8192 tokens, prompt 9000 tokens"))
         self.assertEqual(r.error_class, ErrorClass.context_overflow)
+
+    def test_llama_cpp_context_size_exceeded(self):
+        r = classify(Exception("Context size has been exceeded."))
+        self.assertEqual(r.error_class, ErrorClass.context_overflow)
+        self.assertTrue(r.should_compress_prompt)
+
+    def test_owner_visible_context_message_hides_backend_payload(self):
+        r = classify(Exception(
+            "InternalServerError(\"Error code: 500 - {'error': {'code': 500, "
+            "'message': 'Context size has been exceeded.', "
+            "'type': 'server_error'}}\")"
+        ))
+
+        msg = owner_visible_message(r)
+
+        self.assertIn("local brain", msg)
+        self.assertNotIn("InternalServerError", msg)
+        self.assertNotIn("Error code", msg)
+        self.assertNotIn("server_error", msg)
 
 
 class ClassifyModelMissing(unittest.TestCase):

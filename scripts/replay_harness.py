@@ -501,7 +501,7 @@ def _run_concurrency_probe(
         conn.row_factory = sqlite3.Row
         rows = [dict(r) for r in conn.execute(
             "SELECT * FROM turns WHERE turn_kind=? "
-            "ORDER BY timestamp ASC", (kind,)
+            "ORDER BY rowid ASC", (kind,)
         ).fetchall()]
     if len(rows) != expected_total:
         return ProbeResult(
@@ -513,7 +513,7 @@ def _run_concurrency_probe(
     with sqlite3.connect(probe_db_path) as conn:
         conn.row_factory = sqlite3.Row
         all_rows = [dict(r) for r in conn.execute(
-            "SELECT * FROM turns ORDER BY timestamp ASC"
+            "SELECT * FROM turns ORDER BY rowid ASC"
         ).fetchall()]
     violations = _chain.verify_chain(all_rows)
     if violations:

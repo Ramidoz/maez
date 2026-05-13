@@ -128,6 +128,7 @@ _CONTEXT_OVERFLOW_PATTERNS = (
     "n_ctx_slot",
     "slot context",
     "context length exceeded",
+    "context size has been exceeded",
     "maximum context length",
     "prompt is too long",
     "prompt exceeds max length",
@@ -298,6 +299,40 @@ def emit_telemetry(
         int(classified.should_compress_prompt),
         (classified.message or "")[:200],
     )
+
+
+def owner_visible_message(classified: ClassifiedError) -> str:
+    """Short owner-facing text for backend failures.
+
+    Logs keep the raw exception. Surfaces should not show transport
+    wrappers, HTTP status payloads, or llama.cpp server internals to Rohit.
+    """
+    if classified.error_class is ErrorClass.context_overflow:
+        return (
+            "I hit the local brain's context limit while answering. "
+            "Try me again in a moment."
+        )
+    if classified.error_class is ErrorClass.backend_down:
+        return (
+            "My local brain is still waking or restarting. "
+            "Try me again in a moment."
+        )
+    if classified.error_class is ErrorClass.backend_timeout:
+        return (
+            "My local brain is taking too long to answer. "
+            "Try me again in a moment."
+        )
+    if classified.error_class is ErrorClass.gpu_oom:
+        return (
+            "My local brain ran out of GPU room while answering. "
+            "I need the local model stack checked."
+        )
+    if classified.error_class is ErrorClass.model_missing:
+        return (
+            "I cannot find the local model I need to answer. "
+            "The model stack needs checking."
+        )
+    return "I hit a local brain error while answering. Try me again in a moment."
 
 
 # ── helpers ───────────────────────────────────────────────────────────

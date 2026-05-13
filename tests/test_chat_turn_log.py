@@ -92,6 +92,20 @@ class TestChatTurnLogWiring(unittest.TestCase):
             "log lines)",
         )
 
+    def test_chat_turn_backend_errors_use_owner_visible_message(self):
+        """Telegram should not send raw backend exception reprs to Rohit.
+
+        The raw details belong in logs/telemetry; the surface gets a short
+        local-brain status message.
+        """
+        handle_start = self.daemon_src.index("    def handle_message(")
+        handle_end = self.daemon_src.index("    def _get_public_context", handle_start)
+        handle_src = self.daemon_src[handle_start:handle_end]
+
+        self.assertIn("owner_visible_message", handle_src)
+        self.assertIn('surface="telegram_chat"', handle_src)
+        self.assertNotIn('reply = f"Error: {e}"', handle_src)
+
 
 if __name__ == "__main__":
     unittest.main()
