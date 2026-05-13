@@ -76,9 +76,10 @@ dependencies = [
 
 [project.optional-dependencies]
 # Face recognition + vision perception. Heavy native deps (dlib,
-# opencv). Not required for core daemon; skip on headless servers.
+# opencv, mediapipe). Not required for core daemon; skip on headless servers.
 vision = [
     "opencv-python>=4.10",
+    "mediapipe>=0.10",
     "face_recognition>=1.3",
 ]
 
