@@ -273,6 +273,8 @@ class TelegramAdapter(BasePlatformAdapter):
     _SPLIT_THRESHOLD = 4000
     MEDIA_GROUP_WAIT_SECONDS = 0.8
     _GENERAL_TOPIC_THREAD_ID = "1"
+    _TELEGRAM_DRAFT_PRESENCE_ATTEMPTED_MAX = 1000
+    _TELEGRAM_DRAFT_PRESENCE_FAILURE_WINDOW_SECONDS = 600
     _TelegramDraftPresenceConfig = TelegramDraftPresenceConfig
     
     def __init__(self, config: PlatformConfig):
@@ -3435,7 +3437,10 @@ class TelegramAdapter(BasePlatformAdapter):
             return False
         self._telegram_draft_presence_attempted[key] = None
         self._telegram_draft_presence_attempted.move_to_end(key)
-        while len(self._telegram_draft_presence_attempted) > 512:
+        while (
+            len(self._telegram_draft_presence_attempted)
+            > self._TELEGRAM_DRAFT_PRESENCE_ATTEMPTED_MAX
+        ):
             self._telegram_draft_presence_attempted.popitem(last=False)
         return True
 
@@ -3448,7 +3453,7 @@ class TelegramAdapter(BasePlatformAdapter):
         now = time.time()
         window = [
             ts for ts in self._telegram_draft_presence_failures.get(reason, [])
-            if now - ts <= 600
+            if now - ts <= self._TELEGRAM_DRAFT_PRESENCE_FAILURE_WINDOW_SECONDS
         ]
         window.append(now)
         self._telegram_draft_presence_failures[reason] = window

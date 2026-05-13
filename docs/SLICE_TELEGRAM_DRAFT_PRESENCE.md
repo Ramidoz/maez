@@ -141,7 +141,7 @@ Rate limit:
 - Draft attempt happens once per flushed logical `MessageEvent`, not once per raw Telegram update. Text batching must complete before the draft decision.
 - If one logical user message triggers multiple Maez internal cycles, those cycles coalesce behind the same inbound-message draft decision.
 - If multiple Telegram messages arrive, each message may receive one independent empty draft attempt.
-- Idempotency mechanism: maintain a bounded in-process set of inbound Telegram message ids that already received a draft attempt. The set is capped to the most recent 512 ids and is pruned FIFO-style. If Telegram `message_id` is available, the key is `(chat_id, message_id)` so duplicate delivery with a different `update_id` is suppressed. If `message_id` is missing, the key uses `(chat_id, platform_update_id, fallback_draft_id)`.
+- Idempotency mechanism: maintain a bounded in-process set of inbound Telegram message ids that already received a draft attempt. The set is capped to the most recent 1000 ids and is pruned FIFO-style. If Telegram `message_id` is available, the key is `(chat_id, message_id)` so duplicate delivery with a different `update_id` is suppressed. If `message_id` is missing, the key uses `(chat_id, platform_update_id, fallback_draft_id)`.
 - The wrapper marks the inbound id as attempted before network I/O. Timeouts, cancellations, and API errors must not allow a second draft attempt for the same logical event.
 - Daemon restart clears the in-process idempotency set and resets the process-local fallback id sequence. This is intentional and safe: Telegram inbound messages are not replayed as new live messages during normal operation, and duplicate draft attempts after a crash/restart are still empty, ephemeral, and bounded to one per reprocessed inbound event.
 
@@ -162,7 +162,7 @@ Network and API errors:
 - Draft failure never triggers fallback text.
 - Draft failure may allow normal typing indicator to continue.
 - If `send_message_draft` is unsupported once, open a fail-neutral circuit breaker and suppress further draft attempts until process restart or config reload.
-- If the same failure reason among `timeout`, `network_error`, or `api_error` occurs three times in ten minutes, open a fail-neutral circuit breaker and suppress further draft attempts until process restart or config reload.
+- If the same failure reason among `timeout`, `network_error`, or `api_error` occurs three times in ten minutes, open a fail-neutral circuit breaker and suppress further draft attempts until process restart or config reload. Failure timestamp lists are pruned to this ten-minute window on every recorded failure so long-running daemons cannot accumulate stale failure entries.
 
 Always-on-shape note: draft presence slightly increases Maez's "always here" feel on Telegram. This is not a categorical new body capability, but the bonded-user presence check explicitly asks whether the affordance feels present, neutral, or weird after enablement.
 
@@ -244,6 +244,7 @@ Mandatory tests before implementation commit:
 - **One draft per flushed logical event:** draft attempt happens once per flushed logical `MessageEvent`, not once per raw Telegram update.
 - **One draft per inbound message:** duplicate internal cycles for one inbound message do not create repeated draft attempts.
 - **Duplicate update/message delivery:** reprocessed updates or duplicate message delivery do not create repeated draft attempts while the in-process idempotency set contains the key.
+- **Idempotency memory bound:** high-volume message arrivals evict old attempted-message ids and keep the in-process idempotency set at max 1000 entries.
 - **Timeout graceful:** slow draft call hits timeout and final reply still sends.
 - **Slow draft does not gate reply path:** slow draft call does not delay entry into the mocked brain handler, audit path, or final send beyond normal event-loop scheduling.
 - **Failure does not block final send:** network/API exception from draft wrapper still lets final audited reply send.
@@ -252,6 +253,7 @@ Mandatory tests before implementation commit:
 - **Exception sanitization:** telemetry does not include raw exception strings, token, chat id, username/title, message body, prompt, final reply, or approval-card text.
 - **Off/on final-reply invariance:** with the same mocked brain/audit output, feature disabled vs enabled produces identical final send payload, memory writes, approval-card behavior, and audit result.
 - **Circuit breaker:** unsupported once, or three repeated same-reason transient failures in ten minutes, suppresses future draft attempts until process restart or config reload.
+- **Failure-window memory bound:** stale per-reason failure timestamps older than ten minutes are discarded when a new failure is recorded.
 - **Bad config cannot clear circuit:** malformed or unsupported config changes remain disabled and do not reset circuit-breaker/failure-window state.
 - **Telemetry failure fail-neutrality:** a failing logging/telemetry handler cannot raise out of the draft path or prevent a draft attempt.
 - **Bad chat id fail-neutrality:** malformed chat ids fail the draft path without unobserved task exceptions.
@@ -345,7 +347,7 @@ Folded engineering amendments:
 - Run draft attempts from the background processing path or adapter hook only; never await them on the Telegram polling/update path.
 - Do not gate `_message_handler`, audit, or final `_send_with_retry`.
 - Mark inbound id attempted before network I/O.
-- Make idempotency concrete with a bounded 512-entry in-process set.
+- Make idempotency concrete with a bounded 1000-entry in-process set.
 - Define deterministic `draft_id` generation.
 - Define telemetry state machine and exception sanitization.
 - Add failure circuit breaker.

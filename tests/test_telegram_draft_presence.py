@@ -203,6 +203,18 @@ class TelegramDraftPresenceBehaviorTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(second)
         self.assertEqual(len(bot.calls), 1)
 
+    async def test_attempted_idempotency_set_eviction_is_bounded(self):
+        adapter = TelegramAdapter(PlatformConfig())
+        max_entries = adapter._TELEGRAM_DRAFT_PRESENCE_ATTEMPTED_MAX
+
+        for idx in range(max_entries + 5):
+            adapter._telegram_draft_presence_mark_attempted(("42", str(idx)))
+
+        self.assertEqual(len(adapter._telegram_draft_presence_attempted), max_entries)
+        self.assertNotIn(("42", "0"), adapter._telegram_draft_presence_attempted)
+        self.assertNotIn(("42", "4"), adapter._telegram_draft_presence_attempted)
+        self.assertIn(("42", str(max_entries + 4)), adapter._telegram_draft_presence_attempted)
+
     async def test_duplicate_message_with_different_update_id_is_suppressed(self):
         adapter = TelegramAdapter(PlatformConfig())
         bot = _DraftBot()
@@ -243,6 +255,20 @@ class TelegramDraftPresenceBehaviorTests(unittest.IsolatedAsyncioTestCase):
             await adapter.send_empty_draft_presence(_event(message_id=str(idx)))
 
         self.assertTrue(adapter._telegram_draft_presence_circuit_open)
+
+    async def test_failure_window_discards_stale_timestamps(self):
+        adapter = TelegramAdapter(PlatformConfig())
+        reason = "network_error"
+        stale = time.time() - adapter._TELEGRAM_DRAFT_PRESENCE_FAILURE_WINDOW_SECONDS - 1
+        adapter._telegram_draft_presence_failures[reason] = [stale]
+
+        adapter._telegram_draft_presence_record_failure(reason)
+
+        self.assertEqual(len(adapter._telegram_draft_presence_failures[reason]), 1)
+        self.assertGreater(
+            adapter._telegram_draft_presence_failures[reason][0],
+            stale,
+        )
 
     async def test_config_change_resets_circuit_breaker(self):
         adapter = TelegramAdapter(PlatformConfig())
