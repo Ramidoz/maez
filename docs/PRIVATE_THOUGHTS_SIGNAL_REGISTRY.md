@@ -41,6 +41,20 @@ the 2026 meaning intact, even if later organs generalize the registry.
 | `SignalState` | `active` | Eligible for behavior aggregation if the row validates. |
 | `SignalState` | `resolved` | Durable but not behavior-active. |
 
+## Producer Identity Registry
+
+| producer_id | 2026 meaning |
+|---|---|
+| `audit_rail` | Audit rail producer for held internal concerns. |
+| `reasoning_residue` | Reasoning-residue producer for leftover internal state. |
+| `urge_monitor` | Urge monitor producer for held impulses that should not become action directly. |
+| `dream_cycle` | Dream-cycle producer for offline synthesis residue. |
+| `self_wondering` | Self-wondering producer for private self-observation. |
+| `rupture_detector` | Rupture detector producer for unresolved repair pressure. |
+| `crisis_detector` | Crisis detector producer for held crisis-routing signals. |
+| `soul_objection_detector` | Soul-objection detector producer for forming boundary objections. |
+| `legacy_unknown` | Durable migration marker for legacy rows whose producer identity cannot be proven from `context.source`; forensic-readable, not behavior-facing. |
+
 ## Signal Registry
 
 | signal_kind | producer_id | signal_class | allowed producer contract | introduced | deprecated | merge/split note |

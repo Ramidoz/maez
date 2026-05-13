@@ -330,6 +330,14 @@ CREATE INDEX IF NOT EXISTS idx_pt_signal_kind  ON private_thoughts(signal_kind);
 """
 
 
+def _execute_schema_statements(conn: sqlite3.Connection, statements: str) -> None:
+    """Execute schema statements without sqlite3.executescript's implicit commit."""
+    for statement in statements.split(";"):
+        statement = statement.strip()
+        if statement:
+            conn.execute(statement)
+
+
 class PrivateSignalReader:
     """Behavior-facing private signal reader with no raw dereference API."""
 
@@ -460,7 +468,7 @@ class PrivateThoughts:
                         f"({current_user_version} > {PRIVATE_THOUGHTS_USER_VERSION})"
                     )
                 self._migrate_schema(conn)
-                conn.executescript(_SCHEMA_INDEXES)
+                _execute_schema_statements(conn, _SCHEMA_INDEXES)
                 if current_user_version < PRIVATE_THOUGHTS_USER_VERSION:
                     conn.execute(f"PRAGMA user_version = {PRIVATE_THOUGHTS_USER_VERSION}")
             except Exception:
@@ -485,13 +493,9 @@ class PrivateThoughts:
             ),
             "signal_state": f"TEXT NOT NULL DEFAULT '{SignalState.ACTIVE.value}'",
         }
-        added_columns = False
         for name, ddl in additions.items():
             if name not in columns:
                 conn.execute(f"ALTER TABLE private_thoughts ADD COLUMN {name} {ddl}")
-                added_columns = True
-        if not added_columns:
-            return
 
         rows = conn.execute(
             "SELECT thought_id, provenance, context_json, envelope_version, "
@@ -503,6 +507,28 @@ class PrivateThoughts:
             if not self._row_is_current_version(row_dict):
                 continue
             normalized = self._normalize_legacy_values(row_dict)
+            current_values = (
+                row_dict.get("legacy_provenance"),
+                row_dict.get("producer_id"),
+                row_dict.get("signal_kind"),
+                row_dict.get("signal_class"),
+                row_dict.get("surface_sensitivity"),
+                row_dict.get("signal_state"),
+                row_dict.get("envelope_version") or ENVELOPE_VERSION,
+                row_dict.get("schema_version") or SCHEMA_VERSION,
+            )
+            normalized_values = (
+                normalized["legacy_provenance"],
+                normalized["producer_id"],
+                normalized["signal_kind"],
+                normalized["signal_class"],
+                normalized["surface_sensitivity"],
+                normalized["signal_state"],
+                ENVELOPE_VERSION,
+                SCHEMA_VERSION,
+            )
+            if current_values == normalized_values:
+                continue
             conn.execute(
                 "UPDATE private_thoughts SET "
                 "legacy_provenance = ?, producer_id = ?, signal_kind = ?, "
@@ -679,15 +705,19 @@ class PrivateThoughts:
         rows = self._recent_behavior_signal_metadata(limit=scan_limit)
 
         malformed_signal_row_count = 0
-        class_counts = {value: 0 for value in SignalClass.values()}
         for row in rows:
-            normalized = self._normalize_signal_row(row)
-            if not normalized:
+            if not self._normalize_signal_row(row):
                 malformed_signal_row_count += 1
-                continue
-            signal_class = normalized["signal_class"]
-            if class_counts[signal_class] < bounded_limit:
-                class_counts[signal_class] += 1
+
+        class_counts: dict[str, int] = {}
+        for signal_class in SignalClass.values():
+            count = 0
+            for row in self._behavior_signal_metadata_for_class(signal_class):
+                if self._normalize_signal_row(row):
+                    count += 1
+                    if count >= bounded_limit:
+                        break
+            class_counts[signal_class] = count
 
         signal_classes = {
             signal_class: {
@@ -714,12 +744,30 @@ class PrivateThoughts:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT context_json, memory_phase, envelope_version, schema_version, "
-                "producer_id, signal_class, surface_sensitivity, "
+                "producer_id, signal_kind, signal_class, surface_sensitivity, "
                 "signal_state "
                 "FROM private_thoughts "
                 "WHERE provenance != ? "
                 "ORDER BY thought_id DESC LIMIT ?",
                 ("explicit_api", int(limit)),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [dict(r) for r in rows]
+
+    def _behavior_signal_metadata_for_class(self, signal_class: str) -> list[dict]:
+        """Behavior metadata for one class; avoids chatty classes hiding rare ones."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT context_json, memory_phase, envelope_version, schema_version, "
+                "producer_id, signal_kind, signal_class, surface_sensitivity, "
+                "signal_state "
+                "FROM private_thoughts "
+                "WHERE provenance != ? AND signal_class = ? "
+                "ORDER BY thought_id DESC",
+                ("explicit_api", str(signal_class)),
             ).fetchall()
         finally:
             conn.close()
@@ -815,7 +863,7 @@ class PrivateThoughts:
             or producer == ProducerId.LEGACY_UNKNOWN.value
             or producer not in ProducerId.values()
         ):
-            producer = cls._producer_from_context(row) or registry["producer_id"]
+            producer = cls._producer_from_context(row) or ProducerId.LEGACY_UNKNOWN.value
         signal_class = row.get("signal_class") or registry["signal_class"]
         if signal_class not in SignalClass.values():
             signal_class = registry["signal_class"]
@@ -850,6 +898,7 @@ class PrivateThoughts:
             return None
         try:
             producer_id = ProducerId.coerce(row.get("producer_id"), "ProducerId")
+            signal_kind = SignalKind.coerce(row.get("signal_kind"), "SignalKind")
             signal_class = SignalClass.coerce(row.get("signal_class"), "SignalClass")
             surface_sensitivity = SurfaceSensitivity.coerce(
                 row.get("surface_sensitivity"),
@@ -860,10 +909,14 @@ class PrivateThoughts:
             return None
         if signal_state != SignalState.ACTIVE.value:
             return None
+        registry = _SIGNAL_REGISTRY[signal_kind]
+        if producer_id != registry["producer_id"] or signal_class != registry["signal_class"]:
+            return None
         if not self._context_allows_private_reader(row):
             return None
         return {
             "producer_id": producer_id,
+            "signal_kind": signal_kind,
             "signal_class": signal_class,
             "surface_sensitivity": surface_sensitivity,
             "signal_state": signal_state,

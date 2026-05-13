@@ -8,6 +8,10 @@
 **Purpose:** give Claude's six-role council one grounded packet for reviewing
 S1a.1 without spelunking through the whole repo. This is not a council verdict.
 
+**Historical note:** this packet was prepared before the council-closure
+follow-up commits. Test counts and "pending" statuses below are evidence for
+the original `b913728` review point, not the current post-closure state.
+
 ---
 
 ## 1. Diff Summary
@@ -50,7 +54,7 @@ SQLite migration marker: `PRAGMA user_version = 101`.
 | A1. Closed vocabularies for `allowed_flows`, `consent_tier`, `retention`, producer identity, signal kind/class, sensitivity, state | `_ClosedStrEnum` plus `AllowedFlow`, `ConsentTier`, `RetentionRule`, `ProducerId`, `SignalKind`, `SignalClass`, `SurfaceSensitivity`, `SignalState` in `core/infra/private_thoughts.py`; `record_signal()` coerces/rejects values before write | `test_record_signal_rejects_unknown_closed_vocab_values`, `test_record_signal_rejects_mismatched_producer_for_kind`, `test_record_signal_accepts_enum_instances`, `test_direct_sql_invalid_vocab_row_does_not_surface_to_behavior`, `test_direct_sql_invalid_top_level_enum_row_does_not_surface` |
 | A2. Envelope + schema versions for future readability | `ENVELOPE_VERSION = "1.0"`, `SCHEMA_VERSION = "1.0"`, `PRIVATE_THOUGHTS_USER_VERSION = 101`; `_initialize()` runs transactional migration and refuses newer DB versions; registry doc defines meanings | `test_s1a1_migrates_schema_columns_for_future_readability`, `test_future_version_rows_are_not_mutated_on_reopen`, `test_newer_user_version_refuses_downgrade`; self-test asserts exact schema columns |
 | A3. Split `provenance` into `producer_id` + `signal_kind` + `signal_class` | `_SIGNAL_REGISTRY`; `_normalize_legacy_values()` preserves `legacy_provenance`, maps known legacy values, and derives class; `record_signal()` enforces producer/kind pairs | `test_record_signal_writes_contextual_integrity_envelope`, `test_record_signal_accepts_enum_instances`, `test_record_signal_rejects_mismatched_producer_for_kind` |
-| A4. Sever behavior path from raw-text/dereferenceable handles | `PrivateSignalReader` exposes only `derived_signals()`; `PrivateThoughtsForensics` owns `forensic_signals()`; behavior output has counts/classes only; AST/source guard forbids brain/cognition/actions importing forensic/raw handles | `test_bounded_reader_returns_signals_without_raw_content`, `test_bounded_reader_does_not_call_raw_recent_reader`, `test_behavior_reader_is_narrow_capability`, `test_forensic_access_requires_and_records_audit_before_handles`, `test_behavior_packages_do_not_import_raw_private_thought_surfaces` |
+| A4. Sever behavior path from raw-text/dereferenceable handles | `PrivateSignalReader` exposes only `derived_signals()`; `PrivateThoughtsForensics` owns `forensic_signals()`; behavior output has counts/classes only; static source-token guard forbids brain/cognition/actions importing forensic/raw handles by ordinary source reference | `test_bounded_reader_returns_signals_without_raw_content`, `test_bounded_reader_does_not_call_raw_recent_reader`, `test_behavior_reader_is_narrow_capability`, `test_forensic_access_requires_and_records_audit_before_handles`, `test_behavior_packages_do_not_import_raw_private_thought_surfaces` |
 | A5. Malformed-row crowd-out fix | `_derived_signals_behavior()` scans metadata, validates rows before counting, tracks `malformed_signal_row_count`, and counts per class so noisy rows do not hide rare classes | `test_bounded_reader_ignores_malformed_existing_producer_rows`, `test_bounded_reader_ignores_partially_malformed_context`, `test_bounded_reader_ignores_unknown_provenance_rows`, `test_malformed_recent_rows_do_not_crowd_out_valid_older_rows`, `test_high_volume_valid_rows_do_not_hide_rare_valid_class` |
 | A6. Treat signal names as sensitive metadata | behavior path returns `signal_class` only; detailed `signal_kind` stays producer/forensic-side; normal logs avoid thought IDs and detailed kind names | `test_record_signal_normal_log_excludes_handles_and_sensitive_kind`, `test_bounded_reader_returns_signals_without_raw_content`, `test_behavior_reader_is_narrow_capability` |
 
@@ -60,7 +64,7 @@ SQLite migration marker: `PRAGMA user_version = 101`.
 
 ### `tests/test_private_thoughts_s1.py`
 
-Current file has 25 tests. The S1a.1-specific additions include:
+Current file had 25 tests at the `b913728` review point. The S1a.1-specific additions included:
 
 - `test_s1a1_migrates_schema_columns_for_future_readability`
 - `test_record_signal_rejects_unknown_closed_vocab_values`
@@ -103,7 +107,7 @@ Fresh on 2026-05-13:
 # 37 passed, 0 failed
 
 .venv/bin/python -m unittest tests.test_private_thoughts_s1 tests.test_verify_self_claim tests.test_hardware_backup
-# Ran 71 tests in 0.093s
+# Ran 71 tests in 0.093s at the `b913728` review point
 # OK
 
 .venv/bin/ruff check core/infra/private_thoughts.py scripts/verify_self_claim.py scripts/backup/drill.py tests/test_private_thoughts_s1.py tests/test_verify_self_claim.py tests/test_hardware_backup.py

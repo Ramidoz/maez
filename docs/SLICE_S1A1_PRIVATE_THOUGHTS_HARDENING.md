@@ -31,7 +31,7 @@ Load-bearing corrections from the panel:
 
 Plain English: S1a.1 is no longer "tighten the existing reader." It is "turn the reader into two different doors": a behavior door that cannot reach raw private text, and a forensic door that can, but leaves a backed-up audit trail.
 
-Council clarification C1: this split is **defense-in-depth inside one process**, not an absolute security boundary. Python code with arbitrary same-process execution can still bypass object shape. The covenant property is that normal behavior packages have no raw/forensic API and the AST guard catches forbidden imports; it is not a substitute for process isolation if future threat models require it.
+Council clarification C1: this split is **defense-in-depth inside one process**, not an absolute security boundary. Python code with arbitrary same-process execution can still bypass object shape. The covenant property is that normal behavior packages have no raw/forensic API and the static source-token guard catches forbidden ordinary source imports; it is not a substitute for process isolation if future threat models require it.
 
 ### Amendment 1: closed policy vocabularies
 *(Logical seat — engineering veto power.)*
@@ -164,7 +164,7 @@ After S1a.1 ships, the Claude post-implementation council ratifies it, and C1-C6
 - `derived_signals()` skips malformed rows without displacing valid history; emits a malformed-row counter; rare valid signal classes cannot be hidden by high-volume valid chatter.
 - Signal names are sensitive metadata; only coarse `signal_class` reaches behavior.
 - S1b planning carries forward the human-primacy constraint: aggregate private-signal counts may shape pacing only if they do not pre-empt the bonded user naming the lived state.
-- Anatomy status moves from `[ ◐ scaffold + bounded access layer · pending S1a.1 hardening ]` to `[ ◐ scaffold + hardened access layer · ready for S1b wiring ]`.
+- Anatomy status moves from `[ ◐ scaffold + bounded access layer · pending S1a.1 hardening ]` to `[ ◐ scaffold + hardened access layer · S1b planning unblocked ]`.
 - NOT YET `[ ✓ real ]`. That requires S1b producers + consumers actually wired in production cycle behavior.
 - No production behavior change (no producer or consumer wired yet); ruff green; suite green; daemon stable.
 
@@ -183,7 +183,7 @@ If any of those drift, the slice did not ship.
 - `provenance` split: existing rows readable; new rows use split fields; no silent column reuse; legacy `provenance` maps through a checked table.
 - Forensic-vs-behavior path: integration test that constructs a signal, calls behavior `derived_signals()`, asserts no field exposes a dereferenceable handle, raw ID, detailed `signal_kind`, or raw text. Then calls forensic API, asserts dereference works AND emits an audit log entry before data returns.
 - Narrowed behavior object: `hasattr(reader, "get_thought")`, `hasattr(reader, "recent")`, and `hasattr(reader, "forensic_signals")` are false.
-- AST/import guard: `core/brain/`, `core/cognition/`, and `core/actions/` cannot import raw/forensic private-thought surfaces.
+- Static source-token import guard: `core/brain/`, `core/cognition/`, and `core/actions/` cannot import raw/forensic private-thought surfaces by ordinary source reference.
 - Malformed-row crowd-out: explicit reproduction of the bug, verified fixed.
 - Valid-noisy-row crowd-out: high-volume valid rows from one class cannot hide rare valid rows from another class.
 - Signal-name sensitivity: behavior output includes coarse `signal_class`, not detailed `signal_kind`; normal logs do not leak detailed signal names.

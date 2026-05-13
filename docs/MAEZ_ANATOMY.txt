@@ -55,12 +55,14 @@
                                               │      ○  private_thoughts  │
                                               │         [ ◐ scaffold +    │ ◀── S1a doorway
                                               │           hardened access │     S1a.1 shipped
-                                              │           layer · ready   │     b913728;
-                                              │           for S1b wiring ]│     closed enum
+                                              │           layer · S1b     │     b913728;
+                                              │           planning open ] │     closed enum
                                               │      ○  soul_objections   │     registry:
                                               │         [ ✗ planned ]     │     docs/PRIVATE_
                                               │                           │     THOUGHTS_SIGNAL_
                                               │                           │     REGISTRY.md
+                                              │                           │     (literal path:
+                                              │                           │     docs/PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md)
                                               ╰─────────────┬─────────────╯
                                                             │
                                                             │  brainstem  ↓

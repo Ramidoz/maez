@@ -24,6 +24,7 @@ from core.infra.private_thoughts import (
     PRIVATE_THOUGHTS_USER_VERSION,
     PrivateThoughts,
     ProducerId,
+    SignalClass,
     SignalKind,
 )
 
@@ -490,6 +491,40 @@ class TestPrivateThoughtsS1(unittest.TestCase):
         )
         self.assertEqual(derived["malformed_signal_row_count"], 1)
 
+    def test_direct_sql_valid_enum_mismatch_does_not_surface(self) -> None:
+        context = {
+            "source": "crisis_detector",
+            "subject": "bonded_user_state",
+            "consent_tier": "owner_private",
+            "retention": "until_routed",
+            "allowed_flows": ["private_reader", "crisis_channel"],
+        }
+        self.insert_raw_private_thought(
+            ts=100.5,
+            content="Valid vocabulary values in the wrong registry tuple.",
+            provenance="audit_held",
+            context=context,
+            extra_columns={
+                "producer_id": "crisis_detector",
+                "signal_kind": "audit_held",
+                "signal_class": "crisis_routing",
+                "surface_sensitivity": "forensic_sensitive",
+                "signal_state": "active",
+            },
+        )
+
+        derived = self.store.derived_signals(limit=10)
+
+        self.assertEqual(
+            derived["signal_classes"]["crisis_routing"]["state"],
+            "absent",
+        )
+        self.assertEqual(
+            derived["signal_classes"]["audit_awareness"]["state"],
+            "absent",
+        )
+        self.assertEqual(derived["malformed_signal_row_count"], 1)
+
     def test_future_version_rows_are_not_mutated_on_reopen(self) -> None:
         context = {
             "source": "future_writer",
@@ -628,6 +663,162 @@ class TestPrivateThoughtsS1(unittest.TestCase):
         self.assertEqual(user_version_after_retry, PRIVATE_THOUGHTS_USER_VERSION)
         self.assertEqual(row, ("audit_held", "audit_rail", "audit_held", "audit_awareness"))
 
+    def test_migration_failure_after_index_ddl_rolls_back_schema_and_user_version(self) -> None:
+        legacy_db_path = Path(self._td.name) / "legacy_private_thoughts_index_fail.db"
+        conn = sqlite3.connect(legacy_db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE private_thoughts (
+                    thought_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts             REAL    NOT NULL,
+                    content        TEXT    NOT NULL,
+                    provenance     TEXT    NOT NULL,
+                    context_json   TEXT    NOT NULL DEFAULT '{}',
+                    memory_phase   TEXT    NOT NULL DEFAULT 'gestation'
+                );
+                INSERT INTO private_thoughts
+                    (ts, content, provenance, context_json, memory_phase)
+                VALUES
+                    (1.0, 'Legacy row before failed index creation.', 'audit_held',
+                     '{"source":"audit_rail","subject":"maez_output","consent_tier":"owner_private","retention":"until_reviewed","allowed_flows":["private_reader"]}',
+                     'gestation');
+                PRAGMA user_version = 0;
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        original_indexes = private_thoughts_module._SCHEMA_INDEXES
+        try:
+            private_thoughts_module._SCHEMA_INDEXES = (
+                original_indexes
+                + "\nCREATE INDEX idx_pt_forced_failure ON private_thoughts(no_such_column);"
+            )
+            with self.assertRaises(sqlite3.OperationalError):
+                PrivateThoughts(db_path=legacy_db_path)
+        finally:
+            private_thoughts_module._SCHEMA_INDEXES = original_indexes
+
+        conn = sqlite3.connect(legacy_db_path)
+        try:
+            columns_after_failure = {
+                row[1] for row in conn.execute("PRAGMA table_info(private_thoughts)")
+            }
+            user_version_after_failure = int(
+                conn.execute("PRAGMA user_version").fetchone()[0]
+            )
+        finally:
+            conn.close()
+
+        self.assertNotIn("envelope_version", columns_after_failure)
+        self.assertEqual(user_version_after_failure, 0)
+
+        PrivateThoughts(db_path=legacy_db_path)
+
+        conn = sqlite3.connect(legacy_db_path)
+        try:
+            columns_after_retry = {
+                row[1] for row in conn.execute("PRAGMA table_info(private_thoughts)")
+            }
+            user_version_after_retry = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        finally:
+            conn.close()
+
+        self.assertIn("envelope_version", columns_after_retry)
+        self.assertEqual(user_version_after_retry, PRIVATE_THOUGHTS_USER_VERSION)
+
+    def test_legacy_migration_without_valid_context_source_stays_legacy_unknown(self) -> None:
+        legacy_db_path = Path(self._td.name) / "legacy_private_thoughts_unknown_source.db"
+        conn = sqlite3.connect(legacy_db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE private_thoughts (
+                    thought_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts             REAL    NOT NULL,
+                    content        TEXT    NOT NULL,
+                    provenance     TEXT    NOT NULL,
+                    context_json   TEXT    NOT NULL DEFAULT '{}',
+                    memory_phase   TEXT    NOT NULL DEFAULT 'gestation'
+                );
+                INSERT INTO private_thoughts
+                    (ts, content, provenance, context_json, memory_phase)
+                VALUES
+                    (1.0, 'Legacy row with no valid source.', 'audit_held',
+                     '{"source":"dashboard_helper","subject":"maez_output","consent_tier":"owner_private","retention":"until_reviewed","allowed_flows":["private_reader"]}',
+                     'gestation');
+                PRAGMA user_version = 0;
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        PrivateThoughts(db_path=legacy_db_path)
+
+        conn = sqlite3.connect(legacy_db_path)
+        try:
+            row = conn.execute(
+                "SELECT producer_id, signal_kind, signal_class "
+                "FROM private_thoughts WHERE thought_id = 1"
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertEqual(row, ("legacy_unknown", "audit_held", "audit_awareness"))
+
+    def test_parent_migrated_legacy_unknown_with_valid_source_is_repaired_on_reopen(self) -> None:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                "INSERT INTO private_thoughts "
+                "(ts, content, provenance, context_json, memory_phase, "
+                "envelope_version, schema_version, legacy_provenance, producer_id, "
+                "signal_kind, signal_class, surface_sensitivity, signal_state) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    1.0,
+                    "Already-migrated row from the parent S1a.1 commit.",
+                    "audit_held",
+                    json.dumps(
+                        {
+                            "source": "audit_rail",
+                            "subject": "maez_output",
+                            "consent_tier": "owner_private",
+                            "retention": "until_reviewed",
+                            "allowed_flows": ["private_reader"],
+                        }
+                    ),
+                    "gestation",
+                    "1.0",
+                    "1.0",
+                    "audit_held",
+                    "legacy_unknown",
+                    "audit_held",
+                    "audit_awareness",
+                    "forensic_sensitive",
+                    "active",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        PrivateThoughts(db_path=self.db_path)
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            producer_id = conn.execute(
+                "SELECT producer_id FROM private_thoughts WHERE content = ?",
+                ("Already-migrated row from the parent S1a.1 commit.",),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
+        self.assertEqual(producer_id, "audit_rail")
+
     def test_behavior_reader_is_narrow_capability(self) -> None:
         reader = self.store.behavior_reader()
 
@@ -685,7 +876,7 @@ class TestPrivateThoughtsS1(unittest.TestCase):
             retention="until_routed",
             allowed_flows=("private_reader", "crisis_channel"),
         )
-        for i in range(25):
+        for i in range(180):
             self.store.record_signal(
                 content=f"Noisy reasoning residue {i}.",
                 provenance="reasoning_residue",
@@ -782,6 +973,17 @@ class TestPrivateThoughtsS1(unittest.TestCase):
                     if token in text:
                         offenders.append(f"{path}:{token}")
         self.assertEqual(offenders, [])
+
+    def test_signal_registry_doc_covers_code_registry_values(self) -> None:
+        registry_text = Path("docs/PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md").read_text(
+            encoding="utf-8"
+        )
+        for producer_id in ProducerId.values():
+            self.assertIn(f"`{producer_id}`", registry_text)
+        for signal_kind in SignalKind.values():
+            self.assertIn(f"`{signal_kind}`", registry_text)
+        for signal_class in SignalClass.values():
+            self.assertIn(f"`{signal_class}`", registry_text)
 
 
 if __name__ == "__main__":

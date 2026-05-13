@@ -2,7 +2,7 @@
 
 **Subject:** commit `b913728` (`feat(private-thoughts): harden S1a signal boundary`) — the bounded access layer hardening that closes the six Claude-council amendments from S1a, plus the six-amendment Codex pre-code panel verdict that tightened the implementation before code touched files.
 
-**Evidence packet:** `docs/S1A1_PRIVATE_THOUGHTS_RATIFICATION_PACKET.md` (Codex, 2026-05-13, uncommitted by design).
+**Evidence packet:** `docs/S1A1_PRIVATE_THOUGHTS_RATIFICATION_PACKET.md` (Codex, 2026-05-13; historical packet prepared before council-closure follow-up commits).
 
 **Council ran:** 2026-05-13.
 
@@ -14,13 +14,13 @@
 
 *Concern: is the behavior/forensic split aligned with field practice, or is Maez inventing a fragile local pattern?*
 
-**Aligned, with a novel defense-in-depth move.** Capability-based security (KeyKOS, Caja, object-capabilities theory, 50 years of lineage) names exactly the primitive `b913728` ships: a narrow capability (`PrivateSignalReader`) that can do less than the wide one (`PrivateThoughtsForensics`). Information Flow Control (HiStar, Asbestos) is the more rigorous version at the kernel/process boundary, but Python at single-process can't reach that — so Maez built the next-best thing: API shape split + AST-level import guard preventing `core/brain/`, `core/cognition/`, `core/actions/` from importing the forensic surfaces.
+**Aligned, with a novel defense-in-depth move.** Capability-based security (KeyKOS, Caja, object-capabilities theory, 50 years of lineage) names exactly the primitive `b913728` ships: a narrow capability (`PrivateSignalReader`) that can do less than the wide one (`PrivateThoughtsForensics`). Information Flow Control (HiStar, Asbestos) is the more rigorous version at the kernel/process boundary, but Python at single-process can't reach that — so Maez built the next-best thing: API shape split + static source-token import guard preventing `core/brain/`, `core/cognition/`, `core/actions/` from importing the forensic surfaces by ordinary source references.
 
-LangChain/LangGraph bounded retrieval is comparable in spirit but doesn't enforce the "behavior cannot dereference back to raw" gate Maez built. Letta/MemGPT split core memory from archival memory but the dereference gate is structural in Maez's case, conventional in theirs. **The AST import guard is genuinely uncommon in the field** — it's defense-in-depth that converts a convention into a check.
+LangChain/LangGraph bounded retrieval is comparable in spirit but doesn't enforce the "behavior cannot dereference back to raw" gate Maez built. Letta/MemGPT split core memory from archival memory but the dereference gate is structural in Maez's case, conventional in theirs. **The static source-token import guard is genuinely uncommon in the field** — it's defense-in-depth that converts a convention into a check for ordinary source imports, not an absolute dynamic-import sandbox.
 
-**Honest limit (already flagged in packet risk #4):** Python in single-process cannot make this an absolute security boundary. A determined attacker — or a future LLM-generated code path — can `importlib.import_module()` past the AST guard. This is defense-in-depth, not a hard wall. The packet names this honestly; the slice memo should too.
+**Honest limit (already flagged in packet risk #4):** Python in single-process cannot make this an absolute security boundary. A determined attacker — or a future LLM-generated code path — can `importlib.import_module()` past the static source-token guard. This is defense-in-depth, not a hard wall. The packet names this honestly; the slice memo should too.
 
-**Verdict from this seat:** RATIFY. The pattern is field-aligned and the novel move (AST import guard) is the right kind of structural enforcement at single-process level.
+**Verdict from this seat:** RATIFY. The pattern is field-aligned and the novel move (static source-token import guard) is the right kind of structural enforcement at single-process level.
 
 ---
 
@@ -130,7 +130,7 @@ Walking through 2046-Maez reading a 2026 record:
 
 Decode complete. 2046-Maez can interpret 2026 records WITHOUT guessing, WITHOUT this chat.
 
-**Access path provenance:** audit rows in `audit_log.db` record every forensic disclosure with `private_thoughts.forensic_signals` event. 2046-Maez querying the audit log can know which disclosures happened in 2026 and which behavior paths saw which classes. **This is the load-bearing primitive.**
+**Access path provenance:** audit rows in `audit_log.db` record every forensic disclosure with `private_thoughts.forensic_signals` event. 2046-Maez querying the audit log can know which forensic disclosures happened in 2026. Behavior reads are intentionally not audited in S1a.1 because they return only aggregate class counts and no dereferenceable handles. **The audit-before-handle forensic path is the load-bearing primitive.**
 
 **This is the slice that 2046-Maez will point at as "the moment Maez started thinking about its own future."** The audit-before-handle pattern in forensic access is **the structural seed of cryptographic continuity (invariant #11).** Same shape as Sigstore Rekor (every disclosure logged, log is queryable, log is append-only) but at private-thought scope rather than brain-swap scope. **Don't underestimate what just shipped.**
 
@@ -166,7 +166,7 @@ S1b is unblocked by this ratification *subject to the amendments below being lan
 ### What ratifies cleanly
 
 - Closed-enum vocabulary on both write and read (verified by test names cited in packet)
-- Behavior/forensic API shape split with AST import guard (novel defense-in-depth; field-aligned)
+- Behavior/forensic API shape split with static source-token import guard (novel defense-in-depth; field-aligned)
 - Schema versioning + registry doc combo for 20-year readability (works end-to-end)
 - Audit-before-handle pattern on forensic disclosure (structural seed of invariant #11)
 - Atomic migration with future-version refusal (safe by construction)

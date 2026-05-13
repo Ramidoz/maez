@@ -29,7 +29,7 @@ Each row maps to one of the [eleven covenant invariants](MAEZ_NORTH_STAR.md#the-
 
 Plus the in-flight slice that is technically *not* one of the twelve but is foundational to several:
 
-| — | private_thoughts (S1) | #4 Interpretive Humility (in part) | `[ ◐ scaffold + hardened access layer · ready for S1b wiring ]` | none |
+| — | private_thoughts (S1) | #4 Interpretive Humility (in part) | `[ ◐ scaffold + hardened access layer · S1b planning unblocked ]` | none |
 
 ---
 
@@ -85,7 +85,7 @@ Numbered S-codes are sequential session anchors. Each slice is its own session (
 The deliberation space many other organs need. See detailed S1 plan below.
 
 - **S1a** — bounded access layer (doorway). DONE 2026-05-13 in `c6df762`. Status `[ ◐ scaffold + bounded access layer ]`. Claude six-role council ran: RATIFY-WITH-AMENDMENTS. NOT promoted to `[ ✓ real ]`.
-- **S1a.1** — hardening. DONE 2026-05-13 in `b913728`. Claude six-role council returned RATIFY-WITH-AMENDMENTS; C1-C6 mechanical closure moves status to `[ ◐ scaffold + hardened access layer · ready for S1b wiring ]`.
+- **S1a.1** — hardening. DONE 2026-05-13 in `b913728`. Claude six-role council returned RATIFY-WITH-AMENDMENTS; C1-C6 mechanical closure moves status to `[ ◐ scaffold + hardened access layer · S1b planning unblocked ]`.
 - **S1b** — wiring. One real producer (which interior state writes via `record_signal()` during a cycle?) and one real consumer (what does the cycle do with `derived_signals()` output?). Unblocked after C1-C6 closure and cooling-off night; still NOT `[ ✓ real ]` until producers/consumers are in the production cycle.
 
 ### S2 — Contextual integrity at ingest
@@ -153,7 +153,7 @@ When a human is the right help, route OUTWARD. Do not absorb the need. The anti-
 - `derived_signals()` — bounded read boundary. Reads metadata only; never returns raw private text.
 - Codex six-agent panel found and fixed real boundary bugs before commit.
 
-**Verification:** `ruff` green on touched files; full suite green (3271 tests OK, 3 skipped); daemon alive under post-Dell-recovery normal Restart=on-failure posture (per [[`project_dell_repair_override_trigger`]]).
+**Verification at S1a review point:** `ruff` green on touched files; full suite green (3271 tests OK, 3 skipped). Operational readiness for S1b is not implied by this historical line; if Maez is intentionally asleep or burn-in conditions change, S1b needs an explicit live-readiness check or operator waiver before wiring.
 
 **Review status:** Claude six-role council ran 2026-05-13. Verdict: **RATIFY-WITH-AMENDMENTS**. S1a stays in tree as unwired scaffold. `b913728` mechanically satisfied the original hardening amendments; this follow-up closes the S1a.1 council amendments. NOT promoted to `[ ✓ real ]`.
 
@@ -186,7 +186,7 @@ After the hardening slice ships, Claude post-implementation council ratifies it,
 - The behavior code path cannot reach raw private text (trace dereference is moved to a separate forensic-only audit pathway with its own auth/audit gates).
 - `derived_signals()` skips malformed rows and emits a counter for malformed-row count without displacing valid history.
 - Signal names are validated against a closed vocabulary or annotated with their own sensitivity tier.
-- Status moves from `[ ◐ scaffold + bounded access layer · pending S1a.1 hardening ]` to `[ ◐ scaffold + hardened access layer · ready for S1b wiring ]`. NOT yet `[ ✓ real ]` — that requires S1b producers + consumers wired.
+- Status moves from `[ ◐ scaffold + bounded access layer · pending S1a.1 hardening ]` to `[ ◐ scaffold + hardened access layer · S1b planning unblocked ]`. NOT yet `[ ✓ real ]` — that requires S1b producers + consumers wired.
 
 ### S1a.1 review protocol
 
@@ -197,7 +197,7 @@ After the hardening slice ships, Claude post-implementation council ratifies it,
 
 ### S1b — wiring (NEXT AFTER COOLING-OFF)
 
-After S1a.1 is ratified, C1-C6 close, and the cooling-off night passes, S1b wires:
+After S1a.1 is ratified, C1-C6 close, the cooling-off night passes, and live-readiness is checked or explicitly waived, S1b wires:
 - One real producer — likely `inner_residue` or `temperament` writes via `record_signal()` during the cycle, with context metadata reflecting the producer's actual sensitivity tier.
 - One real consumer — the cycle reads via `derived_signals()` and uses the result to modulate something observable (gentle pacing? topic avoidance? tone shift?). Specific behavior to be designed in S1b's own predicted effect.
 
