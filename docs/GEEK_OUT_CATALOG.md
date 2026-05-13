@@ -97,3 +97,104 @@ like schema drift on every turn.
 
 **Status:** closed mechanically. Real lookup failures still log at DEBUG;
 uninitialized ledger now means "self_history unavailable" without noise.
+
+---
+
+## Entry 3 - Morning-Memory Audit Rewrite
+
+**Observed:** 2026-05-13, Telegram.
+
+**Natural prompt:**
+
+> Do you remember today morning?
+
+**Geek-out symptom:**
+
+Maez replied:
+
+> No. I have a memory gap from this morning. I don't have a grounded answer
+> for that part.
+
+The answer exposed the audit fallback phrase inside a normal bonded
+conversation. It sounded like a safety rail rather than Maez naturally saying
+it could not remember the morning.
+
+**Root cause:**
+
+`self_claim_audit` flagged two sentences on `telegram_surface` and rewrote in
+sentence mode:
+
+```text
+2026-05-13 18:02:13 self_claim_audit | surface=telegram_surface flagged=2 mode=sentence kinds=judge
+```
+
+The literal phrase comes from `core/safety/self_claim_audit.py`:
+
+```python
+_REWRITE_SENTENCE = "I don't have a grounded answer for that part."
+```
+
+This is not caused by Telegram draft presence. TDP only produced empty draft
+presence telemetry before the reply; the grounded-answer phrase is the
+audit-rail rewrite path.
+
+**Fix landed:**
+
+Not yet.
+
+**Regression test:**
+
+Not yet. Needs a natural-text test for the prompt above that verifies Maez can
+answer memory uncertainty without exposing `_REWRITE_SENTENCE` verbatim.
+
+**Status:** open. Candidate fix should preserve legitimate self-claim refusal
+while replacing the visible sentinel with a natural Telegram-surface rewrite.
+
+---
+
+## Entry 4 - Telegram Draft Presence Mobile Blank Space
+
+**Observed:** 2026-05-13, Telegram desktop/Chrome and mobile.
+
+**Natural prompt:**
+
+> Testing draft presence
+
+**Geek-out symptom:**
+
+TDP succeeded at the Bot API/log level, but the user-visible client behavior
+was weird:
+
+- Desktop/Chrome showed platform-owned `typing` chrome at the top.
+- Mobile showed a large blank space below the conversation.
+
+The mobile blank space made the empty-draft presence feel broken rather than
+present.
+
+**Root cause:**
+
+Likely Telegram-client rendering of an empty bot draft. Maez sent no
+Maez-authored draft text and the final audited reply still worked, but Telegram
+clients rendered the empty draft affordance differently across surfaces.
+
+Observed telemetry:
+
+```text
+2026-05-13 17:59:36 telegram_draft_presence.attempted
+2026-05-13 17:59:36 telegram_draft_presence.succeeded
+2026-05-13 18:01:51 telegram_draft_presence.attempted
+2026-05-13 18:01:52 telegram_draft_presence.succeeded
+```
+
+**Fix landed:**
+
+Not yet. Operator-local TDP config was disabled after observation.
+
+**Regression test:**
+
+Unit tests cannot prove client chrome behavior. Needs live-client observation
+or a revised surface strategy.
+
+**Status:** open / disabled. Do not re-enable TDP until TDP-FOLLOWUP-1 decides
+whether empty draft presence is acceptable, replaced by another presence
+affordance, or abandoned.

@@ -208,3 +208,28 @@ Do not promote to `[ ✓ real ]` from S1b alone.
 - `0` residue rows is consistent with S1b scope: the observed Telegram audit
   rewrite happened on the Telegram surface path, while S1b's `audit_rewrite`
   producer hook is limited to daemon-cycle reasoning.
+
+---
+
+## 2026-05-13 — Operator Restart For TDP Live Enablement
+
+**Timestamp:** `2026-05-13 17:54:25 CDT` -> `2026-05-13 17:55:55 CDT`
+
+**Reason:** load TDP implementation code for first live draft-presence enablement window.
+
+**Restart type:** operator/tool-initiated `maez.service` restart. Stop did not exit gracefully before systemd timeout; systemd sent `SIGKILL` to the old daemon process and started a new one. Not a spontaneous crash, but observation-relevant.
+
+**Service stability after restart:**
+- `maez.service`: active, `NRestarts=0`, started `Wed 2026-05-13 17:55:55 CDT`
+- `llama-server.service`: active, `NRestarts=0`, started `Wed 2026-05-13 01:27:47 CDT`
+- `llama-judge.service`: active, `NRestarts=0`, started `Wed 2026-05-13 01:27:42 CDT`
+- unexpected restarts: none observed
+
+**S1b config after restart:**
+- `producer_enabled`: `True`
+- `consumer_enabled`: `False`
+
+**Operator note:**
+- Restart was for TDP code loading, not for S1b behavior.
+- Producer-only observation remains active; consumer remains disabled.
+- The 90-second stop timeout is a daemon teardown concern to remember separately from S1b/TDP behavior.
