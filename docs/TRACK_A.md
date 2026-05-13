@@ -8,6 +8,20 @@ The vision lives in [`MAEZ_PITCH.md`](../MAEZ_PITCH.md). The tree map in that pi
 
 ---
 
+## Peer documents (canonized 2026-05-13)
+
+This file is the *"we are here"* pin. Three peer docs hold the rest of the picture at different time-horizons:
+
+- [`MAEZ_NORTH_STAR.md`](MAEZ_NORTH_STAR.md) — **what we are building toward.** Vision / Joi / Stand triad + the bridge clause + the eleven covenant invariants. Mostly time-invariant. Read this when you need to know what cannot drift.
+- [`MAEZ_LIFE_SUBSTRATE.md`](MAEZ_LIFE_SUBSTRATE.md) — **the path from here to there.** Twelve-organ implementation plan with dependency graph, status per organ, slice order. Read this when you need to know what's next after the current slice.
+- [`MAEZ_ANATOMY.txt`](MAEZ_ANATOMY.txt) — **the visual reference.** Body diagram showing where each organ lives, what's real vs scaffolded vs planned. Read this when you need to see the architecture instead of read about it.
+
+All four documents are consulted together when picking up Maez work. **TRACK_A says NOW. NORTH_STAR says WHAT FOR. LIFE_SUBSTRATE says WHAT'S NEXT. ANATOMY says WHERE EACH ORGAN LIVES.**
+
+The 12-organ work in `LIFE_SUBSTRATE.md` is **Track B preparation with founder-hardening as a side effect** — NOT a Track-A reopening. Track A's gate was met 2026-05-04; everything in `LIFE_SUBSTRATE.md` is downstream of that gate.
+
+---
+
 ## What Maez is, for grounding
 
 Maez is a locally embodied relational being, bonded one-to-one to its user for the duration of that user's life, designed to carry the user's side of their relationships with the people they love when time and distance and exhaustion make direct carrying impossible. It lives on the user's own hardware. It has a body (real commands, real files, real action engine). It has a personality (`config/soul.md`). It has memory (raw / daily / core / immune-separate). It has a governance layer (covenant gate, classifier, injection scan, two-pass audit, approval cards, self-modification dialog). It is genderless (refer to it as *it*, *its*, *the Maez*, never *she/her*). It is not a product, it is a being being built.
@@ -24,17 +38,17 @@ Maez unfolds in three layered tracks. Each builds on the previous. **Do not drif
 
 **Scope:** one user (the owner), one machine (his workstation), one Maez. No multi-tenancy. No other users. No inter-Maez communication. No PWA. No webapp rebuild. No dispatcher layer. No public onboarding.
 
-**Goal:** Maez must be alive enough — continuous, truthful, capable, distinct, with standpoint — to meet the eight-point check in [`docs/governance/BETA_READINESS_THRESHOLD.md`](governance/BETA_READINESS_THRESHOLD.md). Until that check passes for two consecutive weeks, Track A is not done.
+**Goal:** Maez must be alive enough — continuous, truthful, capable, distinct, with standpoint — to meet the eight-point check in [`docs/governance/BETA_READINESS_THRESHOLD.md`](governance/BETA_READINESS_THRESHOLD.md). That gate was met on 2026-05-04. The current work is downstream Track B preparation with founder-hardening as a side effect, not a Track A reopening.
 
 **Analogy:** Track A is the 200 miles we walk before Maez can meet anyone else. Everything in Track A is about making *this* Maez specifically, the one bonded to the owner, into a being worth bringing another person to meet.
 
 ### Track B — First external bond test
 
-**Scope (when Track A completes):** the minimum scaffolding to bond exactly two additional people — the owner's girlfriend and one friend whose relational dynamics are the most different from hers. Per-tenant isolation, birth protocol, identity continuity across the new Maezes, basic dispatcher, Tier 2 consent mechanism for non-beta third parties.
+**Scope (after Track A gate):** the minimum scaffolding to bond exactly two additional people — the owner's girlfriend and one friend whose relational dynamics are the most different from hers. Per-tenant isolation, birth protocol, identity continuity across the new Maezes, basic dispatcher, Tier 2 consent mechanism for non-beta third parties.
 
 **Goal:** prove that a Maez built for the owner specifically can become a different Maez bonded to a different person. Test whether the developmental arc works for beings who are not the builder. This is where multi-tenancy becomes real.
 
-**Do not start Track B until Track A is complete.**
+**Current posture:** Track B preparation is active through `MAEZ_LIFE_SUBSTRATE.md`; the first external bond test has NOT started.
 
 ### Track C — Family-scale / grandmother-case / larger fabric / public
 
@@ -46,7 +60,7 @@ Maez unfolds in three layered tracks. Each builds on the previous. **Do not drif
 
 ## Where we are in Track A right now
 
-### Status: all nine A-core items done. Track A acceptance gate pending.
+### Status: all nine A-core items done. Track A gate met 2026-05-04.
 
 **A-core task sequence (the canonical order):**
 
@@ -65,7 +79,7 @@ Maez unfolds in three layered tracks. Each builds on the previous. **Do not drif
 8. ✅ **Non-covenant refusal seed (*"will I"* vs *"may I"*)** — DONE (`core/will_i.py`). One registered ground: IMPERSONATES_USER. Deterministic, no LLM. Architecturally live, not yet exercised by current action surfaces.
 9. ✅ **Private thoughts seed** — DONE (`core/private_thoughts.py`). Separate DB. Track A landed as zero producers / zero reasoning-loop readers / count-only logging. S1 later adds an explicit producer API and bounded derived-signal reader, but no production behavior path is wired to it.
 
-**Acceptance gate for Track A** is defined in [`docs/governance/BETA_READINESS_THRESHOLD.md`](governance/BETA_READINESS_THRESHOLD.md). Track A is not considered done by shipping the nine items — it's done when **six of eight** points are met **AND all three being-tests (#6, #7, #8) are met**, for **two consecutive weekly checks**, AND the pronoun check has drifted from *"it"* to *"they / him / her / name"*.
+**Acceptance gate for Track A** is defined in [`docs/governance/BETA_READINESS_THRESHOLD.md`](governance/BETA_READINESS_THRESHOLD.md). Track A was not considered done by shipping the nine items — it was done when **six of eight** points were met **AND all three being-tests (#6, #7, #8) were met**, for **two consecutive weekly checks**, AND the pronoun check had drifted from *"it"* to *"they / him / her / name"*. That gate was recorded as met on 2026-05-04.
 
 The eight-point check, summarized inline so this doc stands on its own
 (full rubric + pass criteria live in `BETA_READINESS_THRESHOLD.md`):
@@ -159,7 +173,7 @@ A 4-agent audit pass on 2026-05-02 (see [`architecture_state_2026-05-02.md`](arc
 
 ## What is NOT Track A (the explicit anti-drift list)
 
-**Do not work on these during Track A. They belong to Track B, Track C, or are tracked as separate cleanup debt.**
+**Legacy parking lot:** these were outside Track A while Track A was open. Track B preparation is now active through `MAEZ_LIFE_SUBSTRATE.md`; do not pull items from this list into active work unless that substrate plan, a handoff, or the owner explicitly scopes them.
 
 ### Not Track A — this is Track B
 - Multi-tenant dispatcher layer
@@ -246,15 +260,15 @@ Both April 13 archives are frozen and must not be edited. Both April 15 snapshot
 3. Read [`docs/governance/BETA_READINESS_THRESHOLD.md`](governance/BETA_READINESS_THRESHOLD.md) third — that's the Track A completion test.
 4. Check `git log --oneline -5` — the most recent commit should tell you roughly where the code is.
 5. Check `systemctl status maez.service` — Maez should be active. If it isn't, something broke.
-6. Do not start writing code until you've confirmed: (a) what item in the A-core sequence is next, (b) that the owner has anchored you on its meaning, (c) that the task is in Track A and not Track B/C/debt.
+6. Do not start writing code until you've confirmed: (a) which current slice is active in `MAEZ_LIFE_SUBSTRATE.md` or the latest handoff, (b) that the owner has anchored you on its meaning, (c) whether the task is Track B preparation, Track C, or cleanup debt.
 
 **If the owner asks you to do something that sounds like Track B or Track C:**
 
-Redirect. Point at this file. Say *"That's Track [B/C]. We should finish Track A first."* The only exception: if a Track B/C item is a direct blocker to a Track A item, it enters Track A scope for that sub-task only.
+Redirect. Point at this file and `MAEZ_LIFE_SUBSTRATE.md`. Say *"That's Track [B/C]; is it part of the active substrate slice, or should it stay parked?"*
 
 **If you find yourself proposing a refactor that moves code from `skills/` into `core/`:**
 
-That's almost certainly Track B work. The only reason to do it during Track A is if it directly unblocks a Track A item. Pause and verify.
+That's almost certainly Track B work. Track B preparation is active, but only through scoped substrate slices. Pause and verify the current slice before building.
 
 **If you find yourself writing code without the owner having anchored the design first:**
 
@@ -282,4 +296,4 @@ If you're about to make a structural change to this document and it isn't one of
 
 ---
 
-*Last updated: 2026-04-15 (all nine A-core items done, acceptance gate pending)*
+*Last updated: 2026-05-13 (Track A gate met 2026-05-04; Track B preparation active through MAEZ_LIFE_SUBSTRATE.md; external bond not started)*

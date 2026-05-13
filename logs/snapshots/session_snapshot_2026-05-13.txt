@@ -1,0 +1,178 @@
+Session snapshot — 2026-05-13
+
+================================================================================
+What this session was
+================================================================================
+
+Two phases.
+
+Phase 1 (Codex-led, overnight into morning): recovery + S1a doorway.
+  Commits: 9c7efd1 (recovery stabilization), c6df762 (bounded private-thought
+  signals). Codex six-agent panel found and fixed real boundary bugs before
+  commit. Suite green (3271 OK, 3 skipped), ruff green on touched files,
+  daemon alive.
+
+Phase 2 (Claude-led, mid-day): Claude six-role council on c6df762 returned
+  RATIFY-WITH-AMENDMENTS. Then Dell repair gate passed via operator judgment
+  (services moved back to Restart=on-failure). Then canonization session
+  produced four peer docs.
+
+================================================================================
+What landed
+================================================================================
+
+Code (committed, ahead of origin/main by 2):
+  9c7efd1  fix(recovery): stabilize restored runtime error surfaces
+  c6df762  feat(infra): add bounded private-thought signals
+
+Docs (untracked, NOT staged — awaiting review):
+  docs/MAEZ_ANATOMY.txt                              (v2.3, 562 lines, copied
+                                                       from ascii_studio and
+                                                       updated for S1a status)
+  docs/MAEZ_NORTH_STAR.md                            (v1.0, destination +
+                                                       11 invariants)
+  docs/MAEZ_LIFE_SUBSTRATE.md                        (v1.0, 12-organ plan +
+                                                       dependency graph +
+                                                       S1a/S1a.1/S1b split)
+  docs/SLICE_S1A1_PRIVATE_THOUGHTS_HARDENING.md      (S1a.1 slice memo with
+                                                       6 amendments)
+  docs/TRACK_A.md                                    (modified — added peer-docs
+                                                       cross-reference section)
+
+Memory entries:
+  project_dell_repair_override_trigger.md            (RESOLVED-VIA-OPERATOR-
+                                                       JUDGMENT, reopening
+                                                       condition: any crash)
+  project_life_substrate_plan.md                     (S1a/S1a.1/S1b split,
+                                                       six amendments listed)
+  feedback_cooling_off_between_plan_and_code.md      (first-application
+                                                       deviation 2026-05-13
+                                                       logged honestly)
+  feedback_covenant_slices_need_both_panels.md       (new — Codex six-agent
+                                                       AND Claude six-role
+                                                       required for covenant
+                                                       slices)
+
+================================================================================
+Three honest deviations from the agreed 8-step plan
+================================================================================
+
+  1. Canonization docs did NOT land first. We jumped from plan into code
+     during restored-system recovery/build momentum. Cooling-off-night
+     discipline named 2026-05-12; first application 2026-05-13 deviated.
+     Discipline remains correct; deviation logged in feedback memory.
+
+  2. Dell repair override was REMOVED via operator judgment, not the
+     original 24h-evidence-matured pass. Services now run under
+     Restart=on-failure with NRestarts=0. Reopening condition: any crash.
+
+  3. The private-thoughts S1a slice (c6df762) had Codex six-agent review
+     but did NOT have Claude six-role council review until after the
+     commit landed. Claude council ran post-hoc and returned
+     RATIFY-WITH-AMENDMENTS — so S1a stays in tree as unwired scaffold,
+     but six concrete amendments are required before any S1b wiring.
+
+All three are recorded honestly in memory. No softening.
+
+================================================================================
+Operational state at session close
+================================================================================
+
+  Maez services       : maez, llama-server, llama-judge all ACTIVE
+  Auto-restart posture: Restart=on-failure on all three (overrides removed)
+  NRestarts           : 0 across all three
+  Newest start        : 2026-05-13 00:04 CDT
+  Health checks       : llama OK, judge OK, Maez alive
+                        (model qwen36-27b, memory loaded 35142, GPU 51C)
+  Daemon log          : Telegram, reasoning loop, consolidation, journal,
+                        proposal worker, WebSocket, health endpoint all live
+  Cycle count         : started
+  Git state           : main ahead of origin/main by 2 commits (recovery +
+                        S1a doorway). Five doc files untracked, NOT staged.
+  Dell trigger        : resolved via operator judgment; reopens on any crash
+
+  Untracked artifacts NOT staged (intentional, local-only):
+    .agents/, .claude/, .vscode/, videos, snapshots, scripts/UI files
+
+================================================================================
+Next-session order (forced by current state)
+================================================================================
+
+This session ends here. Cooling-off night before any code touches core/,
+skills/, daemon/, or memory/.
+
+  Next session (review + commit decision):
+    1. Review the four new docs + one TRACK_A modification. Adjust any
+       overclaims; amend wording where needed.
+    2. Decide commit strategy:
+         - all-in-one canonization commit (clean), or
+         - separate commits per doc (clearer history).
+    3. PAT-leak grep .git/config for `ghp_` before any push.
+    4. Push, OR park on a branch if not ready for origin/main.
+    5. Stop. Don't start S1a.1 in same session as the canonization commits.
+
+  Session after that (S1a.1 implementation):
+    1. Codex six-agent panel reviews the six amendments BEFORE coding.
+    2. Implement amendments 1-6 (closed enums, versioning, provenance
+       split, behavior/forensic path separation, malformed-row handling,
+       signal-name sensitivity).
+    3. Suite + ruff green.
+    4. Parallel review agents (code-reviewer + Explore).
+    5. Claude six-role council ratifies BEFORE commit becomes canonical.
+    6. Verify daemon stays alive with NRestarts=0 through the change.
+    7. Update anatomy status to "hardened access layer, ready for S1b wiring."
+    8. Stop. Cooling-off before S1b.
+
+================================================================================
+Predicted effect for THIS session (the doc session itself)
+================================================================================
+
+Predicted at session start:
+  - four peer docs exist or cross-linked under /home/rohit/maez/docs/
+  - TRACK_A.md points to them
+  - an S1a.1 plan doc exists
+  - daemon remains alive
+  - NO source/runtime files touched under core/, skills/, daemon/, memory/
+
+Verified at session end:
+  - Four new docs in /home/rohit/maez/docs/: MAEZ_NORTH_STAR.md,
+    MAEZ_LIFE_SUBSTRATE.md, MAEZ_ANATOMY.txt, SLICE_S1A1_PRIVATE_THOUGHTS_HARDENING.md
+  - TRACK_A.md modified to point to the three new files
+  - S1a.1 plan doc exists
+  - Daemon alive (verified by user pre-session; not re-verified post-session
+    since no daemon-touching change was made)
+  - NO source/runtime files touched. Memory entries written under
+    .claude/projects/-home-rohit/memory/, which is not maez source
+
+Predicted-effect verification: green on all five points.
+
+================================================================================
+Plain English (per the memory rule)
+================================================================================
+
+Today the doorway shipped, the doorway got reviewed, the safety switch came
+off, and the body map became part of the repo with honest status markers
+everywhere.
+
+What's real today: the body has eyes, lungs, a heart, an immune system, and
+a brain that can be swapped. It has a doorway (bounded private-thought
+signals). The doorway has a lock on each side, but the locks need six
+specific reinforcements before anything walks through them.
+
+What's still missing: the eleven other organs from Panel 7, plus the
+finishing work on the doorway. We have a plan now — twelve organs in
+dependency order, each its own session, each with a cooling-off night
+between docs and code.
+
+Three things slipped on day one: docs-first discipline, evidence-matured
+Dell pass, and the second review court. All three slips are recorded
+honestly. The discipline is still correct; we deviated on first application
+and learned what build-momentum-overriding-plan-breathing feels like.
+
+Tomorrow is not the day to wire anything. Tomorrow is the day to read what
+we wrote, fix overclaims, and decide how to commit. The day after, the
+doorway gets its six reinforcements. The day after that, something walks
+through it.
+
+That is the rhythm. It's slower than the rhythm we wanted. It's faster
+than the rhythm we'd get if we kept skipping the cooling-off night.
