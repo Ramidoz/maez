@@ -107,6 +107,7 @@ def accepts_provenance(value: str) -> bool:
 
 _REWRITE_SENTENCE = "I don't have a grounded answer for that part."
 _REWRITE_WHOLE = "I don't have a grounded answer for this right now."
+_REWRITE_SENTENCE_STEM = _REWRITE_SENTENCE.rstrip(".")
 
 # If the flagged fraction of sentences meets or exceeds this AND at least
 # _SHORTCIRCUIT_MIN_FLAGS are flagged, the entire response is replaced with
@@ -438,6 +439,14 @@ def _rewrite(text: str, flags: list[Flag]) -> tuple[str, str]:
         new_text = new_text[:start] + _REWRITE_SENTENCE + " " + new_text[end:]
     new_text = re.sub(r"[ \t]{2,}", " ", new_text)
     new_text = re.sub(r" +([.,;!?])", r"\1", new_text)
+    # If the model is explaining a prior audit fallback and another
+    # sentence gets rewritten, sentence-mode can create a recursive-looking
+    # "grounded answer" loop. Collapse to the single whole-response fallback
+    # instead of surfacing multiple audit sentinels in one user-facing reply.
+    before_sentinels = text.lower().count(_REWRITE_SENTENCE_STEM.lower())
+    after_sentinels = new_text.lower().count(_REWRITE_SENTENCE_STEM.lower())
+    if before_sentinels > 0 and after_sentinels > before_sentinels:
+        return _REWRITE_WHOLE, "shortcircuit"
     return new_text, "sentence"
 
 

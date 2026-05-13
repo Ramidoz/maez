@@ -283,6 +283,28 @@ class ShortCircuitRewrite(unittest.TestCase):
         self.assertIn("Fine four.", new)
         self.assertIn("Fine five.", new)
 
+    def test_existing_audit_sentinel_never_gets_duplicated(self):
+        text = (
+            'I was repeating the fallback phrase "I don\'t have a grounded '
+            'answer for that part." Everything else is stable.'
+        )
+        claim = "Everything else is stable."
+        start = text.find(claim)
+        flag = Flag(
+            kind="judge",
+            span=(start, start + len(claim)),
+            text=claim,
+            reason="no live system signal",
+        )
+
+        new, mode = _rewrite(text, [flag])
+
+        self.assertEqual(mode, "shortcircuit")
+        self.assertEqual(
+            new, "I don't have a grounded answer for this right now.",
+        )
+        self.assertEqual(new.count("I don't have a grounded answer"), 1)
+
 
 # ── _find_flags via judge (stubbed LLM) ────────────────────────────────
 
