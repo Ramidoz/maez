@@ -37,6 +37,7 @@ import html as _html
 import re
 from collections import OrderedDict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
@@ -47,6 +48,7 @@ logger = logging.getLogger(__name__)
 class TelegramDraftPresenceConfig:
     enabled: bool = False
     timeout_ms: int = 750
+    signature: str = ""
 
 
 def _parse_positive_float_env(var_name: str, default: float) -> float:
@@ -316,6 +318,7 @@ class TelegramAdapter(BasePlatformAdapter):
             / "telegram_draft_presence.local.json"
         )
         self._telegram_draft_presence_bad_config_warned = False
+        self._telegram_draft_presence_config_signature: Optional[str] = None
         self._telegram_draft_presence_attempted: OrderedDict[tuple, None] = OrderedDict()
         self._telegram_draft_presence_fallback_id = 0
         self._telegram_draft_presence_circuit_open = False
@@ -1047,13 +1050,7 @@ class TelegramAdapter(BasePlatformAdapter):
         Also delegates to ``BasePlatformAdapter.stop()`` so the session
         sweep task (slice 1.5 base class) is cancelled in lockstep.
         """
-        draft_tasks = list(self._telegram_draft_presence_tasks)
-        for draft_task in draft_tasks:
-            if draft_task and not draft_task.done():
-                draft_task.cancel()
-        if draft_tasks:
-            await asyncio.gather(*draft_tasks, return_exceptions=True)
-        self._telegram_draft_presence_tasks.clear()
+        await self._drain_telegram_draft_presence_tasks()
 
         task = self._batch_sweep_task
         if task is not None and not task.done():
@@ -1167,6 +1164,9 @@ class TelegramAdapter(BasePlatformAdapter):
                 await self._app.shutdown()
             except Exception as e:
                 logger.warning("[%s] Error during Telegram disconnect: %s", self.name, e, exc_info=True)
+        # App shutdown can flush late processing hooks. Drain again so a
+        # shutdown-scheduled draft task cannot survive the disconnect boundary.
+        await self._drain_telegram_draft_presence_tasks()
         self._release_platform_lock()
 
         for task in self._pending_photo_batch_tasks.values():
@@ -3343,12 +3343,32 @@ class TelegramAdapter(BasePlatformAdapter):
         try:
             if not path.exists():
                 return TelegramDraftPresenceConfig()
-            raw = json.loads(path.read_text(encoding="utf-8"))
+            text = path.read_text(encoding="utf-8")
+            signature = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            signature_changed = signature != self._telegram_draft_presence_config_signature
+            if signature_changed:
+                self._telegram_draft_presence_config_signature = signature
+                self._telegram_draft_presence_bad_config_warned = False
+            raw = json.loads(text)
             if not isinstance(raw, dict):
                 raise ValueError("config root must be an object")
             if raw.get("schema_version") != 1:
                 raise ValueError("unsupported schema_version")
             enabled = bool(raw.get("enabled", False))
+            enabled_until = str(raw.get("enabled_until") or "").strip()
+            if enabled:
+                if not enabled_until:
+                    enabled = False
+                else:
+                    try:
+                        expiry = datetime.fromisoformat(
+                            enabled_until.replace("Z", "+00:00")
+                        )
+                        if expiry.tzinfo is None:
+                            expiry = expiry.replace(tzinfo=timezone.utc)
+                        enabled = expiry > datetime.now(timezone.utc)
+                    except ValueError:
+                        enabled = False
             timeout_ms = raw.get("attempt_timeout_ms", 750)
             try:
                 timeout_ms = int(timeout_ms)
@@ -3356,9 +3376,13 @@ class TelegramAdapter(BasePlatformAdapter):
                 timeout_ms = 750
             if timeout_ms < 500 or timeout_ms > 1000:
                 timeout_ms = 750
+            if signature_changed:
+                self._telegram_draft_presence_circuit_open = False
+                self._telegram_draft_presence_failures.clear()
             return TelegramDraftPresenceConfig(
                 enabled=enabled,
                 timeout_ms=timeout_ms,
+                signature=signature,
             )
         except Exception as exc:
             if not self._telegram_draft_presence_bad_config_warned:
@@ -3372,6 +3396,15 @@ class TelegramAdapter(BasePlatformAdapter):
 
     def _telegram_draft_presence_config(self) -> TelegramDraftPresenceConfig:
         return self._load_telegram_draft_presence_config()
+
+    async def _drain_telegram_draft_presence_tasks(self) -> None:
+        draft_tasks = list(self._telegram_draft_presence_tasks)
+        for draft_task in draft_tasks:
+            if draft_task and not draft_task.done():
+                draft_task.cancel()
+        if draft_tasks:
+            await asyncio.gather(*draft_tasks, return_exceptions=True)
+        self._telegram_draft_presence_tasks.clear()
 
     def _telegram_draft_presence_next_fallback_id(self) -> int:
         self._telegram_draft_presence_fallback_id += 1
@@ -3390,7 +3423,7 @@ class TelegramAdapter(BasePlatformAdapter):
         update_id = getattr(event, "platform_update_id", None)
         if message_id:
             draft_id = self._telegram_draft_presence_hash_id(chat_id, str(message_id))
-            key_tail = str(message_id)
+            return draft_id, (chat_id, str(message_id))
         else:
             draft_id = self._telegram_draft_presence_next_fallback_id()
             key_tail = f"fallback:{draft_id}"
@@ -3432,17 +3465,22 @@ class TelegramAdapter(BasePlatformAdapter):
         return "api_error"
 
     def _telegram_draft_presence_log(self, event_name: str, *, reason: str | None = None, timeout_ms: int | None = None) -> None:
+        result = event_name.rsplit(".", 1)[-1]
         parts = [
             event_name,
             "surface=telegram",
             "feature=draft_presence",
+            f"result={result}",
             "producer_version=telegram_draft_presence.v1",
         ]
         if reason:
             parts.append(f"reason={reason}")
         if timeout_ms is not None:
             parts.append(f"timeout_ms={timeout_ms}")
-        logger.info(" | ".join(parts))
+        try:
+            logger.info(" | ".join(parts))
+        except Exception:
+            pass
 
     async def send_empty_draft_presence(self, event: MessageEvent) -> bool:
         """Attempt one empty Telegram draft presence signal.
@@ -3481,19 +3519,19 @@ class TelegramAdapter(BasePlatformAdapter):
             "telegram_draft_presence.attempted",
             timeout_ms=cfg.timeout_ms,
         )
-        kwargs: Dict[str, Any] = {
-            "chat_id": int(chat_id),
-            "draft_id": draft_id,
-            "text": "",
-            "connect_timeout": cfg.timeout_ms / 1000.0,
-            "read_timeout": cfg.timeout_ms / 1000.0,
-            "write_timeout": cfg.timeout_ms / 1000.0,
-            "pool_timeout": cfg.timeout_ms / 1000.0,
-        }
-        thread_id = self._metadata_thread_id(metadata)
-        if thread_id is not None:
-            kwargs["message_thread_id"] = thread_id
         try:
+            kwargs: Dict[str, Any] = {
+                "chat_id": int(chat_id),
+                "draft_id": draft_id,
+                "text": "",
+                "connect_timeout": cfg.timeout_ms / 1000.0,
+                "read_timeout": cfg.timeout_ms / 1000.0,
+                "write_timeout": cfg.timeout_ms / 1000.0,
+                "pool_timeout": cfg.timeout_ms / 1000.0,
+            }
+            thread_id = self._metadata_thread_id(metadata)
+            if thread_id is not None:
+                kwargs["message_thread_id"] = thread_id
             await asyncio.wait_for(
                 send_draft(**kwargs),
                 timeout=cfg.timeout_ms / 1000.0,
@@ -3521,6 +3559,9 @@ class TelegramAdapter(BasePlatformAdapter):
             return False
 
     def _schedule_empty_draft_presence(self, event: MessageEvent) -> None:
+        cfg = self._telegram_draft_presence_config()
+        if not cfg.enabled or self._telegram_draft_presence_circuit_open:
+            return
         task = asyncio.create_task(self.send_empty_draft_presence(event))
         self._telegram_draft_presence_tasks.add(task)
         task.add_done_callback(self._telegram_draft_presence_tasks.discard)

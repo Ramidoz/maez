@@ -14,6 +14,7 @@ Do not promote Telegram draft presence beyond experimental surface hardening unt
 - No draft failure blocks final replies.
 - Rollback verification succeeds after disablement.
 - Bonded-user presence check reports `present` or `neutral`, not weird/always-on in a bad way.
+- Day-1, week-2, and month-2 rechecks are either complete or deliberately waived by the operator.
 
 ## Weirdness Categories
 
@@ -40,6 +41,7 @@ If the same weirdness category repeats after re-enable, leave draft presence dis
 {
   "schema_version": 1,
   "enabled": true,
+  "enabled_until": "YYYY-MM-DDTHH:MM:SSZ",
   "attempt_timeout_ms": 750,
   "max_attempts_per_inbound_message": 1
 }
@@ -50,6 +52,9 @@ If the same weirdness category repeats after re-enable, leave draft presence dis
 - Client:
 - Platform:
 - Version if known:
+- Client auto-update date if known:
+- Notification settings relevant to Telegram drafts:
+- Cross-client check performed: yes/no
 
 **Counters:**
 
@@ -63,11 +68,25 @@ If the same weirdness category repeats after re-enable, leave draft presence dis
 - Telegram-owned empty-draft chrome appeared: yes/no/unknown
 - Persisted to chat history: yes/no
 - Notification triggered: yes/no/unknown
+- Stale-draft duration if observed:
 - Partial Maez-authored content appeared: yes/no
 
 **Operator presence check:** present / neutral / weird
 
 **Weirdness category if any:** none / category
+
+**Prior weirdness windows:** none / links
+
+**Repeat category:** yes/no
+
+**Spec amendment id required before re-enable:** none / id
+
+**Scheduled rechecks:**
+
+- Day 1:
+- Week 2:
+- Month 2:
+- After Telegram client update:
 
 **Rollback verification if disabled:**
 
@@ -80,4 +99,3 @@ If the same weirdness category repeats after re-enable, leave draft presence dis
 **Decision:** continue / disable / diagnose / amend spec
 
 **Notes:**
-

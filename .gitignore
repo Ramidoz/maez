@@ -66,6 +66,8 @@ config/entity_semantics.local.yaml
 # Owner-local S1b private-thoughts kill-switch/runtime tuning.
 config/private_thoughts_s1b.local.json
 config/private_thoughts_s1b.local.json.*
+
+# Owner-local Telegram draft-presence runtime tuning.
 config/telegram_draft_presence.local.json
 config/telegram_draft_presence.local.json.*
 

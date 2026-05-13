@@ -83,6 +83,7 @@ Runtime config path:
 {
   "schema_version": 1,
   "enabled": false,
+  "enabled_until": "2026-05-14T00:00:00Z",
   "attempt_timeout_ms": 750,
   "max_attempts_per_inbound_message": 1
 }
@@ -96,10 +97,11 @@ Rules:
 - Malformed config means disabled and emits a content-free warning at most once per process/config-load window.
 - Missing, unsupported, or future `schema_version` means disabled and emits a content-free warning at most once per process/config-load window.
 - `enabled=false` disables all draft attempts without changing normal Telegram replies.
+- `enabled=true` also requires a future `enabled_until` timestamp. Missing, malformed, or expired `enabled_until` fails closed to disabled.
 - `attempt_timeout_ms` defaults to `750`.
 - Valid timeout range is `500` to `1000` milliseconds. Out-of-range values fall back to `750`.
 - `max_attempts_per_inbound_message` is fixed at `1` in this slice, even if configured differently.
-- `enabled=true` requires a `maez.service` restart unless the implementation explicitly adds hot reload in the same slice.
+- Config is hot-read by the draft wrapper. Changing a valid config file resets circuit-breaker and failure-window state; malformed config remains disabled and warning-bounded.
 
 The config file is owner-local runtime config. It is not committed. This mirrors the S1b local kill-switch pattern.
 
@@ -139,7 +141,7 @@ Rate limit:
 - Draft attempt happens once per flushed logical `MessageEvent`, not once per raw Telegram update. Text batching must complete before the draft decision.
 - If one logical user message triggers multiple Maez internal cycles, those cycles coalesce behind the same inbound-message draft decision.
 - If multiple Telegram messages arrive, each message may receive one independent empty draft attempt.
-- Idempotency mechanism: maintain a bounded in-process set of inbound Telegram message ids that already received a draft attempt. The set is capped to the most recent 512 ids and is pruned FIFO-style. The key is `(chat_id, platform_update_id, message_id)` when all are available; if one is missing, use the generated non-zero fallback draft id in the key for that process.
+- Idempotency mechanism: maintain a bounded in-process set of inbound Telegram message ids that already received a draft attempt. The set is capped to the most recent 512 ids and is pruned FIFO-style. If Telegram `message_id` is available, the key is `(chat_id, message_id)` so duplicate delivery with a different `update_id` is suppressed. If `message_id` is missing, the key uses `(chat_id, platform_update_id, fallback_draft_id)`.
 - The wrapper marks the inbound id as attempted before network I/O. Timeouts, cancellations, and API errors must not allow a second draft attempt for the same logical event.
 - Daemon restart clears the in-process idempotency set and resets the process-local fallback id sequence. This is intentional and safe: Telegram inbound messages are not replayed as new live messages during normal operation, and duplicate draft attempts after a crash/restart are still empty, ephemeral, and bounded to one per reprocessed inbound event.
 
@@ -181,7 +183,7 @@ State machine:
 - Disabled by missing config or `enabled=false`: emit no per-message draft event.
 - Bad config, unsupported schema, or future schema: emit one content-free config warning per process/config-load window; emit no per-message draft event.
 - Unsupported library/API method: emit one `telegram_draft_presence.failed` event with reason `unsupported`, then open the circuit breaker.
-- Enabled and supported: emit `telegram_draft_presence.attempted` immediately before scheduling the draft task.
+- Enabled and supported: the adapter performs a scheduler-side config/circuit check; the scheduled draft task then repeats config/idempotency checks and emits `telegram_draft_presence.attempted` immediately before network I/O.
 - Success: emit `telegram_draft_presence.succeeded`.
 - Timeout, cancellation, network error, or API error: emit `telegram_draft_presence.failed` with sanitized reason.
 
@@ -216,9 +218,9 @@ If telemetry write fails, draft behavior remains fail-neutral and final reply co
 
 1. Telegram receives an inbound user message through the existing v2 surface.
 2. Text batching produces one flushed logical `MessageEvent` when applicable.
-3. Message handler checks runtime config.
+3. Adapter processing hook checks runtime config before scheduling work.
 4. If disabled, no draft attempt occurs.
-5. If enabled, the adapter schedules one empty draft task from the background processing path.
+5. If enabled, the adapter schedules one empty draft task from the background processing path; the task hot-reads config again before network I/O.
 6. Regardless of draft result, Maez continues the existing brain loop and audit path.
 7. Existing final Telegram send persists the final audited reply.
 
@@ -236,6 +238,8 @@ Mandatory tests before implementation commit:
 - **Malformed config disabled:** bad JSON disables draft attempts and logs content-free warning.
 - **Bad config warning bounded:** malformed config logs at most once per process/config-load window, not once per inbound message.
 - **Unsupported schema disabled:** unsupported or future `schema_version` disables draft attempts.
+- **Expired or missing timebox disabled:** `enabled=true` without a future `enabled_until` fails closed.
+- **Disabled config schedules no task:** `enabled=false`, missing config, expired timebox, bad schema, or open circuit does not create a draft task.
 - **Success path:** enabled config attempts one empty draft before final send.
 - **One draft per flushed logical event:** draft attempt happens once per flushed logical `MessageEvent`, not once per raw Telegram update.
 - **One draft per inbound message:** duplicate internal cycles for one inbound message do not create repeated draft attempts.
@@ -248,6 +252,10 @@ Mandatory tests before implementation commit:
 - **Exception sanitization:** telemetry does not include raw exception strings, token, chat id, username/title, message body, prompt, final reply, or approval-card text.
 - **Off/on final-reply invariance:** with the same mocked brain/audit output, feature disabled vs enabled produces identical final send payload, memory writes, approval-card behavior, and audit result.
 - **Circuit breaker:** unsupported once, or three repeated same-reason transient failures in ten minutes, suppresses future draft attempts until process restart or config reload.
+- **Bad config cannot clear circuit:** malformed or unsupported config changes remain disabled and do not reset circuit-breaker/failure-window state.
+- **Telemetry failure fail-neutrality:** a failing logging/telemetry handler cannot raise out of the draft path or prevent a draft attempt.
+- **Bad chat id fail-neutrality:** malformed chat ids fail the draft path without unobserved task exceptions.
+- **Shutdown drain:** draft tasks scheduled before or during Telegram app shutdown are cancelled/drained before disconnect completes.
 
 Focused implementation tests must use a mocked Telegram bot object. Do not call the real Telegram API in CI.
 
@@ -332,6 +340,7 @@ Folded engineering amendments:
 
 - Use `telegram_draft_presence.*` names and `config/telegram_draft_presence.local.json` to avoid future collision with richer draft features.
 - Add `schema_version: 1`; missing, malformed, unsupported, or future schema disables draft attempts.
+- Require `enabled_until`; enabled config without a future timebox fails closed.
 - Require wrapper-isolated Bot API use with PTB per-call timeouts plus outer `asyncio.wait_for`.
 - Run draft attempts from the background processing path or adapter hook only; never await them on the Telegram polling/update path.
 - Do not gate `_message_handler`, audit, or final `_send_with_retry`.
@@ -340,6 +349,7 @@ Folded engineering amendments:
 - Define deterministic `draft_id` generation.
 - Define telemetry state machine and exception sanitization.
 - Add failure circuit breaker.
+- Reset circuit breaker and failure windows on valid config change.
 - Add duplicate-update, off/on final-reply-invariance, slow-draft, bad-config, and exception-sanitization tests.
 - Add live client verification and observed-weirdness response loop.
 

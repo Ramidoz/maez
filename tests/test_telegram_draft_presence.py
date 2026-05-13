@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from skills.surface.platform_base import MessageEvent, Platform, SessionSource
@@ -75,6 +77,9 @@ class TelegramDraftPresenceConfigTests(unittest.TestCase):
                         "schema_version": 1,
                         "enabled": True,
                         "attempt_timeout_ms": 500,
+                        "enabled_until": (
+                            datetime.now(timezone.utc) + timedelta(hours=1)
+                        ).isoformat().replace("+00:00", "Z"),
                         "max_attempts_per_inbound_message": 1,
                     }
                 )
@@ -84,6 +89,36 @@ class TelegramDraftPresenceConfigTests(unittest.TestCase):
 
         self.assertTrue(cfg.enabled)
         self.assertEqual(cfg.timeout_ms, 500)
+
+    def test_enabled_config_requires_unexpired_timebox(self):
+        adapter = TelegramAdapter(PlatformConfig())
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "telegram_draft_presence.local.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "enabled": True,
+                        "enabled_until": (
+                            datetime.now(timezone.utc) - timedelta(minutes=1)
+                        ).isoformat().replace("+00:00", "Z"),
+                    }
+                )
+            )
+            adapter._telegram_draft_presence_config_path = path
+            cfg = adapter._load_telegram_draft_presence_config()
+
+        self.assertFalse(cfg.enabled)
+
+    def test_unsupported_schema_disables_draft_presence(self):
+        adapter = TelegramAdapter(PlatformConfig())
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "telegram_draft_presence.local.json"
+            path.write_text(json.dumps({"schema_version": 2, "enabled": True}))
+            adapter._telegram_draft_presence_config_path = path
+            cfg = adapter._load_telegram_draft_presence_config()
+
+        self.assertFalse(cfg.enabled)
 
     def test_bad_config_warning_is_bounded(self):
         adapter = TelegramAdapter(PlatformConfig())
@@ -98,6 +133,21 @@ class TelegramDraftPresenceConfigTests(unittest.TestCase):
         self.assertFalse(first.enabled)
         self.assertFalse(second.enabled)
         self.assertEqual(len(cap.records), 1)
+
+    def test_bad_config_does_not_reset_circuit_breaker(self):
+        adapter = TelegramAdapter(PlatformConfig())
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "telegram_draft_presence.local.json"
+            path.write_text("{not-json")
+            adapter._telegram_draft_presence_config_path = path
+            adapter._telegram_draft_presence_circuit_open = True
+            adapter._telegram_draft_presence_failures["api_error"] = [time.time()]
+
+            cfg = adapter._load_telegram_draft_presence_config()
+
+        self.assertFalse(cfg.enabled)
+        self.assertTrue(adapter._telegram_draft_presence_circuit_open)
+        self.assertIn("api_error", adapter._telegram_draft_presence_failures)
 
 
 class TelegramDraftPresenceBehaviorTests(unittest.IsolatedAsyncioTestCase):
@@ -153,6 +203,83 @@ class TelegramDraftPresenceBehaviorTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(second)
         self.assertEqual(len(bot.calls), 1)
 
+    async def test_duplicate_message_with_different_update_id_is_suppressed(self):
+        adapter = TelegramAdapter(PlatformConfig())
+        bot = _DraftBot()
+        adapter._bot = bot
+        adapter._telegram_draft_presence_config = lambda: adapter._TelegramDraftPresenceConfig(
+            enabled=True,
+            timeout_ms=750,
+        )
+
+        first = await adapter.send_empty_draft_presence(_event(update_id=1))
+        second = await adapter.send_empty_draft_presence(_event(update_id=2))
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(len(bot.calls), 1)
+
+    async def test_timeout_opens_failure_path_without_final_exception(self):
+        adapter = TelegramAdapter(PlatformConfig())
+        adapter._bot = _DraftBot(delay=0.05)
+        adapter._telegram_draft_presence_config = lambda: adapter._TelegramDraftPresenceConfig(
+            enabled=True,
+            timeout_ms=1,
+        )
+
+        result = await adapter.send_empty_draft_presence(_event())
+
+        self.assertFalse(result)
+
+    async def test_three_same_reason_failures_open_circuit_breaker(self):
+        adapter = TelegramAdapter(PlatformConfig())
+        adapter._bot = _DraftBot(fail=OSError("network down token=SECRET"))
+        adapter._telegram_draft_presence_config = lambda: adapter._TelegramDraftPresenceConfig(
+            enabled=True,
+            timeout_ms=750,
+        )
+
+        for idx in range(3):
+            await adapter.send_empty_draft_presence(_event(message_id=str(idx)))
+
+        self.assertTrue(adapter._telegram_draft_presence_circuit_open)
+
+    async def test_config_change_resets_circuit_breaker(self):
+        adapter = TelegramAdapter(PlatformConfig())
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "telegram_draft_presence.local.json"
+            adapter._telegram_draft_presence_config_path = path
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "enabled": True,
+                        "enabled_until": (
+                            datetime.now(timezone.utc) + timedelta(hours=1)
+                        ).isoformat().replace("+00:00", "Z"),
+                    }
+                )
+            )
+            adapter._telegram_draft_presence_circuit_open = True
+            adapter._telegram_draft_presence_failures["network_error"] = [time.time()]
+            adapter._load_telegram_draft_presence_config()
+
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "enabled": True,
+                        "enabled_until": (
+                            datetime.now(timezone.utc) + timedelta(hours=2)
+                        ).isoformat().replace("+00:00", "Z"),
+                    }
+                )
+            )
+            adapter._load_telegram_draft_presence_config()
+
+        self.assertFalse(adapter._telegram_draft_presence_circuit_open)
+        self.assertEqual(adapter._telegram_draft_presence_failures, {})
+
     async def test_failure_does_not_block_final_send(self):
         adapter = TelegramAdapter(PlatformConfig())
         adapter._bot = _DraftBot(fail=RuntimeError("token=SECRET chat_id=42 boom"))
@@ -162,6 +289,60 @@ class TelegramDraftPresenceBehaviorTests(unittest.IsolatedAsyncioTestCase):
         )
 
         result = await adapter.send_empty_draft_presence(_event())
+
+        self.assertFalse(result)
+
+    async def test_exception_telemetry_is_sanitized(self):
+        adapter = TelegramAdapter(PlatformConfig())
+        adapter._bot = _DraftBot(fail=RuntimeError("token=SECRET chat_id=42 boom"))
+        adapter._telegram_draft_presence_config = lambda: adapter._TelegramDraftPresenceConfig(
+            enabled=True,
+            timeout_ms=750,
+        )
+
+        with self.assertLogs("skills.surface.telegram_adapter", level="INFO") as cap:
+            result = await adapter.send_empty_draft_presence(_event())
+
+        logs = "\n".join(cap.output)
+        self.assertFalse(result)
+        self.assertIn("telegram_draft_presence.failed", logs)
+        self.assertIn("reason=api_error", logs)
+        self.assertNotIn("SECRET", logs)
+        self.assertNotIn("chat_id=42", logs)
+        self.assertNotIn("boom", logs)
+
+    async def test_telemetry_failure_is_fail_neutral(self):
+        class RaisingHandler(logging.Handler):
+            def emit(self, record):
+                raise RuntimeError("telemetry sink down token=SECRET")
+
+        adapter = TelegramAdapter(PlatformConfig())
+        bot = _DraftBot()
+        adapter._bot = bot
+        adapter._telegram_draft_presence_config = lambda: adapter._TelegramDraftPresenceConfig(
+            enabled=True,
+            timeout_ms=750,
+        )
+        handler = RaisingHandler()
+        logger = logging.getLogger("skills.surface.telegram_adapter")
+        logger.addHandler(handler)
+        try:
+            result = await adapter.send_empty_draft_presence(_event())
+        finally:
+            logger.removeHandler(handler)
+
+        self.assertTrue(result)
+        self.assertEqual(len(bot.calls), 1)
+
+    async def test_bad_chat_id_fails_neutral(self):
+        adapter = TelegramAdapter(PlatformConfig())
+        adapter._bot = _DraftBot()
+        adapter._telegram_draft_presence_config = lambda: adapter._TelegramDraftPresenceConfig(
+            enabled=True,
+            timeout_ms=750,
+        )
+
+        result = await adapter.send_empty_draft_presence(_event(chat_id="not-int"))
 
         self.assertFalse(result)
 
@@ -180,6 +361,7 @@ class TelegramDraftPresenceBehaviorTests(unittest.IsolatedAsyncioTestCase):
 
         async def fake_send(*args, **kwargs):
             observed["send_at"] = time.perf_counter()
+            observed["send_content"] = kwargs.get("content")
             return type("Result", (), {"success": True})()
 
         adapter.set_message_handler(handler)
@@ -193,8 +375,72 @@ class TelegramDraftPresenceBehaviorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("handler_at", observed)
         self.assertIn("send_at", observed)
+        self.assertEqual(observed["send_content"], "final")
         self.assertLess(observed["handler_at"] - started, 0.1)
         self.assertLess(observed["send_at"] - started, 0.1)
+
+    async def test_disabled_draft_presence_preserves_final_reply(self):
+        adapter = TelegramAdapter(PlatformConfig())
+        adapter._bot = _DraftBot()
+        adapter._telegram_draft_presence_config = lambda: adapter._TelegramDraftPresenceConfig(
+            enabled=False,
+            timeout_ms=750,
+        )
+        observed: dict[str, str] = {}
+
+        async def handler(event):
+            return "final"
+
+        async def fake_send(*args, **kwargs):
+            observed["send_content"] = kwargs.get("content")
+            return type("Result", (), {"success": True})()
+
+        adapter.set_message_handler(handler)
+        adapter._send_with_retry = fake_send  # type: ignore[method-assign]
+        event = _event()
+        session_key = "telegram:dm:42"
+        adapter._active_sessions[session_key] = asyncio.Event()
+
+        await adapter._process_message_background(event, session_key)
+
+        self.assertEqual(observed["send_content"], "final")
+        self.assertEqual(adapter._telegram_draft_presence_tasks, set())
+
+    async def test_disabled_config_does_not_schedule_draft_task(self):
+        adapter = TelegramAdapter(PlatformConfig())
+        adapter._telegram_draft_presence_config = lambda: adapter._TelegramDraftPresenceConfig(
+            enabled=False,
+            timeout_ms=750,
+        )
+
+        adapter._schedule_empty_draft_presence(_event())
+
+        self.assertEqual(adapter._telegram_draft_presence_tasks, set())
+
+    async def test_disconnect_drains_draft_task_scheduled_during_app_shutdown(self):
+        adapter = TelegramAdapter(PlatformConfig())
+        adapter._bot = _DraftBot(delay=10.0)
+        adapter._telegram_draft_presence_config = lambda: adapter._TelegramDraftPresenceConfig(
+            enabled=True,
+            timeout_ms=750,
+        )
+
+        class FakeUpdater:
+            running = False
+
+        class FakeApp:
+            updater = FakeUpdater()
+            running = False
+
+            async def shutdown(self):
+                adapter._schedule_empty_draft_presence(_event())
+                await asyncio.sleep(0)
+
+        adapter._app = FakeApp()
+
+        await adapter.disconnect()
+
+        self.assertEqual(adapter._telegram_draft_presence_tasks, set())
 
 
 class TelegramDraftPresenceStaticTests(unittest.TestCase):
