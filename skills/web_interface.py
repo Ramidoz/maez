@@ -23,14 +23,19 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 from uuid import uuid4
 
-sys.path.insert(0, '/home/rohit/maez')
+sys.path.insert(0, "/home/rohit/maez")
 from dotenv import load_dotenv
-load_dotenv('/home/rohit/maez/config/.env')
+
+load_dotenv("/home/rohit/maez/config/.env")
 
 from flask import Flask, jsonify, request, redirect, send_file, send_from_directory
 
 from skills.user_accounts import UserAccounts
 from memory.memory_manager import MemoryManager
+from core.infra.http_security import (
+    apply_local_cors_headers,
+    reject_untrusted_browser_write,
+)
 
 logger = logging.getLogger("maez.web")
 logging.basicConfig(level=logging.INFO)
@@ -39,24 +44,25 @@ app = Flask("maez-web")
 accounts = UserAccounts()
 memory = MemoryManager()
 
-SOUL_PATH = '/home/rohit/maez/config/soul.md'
+SOUL_PATH = "/home/rohit/maez/config/soul.md"
 from core.model_config import PRIMARY_MODEL as MODEL  # /etc/maez/model.env
-UI_DIR = '/home/rohit/maez/ui'
-HERO_PAGE = os.path.join(UI_DIR, 'maez_hero.html')
-GATE_PAGE = os.path.join(UI_DIR, 'maez_gate.html')
-PROGRESS_PUBLIC_PAGE = os.path.join(UI_DIR, 'progress_public.html')
-PROGRESS_LOCAL_PAGE = os.path.join(UI_DIR, 'progress_local.html')
-ANALYTICS_PAGE = os.path.join(UI_DIR, 'analytics_local.html')
-ANALYTICS_SCRIPT = os.path.join(UI_DIR, 'maez_analytics.js')
-DEBUG_PAGE = os.path.join(UI_DIR, 'debug.html')
-AUTH_COOKIE = 'maez_token'
-PLANNER_PATH = '/home/rohit/maez/memory/project_planner.json'
+
+UI_DIR = "/home/rohit/maez/ui"
+HERO_PAGE = os.path.join(UI_DIR, "maez_hero.html")
+GATE_PAGE = os.path.join(UI_DIR, "maez_gate.html")
+PROGRESS_PUBLIC_PAGE = os.path.join(UI_DIR, "progress_public.html")
+PROGRESS_LOCAL_PAGE = os.path.join(UI_DIR, "progress_local.html")
+ANALYTICS_PAGE = os.path.join(UI_DIR, "analytics_local.html")
+ANALYTICS_SCRIPT = os.path.join(UI_DIR, "maez_analytics.js")
+DEBUG_PAGE = os.path.join(UI_DIR, "debug.html")
+AUTH_COOKIE = "maez_token"
+PLANNER_PATH = "/home/rohit/maez/memory/project_planner.json"
 PLANNER_LOCK = threading.Lock()
-PLANNER_STATUSES = ('done', 'in_progress', 'next', 'planned')
-PLANNER_VISIBILITIES = ('public', 'private')
-ANALYTICS_PATH = '/home/rohit/maez/memory/site_analytics.jsonl'
+PLANNER_STATUSES = ("done", "in_progress", "next", "planned")
+PLANNER_VISIBILITIES = ("public", "private")
+ANALYTICS_PATH = "/home/rohit/maez/memory/site_analytics.jsonl"
 ANALYTICS_LOCK = threading.Lock()
-ANALYTICS_EVENT_TYPES = ('pageview', 'cta_click')
+ANALYTICS_EVENT_TYPES = ("pageview", "cta_click")
 ANALYTICS_FUNNEL = (
     ("/", "Landing"),
     ("/progress", "Progress"),
@@ -67,19 +73,19 @@ ANALYTICS_FUNNEL = (
 PRIVATE_OWNER_PROFILE_ID = "private_owner"
 
 # Field-journal / dashboard data sources (/api/maez-state, /api/session-timeline, /journal)
-SNAPSHOTS_DIR = '/home/rohit/maez/logs/snapshots'
-MODEL_STATE_PATH = '/home/rohit/maez/config/model_state.json'
-THUNDER_STATE_PATH = '/home/rohit/maez/config/thunder_state.json'
-TRAINING_RUNS_DIR = '/home/rohit/maez/training/runs'
-DAEMON_HEALTH_URL = 'http://127.0.0.1:11435/health'
+SNAPSHOTS_DIR = "/home/rohit/maez/logs/snapshots"
+MODEL_STATE_PATH = "/home/rohit/maez/config/model_state.json"
+THUNDER_STATE_PATH = "/home/rohit/maez/config/thunder_state.json"
+TRAINING_RUNS_DIR = "/home/rohit/maez/training/runs"
+DAEMON_HEALTH_URL = "http://127.0.0.1:11435/health"
 # 2026-04-23 Commit 6: removed stale 'llama-server-vision' from the
 # journal surface — no such service runs. Re-add when a multimodal
 # endpoint is re-provisioned.
 JOURNAL_SERVICES = (
-    'maez',
-    'maez-web',
-    'llama-server',
-    'maez-watchdog',
+    "maez",
+    "maez-web",
+    "llama-server",
+    "maez-watchdog",
 )
 _SERVICE_STATE_CACHE = {}  # service_name -> (state, timestamp)
 _SERVICE_STATE_TTL = 30.0  # seconds
@@ -145,6 +151,7 @@ def _render_identity_reply(*, display: str, linked_user: bool) -> str:
     sensor_clause = ""
     try:
         from core.infra import body_capabilities as _bc
+
         snap = _bc.body_capabilities()
         env = snap.get("env") or {}
         signals: list[str] = []
@@ -154,9 +161,7 @@ def _render_identity_reply(*, display: str, linked_user: bool) -> str:
         if services.get("brain_8080"):
             signals.append("memory")
         if signals:
-            sensor_clause = (
-                f" Right now I can verify: {', '.join(signals)}."
-            )
+            sensor_clause = f" Right now I can verify: {', '.join(signals)}."
     except Exception:
         sensor_clause = ""
     return baseline + sensor_clause
@@ -170,27 +175,33 @@ def _parse_owner_exchange(content: str, timestamp: str) -> list[dict]:
     user_prefix = "the owner asked:"
     reply_prefix = "\nMaez replied:"
     if text.startswith(user_prefix) and reply_prefix in text:
-        user_text, reply_text = text[len(user_prefix):].split(reply_prefix, 1)
+        user_text, reply_text = text[len(user_prefix) :].split(reply_prefix, 1)
         messages = []
         if user_text.strip():
-            messages.append({
-                "role": "user",
-                "content": user_text.strip(),
-                "timestamp": timestamp,
-            })
+            messages.append(
+                {
+                    "role": "user",
+                    "content": user_text.strip(),
+                    "timestamp": timestamp,
+                }
+            )
         if reply_text.strip():
-            messages.append({
-                "role": "assistant",
-                "content": reply_text.strip(),
-                "timestamp": timestamp,
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": reply_text.strip(),
+                    "timestamp": timestamp,
+                }
+            )
         return messages
 
-    return [{
-        "role": "assistant",
-        "content": text,
-        "timestamp": timestamp,
-    }]
+    return [
+        {
+            "role": "assistant",
+            "content": text,
+            "timestamp": timestamp,
+        }
+    ]
 
 
 def _load_private_owner_history() -> list[dict]:
@@ -198,10 +209,12 @@ def _load_private_owner_history() -> list[dict]:
     try:
         for exchange in memory.get_telegram_exchanges(limit=400):
             meta = exchange.get("metadata", {}) or {}
-            messages.extend(_parse_owner_exchange(
-                exchange.get("content", ""),
-                meta.get("timestamp", ""),
-            ))
+            messages.extend(
+                _parse_owner_exchange(
+                    exchange.get("content", ""),
+                    meta.get("timestamp", ""),
+                )
+            )
     except Exception as e:
         logger.debug("Private owner history unavailable: %s", e)
     return messages
@@ -449,15 +462,17 @@ def _planner_public_view(board):
     for item in board.get("items", []):
         if item.get("visibility") != "public":
             continue
-        columns[item["status"]].append({
-            "id": item["id"],
-            "title": item["title"],
-            "status": item["status"],
-            "summary": item["summary"],
-            "details": item["details"],
-            "tags": item["tags"],
-            "updated_at": item["updated_at"],
-        })
+        columns[item["status"]].append(
+            {
+                "id": item["id"],
+                "title": item["title"],
+                "status": item["status"],
+                "summary": item["summary"],
+                "details": item["details"],
+                "tags": item["tags"],
+                "updated_at": item["updated_at"],
+            }
+        )
     return {
         "updated_at": board.get("updated_at", _utcnow_iso()),
         "counts": {status: len(columns[status]) for status in PLANNER_STATUSES},
@@ -565,17 +580,20 @@ def _load_analytics_events():
                     path = _normalize_public_path(event.get("path", "/"))
                     if path.startswith("/api/"):
                         continue
-                    events.append({
-                        "ts": _clean_text(event.get("ts", ""), 40),
-                        "event": event.get("event"),
-                        "path": path,
-                        "label": _clean_text(event.get("label", ""), 80),
-                        "target": _clean_text(event.get("target", ""), 200),
-                        "referrer": _clean_text(event.get("referrer", "direct"), 120) or "direct",
-                        "device": _clean_text(event.get("device", "unknown"), 20) or "unknown",
-                        "anon_id": _clean_text(event.get("anon_id", ""), 64),
-                        "session_id": _clean_text(event.get("session_id", ""), 64),
-                    })
+                    events.append(
+                        {
+                            "ts": _clean_text(event.get("ts", ""), 40),
+                            "event": event.get("event"),
+                            "path": path,
+                            "label": _clean_text(event.get("label", ""), 80),
+                            "target": _clean_text(event.get("target", ""), 200),
+                            "referrer": _clean_text(event.get("referrer", "direct"), 120)
+                            or "direct",
+                            "device": _clean_text(event.get("device", "unknown"), 20) or "unknown",
+                            "anon_id": _clean_text(event.get("anon_id", ""), 64),
+                            "session_id": _clean_text(event.get("session_id", ""), 64),
+                        }
+                    )
         except Exception:
             return []
         return events
@@ -645,24 +663,19 @@ def _build_analytics_summary(events):
                         daily_uniques[day_key].add(anon_id)
         elif event["event"] == "cta_click":
             cta_total += 1
-            cta_counts[(event.get("label", ""), event.get("path", "/"), event.get("target", ""))] += 1
+            cta_counts[
+                (event.get("label", ""), event.get("path", "/"), event.get("target", ""))
+            ] += 1
 
     for day_key, anon_ids in daily_uniques.items():
         if day_key in daily_index:
             daily_index[day_key]["unique_visitors"] = len(anon_ids)
 
-    top_pages = [
-        {"path": path, "count": count}
-        for path, count in page_counts.most_common(8)
-    ]
+    top_pages = [{"path": path, "count": count} for path, count in page_counts.most_common(8)]
     top_referrers = [
-        {"source": source, "count": count}
-        for source, count in referrer_counts.most_common(8)
+        {"source": source, "count": count} for source, count in referrer_counts.most_common(8)
     ]
-    devices = [
-        {"device": device, "count": count}
-        for device, count in device_counts.most_common()
-    ]
+    devices = [{"device": device, "count": count} for device, count in device_counts.most_common()]
     ctas = [
         {"label": label or "Unnamed CTA", "path": path, "target": target, "count": count}
         for (label, path, target), count in cta_counts.most_common(10)
@@ -673,15 +686,17 @@ def _build_analytics_summary(events):
     ]
     recent_events = []
     for event in sorted(recent, key=lambda item: item.get("ts", ""), reverse=True)[:20]:
-        recent_events.append({
-            "ts": event.get("ts", ""),
-            "event": event.get("event", ""),
-            "path": event.get("path", "/"),
-            "label": event.get("label", ""),
-            "target": event.get("target", ""),
-            "referrer": event.get("referrer", "direct"),
-            "device": event.get("device", "unknown"),
-        })
+        recent_events.append(
+            {
+                "ts": event.get("ts", ""),
+                "event": event.get("event", ""),
+                "path": event.get("path", "/"),
+                "label": event.get("label", ""),
+                "target": event.get("target", ""),
+                "referrer": event.get("referrer", "direct"),
+                "device": event.get("device", "unknown"),
+            }
+        )
 
     return {
         "updated_at": _utcnow_iso(),
@@ -704,10 +719,7 @@ def _build_analytics_summary(events):
 
 
 def _request_token():
-    return (
-        request.args.get("web_token", "")
-        or request.cookies.get(AUTH_COOKIE, "")
-    ).strip()
+    return (request.args.get("web_token", "") or request.cookies.get(AUTH_COOKIE, "")).strip()
 
 
 def _attach_auth_cookie(response, token):
@@ -722,15 +734,18 @@ def _attach_auth_cookie(response, token):
     return response
 
 
+@app.before_request
+def local_origin_write_guard():
+    return reject_untrusted_browser_write(request)
+
+
 @app.after_request
 def cors(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    return response
+    return apply_local_cors_headers(response, request)
 
 
 # ── field-journal helpers ────────────────────────────────────────────────
+
 
 def _daemon_health(timeout=2.5):
     """Fetch the daemon's /health endpoint. Returns dict or {'status':'unreachable'}.
@@ -743,7 +758,7 @@ def _daemon_health(timeout=2.5):
     """
     try:
         with urllib.request.urlopen(DAEMON_HEALTH_URL, timeout=timeout) as r:
-            return json.loads(r.read().decode('utf-8'))
+            return json.loads(r.read().decode("utf-8"))
     except Exception as e:
         logger.debug("daemon health unreachable: %s", e)
         return {"status": "unreachable"}
@@ -756,20 +771,25 @@ def _service_state_cached(service_name, ttl=_SERVICE_STATE_TTL):
     if cached and (now - cached[1]) < ttl:
         return cached[0]
     try:
-        out = subprocess.check_output(
-            ['systemctl', 'is-active', service_name + '.service'],
-            timeout=2.0, stderr=subprocess.DEVNULL,
-        ).decode('utf-8').strip()
+        out = (
+            subprocess.check_output(
+                ["systemctl", "is-active", service_name + ".service"],
+                timeout=2.0,
+                stderr=subprocess.DEVNULL,
+            )
+            .decode("utf-8")
+            .strip()
+        )
     except subprocess.CalledProcessError as e:
-        out = (e.output or b'').decode('utf-8').strip() or 'inactive'
+        out = (e.output or b"").decode("utf-8").strip() or "inactive"
     except Exception:
-        out = 'unknown'
+        out = "unknown"
     _SERVICE_STATE_CACHE[service_name] = (out, now)
     return out
 
 
 def _journal_services_state():
-    return {svc.replace('-', '_'): _service_state_cached(svc) for svc in JOURNAL_SERVICES}
+    return {svc.replace("-", "_"): _service_state_cached(svc) for svc in JOURNAL_SERVICES}
 
 
 def _model_state():
@@ -787,7 +807,7 @@ def _model_state():
     except Exception as e:
         logger.debug("model_state.json unreadable: %s", e)
     try:
-        current_run = os.path.join(TRAINING_RUNS_DIR, 'current', 'summary.json')
+        current_run = os.path.join(TRAINING_RUNS_DIR, "current", "summary.json")
         if os.path.exists(current_run):
             with open(current_run) as f:
                 summary = json.load(f)
@@ -797,7 +817,7 @@ def _model_state():
                 data["adapter_loss_final"] = round(float(loss), 4)
             data["adapter_base"] = summary.get("model")
             mtime = os.path.getmtime(current_run)
-            data["adapter_trained"] = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
+            data["adapter_trained"] = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
             data["merged_adapter"] = True
     except Exception as e:
         logger.debug("training summary unreadable: %s", e)
@@ -819,7 +839,7 @@ def _soul_state():
             lines = sum(1 for _ in f)
         return {
             "lines": lines,
-            "last_updated": datetime.fromtimestamp(st.st_mtime).strftime('%Y-%m-%d'),
+            "last_updated": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d"),
         }
     except Exception:
         return {"lines": None, "last_updated": None}
@@ -827,13 +847,13 @@ def _soul_state():
 
 # ── session snapshot parser ──────────────────────────────────────────────
 
-_SNAPSHOT_SECTION_RE = re.compile(r'^=+\s*$')
-_SNAPSHOT_HEADER_RE = re.compile(r'^([A-Z][A-Z ]+):\s*(.*)$')
-_SNAPSHOT_BULLET_RE = re.compile(r'^\s*(?:[-*•]|\d+[.)])\s+(.*)$')
+_SNAPSHOT_SECTION_RE = re.compile(r"^=+\s*$")
+_SNAPSHOT_HEADER_RE = re.compile(r"^([A-Z][A-Z ]+):\s*(.*)$")
+_SNAPSHOT_BULLET_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.*)$")
 
 
 def _snapshot_slug(text):
-    return re.sub(r'[^a-z0-9]+', '_', text.lower()).strip('_')
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
 
 
 # Narrow, word-boundary de-gendering for historical snapshot text. The current
@@ -841,13 +861,13 @@ def _snapshot_slug(text):
 # We don't rewrite the historical files — we de-gender at render time so the
 # /journal timeline reads consistently with the rest of the site.
 _DEGENDER_MAP = (
-    (re.compile(r'\bShe\b'),      'It'),
-    (re.compile(r'\bshe\b'),      'it'),
-    (re.compile(r'\bHer\b'),      'Its'),
-    (re.compile(r'\bher\b'),      'its'),
-    (re.compile(r'\bhers\b'),     'its'),
-    (re.compile(r'\bHerself\b'),  'Itself'),
-    (re.compile(r'\bherself\b'),  'itself'),
+    (re.compile(r"\bShe\b"), "It"),
+    (re.compile(r"\bshe\b"), "it"),
+    (re.compile(r"\bHer\b"), "Its"),
+    (re.compile(r"\bher\b"), "its"),
+    (re.compile(r"\bhers\b"), "its"),
+    (re.compile(r"\bHerself\b"), "Itself"),
+    (re.compile(r"\bherself\b"), "itself"),
 )
 
 
@@ -891,20 +911,22 @@ def _parse_session_snapshot(path):
             m = _SNAPSHOT_HEADER_RE.match(lines[i])
             if m:
                 key, value = m.group(1).strip(), m.group(2).strip()
-                if key == 'BUILD':
-                    m2 = re.search(r'Sessions?\s+([\w+]+)', value)
+                if key == "BUILD":
+                    m2 = re.search(r"Sessions?\s+([\w+]+)", value)
                     if m2:
                         result["label"] = m2.group(1)
-                elif key == 'DATE':
-                    m2 = re.search(r'(\d{4}-\d{2}-\d{2})|([A-Za-z]+\s+\d+,\s*\d{4})', value)
+                elif key == "DATE":
+                    m2 = re.search(r"(\d{4}-\d{2}-\d{2})|([A-Za-z]+\s+\d+,\s*\d{4})", value)
                     if m2:
                         result["date"] = m2.group(0)
-                        if ',' in result["date"]:
+                        if "," in result["date"]:
                             try:
-                                result["date"] = datetime.strptime(result["date"], '%B %d, %Y').strftime('%Y-%m-%d')
+                                result["date"] = datetime.strptime(
+                                    result["date"], "%B %d, %Y"
+                                ).strftime("%Y-%m-%d")
                             except ValueError:
                                 pass
-                elif key == 'AGENT':
+                elif key == "AGENT":
                     result["agent"] = value
             i += 1
 
@@ -950,7 +972,7 @@ def _parse_session_snapshot(path):
             result["sections"][current_section] = [b for b in body if b]
 
         # Headline pulled from THE HEADLINE / TL;DR / SUMMARY section if present
-        for key in ('the_headline', 'headline', 'the_tl_dr', 'tl_dr', 'summary'):
+        for key in ("the_headline", "headline", "the_tl_dr", "tl_dr", "summary"):
             if key in result["sections"] and result["sections"][key]:
                 result["headline"] = result["sections"][key][0]
                 break
@@ -1063,9 +1085,7 @@ def cockpit_static(filename: str):
     # .jsx served as application/javascript so Babel-in-browser can
     # parse them; other common types default-handled by Flask.
     if filename.endswith(".jsx"):
-        return send_from_directory(
-            COCKPIT_DIR, filename, mimetype="application/javascript"
-        )
+        return send_from_directory(COCKPIT_DIR, filename, mimetype="application/javascript")
     return send_from_directory(COCKPIT_DIR, filename)
 
 
@@ -1101,6 +1121,7 @@ def api_daemon_state():
     queries. Best-effort — fields default when a source is unreachable."""
     import re as _re
     import time as _time
+
     lines = _tail_log_lines(_MAEZ_LOG_PATH, 400)
     cycle = None
     last_cycle_ts = None
@@ -1121,14 +1142,14 @@ def api_daemon_state():
             j = i + 1
             while j < len(lines) and len(body_lines) < 3:
                 bl = lines[j].strip()
-                if bl and not _re.search(
-                    r"^\d{4}-\d{2}-\d{2}.*\[INFO\]", bl
-                ):
+                if bl and not _re.search(r"^\d{4}-\d{2}-\d{2}.*\[INFO\]", bl):
                     body_lines.append(bl[:200])
                 j += 1
-                if _re.search(
-                    r"^\d{4}-\d{2}-\d{2}.*\[INFO\] cycle \| score=", lines[j - 1]
-                ) if j - 1 < len(lines) else False:
+                if (
+                    _re.search(r"^\d{4}-\d{2}-\d{2}.*\[INFO\] cycle \| score=", lines[j - 1])
+                    if j - 1 < len(lines)
+                    else False
+                ):
                     break
             currentThought = " ".join(body_lines)[:500]
             break
@@ -1143,8 +1164,7 @@ def api_daemon_state():
     for i in range(len(lines) - 1, -1, -1):
         m = _re.search(r"\bCycle (\d+) response:", lines[i])
         if m and scratch_count < 4:
-            tsm = _re.match(r"(\d{2}:\d{2}:\d{2})", lines[i][11:19]) \
-                  if len(lines[i]) > 19 else None
+            tsm = _re.match(r"(\d{2}:\d{2}:\d{2})", lines[i][11:19]) if len(lines[i]) > 19 else None
             t = lines[i][11:19] if len(lines[i]) > 19 else ""
             body = ""
             if i + 1 < len(lines):
@@ -1155,6 +1175,7 @@ def api_daemon_state():
     open_cards = 0
     try:
         import sqlite3 as _sq
+
         conn = _sq.connect(_PENDING_CARDS_DB, timeout=1.5)
         row = conn.execute(
             "SELECT COUNT(*) FROM pending_cards WHERE status IN (?, ?)",
@@ -1164,17 +1185,19 @@ def api_daemon_state():
         conn.close()
     except Exception:
         pass
-    return jsonify({
-        "cycle": cycle or 0,
-        "lastTick": last_cycle_ts or "",
-        "nextTickIn": 30,  # loose — daemon uses ~30s cycles
-        "score": score if score is not None else 0.0,
-        "mood": mood,
-        "currentThought": currentThought,
-        "scratchpad": scratchpad,
-        "openCards": open_cards,
-        "sampledAt": int(_time.time()),
-    })
+    return jsonify(
+        {
+            "cycle": cycle or 0,
+            "lastTick": last_cycle_ts or "",
+            "nextTickIn": 30,  # loose — daemon uses ~30s cycles
+            "score": score if score is not None else 0.0,
+            "mood": mood,
+            "currentThought": currentThought,
+            "scratchpad": scratchpad,
+            "openCards": open_cards,
+            "sampledAt": int(_time.time()),
+        }
+    )
 
 
 @app.route("/api/v1/cards")
@@ -1183,6 +1206,7 @@ def api_cards_list():
     so the cockpit can show context on what just got resolved."""
     import sqlite3 as _sq
     import time as _time
+
     since = _time.time() - 86400
     try:
         conn = _sq.connect(_PENDING_CARDS_DB, timeout=2.0)
@@ -1199,6 +1223,7 @@ def api_cards_list():
     except Exception as e:
         return jsonify({"error": str(e), "cards": []}), 500
     import json as _json
+
     cards = []
     for r in rows:
         params = {}
@@ -1206,17 +1231,18 @@ def api_cards_list():
             params = _json.loads(r["params_json"] or "{}")
         except Exception:
             pass
-        cards.append({
-            "id": r["request_id"],
-            "action": r["action"],
-            "status": r["status"],
-            "cmd": params.get("cmd") or params.get("path") or "",
-            "reason": (r["plain_english"] or r["reason"]
-                       or params.get("reason", "")),
-            "created_at": r["created_at"],
-            "resolved_at": r["resolved_at"],
-            "resolved_via": r["resolved_via"],
-        })
+        cards.append(
+            {
+                "id": r["request_id"],
+                "action": r["action"],
+                "status": r["status"],
+                "cmd": params.get("cmd") or params.get("path") or "",
+                "reason": (r["plain_english"] or r["reason"] or params.get("reason", "")),
+                "created_at": r["created_at"],
+                "resolved_at": r["resolved_at"],
+                "resolved_via": r["resolved_via"],
+            }
+        )
     return jsonify({"cards": cards})
 
 
@@ -1227,6 +1253,7 @@ def api_card_deny(request_id: str):
     see it as closed."""
     try:
         from core.pending_cards import PendingCardStore
+
         store = PendingCardStore(_PENDING_CARDS_DB)
         card = store.deny(
             request_id,
@@ -1273,12 +1300,15 @@ def api_cockpit_message():
     """
     import urllib.request as _urlreq
     import urllib.error as _urlerr
+
     body = request.get_data() or b"{}"
     headers = {"Content-Type": request.headers.get("Content-Type", "application/json")}
     try:
         req = _urlreq.Request(
             f"{_DAEMON_BASE}/message",
-            data=body, headers=headers, method="POST",
+            data=body,
+            headers=headers,
+            method="POST",
         )
         with _urlreq.urlopen(req, timeout=_COCKPIT_PROXY_TIMEOUT_S) as resp:
             payload = resp.read()
@@ -1293,11 +1323,13 @@ def api_cockpit_message():
             payload = str(e).encode("utf-8")
         return (payload, e.code, {"Content-Type": "application/json"})
     except Exception as e:
-        return jsonify({
-            "ok": False,
-            "error": "daemon_unreachable",
-            "detail": str(e)[:200],
-        }), 502
+        return jsonify(
+            {
+                "ok": False,
+                "error": "daemon_unreachable",
+                "detail": str(e)[:200],
+            }
+        ), 502
 
 
 @app.route("/api/v1/cards/<request_id>/approve", methods=["POST"])
@@ -1309,6 +1341,7 @@ def api_card_approve(request_id: str):
     execute), so timeout is longer."""
     import urllib.request as _urlreq
     import urllib.error as _urlerr
+
     body = request.get_data() or b""
     headers = {}
     ct = request.headers.get("Content-Type")
@@ -1316,9 +1349,13 @@ def api_card_approve(request_id: str):
         headers["Content-Type"] = ct
     try:
         from urllib.parse import quote as _q
+
         url = f"{_DAEMON_BASE}/internal/approve_card/{_q(request_id, safe='')}"
         req = _urlreq.Request(
-            url, data=body, headers=headers, method="POST",
+            url,
+            data=body,
+            headers=headers,
+            method="POST",
         )
         with _urlreq.urlopen(req, timeout=_COCKPIT_APPROVE_TIMEOUT_S) as resp:
             payload = resp.read()
@@ -1332,29 +1369,44 @@ def api_card_approve(request_id: str):
             payload = str(e).encode("utf-8")
         return (payload, e.code, {"Content-Type": "application/json"})
     except Exception as e:
-        return jsonify({
-            "ok": False,
-            "error": "daemon_unreachable",
-            "detail": str(e)[:200],
-        }), 502
+        return jsonify(
+            {
+                "ok": False,
+                "error": "daemon_unreachable",
+                "detail": str(e)[:200],
+            }
+        ), 502
 
 
 @app.route("/api/v1/services")
 def api_services():
     """systemctl status for maez/llama/ollama units."""
     import subprocess as _sp
+
     out = {}
     try:
         r = _sp.run(
-            ["systemctl", "list-units", "--type=service", "--all",
-             "--no-pager", "--no-legend", "maez*", "llama*", "ollama*"],
-            capture_output=True, text=True, timeout=3.0, check=False,
+            [
+                "systemctl",
+                "list-units",
+                "--type=service",
+                "--all",
+                "--no-pager",
+                "--no-legend",
+                "maez*",
+                "llama*",
+                "ollama*",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=3.0,
+            check=False,
         )
         for line in (r.stdout or "").splitlines():
             toks = line.strip().split(None, 4)
             if len(toks) < 4 or not toks[0].endswith(".service"):
                 continue
-            name = toks[0][:-len(".service")]
+            name = toks[0][: -len(".service")]
             out[name] = {
                 "status": toks[2],
                 "sub": toks[3] if len(toks) > 3 else "",
@@ -1369,12 +1421,18 @@ def api_services():
 def api_gpu():
     """nvidia-smi query for the primary GPU. Fails cleanly when no GPU."""
     import subprocess as _sp
+
     try:
         r = _sp.run(
-            ["nvidia-smi", "--query-gpu=memory.used,memory.total,"
-             "temperature.gpu,power.draw,utilization.gpu",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=2.0, check=False,
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.used,memory.total,temperature.gpu,power.draw,utilization.gpu",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            check=False,
         )
         line = (r.stdout or "").strip().splitlines()[0] if r.stdout else ""
         if not line:
@@ -1382,13 +1440,15 @@ def api_gpu():
         parts = [p.strip() for p in line.split(",")]
         vram_used_mb = float(parts[0])
         vram_total_mb = float(parts[1])
-        return jsonify({
-            "vramUsed": round(vram_used_mb / 1024, 1),
-            "vramTotal": round(vram_total_mb / 1024, 1),
-            "temp": int(float(parts[2])),
-            "power": int(float(parts[3])),
-            "util": int(float(parts[4])),
-        })
+        return jsonify(
+            {
+                "vramUsed": round(vram_used_mb / 1024, 1),
+                "vramTotal": round(vram_total_mb / 1024, 1),
+                "temp": int(float(parts[2])),
+                "power": int(float(parts[3])),
+                "util": int(float(parts[4])),
+            }
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1402,6 +1462,7 @@ def api_signals():
     box — aspirational per the iphone_signals plan)."""
     import json as _json
     import os as _os
+
     sigs = []
     perception_path = "/home/rohit/maez/memory/perception_cache.json"
     if _os.path.exists(perception_path):
@@ -1414,60 +1475,77 @@ def api_signals():
                 # CPU signal — always present
                 cpu = data.get("cpu", {})
                 if isinstance(cpu, dict) and "percent" in cpu:
-                    sigs.append({
-                        "t": short_t, "kind": "system",
-                        "text": f"CPU {cpu.get('percent')}% across {cpu.get('core_count', '?')} cores",
-                        "src": "psutil",
-                    })
+                    sigs.append(
+                        {
+                            "t": short_t,
+                            "kind": "system",
+                            "text": f"CPU {cpu.get('percent')}% across {cpu.get('core_count', '?')} cores",
+                            "src": "psutil",
+                        }
+                    )
                 ram = data.get("ram", {})
                 if isinstance(ram, dict) and "percent" in ram:
-                    sigs.append({
-                        "t": short_t, "kind": "system",
-                        "text": f"RAM {ram.get('percent')}% used ({ram.get('used_gb', '?')}G / {ram.get('total_gb', '?')}G)",
-                        "src": "psutil",
-                    })
+                    sigs.append(
+                        {
+                            "t": short_t,
+                            "kind": "system",
+                            "text": f"RAM {ram.get('percent')}% used ({ram.get('used_gb', '?')}G / {ram.get('total_gb', '?')}G)",
+                            "src": "psutil",
+                        }
+                    )
                 gpu = data.get("gpu")
                 if isinstance(gpu, dict):
-                    sigs.append({
-                        "t": short_t, "kind": "system",
-                        "text": (
-                            f"GPU {gpu.get('utilization_pct', '?')}% · "
-                            f"{gpu.get('memory_used_mb', 0)/1024:.1f}G / "
-                            f"{gpu.get('memory_total_mb', 0)/1024:.1f}G · "
-                            f"{gpu.get('temperature_c', '?')}°C"
-                        ),
-                        "src": "nvidia-smi",
-                    })
+                    sigs.append(
+                        {
+                            "t": short_t,
+                            "kind": "system",
+                            "text": (
+                                f"GPU {gpu.get('utilization_pct', '?')}% · "
+                                f"{gpu.get('memory_used_mb', 0) / 1024:.1f}G / "
+                                f"{gpu.get('memory_total_mb', 0) / 1024:.1f}G · "
+                                f"{gpu.get('temperature_c', '?')}°C"
+                            ),
+                            "src": "nvidia-smi",
+                        }
+                    )
                 disk = data.get("disk", {})
                 if isinstance(disk, dict):
                     for mount, info in disk.items():
                         if isinstance(info, dict) and "percent" in info:
                             kind = "disk" if info["percent"] < 85 else "disk_warn"
-                            sigs.append({
-                                "t": short_t, "kind": kind,
-                                "text": (
-                                    f"{mount} {info['percent']}% "
-                                    f"({info.get('used_gb', '?')}G / {info.get('total_gb', '?')}G)"
-                                ),
-                                "src": "psutil",
-                            })
+                            sigs.append(
+                                {
+                                    "t": short_t,
+                                    "kind": kind,
+                                    "text": (
+                                        f"{mount} {info['percent']}% "
+                                        f"({info.get('used_gb', '?')}G / {info.get('total_gb', '?')}G)"
+                                    ),
+                                    "src": "psutil",
+                                }
+                            )
                 tops = data.get("top_processes_cpu") or []
                 if tops:
                     top_names = ", ".join(
-                        f"{p.get('name', '?')}({p.get('cpu_percent', 0):.0f}%)"
-                        for p in tops[:3]
+                        f"{p.get('name', '?')}({p.get('cpu_percent', 0):.0f}%)" for p in tops[:3]
                     )
-                    sigs.append({
-                        "t": short_t, "kind": "processes",
-                        "text": f"Top CPU: {top_names}",
-                        "src": "psutil",
-                    })
+                    sigs.append(
+                        {
+                            "t": short_t,
+                            "kind": "processes",
+                            "text": f"Top CPU: {top_names}",
+                            "src": "psutil",
+                        }
+                    )
         except Exception as e:
-            sigs.append({
-                "t": "", "kind": "error",
-                "text": f"perception_cache.json parse failed: {e}",
-                "src": "system",
-            })
+            sigs.append(
+                {
+                    "t": "",
+                    "kind": "error",
+                    "text": f"perception_cache.json parse failed: {e}",
+                    "src": "system",
+                }
+            )
     # iPhone ingest (aspirational — file doesn't exist on this box yet)
     iphone_path = "/home/rohit/maez/memory/iphone_signals.json"
     if _os.path.exists(iphone_path):
@@ -1476,13 +1554,14 @@ def api_signals():
                 data = _json.load(f)
             if isinstance(data, list):
                 for ev in data[-4:]:
-                    sigs.append({
-                        "t": str(ev.get("time") or ev.get("ts") or "")[-8:],
-                        "kind": "iphone",
-                        "text": str(ev.get("text") or ev.get("summary")
-                                    or str(ev))[:120],
-                        "src": "iphone",
-                    })
+                    sigs.append(
+                        {
+                            "t": str(ev.get("time") or ev.get("ts") or "")[-8:],
+                            "kind": "iphone",
+                            "text": str(ev.get("text") or ev.get("summary") or str(ev))[:120],
+                            "src": "iphone",
+                        }
+                    )
         except Exception:
             pass
     return jsonify({"signals": sigs[:10]})
@@ -1492,6 +1571,7 @@ def api_signals():
 def api_soul():
     """Two-layer soul content."""
     import os as _os
+
     base_path = "/home/rohit/maez/config/soul.base.md"
     local_path = "/home/rohit/maez/config/soul.local.md"
     soul = {"base": "", "local": ""}
@@ -1510,6 +1590,7 @@ def api_memory():
     """ChromaDB tier counts + visible samples from each memory tier."""
     import sqlite3 as _sq
     import os as _os
+
     stats = {"raw": 0, "daily": 0, "core": 0}
     for tier in stats:
         p = f"/home/rohit/maez/memory/db/{tier}/chroma.sqlite3"
@@ -1517,9 +1598,7 @@ def api_memory():
             continue
         try:
             c = _sq.connect(p, timeout=1.5)
-            row = c.execute(
-                "SELECT COUNT(*) FROM embeddings"
-            ).fetchone()
+            row = c.execute("SELECT COUNT(*) FROM embeddings").fetchone()
             stats[tier] = int(row[0]) if row else 0
             c.close()
         except Exception:
@@ -1527,19 +1606,22 @@ def api_memory():
     hits = []
     try:
         from memory.memory_manager import MemoryManager
+
         mem = MemoryManager()
         for core in (mem.get_all_core() or [])[-8:]:
             content = (core.get("content") or "")[:320]
             meta = core.get("metadata") or {}
             ts_val = meta.get("timestamp", "")
-            hits.append({
-                "tier": "core",
-                "score": 1.0,
-                "date": str(ts_val)[:10],
-                "text": content,
-                "tokens": len(content) // 4,
-                "source": meta.get("source", ""),
-            })
+            hits.append(
+                {
+                    "tier": "core",
+                    "score": 1.0,
+                    "date": str(ts_val)[:10],
+                    "text": content,
+                    "tokens": len(content) // 4,
+                    "source": meta.get("source", ""),
+                }
+            )
         try:
             daily_results = mem.daily.get(include=["documents", "metadatas"])
         except Exception:
@@ -1549,26 +1631,30 @@ def api_memory():
             content = (daily_results["documents"][i] or "")[:320]
             meta = daily_results["metadatas"][i] or {}
             ts_val = meta.get("date") or meta.get("timestamp", "")
-            daily_rows.append({
-                "tier": "daily",
-                "score": 0.8,
-                "date": str(ts_val)[:10],
-                "text": content,
-                "tokens": len(content) // 4,
-                "source": meta.get("source", "daily_consolidation"),
-            })
+            daily_rows.append(
+                {
+                    "tier": "daily",
+                    "score": 0.8,
+                    "date": str(ts_val)[:10],
+                    "text": content,
+                    "tokens": len(content) // 4,
+                    "source": meta.get("source", "daily_consolidation"),
+                }
+            )
         hits.extend(daily_rows[-8:])
         for ex in (mem.get_telegram_exchanges(limit=8) or [])[-5:]:
             content = (ex.get("content") or "")[:200]
             ts_val = (ex.get("metadata") or {}).get("timestamp", "")
-            hits.append({
-                "tier": "raw",
-                "score": 0.5,
-                "date": str(ts_val)[:10],
-                "text": content,
-                "tokens": len(content) // 4,
-                "source": "telegram_exchange",
-            })
+            hits.append(
+                {
+                    "tier": "raw",
+                    "score": 0.5,
+                    "date": str(ts_val)[:10],
+                    "text": content,
+                    "tokens": len(content) // 4,
+                    "source": "telegram_exchange",
+                }
+            )
     except Exception:
         pass
     return jsonify({"stats": stats, "hits": hits})
@@ -1619,18 +1705,14 @@ def _read_lived_episodes(db_path):
                 "title": d.get("title"),
                 "summary": d.get("summary"),
                 "open_loop": d.get("open_loop"),
-                "source_memory_ids": _json.loads(
-                    d.get("source_memory_ids_json") or "[]"
-                ),
+                "source_memory_ids": _json.loads(d.get("source_memory_ids_json") or "[]"),
                 "source_kind": d.get("source_kind"),
                 "emotional_tone": d.get("emotional_tone"),
                 "importance": d.get("importance"),
                 "status": d.get("status"),
                 "created_at": d.get("created_at"),
                 "occurred_at": d.get("occurred_at"),
-                "participants": _json.loads(
-                    d.get("participants_json") or "[]"
-                ),
+                "participants": _json.loads(d.get("participants_json") or "[]"),
                 "authorship": d.get("authorship"),
                 "memory_voice": d.get("memory_voice"),
             }
@@ -1665,12 +1747,11 @@ def _read_lived_edges(db_path, *, at_time=None):
     # Re-fetch node kinds (RelationshipGraph.list_active doesn't
     # currently return them; preserve existing cockpit shape).
     import sqlite3 as _sq
+
     try:
         c = _sq.connect(db_path, timeout=1.5)
         c.row_factory = _sq.Row
-        node_rows = c.execute(
-            "SELECT id, label, kind FROM nodes"
-        ).fetchall()
+        node_rows = c.execute("SELECT id, label, kind FROM nodes").fetchall()
         c.close()
     except Exception:
         node_rows = []
@@ -1678,23 +1759,25 @@ def _read_lived_edges(db_path, *, at_time=None):
     label_to_kind = {r["label"]: r["kind"] for r in node_rows}
     out = []
     for d in edges[:50]:  # cap at 50 to match the legacy SQL LIMIT
-        out.append({
-            "id": d.get("id"),
-            "subject_label": d.get("subject_label"),
-            "subject_kind": kind_by_id.get(d.get("subject_id"))
+        out.append(
+            {
+                "id": d.get("id"),
+                "subject_label": d.get("subject_label"),
+                "subject_kind": kind_by_id.get(d.get("subject_id"))
                 or label_to_kind.get(d.get("subject_label")),
-            "relation": d.get("relation"),
-            "object_label": d.get("object_label"),
-            "object_kind": kind_by_id.get(d.get("object_id"))
+                "relation": d.get("relation"),
+                "object_label": d.get("object_label"),
+                "object_kind": kind_by_id.get(d.get("object_id"))
                 or label_to_kind.get(d.get("object_label")),
-            "confidence": d.get("confidence"),
-            "status": d.get("status"),
-            "valid_from": d.get("valid_from"),
-            "valid_to": d.get("valid_to"),
-            "source_episode_ids": d.get("source_episode_ids", []),
-            "source_memory_ids": d.get("source_memory_ids", []),
-            "created_at": d.get("created_at"),
-        })
+                "confidence": d.get("confidence"),
+                "status": d.get("status"),
+                "valid_from": d.get("valid_from"),
+                "valid_to": d.get("valid_to"),
+                "source_episode_ids": d.get("source_episode_ids", []),
+                "source_memory_ids": d.get("source_memory_ids", []),
+                "created_at": d.get("created_at"),
+            }
+        )
     return out
 
 
@@ -1765,9 +1848,7 @@ def _compute_predictions_for_cockpit(query: str) -> list:
 
         import os as _os
 
-        if not _os.path.exists(_LIVED_EPISODE_DB_PATH) or not _os.path.exists(
-            _LIVED_GRAPH_DB_PATH
-        ):
+        if not _os.path.exists(_LIVED_EPISODE_DB_PATH) or not _os.path.exists(_LIVED_GRAPH_DB_PATH):
             return []
         if not is_pushback_prediction_query(query or ""):
             return []
@@ -1778,11 +1859,7 @@ def _compute_predictions_for_cockpit(query: str) -> list:
         # triple text.
         edges = _read_lived_edges(_LIVED_GRAPH_DB_PATH)
         edges_for_sim = list(edges)
-        open_loops = [
-            ep
-            for ep in (store.list_active() or [])
-            if ep.get("open_loop")
-        ]
+        open_loops = [ep for ep in (store.list_active() or []) if ep.get("open_loop")]
         echoes = find_echoes(store, max_echoes=4)
         predictions = simulate_owner_pushback(
             query,
@@ -1801,9 +1878,7 @@ def _compute_predictions_for_cockpit(query: str) -> list:
                 # the trail under each claim. Full edge/episode rows
                 # are too verbose for inline; the panel can re-fetch
                 # /episodes or /graph if it wants the full record.
-                "supporting_edge_ids": [
-                    e.get("id") for e in p.supporting_edges if e.get("id")
-                ],
+                "supporting_edge_ids": [e.get("id") for e in p.supporting_edges if e.get("id")],
                 "supporting_episode_ids": [
                     ep.get("id") for ep in p.supporting_episodes if ep.get("id")
                 ],
@@ -1883,11 +1958,13 @@ def api_lived_memory_graph():
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
     edges = _read_lived_edges(_LIVED_GRAPH_DB_PATH, at_time=at_time)
-    return jsonify({
-        "edges": edges,
-        "count": len(edges),
-        "at_time": at_time,
-    })
+    return jsonify(
+        {
+            "edges": edges,
+            "count": len(edges),
+            "at_time": at_time,
+        }
+    )
 
 
 @app.route("/api/v1/lived-memory/echoes")
@@ -1940,9 +2017,7 @@ def api_lived_memory_brief():
 
         import os as _os
 
-        if not _os.path.exists(_LIVED_EPISODE_DB_PATH) or not _os.path.exists(
-            _LIVED_GRAPH_DB_PATH
-        ):
+        if not _os.path.exists(_LIVED_EPISODE_DB_PATH) or not _os.path.exists(_LIVED_GRAPH_DB_PATH):
             brief = ""
         else:
             store = EpisodeStore(_LIVED_EPISODE_DB_PATH)
@@ -1982,6 +2057,7 @@ def _parse_chat_turn_handled(line: str) -> dict | None:
     line into its components. Returns None if the shape doesn't match.
     """
     import re as _re
+
     if "chat_turn handled" not in line or "telegram_surface" not in line:
         return None
     out: dict = {"raw": line}
@@ -2010,6 +2086,7 @@ def _parse_audit_line(line: str) -> dict | None:
     """Parse a `self_claim_audit | surface=... flagged=N mode=X kinds=Y`
     log line. Returns None if shape doesn't match."""
     import re as _re
+
     if "self_claim_audit |" not in line:
         return None
     out: dict = {"raw": line}
@@ -2032,6 +2109,7 @@ def _parse_audit_line(line: str) -> dict | None:
 def _ts_to_epoch(ts_str: str) -> float | None:
     """Parse 'YYYY-MM-DD HH:MM:SS' (local time) to epoch seconds."""
     import time as _time
+
     try:
         return _time.mktime(_time.strptime(ts_str, "%Y-%m-%d %H:%M:%S"))
     except Exception:
@@ -2041,6 +2119,7 @@ def _ts_to_epoch(ts_str: str) -> float | None:
 def _humanize_minutes_ago(ts_str: str | None) -> str:
     """Render 'N minutes ago' / 'just now' / etc. for a log timestamp."""
     import time as _time
+
     if not ts_str:
         return "unknown time"
     epoch = _ts_to_epoch(ts_str)
@@ -2104,9 +2183,7 @@ def _humanize_signals_absent(signals: list) -> str:
         return f"Maez didn't have: {', '.join(str(s) for s in signals)}."
     if len(parts) == 1:
         return f"Maez couldn't {parts[0]}."
-    return (
-        f"Maez couldn't {', '.join(parts[:-1])}, and couldn't {parts[-1]}."
-    )
+    return f"Maez couldn't {', '.join(parts[:-1])}, and couldn't {parts[-1]}."
 
 
 @app.route("/api/v1/turn/latest")
@@ -2135,10 +2212,12 @@ def api_turn_latest():
             break
 
     if chat_turn is None:
-        return jsonify({
-            "error": "no recent telegram_surface chat turn found in log",
-            "summary_one_line": "No recent chat turn to explain.",
-        }), 404
+        return jsonify(
+            {
+                "error": "no recent telegram_surface chat turn found in log",
+                "summary_one_line": "No recent chat turn to explain.",
+            }
+        ), 404
 
     # Find the surrounding telegram message + audit + sending lines.
     # Look 200 lines either side of the chat_turn line.
@@ -2180,7 +2259,8 @@ def api_turn_latest():
         if epoch is not None:
             try:
                 fl = _sq.connect(
-                    "/home/rohit/maez/memory/fabrication_log.db", timeout=2.0,
+                    "/home/rohit/maez/memory/fabrication_log.db",
+                    timeout=2.0,
                 )
                 cur = fl.cursor()
                 cur.execute(
@@ -2190,11 +2270,13 @@ def api_turn_latest():
                     (epoch - 5, epoch + 5),
                 )
                 for ts, text, reason, mode in cur.fetchall():
-                    flagged_claims.append({
-                        "claim": text,
-                        "reason": reason,
-                        "mode": mode,
-                    })
+                    flagged_claims.append(
+                        {
+                            "claim": text,
+                            "reason": reason,
+                            "mode": mode,
+                        }
+                    )
                 fl.close()
             except Exception:
                 pass
@@ -2202,9 +2284,7 @@ def api_turn_latest():
     # Pending cards executed near the chat_turn timestamp (±60s) —
     # any tools that fired as a result of this turn.
     tool_runs: list[dict] = []
-    chat_ts_epoch = (
-        _ts_to_epoch(chat_turn.get("ts", "")) if chat_turn.get("ts") else None
-    )
+    chat_ts_epoch = _ts_to_epoch(chat_turn.get("ts", "")) if chat_turn.get("ts") else None
     if chat_ts_epoch is not None:
         try:
             pc = _sq.connect(_PENDING_CARDS_DB, timeout=2.0)
@@ -2222,24 +2302,25 @@ def api_turn_latest():
                 cmd = ""
                 try:
                     import json as _json
+
                     p = _json.loads(params or "{}")
                     cmd = (p.get("cmd") or "")[:160]
                 except Exception:
                     pass
-                tool_runs.append({
-                    "request_id": rid[:12] if rid else "",
-                    "cmd": cmd,
-                    "success": bool(success),
-                    "output_preview": (output or "")[:200],
-                })
+                tool_runs.append(
+                    {
+                        "request_id": rid[:12] if rid else "",
+                        "cmd": cmd,
+                        "success": bool(success),
+                        "output_preview": (output or "")[:200],
+                    }
+                )
             pc.close()
         except Exception:
             pass
 
     # Build the structured response with plain-English summaries.
-    you_text = (
-        user_msg_line or chat_turn.get("user_excerpt") or "(unknown)"
-    )
+    you_text = user_msg_line or chat_turn.get("user_excerpt") or "(unknown)"
     maez_excerpt = chat_turn.get("reply_excerpt", "")
     audit_mode = audit_event.get("mode") if audit_event else None
     audit_flagged = audit_event.get("flagged", 0) if audit_event else 0
@@ -2258,15 +2339,12 @@ def api_turn_latest():
             f"no lived-memory recall this turn."
         )
     else:
-        memory_summary = (
-            "Maez ran this turn without lived-memory or ambient context."
-        )
+        memory_summary = "Maez ran this turn without lived-memory or ambient context."
 
     # Audit summary in plain English
     if audit_mode == "noop":
         audit_summary = (
-            "The honesty audit ran clean — nothing in Maez's reply was "
-            "flagged as ungrounded."
+            "The honesty audit ran clean — nothing in Maez's reply was flagged as ungrounded."
         )
     elif audit_mode == "judge_unavailable":
         audit_summary = (
@@ -2274,10 +2352,7 @@ def api_turn_latest():
             "The reply went out without grounding-check this turn."
         )
     elif audit_mode == "prefilter_clean":
-        audit_summary = (
-            "The reply was short / hedging enough that the audit "
-            "skipped the LLM check."
-        )
+        audit_summary = "The reply was short / hedging enough that the audit skipped the LLM check."
     elif audit_mode == "skipped":
         audit_summary = "The audit was skipped (tool-continuation path)."
     elif audit_mode == "sentence":
@@ -2314,9 +2389,7 @@ def api_turn_latest():
             parts.append(f"{len(good)} succeeded")
         if bad:
             parts.append(f"{len(bad)} failed")
-        tools_summary = (
-            f"{len(tool_runs)} tool run(s): {', '.join(parts)}."
-        )
+        tools_summary = f"{len(tool_runs)} tool run(s): {', '.join(parts)}."
 
     # Memory written summary
     if raw_stored_id:
@@ -2326,8 +2399,7 @@ def api_turn_latest():
         )
     else:
         memory_written_summary = (
-            "No memory entry was written for this turn (or write hasn't "
-            "fired yet)."
+            "No memory entry was written for this turn (or write hasn't fired yet)."
         )
 
     # Top-line synthesis
@@ -2352,64 +2424,65 @@ def api_turn_latest():
     if not one_line_parts:
         one_line = "Maez replied. Audit details unavailable for this turn."
     else:
-        one_line = (
-            "Maez replied; " + ", ".join(one_line_parts) + "."
-        )
+        one_line = "Maez replied; " + ", ".join(one_line_parts) + "."
 
-    return jsonify({
-        "you_said": {
-            "text": you_text,
-            "at": user_msg_ts or chat_turn.get("ts"),
-            "when": _humanize_minutes_ago(
-                user_msg_ts or chat_turn.get("ts"),
-            ),
-        },
-        "maez_replied": {
-            "excerpt": maez_excerpt,
-            "at": chat_turn.get("ts"),
-            "when": _humanize_minutes_ago(chat_turn.get("ts")),
-            "length_chars": chat_turn.get("len_reply", 0),
-        },
-        "maez_remembered": {
-            "lived_recall_chars": lived_chars,
-            "ambient_chars": ambient_chars,
-            "summary": memory_summary,
-        },
-        "maez_knew": {
-            "summary": (
-                "Body signals available this turn aren't fully captured "
-                "in the chat log; this view will improve once trace "
-                "logging covers signal manifests per turn."
-            ),
-        },
-        "audit": {
-            "mode": audit_mode,
-            "flagged_count": audit_flagged,
-            "flagged_claims": flagged_claims,
-            "summary": audit_summary,
-        },
-        "tools": {
-            "count": len(tool_runs),
-            "items": tool_runs,
-            "summary": tools_summary,
-        },
-        "memory_written": {
-            "raw_id": raw_stored_id,
-            "raw_chars": raw_stored_chars,
-            "summary": memory_written_summary,
-        },
-        "summary_one_line": one_line,
-        "_meta": {
-            "data_sources": [
-                "logs/maez.log (tail)",
-                "memory/fabrication_log.db",
-                "memory/pending_cards.db",
-            ],
-            "rendered_at": _time.strftime(
-                "%Y-%m-%d %H:%M:%S", _time.localtime(),
-            ),
-        },
-    })
+    return jsonify(
+        {
+            "you_said": {
+                "text": you_text,
+                "at": user_msg_ts or chat_turn.get("ts"),
+                "when": _humanize_minutes_ago(
+                    user_msg_ts or chat_turn.get("ts"),
+                ),
+            },
+            "maez_replied": {
+                "excerpt": maez_excerpt,
+                "at": chat_turn.get("ts"),
+                "when": _humanize_minutes_ago(chat_turn.get("ts")),
+                "length_chars": chat_turn.get("len_reply", 0),
+            },
+            "maez_remembered": {
+                "lived_recall_chars": lived_chars,
+                "ambient_chars": ambient_chars,
+                "summary": memory_summary,
+            },
+            "maez_knew": {
+                "summary": (
+                    "Body signals available this turn aren't fully captured "
+                    "in the chat log; this view will improve once trace "
+                    "logging covers signal manifests per turn."
+                ),
+            },
+            "audit": {
+                "mode": audit_mode,
+                "flagged_count": audit_flagged,
+                "flagged_claims": flagged_claims,
+                "summary": audit_summary,
+            },
+            "tools": {
+                "count": len(tool_runs),
+                "items": tool_runs,
+                "summary": tools_summary,
+            },
+            "memory_written": {
+                "raw_id": raw_stored_id,
+                "raw_chars": raw_stored_chars,
+                "summary": memory_written_summary,
+            },
+            "summary_one_line": one_line,
+            "_meta": {
+                "data_sources": [
+                    "logs/maez.log (tail)",
+                    "memory/fabrication_log.db",
+                    "memory/pending_cards.db",
+                ],
+                "rendered_at": _time.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    _time.localtime(),
+                ),
+            },
+        }
+    )
 
 
 # ── Maez Console v0 — page ───────────────────────────────────────────
@@ -2758,6 +2831,7 @@ def console_last_turn():
     `/api/v1/*` Track-B deferral in SECURITY_AUDIT.md).
     """
     from flask import Response
+
     return Response(_CONSOLE_LAST_TURN_HTML, mimetype="text/html")
 
 
@@ -2773,13 +2847,13 @@ def console_last_turn():
 @app.route("/api/v1/now")
 def api_now():
     """Aggregator for the Maez Now page. Read-only. Pulls from:
-      - logs/maez.log (most recent cycle thought + cycle number)
-      - core.infra.body_capabilities (binaries, services, env)
-      - core.infra.capability_registry (services state, disabled
-        features, memory counts)
-      - core.routing.model_config (configured model + endpoint)
-      - memory/fabrication_log.db (audit mode counts last 24h)
-      - memory/pending_cards.db (pending count + items)
+    - logs/maez.log (most recent cycle thought + cycle number)
+    - core.infra.body_capabilities (binaries, services, env)
+    - core.infra.capability_registry (services state, disabled
+      features, memory counts)
+    - core.routing.model_config (configured model + endpoint)
+    - memory/fabrication_log.db (audit mode counts last 24h)
+    - memory/pending_cards.db (pending count + items)
     """
     import re as _re
     import sqlite3 as _sq
@@ -2809,12 +2883,13 @@ def api_now():
             while j < len(lines) and len(body_lines) < 4:
                 bl = lines[j].strip()
                 if bl and not _re.search(
-                    r"^\d{4}-\d{2}-\d{2}.*\[INFO\]", bl,
+                    r"^\d{4}-\d{2}-\d{2}.*\[INFO\]",
+                    bl,
                 ):
                     body_lines.append(bl[:240])
                 if len(body_lines) > 0 and _re.search(
-                    r"\[INFO\] cycle \| score", lines[j]
-                    if j < len(lines) else "",
+                    r"\[INFO\] cycle \| score",
+                    lines[j] if j < len(lines) else "",
                 ):
                     break
                 j += 1
@@ -2840,10 +2915,10 @@ def api_now():
         "is_quiet": cycle_is_quiet,
         "summary": (
             "Maez is quiet this cycle (no new thought to share)."
-            if cycle_is_quiet else
-            f"Maez just thought this {_humanize_minutes_ago(cycle_ts)}."
-            if cycle_thought else
-            f"Maez is at cycle {cycle_num} — no recent thought captured."
+            if cycle_is_quiet
+            else f"Maez just thought this {_humanize_minutes_ago(cycle_ts)}."
+            if cycle_thought
+            else f"Maez is at cycle {cycle_num} — no recent thought captured."
         ),
     }
 
@@ -2851,6 +2926,7 @@ def api_now():
     body: dict = {}
     try:
         from core.infra import body_capabilities as _bc
+
         snap = _bc.body_capabilities()
         binaries = snap.get("binaries") or {}
         body["tools_available"] = sorted(
@@ -2876,8 +2952,10 @@ def api_now():
     # Brain endpoint
     try:
         from core.routing.model_config import (
-            PRIMARY_MODEL, PRIMARY_BASE_URL,
+            PRIMARY_MODEL,
+            PRIMARY_BASE_URL,
         )
+
         body["brain_model"] = PRIMARY_MODEL
         body["brain_endpoint"] = PRIMARY_BASE_URL
     except Exception:
@@ -2889,6 +2967,7 @@ def api_now():
     services_dead: list[str] = []
     try:
         from core.infra import capability_registry as _cr
+
         d = _cr.describe()
         for unit, state in (d.get("services") or {}).items():
             if unit.startswith("_"):
@@ -2906,9 +2985,7 @@ def api_now():
     can_phrases: list[str] = []
     cannot_phrases: list[str] = []
     if body.get("brain_endpoint", "").startswith("http"):
-        can_phrases.append(
-            f"reach the brain ({body.get('brain_model')})"
-        )
+        can_phrases.append(f"reach the brain ({body.get('brain_model')})")
     if body.get("sudo_passwordless"):
         can_phrases.append("run sudo without a password")
     if body.get("desktop_session_reachable"):
@@ -2918,15 +2995,15 @@ def api_now():
     if "wmctrl" in body.get("tools_missing", []):
         cannot_phrases.append("use wmctrl (not installed)")
     if body.get("services_alive_systemd"):
-        can_phrases.append(
-            f"talk to {len(body['services_alive_systemd'])} live services"
-        )
+        can_phrases.append(f"talk to {len(body['services_alive_systemd'])} live services")
     body_summary_parts = []
     if can_phrases:
         body_summary_parts.append("Maez can " + ", ".join(can_phrases))
     if cannot_phrases:
         body_summary_parts.append("can't " + ", ".join(cannot_phrases))
-    body["summary"] = ". ".join(body_summary_parts) + "." if body_summary_parts else "Body state unavailable."
+    body["summary"] = (
+        ". ".join(body_summary_parts) + "." if body_summary_parts else "Body state unavailable."
+    )
     out["body"] = body
 
     # ── Broken things ───────────────────────────────────────────
@@ -2941,59 +3018,73 @@ def api_now():
     # Look at last 200 lines for known degradation patterns
     recent_text = "\n".join(lines[-400:])
     if "invalid_grant" in recent_text or "Calendar fetch failed: OAuth" in recent_text:
-        broken.append({
-            "label": "Calendar (Google OAuth)",
-            "summary": "OAuth credentials are stale; the refresh token "
-                       "needs replacing. Calendar context is unavailable.",
-            "severity": "degraded",
-        })
+        broken.append(
+            {
+                "label": "Calendar (Google OAuth)",
+                "summary": "OAuth credentials are stale; the refresh token "
+                "needs replacing. Calendar context is unavailable.",
+                "severity": "degraded",
+            }
+        )
     if "GitHub skill auto-disabled" in recent_text:
-        broken.append({
-            "label": "GitHub awareness",
-            "summary": "Personal access token rejected with 401. "
-                       "Update MAEZ_GITHUB_TOKEN and restart maez.service.",
-            "severity": "degraded",
-        })
+        broken.append(
+            {
+                "label": "GitHub awareness",
+                "summary": "Personal access token rejected with 401. "
+                "Update MAEZ_GITHUB_TOKEN and restart maez.service.",
+                "severity": "degraded",
+            }
+        )
     if "screen perception disabled" in recent_text:
-        broken.append({
-            "label": "Vision (screen perception)",
-            "summary": "Intentionally retired. Maez cannot see "
-                       "what's on your screen.",
-            "severity": "intentional",
-        })
+        broken.append(
+            {
+                "label": "Vision (screen perception)",
+                "summary": "Intentionally retired. Maez cannot see what's on your screen.",
+                "severity": "intentional",
+            }
+        )
     if "judge LLM call failed" in recent_text or any(
         "mode=judge_unavailable" in ln for ln in lines[-200:]
     ):
-        broken.append({
-            "label": "Honesty audit (occasionally)",
-            "summary": "The grounding judge times out under load. "
-                       "When it does, the reply goes out without "
-                       "grounding-check (fail-loud, not fail-closed).",
-            "severity": "intermittent",
-        })
+        broken.append(
+            {
+                "label": "Honesty audit (occasionally)",
+                "summary": "The grounding judge times out under load. "
+                "When it does, the reply goes out without "
+                "grounding-check (fail-loud, not fail-closed).",
+                "severity": "intermittent",
+            }
+        )
     if "active_window failed" in recent_text:
-        broken.append({
-            "label": "Active-window detection",
-            "summary": "X session unreachable from the daemon. "
-                       "Maez can't tell what app you have focused.",
-            "severity": "degraded",
-        })
+        broken.append(
+            {
+                "label": "Active-window detection",
+                "summary": "X session unreachable from the daemon. "
+                "Maez can't tell what app you have focused.",
+                "severity": "degraded",
+            }
+        )
 
     out["broken"] = {
         "count": len(broken),
         "items": broken,
         "summary": (
             "Nothing degraded right now."
-            if not broken else
-            f"{len(broken)} thing(s) degraded: " +
-            ", ".join(b["label"].lower() for b in broken) + "."
+            if not broken
+            else f"{len(broken)} thing(s) degraded: "
+            + ", ".join(b["label"].lower() for b in broken)
+            + "."
         ),
     }
 
     # ── Audit health (last 24h) ────────────────────────────────
     audit_counts: dict[str, int] = {
-        "noop": 0, "sentence": 0, "shortcircuit": 0,
-        "judge_unavailable": 0, "prefilter_clean": 0, "skipped": 0,
+        "noop": 0,
+        "sentence": 0,
+        "shortcircuit": 0,
+        "judge_unavailable": 0,
+        "prefilter_clean": 0,
+        "skipped": 0,
     }
     try:
         # Count audit modes from cognition.log over last 24h
@@ -3003,7 +3094,8 @@ def api_now():
             if "self_claim_audit |" not in ln:
                 continue
             tsm = _re.match(
-                r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", ln,
+                r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})",
+                ln,
             )
             if tsm:
                 ep = _ts_to_epoch(tsm.group(1))
@@ -3017,7 +3109,8 @@ def api_now():
         pass
     total_audits = sum(audit_counts.values())
     rewrites = audit_counts.get("sentence", 0) + audit_counts.get(
-        "shortcircuit", 0,
+        "shortcircuit",
+        0,
     )
     unavailable = audit_counts.get("judge_unavailable", 0)
     clean = audit_counts.get("noop", 0)
@@ -3028,13 +3121,11 @@ def api_now():
 
     if total_audits == 0:
         audit_summary = (
-            "No audit events captured in the last 24 hours "
-            "(cognition log may be empty or rotated)."
+            "No audit events captured in the last 24 hours (cognition log may be empty or rotated)."
         )
     elif rewrites == 0 and unavailable == 0:
         audit_summary = (
-            f"Maez spoke cleanly today — every reply the rail saw "
-            f"({clean}) passed without rewrite."
+            f"Maez spoke cleanly today — every reply the rail saw ({clean}) passed without rewrite."
         )
     else:
         # Lead with the practice, not the metric. Reframe the
@@ -3054,9 +3145,7 @@ def api_now():
                 f"itself was unavailable (judge timed out under load)."
             )
         if clean > 0:
-            parts.append(
-                f"{clean} repl{'ies' if clean != 1 else 'y'} passed clean."
-            )
+            parts.append(f"{clean} repl{'ies' if clean != 1 else 'y'} passed clean.")
         audit_summary = " ".join(parts)
 
     out["audit_health"] = {
@@ -3085,6 +3174,7 @@ def api_now():
             cmd = ""
             try:
                 import json as _json
+
                 p = _json.loads(params or "{}")
                 cmd = (p.get("cmd") or "")[:200]
             except Exception:
@@ -3092,18 +3182,21 @@ def api_now():
             iso = ""
             try:
                 iso = _time.strftime(
-                    "%Y-%m-%d %H:%M:%S", _time.localtime(float(created)),
+                    "%Y-%m-%d %H:%M:%S",
+                    _time.localtime(float(created)),
                 )
             except Exception:
                 pass
-            pending.append({
-                "request_id": (rid or "")[:12],
-                "action": action,
-                "cmd_preview": cmd,
-                "plain_english": pe or "",
-                "status": status,
-                "when": _humanize_minutes_ago(iso),
-            })
+            pending.append(
+                {
+                    "request_id": (rid or "")[:12],
+                    "action": action,
+                    "cmd_preview": cmd,
+                    "plain_english": pe or "",
+                    "status": status,
+                    "when": _humanize_minutes_ago(iso),
+                }
+            )
         pc.close()
     except Exception:
         pass
@@ -3113,9 +3206,8 @@ def api_now():
         "items": pending,
         "summary": (
             "Maez has no pending actions awaiting your approval."
-            if not pending else
-            f"Maez wants approval for {len(pending)} action"
-            f"{'s' if len(pending) != 1 else ''}."
+            if not pending
+            else f"Maez wants approval for {len(pending)} action{'s' if len(pending) != 1 else ''}."
         ),
     }
 
@@ -3123,6 +3215,7 @@ def api_now():
     mem_counts = {}
     try:
         from core.infra import capability_registry as _cr
+
         d = _cr.describe()
         mem_counts = d.get("memory_counts") or {}
     except Exception:
@@ -3133,8 +3226,8 @@ def api_now():
             f"Maez holds {mem_counts.get('raw', 0):,} raw memories, "
             f"{mem_counts.get('daily', 0)} daily summaries, and "
             f"{mem_counts.get('core', 0)} core beliefs."
-            if mem_counts else
-            "Memory counts unavailable."
+            if mem_counts
+            else "Memory counts unavailable."
         ),
     }
 
@@ -3147,20 +3240,14 @@ def api_now():
     else:
         parts.append(f"Maez is at cycle {cycle_num}")
     if out["broken"]["count"] > 0:
-        parts.append(
-            f"{out['broken']['count']} thing(s) degraded"
-        )
+        parts.append(f"{out['broken']['count']} thing(s) degraded")
     if out["pending_actions"]["count"] > 0:
-        parts.append(
-            f"{out['pending_actions']['count']} action(s) "
-            f"awaiting your approval"
-        )
+        parts.append(f"{out['pending_actions']['count']} action(s) awaiting your approval")
     audit_str = ""
     if total_audits > 0:
         if rewrites > 0:
             audit_str = (
-                f"the rail caught {rewrites} ungrounded claim"
-                f"{'s' if rewrites != 1 else ''} today"
+                f"the rail caught {rewrites} ungrounded claim{'s' if rewrites != 1 else ''} today"
             )
         else:
             audit_str = "Maez spoke clean today"
@@ -3170,10 +3257,12 @@ def api_now():
     out["summary_one_line"] = one_line
     out["_meta"] = {
         "rendered_at": _time.strftime(
-            "%Y-%m-%d %H:%M:%S", _time.localtime(),
+            "%Y-%m-%d %H:%M:%S",
+            _time.localtime(),
         ),
         "data_sources": [
-            "logs/maez.log", "logs/cognition.log",
+            "logs/maez.log",
+            "logs/cognition.log",
             "memory/pending_cards.db",
             "core.infra.body_capabilities",
             "core.infra.capability_registry",
@@ -3714,6 +3803,7 @@ def console_now():
     the rest of the cockpit.
     """
     from flask import Response
+
     return Response(_CONSOLE_NOW_HTML, mimetype="text/html")
 
 
@@ -3766,19 +3856,28 @@ _RAIL_CACHE: dict = {"value": None, "built_at": 0.0}
 _RAIL_SURFACE_GROUPS: dict[str, set[str]] = {
     "daemon": {"daemon_cycle", "daemon_cycle_retry"},
     "telegram": {
-        "telegram_surface", "telegram_dialog",
-        "telegram_text", "telegram_public",
+        "telegram_surface",
+        "telegram_dialog",
+        "telegram_text",
+        "telegram_public",
     },
     "chat": {"chat"},
     "cli": {"cli"},
     "web": {"web"},
     "scheduled": {
-        "morning_briefing", "nightly_journal",
-        "developmental_heartbeat", "self_mod_dialog",
+        "morning_briefing",
+        "nightly_journal",
+        "developmental_heartbeat",
+        "self_mod_dialog",
     },
 }
 _RAIL_PRODUCTION_GROUPS = (
-    "daemon", "telegram", "chat", "cli", "web", "scheduled",
+    "daemon",
+    "telegram",
+    "chat",
+    "cli",
+    "web",
+    "scheduled",
 )
 
 
@@ -3817,6 +3916,7 @@ def _rail_read_judge_timeout() -> float:
 def _rail_read_tail(path: str, max_bytes: int) -> str:
     try:
         import os as _os
+
         with open(path, "rb") as f:
             sz = _os.fstat(f.fileno()).st_size
             if sz > max_bytes:
@@ -3880,11 +3980,15 @@ def _rail_build_timeline() -> dict:
     minute_anchor = (now.minute // _RAIL_BUCKET_MIN + 1) * _RAIL_BUCKET_MIN
     if minute_anchor >= 60:
         anchor = now.replace(
-            minute=0, second=0, microsecond=0,
+            minute=0,
+            second=0,
+            microsecond=0,
         ) + _td_rail(hours=1)
     else:
         anchor = now.replace(
-            minute=minute_anchor, second=0, microsecond=0,
+            minute=minute_anchor,
+            second=0,
+            microsecond=0,
         )
 
     # Each bucket holds (a) "total" rolled-up counts and
@@ -3962,36 +4066,30 @@ def _rail_build_timeline() -> dict:
                     **c,
                     "total": grp_total,
                     "timeout_rate": (
-                        round(c["rail_unavailable"] / grp_total, 4)
-                        if grp_total > 0 else None
+                        round(c["rail_unavailable"] / grp_total, 4) if grp_total > 0 else None
                     ),
                 }
-        out_buckets.append({
-            "bucket_start": bucket_start.strftime("%Y-%m-%dT%H:%M"),
-            "spoke_clean": b["spoke_clean"],
-            "corrected": b["corrected"],
-            "rail_unavailable": b["rail_unavailable"],
-            "total": total,
-            "timeout_rate": (
-                round(b["rail_unavailable"] / total, 4)
-                if total > 0 else None
-            ),
-            "gpu_pct_avg": (
-                round(sum(gpu_samples) / len(gpu_samples), 1)
-                if gpu_samples else None
-            ),
-            "by_group": compact_by_group,
-        })
+        out_buckets.append(
+            {
+                "bucket_start": bucket_start.strftime("%Y-%m-%dT%H:%M"),
+                "spoke_clean": b["spoke_clean"],
+                "corrected": b["corrected"],
+                "rail_unavailable": b["rail_unavailable"],
+                "total": total,
+                "timeout_rate": (round(b["rail_unavailable"] / total, 4) if total > 0 else None),
+                "gpu_pct_avg": (
+                    round(sum(gpu_samples) / len(gpu_samples), 1) if gpu_samples else None
+                ),
+                "by_group": compact_by_group,
+            }
+        )
 
     # 24h totals + per-group totals
     total_clean = sum(b["spoke_clean"] for b in out_buckets)
     total_corrected = sum(b["corrected"] for b in out_buckets)
     total_unavail = sum(b["rail_unavailable"] for b in out_buckets)
     total_audits = total_clean + total_corrected + total_unavail
-    overall_timeout_rate = (
-        round(total_unavail / total_audits, 4)
-        if total_audits > 0 else None
-    )
+    overall_timeout_rate = round(total_unavail / total_audits, 4) if total_audits > 0 else None
 
     by_group_24h = {}
     for grp in all_groups:
@@ -4045,6 +4143,7 @@ def api_rail_timeline():
     seeing pre-experiment cached numbers.
     """
     from flask import jsonify
+
     now_s = _time_rail.time()
     cache_age = now_s - _RAIL_CACHE["built_at"]
     if _RAIL_CACHE["value"] is None or cache_age >= _RAIL_CACHE_TTL_S:
@@ -4053,10 +4152,12 @@ def api_rail_timeline():
             _RAIL_CACHE["built_at"] = now_s
             cache_age = 0.0
         except Exception as e:
-            return jsonify({
-                "error": "timeline_build_failed",
-                "detail": str(e)[:200],
-            }), 500
+            return jsonify(
+                {
+                    "error": "timeline_build_failed",
+                    "detail": str(e)[:200],
+                }
+            ), 500
     payload = dict(_RAIL_CACHE["value"])
     payload["data_age_seconds"] = round(cache_age, 1)
     return jsonify(payload)
@@ -4657,6 +4758,7 @@ def console_rail():
     cached).
     """
     from flask import Response
+
     return Response(_CONSOLE_RAIL_HTML, mimetype="text/html")
 
 
@@ -4664,6 +4766,7 @@ def console_rail():
 def api_dreams():
     """Merged view of evolution candidates + dream proposals."""
     import sqlite3 as _sq
+
     dreams = []
     evo_path = "/home/rohit/maez/memory/evolution_track.db"
     dream_path = "/home/rohit/maez/memory/dream_proposals.db"
@@ -4678,19 +4781,23 @@ def api_dreams():
         c.close()
         for r in rows:
             state_map = {
-                "validated": "pending", "applied": "approved",
-                "rejected": "rejected", "rolled_back": "rejected",
+                "validated": "pending",
+                "applied": "approved",
+                "rejected": "rejected",
+                "rolled_back": "rejected",
             }
-            dreams.append({
-                "id": r["id"],
-                "at": str(r["created_at"] or "")[11:16],
-                "score": 0.75,
-                "status": state_map.get(r["state"], "pending"),
-                "title": (r["weakness_description"] or "")[:80],
-                "rationale": f"targets {r['target_file']}",
-                "diff": (r["diff_text"] or "")[:600],
-                "source": "evolution",
-            })
+            dreams.append(
+                {
+                    "id": r["id"],
+                    "at": str(r["created_at"] or "")[11:16],
+                    "score": 0.75,
+                    "status": state_map.get(r["state"], "pending"),
+                    "title": (r["weakness_description"] or "")[:80],
+                    "rationale": f"targets {r['target_file']}",
+                    "diff": (r["diff_text"] or "")[:600],
+                    "source": "evolution",
+                }
+            )
     except Exception:
         pass
     # Dream proposals
@@ -4704,16 +4811,18 @@ def api_dreams():
         ).fetchall()
         c.close()
         for r in rows:
-            dreams.append({
-                "id": 10000 + r["id"],
-                "at": str(r["created_at"] or "")[-8:-3] if r["created_at"] else "",
-                "score": 0.65,
-                "status": r["status"] or "pending",
-                "title": (r["insight"] or "")[:80],
-                "rationale": (r["insight"] or "")[:200],
-                "diff": (r["unified_diff"] or "")[:600],
-                "source": "dream",
-            })
+            dreams.append(
+                {
+                    "id": 10000 + r["id"],
+                    "at": str(r["created_at"] or "")[-8:-3] if r["created_at"] else "",
+                    "score": 0.65,
+                    "status": r["status"] or "pending",
+                    "title": (r["insight"] or "")[:80],
+                    "rationale": (r["insight"] or "")[:200],
+                    "diff": (r["unified_diff"] or "")[:600],
+                    "source": "dream",
+                }
+            )
     except Exception:
         pass
     dreams.sort(key=lambda d: d.get("id", 0), reverse=True)
@@ -4762,10 +4871,12 @@ def api_quality():
 
 # ── Workshop — in-cockpit coding session (Phase 1: chat only) ─────────
 
+
 @app.route("/api/v1/workshop/sessions", methods=["GET"])
 def api_workshop_list():
     try:
         from core.workshop import rollup
+
         return jsonify(rollup(limit_sessions=50))
     except Exception as e:
         return jsonify({"error": f"workshop list failed: {e}"}), 500
@@ -4778,8 +4889,10 @@ def api_workshop_create():
         title = (body.get("title") or "(untitled)").strip()[:200]
         model = (body.get("model") or "").strip() or None
         from core.workshop import create_session
+
         sid = create_session(
-            title=title, model=model or "sonnet",
+            title=title,
+            model=model or "sonnet",
         )
         return jsonify({"id": sid, "title": title})
     except Exception as e:
@@ -4790,25 +4903,34 @@ def api_workshop_create():
 def api_workshop_get(session_id: str):
     try:
         from core.workshop import get_session, get_turns
+
         s = get_session(session_id)
         if not s:
             return jsonify({"error": "session not found"}), 404
         turns = get_turns(session_id)
-        return jsonify({
-            "session": {
-                "id": s.id, "title": s.title, "model": s.model,
-                "created_at": s.created_at, "updated_at": s.updated_at,
-            },
-            "turns": [
-                {
-                    "id": t.id, "ts": t.ts, "role": t.role,
-                    "content": t.content, "model_used": t.model_used,
-                    "input_tokens": t.input_tokens,
-                    "output_tokens": t.output_tokens,
-                }
-                for t in turns
-            ],
-        })
+        return jsonify(
+            {
+                "session": {
+                    "id": s.id,
+                    "title": s.title,
+                    "model": s.model,
+                    "created_at": s.created_at,
+                    "updated_at": s.updated_at,
+                },
+                "turns": [
+                    {
+                        "id": t.id,
+                        "ts": t.ts,
+                        "role": t.role,
+                        "content": t.content,
+                        "model_used": t.model_used,
+                        "input_tokens": t.input_tokens,
+                        "output_tokens": t.output_tokens,
+                    }
+                    for t in turns
+                ],
+            }
+        )
     except Exception as e:
         return jsonify({"error": f"workshop get failed: {e}"}), 500
 
@@ -4823,6 +4945,7 @@ def api_workshop_turn(session_id: str):
         if not user_message:
             return jsonify({"error": "message required"}), 400
         from core.workshop import turn
+
         result = turn(
             session_id=session_id,
             user_message=user_message,
@@ -4853,6 +4976,7 @@ def api_workshop_update_model(session_id: str):
         if not model:
             return jsonify({"error": "model required"}), 400
         from core.workshop import update_session_model
+
         ok = update_session_model(session_id, model)
         if not ok:
             return jsonify({"error": "session not found or update failed"}), 404
@@ -4886,6 +5010,7 @@ def api_workshop_apply(session_id: str):
             return jsonify({"error": "diff required"}), 400
         reviewed = bool(body.get("reviewed", False))
         from core.workshop import apply_diff
+
         result = apply_diff(
             session_id=session_id,
             diff_text=diff_text,
@@ -4901,6 +5026,7 @@ def api_workshop_apply(session_id: str):
 def api_workshop_delete(session_id: str):
     try:
         from core.workshop import delete_session
+
         ok = delete_session(session_id)
         if not ok:
             return jsonify({"error": "session not found"}), 404
@@ -4927,18 +5053,21 @@ def api_self_dev_resolve(concern_id: int):
         state = (body.get("state") or "").strip().lower()
         notes = body.get("notes") or None
         if state not in ("open", "resolved", "wont_fix", "rejected"):
-            return jsonify({
-                "error": f"state must be one of open/resolved/wont_fix/rejected; got {state!r}"
-            }), 400
+            return jsonify(
+                {"error": f"state must be one of open/resolved/wont_fix/rejected; got {state!r}"}
+            ), 400
         from core.self_dev_persistence import set_concern_status
+
         ok = set_concern_status(concern_id, state, notes=notes)
         if not ok:
-            return jsonify({
-                "error": f"concern #{concern_id} not found or DB write failed"
-            }), 404
-        return jsonify({
-            "id": concern_id, "state": state, "notes": notes,
-        })
+            return jsonify({"error": f"concern #{concern_id} not found or DB write failed"}), 404
+        return jsonify(
+            {
+                "id": concern_id,
+                "state": state,
+                "notes": notes,
+            }
+        )
     except Exception as e:
         return jsonify({"error": f"resolve failed: {e}"}), 500
 
@@ -4993,6 +5122,7 @@ def _build_machine_info(_os_mod) -> dict:
     profile = ""
     try:
         from core import identity as _identity_mod
+
         profile = _identity_mod.machine_profile() or ""
     except Exception:
         pass
@@ -5008,6 +5138,7 @@ def _build_machine_info(_os_mod) -> dict:
 def _default_owner_name() -> str:
     try:
         from core import identity as _identity_mod
+
         return _identity_mod.display_name() or "owner"
     except Exception:
         return "owner"
@@ -5017,10 +5148,14 @@ def _default_owner_name() -> str:
 def api_identity():
     """Owner / machine / covenant / reddit subs."""
     import os as _os
+
     identity = {
         "owner": {
-            "name": _default_owner_name(), "pronouns": "",
-            "city": "", "lat": None, "lon": None,
+            "name": _default_owner_name(),
+            "pronouns": "",
+            "city": "",
+            "lat": None,
+            "lon": None,
         },
         "machine": _build_machine_info(_os),
         "policies": {
@@ -5034,12 +5169,14 @@ def api_identity():
     # Read identity.yaml if present
     try:
         from core.paths import identity_file as _identity_file
+
         id_path = str(_identity_file())
     except Exception:
         id_path = "/home/rohit/maez/config/identity.yaml"
     if _os.path.exists(id_path):
         try:
             import yaml as _yaml
+
             with open(id_path) as f:
                 y = _yaml.safe_load(f) or {}
             if isinstance(y, dict):
@@ -5053,7 +5190,9 @@ def api_identity():
     # Reddit subs fallback
     if not identity["redditSubs"]:
         identity["redditSubs"] = [
-            "LocalLLaMA", "MachineLearning", "selfhosted",
+            "LocalLLaMA",
+            "MachineLearning",
+            "selfhosted",
         ]
     return jsonify(identity)
 
@@ -5062,22 +5201,24 @@ def api_identity():
 def api_router():
     """Router totals + recent decisions via Langfuse if creds present."""
     import os as _os
+
     totals = {"local": 0, "claude": 0, "bytesIn": 0, "bytesOut": 0, "costUsd": 0.0}
     window = []
-    if (_os.environ.get("LANGFUSE_PUBLIC_KEY")
-            and _os.environ.get("LANGFUSE_SECRET_KEY")):
+    if _os.environ.get("LANGFUSE_PUBLIC_KEY") and _os.environ.get("LANGFUSE_SECRET_KEY"):
         try:
             from langfuse import Langfuse
+
             client = Langfuse(
                 public_key=_os.environ["LANGFUSE_PUBLIC_KEY"],
                 secret_key=_os.environ["LANGFUSE_SECRET_KEY"],
-                host=(_os.environ.get("LANGFUSE_HOST")
-                      or _os.environ.get("LANGFUSE_BASE_URL")
-                      or "https://cloud.langfuse.com"),
+                host=(
+                    _os.environ.get("LANGFUSE_HOST")
+                    or _os.environ.get("LANGFUSE_BASE_URL")
+                    or "https://cloud.langfuse.com"
+                ),
             )
             # Langfuse v4 — fetch recent traces, summarize by model.
-            traces = client.api.trace.list(limit=50) if hasattr(
-                client, "api") else None
+            traces = client.api.trace.list(limit=50) if hasattr(client, "api") else None
             if traces:
                 items = getattr(traces, "data", [])
                 for t in items[:15]:
@@ -5090,14 +5231,15 @@ def api_router():
                     else:
                         totals["local"] += 1
                     ts_val = getattr(t, "timestamp", "") or ""
-                    window.append({
-                        "t": str(ts_val)[11:19],
-                        "msg": str((getattr(t, "input", {}) or {}).get(
-                            "text", ""))[:60],
-                        "route": "claude" if is_claude else "local",
-                        "conf": 0.9,
-                        "tag": name[:20] or "turn",
-                    })
+                    window.append(
+                        {
+                            "t": str(ts_val)[11:19],
+                            "msg": str((getattr(t, "input", {}) or {}).get("text", ""))[:60],
+                            "route": "claude" if is_claude else "local",
+                            "conf": 0.9,
+                            "tag": name[:20] or "turn",
+                        }
+                    )
         except Exception:
             pass
     return jsonify({"totals": totals, "window": window[:10]})
@@ -5107,6 +5249,7 @@ def api_router():
 def api_logs(name: str):
     """Tail of maez.log / cognition.log / evolution.log."""
     import re as _re
+
     allowed = {
         "maez": "/home/rohit/maez/logs/maez.log",
         "cognition": "/home/rohit/maez/logs/cognition.log",
@@ -5123,17 +5266,24 @@ def api_logs(name: str):
             ln,
         )
         if m:
-            parsed.append({
-                "t": m.group(1),
-                "level": m.group(2),
-                "src": (m.group(3) or "").rstrip(":")[:20],
-                "msg": m.group(4)[:200],
-            })
+            parsed.append(
+                {
+                    "t": m.group(1),
+                    "level": m.group(2),
+                    "src": (m.group(3) or "").rstrip(":")[:20],
+                    "msg": m.group(4)[:200],
+                }
+            )
         else:
             # Free-form continuation line
-            parsed.append({
-                "t": "", "level": "INFO", "src": "", "msg": ln[:200],
-            })
+            parsed.append(
+                {
+                    "t": "",
+                    "level": "INFO",
+                    "src": "",
+                    "msg": ln[:200],
+                }
+            )
     return jsonify({"lines": parsed})
 
 
@@ -5150,6 +5300,7 @@ def api_dream_action(dream_id: int, action: str):
     used by /api/v1/dreams."""
     import sqlite3 as _sq
     import time as _time
+
     if action not in ("approve", "reject"):
         return jsonify({"ok": False, "error": "action must be approve or reject"}), 400
     is_dream = dream_id >= 10000
@@ -5160,10 +5311,8 @@ def api_dream_action(dream_id: int, action: str):
         applied_col = "applied_at"
         status_col = "status"
         new_status = "applied" if action == "approve" else "rejected"
-        sql = (f"UPDATE {table} SET {status_col}=?, {applied_col}=? "
-               "WHERE id=?")
-        args = (new_status, _time.time() if action == "approve" else None,
-                real_id)
+        sql = f"UPDATE {table} SET {status_col}=?, {applied_col}=? WHERE id=?"
+        args = (new_status, _time.time() if action == "approve" else None, real_id)
     else:
         db_path = "/home/rohit/maez/memory/evolution_track.db"
         table = "candidates"
@@ -5172,13 +5321,10 @@ def api_dream_action(dream_id: int, action: str):
         applied_col = "applied_at" if action == "approve" else "rejected_at"
         # evolution_track uses rejection_reason rather than rejected_at
         if action == "reject":
-            sql = (f"UPDATE {table} SET {status_col}=?, "
-                   "rejection_reason=?, resolved_at=? WHERE id=?")
-            args = (new_status, "rejected from cockpit UI",
-                    _time.time(), real_id)
+            sql = f"UPDATE {table} SET {status_col}=?, rejection_reason=?, resolved_at=? WHERE id=?"
+            args = (new_status, "rejected from cockpit UI", _time.time(), real_id)
         else:
-            sql = (f"UPDATE {table} SET {status_col}=?, {applied_col}=?, "
-                   "resolved_at=? WHERE id=?")
+            sql = f"UPDATE {table} SET {status_col}=?, {applied_col}=?, resolved_at=? WHERE id=?"
             args = (new_status, _time.time(), _time.time(), real_id)
     try:
         c = _sq.connect(db_path, timeout=2.0)
@@ -5188,8 +5334,13 @@ def api_dream_action(dream_id: int, action: str):
         c.close()
         if changed == 0:
             return jsonify({"ok": False, "error": f"no row with id {real_id}"}), 404
-        return jsonify({"ok": True, "status": new_status, "note":
-                        "state flipped — applying diffs is the daemon's job, not the cockpit's"})
+        return jsonify(
+            {
+                "ok": True,
+                "status": new_status,
+                "note": "state flipped — applying diffs is the daemon's job, not the cockpit's",
+            }
+        )
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -5211,8 +5362,10 @@ def api_chat_sessions():
     scaffolding so the cockpit shows conversational content only.
     """
     import re as _re
+
     try:
         from memory.memory_manager import MemoryManager
+
         mem = MemoryManager()
         exchanges = mem.get_telegram_exchanges(limit=6) or []
     except Exception:
@@ -5249,8 +5402,8 @@ def api_chat_sessions():
         # prefix "Maez:" or the final paragraph after all the scaffolding.
         maez_match = _re.search(r"\n\s*Maez\s*:\s*", text)
         if maez_match:
-            user_blob = text[:maez_match.start()]
-            maez_part = text[maez_match.end():].strip()
+            user_blob = text[: maez_match.start()]
+            maez_part = text[maez_match.end() :].strip()
         else:
             user_blob = text
             maez_part = ""
@@ -5258,7 +5411,7 @@ def api_chat_sessions():
         # Drop scaffolding from the user blob: cut at the first opener.
         scaffold_match = _SCAFFOLD_RE.search(user_blob)
         if scaffold_match:
-            user_blob = user_blob[:scaffold_match.start()]
+            user_blob = user_blob[: scaffold_match.start()]
 
         # Strip the "the owner (surface): " / "rohit: " prefix.
         user_blob = user_blob.strip()
@@ -5268,7 +5421,7 @@ def api_chat_sessions():
         if maez_part:
             m2 = _SCAFFOLD_RE.search(maez_part)
             if m2:
-                maez_part = maez_part[:m2.start()].strip()
+                maez_part = maez_part[: m2.start()].strip()
 
         return user_blob[:800], maez_part[:800]
 
@@ -5279,27 +5432,40 @@ def api_chat_sessions():
         ts_val = str(meta.get("timestamp") or "")[-8:]
         user_msg, maez_reply = _parse_exchange(content)
         if user_msg:
-            history.append({
-                "role": "user", "t": ts_val, "content": user_msg,
-            })
+            history.append(
+                {
+                    "role": "user",
+                    "t": ts_val,
+                    "content": user_msg,
+                }
+            )
         if maez_reply:
-            history.append({
-                "role": "assistant", "t": ts_val, "content": maez_reply,
-                "route": "local", "model": MODEL,
-                "trace": {"tools": [], "memory": 0, "tokens": len(maez_reply) // 4},
-            })
-    return jsonify({
-        "sessions": [{
-            "id": "live",
-            "title": "Recent Telegram",
-            "preview": history[-1]["content"][:60] if history else "(empty)",
-            "updated": history[-1]["t"] if history else "",
-            "color": "blue",
-            "unread": 0,
-            "history": history,
-        }],
-        "activeSessionId": "live",
-    })
+            history.append(
+                {
+                    "role": "assistant",
+                    "t": ts_val,
+                    "content": maez_reply,
+                    "route": "local",
+                    "model": MODEL,
+                    "trace": {"tools": [], "memory": 0, "tokens": len(maez_reply) // 4},
+                }
+            )
+    return jsonify(
+        {
+            "sessions": [
+                {
+                    "id": "live",
+                    "title": "Recent Telegram",
+                    "preview": history[-1]["content"][:60] if history else "(empty)",
+                    "updated": history[-1]["t"] if history else "",
+                    "color": "blue",
+                    "unread": 0,
+                    "history": history,
+                }
+            ],
+            "activeSessionId": "live",
+        }
+    )
 
 
 @app.route("/maez_bg_zen.html")
@@ -5326,7 +5492,7 @@ def register():
         if match:
             result["possible_telegram_match"] = {
                 **match,
-                "suggestion": "I think I've spoken with you on Telegram before. Want to link those conversations?"
+                "suggestion": "I think I've spoken with you on Telegram before. Want to link those conversations?",
             }
         response = jsonify({"success": True, **result})
         return _attach_auth_cookie(response, result.get("web_token", ""))
@@ -5413,13 +5579,12 @@ def chat():
         # recent iPhone signals. Cached (60s TTL) so repeat turns don't hammer APIs.
         try:
             from core.ambient_format import ambient_prompt_block
+
             ambient_block = ambient_prompt_block()
         except Exception as _e:
             ambient_block = ""
         owner_system = (
-            f"{SOUL}\n\n"
-            + (f"{ambient_block}\n\n" if ambient_block else "")
-            + "CRITICAL:\n"
+            f"{SOUL}\n\n" + (f"{ambient_block}\n\n" if ambient_block else "") + "CRITICAL:\n"
             "- You are talking to the owner through the maez.live web interface.\n"
             "- This is the same the owner as the private Telegram conversation.\n"
             "- Treat web and private Telegram as one continuous relationship.\n"
@@ -5445,13 +5610,15 @@ def chat():
             _web_signals_absent.append("ambient context")
         messages_list = [{"role": "system", "content": owner_system}]
         if owner_memory:
-            messages_list.append({
-                "role": "user",
-                "content": (
-                    "Shared continuity with the owner from the long-running private channel:\n\n"
-                    f"{owner_memory}"
-                ),
-            })
+            messages_list.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Shared continuity with the owner from the long-running private channel:\n\n"
+                        f"{owner_memory}"
+                    ),
+                }
+            )
         for h in history[:-1]:
             if isinstance(h, dict) and h.get("role") and h.get("content"):
                 messages_list.append({"role": h["role"], "content": h["content"]})
@@ -5469,9 +5636,7 @@ def chat():
                 from core.memory.episodes import EpisodeStore as _EpStore
                 from core.memory.relationship_graph import RelationshipGraph as _RGraph
 
-                if os.path.exists(_LIVED_EPISODE_DB_PATH) and os.path.exists(
-                    _LIVED_GRAPH_DB_PATH
-                ):
+                if os.path.exists(_LIVED_EPISODE_DB_PATH) and os.path.exists(_LIVED_GRAPH_DB_PATH):
                     _ep = _EpStore(_LIVED_EPISODE_DB_PATH)
                     _gr = _RGraph(_LIVED_GRAPH_DB_PATH)
                     _lived_brief = _build_brief(
@@ -5509,14 +5674,20 @@ def chat():
         # risk. Canonical text is a projection of soul.md's public-facing
         # identity; future session can parse soul.md at runtime.
         IDENTITY_KEYWORDS = (
-            "who are you", "what are you", "tell me about yourself",
-            "what is maez", "who is this", "tell me about maez",
-            "what can you do", "introduce yourself",
+            "who are you",
+            "what are you",
+            "tell me about yourself",
+            "what is maez",
+            "who is this",
+            "tell me about maez",
+            "what can you do",
+            "introduce yourself",
         )
         msg_lower = message.lower().strip()
         if any(kw in msg_lower for kw in IDENTITY_KEYWORDS):
             identity_reply = _render_identity_reply(
-                display=display, linked_user=linked_user,
+                display=display,
+                linked_user=linked_user,
             )
             # R4 (2026-05-04 symphony audit, S3 narrowed F3 per
             # Codex): the early-return identity-short-circuit path
@@ -5552,8 +5723,8 @@ def chat():
                 )
             except Exception as _audit_e:
                 logger.warning(
-                    "web /chat identity short-circuit: audit gate "
-                    "failed (sending ungated): %s", _audit_e,
+                    "web /chat identity short-circuit: audit gate failed (sending ungated): %s",
+                    _audit_e,
                 )
             try:
                 store = UserProfileStore()
@@ -5585,7 +5756,8 @@ def chat():
                         continue
                     try:
                         results = convos.query(
-                            query_texts=[message], n_results=5,
+                            query_texts=[message],
+                            n_results=5,
                             where={"user_id": key},
                             include=["documents"],
                         )
@@ -5600,14 +5772,20 @@ def chat():
         except Exception:
             pass
 
-        share_str = ", ".join(k for k, v in share_config.items() if v) if share_config else "nothing personal"
+        share_str = (
+            ", ".join(k for k, v in share_config.items() if v)
+            if share_config
+            else "nothing personal"
+        )
 
         if linked_user:
             _web_signals_present.append("linked/trusted public user profile")
             # Session 11m: trusted_system prompt for linked users. share_config
             # is the privacy rail — if the owner tightens it in users.db, it takes
             # effect on the next request with no code change.
-            relationship = (user_full.get("relationship") if user_full else None) or "someone the owner trusts"
+            relationship = (
+                user_full.get("relationship") if user_full else None
+            ) or "someone the owner trusts"
             system_prompt_for_chat = (
                 f"You are Maez, a persistent AI presence built by the owner.\n\n"
                 f"You are talking to {display} via the web interface at maez.live. "
@@ -5638,7 +5816,11 @@ def chat():
             )
 
         prompt = (
-            (f"\n[Your past conversations with {display}]\n{user_memory}\n\n" if user_memory else "")
+            (
+                f"\n[Your past conversations with {display}]\n{user_memory}\n\n"
+                if user_memory
+                else ""
+            )
             + f'{display} says:\n"{message}"\n\n'
             + "Respond directly. Be warm and conversational."
         )
@@ -5666,8 +5848,7 @@ def chat():
             _envelope_block = render_envelope_for_prompt(_evidence_envelope)
         except Exception as _env_exc:
             logger.warning(
-                "web /chat public evidence_envelope build failed "
-                "(continuing without envelope): %s",
+                "web /chat public evidence_envelope build failed (continuing without envelope): %s",
                 _env_exc,
             )
             _evidence_envelope = None
@@ -5681,12 +5862,10 @@ def chat():
     # On any failure, fall through to local. Every turn is logged as a
     # trajectory for future distillation SFT.
     from skills import claude_router
+
     profile_id = "private_owner" if owner_bridge else None
     decision = claude_router.classify(message)
-    route_external = (
-        decision.route == "external"
-        and claude_router.jarvis_tier_enabled(profile_id)
-    )
+    route_external = decision.route == "external" and claude_router.jarvis_tier_enabled(profile_id)
 
     # 2026-04-23 Commit 5: opt-in web body parity. When enabled, the
     # owner-bridge /chat turn first runs a brain-loop iteration via
@@ -5699,14 +5878,19 @@ def chat():
     # NEVER routed through this — tool execution is owner-only.
     jarvis_transcript_web = ""
     if owner_bridge and os.environ.get("MAEZ_WEB_TOOL_LOOP", "").strip() in (
-        "1", "true", "yes", "on",
+        "1",
+        "true",
+        "yes",
+        "on",
     ):
         try:
-            bl_payload = json.dumps({
-                "text": message,
-                "chat_id": "web",
-                "user_id": "rohit",
-            }).encode()
+            bl_payload = json.dumps(
+                {
+                    "text": message,
+                    "chat_id": "web",
+                    "user_id": "rohit",
+                }
+            ).encode()
             bl_req = urllib.request.Request(
                 "http://127.0.0.1:11435/internal/brain_loop",
                 data=bl_payload,
@@ -5727,21 +5911,18 @@ def chat():
                     messages_list.append(
                         {
                             "role": "system",
-                            "content": (
-                                f"{jarvis_transcript_web}\n\n"
-                                f"{_JARVIS_INSTRUCTION_BLOCK}"
-                            ),
+                            "content": (f"{jarvis_transcript_web}\n\n{_JARVIS_INSTRUCTION_BLOCK}"),
                         }
                     )
                 except Exception as _ctx_exc:
                     logger.debug(
-                        "web /chat: transcript context failed, using "
-                        "plain user text: %s", _ctx_exc,
+                        "web /chat: transcript context failed, using plain user text: %s",
+                        _ctx_exc,
                     )
         except Exception as _bl_exc:
             logger.debug(
-                "web /chat: brain_loop bridge failed (falling through "
-                "to no-tool synthesis): %s", _bl_exc,
+                "web /chat: brain_loop bridge failed (falling through to no-tool synthesis): %s",
+                _bl_exc,
             )
             jarvis_transcript_web = ""
 
@@ -5749,11 +5930,13 @@ def chat():
         _web_tool_results = []
         if jarvis_transcript_web:
             _web_signals_present.append("owner tool-loop transcript")
-            _web_tool_results.append({
-                "name": "web_tool_loop",
-                "status": "ok",
-                "summary": jarvis_transcript_web,
-            })
+            _web_tool_results.append(
+                {
+                    "name": "web_tool_loop",
+                    "status": "ok",
+                    "summary": jarvis_transcript_web,
+                }
+            )
         else:
             _web_signals_absent.append("owner tool-loop transcript")
         try:
@@ -5772,8 +5955,7 @@ def chat():
             _envelope_block = render_envelope_for_prompt(_evidence_envelope)
         except Exception as _env_exc:
             logger.warning(
-                "web /chat evidence_envelope build failed "
-                "(continuing without envelope): %s",
+                "web /chat evidence_envelope build failed (continuing without envelope): %s",
                 _env_exc,
             )
             _evidence_envelope = None
@@ -5788,7 +5970,8 @@ def chat():
     if route_external:
         try:
             system_parts = [
-                m["content"] for m in messages_list
+                m["content"]
+                for m in messages_list
                 if m.get("role") == "system" and m.get("content")
             ]
             system_prompt_for_api = "\n\n".join(system_parts) if system_parts else SOUL
@@ -5810,6 +5993,7 @@ def chat():
         # Local path: either classifier said local, jarvis_tier off, or Claude failed.
         if not reply:
             from core import llm_client as _llm_client
+
             resp = _llm_client.chat(
                 model=MODEL,
                 messages=messages_list,
@@ -5820,13 +6004,18 @@ def chat():
         logger.debug("Web chat raw response: %r", reply[:100] if reply else "EMPTY")
         if not reply:
             simple_msgs = [
-                {"role": "system", "content": f"You are Maez, a friendly AI. Talk to {display} warmly."},
+                {
+                    "role": "system",
+                    "content": f"You are Maez, a friendly AI. Talk to {display} warmly.",
+                },
                 {"role": "user", "content": message},
             ]
             if _envelope_block:
                 simple_msgs.insert(-1, {"role": "system", "content": _envelope_block})
             resp2 = _llm_client.chat(
-                model=MODEL, messages=simple_msgs, think=False,
+                model=MODEL,
+                messages=simple_msgs,
+                think=False,
                 options={"temperature": 0.7, "num_predict": 150},
             )
             reply = (resp2.message.content or "").strip() or "I'm here. What's on your mind?"
@@ -5844,6 +6033,7 @@ def chat():
     _web_pre_audit_reply = reply
     try:
         from core.safety.audited_output import audit_assistant_text
+
         reply = audit_assistant_text(
             reply,
             surface="web",
@@ -5852,7 +6042,7 @@ def chat():
             evidence_envelope=_evidence_envelope,
         )
         _web_audit_ran = True
-        _web_audit_changed = (_web_pre_audit_reply != reply)
+        _web_audit_changed = _web_pre_audit_reply != reply
     except Exception as _e:
         logger.warning("self-claim audit failed on /chat: %s", _e)
 
@@ -5860,6 +6050,7 @@ def chat():
         from core.ledger.model_reply_persistence_warning import (
             warn_model_reply_persistence_skip,
         )
+
         try:
             from core.ledger.model_reply_persistence import (
                 build_model_reply_audit_verdict,
@@ -5926,15 +6117,17 @@ def chat():
                 _moment_diag_exc,
             )
 
-    claude_router.log_trajectory({
-        "profile_id": profile_id,
-        "display": display,
-        "message": message,
-        "reply": reply,
-        "source": used_source,
-        "decision": decision.to_dict(),
-        "claude_meta": claude_meta,
-    })
+    claude_router.log_trajectory(
+        {
+            "profile_id": profile_id,
+            "display": display,
+            "message": message,
+            "reply": reply,
+            "source": used_source,
+            "decision": decision.to_dict(),
+            "claude_meta": claude_meta,
+        }
+    )
 
     return jsonify({"reply": reply, "display_name": display})
 
@@ -5943,6 +6136,7 @@ def chat():
 def history():
     import chromadb as _chroma
     from chromadb.config import Settings as _S
+
     token = _request_token()
     if not token:
         return jsonify({"error": "Token required"}), 400
@@ -5958,8 +6152,9 @@ def history():
         all_msgs.extend(_load_private_owner_history())
 
     try:
-        pub = _chroma.PersistentClient("/home/rohit/maez/memory/db/public_users",
-                                       settings=_S(anonymized_telemetry=False))
+        pub = _chroma.PersistentClient(
+            "/home/rohit/maez/memory/db/public_users", settings=_S(anonymized_telemetry=False)
+        )
         convos = pub.get_or_create_collection("user_conversations")
         user_keys = [uid]
         if tg_id and tg_id != uid:
@@ -5968,14 +6163,17 @@ def history():
             if not user_key:
                 continue
             try:
-                results = convos.get(where={"user_id": str(user_key)},
-                                     include=["documents", "metadatas"])
+                results = convos.get(
+                    where={"user_id": str(user_key)}, include=["documents", "metadatas"]
+                )
                 for doc, meta in zip(results["documents"], results["metadatas"], strict=False):
-                    all_msgs.append({
-                        "role": meta.get("role", "?"),
-                        "content": doc,
-                        "timestamp": meta.get("timestamp", ""),
-                    })
+                    all_msgs.append(
+                        {
+                            "role": meta.get("role", "?"),
+                            "content": doc,
+                            "timestamp": meta.get("timestamp", ""),
+                        }
+                    )
             except Exception:
                 pass
     except Exception:
@@ -5988,6 +6186,7 @@ def history():
     for msg in all_msgs:
         if current:
             from datetime import datetime as _dt
+
             try:
                 prev_t = _dt.fromisoformat(current[-1]["timestamp"])
                 curr_t = _dt.fromisoformat(msg["timestamp"])
@@ -6006,23 +6205,27 @@ def history():
         first_user = next((m["content"] for m in sess if m["role"] == "user"), "")
         title = " ".join(first_user.split()[:6]) + ("..." if len(first_user.split()) > 6 else "")
         date = sess[0].get("timestamp", "")[:10] if sess else ""
-        result.append({
-            "id": f"session_{i}",
-            "date": date,
-            "title": title or "Conversation",
-            "message_count": len(sess),
-            "messages": sess,
-        })
+        result.append(
+            {
+                "id": f"session_{i}",
+                "date": date,
+                "title": title or "Conversation",
+                "message_count": len(sess),
+                "messages": sess,
+            }
+        )
     result.reverse()  # newest first
-    return jsonify({
-        "sessions": result,
-        "user": {
-            "display_name": user.get("display_name", ""),
-            "username": user.get("username", ""),
-            "telegram_linked": bool(tg_id),
-            "owner_bridge": owner_bridge,
-        },
-    })
+    return jsonify(
+        {
+            "sessions": result,
+            "user": {
+                "display_name": user.get("display_name", ""),
+                "username": user.get("username", ""),
+                "telegram_linked": bool(tg_id),
+                "owner_bridge": owner_bridge,
+            },
+        }
+    )
 
 
 @app.route("/api/progress-board")
@@ -6063,13 +6266,15 @@ def analytics_summary():
     user = accounts.get_by_token(token) if token else None
     if not user:
         return jsonify({"error": "Invalid token"}), 401
-    return jsonify({
-        **_build_analytics_summary(_load_analytics_events()),
-        "user": {
-            "display_name": user.get("display_name", ""),
-            "username": user.get("username", ""),
-        },
-    })
+    return jsonify(
+        {
+            **_build_analytics_summary(_load_analytics_events()),
+            "user": {
+                "display_name": user.get("display_name", ""),
+                "username": user.get("username", ""),
+            },
+        }
+    )
 
 
 @app.route("/api/planner-board", methods=["GET", "POST"])
@@ -6081,7 +6286,31 @@ def planner_board():
 
     if request.method == "GET":
         board = _load_planner_board()
-        return jsonify({
+        return jsonify(
+            {
+                "updated_at": board.get("updated_at", _utcnow_iso()),
+                "counts": _planner_counts(board),
+                "items": board.get("items", []),
+                "user": {
+                    "display_name": user.get("display_name", ""),
+                    "username": user.get("username", ""),
+                },
+            }
+        )
+
+    data = request.get_json(silent=True) or {}
+    items = data.get("items")
+    if not isinstance(items, list):
+        return jsonify({"error": "items list required"}), 400
+
+    board = _save_planner_board(
+        {
+            "updated_at": data.get("updated_at", _utcnow_iso()),
+            "items": items,
+        }
+    )
+    return jsonify(
+        {
             "updated_at": board.get("updated_at", _utcnow_iso()),
             "counts": _planner_counts(board),
             "items": board.get("items", []),
@@ -6089,33 +6318,18 @@ def planner_board():
                 "display_name": user.get("display_name", ""),
                 "username": user.get("username", ""),
             },
-        })
-
-    data = request.get_json(silent=True) or {}
-    items = data.get("items")
-    if not isinstance(items, list):
-        return jsonify({"error": "items list required"}), 400
-
-    board = _save_planner_board({
-        "updated_at": data.get("updated_at", _utcnow_iso()),
-        "items": items,
-    })
-    return jsonify({
-        "updated_at": board.get("updated_at", _utcnow_iso()),
-        "counts": _planner_counts(board),
-        "items": board.get("items", []),
-        "user": {
-            "display_name": user.get("display_name", ""),
-            "username": user.get("username", ""),
-        },
-    })
+        }
+    )
 
 
 @app.route("/api/iphone/ingest", methods=["POST"])
 def api_iphone_ingest():
     """Accept a signal from iOS Shortcuts. Auth via X-Maez-Token header."""
     from skills import iphone_ingest as _iphone
-    token = request.headers.get("X-Maez-Token") or (request.get_json(silent=True) or {}).get("token")
+
+    token = request.headers.get("X-Maez-Token") or (request.get_json(silent=True) or {}).get(
+        "token"
+    )
     payload = request.get_json(silent=True) or {}
     if "token" in payload:
         payload = {k: v for k, v in payload.items() if k != "token"}
@@ -6126,11 +6340,13 @@ def api_iphone_ingest():
 @app.route("/status")
 def status():
     stats = memory.memory_stats()
-    return jsonify({
-        "users_registered": accounts.count(),
-        "memory_count": stats["total"],
-        "raw_memories": stats["raw"],
-    })
+    return jsonify(
+        {
+            "users_registered": accounts.count(),
+            "memory_count": stats["total"],
+            "raw_memories": stats["raw"],
+        }
+    )
 
 
 @app.route("/api/maez-state")
@@ -6138,30 +6354,32 @@ def api_maez_state():
     """Composite state for the field journal: daemon + memory + model + services + soul + thunder.
     Public; aggregates only, no PII. Source of truth for /journal dashboard."""
     stats = memory.memory_stats()
-    return jsonify({
-        "daemon": _daemon_health(),
-        "memory": {
-            "raw": stats.get("raw", 0),
-            "daily": stats.get("daily", 0),
-            "core": stats.get("core", 0),
-            "total": stats.get("total", 0),
-        },
-        "model": _model_state(),
-        "services": _journal_services_state(),
-        "soul": _soul_state(),
-        "thunder": _thunder_state(),
-        "users_registered": accounts.count(),
-    })
+    return jsonify(
+        {
+            "daemon": _daemon_health(),
+            "memory": {
+                "raw": stats.get("raw", 0),
+                "daily": stats.get("daily", 0),
+                "core": stats.get("core", 0),
+                "total": stats.get("total", 0),
+            },
+            "model": _model_state(),
+            "services": _journal_services_state(),
+            "soul": _soul_state(),
+            "thunder": _thunder_state(),
+            "users_registered": accounts.count(),
+        }
+    )
 
 
 @app.route("/api/session-timeline")
 def api_session_timeline():
     """Parsed session snapshots from logs/snapshots/session_*.txt. ?limit=N (default 14, max 50)."""
     try:
-        limit = max(1, min(50, int(request.args.get('limit', 14))))
+        limit = max(1, min(50, int(request.args.get("limit", 14))))
     except ValueError:
         limit = 14
-    pattern = os.path.join(SNAPSHOTS_DIR, 'session_*.txt')
+    pattern = os.path.join(SNAPSHOTS_DIR, "session_*.txt")
     files = sorted(glob.glob(pattern), reverse=True)[:limit]
     sessions = [_parse_session_snapshot(path) for path in files]
     return jsonify({"sessions": sessions, "count": len(sessions)})
@@ -8446,7 +8664,7 @@ boot();
 #  origins, and the fast-lane service itself binds only to 127.0.0.1.
 # ─────────────────────────────────────────────────────────────────────
 _fl_imports_ok = False
-if os.environ.get('MAEZ_LIVE_FAST_LANE_ENABLED') == '1':
+if os.environ.get("MAEZ_LIVE_FAST_LANE_ENABLED") == "1":
     import json as _fl_json
     import urllib.error as _fl_err
     import urllib.request as _fl_req
@@ -8457,33 +8675,34 @@ if os.environ.get('MAEZ_LIVE_FAST_LANE_ENABLED') == '1':
             split_shaping_telemetry as _fl_split,
             ShapingRejected as _fl_ShapingRejected,
         )
+
         _fl_imports_ok = True
     except ImportError as _fl_import_err:
         logger.warning(
-            'maez-live fast-lane adapter DISABLED — '
-            'core.public_user_shaping unavailable: %s', _fl_import_err,
+            "maez-live fast-lane adapter DISABLED — core.public_user_shaping unavailable: %s",
+            _fl_import_err,
         )
 
-if os.environ.get('MAEZ_LIVE_FAST_LANE_ENABLED') == '1' and _fl_imports_ok:
-
+if os.environ.get("MAEZ_LIVE_FAST_LANE_ENABLED") == "1" and _fl_imports_ok:
     _FAST_LANE_URL = os.environ.get(
-        'MAEZ_LIVE_FAST_LANE_URL',
-        'http://127.0.0.1:8765/v1/reply',
+        "MAEZ_LIVE_FAST_LANE_URL",
+        "http://127.0.0.1:8765/v1/reply",
     )
     # Hard-pin to loopback regardless of what the env says — defense in
     # depth so a misconfigured env var can't redirect traffic off-box.
-    _FAST_LANE_ALLOWED_HOSTS = ('127.0.0.1', 'localhost', '::1')
+    _FAST_LANE_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "::1")
 
     # Session 11h — adapter version string. The fast-lane service records
     # this in audit metadata so adapter callers can be distinguished from
     # direct callers (curl, the consumer demo, the staging HTML page) at
     # forensic-replay time.
-    _FAST_LANE_ADAPTER_VERSION = 'maez-live-fast-lane-adapter/0.2 (staging)'
+    _FAST_LANE_ADAPTER_VERSION = "maez-live-fast-lane-adapter/0.2 (staging)"
 
     def _fast_lane_target_is_loopback(url: str) -> bool:
         try:
             from urllib.parse import urlparse as _up
-            host = (_up(url).hostname or '').lower()
+
+            host = (_up(url).hostname or "").lower()
             return host in _FAST_LANE_ALLOWED_HOSTS
         except Exception:
             return False
@@ -8507,39 +8726,42 @@ if os.environ.get('MAEZ_LIVE_FAST_LANE_ENABLED') == '1' and _fl_imports_ok:
             cache age numbers, internal selection reasons, audit_v markers
         """
         if not isinstance(upstream, dict):
-            return {'success': False, 'error': {'code': 'bad_upstream', 'message': 'non-dict response'}}
+            return {
+                "success": False,
+                "error": {"code": "bad_upstream", "message": "non-dict response"},
+            }
 
-        m = upstream.get('metrics') or {}
+        m = upstream.get("metrics") or {}
         stripped = {
-            'success': bool(upstream.get('success', False)),
-            'reply':   upstream.get('reply') or '',
-            'backend': upstream.get('backend') or m.get('backend_name') or 'unknown',
-            'latency_ms': int(m.get('total_ms', 0) or 0),
-            'retry': {
-                'attempted': bool(m.get('retry_attempted', False)),
-                'strategy':  m.get('retry_strategy') or '',
-                'succeeded': bool(m.get('retry_succeeded', False)),
+            "success": bool(upstream.get("success", False)),
+            "reply": upstream.get("reply") or "",
+            "backend": upstream.get("backend") or m.get("backend_name") or "unknown",
+            "latency_ms": int(m.get("total_ms", 0) or 0),
+            "retry": {
+                "attempted": bool(m.get("retry_attempted", False)),
+                "strategy": m.get("retry_strategy") or "",
+                "succeeded": bool(m.get("retry_succeeded", False)),
             },
-            'freshness': {
-                'screen':       m.get('screen_freshness') or 'missing',
-                'system_state': m.get('system_state_freshness') or 'missing',
-                'calendar':     m.get('calendar_freshness') or 'missing',
+            "freshness": {
+                "screen": m.get("screen_freshness") or "missing",
+                "system_state": m.get("system_state_freshness") or "missing",
+                "calendar": m.get("calendar_freshness") or "missing",
             },
         }
-        err = upstream.get('error')
+        err = upstream.get("error")
         if err:
             # Forward only code+message; never any details that could
             # leak server-side state.
             if isinstance(err, dict):
-                stripped['error'] = {
-                    'code':    err.get('code') or 'unknown',
-                    'message': err.get('message') or '',
+                stripped["error"] = {
+                    "code": err.get("code") or "unknown",
+                    "message": err.get("message") or "",
                 }
             else:
-                stripped['error'] = {'code': 'unknown', 'message': str(err)}
+                stripped["error"] = {"code": "unknown", "message": str(err)}
         return stripped
 
-    @app.route('/v1/fast-reply', methods=['POST'])
+    @app.route("/v1/fast-reply", methods=["POST"])
     def fast_reply_adapter():
         """Forward a request to the staging fast-lane boundary.
 
@@ -8561,27 +8783,35 @@ if os.environ.get('MAEZ_LIVE_FAST_LANE_ENABLED') == '1' and _fl_imports_ok:
              policy details never leave the loopback.
         """
         if not _fast_lane_target_is_loopback(_FAST_LANE_URL):
-            return jsonify({
-                'success': False,
-                'error': {'code': 'fast_lane_misconfigured',
-                          'message': 'fast-lane URL must be loopback'},
-            }), 500
+            return jsonify(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "fast_lane_misconfigured",
+                        "message": "fast-lane URL must be loopback",
+                    },
+                }
+            ), 500
 
         data = request.get_json(silent=True) or {}
-        token = data.get('web_token', '')
-        raw_message = (data.get('message') or '').strip()
+        token = data.get("web_token", "")
+        raw_message = (data.get("message") or "").strip()
         if not token or not raw_message:
-            return jsonify({
-                'success': False,
-                'error': {'code': 'bad_request', 'message': 'Token and message required'},
-            }), 400
+            return jsonify(
+                {
+                    "success": False,
+                    "error": {"code": "bad_request", "message": "Token and message required"},
+                }
+            ), 400
 
         user = accounts.get_by_token(token)
         if not user:
-            return jsonify({
-                'success': False,
-                'error': {'code': 'unauthorized', 'message': 'Invalid token'},
-            }), 401
+            return jsonify(
+                {
+                    "success": False,
+                    "error": {"code": "unauthorized", "message": "Invalid token"},
+                }
+            ), 401
 
         # ── 11h: client-side PII shaping (defense-in-depth) ──
         # The fast-lane service ALSO runs schema validation and the
@@ -8590,30 +8820,32 @@ if os.environ.get('MAEZ_LIVE_FAST_LANE_ENABLED') == '1' and _fl_imports_ok:
         try:
             shaped_full = _fl_shape(raw_message)
         except _fl_ShapingRejected as e:
-            return jsonify({
-                'success': False,
-                'error': {'code': e.code, 'message': str(e)},
-            }), 400
+            return jsonify(
+                {
+                    "success": False,
+                    "error": {"code": e.code, "message": str(e)},
+                }
+            ), 400
         upstream_body, _shaping_telemetry = _fl_split(shaped_full)
 
         # Force scope to guest regardless of what shaping returned (it
         # already does this, but defense-in-depth so the client can
         # never escalate by passing scope='public' to the shaper).
-        upstream_body['trust_scope'] = 'guest'
+        upstream_body["trust_scope"] = "guest"
 
         req = _fl_req.Request(
             _FAST_LANE_URL,
-            data=_fl_json.dumps(upstream_body).encode('utf-8'),
+            data=_fl_json.dumps(upstream_body).encode("utf-8"),
             headers={
-                'content-type':         'application/json',
-                'accept':               'application/json',
+                "content-type": "application/json",
+                "accept": "application/json",
                 # 11h: structured adapter-version header
-                'x-maez-adapter-version': _FAST_LANE_ADAPTER_VERSION,
+                "x-maez-adapter-version": _FAST_LANE_ADAPTER_VERSION,
                 # legacy user-agent kept for backwards observability
-                'user-agent':           _FAST_LANE_ADAPTER_VERSION,
-                'origin':               'http://127.0.0.1:11437',
+                "user-agent": _FAST_LANE_ADAPTER_VERSION,
+                "origin": "http://127.0.0.1:11437",
             },
-            method='POST',
+            method="POST",
         )
         try:
             # Session 11j: 30.0s > GUEST_MAX_TIMEOUT_S (15.0) + loopback
@@ -8625,25 +8857,31 @@ if os.environ.get('MAEZ_LIVE_FAST_LANE_ENABLED') == '1' and _fl_imports_ok:
             with _fl_req.urlopen(req, timeout=30.0) as resp:
                 body_bytes = resp.read()
                 upstream_status = resp.status
-                upstream_json = _fl_json.loads(body_bytes.decode('utf-8'))
+                upstream_json = _fl_json.loads(body_bytes.decode("utf-8"))
         except _fl_err.HTTPError as e:
             try:
-                upstream_json = _fl_json.loads(e.read().decode('utf-8'))
+                upstream_json = _fl_json.loads(e.read().decode("utf-8"))
             except Exception:
-                upstream_json = {'success': False, 'error': {'code': 'unparseable', 'message': str(e)}}
+                upstream_json = {
+                    "success": False,
+                    "error": {"code": "unparseable", "message": str(e)},
+                }
             return jsonify(_fast_lane_strip_response(upstream_json)), e.code
         except Exception as e:
-            return jsonify({
-                'success': False,
-                'error': {'code': 'fast_lane_unreachable', 'message': str(e)},
-            }), 502
+            return jsonify(
+                {
+                    "success": False,
+                    "error": {"code": "fast_lane_unreachable", "message": str(e)},
+                }
+            ), 502
 
         return jsonify(_fast_lane_strip_response(upstream_json)), upstream_status
 
     logger.info(
-        'maez-live fast-lane adapter ENABLED (staging, 11h) — '
-        'route /v1/fast-reply registered, target=%s, version=%s',
-        _FAST_LANE_URL, _FAST_LANE_ADAPTER_VERSION,
+        "maez-live fast-lane adapter ENABLED (staging, 11h) — "
+        "route /v1/fast-reply registered, target=%s, version=%s",
+        _FAST_LANE_URL,
+        _FAST_LANE_ADAPTER_VERSION,
     )
 else:
     # Flag is off — log nothing, register nothing.
@@ -8659,6 +8897,7 @@ else:
 # existing helpers (_service_state_cached, _daemon_health) — no new
 # daemon imports. Slice A ships only the route skeleton + services pane;
 # wondering-core and cards/shells/fabrication panes come in slices B + C.
+
 
 def _debug_auth_ok():
     """Gate for /debug and /api/debug/*. Test_t bypass matches existing
@@ -8689,8 +8928,7 @@ def debug_flow_mock():
     intended organs. Static reference is at /debug/flow/static."""
     if not _debug_auth_ok():
         return redirect("/login")
-    return send_file(os.path.join(UI_DIR, "debug_flow_mock.html"),
-                     mimetype="text/html")
+    return send_file(os.path.join(UI_DIR, "debug_flow_mock.html"), mimetype="text/html")
 
 
 @app.route("/debug/flow/static")
@@ -8699,8 +8937,7 @@ def debug_flow_static():
     Preserved for diff / print / review."""
     if not _debug_auth_ok():
         return redirect("/login")
-    return send_file(os.path.join(UI_DIR, "debug_flow_static.html"),
-                     mimetype="text/html")
+    return send_file(os.path.join(UI_DIR, "debug_flow_static.html"), mimetype="text/html")
 
 
 @app.route("/debug/card-default")
@@ -8710,8 +8947,7 @@ def debug_card_default():
     are interchangeable doors and the decision lives inside the brain."""
     if not _debug_auth_ok():
         return redirect("/login")
-    return send_file(os.path.join(UI_DIR, "card_default.html"),
-                     mimetype="text/html")
+    return send_file(os.path.join(UI_DIR, "card_default.html"), mimetype="text/html")
 
 
 @app.route("/api/debug/services")
@@ -8726,11 +8962,13 @@ def api_debug_services():
     services = {}
     for svc in ("maez", "maez-web", "llama-server"):
         services[svc] = _service_state_cached(svc)
-    return jsonify({
-        "services": services,
-        "daemon": _daemon_health(),  # uses the 2.5s default — /health is slow
-        "checked_at": _utcnow_iso(),
-    })
+    return jsonify(
+        {
+            "services": services,
+            "daemon": _daemon_health(),  # uses the 2.5s default — /health is slow
+            "checked_at": _utcnow_iso(),
+        }
+    )
 
 
 # ── Slice B helpers: cognition.log tailing + wondering event parsing ─────
@@ -8749,6 +8987,7 @@ def _debug_tail_cognition_matching(keep_fn, n):
     dominated by `| cycle |` + `| policy |` rows, so a naive tail misses
     the sparse `| wondering |` rows entirely."""
     from collections import deque
+
     matches = deque(maxlen=n)
     try:
         with open(_COGNITION_LOG_PATH, "r", errors="replace") as f:
@@ -8784,10 +9023,10 @@ def _debug_parse_cognition_line(line):
         if cmd_pos != -1 and (q_pos == -1 or cmd_pos < q_pos):
             trailing_start = cmd_pos
             # cmd= may still have q= appended, but that's unlikely per emit — ignore
-            cmd = rest[cmd_pos + 5:]
+            cmd = rest[cmd_pos + 5 :]
         elif q_pos != -1:
             trailing_start = q_pos
-            q = rest[q_pos + 3:]
+            q = rest[q_pos + 3 :]
         if trailing_start is not None:
             head = rest[:trailing_start]
         # Parse remaining simple KVs from head
@@ -8820,6 +9059,7 @@ def api_debug_wonderings():
         return jsonify({"error": "unauthorized"}), 401
     try:
         from core.wonderings import get_store
+
         rows = get_store().list_all(limit=50)
         return jsonify({"wonderings": rows, "checked_at": _utcnow_iso()})
     except Exception as e:
@@ -8852,21 +9092,25 @@ def api_debug_canary_leaks():
 
         store = active_store()
         if store is None:
-            return jsonify({
-                "leaks": [],
-                "leak_count": 0,
-                "active_canaries": 0,
-                "checked_at": _utcnow_iso(),
-                "note": "canary store not initialised in this process",
-            })
+            return jsonify(
+                {
+                    "leaks": [],
+                    "leak_count": 0,
+                    "active_canaries": 0,
+                    "checked_at": _utcnow_iso(),
+                    "note": "canary store not initialised in this process",
+                }
+            )
         leaks = store.recent_leaks(limit=limit)
         active = store.active_canaries()
-        return jsonify({
-            "leaks": leaks,
-            "leak_count": len(leaks),
-            "active_canaries": len(active),
-            "checked_at": _utcnow_iso(),
-        })
+        return jsonify(
+            {
+                "leaks": leaks,
+                "leak_count": len(leaks),
+                "active_canaries": len(active),
+                "checked_at": _utcnow_iso(),
+            }
+        )
     except Exception as e:
         logger.warning("debug /api/debug/canary-leaks failed: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -8899,12 +9143,14 @@ def api_debug_trace_labels():
             rows = store.labels_for_trace(trace_filter.strip())[:limit]
         else:
             rows = store.recent(limit=limit)
-        return jsonify({
-            "labels": rows,
-            "count": len(rows),
-            "stats": store.stats(),
-            "checked_at": _utcnow_iso(),
-        })
+        return jsonify(
+            {
+                "labels": rows,
+                "count": len(rows),
+                "stats": store.stats(),
+                "checked_at": _utcnow_iso(),
+            }
+        )
     except Exception as e:
         logger.warning("debug /api/debug/trace-labels failed: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -9019,11 +9265,13 @@ def api_debug_pursuit_decisions():
             d["wid"] = d.pop("wondering_id")
             d["question"] = (d.get("question") or "")[:200]
             decisions.append(d)
-        return jsonify({
-            "decisions": decisions,
-            "count": len(decisions),
-            "checked_at": _utcnow_iso(),
-        })
+        return jsonify(
+            {
+                "decisions": decisions,
+                "count": len(decisions),
+                "checked_at": _utcnow_iso(),
+            }
+        )
     except Exception as e:
         logger.warning("debug /api/debug/pursuit-decisions failed: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -9040,18 +9288,21 @@ def api_debug_wondering_events():
     except ValueError:
         limit = 20
     lines = _debug_tail_cognition_matching(
-        lambda l: " | wondering | " in l, limit,
+        lambda l: " | wondering | " in l,
+        limit,
     )
     events = []
     for line in lines:
         ev = _debug_parse_cognition_line(line)
         if ev:
             events.append(ev)
-    return jsonify({
-        "events": events,
-        "count": len(events),
-        "checked_at": _utcnow_iso(),
-    })
+    return jsonify(
+        {
+            "events": events,
+            "count": len(events),
+            "checked_at": _utcnow_iso(),
+        }
+    )
 
 
 @app.route("/api/debug/cycle-timeline")
@@ -9076,11 +9327,13 @@ def api_debug_cycle_timeline():
             events.append(ev)
     # Newest first for display
     events.reverse()
-    return jsonify({
-        "events": events[:limit],
-        "count": min(len(events), limit),
-        "checked_at": _utcnow_iso(),
-    })
+    return jsonify(
+        {
+            "events": events[:limit],
+            "count": min(len(events), limit),
+            "checked_at": _utcnow_iso(),
+        }
+    )
 
 
 @app.route("/api/debug/cards")
@@ -9093,6 +9346,7 @@ def api_debug_cards():
         return jsonify({"error": "unauthorized"}), 401
     try:
         from core.pending_cards import DEFAULT_DB_PATH as CARDS_DB
+
         live = ("open", "deferred", "approved", "running")
         placeholders = ",".join("?" * len(live))
         conn = sqlite3.connect(str(CARDS_DB))
@@ -9114,22 +9368,23 @@ def api_debug_cards():
             cmd = params.get("cmd") if isinstance(params, dict) else None
             wid = params.get("wondering_id") if isinstance(params, dict) else None
             origin = "wondering" if wid else ("chat" if d.get("chat_id") else "other")
-            cards.append({
-                "id": d["id"],
-                "request_id": d["request_id"],
-                "status": d["status"],
-                "action": d["action"],
-                "cmd": cmd,
-                "reason": d.get("reason") or d.get("plain_english") or "",
-                "channel": d.get("channel"),
-                "origin": origin,
-                "wondering_id": wid,
-                "created_at": d.get("created_at"),
-                "defer_count": d.get("defer_count") or 0,
-            })
+            cards.append(
+                {
+                    "id": d["id"],
+                    "request_id": d["request_id"],
+                    "status": d["status"],
+                    "action": d["action"],
+                    "cmd": cmd,
+                    "reason": d.get("reason") or d.get("plain_english") or "",
+                    "channel": d.get("channel"),
+                    "origin": origin,
+                    "wondering_id": wid,
+                    "created_at": d.get("created_at"),
+                    "defer_count": d.get("defer_count") or 0,
+                }
+            )
         conn.close()
-        return jsonify({"cards": cards, "count": len(cards),
-                         "checked_at": _utcnow_iso()})
+        return jsonify({"cards": cards, "count": len(cards), "checked_at": _utcnow_iso()})
     except Exception as e:
         logger.warning("debug /api/debug/cards failed: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -9149,6 +9404,7 @@ def api_debug_recent_shells():
         limit = 20
     try:
         from core import paths as _paths
+
         conn = sqlite3.connect(str(_paths.wonderings_db()))
         conn.row_factory = sqlite3.Row
         rows = []
@@ -9161,12 +9417,14 @@ def api_debug_recent_shells():
         ):
             rows.append(dict(row))
         conn.close()
-        return jsonify({
-            "shells": rows,
-            "count": len(rows),
-            "origin": "wondering-only",
-            "checked_at": _utcnow_iso(),
-        })
+        return jsonify(
+            {
+                "shells": rows,
+                "count": len(rows),
+                "origin": "wondering-only",
+                "checked_at": _utcnow_iso(),
+            }
+        )
     except Exception as e:
         logger.warning("debug /api/debug/recent-shells failed: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -9195,13 +9453,15 @@ def api_debug_fabrication_feed():
     for line in cog_lines:
         ev = _debug_parse_cognition_line(line)
         if ev:
-            cog_events.append({
-                "source": "cognition.log",
-                "ts": ev.get("ts"),
-                "wid": ev.get("wid"),
-                "cmd": ev.get("cmd"),
-                "signal": "synth_invalidated",
-            })
+            cog_events.append(
+                {
+                    "source": "cognition.log",
+                    "ts": ev.get("ts"),
+                    "wid": ev.get("wid"),
+                    "cmd": ev.get("cmd"),
+                    "signal": "synth_invalidated",
+                }
+            )
 
     # Real feed 3 (promoted from placeholder): self_claim_audit events
     # emitted by core.self_claim_audit when a user-facing reply gets its
@@ -9223,15 +9483,17 @@ def api_debug_fabrication_feed():
                 if "=" in part:
                     k, v = part.split("=", 1)
                     kv[k] = v
-            sca_events.append({
-                "source": "cognition.log",
-                "ts": ts,
-                "surface": kv.get("surface"),
-                "flagged": int(kv.get("flagged", "0")),
-                "mode": kv.get("mode"),
-                "kinds": kv.get("kinds"),
-                "signal": "self_claim_audit",
-            })
+            sca_events.append(
+                {
+                    "source": "cognition.log",
+                    "ts": ts,
+                    "surface": kv.get("surface"),
+                    "flagged": int(kv.get("flagged", "0")),
+                    "mode": kv.get("mode"),
+                    "kinds": kv.get("kinds"),
+                    "signal": "self_claim_audit",
+                }
+            )
         except Exception:
             continue
 
@@ -9241,6 +9503,7 @@ def api_debug_fabrication_feed():
     try:
         from core import paths as _paths
         from core.wonderings import LEARNING_SYNTH_BLOCKED
+
         conn = sqlite3.connect(str(_paths.wonderings_db()))
         conn.row_factory = sqlite3.Row
         for row in conn.execute(
@@ -9251,14 +9514,16 @@ def api_debug_fabrication_feed():
             (LEARNING_SYNTH_BLOCKED, limit),
         ):
             d = dict(row)
-            db_events.append({
-                "source": "wondering_probes",
-                "probe_id": d["id"],
-                "wid": d["wondering_id"],
-                "cmd": d["cmd"],
-                "stdout_excerpt": d.get("stdout_excerpt") or "",
-                "signal": "synth_invalidated",
-            })
+            db_events.append(
+                {
+                    "source": "wondering_probes",
+                    "probe_id": d["id"],
+                    "wid": d["wondering_id"],
+                    "cmd": d["cmd"],
+                    "stdout_excerpt": d.get("stdout_excerpt") or "",
+                    "signal": "synth_invalidated",
+                }
+            )
         conn.close()
     except Exception as e:
         logger.debug("fabrication feed db read failed: %s", e)
@@ -9266,23 +9531,29 @@ def api_debug_fabrication_feed():
     # Placeholders remaining for detectors that still don't exist.
     # self_claim_hallucination was promoted to a real feed above.
     placeholders = [
-        {"source": "honesty_guard",
-         "status": "no_detector",
-         "note": "no emitter wired — track when honesty-guard events get a log line"},
-        {"source": "state_claim_suppression",
-         "status": "no_detector",
-         "note": "no emitter wired — track when state-claim suppressions are logged"},
+        {
+            "source": "honesty_guard",
+            "status": "no_detector",
+            "note": "no emitter wired — track when honesty-guard events get a log line",
+        },
+        {
+            "source": "state_claim_suppression",
+            "status": "no_detector",
+            "note": "no emitter wired — track when state-claim suppressions are logged",
+        },
     ]
 
-    return jsonify({
-        "real_feeds": {
-            "cognition_synth_invalidated": cog_events,
-            "db_synth_blocked": db_events,
-            "self_claim_audit": sca_events,
-        },
-        "placeholders": placeholders,
-        "checked_at": _utcnow_iso(),
-    })
+    return jsonify(
+        {
+            "real_feeds": {
+                "cognition_synth_invalidated": cog_events,
+                "db_synth_blocked": db_events,
+                "self_claim_audit": sca_events,
+            },
+            "placeholders": placeholders,
+            "checked_at": _utcnow_iso(),
+        }
+    )
 
 
 @app.route("/api/debug/stats")
@@ -9293,12 +9564,15 @@ def api_debug_stats():
         return jsonify({"error": "unauthorized"}), 401
     try:
         from core.wonderings import get_store
+
         store = get_store()
-        return jsonify({
-            "hour": store.stats(3600),
-            "day": store.stats(86400),
-            "checked_at": _utcnow_iso(),
-        })
+        return jsonify(
+            {
+                "hour": store.stats(3600),
+                "day": store.stats(86400),
+                "checked_at": _utcnow_iso(),
+            }
+        )
     except Exception as e:
         logger.warning("debug /api/debug/stats failed: %s", e)
         return jsonify({"error": str(e)}), 500

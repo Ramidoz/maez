@@ -45,6 +45,7 @@ try:
 except Exception:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from memory.memory_manager import MemoryManager
+
 # 5x.F.A — cycle-scoped recall-context bag helpers. Hoisted to
 # module-top because (a) the import is cheap and Chroma-free per
 # the AST-parse isolation test, (b) F.A uses these at three sites
@@ -131,6 +132,10 @@ from core.turn_traces.trace_schema import (
     extract_evidence_ids as _trace_extract_evidence_ids,
     hash_text as _trace_hash_text,
 )
+from core.infra.http_security import (
+    apply_local_cors_headers,
+    reject_untrusted_browser_write,
+)
 
 LOOP_INTERVAL = 30  # seconds
 HEALTH_PORT = 11435
@@ -162,6 +167,7 @@ def _authoritative_tool_reply(tool_calls: "list[dict] | None") -> str:
         if output:
             return f"I could not get a live {noun}: {output}"
     return ""
+
 
 # Sentinel the model emits when nothing noteworthy to report this cycle.
 # Storing fabricated prose is worse than storing nothing — HEARTBEAT_OK
@@ -288,6 +294,7 @@ logger.setLevel(logging.DEBUG)
 logger.propagate = False
 
 import logging.handlers as _logging_handlers
+
 # Slice 3 cleanup (2026-05-08): rotate maez.log. The maez.envelope
 # logger (truncation telemetry, cap-hit warnings, per-section drops)
 # is a CHILD of `maez`, so its records propagate up to THIS handler.
@@ -296,7 +303,9 @@ import logging.handlers as _logging_handlers
 # 50MB × 10 files = 500MB ceiling — preserves cockpit history,
 # bounded enough to never fill disk.
 file_handler = _logging_handlers.RotatingFileHandler(
-    LOG_PATH, maxBytes=50 * 1024 * 1024, backupCount=10,
+    LOG_PATH,
+    maxBytes=50 * 1024 * 1024,
+    backupCount=10,
 )
 file_handler.setFormatter(
     logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
@@ -355,8 +364,8 @@ class MaezDaemon:
             init_default_active_store()
         except Exception as _canary_init_exc:
             logger.debug(
-                "canary store init skipped (continuing without "
-                "fabrication-detection): %s", _canary_init_exc,
+                "canary store init skipped (continuing without fabrication-detection): %s",
+                _canary_init_exc,
             )
         # Session 11m: pass daemon ref so the Telegram bot can signal
         # "the owner is talking" and defer our next reasoning cycle.
@@ -398,6 +407,7 @@ class MaezDaemon:
         # for an in-flight cycle to finish (bounded join) so dream
         # cycles writing to memory.db don't get torn mid-write.
         from core.health.bounded_worker import BoundedSingletonWorker
+
         self._dream_worker = BoundedSingletonWorker(name="dream-cycle")
         self._last_alert_time = 0.0
         self._last_screen_obs: ScreenObservation | None = None
@@ -1065,7 +1075,8 @@ class MaezDaemon:
                 except ValueError:
                     logger.warning(
                         "PID file %s held non-integer %r; overwriting",
-                        PID_FILE, raw,
+                        PID_FILE,
+                        raw,
                     )
                     prior_pid = None
                 if prior_pid is not None and prior_pid != os.getpid():
@@ -1075,18 +1086,25 @@ class MaezDaemon:
                         logger.warning(
                             "Stale/dead PID %d in %s (liveness probe: "
                             "%s); overwriting with current PID %d",
-                            prior_pid, PID_FILE, e, os.getpid(),
+                            prior_pid,
+                            PID_FILE,
+                            e,
+                            os.getpid(),
                         )
                     else:
                         logger.warning(
                             "PID %d in %s appears LIVE; overwriting "
                             "anyway with current PID %d — investigate "
                             "if a second daemon is running",
-                            prior_pid, PID_FILE, os.getpid(),
+                            prior_pid,
+                            PID_FILE,
+                            os.getpid(),
                         )
         except OSError as e:
             logger.warning(
-                "PID file %s read failed (%s); overwriting", PID_FILE, e,
+                "PID file %s read failed (%s); overwriting",
+                PID_FILE,
+                e,
             )
         PID_FILE.write_text(str(os.getpid()))
         logger.info("PID %d written to %s", os.getpid(), PID_FILE)
@@ -1184,8 +1202,7 @@ class MaezDaemon:
             )
         except Exception as exc:
             logger.warning(
-                "evidence_envelope build failed for %s "
-                "(continuing without envelope): %s",
+                "evidence_envelope build failed for %s (continuing without envelope): %s",
                 surface,
                 exc,
             )
@@ -1244,7 +1261,8 @@ class MaezDaemon:
         )
 
         memory_block = self.memory.format_for_prompt(
-            recalled, max_chars=resolve_recall_cap_chars(),
+            recalled,
+            max_chars=resolve_recall_cap_chars(),
         )
         stats = self.memory.memory_stats()
         if memory_block:
@@ -1309,6 +1327,7 @@ class MaezDaemon:
         # — adds nothing to the prompt on quiet cycles.
         try:
             from core.decision import recent_action_context as _rac
+
             _action_outcomes_block = _rac.recent_failures(
                 window_seconds=120.0,
             )
@@ -1435,8 +1454,7 @@ class MaezDaemon:
             )
         except Exception as _env_exc:
             logger.warning(
-                "evidence_envelope build failed for daemon_cycle "
-                "(continuing without envelope): %s",
+                "evidence_envelope build failed for daemon_cycle (continuing without envelope): %s",
                 _env_exc,
             )
             _cycle_evidence_envelope = None
@@ -1725,9 +1743,8 @@ class MaezDaemon:
                 from core.safety.audit_signal_manifest import (
                     default_audit_signals,
                 )
-                _chat_signals_present, _chat_signals_absent = (
-                    default_audit_signals(source)
-                )
+
+                _chat_signals_present, _chat_signals_absent = default_audit_signals(source)
             except Exception as _signals_exc:
                 logger.debug(
                     "chat audit fallback manifest unavailable: %s",
@@ -1739,16 +1756,14 @@ class MaezDaemon:
                 if label not in _chat_signals_present:
                     _chat_signals_present.append(label)
                 _chat_signals_absent[:] = [
-                    s for s in _chat_signals_absent
-                    if not str(s).lower().startswith(name)
+                    s for s in _chat_signals_absent if not str(s).lower().startswith(name)
                 ]
 
             def _mark_signal_absent(name: str, label: str) -> None:
                 if label not in _chat_signals_absent:
                     _chat_signals_absent.append(label)
                 _chat_signals_present[:] = [
-                    s for s in _chat_signals_present
-                    if not str(s).lower().startswith(name)
+                    s for s in _chat_signals_present if not str(s).lower().startswith(name)
                 ]
 
             _mark_signal_present(
@@ -1761,10 +1776,7 @@ class MaezDaemon:
                 if self._last_screen_obs is not None
                 else None
             )
-            if (
-                _screen_state == "ok"
-                and getattr(self._last_screen_obs, "success", False)
-            ):
+            if _screen_state == "ok" and getattr(self._last_screen_obs, "success", False):
                 _mark_signal_present("screen observation", "screen observation")
             elif _screen_state == "disabled":
                 _mark_signal_absent(
@@ -1824,8 +1836,10 @@ class MaezDaemon:
             render_envelope_for_prompt as _render_envelope,
             resolve_recall_cap_chars as _resolve_recall_cap,
         )
+
         memory_block = self.memory.format_for_prompt(
-            recalled, max_chars=_resolve_recall_cap(),
+            recalled,
+            max_chars=_resolve_recall_cap(),
         )
 
         # Slice 3 wiring: build the evidence envelope so the LLM sees
@@ -1848,8 +1862,8 @@ class MaezDaemon:
             # MUST NOT block the daemon's reply path. Fall through
             # to the legacy signals-only audit.
             logger.warning(
-                "evidence_envelope build failed (continuing without "
-                "envelope): %s", _env_exc,
+                "evidence_envelope build failed (continuing without envelope): %s",
+                _env_exc,
             )
             _evidence_envelope = None
         _envelope_block = _render_envelope(_evidence_envelope)
@@ -1953,10 +1967,7 @@ class MaezDaemon:
                 messages.append(
                     {
                         "role": "system",
-                        "content": (
-                            f"{transcript}\n\n"
-                            f"{_JARVIS_INSTRUCTION_BLOCK}"
-                        ),
+                        "content": (f"{transcript}\n\n{_JARVIS_INSTRUCTION_BLOCK}"),
                     }
                 )
             except Exception as _tool_ctx_exc:
@@ -1997,9 +2008,7 @@ class MaezDaemon:
         # leaves the field at its default empty list.
         try:
             if _goals is not None and not _goals.is_empty:
-                _trace.working_self_goals = [
-                    f"{g.source}: {g.text}" for g in _goals.goals
-                ]
+                _trace.working_self_goals = [f"{g.source}: {g.text}" for g in _goals.goals]
         except Exception as _trace_goals_exc:
             logger.debug("trace working_self_goals capture skipped: %s", _trace_goals_exc)
         _lived_brief = ""
@@ -2034,15 +2043,19 @@ class MaezDaemon:
         if os.environ.get("MAEZ_AMBIENT_BRIEF", "1") != "0":
             try:
                 from core.memory.ambient_format import ambient_prompt_block
+
                 _ambient_block = ambient_prompt_block()
                 if _ambient_block:
-                    messages.append({
-                        "role": "system",
-                        "content": _ambient_block,
-                    })
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": _ambient_block,
+                        }
+                    )
             except Exception as _amb_exc:
                 logger.debug(
-                    "ambient brief injection failed: %s", _amb_exc,
+                    "ambient brief injection failed: %s",
+                    _amb_exc,
                 )
 
         # Trace: capture the evidence ids the lived brief surfaced.
@@ -2091,10 +2104,7 @@ class MaezDaemon:
                     )
                 except Exception:
                     logger.exception("telegram chat synthesis failed")
-                    reply = (
-                        "I hit a local brain error while answering. "
-                        "Try me again in a moment."
-                    )
+                    reply = "I hit a local brain error while answering. Try me again in a moment."
 
         # 2026-04-23 Commit 7b: strip tool-call JSON leaks from the raw
         # model output BEFORE audit and BEFORE store. Models occasionally
@@ -2232,8 +2242,7 @@ class MaezDaemon:
                 _trace.audit = AuditInfo(
                     ran=True,
                     changed_output=(
-                        _trace_hash_text(_trace_pre_audit_text)
-                        != _trace_hash_text(reply)
+                        _trace_hash_text(_trace_pre_audit_text) != _trace_hash_text(reply)
                     ),
                 )
             except Exception as _trace_exc:
@@ -2252,6 +2261,7 @@ class MaezDaemon:
         from core.ledger.model_reply_persistence_warning import (
             warn_model_reply_persistence_skip,
         )
+
         try:
             from core.ledger.model_reply_persistence import (
                 build_model_reply_audit_verdict,
@@ -2275,13 +2285,9 @@ class MaezDaemon:
                     audit_verdict=build_model_reply_audit_verdict(
                         surface=source,
                         audit_ran=True,
-                        changed_output=bool(
-                            getattr(_trace.audit, "changed_output", False)
-                        ),
+                        changed_output=bool(getattr(_trace.audit, "changed_output", False)),
                     ),
-                    memory_read_ids=list(
-                        getattr(_trace, "lived_recall_ids", []) or []
-                    ),
+                    memory_read_ids=list(getattr(_trace, "lived_recall_ids", []) or []),
                 )
         except Exception as _ledger_reply_exc:
             warn_model_reply_persistence_skip(
@@ -2360,8 +2366,7 @@ class MaezDaemon:
         # the future deterministic harness. Never raises.
         try:
             _trace.tool_calls = [
-                ToolCall(**tc) if isinstance(tc, dict) else tc
-                for tc in (tool_calls or [])
+                ToolCall(**tc) if isinstance(tc, dict) else tc for tc in (tool_calls or [])
             ]
             _final_hash = _trace_hash_text(reply)
             _trace.final_text_hash = _final_hash
@@ -2673,7 +2678,9 @@ class MaezDaemon:
             _briefing_signals_present = ["git status summary", "system stats"]
             _briefing_signals_absent = []
             if self._last_calendar_snap is not None and getattr(
-                self._last_calendar_snap, "success", False,
+                self._last_calendar_snap,
+                "success",
+                False,
             ):
                 _briefing_signals_present.append("calendar")
             else:
@@ -2885,14 +2892,11 @@ class MaezDaemon:
             # Recognize this as expected when self.running is
             # False; surface it as ERROR otherwise.
             if not self.running:
-                logger.info(
-                    "WebSocket server: graceful shutdown "
-                    "(loop stopped during shutdown)"
-                )
+                logger.info("WebSocket server: graceful shutdown (loop stopped during shutdown)")
             else:
                 logger.exception(
-                    "WebSocket server: unexpected runtime error "
-                    "while self.running=True: %s", e,
+                    "WebSocket server: unexpected runtime error while self.running=True: %s",
+                    e,
                 )
 
     def _start_health_broadcast(self):
@@ -3066,9 +3070,7 @@ class MaezDaemon:
         Hourly is responsive enough for human-review windows and
         keeps the load on llama-server / disk negligible.
         """
-        logger.info(
-            "Capability planning thread started (interval: 1h)"
-        )
+        logger.info("Capability planning thread started (interval: 1h)")
 
         # First tick after a short startup delay so the daemon's
         # primary loops settle before this side-channel runs.
@@ -3095,7 +3097,8 @@ class MaezDaemon:
                     AcquisitionQueue,
                 )
                 from core.infra.capability_integration_plans import (
-                    IntegrationPlanStore, poll_and_plan,
+                    IntegrationPlanStore,
+                    poll_and_plan,
                 )
 
                 q = AcquisitionQueue()
@@ -3110,9 +3113,10 @@ class MaezDaemon:
             except Exception as e:
                 tick_failed = True
                 logger.warning(
-                    "Capability planning loop tick failed: "
-                    "%s: %s — backing off %.0fs",
-                    type(e).__name__, e, backoff_s,
+                    "Capability planning loop tick failed: %s: %s — backing off %.0fs",
+                    type(e).__name__,
+                    e,
+                    backoff_s,
                 )
 
             # On success, reset backoff and use the normal hourly
@@ -3164,11 +3168,13 @@ class MaezDaemon:
                 f"implementation is a separate slice). Deny to discard."
             )
             from core.decision.pending_cards import PendingCardStore
+
             store = PendingCardStore()
             try:
                 from core.identity import (
                     user_profile_id as _owner_user_id,
                 )
+
                 owner = _owner_user_id()
             except Exception:
                 owner = "owner"
@@ -3192,15 +3198,15 @@ class MaezDaemon:
                 user_id=str(owner),
             )
             logger.info(
-                "capability_integration_plans: surfaced card for "
-                "plan_id=%s capability_id=%s",
-                plan_id, cap_id,
+                "capability_integration_plans: surfaced card for plan_id=%s capability_id=%s",
+                plan_id,
+                cap_id,
             )
         except Exception as e:
             logger.warning(
-                "capability_integration_plans: surface_card failed "
-                "for plan_id=%s: %s",
-                plan_id, e,
+                "capability_integration_plans: surface_card failed for plan_id=%s: %s",
+                plan_id,
+                e,
             )
 
     def _nightly_journal_loop(self):
@@ -3866,7 +3872,8 @@ class MaezDaemon:
                     logger.debug("Reddit context failed: %s", e)
                 try:
                     written = self.reddit.persist_to_memory(
-                        self.memory, cycle=self.cycle_count,
+                        self.memory,
+                        cycle=self.cycle_count,
                     )
                     if written:
                         logger.info(
@@ -4649,7 +4656,8 @@ class MaezDaemon:
         # the reasoning loop or consolidation.
         planning_thread = threading.Thread(
             target=self._capability_planning_loop,
-            daemon=True, name="capability-planning",
+            daemon=True,
+            name="capability-planning",
         )
         planning_thread.start()
 
@@ -4849,9 +4857,7 @@ class MaezDaemon:
         # any stale callers that might still be in the loop's tail.
         try:
             if not self._dream_worker.shutdown(timeout=5.0):
-                logger.warning(
-                    "Dream worker did not finish within shutdown timeout"
-                )
+                logger.warning("Dream worker did not finish within shutdown timeout")
         except Exception as e:
             logger.debug("Dream worker shutdown failed: %s", e)
         try:
@@ -4919,6 +4925,7 @@ class MaezDaemon:
         # in Python.
         try:
             from core.health.shared_executor import shutdown_shared_executor
+
             shutdown_shared_executor(wait=False, cancel_futures=True)
         except Exception as e:
             logger.debug("Shared executor shutdown failed: %s", e)
@@ -4953,12 +4960,13 @@ class MaezDaemon:
         """Minimal Flask health check endpoint."""
         app = Flask("maez-health")
 
+        @app.before_request
+        def local_origin_write_guard():
+            return reject_untrusted_browser_write(request)
+
         @app.after_request
         def cors(response):
-            response.headers["Access-Control-Allow-Origin"] = "*"
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-            return response
+            return apply_local_cors_headers(response, request)
 
         # Suppress Flask request logging — we have our own
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
@@ -5065,10 +5073,12 @@ class MaezDaemon:
                     return_structured=True,
                 )
                 if hasattr(_result, "transcript"):
-                    return jsonify({
-                        "transcript": _result.transcript or "",
-                        "tool_calls": list(_result.tool_calls or []),
-                    })
+                    return jsonify(
+                        {
+                            "transcript": _result.transcript or "",
+                            "tool_calls": list(_result.tool_calls or []),
+                        }
+                    )
                 # Legacy string fallback (if a future change reverts the
                 # structured API). Kept for safety; not currently
                 # reachable.
@@ -5078,11 +5088,13 @@ class MaezDaemon:
                 # Fail open — empty transcript lets the web caller
                 # fall through to non-tool LLM synthesis rather than
                 # degrade the whole turn.
-                return jsonify({
-                    "transcript": "",
-                    "tool_calls": [],
-                    "error": str(e),
-                }), 200
+                return jsonify(
+                    {
+                        "transcript": "",
+                        "tool_calls": [],
+                        "error": str(e),
+                    }
+                ), 200
 
         @app.route("/internal/approve_card/<request_id>", methods=["POST", "OPTIONS"])
         def approve_card(request_id: str):

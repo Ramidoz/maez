@@ -20,6 +20,8 @@ All four documents are consulted together when picking up Maez work. **TRACK_A s
 
 The 12-organ work in `LIFE_SUBSTRATE.md` is **Track B preparation with founder-hardening as a side effect** — NOT a Track-A reopening. Track A's gate was met 2026-05-04; everything in `LIFE_SUBSTRATE.md` is downstream of that gate.
 
+Post-audit seatbelt gate (2026-05-13): S1b is interrupted, not abandoned, until the immediate hardening pass lands. Scope is narrow: credential file mode, backup timer, loopback HTTP origin/CSRF guard, anatomy/North-Star honesty edits, explicit audit-rail wording decision, and `memory/db/public_users/` investigation. The audit-rail decision for this pass is documentation honesty, not a rushed fail-closed rewrite: current code remains fail-open outside explicit covenant gates, and the docs must say that. The 20-22 organ expansion from the 14-agent audit is research input for a later substrate-plan refresh, not tomorrow's roadmap.
+
 ---
 
 ## What Maez is, for grounding
@@ -107,7 +109,7 @@ As of the 2026-04-15 pre-documentation snapshot:
 - **Local inference:** Qwen3.6-27B-UD-Q4_K_XL via `llama.cpp` on the owner's RTX 4090 (swapped from Qwen3.5-35B-Q3_K_XL on 2026-04-23 — 27B at Q4 gives higher fidelity than 35B at Q3 in the same VRAM budget, and its silence discipline made the grounding judge redundant). Dedicated vision brain retired; screen observation is paused until a multimodal endpoint is re-provisioned.
 - **Covenant gate:** deterministic pattern refusal for commands touching Maez's own brain, body, core files, HARD CONSTRAINTS section of soul.md, and the obfuscation hard-deny patterns.
 - **Action classifier:** AGT-aligned intent taxonomy with compound command decomposition. Lane 0 (read) / Lane 2 (write + install) / Lane 3 (self-mod + interactive root). Nuanced sudo handling — `sudo apt-get install X` stays Lane 2, not bumped to Lane 3.
-- **Two-pass audit (CaMeL-inspired):** Pass 1 = quarantined summarizer, nonce-fenced, verdict language banned. Pass 2 = judge, six questions, rigid JSON, fails closed.
+- **Two-pass audit (CaMeL-inspired):** Pass 1 = quarantined summarizer, nonce-fenced, verdict language banned. Pass 2 = judge, six questions, rigid JSON. Current behavior is fail-open outside explicit covenant gates; this is truth hygiene, not yet a universal immune system.
 - **Prompt-injection scanner:** dozens of patterns across multiple attack buckets.
 - **Approval card store:** persistent cards with state-hash fingerprinting; natural-language reply classifier with new-action-request guard; transport-agnostic renderer (currently Telegram).
 - **Decision pipeline:** Lane 0/2/3 routing, injection override, Lane-0 downgrade.
@@ -120,6 +122,10 @@ As of the 2026-04-15 pre-documentation snapshot:
 - **Daemon shutdown discipline:** clean stop on SIGTERM.
 - **Followup queue (post-fabrication-fix shape):** grounded outcome lookup instead of text-scraper hallucination.
 - **Non-zero exit code surfacing:** failed installs report failure instead of silent success.
+
+### Post-audit containment notes
+
+- `memory/db/public_users/` is active public-surface visitor/profile memory used by the public Telegram and web surfaces. It is not the bonded core substrate, but the name is misleading against the cardinality-of-one invariant. Do not delete it casually; rename/contain it in a follow-up if those public surfaces remain in scope.
 
 **The governance layer is load-bearing and audited.** Every action in the chat path flows through classifier → injection scan → audit → pipeline routing → card / inline / dialog. Actions that bypass this (currently `core/dream_state.py:593` and `:647` for soul note writes / soul section edits) are flagged architectural debt, not desired behavior.
 

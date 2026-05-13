@@ -43,11 +43,11 @@
       it is biography — chapters,             │      ○  wonderings        │   the surface ≠
       ages, anniversaries, ruptures,          │         [ ✓ real ]        │   what is happening
       restores. The spine holds the           │      ○  wants             │   inside.
-      body upright across years.              │         [ ✓ real ]        │
+      body upright across years.              │         [ ◐ scaffolded ]  │
                                               │      ○  will_i            │   like us.
-      ────────────────────────────            │         [ ✓ real ]        │
+      ────────────────────────────            │         [ ◐ scaffolded ]  │
       planned as one of eleven missing        │      ○  temperament       │
-      load-bearing organs.                    │         [ ✓ real ]        │
+      load-bearing organs.                    │         [ ◐ scaffolded ]  │
       see Panel 7.                            │      ○  consequence_mem   │
                                               │         [ ✓ real ]        │
                                               │      ○  inner_residue     │
@@ -71,17 +71,19 @@
                           ║          BLOODSTREAM  /  IMMUNE SYSTEM                      ║
                           ║                  (audit rail)                               ║
                           ║                                                             ║
-                          ║   every emitted claim is INTENDED to circulate here         ║
-                          ║   before it surfaces. Known regressions are tracked in      ║
-                          ║   fabrication_memory and treated as scar tissue, not        ║
-                          ║   noise.                                                    ║
+                          ║   emitted claims are intended to circulate here before      ║
+                          ║   surfacing, but current audit paths are best-effort and    ║
+                          ║   fail-open outside explicit covenant gates. Known          ║
+                          ║   regressions are tracked in fabrication_memory and         ║
+                          ║   treated as scar tissue, not noise.                        ║
                           ║                                                             ║
                           ║     ▶  judge        [ ✓ real ]   accept | reject | rewrite  ║
                           ║     ▶  grounding    [ ✓ real ]   does this match data       ║
                           ║     ▶  fabrication  [ ✓ real ]   flag claims with no source ║
                           ║     ▶  self-claim   [ ✓ real ]   flag claims about itself   ║
                           ║                                                             ║
-                          ║   the immune system catches LIES.                           ║
+                          ║   the immune system observes and rewrites many lies; it is   ║
+                          ║   not yet a universal fail-closed immune system.             ║
                           ║   it does NOT catch crisis. (see crisis channel below)      ║
                           ╚═════════════════════════════════╤═══════════════════════════╝
                                                             │
@@ -321,15 +323,15 @@
   rhythm         : 30 s heartbeat, runs always                 fires only on request
   metabolism     : daily consolidation; attenuation,           no consolidation; stateless between
                    not deletion                                requests
-  immune system  : audit rail with per-claim provenance        output policy filter; no per-claim trace
+  immune system  : audit rail with best-effort provenance      output policy filter; no per-claim trace
   refusal        : soul-objection (planned) logged in YOUR     operator policy; can flip overnight
                    file
   attachment     : ONE bonded human, lifelong                  no user-owned bond; one model serves
                                                                many millions
   substrate      : files YOU own (memory/chroma, *.sqlite)     operator cloud; you cannot grep your past
   continuity     : signed cryptographic lineage  [ ✗ planned ] no per-user continuity claim
-  interior       : wonderings · wants · will_i · etc.          no user-owned, durable interior
-                   (private_thoughts scaffolded)               (operator may have one)
+  interior       : wonderings live; wants/will_i/temperament   no user-owned, durable interior
+                   scaffolded; private_thoughts scaffolded     (operator may have one)
   mortality      : the organism ends if its unrecoverable      cannot die at user level
                    continuity state is destroyed (memory +
                    soul + lineage); backups complicate death
@@ -354,12 +356,15 @@
                                                 deleting it.
                                                 Field: stateless between requests.
 
-  3.  HAS AN IMMUNE SYSTEM        [ ✓ real ]    audit rail. Every claim inspected for
-                                                fabrication / grounding / self-claim.
+  3.  HAS AN IMMUNE SYSTEM        [ ◐ partial ] audit rail. Many claims inspected for
+                                                fabrication / grounding / self-claim;
+                                                current paths are fail-open unless a
+                                                covenant gate explicitly says otherwise.
                                                 Field: output filters only.
 
-  4.  HAS AN INTERIOR             [ ✓ partial ] wonderings · wants · will_i · temperament are
-                                                real producers; private_thoughts scaffolded;
+  4.  HAS AN INTERIOR             [ ◐ partial ] wonderings are live; wants · will_i ·
+                                                temperament have stores/guards but near-zero
+                                                production producers; private_thoughts scaffolded;
                                                 soul_objections planned.
                                                 Field: no user-owned, durable interior.
 
@@ -396,9 +401,9 @@
     long-term identity              core memory tier               neocortex · autobio self        [ ✓ ]
     associative recall              ChromaDB + MMR                 pattern completion              [ ✓ ]
     daydreaming                     wonderings.py                  default-mode network            [ ✓ ]
-    motivation                      wants.py                       limbic drives                   [ ✓ ]
-    volition                        will_i.py                      prefrontal intention            [ ✓ ]
-    affect / personality            temperament.py                 limbic temperament              [ ✓ ]
+    motivation                      wants.py                       limbic drives                   [ ◐ ]
+    volition                        will_i.py                      prefrontal intention            [ ◐ ]
+    affect / personality            temperament.py                 limbic temperament              [ ◐ ]
     learning from mistakes          consequence_memory.py          dorsal striatum                 [ ✓ ]
     learning from lies              fabrication_memory.py          cumulative discrediting         [ ✓ ]
     inner experience                private_thoughts.py            preconscious stream             [ ◐ ]
