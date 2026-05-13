@@ -121,3 +121,49 @@ Do not promote to `[ ✓ real ]` from S1b alone.
 **Operator note:**
 - S1b runbook and log created immediately after S1b council amendments closed.
 - Observation starts with no recorded S1b producer or consumer activity in the last 24h.
+
+---
+
+## 2026-05-13 — Producer-Only Observation Start
+
+**Timestamp:** `2026-05-13 11:50:01 CDT` (`2026-05-13T16:50:01Z`)
+
+**Operator decision:** start S1b producer-only observation now.
+
+**Enablement method:** wrote gitignored owner-local runtime config at `config/private_thoughts_s1b.local.json`.
+
+**S1b config after enablement:**
+- `producer_enabled`: `True`
+- `consumer_enabled`: `False`
+- `active_window_seconds`: `1800`
+- `hourly_write_cap`: `20`
+- `optional_output_sentence_cap`: `1`
+- `busy_timeout_ms`: `500`
+- `duty_cycle_window_seconds`: `86400`
+- `duty_cycle_min_samples`: `3`
+- `duty_cycle_max_dampened_ratio`: `0.8`
+
+**Service stability after enablement:**
+- `maez.service`: active, `NRestarts=0`, started `Wed 2026-05-13 09:58:49 CDT`
+- `llama-server.service`: active, `NRestarts=0`, started `Wed 2026-05-13 01:27:47 CDT`
+- `llama-judge.service`: active, `NRestarts=0`, started `Wed 2026-05-13 01:27:42 CDT`
+- restart performed for this enablement: no
+
+**Producer duty cycle at start:**
+- `residue_rows_24h`: `0`
+
+**Rate-limit summaries at start:**
+- `rate_limit_summaries_24h`: `0`
+
+**Consumer state:**
+- consumer remains disabled
+- no presentation dampening can occur during producer-only observation
+
+**Observation gate:**
+- producer-only window begins at `2026-05-13T16:50:01Z`
+- consumer remains disabled until producer-only observation is clean for at least `200 cycles AND 24h`
+- earliest calendar eligibility, assuming healthy continuous daemon cycles: `2026-05-14T16:50:01Z`
+
+**Operator note:**
+- Runtime config was used instead of systemd env var so no service restart was needed.
+- This avoids changing `NRestarts` and keeps enablement reversible through the local config file.
