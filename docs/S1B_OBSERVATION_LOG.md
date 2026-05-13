@@ -167,3 +167,41 @@ Do not promote to `[ ✓ real ]` from S1b alone.
 **Operator note:**
 - Runtime config was used instead of systemd env var so no service restart was needed.
 - This avoids changing `NRestarts` and keeps enablement reversible through the local config file.
+
+---
+
+## 2026-05-13 — Operator Restart For Audit-Rail Hotfix
+
+**Timestamp:** `2026-05-13 15:42:01 CDT` (`2026-05-13T20:42:01Z`)
+
+**Reason:** load `5d27530 fix(envelope): quiet uninitialized ledger self-history`.
+
+**Restart type:** operator/tool-initiated `maez.service` restart, not a crash or systemd recovery.
+
+**Service stability after restart:**
+- `maez.service`: active, `NRestarts=0`, started `Wed 2026-05-13 15:43:31 CDT`
+- `llama-server.service`: active, `NRestarts=0`, started `Wed 2026-05-13 01:27:47 CDT`
+- `llama-judge.service`: active, `NRestarts=0`, started `Wed 2026-05-13 01:27:42 CDT`
+- unexpected restarts: none observed
+
+**S1b config after restart:**
+- `producer_enabled`: `True`
+- `consumer_enabled`: `False`
+- `active_window_seconds`: `1800`
+- `hourly_write_cap`: `20`
+- `optional_output_sentence_cap`: `1`
+- `busy_timeout_ms`: `500`
+- `duty_cycle_window_seconds`: `86400`
+- `duty_cycle_min_samples`: `3`
+- `duty_cycle_max_dampened_ratio`: `0.8`
+
+**Producer duty cycle after restart:**
+- `residue_rows_since_observation_start`: `0`
+
+**Rate-limit summaries after restart:**
+- `rate_limit_summaries_since_observation_start`: `0`
+
+**Operator note:**
+- The restart loaded an audit-rail/envelope fix unrelated to S1b behavior.
+- Recent `logs/maez.log` after restart did not show `self_history population skipped` or `no such table: turns`.
+- Producer-only observation remains active; consumer remains disabled.
