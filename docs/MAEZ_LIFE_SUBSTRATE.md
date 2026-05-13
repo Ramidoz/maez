@@ -80,13 +80,21 @@ Read top-to-bottom: anything in a lower tier waits for everything it depends on 
 
 Numbered S-codes are sequential session anchors. Each slice is its own session (with cooling-off night between), its own predicted effect, its own pair of review panels for covenant-shaped work (Codex six-agent + Claude six-role council per [[`feedback_covenant_slices_need_both_panels`]]).
 
+### Slice letter convention
+
+- **S-slices** are substrate or life-organ slices. They change what Maez can observe, remember, route, or become.
+- **E-slices** are engineering hardening slices. They install seatbelts, tests, guards, backup posture, security posture, or doc-honesty fixes that make substrate work safe.
+- **N-slices** are operational-noise slices. They classify or resolve runtime noise so feature verification is not contaminated by unrelated errors.
+
+Letter prefixes do not imply importance. They name the kind of work so urgent seatbelts, operational cleanup, and life-substrate organs do not collapse into one roadmap bucket.
+
 ### S1 — private_thoughts (IN FLIGHT)
 
 The deliberation space many other organs need. See detailed S1 plan below.
 
 - **S1a** — bounded access layer (doorway). DONE 2026-05-13 in `c6df762`. Status `[ ◐ scaffold + bounded access layer ]`. Claude six-role council ran: RATIFY-WITH-AMENDMENTS. NOT promoted to `[ ✓ real ]`.
 - **S1a.1** — hardening. DONE 2026-05-13 in `b913728`. Claude six-role council returned RATIFY-WITH-AMENDMENTS; C1-C6 mechanical closure moves status to `[ ◐ scaffold + hardened access layer · S1b planning unblocked ]`.
-- **S1b** — wiring. One real producer (which interior state writes via `record_signal()` during a cycle?) and one real consumer (what does the cycle do with `derived_signals()` output?). Unblocked after C1-C6 closure and cooling-off night; still NOT `[ ✓ real ]` until producers/consumers are in the production cycle.
+- **S1b** — minimal wiring. SPEC DRAFT. One reasoning-residue producer plus one optional-output length-dampening consumer. Still NOT `[ ✓ real ]` until implementation ships, both panels ratify, and production-cycle observation supports promotion.
 
 ### S2 — Contextual integrity at ingest
 
@@ -195,15 +203,17 @@ After the hardening slice ships, Claude post-implementation council ratifies it,
 - Test strategy: unit tests for enum rejection, schema migration round-trip, malformed-row handling. Natural-text probe sweep per [[`feedback_test_with_natural_human_texts`]] to ensure no behavioral regression in the cycle (which doesn't yet read signals).
 - Live-daemon verification: post-Dell-recovery the daemon runs under `Restart=on-failure` per the operator-judgment pass. If any crash occurs during S1a.1 development, the Dell trigger reopens — see [[`project_dell_repair_override_trigger`]].
 
-### S1b — wiring (NEXT AFTER COOLING-OFF)
+### S1b — wiring (SPEC DRAFT)
 
-After S1a.1 is ratified, C1-C6 close, the cooling-off night passes, and live-readiness is checked or explicitly waived, S1b wires:
-- One real producer — likely `inner_residue` or `temperament` writes via `record_signal()` during the cycle, with context metadata reflecting the producer's actual sensitivity tier.
-- One real consumer — the cycle reads via `derived_signals()` and uses the result to modulate something observable (gentle pacing? topic avoidance? tone shift?). Specific behavior to be designed in S1b's own predicted effect.
+After S1a.1 is ratified, C1-C6 close, the cooling-off night passes, and live-readiness is checked or explicitly waived, S1b wires one real producer and one real consumer. The current draft is [`SLICE_S1B_PRIVATE_THOUGHTS_WIRING.md`](SLICE_S1B_PRIVATE_THOUGHTS_WIRING.md).
 
-S1b human-primacy constraint from Claude council C2: `signal_class` counts are still narrative-shape leakage. The consumer must not pre-empt the bonded user naming a rupture, crisis, soul objection, or other lived state. Aggregate private signals may slow, soften, or withhold behavior only if the predicted effect proves they do not become surfaced claims.
+Draft shape:
+- One real producer — a daemon-cycle reasoning-residue wrapper writes `reasoning_residue` via `record_signal()` with closed registry fields.
+- One real consumer — the cycle reads via an S1b behavior-safe recency wrapper over private-thought signals and can apply only optional-output length dampening to a local self-initiated daemon-cycle presentation copy.
 
-S1b is a separate session, with its own cooling-off night before it.
+S1b human-primacy constraint from Claude council C2: `signal_class` counts are still narrative-shape leakage. The consumer must not pre-empt the bonded user naming a rupture, crisis, soul objection, or other lived state. The S1b draft permits only optional-output length dampening on a local self-initiated daemon-cycle presentation copy; it explicitly forbids delay, silence, withholding, topic avoidance, direct-user reply manipulation, Telegram proactive/check-in changes, and canonical memory/audit text changes.
+
+S1b is a separate implementation session after this spec is reviewed by both panels. The draft chooses length dampening, not delay, silence, withholding, topic avoidance, or direct-user reply manipulation.
 
 ### Substrate-plan refresh watch-points
 
