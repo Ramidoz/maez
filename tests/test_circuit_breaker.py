@@ -32,7 +32,6 @@ deterministically advance time without real sleeps), and MUST be thread-safe.
 from __future__ import annotations
 
 import threading
-import time
 import unittest
 from unittest.mock import Mock
 

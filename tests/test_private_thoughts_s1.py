@@ -13,13 +13,19 @@ These tests pin the first post-scaffold shape:
 from __future__ import annotations
 
 import json
+from unittest import mock
 import tempfile
 import unittest
 from pathlib import Path
 import sqlite3
 
 import core.infra.private_thoughts as private_thoughts_module
-from core.infra.private_thoughts import PrivateThoughts, ProducerId, SignalKind
+from core.infra.private_thoughts import (
+    PRIVATE_THOUGHTS_USER_VERSION,
+    PrivateThoughts,
+    ProducerId,
+    SignalKind,
+)
 
 
 class TestPrivateThoughtsS1(unittest.TestCase):
@@ -544,6 +550,83 @@ class TestPrivateThoughtsS1(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "newer than this code"):
             PrivateThoughts(db_path=self.db_path)
+
+    def test_migration_failure_rolls_back_user_version_and_retries(self) -> None:
+        legacy_db_path = Path(self._td.name) / "legacy_private_thoughts.db"
+        conn = sqlite3.connect(legacy_db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE private_thoughts (
+                    thought_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts             REAL    NOT NULL,
+                    content        TEXT    NOT NULL,
+                    provenance     TEXT    NOT NULL,
+                    context_json   TEXT    NOT NULL DEFAULT '{}',
+                    memory_phase   TEXT    NOT NULL DEFAULT 'gestation'
+                );
+                INSERT INTO private_thoughts
+                    (ts, content, provenance, context_json, memory_phase)
+                VALUES
+                    (1.0, 'Legacy row before failed migration.', 'audit_held',
+                     '{"source":"audit_rail","subject":"maez_output","consent_tier":"owner_private","retention":"until_reviewed","allowed_flows":["private_reader"]}',
+                     'gestation');
+                PRAGMA user_version = 0;
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        original_migrate = PrivateThoughts._migrate_schema
+
+        def fail_after_schema_changes(
+            store: PrivateThoughts,
+            migration_conn: sqlite3.Connection,
+        ) -> None:
+            original_migrate(store, migration_conn)
+            raise RuntimeError("simulated migration failure after DDL")
+
+        with mock.patch.object(PrivateThoughts, "_migrate_schema", fail_after_schema_changes):
+            with self.assertRaisesRegex(RuntimeError, "simulated migration failure"):
+                PrivateThoughts(db_path=legacy_db_path)
+
+        conn = sqlite3.connect(legacy_db_path)
+        try:
+            columns_after_failure = {
+                row[1] for row in conn.execute("PRAGMA table_info(private_thoughts)")
+            }
+            user_version_after_failure = int(
+                conn.execute("PRAGMA user_version").fetchone()[0]
+            )
+            row_count_after_failure = int(
+                conn.execute("SELECT COUNT(*) FROM private_thoughts").fetchone()[0]
+            )
+        finally:
+            conn.close()
+
+        self.assertNotIn("envelope_version", columns_after_failure)
+        self.assertEqual(user_version_after_failure, 0)
+        self.assertEqual(row_count_after_failure, 1)
+
+        PrivateThoughts(db_path=legacy_db_path)
+
+        conn = sqlite3.connect(legacy_db_path)
+        try:
+            columns_after_retry = {
+                row[1] for row in conn.execute("PRAGMA table_info(private_thoughts)")
+            }
+            user_version_after_retry = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            row = conn.execute(
+                "SELECT legacy_provenance, producer_id, signal_kind, signal_class "
+                "FROM private_thoughts WHERE thought_id = 1"
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertIn("envelope_version", columns_after_retry)
+        self.assertEqual(user_version_after_retry, PRIVATE_THOUGHTS_USER_VERSION)
+        self.assertEqual(row, ("audit_held", "audit_rail", "audit_held", "audit_awareness"))
 
     def test_behavior_reader_is_narrow_capability(self) -> None:
         reader = self.store.behavior_reader()

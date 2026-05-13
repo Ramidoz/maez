@@ -810,7 +810,11 @@ class PrivateThoughts:
             }
         registry = _SIGNAL_REGISTRY[str(kind)]
         producer = row.get("producer_id")
-        if not producer or producer not in ProducerId.values():
+        if (
+            not producer
+            or producer == ProducerId.LEGACY_UNKNOWN.value
+            or producer not in ProducerId.values()
+        ):
             producer = cls._producer_from_context(row) or registry["producer_id"]
         signal_class = row.get("signal_class") or registry["signal_class"]
         if signal_class not in SignalClass.values():

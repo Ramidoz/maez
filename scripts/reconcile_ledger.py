@@ -143,7 +143,6 @@ def main(argv: list | None = None) -> int:
 
     # Determine exit code with documented precedence: 2 > 1 > 3 > 0.
     # (2 already handled in except blocks above.)
-    verdict = result["verdict"]
     total_orphans = sum(len(v) for v in result["orphans_found"].values())
     has_state_c = bool(result.get("state_c_turns"))
 

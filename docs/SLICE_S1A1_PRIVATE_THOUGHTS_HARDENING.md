@@ -1,10 +1,10 @@
 # Slice S1a.1 — private_thoughts hardening
 
-**Status:** implementation-approved only under the tightened contract below. The 2026-05-13 Codex six-agent pre-code panel BLOCKED the loose version of this memo and approved the goal only after the amendments were made mechanical.
+**Status:** shipped in `b913728`; Claude six-role council returned **RATIFY-WITH-AMENDMENTS**. This follow-up closes the six mechanical council amendments before S1b wiring.
 
 **Predecessor:** `c6df762` (`feat(infra): add bounded private-thought signals`) — S1a doorway, ratified-with-amendments by the Claude six-role council on 2026-05-13.
 
-**Blocks:** S1b (wiring real producers + consumers) is held until S1a.1 ships.
+**Blocks:** S1b (wiring real producers + consumers) is held until S1a.1 ships, Claude ratifies, and the C1-C6 mechanical ratification amendments close.
 
 **Maps to:** [`MAEZ_LIFE_SUBSTRATE.md § S1`](MAEZ_LIFE_SUBSTRATE.md) — anatomy invariant [#4 Interpretive Humility (in part)](MAEZ_NORTH_STAR.md#4-interpretive-humility) and is structural prerequisite to [#5 Rupture and Repair](MAEZ_NORTH_STAR.md#5-rupture-and-repair), [#6 Crisis Routing](MAEZ_NORTH_STAR.md#6-crisis-routing), [#7 Soul-Level Objection](MAEZ_NORTH_STAR.md#7-soul-level-objection).
 
@@ -30,6 +30,8 @@ Load-bearing corrections from the panel:
 - **Forensic audit must be backed up.** Use an already-backed store or update Decision-22 coverage in the same slice.
 
 Plain English: S1a.1 is no longer "tighten the existing reader." It is "turn the reader into two different doors": a behavior door that cannot reach raw private text, and a forensic door that can, but leaves a backed-up audit trail.
+
+Council clarification C1: this split is **defense-in-depth inside one process**, not an absolute security boundary. Python code with arbitrary same-process execution can still bypass object shape. The covenant property is that normal behavior packages have no raw/forensic API and the AST guard catches forbidden imports; it is not a substitute for process isolation if future threat models require it.
 
 ### Amendment 1: closed policy vocabularies
 *(Logical seat — engineering veto power.)*
@@ -74,6 +76,8 @@ Every record carries `envelope_version` and `schema_version` fields.
 
 `_initialize()` performs an automatic, all-or-nothing migration with `BEGIN IMMEDIATE`, `PRAGMA table_info`, and an explicit migration marker (`PRAGMA user_version` or a `schema_migrations` row). Legacy rows stay readable through the normalization adapter. A reader that encounters a future unsupported version logs and skips rather than crashing.
 
+Council clarification C3: the first live non-empty migration is a watch-point. `memory/private_thoughts.db` had no live rows during S1a.1 verification, so the next real migration with non-empty private-thought history must be treated as evidence-bearing: run the named rollback test, inspect the migration result, and confirm legacy rows preserve readability before moving on.
+
 A checked-in compatibility table must define the semantics of every enum and legacy mapping. A 2046 reader should be able to answer "what did `until_reviewed` mean in 2026?" without this chat. S1a.1's table lives at [`PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md`](PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md).
 
 ### Amendment 3: split `provenance` into `producer_id` + `signal_kind`
@@ -110,6 +114,8 @@ Today `trace_ids` exist on signals AND they can be dereferenced back to raw priv
 
 This is the most consequential amendment. It defines the boundary between "behavior reads bounded signals" (covenant-safe) and "forensic auditing reads raw thoughts" (audited, logged, rare).
 
+Council clarification C2: even coarse `signal_class` counts can leak narrative shape. A future S1b consumer must not pre-empt the bonded user naming a rupture, crisis, or objection. It may use aggregate signals only under a human-primacy design that slows, softens, or withholds behavior without turning the count into a surfaced claim like "I sense bond repair pressure."
+
 ### Amendment 5: fix `derived_signals()` false-absence risk
 *(Logical + Body-Coherence.)*
 
@@ -141,11 +147,13 @@ Taxonomy registry requirement:
 
 Each signal registry entry includes stable id, `signal_kind`, `signal_class`, `surface_sensitivity`, allowed producers, introduced version, optional deprecated version, and merge/split note. New kinds require updating the registry and tests.
 
+Council clarification C4/C5: `PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md` is the first instance of a substrate discipline: any organ that ships closed enum vocabularies also ships a registry doc that lets future readers interpret the vocabulary without this chat. S2 must decide whether this remains per-organ or becomes a shared registry pattern.
+
 ---
 
 ## Predicted effect
 
-After S1a.1 ships and the Claude post-implementation council ratifies it:
+After S1a.1 ships, the Claude post-implementation council ratifies it, and C1-C6 close:
 
 - `record_signal()` rejects out-of-vocabulary enum values with a clear error naming the closed vocabulary.
 - Existing legacy rows are automatically migrated/normalized without losing readability.
@@ -155,7 +163,8 @@ After S1a.1 ships and the Claude post-implementation council ratifies it:
 - A separate forensic surface handles dereferenceable access under explicit persistent audit.
 - `derived_signals()` skips malformed rows without displacing valid history; emits a malformed-row counter; rare valid signal classes cannot be hidden by high-volume valid chatter.
 - Signal names are sensitive metadata; only coarse `signal_class` reaches behavior.
-- Anatomy status moves from `[ ◐ scaffold + bounded access layer · pending S1a.1 hardening ]` to `[ ◐ scaffold + hardened access layer · ready for S1b wiring ]`. Between commit and Claude ratification, the honest intermediate status is `[ ◐ scaffold + hardened access layer · Claude S1a.1 council pending ]`.
+- S1b planning carries forward the human-primacy constraint: aggregate private-signal counts may shape pacing only if they do not pre-empt the bonded user naming the lived state.
+- Anatomy status moves from `[ ◐ scaffold + bounded access layer · pending S1a.1 hardening ]` to `[ ◐ scaffold + hardened access layer · ready for S1b wiring ]`.
 - NOT YET `[ ✓ real ]`. That requires S1b producers + consumers actually wired in production cycle behavior.
 - No production behavior change (no producer or consumer wired yet); ruff green; suite green; daemon stable.
 
@@ -170,6 +179,7 @@ If any of those drift, the slice did not ship.
 - Direct-SQL invalid rows: invented enum values do not surface on behavior path.
 - Schema-version round-trip: open a pre-S1a.1 DB, migrate it, write/read v1.0; insert a v2.0-hypothetical row and verify skip behavior.
 - Migration atomicity: schema migration is all-or-nothing; legacy rows remain readable through the normalization adapter.
+- Named rollback regression: `test_migration_failure_rolls_back_user_version_and_retries` simulates failure after DDL, verifies `PRAGMA user_version` and schema changes roll back, then reopens successfully.
 - `provenance` split: existing rows readable; new rows use split fields; no silent column reuse; legacy `provenance` maps through a checked table.
 - Forensic-vs-behavior path: integration test that constructs a signal, calls behavior `derived_signals()`, asserts no field exposes a dereferenceable handle, raw ID, detailed `signal_kind`, or raw text. Then calls forensic API, asserts dereference works AND emits an audit log entry before data returns.
 - Narrowed behavior object: `hasattr(reader, "get_thought")`, `hasattr(reader, "recent")`, and `hasattr(reader, "forensic_signals")` are false.
@@ -239,9 +249,10 @@ If the daemon crashes during S1a.1, stop. Capture the snapshot. Reopen the Dell 
 - Does NOT change anatomy status to `[ ✓ real ]` (requires S1b).
 - Does NOT generalize the schema globally — that's S2 (Contextual integrity at ingest).
 - Does NOT add new signal kinds beyond what's needed to validate the enum infrastructure (signal-kind enrichment is per-producer, in S1b and later).
+- Does NOT resolve the S1a.1↔S15 design alignment. The audit-before-handle pattern is structurally related to the future Sigstore Rekor attestation organ; the substrate-plan refresh must align those designs instead of rediscovering the shape later.
 
 The slice is scope-bounded by design. Anything that creeps beyond this list becomes its own slice with its own predicted effect.
 
 ---
 
-*Plan written 2026-05-13. Implementation session waits for cooling-off night, then proceeds with Codex six-agent → implementation → Claude six-role council → ratification.*
+*Plan written 2026-05-13. Updated after Claude six-role council ratification of `b913728`; C1-C6 mechanical closure recorded before S1b.*

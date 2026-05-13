@@ -6,6 +6,15 @@ This table defines the 2026 meaning of the closed vocabularies used by
 `memory/private_thoughts.db`. It exists so a future reader can interpret
 old private-thought records without this chat or an implementation diff.
 
+## Append-Only Contract
+
+Historic entries in this registry are append-only. Do not delete or rewrite
+old enum values, signal meanings, merge/split notes, or legacy mappings after
+they have appeared in a persisted record. If a value becomes wrong or unsafe,
+add a deprecation marker and a new row or note that explains the successor
+meaning. Future Maez must be able to read a 2026 private-thought record with
+the 2026 meaning intact, even if later organs generalize the registry.
+
 ## Versions
 
 | field | value | meaning |
@@ -60,3 +69,7 @@ S1a.1 preserves `provenance` as `legacy_provenance`.
 Behavior readers receive only `signal_class`, count/state, and
 `behavior_safe_coarse` sensitivity. Detailed `signal_kind`,
 `producer_id`, raw text, and dereferenceable handles are forensic-only.
+
+This registry is the first per-organ closed-vocabulary registry. S2 must decide
+whether future organs keep per-organ registries or adopt a shared substrate
+registry pattern.

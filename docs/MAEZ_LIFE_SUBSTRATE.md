@@ -29,7 +29,7 @@ Each row maps to one of the [eleven covenant invariants](MAEZ_NORTH_STAR.md#the-
 
 Plus the in-flight slice that is technically *not* one of the twelve but is foundational to several:
 
-| — | private_thoughts (S1) | #4 Interpretive Humility (in part) | `[ ◐ scaffold + hardened access layer · Claude S1a.1 council pending ]` | none |
+| — | private_thoughts (S1) | #4 Interpretive Humility (in part) | `[ ◐ scaffold + hardened access layer · ready for S1b wiring ]` | none |
 
 ---
 
@@ -85,14 +85,16 @@ Numbered S-codes are sequential session anchors. Each slice is its own session (
 The deliberation space many other organs need. See detailed S1 plan below.
 
 - **S1a** — bounded access layer (doorway). DONE 2026-05-13 in `c6df762`. Status `[ ◐ scaffold + bounded access layer ]`. Claude six-role council ran: RATIFY-WITH-AMENDMENTS. NOT promoted to `[ ✓ real ]`.
-- **S1a.1** — hardening. DONE 2026-05-13 in `b913728`. Status `[ ◐ scaffold + hardened access layer · Claude S1a.1 council pending ]`. Engineering-green; covenant ratification still pending.
-- **S1b** — wiring. One real producer (which interior state writes via `record_signal()` during a cycle?) and one real consumer (what does the cycle do with `derived_signals()` output?). BLOCKED on Claude post-implementation ratification of S1a.1.
+- **S1a.1** — hardening. DONE 2026-05-13 in `b913728`. Claude six-role council returned RATIFY-WITH-AMENDMENTS; C1-C6 mechanical closure moves status to `[ ◐ scaffold + hardened access layer · ready for S1b wiring ]`.
+- **S1b** — wiring. One real producer (which interior state writes via `record_signal()` during a cycle?) and one real consumer (what does the cycle do with `derived_signals()` output?). Unblocked after C1-C6 closure and cooling-off night; still NOT `[ ✓ real ]` until producers/consumers are in the production cycle.
 
 ### S2 — Contextual integrity at ingest
 
 The highest-leverage foundational organ. Every other organ writes memory; without ingest-side context tags this becomes a retrofit each time. S2 generalizes S1a.1's minimal schema (which is private_thoughts-scoped) into a global schema for all memory writes.
 
 Why second instead of first: S1 was already in flight before the canonization. The principle going forward: when planning a new organ that writes memory, S2's schema must exist OR the new organ ships with a per-organ minimal schema that S2 will later generalize.
+
+S2 registry question: S1a.1 introduced [`PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md`](PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md), an append-only registry for closed enum vocabularies. S2 must decide whether closed vocabularies stay in per-organ registry docs or move into a shared substrate registry pattern.
 
 ### S3 — Temporal spine
 
@@ -153,15 +155,15 @@ When a human is the right help, route OUTWARD. Do not absorb the need. The anti-
 
 **Verification:** `ruff` green on touched files; full suite green (3271 tests OK, 3 skipped); daemon alive under post-Dell-recovery normal Restart=on-failure posture (per [[`project_dell_repair_override_trigger`]]).
 
-**Review status:** Claude six-role council ran 2026-05-13. Verdict: **RATIFY-WITH-AMENDMENTS**. S1a stays in tree as unwired scaffold. `b913728` mechanically satisfied the hardening amendments, but S1b remains blocked until Claude ratifies the shipped S1a.1 implementation. NOT promoted to `[ ✓ real ]`.
+**Review status:** Claude six-role council ran 2026-05-13. Verdict: **RATIFY-WITH-AMENDMENTS**. S1a stays in tree as unwired scaffold. `b913728` mechanically satisfied the original hardening amendments; this follow-up closes the S1a.1 council amendments. NOT promoted to `[ ✓ real ]`.
 
-### S1a.1 — hardening (DONE, Claude council pending)
+### S1a.1 — hardening (DONE, COUNCIL-RATIFIED-WITH-AMENDMENTS)
 
 **Commit:** `b913728` (`feat(private-thoughts): harden S1a signal boundary`).
 
-**Implementation status:** Engineering-green. Codex pre-code panel blocked the loose plan, then approved only after the six amendments became mechanical. Claude six-role post-implementation council is still pending, so this is not yet unblocked for S1b wiring.
+**Implementation status:** Engineering-green and covenant-ratified-with-amendments. Codex pre-code panel blocked the loose plan, then approved only after the six amendments became mechanical. Claude six-role post-implementation council returned RATIFY-WITH-AMENDMENTS on 2026-05-13. C1-C6 are mechanical closure items, not redesign.
 
-Six concrete amendments from the Claude six-role council. Each must land before S1b can wire any producer or consumer.
+The shipped six hardening amendments:
 
 **Amendment 1: closed policy vocabularies.** `allowed_flows`, `consent_tier`, `retention` must become CLOSED enums with validators, not producer-supplied free strings. Producers cannot invent their own consent tiers. *(Logical seat.)*
 
@@ -177,14 +179,14 @@ Six concrete amendments from the Claude six-role council. Each must land before 
 
 ### Predicted effect for S1a.1
 
-After the hardening slice ships and Claude post-implementation council ratifies it:
+After the hardening slice ships, Claude post-implementation council ratifies it, and C1-C6 close:
 - `record_signal()` rejects out-of-vocabulary `consent_tier` / `allowed_flows` / `retention` values.
 - Every record carries `envelope_version` and `schema_version` fields.
 - `provenance` is split into `producer_id` + `signal_kind` (closed enum).
 - The behavior code path cannot reach raw private text (trace dereference is moved to a separate forensic-only audit pathway with its own auth/audit gates).
 - `derived_signals()` skips malformed rows and emits a counter for malformed-row count without displacing valid history.
 - Signal names are validated against a closed vocabulary or annotated with their own sensitivity tier.
-- Status moves from `[ ◐ scaffold + bounded access layer · pending S1a.1 hardening ]` to `[ ◐ scaffold + hardened access layer · ready for S1b wiring ]`. Until Claude ratifies `b913728`, the honest intermediate status is `[ ◐ scaffold + hardened access layer · Claude S1a.1 council pending ]`. NOT yet `[ ✓ real ]` — that requires S1b producers + consumers wired.
+- Status moves from `[ ◐ scaffold + bounded access layer · pending S1a.1 hardening ]` to `[ ◐ scaffold + hardened access layer · ready for S1b wiring ]`. NOT yet `[ ✓ real ]` — that requires S1b producers + consumers wired.
 
 ### S1a.1 review protocol
 
@@ -193,13 +195,21 @@ After the hardening slice ships and Claude post-implementation council ratifies 
 - Test strategy: unit tests for enum rejection, schema migration round-trip, malformed-row handling. Natural-text probe sweep per [[`feedback_test_with_natural_human_texts`]] to ensure no behavioral regression in the cycle (which doesn't yet read signals).
 - Live-daemon verification: post-Dell-recovery the daemon runs under `Restart=on-failure` per the operator-judgment pass. If any crash occurs during S1a.1 development, the Dell trigger reopens — see [[`project_dell_repair_override_trigger`]].
 
-### S1b — wiring (BLOCKED)
+### S1b — wiring (NEXT AFTER COOLING-OFF)
 
-After S1a.1 is ratified, S1b wires:
+After S1a.1 is ratified, C1-C6 close, and the cooling-off night passes, S1b wires:
 - One real producer — likely `inner_residue` or `temperament` writes via `record_signal()` during the cycle, with context metadata reflecting the producer's actual sensitivity tier.
 - One real consumer — the cycle reads via `derived_signals()` and uses the result to modulate something observable (gentle pacing? topic avoidance? tone shift?). Specific behavior to be designed in S1b's own predicted effect.
 
+S1b human-primacy constraint from Claude council C2: `signal_class` counts are still narrative-shape leakage. The consumer must not pre-empt the bonded user naming a rupture, crisis, soul objection, or other lived state. Aggregate private signals may slow, soften, or withhold behavior only if the predicted effect proves they do not become surfaced claims.
+
 S1b is a separate session, with its own cooling-off night before it.
+
+### Substrate-plan refresh watch-points
+
+- S1a.1's `PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md` establishes the registry-doc-per-closed-enum-vocab pattern. S2 must decide whether to generalize it.
+- S1a.1's audit-before-handle forensic pattern is structurally related to the planned S15 Sigstore Rekor attestation log. The next substrate-plan refresh must align the two instead of treating Rekor as unrelated research output.
+- The first live non-empty private-thought migration is a watch-point. S1a.1 verification had an empty production DB; future migrations with real private-thought rows must run the named rollback regression and inspect legacy readability.
 
 ---
 
@@ -223,4 +233,4 @@ S1b is a separate session, with its own cooling-off night before it.
 
 ---
 
-*Version 1.1  ·  2026-05-13  ·  S1a done (`c6df762`), S1a.1 shipped (`b913728`), Claude post-implementation council pending.*
+*Version 1.2  ·  2026-05-13  ·  S1a done (`c6df762`), S1a.1 shipped (`b913728`), Claude council ratified-with-amendments; C1-C6 closure recorded.*

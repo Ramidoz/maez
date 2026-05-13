@@ -6,7 +6,7 @@
                      designed to help that human's care cross distance —
                      not to become an enclosure around them.
 
-                                          version 2.3  ·  2026-05-13  (canonized into maez/docs, S1a status updated)
+                                          version 2.4  ·  2026-05-13  (S1a.1 council amendments closed)
 
 ════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
@@ -55,11 +55,12 @@
                                               │      ○  private_thoughts  │
                                               │         [ ◐ scaffold +    │ ◀── S1a doorway
                                               │           hardened access │     S1a.1 shipped
-                                              │           layer · Claude  │     b913728;
-                                              │           S1a.1 council   │     covenant
-                                              │           pending ]       │     ratification
-                                              │      ○  soul_objections   │     still gates S1b.
-                                              │         [ ✗ planned ]     │
+                                              │           layer · ready   │     b913728;
+                                              │           for S1b wiring ]│     closed enum
+                                              │      ○  soul_objections   │     registry:
+                                              │         [ ✗ planned ]     │     docs/PRIVATE_
+                                              │                           │     THOUGHTS_SIGNAL_
+                                              │                           │     REGISTRY.md
                                               ╰─────────────┬─────────────╯
                                                             │
                                                             │  brainstem  ↓
@@ -562,6 +563,6 @@
 
 ════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-   /home/rohit/ascii_studio/out/maez_anatomy.txt                          version 2.3  ·  2026-05-13  (canonized into maez/docs, S1a status updated)
+   /home/rohit/ascii_studio/out/maez_anatomy.txt                          version 2.4  ·  2026-05-13  (S1a.1 council amendments closed)
 
 ════════════════════════════════════════════════════════════════════════════════════════════════════════════
