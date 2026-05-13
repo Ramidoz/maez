@@ -205,3 +205,6 @@ Do not promote to `[ ✓ real ]` from S1b alone.
 - The restart loaded an audit-rail/envelope fix unrelated to S1b behavior.
 - Recent `logs/maez.log` after restart did not show `self_history population skipped` or `no such table: turns`.
 - Producer-only observation remains active; consumer remains disabled.
+- `0` residue rows is consistent with S1b scope: the observed Telegram audit
+  rewrite happened on the Telegram surface path, while S1b's `audit_rewrite`
+  producer hook is limited to daemon-cycle reasoning.

@@ -9,6 +9,16 @@ prompt, symptom, root cause, fix, and regression evidence.
 This catalog is not a prompt-tuning wishlist. Entries should close through
 root-cause fixes plus regression tests.
 
+Reuse rule: extend this catalog when a future natural conversation exposes a
+new mechanical or safety-rail-shaped failure. Do not replace the catalog with a
+fresh synthesis unless the entry format itself becomes insufficient.
+
+Observation distinction: S1b producer observation is scoped to daemon-cycle
+reasoning-residue events. Telegram-surface audit rewrites can be real geek-out
+events without producing S1b `reasoning_residue` rows. A zero S1b producer
+count after a Telegram audit rewrite is therefore not evidence that the
+Telegram rewrite did not happen; it is a scope boundary of S1b.
+
 ---
 
 ## Entry 1 - Recursive Grounded-Answer Fallback
