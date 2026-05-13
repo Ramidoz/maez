@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sqlite3
 import time
 from typing import Iterable
 
@@ -255,6 +256,30 @@ _log = logging.getLogger("maez.envelope")
 # from the ledger. Same as MAX_SELF_HISTORY on the class — kept as
 # a module-level alias for the free-function call sites.
 DEFAULT_SELF_HISTORY_LIMIT = 5
+
+
+def _has_turns_table(db_path: str) -> bool:
+    """Return True iff ``db_path`` is an initialized ledger DB.
+
+    A present-but-empty ``memory/ledger.db`` is expected before ledger
+    writes are authorized. Treat that as "self_history unavailable" rather
+    than logging a schema failure on every generation turn.
+    """
+    if not db_path or not os.path.exists(db_path):
+        return False
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'turns' LIMIT 1"
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+    except Exception:
+        # Let the normal recent_turns path handle and log real DB errors.
+        return True
 
 
 def _truncate(text: str, n: int) -> str:
@@ -826,6 +851,8 @@ class BoundedEnvelopeBuilder:
         recall_gestation: str = "user",
     ) -> list[dict]:
         if db_path is None or limit <= 0:
+            return []
+        if not _has_turns_table(db_path):
             return []
         try:
             rows = _rt.recent_turns_by_kind(

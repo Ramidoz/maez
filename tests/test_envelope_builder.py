@@ -209,6 +209,25 @@ class MissingDBTests(unittest.TestCase):
         self.assertEqual(env["signals_present"], ["ok"])
         envelope_schema.validate_envelope(env)
 
+    def test_uninitialized_ledger_returns_empty_self_history_without_noise(self):
+        # Production memory/ledger.db can exist before ledger writes are
+        # authorized. A zero-table SQLite file means "self_history is not
+        # live yet", not an operator-actionable schema failure on every turn.
+        path = Path(_TEST_DB_DIR) / f"empty_ledger_{os.urandom(4).hex()}.db"
+        path.touch()
+
+        with self.assertNoLogs("maez.envelope", level="DEBUG"):
+            env = envelope_builder.build_envelope(
+                ledger_db_path=str(path),
+                signals_present=["ok"],
+                signals_absent=[],
+                tool_results=[],
+            )
+
+        self.assertEqual(env["self_history"], [])
+        self.assertEqual(env["signals_present"], ["ok"])
+        envelope_schema.validate_envelope(env)
+
 
 class PassthroughTests(unittest.TestCase):
     def test_tool_results_passthrough(self):

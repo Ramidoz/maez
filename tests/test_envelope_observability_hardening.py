@@ -120,7 +120,7 @@ class SelfHistoryPopulationLoggingTests(unittest.TestCase):
 
     def test_lookup_failure_logs_debug(self):
         # Force the recent-turns lookup to raise.
-        with patch.object(
+        with patch.object(eb, "_has_turns_table", return_value=True), patch.object(
             eb._rt, "recent_turns_by_kind",
             side_effect=RuntimeError("simulated DB lock"),
         ):
