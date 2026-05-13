@@ -382,6 +382,54 @@ class PrivateThoughtsS1bTest(unittest.TestCase):
         cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
         self.assertTrue(cfg["consumer_enabled"])
 
+    def test_duty_cycle_parameters_are_loaded_from_config(self) -> None:
+        from core.infra.private_thoughts_s1b import load_s1b_config
+
+        self.config_path.write_text(
+            json.dumps(
+                {
+                    "producer_enabled": True,
+                    "consumer_enabled": True,
+                    "duty_cycle_window_seconds": 3600,
+                    "duty_cycle_min_samples": 9,
+                    "duty_cycle_max_dampened_ratio": 0.95,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        cfg = load_s1b_config(config_path=self.config_path)
+
+        self.assertEqual(cfg.duty_cycle_window_seconds, 3600)
+        self.assertEqual(cfg.duty_cycle_min_samples, 9)
+        self.assertEqual(cfg.duty_cycle_max_dampened_ratio, 0.95)
+
+    def test_consumer_self_disable_uses_configured_duty_cycle_threshold(self) -> None:
+        from core.infra.private_thoughts_s1b import PrivateThoughtsS1bConsumer
+
+        self.config_path.write_text(
+            json.dumps(
+                {
+                    "producer_enabled": True,
+                    "consumer_enabled": True,
+                    "duty_cycle_min_samples": 3,
+                    "duty_cycle_max_dampened_ratio": 1.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        consumer = PrivateThoughtsS1bConsumer(
+            db_path=self.db_path,
+            audit_db_path=self.audit_db_path,
+            config_path=self.config_path,
+        )
+
+        for offset in (0, 100, 200):
+            consumer.record_optional_presentation(dampened=True, now=1_000_000.0 + offset)
+
+        cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertTrue(cfg["consumer_enabled"])
+
 
 class _FakeProducer:
     def __init__(self) -> None:

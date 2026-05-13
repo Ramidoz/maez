@@ -1,6 +1,6 @@
 # Slice S1b - private_thoughts minimal wiring
 
-**Status:** IMPLEMENTED in code, pending post-implementation Codex review and Claude council ratification. Not yet promoted beyond scaffold/minimal-wiring status.
+**Status:** IMPLEMENTED in code, post-implementation Codex and Claude councils ratified with P1-P3 mechanical amendments. Observation is pending; not yet promoted beyond scaffold/minimal-wiring status.
 
 **Predecessors:**
 - `c6df762` - S1a bounded access layer.
@@ -11,6 +11,7 @@
 **Council inputs:**
 - [`S1B_PRE_SPEC_CLAUDE_COUNCIL_NOTES.md`](S1B_PRE_SPEC_CLAUDE_COUNCIL_NOTES.md), which ratified Option 1 with amendments D1-D10.
 - [`S1B_SPEC_CLAUDE_COUNCIL_REVIEW.md`](S1B_SPEC_CLAUDE_COUNCIL_REVIEW.md), which ratified this spec with amendments E1-E12.
+- [`S1B_IMPLEMENTATION_CLAUDE_COUNCIL_REVIEW.md`](S1B_IMPLEMENTATION_CLAUDE_COUNCIL_REVIEW.md), which ratified the implementation with P1-P3 mechanical amendments.
 
 **Codex draft review:** Dewey, Feynman, Locke, Descartes, Ohm, and Goodall reviewed this draft before implementation. Verdict: **RATIFY-WITH-AMENDMENTS**. The folded amendments are named in [Codex draft-review amendments](#codex-draft-review-amendments).
 
@@ -354,10 +355,11 @@ Implementation must add tests proving canonical stored text remains unchanged wh
 
 The observe gate blocks near-constant residue before activation. S1b also needs a production guard after activation.
 
-If consumer dampening becomes near-default in production, S1b self-disables the consumer and writes a content-free operator-visible audit summary. Initial thresholds:
-- dampened optional presentations exceed 30% of local optional presentation opportunities over 24 hours;
-- active residue is present in more than 50% of sampled windows over 24 hours;
-- rate-limit summaries occur more than once in a 24-hour window.
+If consumer dampening becomes near-default in production, S1b self-disables the consumer and writes a content-free operator-visible audit summary. Default implementation thresholds:
+- dampened optional presentations exceed 80% of local optional presentation opportunities over 24 hours;
+- at least 3 local optional presentation samples exist inside that 24-hour window.
+
+These thresholds are retunable through `config/private_thoughts_s1b.local.json` using `duty_cycle_window_seconds`, `duty_cycle_min_samples`, and `duty_cycle_max_dampened_ratio`. Rate-limit summaries remain operator-observable, but they do not currently drive the consumer self-disable threshold.
 
 Self-disable affects only `consumer_enabled`; the producer may continue recording bounded signals unless its own cap is breached or the operator disables it. Re-enabling the consumer after self-disable requires operator action and a new predicted effect if tuning changes.
 
@@ -507,7 +509,7 @@ After S1b implementation ships and both panels ratify it:
 - Demonstrator probe uses a fresh empty temp DB, not a live DB copy.
 - Logs expose content-free observability counters.
 - Turning the consumer flag off returns behavior to neutral without schema rollback.
-- Anatomy status may move only to `[ ◐ scaffold + minimal wiring ]` unless the post-implementation councils explicitly ratify a stronger status.
+- Anatomy status may move to `[ ◐ scaffold + minimal wiring · councils ratified · observation pending ]`. Stronger promotion requires the observation criteria below.
 
 If any direct user reply changes due to S1b, any canonical memory/audit text is modified by S1b dampening, or any user-facing text names private signals, the slice fails.
 

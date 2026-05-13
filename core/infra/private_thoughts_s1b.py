@@ -39,14 +39,16 @@ logger = logging.getLogger("maez")
 
 S1B_SENTINEL_CONTENT = "s1b_reasoning_residue_event"
 S1B_PRODUCER_VERSION = "s1b.1"
+# A 30-minute recency window spans several daemon cycles without letting
+# one transient retry shape the whole day of local presentation.
 DEFAULT_ACTIVE_WINDOW_SECONDS = 30 * 60
 DEFAULT_HOURLY_WRITE_CAP = 20
 DEFAULT_OPTIONAL_OUTPUT_SENTENCE_CAP = 1
 DEFAULT_BUSY_TIMEOUT_MS = 500
 DEFAULT_CONFIG_PATH = paths.config_dir() / "private_thoughts_s1b.local.json"
-S1B_DUTY_CYCLE_WINDOW_SECONDS = 24 * 60 * 60
-S1B_DUTY_CYCLE_MIN_SAMPLES = 3
-S1B_DUTY_CYCLE_MAX_DAMPENED_RATIO = 0.80
+DEFAULT_DUTY_CYCLE_WINDOW_SECONDS = 24 * 60 * 60
+DEFAULT_DUTY_CYCLE_MIN_SAMPLES = 3
+DEFAULT_DUTY_CYCLE_MAX_DAMPENED_RATIO = 0.80
 
 S1B_EVENT_PRIORITY: tuple[str, ...] = (
     "retry_failed",
@@ -114,6 +116,9 @@ class S1bConfig:
     hourly_write_cap: int = DEFAULT_HOURLY_WRITE_CAP
     optional_output_sentence_cap: int = DEFAULT_OPTIONAL_OUTPUT_SENTENCE_CAP
     busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS
+    duty_cycle_window_seconds: int = DEFAULT_DUTY_CYCLE_WINDOW_SECONDS
+    duty_cycle_min_samples: int = DEFAULT_DUTY_CYCLE_MIN_SAMPLES
+    duty_cycle_max_dampened_ratio: float = DEFAULT_DUTY_CYCLE_MAX_DAMPENED_RATIO
 
 
 @dataclass(frozen=True)
@@ -165,6 +170,14 @@ def _as_positive_int(value: object, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
+
+
+def _as_ratio(value: object, default: float) -> float:
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return parsed if 0.0 <= parsed <= 1.0 else default
 
 
 def load_s1b_config(*, config_path: Path | str | None = None) -> S1bConfig:
@@ -222,6 +235,18 @@ def load_s1b_config(*, config_path: Path | str | None = None) -> S1bConfig:
         busy_timeout_ms=_as_positive_int(
             file_values.get("busy_timeout_ms"),
             DEFAULT_BUSY_TIMEOUT_MS,
+        ),
+        duty_cycle_window_seconds=_as_positive_int(
+            file_values.get("duty_cycle_window_seconds"),
+            DEFAULT_DUTY_CYCLE_WINDOW_SECONDS,
+        ),
+        duty_cycle_min_samples=_as_positive_int(
+            file_values.get("duty_cycle_min_samples"),
+            DEFAULT_DUTY_CYCLE_MIN_SAMPLES,
+        ),
+        duty_cycle_max_dampened_ratio=_as_ratio(
+            file_values.get("duty_cycle_max_dampened_ratio"),
+            DEFAULT_DUTY_CYCLE_MAX_DAMPENED_RATIO,
         ),
     )
 
@@ -618,28 +643,29 @@ class PrivateThoughtsS1bConsumer:
                 "dampened": bool(dampened),
             },
         )
-        total, dampened_count = self._presentation_counts(now=now)
+        cfg = load_s1b_config(config_path=self.config_path)
+        total, dampened_count = self._presentation_counts(now=now, cfg=cfg)
         if (
-            total >= S1B_DUTY_CYCLE_MIN_SAMPLES
-            and dampened_count / max(1, total) > S1B_DUTY_CYCLE_MAX_DAMPENED_RATIO
+            total >= cfg.duty_cycle_min_samples
+            and dampened_count / max(1, total) > cfg.duty_cycle_max_dampened_ratio
         ):
             self._disable_consumer_in_config()
             self._record_consumer_audit(
                 action="private_thoughts_s1b.consumer_self_disabled",
                 params={
                     "producer_version": S1B_PRODUCER_VERSION,
-                    "window_seconds": S1B_DUTY_CYCLE_WINDOW_SECONDS,
+                    "window_seconds": cfg.duty_cycle_window_seconds,
                     "sample_count": total,
                     "dampened_count": dampened_count,
-                    "max_dampened_ratio": S1B_DUTY_CYCLE_MAX_DAMPENED_RATIO,
+                    "max_dampened_ratio": cfg.duty_cycle_max_dampened_ratio,
                 },
             )
 
-    def _presentation_counts(self, *, now: float) -> tuple[int, int]:
+    def _presentation_counts(self, *, now: float, cfg: S1bConfig) -> tuple[int, int]:
         audit_db_path = self._audit_db_path()
         if not audit_db_path.exists():
             return (0, 0)
-        cutoff = now - S1B_DUTY_CYCLE_WINDOW_SECONDS
+        cutoff = now - cfg.duty_cycle_window_seconds
         try:
             with sqlite3.connect(audit_db_path) as conn:
                 rows = conn.execute(
