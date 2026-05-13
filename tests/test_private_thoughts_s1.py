@@ -7,7 +7,7 @@ These tests pin the first post-scaffold shape:
 
 - producers write through a minimal contextual-integrity envelope;
 - raw private-thought content stays private;
-- the bounded reader returns derived signals plus trace ids, not text.
+- the bounded reader returns coarse derived signals, never trace ids or text.
 """
 
 from __future__ import annotations
@@ -18,7 +18,8 @@ import unittest
 from pathlib import Path
 import sqlite3
 
-from core.infra.private_thoughts import PrivateThoughts
+import core.infra.private_thoughts as private_thoughts_module
+from core.infra.private_thoughts import PrivateThoughts, ProducerId, SignalKind
 
 
 class TestPrivateThoughtsS1(unittest.TestCase):
@@ -29,6 +30,45 @@ class TestPrivateThoughtsS1(unittest.TestCase):
 
     def tearDown(self) -> None:
         self._td.cleanup()
+
+    def assertNoBehaviorTraceHandles(self, derived: dict) -> None:
+        self.assertNotIn("trace_ids", derived)
+        self.assertNotIn("thought_id", str(derived))
+        self.assertNotIn("trace_id", str(derived))
+
+    def insert_raw_private_thought(
+        self,
+        *,
+        ts: float,
+        content: str,
+        provenance: str,
+        context: dict | str,
+        memory_phase: str = "gestation",
+        extra_columns: dict | None = None,
+    ) -> int:
+        context_json = context if isinstance(context, str) else json.dumps(context)
+        columns = [
+            "ts",
+            "content",
+            "provenance",
+            "context_json",
+            "memory_phase",
+        ]
+        values = [ts, content, provenance, context_json, memory_phase]
+        for key, value in (extra_columns or {}).items():
+            columns.append(key)
+            values.append(value)
+        placeholders = ", ".join("?" for _ in columns)
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cur = conn.execute(
+                f"INSERT INTO private_thoughts ({', '.join(columns)}) VALUES ({placeholders})",
+                values,
+            )
+            conn.commit()
+            return int(cur.lastrowid)
+        finally:
+            conn.close()
 
     def test_record_signal_writes_contextual_integrity_envelope(self) -> None:
         thought_id = self.store.record_signal(
@@ -133,17 +173,16 @@ class TestPrivateThoughtsS1(unittest.TestCase):
 
         self.assertTrue(derived["bounded"])
         self.assertEqual(derived["limit"], 10)
-        self.assertEqual(derived["counts"]["crisis_signal_held"], 1)
-        self.assertEqual(derived["counts"]["rupture_unhealed"], 1)
-        self.assertEqual(derived["signals"]["crisis_awareness"], "present")
-        self.assertEqual(derived["signals"]["unhealed_rupture"], "present")
+        self.assertIsInstance(crisis_id, int)
+        self.assertIsInstance(rupture_id, int)
+        self.assertNoBehaviorTraceHandles(derived)
         self.assertEqual(
-            derived["trace_ids"]["crisis_signal_held"],
-            [crisis_id],
+            derived["signal_classes"]["crisis_routing"]["state"],
+            "present",
         )
         self.assertEqual(
-            derived["trace_ids"]["rupture_unhealed"],
-            [rupture_id],
+            derived["signal_classes"]["bond_repair"]["state"],
+            "present",
         )
         self.assertNotIn("content", str(derived).lower())
         self.assertNotIn("route to humans", str(derived))
@@ -166,8 +205,14 @@ class TestPrivateThoughtsS1(unittest.TestCase):
 
         derived = self.store.derived_signals(limit=10)
 
-        self.assertEqual(derived["counts"]["audit_held"], 1)
-        self.assertEqual(derived["signals"]["audit_held_awareness"], "present")
+        self.assertEqual(
+            derived["signal_classes"]["audit_awareness"]["count"],
+            1,
+        )
+        self.assertEqual(
+            derived["signal_classes"]["audit_awareness"]["state"],
+            "present",
+        )
 
     def test_bounded_reader_requires_private_reader_flow(self) -> None:
         hidden_id = self.store.record_signal(
@@ -191,25 +236,21 @@ class TestPrivateThoughtsS1(unittest.TestCase):
 
         derived = self.store.derived_signals(limit=10)
 
-        self.assertEqual(derived["counts"]["audit_held"], 1)
-        self.assertEqual(derived["trace_ids"]["audit_held"], [visible_id])
-        self.assertNotIn(hidden_id, derived["trace_ids"]["audit_held"])
+        self.assertEqual(
+            derived["signal_classes"]["audit_awareness"]["count"],
+            1,
+        )
+        self.assertIsInstance(hidden_id, int)
+        self.assertIsInstance(visible_id, int)
+        self.assertNoBehaviorTraceHandles(derived)
 
     def test_bounded_reader_ignores_malformed_existing_producer_rows(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
-            cur = conn.execute(
-                "INSERT INTO private_thoughts "
-                "(ts, content, provenance, context_json, memory_phase) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (
-                    1.0,
-                    "Malformed row created outside the API.",
-                    "audit_held",
-                    "{}",
-                    "gestation",
-                ),
-            )
-            malformed_id = int(cur.lastrowid)
+        malformed_id = self.insert_raw_private_thought(
+            ts=1.0,
+            content="Malformed row created outside the API.",
+            provenance="audit_held",
+            context="{}",
+        )
 
         visible_id = self.store.record_signal(
             content="Well-formed row created through the producer API.",
@@ -223,9 +264,14 @@ class TestPrivateThoughtsS1(unittest.TestCase):
 
         derived = self.store.derived_signals(limit=10)
 
-        self.assertEqual(derived["counts"]["audit_held"], 1)
-        self.assertEqual(derived["trace_ids"]["audit_held"], [visible_id])
-        self.assertNotIn(malformed_id, derived["trace_ids"]["audit_held"])
+        self.assertEqual(
+            derived["signal_classes"]["audit_awareness"]["count"],
+            1,
+        )
+        self.assertEqual(derived["malformed_signal_row_count"], 1)
+        self.assertIsInstance(malformed_id, int)
+        self.assertIsInstance(visible_id, int)
+        self.assertNoBehaviorTraceHandles(derived)
 
     def test_bounded_reader_ignores_partially_malformed_context(self) -> None:
         bad_context = {
@@ -235,20 +281,12 @@ class TestPrivateThoughtsS1(unittest.TestCase):
             "retention": "until_reviewed",
             "allowed_flows": ["private_reader", 123],
         }
-        with sqlite3.connect(self.db_path) as conn:
-            cur = conn.execute(
-                "INSERT INTO private_thoughts "
-                "(ts, content, provenance, context_json, memory_phase) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (
-                    1.0,
-                    "Partially malformed row created outside the API.",
-                    "audit_held",
-                    json.dumps(bad_context),
-                    "gestation",
-                ),
-            )
-            malformed_id = int(cur.lastrowid)
+        malformed_id = self.insert_raw_private_thought(
+            ts=1.0,
+            content="Partially malformed row created outside the API.",
+            provenance="audit_held",
+            context=bad_context,
+        )
 
         visible_id = self.store.record_signal(
             content="Well-formed row created through the producer API.",
@@ -262,9 +300,14 @@ class TestPrivateThoughtsS1(unittest.TestCase):
 
         derived = self.store.derived_signals(limit=10)
 
-        self.assertEqual(derived["counts"]["audit_held"], 1)
-        self.assertEqual(derived["trace_ids"]["audit_held"], [visible_id])
-        self.assertNotIn(malformed_id, derived["trace_ids"]["audit_held"])
+        self.assertEqual(
+            derived["signal_classes"]["audit_awareness"]["count"],
+            1,
+        )
+        self.assertEqual(derived["malformed_signal_row_count"], 1)
+        self.assertIsInstance(malformed_id, int)
+        self.assertIsInstance(visible_id, int)
+        self.assertNoBehaviorTraceHandles(derived)
 
     def test_bounded_reader_ignores_unknown_provenance_rows(self) -> None:
         context = {
@@ -274,20 +317,12 @@ class TestPrivateThoughtsS1(unittest.TestCase):
             "retention": "until_reviewed",
             "allowed_flows": ["private_reader"],
         }
-        with sqlite3.connect(self.db_path) as conn:
-            cur = conn.execute(
-                "INSERT INTO private_thoughts "
-                "(ts, content, provenance, context_json, memory_phase) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (
-                    1.0,
-                    "Unknown provenance row created outside the API.",
-                    "unknown_external",
-                    json.dumps(context),
-                    "gestation",
-                ),
-            )
-            unknown_id = int(cur.lastrowid)
+        unknown_id = self.insert_raw_private_thought(
+            ts=1.0,
+            content="Unknown provenance row created outside the API.",
+            provenance="unknown_external",
+            context=context,
+        )
 
         visible_id = self.store.record_signal(
             content="Well-formed row created through the producer API.",
@@ -301,10 +336,369 @@ class TestPrivateThoughtsS1(unittest.TestCase):
 
         derived = self.store.derived_signals(limit=10)
 
-        self.assertNotIn("unknown_external", derived["counts"])
-        self.assertNotIn("unknown_external", derived["trace_ids"])
-        self.assertEqual(derived["trace_ids"]["audit_held"], [visible_id])
-        self.assertNotIn(unknown_id, derived["trace_ids"]["audit_held"])
+        self.assertNotIn("unknown_external", str(derived))
+        self.assertEqual(
+            derived["signal_classes"]["audit_awareness"]["count"],
+            1,
+        )
+        self.assertEqual(derived["malformed_signal_row_count"], 1)
+        self.assertIsInstance(unknown_id, int)
+        self.assertIsInstance(visible_id, int)
+        self.assertNoBehaviorTraceHandles(derived)
+
+    def test_s1a1_migrates_schema_columns_for_future_readability(self) -> None:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(private_thoughts)").fetchall()
+            }
+        finally:
+            conn.close()
+
+        self.assertTrue(
+            {
+                "envelope_version",
+                "schema_version",
+                "legacy_provenance",
+                "producer_id",
+                "signal_kind",
+                "signal_class",
+                "surface_sensitivity",
+                "signal_state",
+            }.issubset(columns)
+        )
+
+    def test_record_signal_rejects_unknown_closed_vocab_values(self) -> None:
+        with self.assertRaisesRegex(ValueError, "ConsentTier"):
+            self.store.record_signal(
+                content="Invalid consent tier should not write.",
+                provenance="audit_held",
+                source="audit_rail",
+                subject="maez_output",
+                consent_tier="public",
+                retention="until_reviewed",
+                allowed_flows=("private_reader",),
+            )
+        with self.assertRaisesRegex(ValueError, "AllowedFlow"):
+            self.store.record_signal(
+                content="Invalid flow should not write.",
+                provenance="audit_held",
+                source="audit_rail",
+                subject="maez_output",
+                consent_tier="owner_private",
+                retention="until_reviewed",
+                allowed_flows=("private_reader", "raw_export"),
+            )
+        with self.assertRaisesRegex(ValueError, "RetentionRule"):
+            self.store.record_signal(
+                content="Invalid retention should not write.",
+                provenance="audit_held",
+                source="audit_rail",
+                subject="maez_output",
+                consent_tier="owner_private",
+                retention="forever",
+                allowed_flows=("private_reader",),
+            )
+
+    def test_record_signal_rejects_mismatched_producer_for_kind(self) -> None:
+        with self.assertRaisesRegex(ValueError, "producer_id"):
+            self.store.record_signal(
+                content="Valid enums but invalid producer/kind pair.",
+                signal_kind="audit_held",
+                producer_id="crisis_detector",
+                source="audit_rail",
+                subject="maez_output",
+                consent_tier="owner_private",
+                retention="until_reviewed",
+                allowed_flows=("private_reader",),
+            )
+
+    def test_record_signal_accepts_enum_instances(self) -> None:
+        thought_id = self.store.record_signal(
+            content="Enum inputs should use their values, not repr strings.",
+            signal_kind=SignalKind.AUDIT_HELD,
+            producer_id=ProducerId.AUDIT_RAIL,
+            source="audit_rail",
+            subject="maez_output",
+            consent_tier="owner_private",
+            retention="until_reviewed",
+            allowed_flows=("private_reader",),
+        )
+
+        row = self.store.get_thought(thought_id)
+        self.assertEqual(row["signal_kind"], "audit_held")
+        self.assertEqual(row["producer_id"], "audit_rail")
+
+    def test_direct_sql_invalid_vocab_row_does_not_surface_to_behavior(self) -> None:
+        context = {
+            "source": "audit_rail",
+            "subject": "maez_output",
+            "consent_tier": "ultra_secret",
+            "retention": "forever",
+            "allowed_flows": ["private_reader", "raw_export"],
+        }
+        bad_id = self.insert_raw_private_thought(
+            ts=99.0,
+            content="Direct SQL row with invented governance vocabulary.",
+            provenance="audit_held",
+            context=context,
+        )
+
+        derived = self.store.derived_signals(limit=10)
+
+        self.assertEqual(
+            derived["signal_classes"]["audit_awareness"]["state"],
+            "absent",
+        )
+        self.assertGreaterEqual(derived["malformed_signal_row_count"], 1)
+        self.assertIsInstance(bad_id, int)
+        self.assertNoBehaviorTraceHandles(derived)
+
+    def test_direct_sql_invalid_top_level_enum_row_does_not_surface(self) -> None:
+        context = {
+            "source": "audit_rail",
+            "subject": "maez_output",
+            "consent_tier": "owner_private",
+            "retention": "until_reviewed",
+            "allowed_flows": ["private_reader"],
+        }
+        self.insert_raw_private_thought(
+            ts=100.0,
+            content="Top-level enum columns are invented.",
+            provenance="audit_held",
+            context=context,
+            extra_columns={
+                "producer_id": "crisis_detector",
+                "signal_kind": "audit_held",
+                "signal_class": "invented_class",
+                "surface_sensitivity": "invented_sensitivity",
+                "signal_state": "invented_state",
+            },
+        )
+
+        derived = self.store.derived_signals(limit=10)
+
+        self.assertEqual(
+            derived["signal_classes"]["audit_awareness"]["state"],
+            "absent",
+        )
+        self.assertEqual(derived["malformed_signal_row_count"], 1)
+
+    def test_future_version_rows_are_not_mutated_on_reopen(self) -> None:
+        context = {
+            "source": "future_writer",
+            "subject": "maez_output",
+            "consent_tier": "owner_private",
+            "retention": "until_reviewed",
+            "allowed_flows": ["private_reader"],
+        }
+        future_id = self.insert_raw_private_thought(
+            ts=101.0,
+            content="Future row must be skipped, not rewritten.",
+            provenance="future_kind",
+            context=context,
+            extra_columns={
+                "envelope_version": "2.0",
+                "schema_version": "2.0",
+                "legacy_provenance": "future_kind",
+                "producer_id": "future_writer",
+                "signal_kind": "future_kind",
+                "signal_class": "future_class",
+                "surface_sensitivity": "future_sensitivity",
+                "signal_state": "future_state",
+            },
+        )
+
+        PrivateThoughts(db_path=self.db_path)
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT envelope_version, schema_version, producer_id, "
+                "signal_kind, signal_class, surface_sensitivity, signal_state "
+                "FROM private_thoughts WHERE thought_id = ?",
+                (future_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(
+            row,
+            (
+                "2.0",
+                "2.0",
+                "future_writer",
+                "future_kind",
+                "future_class",
+                "future_sensitivity",
+                "future_state",
+            ),
+        )
+
+    def test_newer_user_version_refuses_downgrade(self) -> None:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute("PRAGMA user_version = 999")
+            conn.commit()
+        finally:
+            conn.close()
+
+        with self.assertRaisesRegex(RuntimeError, "newer than this code"):
+            PrivateThoughts(db_path=self.db_path)
+
+    def test_behavior_reader_is_narrow_capability(self) -> None:
+        reader = self.store.behavior_reader()
+
+        self.assertFalse(hasattr(reader, "get_thought"))
+        self.assertFalse(hasattr(reader, "recent"))
+        self.assertFalse(hasattr(reader, "forensic_signals"))
+        self.assertFalse(hasattr(reader, "_store"))
+        self.assertTrue(callable(reader.derived_signals))
+
+    def test_malformed_recent_rows_do_not_crowd_out_valid_older_rows(self) -> None:
+        for ts in (1.0, 2.0, 3.0):
+            self.insert_raw_private_thought(
+                ts=ts,
+                content=f"Valid old audit row {ts}.",
+                provenance="audit_held",
+                context={
+                    "source": "audit_rail",
+                    "subject": "maez_output",
+                    "consent_tier": "owner_private",
+                    "retention": "until_reviewed",
+                    "allowed_flows": ["private_reader"],
+                },
+                extra_columns={
+                    "producer_id": "audit_rail",
+                    "signal_kind": "audit_held",
+                    "signal_class": "audit_awareness",
+                    "surface_sensitivity": "forensic_sensitive",
+                    "signal_state": "active",
+                },
+            )
+        for ts in (10.0, 11.0, 12.0, 13.0, 14.0):
+            self.insert_raw_private_thought(
+                ts=ts,
+                content=f"Malformed recent audit row {ts}.",
+                provenance="audit_held",
+                context="{}",
+            )
+
+        derived = self.store.derived_signals(limit=3)
+
+        self.assertEqual(
+            derived["signal_classes"]["audit_awareness"]["count"],
+            3,
+        )
+        self.assertEqual(derived["malformed_signal_row_count"], 5)
+        self.assertFalse(derived["scan_truncated"])
+
+    def test_high_volume_valid_rows_do_not_hide_rare_valid_class(self) -> None:
+        self.store.record_signal(
+            content="Rare crisis row should remain visible as a class.",
+            provenance="crisis_signal_held",
+            source="crisis_detector",
+            subject="bonded_user_state",
+            consent_tier="owner_private",
+            retention="until_routed",
+            allowed_flows=("private_reader", "crisis_channel"),
+        )
+        for i in range(25):
+            self.store.record_signal(
+                content=f"Noisy reasoning residue {i}.",
+                provenance="reasoning_residue",
+                source="reasoning_residue",
+                subject="maez_state",
+                consent_tier="owner_private",
+                retention="until_reviewed",
+                allowed_flows=("private_reader",),
+            )
+
+        derived = self.store.derived_signals(limit=5)
+
+        self.assertEqual(
+            derived["signal_classes"]["crisis_routing"]["state"],
+            "present",
+        )
+        self.assertGreaterEqual(
+            derived["signal_classes"]["reasoning_residue"]["count"],
+            1,
+        )
+
+    def test_record_signal_normal_log_excludes_handles_and_sensitive_kind(self) -> None:
+        with self.assertLogs("maez", level="INFO") as captured:
+            self.store.record_signal(
+                content="Sensitive kind must not appear in normal daemon logs.",
+                provenance="crisis_signal_held",
+                source="crisis_detector",
+                subject="bonded_user_state",
+                consent_tier="owner_private",
+                retention="until_routed",
+                allowed_flows=("private_reader", "crisis_channel"),
+            )
+
+        log_text = "\n".join(captured.output)
+        self.assertNotIn("thought_id", log_text)
+        self.assertNotIn("crisis_signal_held", log_text)
+        self.assertIn("private signal recorded", log_text.lower())
+
+    def test_forensic_access_requires_and_records_audit_before_handles(self) -> None:
+        thought_id = self.store.record_signal(
+            content="Forensic-only private text.",
+            provenance="audit_held",
+            source="audit_rail",
+            subject="maez_output",
+            consent_tier="owner_private",
+            retention="until_reviewed",
+            allowed_flows=("private_reader", "audit_trace"),
+        )
+        forensics_cls = getattr(
+            private_thoughts_module,
+            "PrivateThoughtsForensics",
+            None,
+        )
+        self.assertIsNotNone(forensics_cls)
+        audit_db = Path(self._td.name) / "audit_log.db"
+        forensics = forensics_cls(self.db_path, audit_db_path=audit_db)
+        self.assertFalse(hasattr(forensics, "store"))
+
+        with self.assertRaisesRegex(ValueError, "reason"):
+            forensics.forensic_signals(reason="", audit_to="operator")
+
+        rows = forensics.forensic_signals(
+            reason="operator diagnostic",
+            audit_to="operator",
+        )
+
+        self.assertEqual(rows["trace_ids"]["audit_held"], [thought_id])
+        conn = sqlite3.connect(audit_db)
+        try:
+            row = conn.execute(
+                "SELECT params_json FROM audit_log WHERE "
+                "action = 'private_thoughts.forensic_signals'"
+            ).fetchone()
+        finally:
+            conn.close()
+        params = json.loads(row[0])
+        self.assertEqual(params["returned_handle_count"], 1)
+        self.assertIn("returned_handles_sha256", params)
+
+    def test_behavior_packages_do_not_import_raw_private_thought_surfaces(self) -> None:
+        forbidden = (
+            "PrivateThoughtsForensics",
+            "get_thought",
+            "forensic_signals",
+        )
+        roots = [Path("core/brain"), Path("core/cognition"), Path("core/actions")]
+        offenders: list[str] = []
+        for root in roots:
+            for path in root.rglob("*.py"):
+                text = path.read_text(encoding="utf-8")
+                if "private_thoughts" not in text:
+                    continue
+                for token in forbidden:
+                    if token in text:
+                        offenders.append(f"{path}:{token}")
+        self.assertEqual(offenders, [])
 
 
 if __name__ == "__main__":

@@ -81,16 +81,12 @@ def _make_synthetic_state(root: Path) -> dict[str, Path]:
     paths["identity"] = root / "config" / "identity.yaml"
 
     # Secret file
-    (root / "config" / "credentials.json").write_text(
-        '{"api_key": "fake-secret-not-real"}'
-    )
+    (root / "config" / "credentials.json").write_text('{"api_key": "fake-secret-not-real"}')
     paths["secret"] = root / "config" / "credentials.json"
 
     # Glob target
     (root / "logs" / "traces").mkdir(parents=True, exist_ok=True)
-    (root / "logs" / "traces" / "2026-04-30.jsonl").write_text(
-        '{"turn": 1, "text": "hi"}\n'
-    )
+    (root / "logs" / "traces" / "2026-04-30.jsonl").write_text('{"turn": 1, "text": "hi"}\n')
     paths["trace"] = root / "logs" / "traces" / "2026-04-30.jsonl"
 
     return paths
@@ -103,15 +99,11 @@ def _synthetic_manifest() -> dict:
         "version": 1,
         "secret_warning": "test warning",
         "entries": [
-            {"type": "sqlite_db", "path": "memory/audit_log.db",
-             "required": False},
+            {"type": "sqlite_db", "path": "memory/audit_log.db", "required": False},
             {"type": "directory", "path": "memory/db", "required": False},
-            {"type": "file", "path": "memory/continuity_capsule.json",
-             "required": False},
-            {"type": "file", "path": "config/identity.yaml",
-             "required": True},
-            {"type": "glob", "path": "logs/traces/*.jsonl",
-             "required": False},
+            {"type": "file", "path": "memory/continuity_capsule.json", "required": False},
+            {"type": "file", "path": "config/identity.yaml", "required": True},
+            {"type": "glob", "path": "logs/traces/*.jsonl", "required": False},
             {"type": "secret_file", "path": "config/credentials.json"},
         ],
     }
@@ -128,12 +120,13 @@ class TestInventoryResolution(unittest.TestCase):
             root = Path(td)
             _make_synthetic_state(root)
             resolved = resolve_inventory(
-                _synthetic_manifest(), root, include_secrets=False,
+                _synthetic_manifest(),
+                root,
+                include_secrets=False,
             )
         types = {r["type"] for r in resolved}
         self.assertEqual(types, {"sqlite_db", "directory", "file", "glob"})
-        self.assertNotIn("secret_file", types,
-                         "secret excluded by default")
+        self.assertNotIn("secret_file", types, "secret excluded by default")
 
     def test_glob_expansion_returns_concrete_paths(self):
         from scripts.backup.inventory import resolve_inventory
@@ -143,7 +136,9 @@ class TestInventoryResolution(unittest.TestCase):
             _make_synthetic_state(root)
             (root / "logs" / "traces" / "2026-05-01.jsonl").write_text("{}")
             resolved = resolve_inventory(
-                _synthetic_manifest(), root, include_secrets=False,
+                _synthetic_manifest(),
+                root,
+                include_secrets=False,
             )
         glob_entries = [r for r in resolved if r["type"] == "glob"]
         self.assertEqual(len(glob_entries), 1)
@@ -164,7 +159,9 @@ class TestInventoryResolution(unittest.TestCase):
             # Don't create config/identity.yaml — it's required.
             with self.assertRaises(BackupInventoryError):
                 resolve_inventory(
-                    _synthetic_manifest(), root, include_secrets=False,
+                    _synthetic_manifest(),
+                    root,
+                    include_secrets=False,
                 )
 
     def test_optional_missing_silently_skipped(self):
@@ -176,7 +173,9 @@ class TestInventoryResolution(unittest.TestCase):
             (root / "config" / "identity.yaml").write_text("ok\n")
             # No other state — all optional, should not raise.
             resolved = resolve_inventory(
-                _synthetic_manifest(), root, include_secrets=False,
+                _synthetic_manifest(),
+                root,
+                include_secrets=False,
             )
         # Only the identity file resolves; everything else is missing
         # and skipped. Expect one entry.
@@ -195,7 +194,9 @@ class TestSecretOptIn(unittest.TestCase):
             root = Path(td)
             _make_synthetic_state(root)
             resolved = resolve_inventory(
-                _synthetic_manifest(), root, include_secrets=False,
+                _synthetic_manifest(),
+                root,
+                include_secrets=False,
             )
         secrets = [r for r in resolved if r["type"] == "secret_file"]
         self.assertEqual(secrets, [])
@@ -207,7 +208,9 @@ class TestSecretOptIn(unittest.TestCase):
             root = Path(td)
             _make_synthetic_state(root)
             resolved = resolve_inventory(
-                _synthetic_manifest(), root, include_secrets=True,
+                _synthetic_manifest(),
+                root,
+                include_secrets=True,
             )
         secrets = [r for r in resolved if r["type"] == "secret_file"]
         self.assertEqual(len(secrets), 1)
@@ -250,9 +253,7 @@ class TestSQLiteBackup(unittest.TestCase):
             src = Path(td) / "s.db"
             dst = Path(td) / "deep" / "nested" / "dst.db"
             con = sqlite3.connect(src)
-            con.executescript(
-                "CREATE TABLE t (k INTEGER); INSERT INTO t VALUES (1);"
-            )
+            con.executescript("CREATE TABLE t (k INTEGER); INSERT INTO t VALUES (1);")
             con.commit()
             con.close()
             backup_sqlite(src, dst)
@@ -296,7 +297,8 @@ class TestAtomicCompletion(unittest.TestCase):
             in_progress = dst_root / ".in-progress"
             if in_progress.exists():
                 self.assertEqual(
-                    list(in_progress.iterdir()), [],
+                    list(in_progress.iterdir()),
+                    [],
                     "in-progress should be empty after success",
                 )
 
@@ -314,13 +316,14 @@ class TestAtomicCompletion(unittest.TestCase):
             # that requires a missing required path.
             broken_manifest = dict(_synthetic_manifest())
             broken_manifest["entries"] = list(broken_manifest["entries"]) + [
-                {"type": "file", "path": "config/does_not_exist.yaml",
-                 "required": True},
+                {"type": "file", "path": "config/does_not_exist.yaml", "required": True},
             ]
             with self.assertRaises(Exception):
                 run_backup(
-                    source_root=src_root, backup_root=dst_root,
-                    manifest=broken_manifest, include_secrets=False,
+                    source_root=src_root,
+                    backup_root=dst_root,
+                    manifest=broken_manifest,
+                    include_secrets=False,
                     timestamp="2026-04-30T13-00-00",
                 )
         # Final snapshot path must not exist.
@@ -340,9 +343,11 @@ class TestManifestIntegrity(unittest.TestCase):
             dst_root = Path(td) / "backups"
             _make_synthetic_state(src_root)
             result = run_backup(
-                source_root=src_root, backup_root=dst_root,
+                source_root=src_root,
+                backup_root=dst_root,
                 manifest=_synthetic_manifest(),
-                include_secrets=False, timestamp="2026-04-30T14-00-00",
+                include_secrets=False,
+                timestamp="2026-04-30T14-00-00",
             )
             manifest_path = result["snapshot_path"] / "manifest.json"
             self.assertTrue(manifest_path.is_file())
@@ -366,9 +371,11 @@ class TestManifestIntegrity(unittest.TestCase):
             dst_root = Path(td) / "backups"
             _make_synthetic_state(src_root)
             result = run_backup(
-                source_root=src_root, backup_root=dst_root,
+                source_root=src_root,
+                backup_root=dst_root,
                 manifest=_synthetic_manifest(),
-                include_secrets=False, timestamp="2026-04-30T15-00-00",
+                include_secrets=False,
+                timestamp="2026-04-30T15-00-00",
             )
             snap = result["snapshot_path"]
             # Pre-corruption: verify must pass.
@@ -378,6 +385,7 @@ class TestManifestIntegrity(unittest.TestCase):
             target.write_text("CORRUPTED")
             # Verify must now fail.
             from scripts.backup.restore import ManifestVerificationError
+
             with self.assertRaises(ManifestVerificationError):
                 verify_manifest(snap)
 
@@ -397,9 +405,11 @@ class TestRestoreRollback(unittest.TestCase):
             dst_root = Path(td) / "backups"
             _make_synthetic_state(src_root)
             result = run_backup(
-                source_root=src_root, backup_root=dst_root,
+                source_root=src_root,
+                backup_root=dst_root,
                 manifest=_synthetic_manifest(),
-                include_secrets=False, timestamp="2026-04-30T16-00-00",
+                include_secrets=False,
+                timestamp="2026-04-30T16-00-00",
             )
 
             # Modify live state so we can verify the pre-restore
@@ -418,12 +428,9 @@ class TestRestoreRollback(unittest.TestCase):
                 pre_restore_label="pre-restore-test",
             )
 
-            pre_restore_dirs = list(src_root.parent.glob(
-                f"{src_root.name}.pre-restore-test.*"
-            ))
+            pre_restore_dirs = list(src_root.parent.glob(f"{src_root.name}.pre-restore-test.*"))
             self.assertEqual(len(pre_restore_dirs), 1)
-            preserved = (pre_restore_dirs[0] / "memory" /
-                         "continuity_capsule.json")
+            preserved = pre_restore_dirs[0] / "memory" / "continuity_capsule.json"
             self.assertTrue(preserved.is_file())
             self.assertIn("cycle", preserved.read_text())
             self.assertIn("99", preserved.read_text())
@@ -454,9 +461,11 @@ class TestRestoreRollback(unittest.TestCase):
             dst_root = Path(td) / "backups"
             _make_synthetic_state(src_root)
             result = run_backup(
-                source_root=src_root, backup_root=dst_root,
+                source_root=src_root,
+                backup_root=dst_root,
                 manifest=_synthetic_manifest(),
-                include_secrets=False, timestamp="2026-04-30T19-00-00",
+                include_secrets=False,
+                timestamp="2026-04-30T19-00-00",
             )
 
             class FailingMM:
@@ -487,9 +496,11 @@ class TestRestoreRollback(unittest.TestCase):
             dst_root = Path(td) / "backups"
             _make_synthetic_state(src_root)
             result = run_backup(
-                source_root=src_root, backup_root=dst_root,
+                source_root=src_root,
+                backup_root=dst_root,
                 manifest=_synthetic_manifest(),
-                include_secrets=False, timestamp="2026-04-30T20-00-00",
+                include_secrets=False,
+                timestamp="2026-04-30T20-00-00",
             )
 
             captured_core = []
@@ -524,9 +535,11 @@ class TestRestoreRollback(unittest.TestCase):
             dst_root = Path(td) / "backups"
             _make_synthetic_state(src_root)
             result = run_backup(
-                source_root=src_root, backup_root=dst_root,
+                source_root=src_root,
+                backup_root=dst_root,
                 manifest=_synthetic_manifest(),
-                include_secrets=False, timestamp="2026-04-30T17-00-00",
+                include_secrets=False,
+                timestamp="2026-04-30T17-00-00",
             )
             # Modify live state.
             target = src_root / "memory" / "continuity_capsule.json"
@@ -559,14 +572,15 @@ class TestRestoreWriter(unittest.TestCase):
             # 5x.B Pass 2a: accept provenance kwargs so the
             # production restore_writer's first try-branch lands
             # without falling through to the TypeError compat path.
-            def store_core(self, content, source=None, *,
-                           provenance_source=None, trust_tier=None):
-                captured.append({
-                    "content": content,
-                    "source": source,
-                    "provenance_source": provenance_source,
-                    "trust_tier": trust_tier,
-                })
+            def store_core(self, content, source=None, *, provenance_source=None, trust_tier=None):
+                captured.append(
+                    {
+                        "content": content,
+                        "source": source,
+                        "provenance_source": provenance_source,
+                        "trust_tier": trust_tier,
+                    }
+                )
                 return "core-fake-id"
 
         result = write_restoration_record(
@@ -592,8 +606,7 @@ class TestRestoreWriter(unittest.TestCase):
         captured_core = []
 
         class FakeMM:
-            def store_core(self, content, source=None, *,
-                           provenance_source=None, trust_tier=None):
+            def store_core(self, content, source=None, *, provenance_source=None, trust_tier=None):
                 captured_core.append(content)
                 return "x"
 
@@ -649,15 +662,16 @@ class TestLastBackupLog(unittest.TestCase):
             dst_root = Path(td) / "backups"
             _make_synthetic_state(src_root)
             run_backup(
-                source_root=src_root, backup_root=dst_root,
+                source_root=src_root,
+                backup_root=dst_root,
                 manifest=_synthetic_manifest(),
-                include_secrets=False, timestamp="2026-04-30T18-00-00",
+                include_secrets=False,
+                timestamp="2026-04-30T18-00-00",
             )
             log_path = src_root / "logs" / "last_backup.json"
             self.assertTrue(log_path.is_file())
             log = json.loads(log_path.read_text())
-            for key in ("status", "timestamp", "snapshot_path",
-                        "duration_seconds", "byte_count"):
+            for key in ("status", "timestamp", "snapshot_path", "duration_seconds", "byte_count"):
                 self.assertIn(key, log)
             self.assertEqual(log["status"], "success")
 
@@ -674,7 +688,8 @@ class TestDrillHelpers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             # Need 100 bytes; tmpdir has GB. Always passes.
             ok, free, needed = check_free_space(
-                Path(td), required_bytes=100,
+                Path(td),
+                required_bytes=100,
             )
         self.assertTrue(ok)
         self.assertGreaterEqual(free, needed)
@@ -685,7 +700,8 @@ class TestDrillHelpers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             # Demand petabytes — guaranteed to exceed any real disk.
             ok, free, needed = check_free_space(
-                Path(td), required_bytes=10**18,
+                Path(td),
+                required_bytes=10**18,
             )
         self.assertFalse(ok)
         self.assertLess(free, needed)
@@ -726,8 +742,7 @@ class TestDrillHelpers(unittest.TestCase):
             db = Path(td) / "x.db"
             con = sqlite3.connect(db)
             con.executescript(
-                "CREATE TABLE t (k INTEGER PRIMARY KEY);"
-                "INSERT INTO t VALUES (1), (2), (3), (4);"
+                "CREATE TABLE t (k INTEGER PRIMARY KEY);INSERT INTO t VALUES (1), (2), (3), (4);"
             )
             con.commit()
             con.close()
@@ -744,6 +759,39 @@ class TestDrillHelpers(unittest.TestCase):
             con.close()
             self.assertIsNone(sqlite_row_count(db, "no_such_table"))
 
+    def test_restore_verification_checks_private_thoughts(self):
+        from scripts.backup.drill import verify_restored_copy
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "source"
+            restored = root / "restored"
+            for base in (source, restored):
+                (base / "memory").mkdir(parents=True)
+                db = base / "memory" / "private_thoughts.db"
+                con = sqlite3.connect(db)
+                con.executescript(
+                    "CREATE TABLE private_thoughts ("
+                    "thought_id INTEGER PRIMARY KEY, content TEXT);"
+                    "INSERT INTO private_thoughts VALUES (1, 'held');"
+                )
+                con.commit()
+                con.close()
+
+            checks = verify_restored_copy(
+                source_root=source,
+                restored_root=restored,
+                label="drill",
+            )
+
+        private_checks = [
+            check
+            for check in checks
+            if check["name"] == "drill.memory_private_thoughts_db_row_count"
+        ]
+        self.assertEqual(len(private_checks), 1)
+        self.assertEqual(private_checks[0]["status"], "pass")
+
     def test_drill_report_shape(self):
         """A drill report is a structured JSON document. Test that
         the shape matches what an operator / cockpit would consume."""
@@ -754,17 +802,24 @@ class TestDrillHelpers(unittest.TestCase):
             backup_root="/var/tmp/maez-backup-drill",
             snapshot_path="/var/tmp/maez-backup-drill/snap",
             checks=[
-                {"name": "manifest_verified", "status": "pass",
-                 "detail": "23 files"},
-                {"name": "core_count_match",  "status": "pass",
-                 "detail": "expected=12 actual=12"},
-                {"name": "lived_episode_count_match", "status": "fail",
-                 "detail": "expected=523 actual=520"},
+                {"name": "manifest_verified", "status": "pass", "detail": "23 files"},
+                {"name": "core_count_match", "status": "pass", "detail": "expected=12 actual=12"},
+                {
+                    "name": "lived_episode_count_match",
+                    "status": "fail",
+                    "detail": "expected=523 actual=520",
+                },
             ],
         )
-        for k in ("timestamp", "source_root", "backup_root",
-                 "snapshot_path", "overall_status", "checks",
-                 "drill_version"):
+        for k in (
+            "timestamp",
+            "source_root",
+            "backup_root",
+            "snapshot_path",
+            "overall_status",
+            "checks",
+            "drill_version",
+        ):
             self.assertIn(k, report)
         self.assertEqual(report["overall_status"], "fail")
 
@@ -772,7 +827,9 @@ class TestDrillHelpers(unittest.TestCase):
         from scripts.backup.drill import build_drill_report
 
         report = build_drill_report(
-            source_root="/x", backup_root="/y", snapshot_path="/z",
+            source_root="/x",
+            backup_root="/y",
+            snapshot_path="/z",
             checks=[
                 {"name": "a", "status": "pass", "detail": ""},
                 {"name": "b", "status": "pass", "detail": ""},
@@ -787,7 +844,9 @@ class TestDrillHelpers(unittest.TestCase):
         from scripts.backup.drill import build_drill_report
 
         report = build_drill_report(
-            source_root="/x", backup_root="/y", snapshot_path="/z",
+            source_root="/x",
+            backup_root="/y",
+            snapshot_path="/z",
             checks=[
                 {"name": "a", "status": "pass", "detail": ""},
                 {"name": "b", "status": "skip", "detail": "n/a"},
@@ -800,7 +859,9 @@ class TestDrillHelpers(unittest.TestCase):
         from scripts.backup.drill import build_drill_report
 
         report = build_drill_report(
-            source_root="/x", backup_root="/y", snapshot_path="/z",
+            source_root="/x",
+            backup_root="/y",
+            snapshot_path="/z",
             checks=[
                 {"name": "a", "status": "pass", "detail": ""},
                 {"name": "b", "status": "fail", "detail": "broken"},

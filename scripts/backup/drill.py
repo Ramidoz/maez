@@ -75,7 +75,9 @@ def estimate_state_size(source_root: Path) -> int:
 
     manifest = load_default_manifest()
     resolved = resolve_inventory(
-        manifest, source_root, include_secrets=False,
+        manifest,
+        source_root,
+        include_secrets=False,
     )
     total = 0
     for entry in resolved:
@@ -96,7 +98,8 @@ def estimate_state_size(source_root: Path) -> int:
 
 
 def check_free_space(
-    destination: Path, required_bytes: int,
+    destination: Path,
+    required_bytes: int,
 ) -> tuple[bool, int, int]:
     """Return ``(ok, free_bytes, required_bytes)``. Caller is the
     drill driver — decide what to do on insufficient space at the
@@ -131,8 +134,7 @@ def sqlite_row_count(db_path: Path, table: str) -> int | None:
         con = sqlite3.connect(str(db_path))
         try:
             cur = con.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name=?",
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
                 (table,),
             )
             if cur.fetchone() is None:
@@ -162,9 +164,7 @@ def build_drill_report(
     overall = "fail" if has_failure else "pass"
     report = {
         "drill_version": _DRILL_VERSION,
-        "timestamp": datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H-%M-%S"
-        ),
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S"),
         "source_root": source_root,
         "backup_root": backup_root,
         "snapshot_path": snapshot_path,
@@ -217,19 +217,23 @@ def verify_restored_copy(
     # 1. MemoryManager opens.
     restored_mm_path = restored_root / "memory" / "db"
     if not restored_mm_path.is_dir():
-        checks.append({
-            "name": f"{label}.memory_manager_opens",
-            "status": "skip",
-            "detail": "no memory/db in restored copy",
-        })
+        checks.append(
+            {
+                "name": f"{label}.memory_manager_opens",
+                "status": "skip",
+                "detail": "no memory/db in restored copy",
+            }
+        )
     else:
         try:
             mm = _open_mm_at(restored_mm_path)
-            checks.append({
-                "name": f"{label}.memory_manager_opens",
-                "status": "pass",
-                "detail": "MemoryManager() instantiated cleanly",
-            })
+            checks.append(
+                {
+                    "name": f"{label}.memory_manager_opens",
+                    "status": "pass",
+                    "detail": "MemoryManager() instantiated cleanly",
+                }
+            )
 
             # 3. Core-memory count matches source.
             try:
@@ -237,23 +241,29 @@ def verify_restored_copy(
                 source_core = len(source_mm.get_all_core() or [])
                 restored_core = len(mm.get_all_core() or [])
                 if source_core == restored_core:
-                    checks.append({
-                        "name": f"{label}.core_count_match",
-                        "status": "pass",
-                        "detail": f"source={source_core} restored={restored_core}",
-                    })
+                    checks.append(
+                        {
+                            "name": f"{label}.core_count_match",
+                            "status": "pass",
+                            "detail": f"source={source_core} restored={restored_core}",
+                        }
+                    )
                 else:
-                    checks.append({
+                    checks.append(
+                        {
+                            "name": f"{label}.core_count_match",
+                            "status": "fail",
+                            "detail": f"source={source_core} restored={restored_core}",
+                        }
+                    )
+            except Exception as e:  # pragma: no cover — live-data paths
+                checks.append(
+                    {
                         "name": f"{label}.core_count_match",
                         "status": "fail",
-                        "detail": f"source={source_core} restored={restored_core}",
-                    })
-            except Exception as e:  # pragma: no cover — live-data paths
-                checks.append({
-                    "name": f"{label}.core_count_match",
-                    "status": "fail",
-                    "detail": f"{type(e).__name__}: {e}",
-                })
+                        "detail": f"{type(e).__name__}: {e}",
+                    }
+                )
 
             # 4. Recall returns non-empty for a known query.
             try:
@@ -262,25 +272,32 @@ def verify_restored_copy(
                 # Empty cores would make recall trivially empty;
                 # check the bundle keys are present rather than
                 # asserting non-zero across all tiers.
-                checks.append({
-                    "name": f"{label}.recall_for_cycle_non_empty",
-                    "status": "pass" if isinstance(bundle, dict)
-                    and {"core", "daily", "raw"}.issubset(bundle.keys())
-                    else "fail",
-                    "detail": f"core={core_n} keys={sorted(bundle.keys())}",
-                })
+                checks.append(
+                    {
+                        "name": f"{label}.recall_for_cycle_non_empty",
+                        "status": "pass"
+                        if isinstance(bundle, dict)
+                        and {"core", "daily", "raw"}.issubset(bundle.keys())
+                        else "fail",
+                        "detail": f"core={core_n} keys={sorted(bundle.keys())}",
+                    }
+                )
             except Exception as e:  # pragma: no cover — live-data paths
-                checks.append({
-                    "name": f"{label}.recall_for_cycle_non_empty",
+                checks.append(
+                    {
+                        "name": f"{label}.recall_for_cycle_non_empty",
+                        "status": "fail",
+                        "detail": f"{type(e).__name__}: {e}",
+                    }
+                )
+        except Exception as e:  # pragma: no cover — live-data paths
+            checks.append(
+                {
+                    "name": f"{label}.memory_manager_opens",
                     "status": "fail",
                     "detail": f"{type(e).__name__}: {e}",
-                })
-        except Exception as e:  # pragma: no cover — live-data paths
-            checks.append({
-                "name": f"{label}.memory_manager_opens",
-                "status": "fail",
-                "detail": f"{type(e).__name__}: {e}",
-            })
+                }
+            )
 
     # 5. Lived-memory episode count matches source.
     src_eps = source_root / "memory" / "lived_episodes.db"
@@ -289,95 +306,123 @@ def verify_restored_copy(
         src_count = sqlite_row_count(src_eps, "episodes")
         rst_count = sqlite_row_count(rst_eps, "episodes")
         if src_count is None or rst_count is None:
-            checks.append({
+            checks.append(
+                {
+                    "name": f"{label}.lived_episode_count_match",
+                    "status": "skip",
+                    "detail": "episodes table not present",
+                }
+            )
+        elif src_count == rst_count:
+            checks.append(
+                {
+                    "name": f"{label}.lived_episode_count_match",
+                    "status": "pass",
+                    "detail": f"source={src_count} restored={rst_count}",
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "name": f"{label}.lived_episode_count_match",
+                    "status": "fail",
+                    "detail": f"source={src_count} restored={rst_count}",
+                }
+            )
+    else:
+        checks.append(
+            {
                 "name": f"{label}.lived_episode_count_match",
                 "status": "skip",
-                "detail": "episodes table not present",
-            })
-        elif src_count == rst_count:
-            checks.append({
-                "name": f"{label}.lived_episode_count_match",
-                "status": "pass",
-                "detail": f"source={src_count} restored={rst_count}",
-            })
-        else:
-            checks.append({
-                "name": f"{label}.lived_episode_count_match",
-                "status": "fail",
-                "detail": f"source={src_count} restored={rst_count}",
-            })
-    else:
-        checks.append({
-            "name": f"{label}.lived_episode_count_match",
-            "status": "skip",
-            "detail": "lived_episodes.db not in source or restored",
-        })
+                "detail": "lived_episodes.db not in source or restored",
+            }
+        )
 
     # 6. identity.yaml byte-identical.
     src_id = source_root / "config" / "identity.yaml"
     rst_id = restored_root / "config" / "identity.yaml"
     if not src_id.is_file():
-        checks.append({
-            "name": f"{label}.identity_yaml_match",
-            "status": "skip",
-            "detail": "config/identity.yaml not present in source",
-        })
+        checks.append(
+            {
+                "name": f"{label}.identity_yaml_match",
+                "status": "skip",
+                "detail": "config/identity.yaml not present in source",
+            }
+        )
     elif compare_files(src_id, rst_id):
-        checks.append({
-            "name": f"{label}.identity_yaml_match",
-            "status": "pass",
-            "detail": "byte-identical",
-        })
+        checks.append(
+            {
+                "name": f"{label}.identity_yaml_match",
+                "status": "pass",
+                "detail": "byte-identical",
+            }
+        )
     else:
-        checks.append({
-            "name": f"{label}.identity_yaml_match",
-            "status": "fail",
-            "detail": "differs from source or missing in restore",
-        })
+        checks.append(
+            {
+                "name": f"{label}.identity_yaml_match",
+                "status": "fail",
+                "detail": "differs from source or missing in restore",
+            }
+        )
 
     # 7. Key SQLite DBs open + row counts match source. We pick
-    # high-leverage covenant DBs — the immune memory and identity
-    # ledger — rather than every DB in the manifest. The rest are
-    # implicitly covered by manifest sha256 verification.
+    # high-leverage covenant DBs — immune memory, identity/wants,
+    # and private_thoughts — rather than every DB in the manifest.
+    # The rest are implicitly covered by manifest sha256 verification.
     for rel, table in (
         ("memory/audit_log.db", "audit_log"),
         ("memory/identity_ledger.db", "identity_ledger"),
+        ("memory/private_thoughts.db", "private_thoughts"),
         ("memory/wants.db", "want_events"),
     ):
         src_db = source_root / rel
         rst_db = restored_root / rel
         if not src_db.is_file():
-            checks.append({
-                "name": f"{label}.{rel.replace('/', '_').replace('.', '_')}_row_count",
-                "status": "skip",
-                "detail": "not present in source",
-            })
+            checks.append(
+                {
+                    "name": f"{label}.{rel.replace('/', '_').replace('.', '_')}_row_count",
+                    "status": "skip",
+                    "detail": "not present in source",
+                }
+            )
             continue
         if not rst_db.is_file():
-            checks.append({
-                "name": f"{label}.{rel.replace('/', '_').replace('.', '_')}_row_count",
-                "status": "fail",
-                "detail": "missing in restore",
-            })
+            checks.append(
+                {
+                    "name": f"{label}.{rel.replace('/', '_').replace('.', '_')}_row_count",
+                    "status": "fail",
+                    "detail": "missing in restore",
+                }
+            )
             continue
         src_n = sqlite_row_count(src_db, table)
         rst_n = sqlite_row_count(rst_db, table)
         check_name = f"{label}.{rel.replace('/', '_').replace('.', '_')}_row_count"
         if src_n is None or rst_n is None:
-            checks.append({
-                "name": check_name, "status": "skip",
-                "detail": f"table {table!r} not present",
-            })
+            checks.append(
+                {
+                    "name": check_name,
+                    "status": "skip",
+                    "detail": f"table {table!r} not present",
+                }
+            )
         elif src_n == rst_n:
-            checks.append({
-                "name": check_name, "status": "pass",
-                "detail": f"source={src_n} restored={rst_n}",
-            })
+            checks.append(
+                {
+                    "name": check_name,
+                    "status": "pass",
+                    "detail": f"source={src_n} restored={rst_n}",
+                }
+            )
         else:
-            checks.append({
-                "name": check_name, "status": "fail",
-                "detail": f"source={src_n} restored={rst_n}",
-            })
+            checks.append(
+                {
+                    "name": check_name,
+                    "status": "fail",
+                    "detail": f"source={src_n} restored={rst_n}",
+                }
+            )
 
     return checks
 
@@ -407,22 +452,25 @@ def run_drill(
             source_root=str(source_root),
             backup_root=str(backup_root),
             snapshot_path="",
-            checks=[{
-                "name": "free_space_check", "status": "fail",
-                "detail": (
-                    f"need {needed} bytes, have {free} bytes free "
-                    f"under {backup_root}"
-                ),
-            }],
+            checks=[
+                {
+                    "name": "free_space_check",
+                    "status": "fail",
+                    "detail": (f"need {needed} bytes, have {free} bytes free under {backup_root}"),
+                }
+            ],
             extras={"duration_seconds": round(time.monotonic() - started, 3)},
         )
         _write_drill_log(source_root, report)
         return report
 
-    checks: list[dict] = [{
-        "name": "free_space_check", "status": "pass",
-        "detail": f"{free} bytes free under {backup_root}",
-    }]
+    checks: list[dict] = [
+        {
+            "name": "free_space_check",
+            "status": "pass",
+            "detail": f"{free} bytes free under {backup_root}",
+        }
+    ]
 
     # 2. Real backup.
     snapshot_root = backup_root / "snapshot"
@@ -433,35 +481,46 @@ def run_drill(
             backup_root=snapshot_root,
             include_secrets=False,
         )
-        checks.append({
-            "name": "backup_succeeded", "status": "pass",
-            "detail": f"{backup_result['byte_count']} bytes in "
-                      f"{backup_result['duration_seconds']:.2f}s",
-        })
+        checks.append(
+            {
+                "name": "backup_succeeded",
+                "status": "pass",
+                "detail": f"{backup_result['byte_count']} bytes in "
+                f"{backup_result['duration_seconds']:.2f}s",
+            }
+        )
         snapshot_path = backup_result["snapshot_path"]
 
         # 2a. Verify snapshot manifest BEFORE restoring. This is
         # the right place — the snapshot has manifest.json; the
         # restored copy doesn't (restore intentionally skips it).
         from scripts.backup.restore import verify_manifest
+
         try:
             m = verify_manifest(snapshot_path)
-            checks.append({
-                "name": "snapshot_manifest_verified",
-                "status": "pass",
-                "detail": f"{len(m.get('files') or [])} files verified",
-            })
+            checks.append(
+                {
+                    "name": "snapshot_manifest_verified",
+                    "status": "pass",
+                    "detail": f"{len(m.get('files') or [])} files verified",
+                }
+            )
         except Exception as e:
-            checks.append({
-                "name": "snapshot_manifest_verified",
+            checks.append(
+                {
+                    "name": "snapshot_manifest_verified",
+                    "status": "fail",
+                    "detail": f"{type(e).__name__}: {e}",
+                }
+            )
+    except Exception as e:
+        checks.append(
+            {
+                "name": "backup_succeeded",
                 "status": "fail",
                 "detail": f"{type(e).__name__}: {e}",
-            })
-    except Exception as e:
-        checks.append({
-            "name": "backup_succeeded", "status": "fail",
-            "detail": f"{type(e).__name__}: {e}",
-        })
+            }
+        )
         report = build_drill_report(
             source_root=str(source_root),
             backup_root=str(backup_root),
@@ -487,8 +546,7 @@ def run_drill(
         _label = label
 
         class DrillMM:
-            def store_core(self, content, source=None,
-                           _captured=captured_core, _lbl=_label):
+            def store_core(self, content, source=None, _captured=captured_core, _lbl=_label):
                 _captured.append({"content": content, "source": source})
                 return f"drill-{_lbl}-fake-id"
 
@@ -501,43 +559,51 @@ def run_drill(
                 mm_factory=lambda: DrillMM(),
                 pre_restore_label=f"drill-{label}-pre",
             )
-            checks.append({
-                "name": f"{label}.restore_succeeded",
-                "status": "pass",
-                "detail": f"reason={reason} write_coma={write_coma}",
-            })
+            checks.append(
+                {
+                    "name": f"{label}.restore_succeeded",
+                    "status": "pass",
+                    "detail": f"reason={reason} write_coma={write_coma}",
+                }
+            )
         except Exception as e:
-            checks.append({
-                "name": f"{label}.restore_succeeded",
-                "status": "fail",
-                "detail": f"{type(e).__name__}: {e}",
-            })
+            checks.append(
+                {
+                    "name": f"{label}.restore_succeeded",
+                    "status": "fail",
+                    "detail": f"{type(e).__name__}: {e}",
+                }
+            )
             continue
 
         # 4. Verify the restored copy.
-        checks.extend(verify_restored_copy(
-            source_root=source_root,
-            restored_root=restore_dst,
-            label=label,
-        ))
+        checks.extend(
+            verify_restored_copy(
+                source_root=source_root,
+                restored_root=restore_dst,
+                label=label,
+            )
+        )
 
         # 4a. Drill-specific: hf_no_coma must NOT have stored a
         # coma memory (write_coma=False); pause must NOT have
         # stored a coma memory (deliberate-pause reason).
         if captured_core:
-            checks.append({
-                "name": f"{label}.no_coma_written",
-                "status": "fail",
-                "detail": (
-                    f"unexpected coma write: {len(captured_core)} entries"
-                ),
-            })
+            checks.append(
+                {
+                    "name": f"{label}.no_coma_written",
+                    "status": "fail",
+                    "detail": (f"unexpected coma write: {len(captured_core)} entries"),
+                }
+            )
         else:
-            checks.append({
-                "name": f"{label}.no_coma_written",
-                "status": "pass",
-                "detail": "drill correctly skipped coma write",
-            })
+            checks.append(
+                {
+                    "name": f"{label}.no_coma_written",
+                    "status": "pass",
+                    "detail": "drill correctly skipped coma write",
+                }
+            )
 
     elapsed = time.monotonic() - started
     report = build_drill_report(
@@ -555,7 +621,8 @@ def run_drill(
             shutil.rmtree(backup_root)
         except Exception as e:
             logger.warning(
-                "drill cleanup failed (drill dirs left in place): %s", e,
+                "drill cleanup failed (drill dirs left in place): %s",
+                e,
             )
 
     return report
@@ -589,18 +656,22 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     p.add_argument(
-        "--source-root", type=Path,
+        "--source-root",
+        type=Path,
         default=Path(os.environ.get("MAEZ_ROOT") or Path.cwd()),
         help="Live repo to back up (default: $MAEZ_ROOT or cwd).",
     )
     p.add_argument(
-        "--backup-root", type=Path, default=_DEFAULT_BACKUP_ROOT,
+        "--backup-root",
+        type=Path,
+        default=_DEFAULT_BACKUP_ROOT,
         help=f"Drill destination (default: {_DEFAULT_BACKUP_ROOT}).",
     )
     p.add_argument(
-        "--keep", action="store_true",
+        "--keep",
+        action="store_true",
         help="Leave drill directories in place after success "
-             "(default: clean up on pass, leave on failure).",
+        "(default: clean up on pass, leave on failure).",
     )
     args = p.parse_args(argv)
 

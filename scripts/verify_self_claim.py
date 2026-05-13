@@ -24,15 +24,16 @@ and user inputs are explicitly excluded):
   • ``memory/wonderings.db`` (wonderings table — Maez's own
     questions / conclusions)
 
-The verifier is read-only. It surfaces hits with timestamps and
-short context excerpts; it never modifies any store. Conventions
-follow ``scripts/audit_inspect.py`` (argparse, --json, sys.path
-inject).
+Most searched stores are read-only. The private-thoughts search is
+forensic raw access, so it records an audit row before returning any
+private-thought handles or snippets. Conventions follow
+``scripts/audit_inspect.py`` (argparse, --json, sys.path inject).
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 import sys
@@ -49,6 +50,7 @@ sys.path.insert(0, str(_REPO))
 @dataclass
 class ClaimHit:
     """One verified prior usage of the searched phrase."""
+
     store: str
     timestamp: str
     snippet: str
@@ -82,7 +84,9 @@ def _excerpt(text: str, phrase: str, *, window: int = 80) -> str:
 
 
 def _search_chroma(
-    *, phrase: str, top_n: int,
+    *,
+    phrase: str,
+    top_n: int,
 ) -> list[ClaimHit]:
     """Walk Chroma raw + core collections via MemoryManager. Uses
     ``where_document={"$contains": phrase}`` — Chroma's
@@ -97,10 +101,12 @@ def _search_chroma(
     hits: list[ClaimHit] = []
     try:
         from memory.memory_manager import MemoryManager
+
         m = MemoryManager()
     except Exception as e:
         print(
-            f"warning: chroma init failed: {e}", file=sys.stderr,
+            f"warning: chroma init failed: {e}",
+            file=sys.stderr,
         )
         return hits
 
@@ -120,8 +126,7 @@ def _search_chroma(
                 )
             except Exception as e:
                 print(
-                    f"warning: chroma {label} where_document "
-                    f"failed for {form!r}: {e}",
+                    f"warning: chroma {label} where_document failed for {form!r}: {e}",
                     file=sys.stderr,
                 )
                 continue
@@ -133,20 +138,19 @@ def _search_chroma(
                     continue
                 seen_ids.add(rid)
                 meta = meta or {}
-                ts = (
-                    meta.get("timestamp")
-                    or meta.get("created_at") or "?"
+                ts = meta.get("timestamp") or meta.get("created_at") or "?"
+                hits.append(
+                    ClaimHit(
+                        store=store_label,
+                        timestamp=str(ts),
+                        snippet=_excerpt(doc or "", phrase),
+                        extra={
+                            "wing": meta.get("wing"),
+                            "type": meta.get("type"),
+                            "role": meta.get("role"),
+                        },
+                    )
                 )
-                hits.append(ClaimHit(
-                    store=store_label,
-                    timestamp=str(ts),
-                    snippet=_excerpt(doc or "", phrase),
-                    extra={
-                        "wing": meta.get("wing"),
-                        "type": meta.get("type"),
-                        "role": meta.get("role"),
-                    },
-                ))
                 per_store += 1
                 if per_store >= top_n:
                     break
@@ -156,12 +160,16 @@ def _search_chroma(
 
 
 def _search_private_thoughts(
-    *, phrase: str, repo_root: Path, top_n: int,
+    *,
+    phrase: str,
+    repo_root: Path,
+    top_n: int,
 ) -> list[ClaimHit]:
     db = repo_root / "memory" / "private_thoughts.db"
     if not db.exists():
         return []
     hits: list[ClaimHit] = []
+    con: sqlite3.Connection | None = None
     try:
         con = sqlite3.connect(str(db))
         con.row_factory = sqlite3.Row
@@ -178,27 +186,72 @@ def _search_private_thoughts(
             file=sys.stderr,
         )
         return []
+    finally:
+        if con is not None:
+            con.close()
     for r in rows:
-        hits.append(ClaimHit(
-            store="private_thoughts",
-            timestamp=str(r["ts"]),
-            snippet=_excerpt(r["content"] or "", phrase),
-            extra={
-                "thought_id": r["thought_id"],
-                "provenance": r["provenance"],
-                "phase": r["memory_phase"],
-            },
-        ))
+        hits.append(
+            ClaimHit(
+                store="private_thoughts",
+                timestamp=str(r["ts"]),
+                snippet=_excerpt(r["content"] or "", phrase),
+                extra={
+                    "thought_id": r["thought_id"],
+                    "provenance": r["provenance"],
+                    "phase": r["memory_phase"],
+                },
+            )
+        )
+    _record_private_thoughts_search_audit(
+        repo_root=repo_root,
+        phrase=phrase,
+        top_n=top_n,
+        hits=hits,
+    )
     return hits
 
 
+def _record_private_thoughts_search_audit(
+    *,
+    repo_root: Path,
+    phrase: str,
+    top_n: int,
+    hits: list[ClaimHit],
+) -> None:
+    from core.cognition.audit_log import AuditLog
+
+    returned_handles = sorted(f"{hit.store}:{hit.extra.get('thought_id')}" for hit in hits)
+    AuditLog(repo_root / "memory" / "audit_log.db").record(
+        action="private_thoughts.verify_self_claim_search",
+        params={
+            "phrase_sha256": hashlib.sha256(phrase.encode("utf-8")).hexdigest(),
+            "top_n": int(top_n),
+            "returned_hit_count": len(hits),
+            "returned_handles_sha256": hashlib.sha256(
+                "\n".join(returned_handles).encode("utf-8")
+            ).hexdigest(),
+        },
+        classification={
+            "intent_category": "FORENSIC_PRIVATE_THOUGHTS",
+            "lane": "operator_forensic",
+        },
+        injection_matches=[],
+        verdict=None,
+        policy_rule_id="S1A1_PRIVATE_THOUGHTS_FORENSIC_AUDIT",
+    )
+
+
 def _search_fast_conversation(
-    *, phrase: str, repo_root: Path, top_n: int,
+    *,
+    phrase: str,
+    repo_root: Path,
+    top_n: int,
 ) -> list[ClaimHit]:
     db = repo_root / "memory" / "fast_conversation_log.db"
     if not db.exists():
         return []
     hits: list[ClaimHit] = []
+    con: sqlite3.Connection | None = None
     try:
         con = sqlite3.connect(str(db))
         con.row_factory = sqlite3.Row
@@ -217,26 +270,35 @@ def _search_fast_conversation(
             file=sys.stderr,
         )
         return []
+    finally:
+        if con is not None:
+            con.close()
     for r in rows:
-        hits.append(ClaimHit(
-            store="fast_conversation",
-            timestamp=str(r["created_at"]),
-            snippet=_excerpt(r["text"] or "", phrase),
-            extra={
-                "id": r["id"],
-                "trust_scope": r["trust_scope"],
-            },
-        ))
+        hits.append(
+            ClaimHit(
+                store="fast_conversation",
+                timestamp=str(r["created_at"]),
+                snippet=_excerpt(r["text"] or "", phrase),
+                extra={
+                    "id": r["id"],
+                    "trust_scope": r["trust_scope"],
+                },
+            )
+        )
     return hits
 
 
 def _search_lived_episodes(
-    *, phrase: str, repo_root: Path, top_n: int,
+    *,
+    phrase: str,
+    repo_root: Path,
+    top_n: int,
 ) -> list[ClaimHit]:
     db = repo_root / "memory" / "lived_episodes.db"
     if not db.exists():
         return []
     hits: list[ClaimHit] = []
+    con: sqlite3.Connection | None = None
     try:
         con = sqlite3.connect(str(db))
         con.row_factory = sqlite3.Row
@@ -264,33 +326,39 @@ def _search_lived_episodes(
             file=sys.stderr,
         )
         return []
+    finally:
+        if con is not None:
+            con.close()
     for r in rows:
         # Search both title and summary, prefer summary excerpt
         # when phrase appears there.
-        text = (
-            r["summary"] if phrase.lower() in (r["summary"] or "").lower()
-            else r["title"]
+        text = r["summary"] if phrase.lower() in (r["summary"] or "").lower() else r["title"]
+        hits.append(
+            ClaimHit(
+                store="lived_episodes",
+                timestamp=str(r["occurred_at"] or r["created_at"]),
+                snippet=_excerpt(text or "", phrase),
+                extra={
+                    "episode_id": r["id"],
+                    "memory_voice": r["memory_voice"],
+                    "title": r["title"],
+                },
+            )
         )
-        hits.append(ClaimHit(
-            store="lived_episodes",
-            timestamp=str(r["occurred_at"] or r["created_at"]),
-            snippet=_excerpt(text or "", phrase),
-            extra={
-                "episode_id": r["id"],
-                "memory_voice": r["memory_voice"],
-                "title": r["title"],
-            },
-        ))
     return hits
 
 
 def _search_wonderings(
-    *, phrase: str, repo_root: Path, top_n: int,
+    *,
+    phrase: str,
+    repo_root: Path,
+    top_n: int,
 ) -> list[ClaimHit]:
     db = repo_root / "memory" / "wonderings.db"
     if not db.exists():
         return []
     hits: list[ClaimHit] = []
+    con: sqlite3.Connection | None = None
     try:
         con = sqlite3.connect(str(db))
         con.row_factory = sqlite3.Row
@@ -312,21 +380,26 @@ def _search_wonderings(
             file=sys.stderr,
         )
         return []
+    finally:
+        if con is not None:
+            con.close()
     for r in rows:
         text = (
             r["conclusion"]
             if (r["conclusion"] or "").lower().find(phrase.lower()) >= 0
             else r["question"]
         )
-        hits.append(ClaimHit(
-            store="wonderings",
-            timestamp=str(r["created_at"]),
-            snippet=_excerpt(text or "", phrase),
-            extra={
-                "wonder_id": r["id"],
-                "status": r["status"],
-            },
-        ))
+        hits.append(
+            ClaimHit(
+                store="wonderings",
+                timestamp=str(r["created_at"]),
+                snippet=_excerpt(text or "", phrase),
+                extra={
+                    "wonder_id": r["id"],
+                    "status": r["status"],
+                },
+            )
+        )
     return hits
 
 
@@ -419,16 +492,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("phrase", help="Phrase to search for (case-insensitive)")
     p.add_argument(
-        "--store", action="append", choices=list(_SEARCHERS.keys()),
-        help="Restrict to one or more stores. Repeatable. Default: "
-             "all stores.",
+        "--store",
+        action="append",
+        choices=list(_SEARCHERS.keys()),
+        help="Restrict to one or more stores. Repeatable. Default: all stores.",
     )
     p.add_argument(
-        "--top-n", type=int, default=10,
+        "--top-n",
+        type=int,
+        default=10,
         help="Per-store hit cap (default: 10).",
     )
     p.add_argument(
-        "--json", action="store_true",
+        "--json",
+        action="store_true",
         help="Emit JSON to stdout (default: human-readable).",
     )
     args = p.parse_args(argv)

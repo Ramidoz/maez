@@ -13,7 +13,9 @@ The state that **cannot be regenerated**:
 | path | size order | what it is |
 |---|---|---|
 | `memory/chroma/` | hundreds of MB to several GB | raw / daily / core archive |
+| `memory/audit_log.db` | tens of MB | immune-memory and forensic audit trail |
 | `memory/lived_episodes.db` | tens of MB | episode store |
+| `memory/private_thoughts.db` | small to growing | private-thought signal store; backed up because continuity matters, but raw access is forensic/audited |
 | `memory/canaries.db` | <1 MB | canary store |
 | `memory/labels.db` | <1 MB | annotation labels (owner ground truth) |
 | `config/soul.local.md` | <1 MB | per-instance accumulated soul |
@@ -84,7 +86,7 @@ What the backup destination is **NOT**: a third-party cloud service whose terms 
 2. Verifies the snapshot exists and is readable.
 3. Renames current state directories with a `.pre-restore.<timestamp>` suffix (so the failed-restore-recovery path stays clean).
 4. Rsyncs the snapshot back into place.
-5. Verifies the restored state passes integrity checks (Chroma collections open, episode-store schema matches, soul.local.md parses).
+5. Verifies the restored state passes integrity checks (Chroma collections open, episode-store schema matches, `private_thoughts.db` opens with the expected row count/schema marker, audit log opens, soul.local.md parses).
 6. Logs the restoration to `logs/restore_history.jsonl` so future Maez can know "on date X, my state was restored from snapshot of date Y."
 7. Restarts the daemon.
 
