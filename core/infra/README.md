@@ -10,7 +10,7 @@ fast-reply plumbing.
 | [`capability_registry.py`](capability_registry.py) | What Maez can do / has done — introspection for the audit prompt and for `maez doctor`-style diagnostics. |
 | [`self_model.py`](self_model.py) | Maez's structured self-description — a dict of its current modules, schedules, and known capabilities. Fed into some prompts so replies don't fabricate architecture. |
 | [`public_user_shaping.py`](public_user_shaping.py) | Policy shaper for non-owner surfaces: trim verbose audit metadata, scrub owner-private references, cap response length. |
-| [`private_thoughts.py`](private_thoughts.py) | Separate SQLite DB for thoughts marked private — never surface, never index, never export. Zero producers in Track A; scaffolded for later. |
+| [`private_thoughts.py`](private_thoughts.py) | Separate SQLite DB for thoughts marked private. Track A landed as zero-producer/zero-reader; S1 adds an explicit producer API and a bounded derived-signal reader, still unwired from production behavior. |
 | [`install_recipes.py`](install_recipes.py) | Recipes for classes of install tasks (apt package install, pip install, systemd-enable) with their expected shape so classifier + audit can reason about them without re-parsing every time. |
 | [`builder_mode_capture.py`](builder_mode_capture.py) | Detects when the owner is in focused building work (long editor session, no chat turns) and captures a perception snapshot for context-restore on return. |
 | [`builder_mode_perception.py`](builder_mode_perception.py) | Consumes the capture → synthesises a "where were you" summary for the next chat turn. |
@@ -28,9 +28,11 @@ fast-reply plumbing.
 - **`paths.py` never does I/O at import time.** All helpers are pure
   functions of the env + repo layout. Directory creation happens
   in `ensure_dirs()`, called deliberately by the daemon on boot.
-- **`private_thoughts.py` has no surfaces.** Don't add consumers
-  without a governance discussion. The whole point is a storage
-  channel that no other subsystem reads.
+- **`private_thoughts.py` has no production behavior surface.**
+  Raw inspection is limited to explicit forensic/operator tools.
+  The S1 bounded reader may return only derived signals from rows
+  whose context envelope allows `private_reader`; it must not select
+  or return raw thought content.
 - **`fast_reply_audit` is defence-in-depth.** Callers are supposed to
   strip secrets; this layer rejects records containing any of the
   known-sensitive keys as a backstop.
@@ -41,7 +43,9 @@ fast-reply plumbing.
 - `capability_registry.snapshot() -> dict`
 - `self_model.build() -> dict`
 - `public_user_shaping.shape_for_public(text, trust_scope) -> str`
-- `private_thoughts.record(text, provenance)` — Track A writers: zero so far
+- `private_thoughts.record_thought(...)` — explicit/manual raw writer
+- `private_thoughts.record_signal(...)` — S1 producer writer with contextual-integrity envelope
+- `private_thoughts.derived_signals(...)` — S1 bounded metadata reader; no production behavior wiring yet
 - `fast_prompt_builder.build(...) -> PromptPayload`
 - `fast_reply_audit.record(entry)` / `.recent(limit)`
 - `fast_conversation_log.FastConversationLog(...).append(scope, role, content)`

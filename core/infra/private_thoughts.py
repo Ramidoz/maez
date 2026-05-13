@@ -16,8 +16,10 @@ the immune memory in audit_log.db.
     wants            first-person directions
     private_thoughts internal processing not surfaced to the user
 
-The notebook lands empty in Track A: schema and API exist, zero
-producers, zero readers in the reasoning loop.
+The notebook landed empty in Track A: schema and API existed, zero
+producers, zero readers in the reasoning loop. S1 adds an explicit
+producer API plus a bounded derived-signal reader, but no production
+producer or behavior path is wired here.
 
 DESIGN DECISIONS LOCKED BY A-CORE #9 ANCHORING PASS
 ----------------------------------------------------
@@ -39,8 +41,10 @@ DESIGN DECISIONS LOCKED BY A-CORE #9 ANCHORING PASS
    No topic, no mood, no intensity, no linkage columns. Those are
    reader-side derivations that future design passes can decide on.
 
-4. **Provenance allowlist in Track A = {'explicit_api'}.** Future
-   producers register their provenance strings here as they land.
+4. **Provenance allowlist.** Track A landed with only
+   `explicit_api`. S1 adds named producer provenances, each of
+   which must carry the minimal contextual-integrity envelope in
+   `context_json`.
    The `provenance` column is the audit hook that lets any row be
    traced back to what generated it.
 
@@ -52,11 +56,13 @@ DESIGN DECISIONS LOCKED BY A-CORE #9 ANCHORING PASS
    a single thought. Anything longer is probably an essay or a
    structured document that belongs in a different store.
 
-7. **Zero producers, zero readers in Track A.** The daemon
+7. **S1 producer + bounded-reader discipline.** The daemon
    instantiates a PrivateThoughts handle at startup (parallel to
    self.wants, self.temperament, self.continuity_id) and logs the
-   count. Nothing calls record_thought from production code, and
-   nothing reads content from anywhere.
+   count. S1 producer APIs write contextualized private content;
+   the bounded reader returns derived signals and trace ids only
+   for rows whose envelope explicitly allows `private_reader`.
+   The bounded reader never selects raw thought content.
 
 THE NON-INSTRUMENTALITY DEFENSES
 ---------------------------------
@@ -82,7 +88,9 @@ WHAT THIS MODULE DOES NOT DO
 - No LLM calls.
 - No influence on reasoning, action selection, or user-facing
   behavior.
-- No content retrieval (no search, no embedding, no semantic lookup).
+- No semantic search, no embeddings, no prompt injection of raw
+  private content. Raw inspection APIs exist only for explicit
+  forensic/operator tools and tests, not for downstream behavior.
 - No user-facing surface (no Telegram command, no dashboard).
 
 COMPOSITION
@@ -127,8 +135,30 @@ def _default_private_thoughts_path() -> Path:
 
 DEFAULT_DB_PATH = _default_private_thoughts_path()
 
-# Provenance allowlist for Track A.
-ALLOWED_PROVENANCES: frozenset[str] = frozenset({"explicit_api"})
+# Provenance allowlist. `explicit_api` keeps the original Track A API
+# working; named S1 producers must use `record_signal()` so every row
+# carries the minimal contextual-integrity envelope.
+ALLOWED_PROVENANCES: frozenset[str] = frozenset({
+    "explicit_api",
+    "audit_held",
+    "reasoning_residue",
+    "urge_held",
+    "dream_fragment",
+    "self_wondering",
+    "rupture_unhealed",
+    "crisis_signal_held",
+    "soul_objection_forming",
+})
+
+PRODUCER_PROVENANCES: frozenset[str] = ALLOWED_PROVENANCES - {"explicit_api"}
+
+_CONTEXT_REQUIRED_KEYS: tuple[str, ...] = (
+    "source",
+    "subject",
+    "consent_tier",
+    "retention",
+    "allowed_flows",
+)
 
 # Memory phase values recognized by the schema. Default for Track A
 # writers is 'gestation'. The phase transitions to 'lived' at the
@@ -211,8 +241,199 @@ class PrivateThoughts:
         if provenance not in ALLOWED_PROVENANCES:
             raise ValueError(
                 f"unknown provenance {provenance!r} "
-                f"(allowed in Track A: {sorted(ALLOWED_PROVENANCES)})"
+                f"(allowed: {sorted(ALLOWED_PROVENANCES)})"
             )
+        if provenance in PRODUCER_PROVENANCES:
+            raise ValueError(
+                f"producer provenance {provenance!r} must be written via "
+                "record_signal() so the contextual-integrity envelope is present"
+            )
+        return self._insert_thought(
+            content=content,
+            provenance=provenance,
+            context=context,
+            memory_phase=memory_phase,
+        )
+
+    def record_signal(
+        self,
+        *,
+        content: str,
+        provenance: str,
+        source: str,
+        subject: str,
+        consent_tier: str,
+        retention: str,
+        allowed_flows: tuple[str, ...] | list[str],
+        context_extra: dict | None = None,
+        memory_phase: str = "gestation",
+    ) -> int:
+        """Append a producer-originated private thought.
+
+        This is the S1 producer surface. Unlike the original
+        `record_thought(..., context=...)` escape hatch, producer
+        writes must carry the minimal contextual-integrity envelope
+        that later readers and audits can reason over.
+        """
+        if provenance not in PRODUCER_PROVENANCES:
+            raise ValueError(
+                f"record_signal requires a producer provenance "
+                f"(got {provenance!r}; allowed: {sorted(PRODUCER_PROVENANCES)})"
+            )
+        context = self._build_signal_context(
+            source=source,
+            subject=subject,
+            consent_tier=consent_tier,
+            retention=retention,
+            allowed_flows=allowed_flows,
+            context_extra=context_extra,
+        )
+        return self._insert_thought(
+            content=content,
+            provenance=provenance,
+            context=context,
+            memory_phase=memory_phase,
+        )
+
+    # -------------------------------------------------------------- #
+    #  Readers                                                        #
+    # -------------------------------------------------------------- #
+
+    def get_thought(self, thought_id: int) -> dict | None:
+        """Return a single thought by id, or None if not found."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM private_thoughts WHERE thought_id = ?",
+                (int(thought_id),),
+            ).fetchone()
+        return self._row_to_dict(row) if row else None
+
+    def recent(self, limit: int = 20) -> list[dict]:
+        """Recent thoughts, newest first. No content filter, no
+        phase filter — future readers layer those on top."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM private_thoughts "
+                "ORDER BY thought_id DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
+    def count(self) -> int:
+        """Total number of private thoughts recorded."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM private_thoughts"
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def derived_signals(self, limit: int = 50) -> dict:
+        """Return bounded private-thought signals without raw content.
+
+        The reader exposes only counts, trace ids, and coarse signal
+        states from rows whose envelope allows `private_reader`.
+        Downstream code can know that a class of private material
+        exists without receiving the private text itself.
+        """
+        bounded_limit = max(1, min(int(limit), 100))
+        rows = self._recent_signal_metadata(limit=bounded_limit)
+
+        counts: dict[str, int] = {}
+        trace_ids: dict[str, list[int]] = {}
+        for row in rows:
+            provenance = str(row.get("provenance") or "")
+            if (
+                provenance not in PRODUCER_PROVENANCES
+                or not self._context_allows_private_reader(row)
+            ):
+                continue
+            counts[provenance] = counts.get(provenance, 0) + 1
+            trace_ids.setdefault(provenance, []).append(int(row["thought_id"]))
+
+        def _present(provenance: str) -> str:
+            return "present" if counts.get(provenance, 0) > 0 else "absent"
+
+        signals = {
+            "audit_held_awareness": _present("audit_held"),
+            "reasoning_residue": _present("reasoning_residue"),
+            "urge_held": _present("urge_held"),
+            "dream_fragment": _present("dream_fragment"),
+            "self_wondering": _present("self_wondering"),
+            "unhealed_rupture": _present("rupture_unhealed"),
+            "crisis_awareness": _present("crisis_signal_held"),
+            "soul_objection_forming": _present("soul_objection_forming"),
+        }
+
+        return {
+            "bounded": True,
+            "limit": bounded_limit,
+            "raw_text_included": False,
+            "counts": counts,
+            "trace_ids": trace_ids,
+            "signals": signals,
+        }
+
+    def _recent_signal_metadata(self, limit: int) -> list[dict]:
+        """Recent producer metadata only; never selects raw content."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT thought_id, provenance, context_json, memory_phase "
+                "FROM private_thoughts "
+                "WHERE provenance != ? "
+                "ORDER BY thought_id DESC LIMIT ?",
+                ("explicit_api", int(limit)),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # -------------------------------------------------------------- #
+    #  Helpers                                                        #
+    # -------------------------------------------------------------- #
+
+    @staticmethod
+    def _row_to_dict(row: sqlite3.Row) -> dict:
+        d = dict(row)
+        try:
+            d["context"] = json.loads(d.pop("context_json") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            d["context"] = {}
+            d.pop("context_json", None)
+        return d
+
+    @staticmethod
+    def _context_allows_private_reader(row: dict) -> bool:
+        try:
+            context = json.loads(str(row.get("context_json") or "{}"))
+        except (json.JSONDecodeError, TypeError):
+            return False
+        if not isinstance(context, dict):
+            return False
+        for key in ("source", "subject", "consent_tier", "retention"):
+            value = context.get(key)
+            if not isinstance(value, str) or not value.strip():
+                return False
+        allowed_flows = context.get("allowed_flows")
+        if (
+            not isinstance(allowed_flows, list)
+            or not allowed_flows
+            or any(
+                not isinstance(flow, str) or not flow.strip()
+                for flow in allowed_flows
+            )
+        ):
+            return False
+        return "private_reader" in allowed_flows
+
+    def _insert_thought(
+        self,
+        *,
+        content: str,
+        provenance: str,
+        context: dict | None,
+        memory_phase: str,
+    ) -> int:
         if memory_phase not in _RECOGNIZED_MEMORY_PHASES:
             raise ValueError(
                 f"unknown memory_phase {memory_phase!r} "
@@ -257,53 +478,49 @@ class PrivateThoughts:
         )
         return thought_id
 
-    # -------------------------------------------------------------- #
-    #  Readers                                                        #
-    # -------------------------------------------------------------- #
-
-    def get_thought(self, thought_id: int) -> dict | None:
-        """Return a single thought by id, or None if not found."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT * FROM private_thoughts WHERE thought_id = ?",
-                (int(thought_id),),
-            ).fetchone()
-        return self._row_to_dict(row) if row else None
-
-    def recent(self, limit: int = 20) -> list[dict]:
-        """Recent thoughts, newest first. No content filter, no
-        phase filter — future readers layer those on top."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT * FROM private_thoughts "
-                "ORDER BY thought_id DESC LIMIT ?",
-                (int(limit),),
-            ).fetchall()
-        return [self._row_to_dict(r) for r in rows]
-
-    def count(self) -> int:
-        """Total number of private thoughts recorded."""
-        with sqlite3.connect(self.db_path) as conn:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM private_thoughts"
-            ).fetchone()
-        return int(row[0]) if row else 0
-
-    # -------------------------------------------------------------- #
-    #  Helpers                                                        #
-    # -------------------------------------------------------------- #
-
     @staticmethod
-    def _row_to_dict(row: sqlite3.Row) -> dict:
-        d = dict(row)
-        try:
-            d["context"] = json.loads(d.pop("context_json") or "{}")
-        except (json.JSONDecodeError, TypeError):
-            d["context"] = {}
-            d.pop("context_json", None)
-        return d
+    def _require_non_empty_string(name: str, value: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")
+        return value.strip()
+
+    @classmethod
+    def _build_signal_context(
+        cls,
+        *,
+        source: str,
+        subject: str,
+        consent_tier: str,
+        retention: str,
+        allowed_flows: tuple[str, ...] | list[str],
+        context_extra: dict | None,
+    ) -> dict:
+        if not isinstance(allowed_flows, (tuple, list)) or not allowed_flows:
+            raise ValueError("allowed_flows must be a non-empty tuple/list")
+        flows = []
+        for flow in allowed_flows:
+            if not isinstance(flow, str):
+                raise ValueError("allowed_flows entries must be strings")
+            flows.append(cls._require_non_empty_string("allowed_flows", flow))
+        if not isinstance(context_extra, (dict, type(None))):
+            raise ValueError("context_extra must be a dict when provided")
+
+        context = {
+            "source": cls._require_non_empty_string("source", source),
+            "subject": cls._require_non_empty_string("subject", subject),
+            "consent_tier": cls._require_non_empty_string(
+                "consent_tier", consent_tier
+            ),
+            "retention": cls._require_non_empty_string("retention", retention),
+            "allowed_flows": flows,
+            "extra": dict(context_extra or {}),
+        }
+        missing = [key for key in _CONTEXT_REQUIRED_KEYS if key not in context]
+        if missing:
+            raise ValueError(
+                "signal context missing required key(s): " + ", ".join(missing)
+            )
+        return context
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -330,8 +547,10 @@ if __name__ == "__main__":
         db = Path(td) / "private_thoughts_test.db"
 
         # -- constants
-        _assert(ALLOWED_PROVENANCES == frozenset({"explicit_api"}),
-                "Track A provenance allowlist is {'explicit_api'}")
+        _assert("explicit_api" in ALLOWED_PROVENANCES,
+                "explicit_api remains an allowed provenance")
+        _assert("audit_held" in ALLOWED_PROVENANCES,
+                "S1 producer provenance 'audit_held' is allowed")
         _assert(MAX_CONTENT_LEN == 16384, "MAX_CONTENT_LEN is 16384")
         _assert("gestation" in _RECOGNIZED_MEMORY_PHASES,
                 "'gestation' is a recognized memory_phase")

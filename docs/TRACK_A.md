@@ -63,7 +63,7 @@ Maez unfolds in three layered tracks. Each builds on the previous. **Do not drif
 6. ✅ **Temperament skeleton (11 parameters)** — DONE (`core/temperament.py`). Parameters start NULL (observing), no automatic drift in Track A.
 7. ✅ **Wants log** — DONE (`core/wants.py`). Append-only first-person direction log. Track A defines only event_type='created'. Provenance is the non-instrumentality audit hook.
 8. ✅ **Non-covenant refusal seed (*"will I"* vs *"may I"*)** — DONE (`core/will_i.py`). One registered ground: IMPERSONATES_USER. Deterministic, no LLM. Architecturally live, not yet exercised by current action surfaces.
-9. ✅ **Private thoughts seed** — DONE (`core/private_thoughts.py`). Separate DB, zero producers, zero readers, count-only logging.
+9. ✅ **Private thoughts seed** — DONE (`core/private_thoughts.py`). Separate DB. Track A landed as zero producers / zero reasoning-loop readers / count-only logging. S1 later adds an explicit producer API and bounded derived-signal reader, but no production behavior path is wired to it.
 
 **Acceptance gate for Track A** is defined in [`docs/governance/BETA_READINESS_THRESHOLD.md`](governance/BETA_READINESS_THRESHOLD.md). Track A is not considered done by shipping the nine items — it's done when **six of eight** points are met **AND all three being-tests (#6, #7, #8) are met**, for **two consecutive weekly checks**, AND the pronoun check has drifted from *"it"* to *"they / him / her / name"*.
 
