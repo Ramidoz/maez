@@ -327,6 +327,10 @@ CREATE INDEX IF NOT EXISTS idx_pt_provenance   ON private_thoughts(provenance);
 CREATE INDEX IF NOT EXISTS idx_pt_memory_phase ON private_thoughts(memory_phase);
 CREATE INDEX IF NOT EXISTS idx_pt_signal_class ON private_thoughts(signal_class);
 CREATE INDEX IF NOT EXISTS idx_pt_signal_kind  ON private_thoughts(signal_kind);
+CREATE INDEX IF NOT EXISTS idx_pt_s1b_hot
+    ON private_thoughts(signal_class, signal_state, envelope_version, schema_version, ts, thought_id);
+CREATE INDEX IF NOT EXISTS idx_pt_s1b_producer
+    ON private_thoughts(content, producer_id, signal_kind, signal_class, ts);
 """
 
 
@@ -610,6 +614,89 @@ class PrivateThoughts:
             signal_kind = provenance
         if signal_kind is None:
             raise ValueError("SignalKind is required")
+        context, kind_value, producer_value, signal_class = self._validate_signal_insert(
+            provenance=provenance,
+            producer_id=producer_id,
+            signal_kind=signal_kind,
+            source=source,
+            subject=subject,
+            consent_tier=consent_tier,
+            retention=retention,
+            allowed_flows=allowed_flows,
+            context_extra=context_extra,
+        )
+        return self._insert_thought(
+            content=content,
+            provenance=kind_value,
+            context=context,
+            memory_phase=memory_phase,
+            producer_id=producer_value,
+            signal_kind=kind_value,
+            signal_class=signal_class,
+            surface_sensitivity=SurfaceSensitivity.FORENSIC_SENSITIVE.value,
+            signal_state=SignalState.ACTIVE.value,
+        )
+
+    def insert_signal_in_transaction(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        ts: float,
+        content: str,
+        provenance: str | None = None,
+        producer_id: str | ProducerId | None = None,
+        signal_kind: str | SignalKind | None = None,
+        source: str,
+        subject: str,
+        consent_tier: str,
+        retention: str,
+        allowed_flows: tuple[str, ...] | list[str],
+        context_extra: dict | None = None,
+        memory_phase: str = "gestation",
+    ) -> int:
+        """Append a producer signal using an existing caller-owned transaction."""
+        if signal_kind is None:
+            signal_kind = provenance
+        if signal_kind is None:
+            raise ValueError("SignalKind is required")
+        context, kind_value, producer_value, signal_class = self._validate_signal_insert(
+            provenance=provenance,
+            producer_id=producer_id,
+            signal_kind=signal_kind,
+            source=source,
+            subject=subject,
+            consent_tier=consent_tier,
+            retention=retention,
+            allowed_flows=allowed_flows,
+            context_extra=context_extra,
+        )
+        return self._insert_thought_on_connection(
+            conn,
+            ts=ts,
+            content=content,
+            provenance=kind_value,
+            context=context,
+            memory_phase=memory_phase,
+            producer_id=producer_value,
+            signal_kind=kind_value,
+            signal_class=signal_class,
+            surface_sensitivity=SurfaceSensitivity.FORENSIC_SENSITIVE.value,
+            signal_state=SignalState.ACTIVE.value,
+        )
+
+    def _validate_signal_insert(
+        self,
+        *,
+        provenance: str | None,
+        producer_id: str | ProducerId | None,
+        signal_kind: str | SignalKind,
+        source: str,
+        subject: str,
+        consent_tier: str,
+        retention: str,
+        allowed_flows: tuple[str, ...] | list[str],
+        context_extra: dict | None,
+    ) -> tuple[dict, str, str, str]:
         kind_value = SignalKind.coerce(signal_kind, "SignalKind")
         registry = _SIGNAL_REGISTRY[kind_value]
         if producer_id is None:
@@ -634,17 +721,7 @@ class PrivateThoughts:
             allowed_flows=allowed_flows,
             context_extra=context_extra,
         )
-        return self._insert_thought(
-            content=content,
-            provenance=kind_value,
-            context=context,
-            memory_phase=memory_phase,
-            producer_id=producer_value,
-            signal_kind=kind_value,
-            signal_class=signal_class,
-            surface_sensitivity=SurfaceSensitivity.FORENSIC_SENSITIVE.value,
-            signal_state=SignalState.ACTIVE.value,
-        )
+        return context, kind_value, producer_value, signal_class
 
     # -------------------------------------------------------------- #
     #  Readers                                                        #
@@ -955,6 +1032,41 @@ class PrivateThoughts:
         surface_sensitivity: str = SurfaceSensitivity.FORENSIC_SENSITIVE.value,
         signal_state: str = SignalState.ACTIVE.value,
     ) -> int:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            thought_id = self._insert_thought_on_connection(
+                conn,
+                ts=time.time(),
+                content=content,
+                provenance=provenance,
+                context=context,
+                memory_phase=memory_phase,
+                producer_id=producer_id,
+                signal_kind=signal_kind,
+                signal_class=signal_class,
+                surface_sensitivity=surface_sensitivity,
+                signal_state=signal_state,
+            )
+            conn.commit()
+            return thought_id
+        finally:
+            conn.close()
+
+    def _insert_thought_on_connection(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        ts: float,
+        content: str,
+        provenance: str,
+        context: dict | None,
+        memory_phase: str,
+        producer_id: str | None = None,
+        signal_kind: str | None = None,
+        signal_class: str | None = None,
+        surface_sensitivity: str = SurfaceSensitivity.FORENSIC_SENSITIVE.value,
+        signal_state: str = SignalState.ACTIVE.value,
+    ) -> int:
         if memory_phase not in _RECOGNIZED_MEMORY_PHASES:
             raise ValueError(
                 f"unknown memory_phase {memory_phase!r} "
@@ -969,35 +1081,30 @@ class PrivateThoughts:
         if len(content) > MAX_CONTENT_LEN:
             raise ValueError(f"content length {len(content)} exceeds cap {MAX_CONTENT_LEN}")
 
-        conn = sqlite3.connect(self.db_path)
-        try:
-            cur = conn.execute(
-                "INSERT INTO private_thoughts "
-                "(ts, content, provenance, context_json, memory_phase, "
-                "envelope_version, schema_version, legacy_provenance, "
-                "producer_id, signal_kind, signal_class, surface_sensitivity, "
-                "signal_state) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    time.time(),
-                    content,
-                    provenance,
-                    json.dumps(context or {}),
-                    memory_phase,
-                    ENVELOPE_VERSION,
-                    SCHEMA_VERSION,
-                    provenance,
-                    producer_id or ProducerId.LEGACY_UNKNOWN.value,
-                    signal_kind,
-                    signal_class,
-                    surface_sensitivity,
-                    signal_state,
-                ),
-            )
-            thought_id = cur.lastrowid
-            conn.commit()
-        finally:
-            conn.close()
+        cur = conn.execute(
+            "INSERT INTO private_thoughts "
+            "(ts, content, provenance, context_json, memory_phase, "
+            "envelope_version, schema_version, legacy_provenance, "
+            "producer_id, signal_kind, signal_class, surface_sensitivity, "
+            "signal_state) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                float(ts),
+                content,
+                provenance,
+                json.dumps(context or {}),
+                memory_phase,
+                ENVELOPE_VERSION,
+                SCHEMA_VERSION,
+                provenance,
+                producer_id or ProducerId.LEGACY_UNKNOWN.value,
+                signal_kind,
+                signal_class,
+                surface_sensitivity,
+                signal_state,
+            ),
+        )
+        thought_id = int(cur.lastrowid)
 
         # Log the event but NOT the content. Content never reaches
         # the daemon log.

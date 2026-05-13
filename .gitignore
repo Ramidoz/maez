@@ -63,6 +63,10 @@ config/entity_aliases.local.yaml
 # fixture (docs/entity_semantics.example.yaml) is committed.
 config/entity_semantics.local.yaml
 
+# Owner-local S1b private-thoughts kill-switch/runtime tuning.
+config/private_thoughts_s1b.local.json
+config/private_thoughts_s1b.local.json.*
+
 # Working docs, intimate narratives, in-progress follow-ups — stay local
 docs/REBUILD_PLAN_*.md
 docs/TASK_TREEMAP.md

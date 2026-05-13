@@ -1,6 +1,6 @@
 # Slice S1b - private_thoughts minimal wiring
 
-**Status:** SPEC DRAFT. No implementation code has landed for S1b.
+**Status:** IMPLEMENTED in code, pending post-implementation Codex review and Claude council ratification. Not yet promoted beyond scaffold/minimal-wiring status.
 
 **Predecessors:**
 - `c6df762` - S1a bounded access layer.
@@ -14,7 +14,7 @@
 
 **Codex draft review:** Dewey, Feynman, Locke, Descartes, Ohm, and Goodall reviewed this draft before implementation. Verdict: **RATIFY-WITH-AMENDMENTS**. The folded amendments are named in [Codex draft-review amendments](#codex-draft-review-amendments).
 
-**Blocks:** implementation waits for this amended spec to become canonical, a cooling-off night, and a live-readiness check or explicit operator waiver.
+**Implementation gate:** this amended spec became canonical, the cooling-off night passed, and the operator explicitly waived the strict post-presence-restart soak window on 2026-05-13. Gate record for the implementation commit: services were healthy with `NRestarts=0`; the restart was operator provisioning, not crash recovery; extra discipline was RED-first tests and abort-on-service-restart/crash during implementation.
 
 **Maps to:** [`MAEZ_LIFE_SUBSTRATE.md § S1`](MAEZ_LIFE_SUBSTRATE.md#s1--private_thoughts-in-flight), especially invariant #2 Human-Primacy, #3 Contextual Integrity, #4 Interpretive Humility, #5 Rupture and Repair, and #8 Capability Quarantine.
 

@@ -599,6 +599,21 @@ class MaezDaemon:
         except Exception as e:
             logger.debug("private thoughts init failed: %s", e)
             self.private_thoughts = None
+        try:
+            from core.infra.private_thoughts_s1b import (
+                PrivateThoughtsS1bConsumer,
+                PrivateThoughtsS1bProducer,
+            )
+
+            self._s1b_producer = PrivateThoughtsS1bProducer()
+            self._s1b_consumer = PrivateThoughtsS1bConsumer()
+            self._s1b_residue_events: list[str] = []
+            logger.info("Private thoughts S1b wiring ready (flag-gated)")
+        except Exception as e:
+            logger.debug("private thoughts S1b init failed: %s", e)
+            self._s1b_producer = None
+            self._s1b_consumer = None
+            self._s1b_residue_events = []
 
         self._cognition_critique_counter = 0
         self._last_cognition_critique: dict | None = None
@@ -1246,6 +1261,54 @@ class MaezDaemon:
             )
             return None
 
+    # ------------------------------------------------------------------ #
+    #  S1b private-thoughts minimal wiring                                #
+    # ------------------------------------------------------------------ #
+
+    def _s1b_note_residue_event(self, event_kind: str) -> None:
+        """Collect content-free reasoning-residue events for end-cycle write."""
+        if not hasattr(self, "_s1b_residue_events"):
+            self._s1b_residue_events = []
+        self._s1b_residue_events.append(str(event_kind))
+
+    def _s1b_flush_residue_events(self) -> int | None:
+        """Write at most one S1b private signal for the current cycle."""
+        events = list(getattr(self, "_s1b_residue_events", []) or [])
+        self._s1b_residue_events = []
+        if not events:
+            return None
+        producer = getattr(self, "_s1b_producer", None)
+        if producer is None:
+            return None
+        try:
+            return producer.emit_cycle_residue(events, cycle_id=self.cycle_count)
+        except Exception as exc:
+            logger.warning("S1b producer write skipped: %s", exc)
+            return None
+
+    def _s1b_optional_presentation_payload(self, canonical_text: str) -> dict | None:
+        """Return a separate dampened optional-presentation payload, if enabled."""
+        consumer = getattr(self, "_s1b_consumer", None)
+        if consumer is None:
+            return None
+        try:
+            from core.infra.private_thoughts_s1b import build_cycle_optional_presentation
+
+            decision = consumer.pacing_decision()
+            payload = build_cycle_optional_presentation(
+                cycle=self.cycle_count,
+                canonical_text=canonical_text,
+                decision=decision,
+            )
+            recorder = getattr(consumer, "record_optional_presentation", None)
+            should_record = getattr(consumer, "should_record_optional_presentation_opportunity", None)
+            if callable(recorder) and callable(should_record) and should_record():
+                recorder(dampened=payload is not None)
+            return payload
+        except Exception as exc:
+            logger.warning("S1b consumer returned neutral after error: %s", exc)
+            return None
+
     def _reason(self, snap: dict, *, stale_fields: set | None = None) -> str | None:
         """Run a single reasoning cycle against the local model.
 
@@ -1588,6 +1651,7 @@ class MaezDaemon:
                 # Transient → one retry after a short backoff.
                 transient = _cls is not None and _cls.likely_transient and _cls.retryable
                 if transient:
+                    self._s1b_note_residue_event("retry_triggered")
                     logger.info(
                         "Cycle %d: %s error, retrying once after 2s backoff",
                         self.cycle_count,
@@ -1611,6 +1675,7 @@ class MaezDaemon:
                             self.cycle_count,
                             retry_err,
                         )
+                        self._s1b_note_residue_event("retry_failed")
                         return None
                 else:
                     # Structural / unknown / non-retryable → skip cleanly.
@@ -3710,6 +3775,7 @@ class MaezDaemon:
 
             # Broadcast cycle start to UI
             self._ws_broadcast({"type": "cycle_start", "cycle": self.cycle_count})
+            self._s1b_residue_events = []
 
             # Collect system perception
             snap = perception_snapshot()
@@ -4062,12 +4128,14 @@ class MaezDaemon:
                 result = self._reason(snap, stale_fields=stale)
             if result is None:
                 # Either gate skipped, or _reason couldn't run. No-op.
+                self._s1b_flush_residue_events()
                 pass
             elif result.strip() == _HEARTBEAT_OK:
                 # Nothing noteworthy this cycle — skip audit, storage, broadcast.
                 # Storing fabricated prose is worse than storing nothing.
                 logger.info("Cycle %d: HEARTBEAT_OK — silent cycle", self.cycle_count)
                 self._cycles_since_last_thought += 1
+                self._s1b_flush_residue_events()
                 result = None
             else:
                 # Self-claim audit on the cycle response BEFORE anything
@@ -4149,6 +4217,7 @@ class MaezDaemon:
                             self.cycle_count,
                             ",".join(sorted({f.kind for f in _audit_result.flags})),
                         )
+                        self._s1b_note_residue_event("audit_rewrite")
                         result = _audit_result.text
                 except Exception as _audit_err:
                     logger.debug(
@@ -4181,6 +4250,7 @@ class MaezDaemon:
                 # Retry path: if thought is below floor or matches reject combos
                 try:
                     if cog_should_retry(cog_metadata):
+                        self._s1b_note_residue_event("low_cognition_score")
                         policy = cog_get_behavior_policy()
                         retry_instruction = cog_build_retry_prompt(cog_metadata, policy)
                         initial_score = cog_metadata.get("cog_score", 0)
@@ -4289,6 +4359,8 @@ class MaezDaemon:
                 except Exception as e:
                     logger.debug("Retry check failed: %s", e)
 
+                self._s1b_flush_residue_events()
+
                 mem_metadata = {
                     "cpu_pct": snap["cpu"]["percent"],
                     "ram_pct": snap["ram"]["percent"],
@@ -4321,6 +4393,9 @@ class MaezDaemon:
                         "thought": result,
                     }
                 )
+                _s1b_optional_payload = self._s1b_optional_presentation_payload(result)
+                if _s1b_optional_payload is not None:
+                    self._ws_broadcast(_s1b_optional_payload)
 
                 # 2026-04-25 fixation patches: thought stored — push
                 # axes into history (Patch A's stale-field detector)

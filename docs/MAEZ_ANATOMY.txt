@@ -54,9 +54,9 @@
                                               │         [ ✓ real ]        │
                                               │      ○  private_thoughts  │
                                               │         [ ◐ scaffold +    │ ◀── S1a doorway
-                                              │           hardened access │     S1a.1 shipped
-                                              │           layer · S1b     │     b913728;
-                                              │           planning open ] │     closed enum
+                                              │           minimal wiring  │     S1b implemented;
+                                              │           · councils      │     post-review
+                                              │           pending ]       │     pending
                                               │      ○  soul_objections   │     registry:
                                               │         [ ✗ planned ]     │     docs/PRIVATE_
                                               │                           │     THOUGHTS_SIGNAL_

@@ -29,7 +29,7 @@ Each row maps to one of the [eleven covenant invariants](MAEZ_NORTH_STAR.md#the-
 
 Plus the in-flight slice that is technically *not* one of the twelve but is foundational to several:
 
-| — | private_thoughts (S1) | #4 Interpretive Humility (in part) | `[ ◐ scaffold + hardened access layer · S1b planning unblocked ]` | none |
+| — | private_thoughts (S1) | #4 Interpretive Humility (in part) | `[ ◐ scaffold + minimal wiring · post-implementation councils pending ]` | none |
 
 ---
 
@@ -94,7 +94,7 @@ The deliberation space many other organs need. See detailed S1 plan below.
 
 - **S1a** — bounded access layer (doorway). DONE 2026-05-13 in `c6df762`. Status `[ ◐ scaffold + bounded access layer ]`. Claude six-role council ran: RATIFY-WITH-AMENDMENTS. NOT promoted to `[ ✓ real ]`.
 - **S1a.1** — hardening. DONE 2026-05-13 in `b913728`. Claude six-role council returned RATIFY-WITH-AMENDMENTS; C1-C6 mechanical closure moves status to `[ ◐ scaffold + hardened access layer · S1b planning unblocked ]`.
-- **S1b** — minimal wiring. SPEC DRAFT. One reasoning-residue producer plus one optional-output length-dampening consumer. Still NOT `[ ✓ real ]` until implementation ships, both panels ratify, and production-cycle observation supports promotion.
+- **S1b** — minimal wiring. IMPLEMENTED in code under explicit operator waiver on 2026-05-13. One reasoning-residue producer plus one optional-output length-dampening consumer. Still NOT `[ ✓ real ]` until both panels ratify and production-cycle observation supports promotion.
 
 ### S2 — Contextual integrity at ingest
 
@@ -203,9 +203,9 @@ After the hardening slice ships, Claude post-implementation council ratifies it,
 - Test strategy: unit tests for enum rejection, schema migration round-trip, malformed-row handling. Natural-text probe sweep per [[`feedback_test_with_natural_human_texts`]] to ensure no behavioral regression in the cycle (which doesn't yet read signals).
 - Live-daemon verification: post-Dell-recovery the daemon runs under `Restart=on-failure` per the operator-judgment pass. If any crash occurs during S1a.1 development, the Dell trigger reopens — see [[`project_dell_repair_override_trigger`]].
 
-### S1b — wiring (SPEC DRAFT)
+### S1b — wiring (IMPLEMENTED · POST-IMPLEMENTATION REVIEW PENDING)
 
-After S1a.1 is ratified, C1-C6 close, the cooling-off night passes, and live-readiness is checked or explicitly waived, S1b wires one real producer and one real consumer. The current draft is [`SLICE_S1B_PRIVATE_THOUGHTS_WIRING.md`](SLICE_S1B_PRIVATE_THOUGHTS_WIRING.md).
+After S1a.1 was ratified, C1-C6 closed, the cooling-off night passed, and the operator explicitly waived the strict post-presence-restart soak window, S1b wired one real producer and one real consumer. The implementation contract is [`SLICE_S1B_PRIVATE_THOUGHTS_WIRING.md`](SLICE_S1B_PRIVATE_THOUGHTS_WIRING.md).
 
 Draft shape:
 - One real producer — a daemon-cycle reasoning-residue wrapper writes `reasoning_residue` via `record_signal()` with closed registry fields.
@@ -213,7 +213,7 @@ Draft shape:
 
 S1b human-primacy constraint from Claude council C2: `signal_class` counts are still narrative-shape leakage. The consumer must not pre-empt the bonded user naming a rupture, crisis, soul objection, or other lived state. The S1b draft permits only optional-output length dampening on a local self-initiated daemon-cycle presentation copy; it explicitly forbids delay, silence, withholding, topic avoidance, direct-user reply manipulation, Telegram proactive/check-in changes, and canonical memory/audit text changes.
 
-S1b is a separate implementation session after this spec is reviewed by both panels. The draft chooses length dampening, not delay, silence, withholding, topic avoidance, or direct-user reply manipulation.
+S1b chose length dampening, not delay, silence, withholding, topic avoidance, or direct-user reply manipulation. Post-implementation Codex review and Claude council ratification remain pending before any stronger status promotion.
 
 ### Substrate-plan refresh watch-points
 

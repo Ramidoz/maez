@@ -573,27 +573,34 @@ class MaezTerminalUI:
             async for msg in ws:
                 try:
                     d = json.loads(msg)
-                    tp = d.get("type")
-                    if tp == "cycle_start":
-                        self.set_emotion("thinking")
-                    elif tp == "cycle_end":
-                        self.set_emotion("happy")
-                        if d.get("thought"):
-                            self.last_thought = d["thought"]
-                    elif tp == "alert":
-                        self.set_emotion("alert")
-                    elif tp == "health":
-                        s = d.get("system", d)
-                        self.cpu = s.get("cpu_percent", self.cpu)
-                        self.gpu = s.get("gpu_percent", self.gpu) or self.gpu
-                        self.ram = s.get("ram_percent", self.ram)
-                        self.temp = s.get("gpu_temp_c", self.temp) or self.temp
-                    elif tp == "message_reply":
-                        self.set_emotion("speaking")
-                        if d.get("text"):
-                            self.last_thought = d["text"]
+                    self._handle_ws_payload(d)
                 except Exception:
                     pass
+
+    def _handle_ws_payload(self, d: dict) -> None:
+        tp = d.get("type")
+        if tp == "cycle_start":
+            self.set_emotion("thinking")
+        elif tp == "cycle_end":
+            self.set_emotion("happy")
+            if d.get("thought"):
+                self.last_thought = d["thought"]
+        elif tp == "cycle_optional_presentation":
+            self.set_emotion("happy")
+            if d.get("presentation_text"):
+                self.last_thought = d["presentation_text"]
+        elif tp == "alert":
+            self.set_emotion("alert")
+        elif tp == "health":
+            s = d.get("system", d)
+            self.cpu = s.get("cpu_percent", self.cpu)
+            self.gpu = s.get("gpu_percent", self.gpu) or self.gpu
+            self.ram = s.get("ram_percent", self.ram)
+            self.temp = s.get("gpu_temp_c", self.temp) or self.temp
+        elif tp == "message_reply":
+            self.set_emotion("speaking")
+            if d.get("text"):
+                self.last_thought = d["text"]
 
     def _thread_mode_toggle(self):
         while self.running:
