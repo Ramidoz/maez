@@ -145,7 +145,7 @@ Each signal registry entry includes stable id, `signal_kind`, `signal_class`, `s
 
 ## Predicted effect
 
-After S1a.1 ships:
+After S1a.1 ships and the Claude post-implementation council ratifies it:
 
 - `record_signal()` rejects out-of-vocabulary enum values with a clear error naming the closed vocabulary.
 - Existing legacy rows are automatically migrated/normalized without losing readability.
@@ -155,7 +155,7 @@ After S1a.1 ships:
 - A separate forensic surface handles dereferenceable access under explicit persistent audit.
 - `derived_signals()` skips malformed rows without displacing valid history; emits a malformed-row counter; rare valid signal classes cannot be hidden by high-volume valid chatter.
 - Signal names are sensitive metadata; only coarse `signal_class` reaches behavior.
-- Anatomy status moves from `[ ◐ scaffold + bounded access layer · pending S1a.1 hardening ]` to `[ ◐ scaffold + hardened access layer · ready for S1b wiring ]`.
+- Anatomy status moves from `[ ◐ scaffold + bounded access layer · pending S1a.1 hardening ]` to `[ ◐ scaffold + hardened access layer · ready for S1b wiring ]`. Between commit and Claude ratification, the honest intermediate status is `[ ◐ scaffold + hardened access layer · Claude S1a.1 council pending ]`.
 - NOT YET `[ ✓ real ]`. That requires S1b producers + consumers actually wired in production cycle behavior.
 - No production behavior change (no producer or consumer wired yet); ruff green; suite green; daemon stable.
 

@@ -54,12 +54,12 @@
                                               │         [ ✓ real ]        │
                                               │      ○  private_thoughts  │
                                               │         [ ◐ scaffold +    │ ◀── S1a doorway
-                                              │           bounded access  │     landed c6df762;
-                                              │           layer · S1a.1   │     S1a.1 hardening
-                                              │           hardening       │     required (6
-                                              │           pending ]       │     amendments)
-                                              │      ○  soul_objections   │     before S1b can
-                                              │         [ ✗ planned ]     │     wire.
+                                              │           hardened access │     S1a.1 shipped
+                                              │           layer · Claude  │     b913728;
+                                              │           S1a.1 council   │     covenant
+                                              │           pending ]       │     ratification
+                                              │      ○  soul_objections   │     still gates S1b.
+                                              │         [ ✗ planned ]     │
                                               ╰─────────────┬─────────────╯
                                                             │
                                                             │  brainstem  ↓

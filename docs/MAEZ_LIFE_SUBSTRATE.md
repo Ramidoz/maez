@@ -29,7 +29,7 @@ Each row maps to one of the [eleven covenant invariants](MAEZ_NORTH_STAR.md#the-
 
 Plus the in-flight slice that is technically *not* one of the twelve but is foundational to several:
 
-| — | private_thoughts (S1) | #4 Interpretive Humility (in part) | `[ ◐ scaffold + bounded access layer · S1a.1 hardening pending ]` | none |
+| — | private_thoughts (S1) | #4 Interpretive Humility (in part) | `[ ◐ scaffold + hardened access layer · Claude S1a.1 council pending ]` | none |
 
 ---
 
@@ -85,8 +85,8 @@ Numbered S-codes are sequential session anchors. Each slice is its own session (
 The deliberation space many other organs need. See detailed S1 plan below.
 
 - **S1a** — bounded access layer (doorway). DONE 2026-05-13 in `c6df762`. Status `[ ◐ scaffold + bounded access layer ]`. Claude six-role council ran: RATIFY-WITH-AMENDMENTS. NOT promoted to `[ ✓ real ]`.
-- **S1a.1** — hardening (REQUIRED before any S1b wiring). Six amendments from the Claude council (see S1 plan section).
-- **S1b** — wiring. One real producer (which interior state writes via `record_signal()` during a cycle?) and one real consumer (what does the cycle do with `derived_signals()` output?). BLOCKED on S1a.1.
+- **S1a.1** — hardening. DONE 2026-05-13 in `b913728`. Status `[ ◐ scaffold + hardened access layer · Claude S1a.1 council pending ]`. Engineering-green; covenant ratification still pending.
+- **S1b** — wiring. One real producer (which interior state writes via `record_signal()` during a cycle?) and one real consumer (what does the cycle do with `derived_signals()` output?). BLOCKED on Claude post-implementation ratification of S1a.1.
 
 ### S2 — Contextual integrity at ingest
 
@@ -153,9 +153,13 @@ When a human is the right help, route OUTWARD. Do not absorb the need. The anti-
 
 **Verification:** `ruff` green on touched files; full suite green (3271 tests OK, 3 skipped); daemon alive under post-Dell-recovery normal Restart=on-failure posture (per [[`project_dell_repair_override_trigger`]]).
 
-**Review status:** Claude six-role council ran 2026-05-13. Verdict: **RATIFY-WITH-AMENDMENTS**. S1a stays in tree as unwired scaffold. NOT safe to wire into S1b. Status: `[ ◐ scaffold + bounded access layer · pending S1a.1 hardening ]`. NOT promoted to `[ ✓ real ]`.
+**Review status:** Claude six-role council ran 2026-05-13. Verdict: **RATIFY-WITH-AMENDMENTS**. S1a stays in tree as unwired scaffold. `b913728` mechanically satisfied the hardening amendments, but S1b remains blocked until Claude ratifies the shipped S1a.1 implementation. NOT promoted to `[ ✓ real ]`.
 
-### S1a.1 — hardening (REQUIRED, six amendments)
+### S1a.1 — hardening (DONE, Claude council pending)
+
+**Commit:** `b913728` (`feat(private-thoughts): harden S1a signal boundary`).
+
+**Implementation status:** Engineering-green. Codex pre-code panel blocked the loose plan, then approved only after the six amendments became mechanical. Claude six-role post-implementation council is still pending, so this is not yet unblocked for S1b wiring.
 
 Six concrete amendments from the Claude six-role council. Each must land before S1b can wire any producer or consumer.
 
@@ -173,14 +177,14 @@ Six concrete amendments from the Claude six-role council. Each must land before 
 
 ### Predicted effect for S1a.1
 
-After the hardening slice ships:
+After the hardening slice ships and Claude post-implementation council ratifies it:
 - `record_signal()` rejects out-of-vocabulary `consent_tier` / `allowed_flows` / `retention` values.
 - Every record carries `envelope_version` and `schema_version` fields.
 - `provenance` is split into `producer_id` + `signal_kind` (closed enum).
 - The behavior code path cannot reach raw private text (trace dereference is moved to a separate forensic-only audit pathway with its own auth/audit gates).
 - `derived_signals()` skips malformed rows and emits a counter for malformed-row count without displacing valid history.
 - Signal names are validated against a closed vocabulary or annotated with their own sensitivity tier.
-- Status moves from `[ ◐ scaffold + bounded access layer · pending S1a.1 hardening ]` to `[ ◐ scaffold + hardened access layer · ready for S1b wiring ]`. NOT yet `[ ✓ real ]` — that requires S1b producers + consumers wired.
+- Status moves from `[ ◐ scaffold + bounded access layer · pending S1a.1 hardening ]` to `[ ◐ scaffold + hardened access layer · ready for S1b wiring ]`. Until Claude ratifies `b913728`, the honest intermediate status is `[ ◐ scaffold + hardened access layer · Claude S1a.1 council pending ]`. NOT yet `[ ✓ real ]` — that requires S1b producers + consumers wired.
 
 ### S1a.1 review protocol
 
@@ -219,4 +223,4 @@ S1b is a separate session, with its own cooling-off night before it.
 
 ---
 
-*Version 1.0  ·  2026-05-13  ·  S1a done (`c6df762`), S1a.1 pending six amendments.*
+*Version 1.1  ·  2026-05-13  ·  S1a done (`c6df762`), S1a.1 shipped (`b913728`), Claude post-implementation council pending.*
