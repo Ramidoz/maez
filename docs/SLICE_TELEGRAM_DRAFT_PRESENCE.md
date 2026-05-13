@@ -190,7 +190,7 @@ Allowed metadata:
 - `surface`: `telegram`
 - `feature`: `draft_presence`
 - `result`: `attempted`, `succeeded`, `failed`
-- `reason`: one of `disabled`, `unsupported`, `timeout`, `network_error`, `api_error`, `bad_config`, `unknown_error`
+- `reason`: one of `disabled`, `unsupported`, `timeout`, `cancelled`, `network_error`, `api_error`, `bad_config`, `unknown_error`
 - `timeout_ms`
 - `producer_version`: `telegram_draft_presence.v1`
 

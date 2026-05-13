@@ -27,6 +27,7 @@ Uses python-telegram-bot library for:
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -34,9 +35,18 @@ import tempfile
 import time
 import html as _html
 import re
+from collections import OrderedDict
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class TelegramDraftPresenceConfig:
+    enabled: bool = False
+    timeout_ms: int = 750
 
 
 def _parse_positive_float_env(var_name: str, default: float) -> float:
@@ -261,6 +271,7 @@ class TelegramAdapter(BasePlatformAdapter):
     _SPLIT_THRESHOLD = 4000
     MEDIA_GROUP_WAIT_SECONDS = 0.8
     _GENERAL_TOPIC_THREAD_ID = "1"
+    _TelegramDraftPresenceConfig = TelegramDraftPresenceConfig
     
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform.TELEGRAM)
@@ -299,6 +310,17 @@ class TelegramAdapter(BasePlatformAdapter):
         self._model_picker_state: Dict[str, dict] = {}
         # Approval button state: message_id → session_key
         self._approval_state: Dict[int, str] = {}
+        self._telegram_draft_presence_config_path = (
+            Path(__file__).resolve().parents[2]
+            / "config"
+            / "telegram_draft_presence.local.json"
+        )
+        self._telegram_draft_presence_bad_config_warned = False
+        self._telegram_draft_presence_attempted: OrderedDict[tuple, None] = OrderedDict()
+        self._telegram_draft_presence_fallback_id = 0
+        self._telegram_draft_presence_circuit_open = False
+        self._telegram_draft_presence_failures: Dict[str, List[float]] = {}
+        self._telegram_draft_presence_tasks: set[asyncio.Task] = set()
 
         # Slice 1.5: periodic batch-dict sweeper.
         self._batch_last_touched: Dict[str, Dict[str, float]] = {
@@ -1025,6 +1047,14 @@ class TelegramAdapter(BasePlatformAdapter):
         Also delegates to ``BasePlatformAdapter.stop()`` so the session
         sweep task (slice 1.5 base class) is cancelled in lockstep.
         """
+        draft_tasks = list(self._telegram_draft_presence_tasks)
+        for draft_task in draft_tasks:
+            if draft_task and not draft_task.done():
+                draft_task.cancel()
+        if draft_tasks:
+            await asyncio.gather(*draft_tasks, return_exceptions=True)
+        self._telegram_draft_presence_tasks.clear()
+
         task = self._batch_sweep_task
         if task is not None and not task.done():
             task.cancel()
@@ -3302,8 +3332,202 @@ class TelegramAdapter(BasePlatformAdapter):
             logger.debug("[%s] set_message_reaction failed (%s): %s", self.name, emoji, e)
             return False
 
+    def _load_telegram_draft_presence_config(self) -> TelegramDraftPresenceConfig:
+        """Load owner-local Telegram draft-presence config.
+
+        Missing/malformed config fails closed to disabled. Malformed config is
+        warned at most once per process/config-load window so one bad local
+        JSON file cannot spam logs on every inbound message.
+        """
+        path = self._telegram_draft_presence_config_path
+        try:
+            if not path.exists():
+                return TelegramDraftPresenceConfig()
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise ValueError("config root must be an object")
+            if raw.get("schema_version") != 1:
+                raise ValueError("unsupported schema_version")
+            enabled = bool(raw.get("enabled", False))
+            timeout_ms = raw.get("attempt_timeout_ms", 750)
+            try:
+                timeout_ms = int(timeout_ms)
+            except (TypeError, ValueError):
+                timeout_ms = 750
+            if timeout_ms < 500 or timeout_ms > 1000:
+                timeout_ms = 750
+            return TelegramDraftPresenceConfig(
+                enabled=enabled,
+                timeout_ms=timeout_ms,
+            )
+        except Exception as exc:
+            if not self._telegram_draft_presence_bad_config_warned:
+                self._telegram_draft_presence_bad_config_warned = True
+                logger.warning(
+                    "[%s] Telegram draft presence disabled by bad local config: %s",
+                    self.name,
+                    exc.__class__.__name__,
+                )
+            return TelegramDraftPresenceConfig()
+
+    def _telegram_draft_presence_config(self) -> TelegramDraftPresenceConfig:
+        return self._load_telegram_draft_presence_config()
+
+    def _telegram_draft_presence_next_fallback_id(self) -> int:
+        self._telegram_draft_presence_fallback_id += 1
+        return self._telegram_draft_presence_fallback_id
+
+    @staticmethod
+    def _telegram_draft_presence_hash_id(chat_id: str, message_id: str) -> int:
+        digest = hashlib.sha256(f"{chat_id}:{message_id}".encode("utf-8")).digest()
+        value = int.from_bytes(digest[:8], "big") & ((1 << 52) - 1)
+        return value or 1
+
+    def _telegram_draft_presence_ids(self, event: MessageEvent) -> tuple[int, tuple]:
+        source = getattr(event, "source", None)
+        chat_id = str(getattr(source, "chat_id", "") or "")
+        message_id = getattr(event, "message_id", None)
+        update_id = getattr(event, "platform_update_id", None)
+        if message_id:
+            draft_id = self._telegram_draft_presence_hash_id(chat_id, str(message_id))
+            key_tail = str(message_id)
+        else:
+            draft_id = self._telegram_draft_presence_next_fallback_id()
+            key_tail = f"fallback:{draft_id}"
+        key = (chat_id, update_id, key_tail)
+        return draft_id, key
+
+    def _telegram_draft_presence_mark_attempted(self, key: tuple) -> bool:
+        if key in self._telegram_draft_presence_attempted:
+            return False
+        self._telegram_draft_presence_attempted[key] = None
+        self._telegram_draft_presence_attempted.move_to_end(key)
+        while len(self._telegram_draft_presence_attempted) > 512:
+            self._telegram_draft_presence_attempted.popitem(last=False)
+        return True
+
+    def _telegram_draft_presence_record_failure(self, reason: str) -> None:
+        if reason == "unsupported":
+            self._telegram_draft_presence_circuit_open = True
+            return
+        if reason not in {"timeout", "network_error", "api_error"}:
+            return
+        now = time.time()
+        window = [
+            ts for ts in self._telegram_draft_presence_failures.get(reason, [])
+            if now - ts <= 600
+        ]
+        window.append(now)
+        self._telegram_draft_presence_failures[reason] = window
+        if len(window) >= 3:
+            self._telegram_draft_presence_circuit_open = True
+
+    @staticmethod
+    def _telegram_draft_presence_reason(error: Exception) -> str:
+        name = error.__class__.__name__.lower()
+        if isinstance(error, asyncio.TimeoutError) or "timeout" in name:
+            return "timeout"
+        if "network" in name or isinstance(error, OSError):
+            return "network_error"
+        return "api_error"
+
+    def _telegram_draft_presence_log(self, event_name: str, *, reason: str | None = None, timeout_ms: int | None = None) -> None:
+        parts = [
+            event_name,
+            "surface=telegram",
+            "feature=draft_presence",
+            "producer_version=telegram_draft_presence.v1",
+        ]
+        if reason:
+            parts.append(f"reason={reason}")
+        if timeout_ms is not None:
+            parts.append(f"timeout_ms={timeout_ms}")
+        logger.info(" | ".join(parts))
+
+    async def send_empty_draft_presence(self, event: MessageEvent) -> bool:
+        """Attempt one empty Telegram draft presence signal.
+
+        This wrapper is fail-neutral: it never raises to the message path and
+        never sends Maez-authored draft text.
+        """
+        cfg = self._telegram_draft_presence_config()
+        if not cfg.enabled or self._telegram_draft_presence_circuit_open:
+            return False
+        if not self._bot:
+            return False
+        send_draft = getattr(self._bot, "send_message_draft", None)
+        if not callable(send_draft):
+            self._telegram_draft_presence_log(
+                "telegram_draft_presence.failed",
+                reason="unsupported",
+                timeout_ms=cfg.timeout_ms,
+            )
+            self._telegram_draft_presence_record_failure("unsupported")
+            return False
+
+        source = getattr(event, "source", None)
+        chat_id = str(getattr(source, "chat_id", "") or "")
+        if not chat_id:
+            return False
+        draft_id, key = self._telegram_draft_presence_ids(event)
+        if not self._telegram_draft_presence_mark_attempted(key):
+            return False
+
+        metadata = {"timeout_ms": cfg.timeout_ms}
+        thread = getattr(source, "thread_id", None)
+        if thread:
+            metadata["thread_id"] = thread
+        self._telegram_draft_presence_log(
+            "telegram_draft_presence.attempted",
+            timeout_ms=cfg.timeout_ms,
+        )
+        kwargs: Dict[str, Any] = {
+            "chat_id": int(chat_id),
+            "draft_id": draft_id,
+            "text": "",
+            "connect_timeout": cfg.timeout_ms / 1000.0,
+            "read_timeout": cfg.timeout_ms / 1000.0,
+            "write_timeout": cfg.timeout_ms / 1000.0,
+            "pool_timeout": cfg.timeout_ms / 1000.0,
+        }
+        thread_id = self._metadata_thread_id(metadata)
+        if thread_id is not None:
+            kwargs["message_thread_id"] = thread_id
+        try:
+            await asyncio.wait_for(
+                send_draft(**kwargs),
+                timeout=cfg.timeout_ms / 1000.0,
+            )
+            self._telegram_draft_presence_log(
+                "telegram_draft_presence.succeeded",
+                timeout_ms=cfg.timeout_ms,
+            )
+            return True
+        except asyncio.CancelledError:
+            self._telegram_draft_presence_log(
+                "telegram_draft_presence.failed",
+                reason="cancelled",
+                timeout_ms=cfg.timeout_ms,
+            )
+            return False
+        except Exception as exc:
+            reason = self._telegram_draft_presence_reason(exc)
+            self._telegram_draft_presence_log(
+                "telegram_draft_presence.failed",
+                reason=reason,
+                timeout_ms=cfg.timeout_ms,
+            )
+            self._telegram_draft_presence_record_failure(reason)
+            return False
+
+    def _schedule_empty_draft_presence(self, event: MessageEvent) -> None:
+        task = asyncio.create_task(self.send_empty_draft_presence(event))
+        self._telegram_draft_presence_tasks.add(task)
+        task.add_done_callback(self._telegram_draft_presence_tasks.discard)
+
     async def on_processing_start(self, event: MessageEvent) -> None:
         """Add an in-progress reaction when message processing begins."""
+        self._schedule_empty_draft_presence(event)
         if not self._reactions_enabled():
             return
         chat_id = getattr(event.source, "chat_id", None)
