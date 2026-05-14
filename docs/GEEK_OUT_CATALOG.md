@@ -204,3 +204,77 @@ or a revised surface strategy.
 **Status:** open / disabled. Do not re-enable TDP until TDP-FOLLOWUP-1 decides
 whether empty draft presence is acceptable, replaced by another presence
 affordance, or abandoned.
+
+---
+
+## Entry 5 - Last-Week Recall Fragment
+
+**Observed:** 2026-05-13, Telegram.
+
+**Natural prompt:**
+
+> I feel much better compared to last week. You remember last week right?
+
+Follow-up:
+
+> Do you remember last week?
+
+**Geek-out symptom:**
+
+After ARS landed, the old mechanical grounded-answer sentinel disappeared, but
+the live answer became a clipped non-answer:
+
+> That's the gap.
+>
+> I'm glad to hear you're feeling better.
+
+Then the follow-up produced:
+
+> But I'm glad to hear you're feeling better now.
+
+The answer sounded evasive and memoryless. It was not the old robotic sentinel,
+but it was still not Maez answering the temporal-memory question.
+
+**Working hypothesis:**
+
+Two causally-linked issues:
+
+1. The live recall path did not bring sufficiently grounded "last week" evidence
+   into the moment. Existing lived recall has temporal mode and temporal
+   annotation, but it does not yet guarantee a bounded search over natural
+   anchors like `last week`. This remains a working hypothesis until TRF
+   implementation captures the temporal/lived-recall trace for this probe.
+2. ARS correctly removed ungrounded memory-claim sentences, but partial omission
+   left a fragment that was grammatical without being an answer.
+
+Observed telemetry:
+
+```text
+2026-05-13 22:14:23 self_claim_audit | surface=telegram_surface flagged=2 mode=sentence kinds=judge
+2026-05-13 22:14:23 audit_rewrite | event=omission_partial surface=telegram_surface mode=sentence flag_count=2 omitted_sentence_count=2 remaining_sentence_count=4 producer_version=audit_rewrite_strategy.v1
+2026-05-13 22:15:05 self_claim_audit | surface=telegram_surface flagged=1 mode=sentence kinds=judge
+2026-05-13 22:15:05 audit_rewrite | event=omission_partial surface=telegram_surface mode=sentence flag_count=1 omitted_sentence_count=1 remaining_sentence_count=1 producer_version=audit_rewrite_strategy.v1
+```
+
+This is not an outage: services were active with `NRestarts=0`, and the
+evolution DB file-descriptor leak had already been fixed. The problem is memory
+recall plus post-ARS answer shape.
+
+**Fix landed:**
+
+Not yet. Draft spec:
+
+- `docs/SLICE_TEMPORAL_RECALL_AND_ARS_FRAGMENT_GUARD.md`
+
+**Regression test:**
+
+Not yet. The spec requires RED-first tests for:
+
+- temporal-anchor recall on `last week`
+- no-fragment ARS output after partial omission
+- audit protection preservation
+- live natural-text probe based on this Telegram turn
+
+**Status:** open. Do not close until live Telegram confirms the old sentinel is
+absent AND the answer is complete: either evidence-backed memory, or an honest
+"not finding it clearly" fallback that preserves the grounded current message.
