@@ -721,6 +721,19 @@ Behavioral closure window:
 - catalog closure waits for the week gate unless the operator explicitly
   waives it after reviewing the smoke observation.
 
+What "remembers" means in M1 v1:
+
+- M1 v1 remembers that a bounded bonded Telegram exchange happened, when it
+  happened, why it was promoted, and which raw source IDs prove it.
+- M1 v1 does not remember what was said inside that exchange as TRF-readable
+  biography. Raw text stays in raw memory behind source IDs.
+- A passing live observation should therefore look like: "Maez can find that
+  there was a promoted exchange last week." It should not be judged as: "Maez
+  can quote or summarize the contents of that exchange."
+- If the bonded user wants Maez to recall contents, that is a later
+  reflection-quality slice. It must not be smuggled into M1 v1 by weakening the
+  structural-summary rule.
+
 Daily checks:
 
 - newest lived episode timestamp;
