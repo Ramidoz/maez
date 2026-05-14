@@ -19,6 +19,7 @@ Safeguards:
 """
 
 import ast
+from contextlib import contextmanager
 import json
 import logging
 import os
@@ -478,8 +479,23 @@ V1_ALLOWED_TARGET = "core/cognition_quality.py"
 EVOLUTION_DB = f'{MAEZ_ROOT}/memory/evolution_track.db'
 
 
+@contextmanager
 def _rail_conn():
-    return _sqlite3.connect(EVOLUTION_DB)
+    """Open the evolution rail DB as a transaction and always close it.
+
+    sqlite3.Connection's native context manager commits or rolls back, but it
+    does not close the underlying file descriptor. The proposal worker polls
+    forever, so deterministic close is required to avoid daemon FD exhaustion.
+    """
+    conn = _sqlite3.connect(EVOLUTION_DB)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _init_rail_schema():

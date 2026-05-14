@@ -233,3 +233,23 @@ Do not promote to `[ ✓ real ]` from S1b alone.
 - Restart was for TDP code loading, not for S1b behavior.
 - Producer-only observation remains active; consumer remains disabled.
 - The 90-second stop timeout is a daemon teardown concern to remember separately from S1b/TDP behavior.
+
+---
+
+## 2026-05-13 — Operator Restart For Evolution DB FD-Leak Hotfix
+
+**Timestamp:** `2026-05-13 22:07:54 CDT` (`2026-05-14T03:07:54Z`)
+
+**Reason:** load a hotfix for proposal-worker SQLite file-descriptor leakage.
+Live Telegram returned `(internal error: [Errno 24] Too many open files:
+'/proc/stat')`; inspection showed `maez.service` at its 1024 soft FD limit,
+with `952` open descriptors pointing at `memory/evolution_track.db`.
+
+**Restart type:** operator/tool-initiated `maez.service` restart, not a crash or
+systemd recovery.
+
+**S1b relevance:**
+- restart is operational recovery for the evolution proposal worker, not S1b behavior
+- producer-only observation remains active
+- consumer remains disabled
+- this entry preserves the observation trail across the required service restart
