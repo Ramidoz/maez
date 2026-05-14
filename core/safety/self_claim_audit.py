@@ -6,8 +6,12 @@ self_claim_audit.py — semantic-judge-powered audit of assistant output.
 v2 (2026-04-21): regex detectors removed. Single path: local LLM grounding
 judge in core/grounding_judge.py classifies the response against a signal
 manifest (signals_present / signals_absent) and returns a list of
-ungrounded claims. Each flagged claim's containing sentence is replaced
-with a fixed uncertainty sentinel.
+ungrounded claims.
+
+ARS v1 (2026-05-13): flagged claim sentences are omitted by default. If every
+sentence is omitted, Maez uses the ratified v1 fallback: "I'm not sure about
+that right now." Old mechanical audit sentinels are blocked from user-visible
+output even when model-authored.
 
 Scope:
   IN:  any user-facing or internal assistant reply that the caller routes
@@ -118,14 +122,16 @@ _REWRITE_WHOLE = "I don't have a grounded answer for this right now."
 _REWRITE_SENTENCE_STEM = _REWRITE_SENTENCE.rstrip(".")
 _ARS_ALL_FLAGGED_FALLBACK = "I'm not sure about that right now."
 _OLD_REWRITE_SENTINELS = (_REWRITE_SENTENCE, _REWRITE_WHOLE)
-
-# If the flagged fraction of sentences meets or exceeds this AND at least
-# _SHORTCIRCUIT_MIN_FLAGS are flagged, the entire response is replaced with
-# _REWRITE_WHOLE rather than punctuating surviving fragments with sentinels.
-# Pathologically-fabricated responses are more honestly rendered as a single
-# refusal than a mosaic of rewrites.
-_SHORTCIRCUIT_RATIO = 0.5
-_SHORTCIRCUIT_MIN_FLAGS = 2
+_OLD_REWRITE_SENTINEL_PATTERNS = (
+    re.compile(
+        r"\bi\s+don'?t\s+have\s+a\s+grounded\s+answer\s+for\s+that\s+part\s*[.!?]?",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bi\s+don'?t\s+have\s+a\s+grounded\s+answer\s+for\s+this\s+right\s+now\s*[.!?]?",
+        re.IGNORECASE,
+    ),
+)
 
 
 # Cheap pre-filter to skip the judge on obviously-clean responses.
@@ -232,25 +238,27 @@ def _sentence_spans_covering(text: str, start: int, end: int) -> list[tuple[int,
     claim straddles multiple sentences (judge occasionally returns a
     2-sentence quote), we need every one so no fabricated half leaks
     through after rewrite."""
+    start = max(0, min(len(text), start))
+    end = max(0, min(len(text), end))
+    if end <= start:
+        return []
     spans: list[tuple[int, int]] = []
     pos = start
-    safety = 0
-    while pos < end and safety < 32:
+    while pos < end:
         s_start, s_end = _sentence_span(text, pos)
-        spans.append((s_start, s_end))
+        span = (s_start, s_end)
+        if not spans or spans[-1] != span:
+            spans.append(span)
         if s_end <= pos:
-            break
-        pos = s_end
-        safety += 1
-    if not spans:
-        spans.append(_sentence_span(text, start))
+            pos += 1
+        else:
+            pos = s_end
     return spans
 
 
 def _count_sentences(text: str) -> int:
     """Rough count of sentence-terminator occurrences plus a trailing
-    fragment. Used to compute the flagged-ratio short-circuit threshold.
-    Not semantically perfect — good enough for a 50% guard."""
+    fragment. Used for content-free ARS observability counts."""
     if not text or not text.strip():
         return 0
     count = 0
@@ -278,8 +286,7 @@ class _RewriteOutcome:
 
 
 def _contains_old_rewrite_sentinel(text: str) -> bool:
-    low = (text or "").lower()
-    return any(s.lower() in low for s in _OLD_REWRITE_SENTINELS)
+    return any(pattern.search(text or "") for pattern in _OLD_REWRITE_SENTINEL_PATTERNS)
 
 
 def _normalize_omission_text(text: str) -> str:
@@ -321,16 +328,9 @@ def _delete_spans(text: str, spans: list[tuple[int, int]]) -> str:
 
 def _old_sentinel_spans(text: str) -> list[tuple[int, int]]:
     spans: list[tuple[int, int]] = []
-    low = text.lower()
-    for sentinel in _OLD_REWRITE_SENTINELS:
-        pos = 0
-        sentinel_low = sentinel.lower()
-        while True:
-            idx = low.find(sentinel_low, pos)
-            if idx < 0:
-                break
-            spans.extend(_sentence_spans_covering(text, idx, idx + len(sentinel)))
-            pos = idx + len(sentinel)
+    for pattern in _OLD_REWRITE_SENTINEL_PATTERNS:
+        for match in pattern.finditer(text):
+            spans.extend(_sentence_spans_covering(text, match.start(), match.end()))
     return spans
 
 
@@ -543,6 +543,11 @@ def _rewrite_detailed(text: str, flags: list[Flag]) -> _RewriteOutcome:
     for f in flags:
         start = max(0, min(len(text), f.span[0]))
         end = max(0, min(len(text), f.span[1]))
+        if f.text and (end <= start or f.text not in text[start:end]):
+            fallback_start = text.find(f.text)
+            if fallback_start >= 0:
+                start = fallback_start
+                end = fallback_start + len(f.text)
         if end <= start:
             continue
         for s in _sentence_spans_covering(text, start, end):
@@ -615,11 +620,34 @@ def audit(
     if not text or not text.strip():
         return AuditResult(text=text, rewritten=False, mode="noop")
 
+    sentinel_cleanup: Optional[_RewriteOutcome] = None
+    if _contains_old_rewrite_sentinel(text):
+        sentinel_cleanup = _rewrite_detailed(text, [])
+        _emit_rewrite_outcome(surface=surface, outcome=sentinel_cleanup, flags=[])
+        if sentinel_cleanup.voice_fallback_used:
+            _emit(
+                surface=surface,
+                flags=[],
+                mode=sentinel_cleanup.mode,
+                signals_absent=signals_absent,
+                signals_present=signals_present,
+            )
+            return AuditResult(
+                text=sentinel_cleanup.text,
+                rewritten=True,
+                mode=sentinel_cleanup.mode,
+                flags=[],
+            )
+        # Old sentinels are removed as a pre-clean step, not as proof the
+        # survivor is safe. Any remaining text still takes the normal audit path
+        # unless the caller deliberately chose a skip path below.
+        text = sentinel_cleanup.text
+
     if in_tool_continuation:
         _emit(surface=surface, flags=[], mode="skipped", skipped_reason="tool_continuation")
         return AuditResult(
             text=text,
-            rewritten=False,
+            rewritten=sentinel_cleanup is not None,
             mode="noop",
             skipped_reason="tool_continuation",
         )
@@ -631,26 +659,9 @@ def audit(
         _emit(surface=surface, flags=[], mode="skipped", skipped_reason="env_disabled")
         return AuditResult(
             text=text,
-            rewritten=False,
+            rewritten=sentinel_cleanup is not None,
             mode="noop",
             skipped_reason="env_disabled",
-        )
-
-    if _contains_old_rewrite_sentinel(text):
-        outcome = _rewrite_detailed(text, [])
-        _emit(
-            surface=surface,
-            flags=[],
-            mode=outcome.mode,
-            signals_absent=signals_absent,
-            signals_present=signals_present,
-        )
-        _emit_rewrite_outcome(surface=surface, outcome=outcome, flags=[])
-        return AuditResult(
-            text=outcome.text,
-            rewritten=True,
-            mode=outcome.mode,
-            flags=[],
         )
 
     # Cheap pre-filter: very short / purely-hedging replies can't
@@ -658,7 +669,7 @@ def audit(
     # Fail-safe: any uncertainty falls through to the full judge.
     if _looks_obviously_clean(text):
         _emit(surface=surface, flags=[], mode="prefilter_clean")
-        return AuditResult(text=text, rewritten=False, mode="noop")
+        return AuditResult(text=text, rewritten=sentinel_cleanup is not None, mode="noop")
 
     flags, judge_available = _find_flags(
         text,
@@ -678,7 +689,7 @@ def audit(
         # distinction that callers rely on. Pass the computed mode.
         return AuditResult(
             text=text,
-            rewritten=False,
+            rewritten=sentinel_cleanup is not None,
             mode=mode,
             skipped_reason=None if judge_available else "judge_unavailable",
         )

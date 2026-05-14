@@ -352,6 +352,120 @@ class AuditRewriteStrategy(unittest.TestCase):
         joined = "\n".join(logs.output)
         self.assertIn("audit_rewrite | event=sentinel_attempted_blocked", joined)
 
+    def test_old_sentinel_with_neighboring_claim_continues_through_judge(self):
+        claim = "I saw the room go quiet for three minutes while you were away."
+        text = f"{self.OLD_SENTENCE} {claim}"
+
+        def fake_find_flags(candidate, **_kwargs):
+            self.assertNotIn(self.OLD_SENTENCE, candidate)
+            start = candidate.find(claim)
+            self.assertGreaterEqual(start, 0)
+            return (
+                [
+                    Flag(
+                        kind="judge",
+                        span=(start, start + len(claim)),
+                        text=claim,
+                    )
+                ],
+                True,
+            )
+
+        with (
+            patch("core.self_claim_audit._find_flags", side_effect=fake_find_flags) as find_flags,
+            self.assertLogs("maez.cognition", level="INFO") as logs,
+        ):
+            r = audit(text, surface="telegram_surface")
+
+        self.assertTrue(find_flags.called)
+        self.assertTrue(r.rewritten)
+        self.assertEqual(r.text, self.FALLBACK)
+        self.assertNotIn(self.OLD_SENTENCE, r.text)
+        self.assertNotIn(claim, r.text)
+        joined = "\n".join(logs.output)
+        self.assertIn("audit_rewrite | event=sentinel_attempted_blocked", joined)
+
+    def test_old_sentinel_blocked_when_semantic_audit_disabled(self):
+        with patch.dict(os.environ, {"MAEZ_SEMANTIC_AUDIT": "0"}):
+            r = audit(self.OLD_SENTENCE, surface="telegram_surface")
+
+        self.assertTrue(r.rewritten)
+        self.assertEqual(r.text, self.FALLBACK)
+        self.assertNotIn("grounded answer", r.text)
+
+    def test_old_sentinel_blocked_in_tool_continuation_skip_path(self):
+        r = audit(
+            self.OLD_SENTENCE,
+            surface="telegram_surface",
+            in_tool_continuation=True,
+        )
+
+        self.assertTrue(r.rewritten)
+        self.assertEqual(r.text, self.FALLBACK)
+        self.assertNotIn("grounded answer", r.text)
+
+    def test_old_sentinel_variants_are_blocked_before_prefilter(self):
+        variants = [
+            "I don't have a grounded answer for that part",
+            "I don't have a grounded answer for that part!",
+            "I don't have a grounded answer for that part?",
+            "I don't   have   a   grounded   answer   for   that   part.",
+        ]
+        for text in variants:
+            with self.subTest(text=text):
+                r = audit(text, surface="telegram_surface")
+                self.assertTrue(r.rewritten)
+                self.assertEqual(r.text, self.FALLBACK)
+                self.assertNotIn("grounded answer", r.text)
+
+    def test_long_flag_span_omits_every_overlapped_sentence(self):
+        bad = " ".join(f"Bad {i}." for i in range(40))
+        text = f"{bad} Safe survivor."
+        flag = Flag(kind="judge", span=(0, len(bad)), text=bad)
+
+        new, mode = _rewrite(text, [flag])
+
+        self.assertEqual(mode, "sentence")
+        self.assertEqual(new, "Safe survivor.")
+        self.assertNotIn("Bad 32", new)
+        self.assertNotIn("Bad 39", new)
+
+    def test_invalid_span_falls_back_to_flag_text_location(self):
+        text = "Safe. Bad claim is here. Safe ending."
+        claim = "Bad claim is here."
+        start = text.find(claim)
+        flag = Flag(kind="judge", span=(start + len(claim), start), text=claim)
+
+        new, mode = _rewrite(text, [flag])
+
+        self.assertEqual(mode, "sentence")
+        self.assertEqual(new, "Safe. Safe ending.")
+        self.assertNotIn(claim, new)
+
+    def test_zero_length_span_falls_back_to_flag_text_location(self):
+        text = "Safe. Bad claim is here. Safe ending."
+        claim = "Bad claim is here."
+        start = text.find(claim)
+        flag = Flag(kind="judge", span=(start, start), text=claim)
+
+        new, mode = _rewrite(text, [flag])
+
+        self.assertEqual(mode, "sentence")
+        self.assertEqual(new, "Safe. Safe ending.")
+        self.assertNotIn(claim, new)
+
+    def test_partial_omission_does_not_leave_causal_connector_fragment(self):
+        text = "Because of that, I think I watched you leave. The rest is stable."
+        claim = "I watched you leave"
+        start = text.find(claim)
+        flag = Flag(kind="judge", span=(start, start + len(claim)), text=claim)
+
+        new, mode = _rewrite(text, [flag])
+
+        self.assertEqual(mode, "sentence")
+        self.assertEqual(new, "The rest is stable.")
+        self.assertNotIn("Because of that", new)
+
     def test_ars_counter_is_content_free(self):
         text = "Grounded. I saw the room."
         claim = "I saw the room."

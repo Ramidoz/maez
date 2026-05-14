@@ -61,7 +61,10 @@ catches the claim; it just stops speaking in Maez's voice.
 
 ---
 
-## Current Behavior
+## Pre-ARS Behavior
+
+This section records the behavior ARS replaced. It is retained as motivation
+and regression context, not as the current implementation contract.
 
 Source of truth: `core/safety/self_claim_audit.py`.
 
