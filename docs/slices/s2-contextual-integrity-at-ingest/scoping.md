@@ -265,6 +265,9 @@ Why Calendar comes first among the five information-limb categories:
    "right now" voice motif's grounding.
 6. **OpenHuman convergence.** Both panels and the third-party comparison
    independently picked Calendar as the right first target.
+7. **Pedagogical safety.** Calendar lets Maez learn ingest discipline on the
+   lowest-blast-radius information limb before higher-risk sources like Gmail
+   and Slack arrive.
 
 S2 + Calendar is the first concrete realization of invariant #1 (Time as
 Biography) as a substrate-fed organ rather than purely conversation-emergent.
@@ -375,9 +378,10 @@ prevents scope creep during the BAD packet drafting.
 
 X2. **Minimal S2 predicate path.** Body Topology Rule 7 allows the first
 information-limb slice to ship a minimal S2 predicate instead of waiting for
-full S2. Is this scoping memo the predicate (and the full S2 BAD packet
-follows), or is the predicate a smaller artifact baked into the Calendar
-slice? Worth choosing before drafting either.
+full S2. This scoping memo declares the intended path: it is a precursor to
+the full S2 BAD packet, not the minimal predicate path. The panel question is
+whether to ratify that sequencing or recommend the smaller predicate path
+inside the Calendar slice instead.
 
 ---
 
