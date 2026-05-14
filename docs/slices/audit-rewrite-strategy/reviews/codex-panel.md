@@ -1,6 +1,6 @@
 # Codex Six-Agent Panel - ARS spec review
 
-**Subject:** `docs/SLICE_AUDIT_REWRITE_STRATEGY.md`, pre-canonical draft.
+**Subject:** `docs/slices/audit-rewrite-strategy/spec.md`, pre-canonical draft.
 
 **Date:** 2026-05-13.
 
@@ -132,7 +132,7 @@ Findings:
 | Executable probe corpus | `tests/data/audit_rewrite_probe_corpus.jsonl` schema with candidate text, flags, required/forbidden substrings, and quality band. |
 | Morning-memory fixture | Required initial corpus row for the 2026-05-13 Telegram failure. |
 | Corpus growth | Append fixture rows for new live geek-outs; catalog holds narrative context. |
-| ARS observation log | `docs/AUDIT_REWRITE_OBSERVATION_LOG.md` required during implementation. |
+| ARS observation log | `docs/slices/audit-rewrite-strategy/observation-log.md` required during implementation. |
 | Fragment quality | Tests and observation labels for clipped/evasive/confusing remnants. |
 | Old sentinel in model output | Exact old sentinels forbidden even when model-authored; trip-wire/fallback path applies. |
 | Observability landing | Separate `audit_rewrite | event=...` cognition-log lines; no new fabrication-memory rows for counters. |

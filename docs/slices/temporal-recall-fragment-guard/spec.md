@@ -10,13 +10,13 @@ live Telegram observation remain pending before Geek-Out Entry 5 can close.
 `daemon/maez_daemon.py::handle_message`.
 
 **Maps to:**
-- [`docs/GEEK_OUT_CATALOG.md`](GEEK_OUT_CATALOG.md) - Entry 5, Last-Week Recall
+- [`docs/GEEK_OUT_CATALOG.md`](../../GEEK_OUT_CATALOG.md) - Entry 5, Last-Week Recall
   Fragment.
-- [`docs/SLICE_AUDIT_REWRITE_STRATEGY.md`](SLICE_AUDIT_REWRITE_STRATEGY.md) -
+- [`docs/slices/audit-rewrite-strategy/spec.md`](../audit-rewrite-strategy/spec.md) -
   ARS omission-over-sentinel remains the governing audit-rewrite contract.
-- [`docs/maez_manual/temporal-arithmetic-at-recall.md`](maez_manual/temporal-arithmetic-at-recall.md)
+- [`docs/maez_manual/temporal-arithmetic-at-recall.md`](../../maez_manual/temporal-arithmetic-at-recall.md)
   - the existing temporal-recall capability manual entry.
-- [`docs/governance/BETA_READINESS_THRESHOLD.md`](governance/BETA_READINESS_THRESHOLD.md)
+- [`docs/governance/BETA_READINESS_THRESHOLD.md`](../../governance/BETA_READINESS_THRESHOLD.md)
   - "what did we do last Tuesday" must produce a grounded answer or an honest
   non-memory answer, not a hallucination.
 
@@ -813,7 +813,7 @@ review doc and are not binding v1 implementation scope.
 
 ## Observation Log
 
-Create `docs/TRF_OBSERVATION_LOG.md` during implementation. Each entry should
+Create `docs/slices/temporal-recall-fragment-guard/observation-log.md` during implementation. Each entry should
 record:
 
 - timestamp;

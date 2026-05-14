@@ -2,7 +2,7 @@
 
 **Slice:** Temporal Recall + ARS Fragment Guard (TRF)
 **Review date:** 2026-05-13
-**Subject:** Implementation of `docs/SLICE_TEMPORAL_RECALL_AND_ARS_FRAGMENT_GUARD.md`
+**Subject:** Implementation of `docs/slices/temporal-recall-fragment-guard/spec.md`
 
 ## Verdict
 

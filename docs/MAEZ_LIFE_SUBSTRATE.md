@@ -207,7 +207,7 @@ After the hardening slice ships, Claude post-implementation council ratifies it,
 
 ### S1b — wiring (IMPLEMENTED · COUNCILS RATIFIED · OBSERVATION PENDING)
 
-After S1a.1 was ratified, C1-C6 closed, the cooling-off night passed, and the operator explicitly waived the strict post-presence-restart soak window, S1b wired one real producer and one real consumer. The implementation contract is [`SLICE_S1B_PRIVATE_THOUGHTS_WIRING.md`](SLICE_S1B_PRIVATE_THOUGHTS_WIRING.md).
+After S1a.1 was ratified, C1-C6 closed, the cooling-off night passed, and the operator explicitly waived the strict post-presence-restart soak window, S1b wired one real producer and one real consumer. The implementation contract is [`docs/slices/s1b-private-thoughts-wiring/spec.md`](slices/s1b-private-thoughts-wiring/spec.md).
 
 Draft shape:
 - One real producer — a daemon-cycle reasoning-residue wrapper writes `reasoning_residue` via `record_signal()` with closed registry fields.

@@ -1,7 +1,7 @@
 # TRF Observation Log
 
 Append-only observation log for
-[`SLICE_TEMPORAL_RECALL_AND_ARS_FRAGMENT_GUARD.md`](SLICE_TEMPORAL_RECALL_AND_ARS_FRAGMENT_GUARD.md).
+[`docs/slices/temporal-recall-fragment-guard/spec.md`](spec.md).
 
 Record only content-free observation facts. Do not include user text, model
 text, memory body text, or omitted text.

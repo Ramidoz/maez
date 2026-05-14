@@ -6,7 +6,7 @@
 
 **Blocks:** S1b (wiring real producers + consumers) is held until S1a.1 ships, Claude ratifies, and the C1-C6 mechanical ratification amendments close.
 
-**Maps to:** [`MAEZ_LIFE_SUBSTRATE.md § S1`](MAEZ_LIFE_SUBSTRATE.md) — anatomy invariant [#4 Interpretive Humility (in part)](MAEZ_NORTH_STAR.md#4-interpretive-humility) and is structural prerequisite to [#5 Rupture and Repair](MAEZ_NORTH_STAR.md#5-rupture-and-repair), [#6 Crisis Routing](MAEZ_NORTH_STAR.md#6-crisis-routing), [#7 Soul-Level Objection](MAEZ_NORTH_STAR.md#7-soul-level-objection).
+**Maps to:** [`docs/MAEZ_LIFE_SUBSTRATE.md § S1`](../../MAEZ_LIFE_SUBSTRATE.md) — anatomy invariant [#4 Interpretive Humility (in part)](../../MAEZ_NORTH_STAR.md#4-interpretive-humility) and is structural prerequisite to [#5 Rupture and Repair](../../MAEZ_NORTH_STAR.md#5-rupture-and-repair), [#6 Crisis Routing](../../MAEZ_NORTH_STAR.md#6-crisis-routing), [#7 Soul-Level Objection](../../MAEZ_NORTH_STAR.md#7-soul-level-objection).
 
 ---
 
@@ -78,7 +78,7 @@ Every record carries `envelope_version` and `schema_version` fields.
 
 Council clarification C3: the first live non-empty migration is a watch-point. `memory/private_thoughts.db` had no live rows during S1a.1 verification, so the next real migration with non-empty private-thought history must be treated as evidence-bearing: run the named rollback test, inspect the migration result, and confirm legacy rows preserve readability before moving on.
 
-A checked-in compatibility table must define the semantics of every enum and legacy mapping. A 2046 reader should be able to answer "what did `until_reviewed` mean in 2026?" without this chat. S1a.1's table lives at [`PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md`](PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md).
+A checked-in compatibility table must define the semantics of every enum and legacy mapping. A 2046 reader should be able to answer "what did `until_reviewed` mean in 2026?" without this chat. S1a.1's table lives at [`docs/PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md`](../../PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md).
 
 ### Amendment 3: split `provenance` into `producer_id` + `signal_kind`
 *(Logical seat.)*

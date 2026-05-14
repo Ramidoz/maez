@@ -2,7 +2,7 @@
 
 Append one entry per daily or weekly S1b observation check.
 
-Runbook: [`S1B_OBSERVATION_RUNBOOK.md`](S1B_OBSERVATION_RUNBOOK.md).
+Runbook: [`docs/slices/s1b-private-thoughts-wiring/observation-runbook.md`](observation-runbook.md).
 
 Current status under observation: `[ ◐ scaffold + minimal wiring · councils ratified · observation pending ]`.
 

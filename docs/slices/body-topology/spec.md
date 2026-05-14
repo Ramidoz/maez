@@ -30,7 +30,7 @@ Maez's body, what a body limb may publish or do, and what it must never claim.
 - [`docs/SLICE_X5_BODY_STATE_ORGAN_MEMO.md`](../../SLICE_X5_BODY_STATE_ORGAN_MEMO.md) — mechanical body-state vocabulary.
 - [`docs/adr/0027-x5-body-state-id-basis.md`](../../adr/0027-x5-body-state-id-basis.md) — content-free body-state handles.
 - [`docs/MAEZ_LIFE_SUBSTRATE.md`](../../MAEZ_LIFE_SUBSTRATE.md) — capability quarantine, body/voice queue.
-- [`docs/SLICE_TELEGRAM_DRAFT_PRESENCE.md`](../../SLICE_TELEGRAM_DRAFT_PRESENCE.md) — precedent for surface hardening versus
+- [`docs/slices/telegram-draft-presence/spec.md`](../telegram-draft-presence/spec.md) — precedent for surface hardening versus
   new body part.
 
 ---

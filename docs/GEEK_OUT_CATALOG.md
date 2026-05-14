@@ -264,7 +264,7 @@ recall plus post-ARS answer shape.
 
 TRF implementation in progress/landed after canonical spec:
 
-- `docs/SLICE_TEMPORAL_RECALL_AND_ARS_FRAGMENT_GUARD.md`
+- `docs/slices/temporal-recall-fragment-guard/spec.md`
 - `core/memory/temporal_anchor_recall.py`
 - `core/safety/temporal_fragment_guard.py`
 - `daemon/maez_daemon.py`

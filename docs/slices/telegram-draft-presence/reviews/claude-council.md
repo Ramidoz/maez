@@ -1,6 +1,6 @@
 # Claude Six-Role Council — Telegram Draft Presence (TDP) spec review
 
-**Subject:** `docs/SLICE_TELEGRAM_DRAFT_PRESENCE.md` — 274-line spec draft, uncommitted, ready for both panels' review before canonization.
+**Subject:** `docs/slices/telegram-draft-presence/spec.md` — spec draft, uncommitted, ready for both panels' review before canonization.
 
 **Council ran:** 2026-05-13, pre-canonical. Codex's six-agent panel still needs to sit (their lane). Both panels' amendments fold before commit.
 

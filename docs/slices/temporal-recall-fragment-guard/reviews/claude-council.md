@@ -1,6 +1,6 @@
 # Claude Six-Role Council — TRF (Temporal Recall + ARS Fragment Guard) spec review
 
-**Subject:** `docs/SLICE_TEMPORAL_RECALL_AND_ARS_FRAGMENT_GUARD.md` — 743-line spec draft. Pre-spec amendments T1-T6 folded; Codex's six-agent panel BLOCK/REVISE closure folded.
+**Subject:** `docs/slices/temporal-recall-fragment-guard/spec.md` — spec draft. Pre-spec amendments T1-T6 folded; Codex's six-agent panel BLOCK/REVISE closure folded.
 
 **Council ran:** 2026-05-13, pre-canonical. Codex's six-agent panel has already sat (two BLOCKs, both folded). This council reviews the corrected draft.
 

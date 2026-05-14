@@ -2,11 +2,11 @@
 
 **Subject:** commit `b913728` (`feat(private-thoughts): harden S1a signal boundary`) — the bounded access layer hardening that closes the six Claude-council amendments from S1a, plus the six-amendment Codex pre-code panel verdict that tightened the implementation before code touched files.
 
-**Evidence packet:** `docs/S1A1_PRIVATE_THOUGHTS_RATIFICATION_PACKET.md` (Codex, 2026-05-13; historical packet prepared before council-closure follow-up commits).
+**Evidence packet:** `docs/slices/s1a1-private-thoughts-hardening/ratification-packet.md` (Codex, 2026-05-13; historical packet prepared before council-closure follow-up commits).
 
 **Council ran:** 2026-05-13.
 
-**Boundary discipline observed:** the council does NOT rerun Codex's six-agent panel. Codex's engineering review is in `docs/SLICE_S1A1_PRIVATE_THOUGHTS_HARDENING.md` already. The council covenant-side-checks the shipped implementation against Maez's long-term shape. Per [[`feedback_council_role_boundaries`]].
+**Boundary discipline observed:** the council does NOT rerun Codex's six-agent panel. Codex's engineering review is in `docs/slices/s1a1-private-thoughts-hardening/spec.md` already. The council covenant-side-checks the shipped implementation against Maez's long-term shape. Per [[`feedback_council_role_boundaries`]].
 
 ---
 
@@ -156,7 +156,7 @@ S1b is unblocked by this ratification *subject to the amendments below being lan
 
 | # | Seat | Amendment | Where it lands |
 |---|------|-----------|-----------------|
-| C1 | Outside-View | Add "single-process limit = defense-in-depth, not absolute boundary" honest note | `SLICE_S1A1_PRIVATE_THOUGHTS_HARDENING.md` |
+| C1 | Outside-View | Add "single-process limit = defense-in-depth, not absolute boundary" honest note | `docs/slices/s1a1-private-thoughts-hardening/spec.md` |
 | C2 | Body-Coherence | Name human-primacy constraint that propagates to S1b consumer design | `MAEZ_LIFE_SUBSTRATE.md` §S1b (when written) |
 | C3 | Logical | Add named migration-failure-rollback test + slice-memo note that first live non-empty migration is a watch-point | new test in `tests/test_private_thoughts_s1.py`, one-line note in slice memo |
 | C4 | Creative | Generalize registry-doc-per-closed-enum-vocab pattern as substrate discipline | `MAEZ_LIFE_SUBSTRATE.md` discipline section |

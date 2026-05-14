@@ -92,7 +92,7 @@ The implementation is the right tightness for this scope. No cleaner shape surfa
 
 - 48 tests with clear names = 5-year-readable contract
 - Commit body for `816b266` explicitly describes the dangerous failure mode that motivated BLOCK — 5-year-readable rationale
-- Observation log landed (`docs/AUDIT_REWRITE_OBSERVATION_LOG.md`)
+- Observation log landed (`docs/slices/audit-rewrite-strategy/observation-log.md`)
 - Probe corpus is now executable JSONL — durable, replayable, growable
 - The waiver-text-pattern in commit bodies (operator waiver for same-day spec-and-code) is consistent with prior TDP and S1b implementations
 
@@ -144,7 +144,7 @@ All three are documentation/closure-state items. None require implementation cha
 - **RED-first discipline** per commit bodies
 - **Audit protection preserved** (named test against fixture)
 - **Live regression case** (today's "Do you remember today morning?" sentinel-leak) included in probe corpus
-- **Observation log doc** landed (`docs/AUDIT_REWRITE_OBSERVATION_LOG.md`)
+- **Observation log doc** landed (`docs/slices/audit-rewrite-strategy/observation-log.md`)
 - **Probe corpus as executable JSONL** (durable, growable per ARS-CC-7)
 - **Operator waiver** in commit bodies for 5-year retrieval
 

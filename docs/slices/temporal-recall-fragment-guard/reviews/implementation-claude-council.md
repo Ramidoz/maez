@@ -4,7 +4,7 @@
 
 **Council ran:** 2026-05-13, post-implementation.
 
-**The four Codex blockers (per `SLICE_TEMPORAL_RECALL_AND_ARS_FRAGMENT_GUARD_CODEX_POST_IMPLEMENTATION_REVIEW.md`):**
+**The four Codex blockers (per `docs/slices/temporal-recall-fragment-guard/reviews/codex-post-implementation.md`):**
 
 | # | Blocker | Why it mattered |
 |---|---------|-----------------|
@@ -90,10 +90,10 @@ Two observations, no redesign:
 
 5-year readability:
 
-- Codex post-implementation review trail at `docs/SLICE_TEMPORAL_RECALL_AND_ARS_FRAGMENT_GUARD_CODEX_POST_IMPLEMENTATION_REVIEW.md` — 5-year-readable explanation of what Codex caught and why
+- Codex post-implementation review trail at `docs/slices/temporal-recall-fragment-guard/reviews/codex-post-implementation.md` — 5-year-readable explanation of what Codex caught and why
 - 33 tests with explicit names matching spec contract + Codex blockers
 - Probe corpus is executable JSONL at canonical path
-- Observation log template at `docs/TRF_OBSERVATION_LOG.md`
+- Observation log template at `docs/slices/temporal-recall-fragment-guard/observation-log.md`
 - Commit body explicitly names the four blockers
 
 The TRF closure trail (spec → both panels pre-impl → canonical → impl → Codex post-impl 4 blockers → fix → both panels post-impl → live observation) is clear provenance.

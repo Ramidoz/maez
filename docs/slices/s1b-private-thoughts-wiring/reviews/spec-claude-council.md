@@ -1,6 +1,6 @@
 # Claude Six-Role Council — S1b spec review
 
-**Subject:** `docs/SLICE_S1B_PRIVATE_THOUGHTS_WIRING.md` (552 lines, Codex-prepared, folds Claude pre-spec D1-D10, ratified-with-amendments by Codex's six-agent panel).
+**Subject:** `docs/slices/s1b-private-thoughts-wiring/spec.md` (Codex-prepared, folds Claude pre-spec D1-D10, ratified-with-amendments by Codex's six-agent panel).
 
 **Council ran:** 2026-05-13, BEFORE implementation. This is pre-send council per [[`feedback_council_trigger_conditions`]], not post-send recovery.
 

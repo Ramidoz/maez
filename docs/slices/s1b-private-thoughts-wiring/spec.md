@@ -9,15 +9,15 @@
 - `463d81c` - Codex post-hoc blocker closure.
 
 **Council inputs:**
-- [`S1B_PRE_SPEC_CLAUDE_COUNCIL_NOTES.md`](S1B_PRE_SPEC_CLAUDE_COUNCIL_NOTES.md), which ratified Option 1 with amendments D1-D10.
-- [`S1B_SPEC_CLAUDE_COUNCIL_REVIEW.md`](S1B_SPEC_CLAUDE_COUNCIL_REVIEW.md), which ratified this spec with amendments E1-E12.
-- [`S1B_IMPLEMENTATION_CLAUDE_COUNCIL_REVIEW.md`](S1B_IMPLEMENTATION_CLAUDE_COUNCIL_REVIEW.md), which ratified the implementation with P1-P3 mechanical amendments.
+- [`docs/slices/s1b-private-thoughts-wiring/reviews/pre-spec-claude-council.md`](reviews/pre-spec-claude-council.md), which ratified Option 1 with amendments D1-D10.
+- [`docs/slices/s1b-private-thoughts-wiring/reviews/spec-claude-council.md`](reviews/spec-claude-council.md), which ratified this spec with amendments E1-E12.
+- [`docs/slices/s1b-private-thoughts-wiring/reviews/implementation-claude-council.md`](reviews/implementation-claude-council.md), which ratified the implementation with P1-P3 mechanical amendments.
 
 **Codex draft review:** Dewey, Feynman, Locke, Descartes, Ohm, and Goodall reviewed this draft before implementation. Verdict: **RATIFY-WITH-AMENDMENTS**. The folded amendments are named in [Codex draft-review amendments](#codex-draft-review-amendments).
 
 **Implementation gate:** this amended spec became canonical, the cooling-off night passed, and the operator explicitly waived the strict post-presence-restart soak window on 2026-05-13. Gate record for the implementation commit: services were healthy with `NRestarts=0`; the restart was operator provisioning, not crash recovery; extra discipline was RED-first tests and abort-on-service-restart/crash during implementation.
 
-**Maps to:** [`MAEZ_LIFE_SUBSTRATE.md § S1`](MAEZ_LIFE_SUBSTRATE.md#s1--private_thoughts-in-flight), especially invariant #2 Human-Primacy, #3 Contextual Integrity, #4 Interpretive Humility, #5 Rupture and Repair, and #8 Capability Quarantine.
+**Maps to:** [`docs/MAEZ_LIFE_SUBSTRATE.md § S1`](../../MAEZ_LIFE_SUBSTRATE.md#s1--private_thoughts-in-flight), especially invariant #2 Human-Primacy, #3 Contextual Integrity, #4 Interpretive Humility, #5 Rupture and Repair, and #8 Capability Quarantine.
 
 ---
 

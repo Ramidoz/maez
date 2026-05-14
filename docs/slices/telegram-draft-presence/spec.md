@@ -5,10 +5,10 @@
 **Classification:** surface UX hardening of an existing Maez surface, not a new body part.
 
 **Maps to:**
-- [`docs/TRACK_A.md`](TRACK_A.md) - Telegram is already the active private surface.
-- [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](governance/BETA_ARCHITECTURE_DECISIONS.md) - Telegram is already an accepted mediated interaction surface.
-- [`SLICE_S1B_PRIVATE_THOUGHTS_WIRING.md`](SLICE_S1B_PRIVATE_THOUGHTS_WIRING.md) - reuse the runtime-config, observability, and fail-neutral discipline.
-- [`SLICE_TELEGRAM_DRAFT_PRESENCE_CLAUDE_COUNCIL_REVIEW.md`](SLICE_TELEGRAM_DRAFT_PRESENCE_CLAUDE_COUNCIL_REVIEW.md) - Claude council ratification with TDP-L1/TDP-L2/TDP-L3/TDP-C1/TDP-F1/TDP-B1.
+- [`docs/TRACK_A.md`](../../TRACK_A.md) - Telegram is already the active private surface.
+- [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../../governance/BETA_ARCHITECTURE_DECISIONS.md) - Telegram is already an accepted mediated interaction surface.
+- [`docs/slices/s1b-private-thoughts-wiring/spec.md`](../s1b-private-thoughts-wiring/spec.md) - reuse the runtime-config, observability, and fail-neutral discipline.
+- [`docs/slices/telegram-draft-presence/reviews/claude-council.md`](reviews/claude-council.md) - Claude council ratification with TDP-L1/TDP-L2/TDP-L3/TDP-C1/TDP-F1/TDP-B1.
 
 **Telegram source:** Bot API `sendMessageDraft`, added for all bots in Bot API 9.5 and extended in Bot API 10.0 to allow empty draft text. Official docs: <https://core.telegram.org/bots/api#sendmessagedraft> and <https://core.telegram.org/bots/api-changelog>.
 
@@ -311,7 +311,7 @@ If draft failure delays or blocks the final audited reply, the slice failed.
 
 Enablement is a watched experiment, not a permanent affordance.
 
-Observation log path: `docs/TELEGRAM_DRAFT_PRESENCE_OBSERVATION_LOG.md`.
+Observation log path: `docs/slices/telegram-draft-presence/observation-log.md`.
 
 Each enablement window records:
 

@@ -15,17 +15,17 @@ flagging logic, judge prompt, evidence-envelope construction, and judge
 availability behavior are out of scope unless a panel explicitly blocks on them.
 
 **Maps to:**
-- [`docs/GEEK_OUT_CATALOG.md`](GEEK_OUT_CATALOG.md) - Entry 3, Morning-Memory
+- [`docs/GEEK_OUT_CATALOG.md`](../../GEEK_OUT_CATALOG.md) - Entry 3, Morning-Memory
   Audit Rewrite.
-- [`docs/TRACK_A.md`](TRACK_A.md) - audit rail is live but fail-open outside
+- [`docs/TRACK_A.md`](../../TRACK_A.md) - audit rail is live but fail-open outside
   covenant gates; this slice changes user-visible rewrite strategy, not rail
   availability.
-- [`docs/SLICE_S1B_PRIVATE_THOUGHTS_WIRING.md`](SLICE_S1B_PRIVATE_THOUGHTS_WIRING.md)
+- [`docs/slices/s1b-private-thoughts-wiring/spec.md`](../s1b-private-thoughts-wiring/spec.md)
   - reuse the content-free observability and natural-text probe discipline.
-- [`docs/SLICE_TELEGRAM_DRAFT_PRESENCE.md`](SLICE_TELEGRAM_DRAFT_PRESENCE.md)
+- [`docs/slices/telegram-draft-presence/spec.md`](../telegram-draft-presence/spec.md)
   - reuse the "preserve Maez voice by refusing mechanical surface text"
   principle.
-- [`docs/SLICE_AUDIT_REWRITE_STRATEGY_CLAUDE_COUNCIL_REVIEW.md`](SLICE_AUDIT_REWRITE_STRATEGY_CLAUDE_COUNCIL_REVIEW.md)
+- [`docs/slices/audit-rewrite-strategy/reviews/claude-council.md`](reviews/claude-council.md)
   - Claude pre-canonical council verdict and ARS-CC-1 through ARS-CC-8.
 
 **Panel outcome:** Claude returned RATIFY-WITH-AMENDMENTS. Codex returned
@@ -448,7 +448,7 @@ Mandatory initial fixture:
 
 Implementation creates an appendable observation log:
 
-`docs/AUDIT_REWRITE_OBSERVATION_LOG.md`
+`docs/slices/audit-rewrite-strategy/observation-log.md`
 
 Purpose: tests prove the old sentinel is gone and flagged claims do not surface;
 the observation log records whether omission feels natural in bonded

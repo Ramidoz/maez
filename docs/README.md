@@ -5,9 +5,9 @@ to move, and the naming rules new docs must follow. Read this first when you
 need to find something in the docs tree.
 
 **Status:** v1, 2026-05-14. Map describes both the current structure and the
-target structure. Migration is staged and not yet started; until further notice
-every file remains at its current path and every existing reference stays
-valid.
+target structure. Body Topology and the active slice families have migrated;
+legacy slices, handoffs, snapshots, ledgers, and flat audits still move in
+later phases.
 
 ---
 
@@ -42,8 +42,8 @@ this map covers `docs/` only.
 | Governance miscellany | `docs/governance/` | Gestation memory protocol, post-install hardening, licence/security audits, readiness checks. |
 | Covenant | `docs/covenant/` | OSS users, lineage, founding generation. |
 | Birth book | `docs/birth_book/` | **Covenant-protected canon.** Files `00`–`02` are Rohit-authored verbatim and excluded from `source_awareness`. Do not read `00/01/02` unless explicitly asked. |
-| Active slice specs | `docs/SLICE_*.md` (flat at top of `docs/`) | Each slice may have `_CLAUDE_COUNCIL_REVIEW`, `_CODEX_PANEL_REVIEW`, `_IMPLEMENTATION_*_REVIEW`, `_OBSERVATION_LOG` siblings. Target: `docs/slices/<slug>/`. Migration pending. |
-| S1 family | `docs/S1A1_*.md`, `docs/S1B_*.md`, `docs/SLICE_S1A1_*.md`, `docs/SLICE_S1B_*.md` | First substrate slice family. Target: `docs/slices/s1a1-private-thoughts-hardening/` and `docs/slices/s1b-private-thoughts-wiring/`. |
+| Active slice specs | `docs/slices/body-topology/`, `docs/slices/audit-rewrite-strategy/`, `docs/slices/temporal-recall-fragment-guard/`, `docs/slices/telegram-draft-presence/` | Canonical active slices now live in per-slice folders with specs, reviews, and observation logs. |
+| S1 family | `docs/slices/s1a1-private-thoughts-hardening/`, `docs/slices/s1b-private-thoughts-wiring/` | First substrate slice family. S1b observation log remains live at the migrated path. |
 | Legacy organ memos | `docs/SLICE_X*_MEMO.md` (X.0 through X.6) | Pre-anatomy-v2.2 organ memos. Target: `docs/slices/organs/`. |
 | Pre-anatomy slice memos | `docs/SLICE_3_*_MEMO.md`, `docs/SLICE_4C_5B_*_MEMO.md`, `docs/SLICE_GESTATION_BOUNDARY_MEMO.md` | Historical. Target: `docs/slices/legacy/`. |
 | Observation logs | `docs/*_OBSERVATION_LOG.md` (TRF, telegram-draft-presence, S1B, audit-rewrite) | Target: per-slice folder. |
@@ -268,15 +268,15 @@ Optional:
 | 1. Push BT canonicalization (`6f96c14`) to origin/main | **DONE 2026-05-14** | — |
 | 2. Map (this README) + folder rules | **DONE 2026-05-14** | — |
 | 3. Pilot move: Body Topology → `docs/slices/body-topology/` + cross-reference updates | **DONE 2026-05-14** | Active slice families can migrate after observation gates close. |
-| 4. Migrate active slice families (ARS, TDP, TRF, S1A1, S1B) | NOT STARTED | Pilot lands cleanly + observation gates close. |
+| 4. Migrate active slice families (ARS, TDP, TRF, S1A1, S1B) | **DONE 2026-05-14** | Legacy organ and pre-anatomy memos can migrate next. |
 | 5. Migrate legacy organ memos (X.0–X.6) and pre-anatomy memos | NOT STARTED | Active families landed. |
 | 6. Migrate handoffs, snapshots, ledger, flat audits | NOT STARTED | After slice migrations. |
 | 7. Sweep cross-references in memory, code comments, `AGENTS.md`, top-level `README.md` | NOT STARTED | Final step. |
 
-Until each phase lands, the current paths remain valid. Decision-24-era Body
-Topology references now resolve through `docs/slices/body-topology/`; older
-active and legacy slice families still resolve at their current flat paths
-under `docs/`.
+Until each phase lands, the current paths remain valid. Body Topology and the
+active slice families now resolve through `docs/slices/`; legacy slice families,
+handoffs, snapshots, ledgers, and flat audits still resolve at their current
+flat paths under `docs/`.
 
 ---
 
@@ -304,17 +304,16 @@ atomically with the move so no broken link lands.
 
 This is the table of contents for Maez's documentation drawer.
 
-Right now most docs are piled flat at the top of `docs/`. The plan is to give
-every slice its own folder (like `docs/slices/body-topology/` with the spec and
-both review trails inside), put handoff notes in `docs/handoffs/`, put
-architecture snapshots in `docs/snapshots/`, and keep the anchor docs (what
-Maez is, what Track A is, current architecture) at the top so newcomers can
-find them.
+The docs drawer is being organized in waves. The first two waves put Body
+Topology and the active slice families into `docs/slices/`, each with its spec,
+reviews, and observation log beside each other. The remaining cleanup is legacy:
+old organ memos, handoff notes, architecture snapshots, ledgers, and flat audit
+files still need their own drawers.
 
-Nothing has moved yet. This map describes both where things live now and where
-they will live after the migration, so future agents can navigate in either
-state. The migration happens slice-by-slice in future sessions; until each move
-lands, the current paths still work and every existing reference stays valid.
+This map describes both where things live now and where they will live after the
+remaining migration phases, so future agents can navigate in either state.
+Until each move lands, the old paths for unmigrated files still work and every
+existing reference stays valid.
 
 New docs going forward should use the target layout — for example, the next
 slice spec lands directly at `docs/slices/<slug>/spec.md`, not as another flat

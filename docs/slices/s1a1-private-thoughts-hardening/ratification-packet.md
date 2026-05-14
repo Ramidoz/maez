@@ -22,7 +22,7 @@ the original `b913728` review point, not the current post-closure state.
 |---|---|
 | `core/infra/private_thoughts.py` | `+624/-140`; closed enums, schema migration, behavior reader, forensic reader, audit-before-handle path |
 | `docs/PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md` | new; stable 2026 vocabulary/compatibility registry |
-| `docs/SLICE_S1A1_PRIVATE_THOUGHTS_HARDENING.md` | `+100/-24`; tightened plan and Codex six-agent verdict trail |
+| `docs/slices/s1a1-private-thoughts-hardening/spec.md` | `+100/-24`; tightened plan and Codex six-agent verdict trail |
 | `docs/operations/hardware_backup.md` | `+3/-1`; backup docs include private thoughts and audit log continuity |
 | `scripts/backup/drill.py` | `+241/-170`; restore drill verifies `private_thoughts.db` and `audit_log.db` |
 | `scripts/verify_self_claim.py` | `+148/-71`; private-thought forensic search now writes audit rows |
@@ -182,7 +182,7 @@ history to migrate on this body.
 
 ## 6. Codex Six-Agent Verdict Trail
 
-Recorded in `docs/SLICE_S1A1_PRIVATE_THOUGHTS_HARDENING.md`:
+Recorded in `docs/slices/s1a1-private-thoughts-hardening/spec.md`:
 
 - The pre-code panel verdict was **BLOCK plan-as-written; proceed only with tightened contract**.
 - The plan was tightened before implementation, not patched afterward.

@@ -1,6 +1,6 @@
 # Claude Six-Role Council — ARS (audit rewrite strategy) spec review
 
-**Subject:** `docs/SLICE_AUDIT_REWRITE_STRATEGY.md` — 538-line spec draft folding operator pre-spec amendments A1-A5. Pre-canonical; Codex's six-agent panel still needs to sit in its lane.
+**Subject:** `docs/slices/audit-rewrite-strategy/spec.md` — spec draft folding operator pre-spec amendments A1-A5. Pre-canonical; Codex's six-agent panel still needs to sit in its lane.
 
 **Council ran:** 2026-05-13, pre-canonical.
 

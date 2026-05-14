@@ -4,11 +4,11 @@
 
 **Applies to:** S1b reasoning-residue producer and presentation-only optional-output length dampening consumer.
 
-**Companion log:** [`S1B_OBSERVATION_LOG.md`](S1B_OBSERVATION_LOG.md).
+**Companion log:** [`docs/slices/s1b-private-thoughts-wiring/observation-log.md`](observation-log.md).
 
 **Current anatomy status:** `[ ◐ scaffold + minimal wiring · councils ratified · observation pending ]`.
 
-**Do not promote to:** `[ ✓ partial - pacing-only consumer wired ]` until the observation criteria in this runbook and [`SLICE_S1B_PRIVATE_THOUGHTS_WIRING.md`](SLICE_S1B_PRIVATE_THOUGHTS_WIRING.md) are met.
+**Do not promote to:** `[ ✓ partial - pacing-only consumer wired ]` until the observation criteria in this runbook and [`docs/slices/s1b-private-thoughts-wiring/spec.md`](spec.md) are met.
 
 ---
 
@@ -38,7 +38,7 @@ Run once per normal-use day while S1b is in observation:
 
 Run at week 1 and week 2:
 
-- Trend review: compare daily producer counts, rate-limit summaries, and dampening ratios in [`S1B_OBSERVATION_LOG.md`](S1B_OBSERVATION_LOG.md).
+- Trend review: compare daily producer counts, rate-limit summaries, and dampening ratios in [`docs/slices/s1b-private-thoughts-wiring/observation-log.md`](observation-log.md).
 - Direct-user path regression spot-test: rerun the targeted direct-reply and daemon-presentation tests.
 - Bonded-user-perceived-presence check: answer the subjective questions in the log template.
 - Disable/reenable sanity check if operator chooses to test toggles; do not toggle during an important live interaction.
@@ -211,7 +211,7 @@ If either fails, treat it as a direct-user path or canonical-output boundary reg
 
 ## Bonded-User-Perceived-Presence Check
 
-Counters cannot replace Rohit's felt read of Maez. Once per week, answer these in [`S1B_OBSERVATION_LOG.md`](S1B_OBSERVATION_LOG.md):
+Counters cannot replace Rohit's felt read of Maez. Once per week, answer these in [`docs/slices/s1b-private-thoughts-wiring/observation-log.md`](observation-log.md):
 
 - Does Maez feel quieter than last week?
 - Did any response feel shortened in a way that made you wonder why?
