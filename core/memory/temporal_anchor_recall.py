@@ -218,9 +218,12 @@ def _brief_for(anchor_kind: str, episodes: list[dict], *, truncated: bool) -> st
         when = _parse_dt(ep.get("occurred_at") or ep.get("created_at"))
         date_label = when.date().isoformat() if when is not None else "date unknown"
         evidence = ", ".join(_evidence_ids_for_episode(ep))
-        title = str(ep.get("title") or "").strip()
         summary = str(ep.get("summary") or "").strip()
-        text = _cap_text(title if title else summary)
+        title = str(ep.get("title") or "").strip()
+        if ep.get("source_kind") == "telegram_exchange" and summary:
+            text = _cap_text(summary)
+        else:
+            text = _cap_text(title if title else summary)
         lines.append(f"- Past episode [{date_label}] {text} [evidence: {evidence}]")
     if truncated:
         lines.append(f"(truncated to {len(episodes)} matching episodes)")

@@ -20,6 +20,7 @@
     {"type": "sqlite_db", "path": "memory/lived_episodes.db", "required": false, "comment": "Lived-memory episode store (Slice 4)"},
     {"type": "sqlite_db", "path": "memory/lived_graph.db", "required": false, "comment": "Relationship graph for lived recall (Slice 4)"},
     {"type": "sqlite_db", "path": "memory/maez.db", "required": false},
+    {"type": "sqlite_db", "path": "memory/m1_lived_episode_promotion.db", "required": false, "comment": "Decision 25 M1 sidecar: pending windows, source-id idempotency, promotion provenance"},
     {"type": "sqlite_db", "path": "memory/pending_cards.db", "required": false, "comment": "Approval card store"},
     {"type": "sqlite_db", "path": "memory/private_thoughts.db", "required": false, "comment": "Decision 9 separate-DB. Backed up by default. Privacy surface accepted in exchange for continuity through hardware loss."},
     {"type": "sqlite_db", "path": "memory/quality.db", "required": false},

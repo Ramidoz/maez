@@ -157,6 +157,17 @@ class EpisodeStore:
             ).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
+    def active_count_and_newest_time(self) -> tuple[int, Optional[str]]:
+        """Return active count and newest event/create timestamp without row scans."""
+        with closing(self._connect()) as c:
+            row = c.execute(
+                "SELECT COUNT(*) AS n, MAX(COALESCE(occurred_at, created_at)) AS newest "
+                "FROM episodes WHERE status = 'active'"
+            ).fetchone()
+        if row is None:
+            return 0, None
+        return int(row["n"] or 0), row["newest"]
+
     def list_active_in_window(
         self,
         *,

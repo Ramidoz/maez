@@ -38,8 +38,14 @@ _NEGATED_MARKERS = (
     "do not mark this",
 )
 
-_THIRD_PARTY_SAID = re.compile(
-    r"\b(he|she|they|someone|somebody|claude|codex|gemini)\s+said\b",
+_THIRD_PARTY_MARKER_REPORT = re.compile(
+    r"\b("
+    r"he|she|they|someone|somebody|"
+    r"my\s+\w+|[a-z][a-z]+|"
+    r"claude|codex|gemini"
+    r")\s+(said|told\s+me|asked\s+me|wanted\s+me\s+to)\b.*"
+    r"(remember\s+this|save\s+this|mark\s+this|don't\s+forget\s+this|"
+    r"do\s+not\s+forget\s+this|this\s+matters)",
     re.IGNORECASE,
 )
 
@@ -129,7 +135,7 @@ def marker_is_owner_authored(text: str) -> bool:
         return False
     if any(phrase in lowered for phrase in _NEGATED_MARKERS):
         return False
-    if _THIRD_PARTY_SAID.search(lowered):
+    if _THIRD_PARTY_MARKER_REPORT.search(lowered):
         return False
     if "quoting" in lowered:
         return False
@@ -256,6 +262,34 @@ class M1PromotionStore:
         promoted = self.promoted_source_ids(source_memory_ids)
         return [sid for sid in source_memory_ids if sid and sid not in promoted]
 
+    def rebuild_source_index_from_episodes(self, episode_store) -> None:
+        """Recover idempotency if the M1 sidecar is restored behind biography."""
+
+        try:
+            active = episode_store.list_active()
+        except Exception:
+            return
+        with closing(self._connect()) as conn:
+            with conn:
+                for ep in active:
+                    if ep.get("source_kind") != "telegram_exchange":
+                        continue
+                    episode_id = str(ep.get("id") or "")
+                    if not episode_id:
+                        continue
+                    promoted_at = str(
+                        ep.get("created_at") or ep.get("occurred_at") or _now_iso()
+                    )
+                    for sid in ep.get("source_memory_ids") or []:
+                        if not sid:
+                            continue
+                        conn.execute(
+                            "INSERT OR IGNORE INTO source_index "
+                            "(source_memory_id, episode_id, window_id, promoted_at) "
+                            "VALUES (?, ?, ?, ?)",
+                            (str(sid), episode_id, "reconstructed", promoted_at),
+                        )
+
     def mark_promoted(
         self,
         *,
@@ -288,6 +322,16 @@ class M1PromotionStore:
             ).fetchone()
         return int(row["n"] if row is not None else 0)
 
+    def get_provenance(self, episode_id: str) -> dict:
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT provenance_json FROM promotion_provenance WHERE episode_id = ?",
+                (episode_id,),
+            ).fetchone()
+        if row is None:
+            return {}
+        return dict(json.loads(row["provenance_json"]))
+
 
 class M1LivedEpisodePromoter:
     def __init__(
@@ -302,6 +346,7 @@ class M1LivedEpisodePromoter:
         self.promotion_store = promotion_store
         self.config = config or M1Config()
         self.now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+        self.promotion_store.rebuild_source_index_from_episodes(self.episode_store)
 
     def consider_audited_exchange(
         self,
@@ -316,27 +361,39 @@ class M1LivedEpisodePromoter:
         if not raw_memory_id:
             return PromotionOutcome(False, skipped_reason="no_source_id")
 
-        explicit_marker = marker_is_owner_authored(owner_text)
-        reasons = _eligibility_reasons(owner_text, explicit_marker=explicit_marker)
+        if marker_is_owner_authored(owner_text):
+            outcome = self.promote_window(
+                source_memory_ids=[raw_memory_id],
+                first_owner_at=occurred_at,
+                last_owner_at=occurred_at,
+                pair_count=1,
+                trigger="explicit_marker",
+                reason="explicit_marker",
+            )
+            if outcome.skipped_reason == "rate_limited":
+                self.promotion_store.save_pending_window(
+                    PendingWindow(
+                        window_id="m1-window-1",
+                        source_memory_ids=[raw_memory_id],
+                        first_owner_at=occurred_at,
+                        last_owner_at=occurred_at,
+                        pair_count=1,
+                        explicit_marker_seen=True,
+                        promotion_state="deferred_rate_limited",
+                        eligibility_reasons=["explicit_marker"],
+                    )
+                )
+                return outcome
+            self.promotion_store.clear_pending_window()
+            return outcome
+
+        reasons = _eligibility_reasons(owner_text, explicit_marker=False)
         window = self._append_to_window(
             raw_memory_id=raw_memory_id,
             occurred_at=occurred_at,
-            explicit_marker=explicit_marker,
+            explicit_marker=False,
             eligibility_reasons=reasons,
         )
-
-        if explicit_marker:
-            outcome = self.promote_window(
-                source_memory_ids=window.source_memory_ids,
-                first_owner_at=window.first_owner_at,
-                last_owner_at=window.last_owner_at,
-                pair_count=window.pair_count,
-                trigger="explicit_marker",
-                reason="explicit_marker",
-                window_id=window.window_id,
-            )
-            self.promotion_store.clear_pending_window()
-            return outcome
 
         if window.pair_count >= self.config.max_turn_pairs:
             if window.eligibility_reasons:
@@ -350,6 +407,20 @@ class M1LivedEpisodePromoter:
                     reason=reason,
                     window_id=window.window_id,
                 )
+                if outcome.skipped_reason == "rate_limited":
+                    self.promotion_store.save_pending_window(
+                        PendingWindow(
+                            window_id=window.window_id,
+                            source_memory_ids=window.source_memory_ids,
+                            first_owner_at=window.first_owner_at,
+                            last_owner_at=window.last_owner_at,
+                            pair_count=window.pair_count,
+                            explicit_marker_seen=window.explicit_marker_seen,
+                            promotion_state="deferred_rate_limited",
+                            eligibility_reasons=window.eligibility_reasons,
+                        )
+                    )
+                    return outcome
                 self.promotion_store.clear_pending_window()
                 return outcome
             self.promotion_store.clear_pending_window()
@@ -422,6 +493,21 @@ class M1LivedEpisodePromoter:
             reason=window.eligibility_reasons[0],
             window_id=window.window_id,
         )
+        if outcome.skipped_reason == "rate_limited":
+            self.promotion_store.save_pending_window(
+                PendingWindow(
+                    window_id=window.window_id,
+                    source_memory_ids=window.source_memory_ids,
+                    first_owner_at=window.first_owner_at,
+                    last_owner_at=window.last_owner_at,
+                    pair_count=window.pair_count,
+                    explicit_marker_seen=window.explicit_marker_seen,
+                    promotion_state="deferred_rate_limited",
+                    last_flush_checked_at=now.isoformat(),
+                    eligibility_reasons=window.eligibility_reasons,
+                )
+            )
+            return [outcome]
         self.promotion_store.clear_pending_window()
         return [outcome]
 
@@ -439,7 +525,7 @@ class M1LivedEpisodePromoter:
         unpromoted = self.promotion_store.filter_unpromoted(source_memory_ids)
         if not unpromoted:
             return PromotionOutcome(False, skipped_reason="duplicate_source")
-        if len(unpromoted) < len([sid for sid in source_memory_ids if sid]) and not reason:
+        if len(unpromoted) < len([sid for sid in source_memory_ids if sid]):
             return PromotionOutcome(False, skipped_reason="partial_overlap")
 
         now = self.now_fn()
@@ -487,9 +573,18 @@ class M1LivedEpisodePromoter:
         )
         return PromotionOutcome(True, episode_id=episode_id, source_id_count=len(unpromoted))
 
+    def status_health(self) -> dict:
+        window = self.promotion_store.load_pending_window()
+        return {
+            "enabled": bool(self.config.enabled),
+            "pending_source_count": len(window.source_memory_ids),
+            "pending_state": window.promotion_state,
+            "last_flush_checked_at": window.last_flush_checked_at,
+        }
 
-def _iter_active_episode_times(episode_store) -> Iterable[datetime]:
-    for ep in episode_store.list_active():
+
+def _iter_active_episode_times(active_episodes: Iterable[dict]) -> Iterable[datetime]:
+    for ep in active_episodes:
         raw = ep.get("occurred_at") or ep.get("created_at")
         if not raw:
             continue
@@ -506,18 +601,25 @@ def biography_staleness_health(
 ) -> dict:
     now = now or datetime.now(timezone.utc)
     try:
-        active = episode_store.list_active()
-        if not active:
+        aggregate = getattr(episode_store, "active_count_and_newest_time", None)
+        if callable(aggregate):
+            active_count, newest_raw = aggregate()
+        else:
+            active = episode_store.list_active()
+            active_count = len(active)
+            newest = max(_iter_active_episode_times(active), default=None)
+            newest_raw = newest.isoformat() if newest is not None else None
+        if not active_count:
             return {
                 "active_count": 0,
                 "newest_created_at": None,
                 "newest_age_hours": None,
                 "staleness_status": "empty",
             }
-        newest = max(_iter_active_episode_times(episode_store), default=None)
+        newest = _parse_iso(str(newest_raw)) if newest_raw else None
         if newest is None:
             return {
-                "active_count": len(active),
+                "active_count": active_count,
                 "newest_created_at": None,
                 "newest_age_hours": None,
                 "staleness_status": "unavailable",
@@ -530,7 +632,7 @@ def biography_staleness_health(
         else:
             status = "ok"
         return {
-            "active_count": len(active),
+            "active_count": active_count,
             "newest_created_at": newest.isoformat(),
             "newest_age_hours": age_hours,
             "staleness_status": status,

@@ -109,6 +109,7 @@ MEMORY_DIR = BASE_DIR / "memory"
 PID_FILE = BASE_DIR / "daemon" / "maez.pid"
 SHUTDOWN_FILE = BASE_DIR / "daemon" / "last_shutdown"
 LEDGER_DB_PATH = Path(os.environ.get("MAEZ_LEDGER_DB_PATH") or (MEMORY_DIR / "ledger.db"))
+M1_ALLOWED_PROMOTION_SOURCES = frozenset({"telegram_surface", "telegram_text"})
 
 # --- Constants ---
 from core.model_config import PRIMARY_MODEL as MODEL  # single source of truth — /etc/maez/model.env
@@ -403,6 +404,7 @@ class MaezDaemon:
             _lived_dir = Path(__file__).resolve().parent.parent / "memory"
         self.lived_episodes = EpisodeStore(str(_lived_dir / "lived_episodes.db"))
         self.lived_graph = RelationshipGraph(str(_lived_dir / "lived_graph.db"))
+        self._m1_lock = threading.Lock()
         try:
             self.m1_promoter = M1LivedEpisodePromoter(
                 episode_store=self.lived_episodes,
@@ -779,7 +781,9 @@ class MaezDaemon:
         if promoter is None:
             return
         try:
-            for outcome in promoter.flush_due_windows():
+            with self._m1_lock:
+                outcomes = promoter.flush_due_windows()
+            for outcome in outcomes:
                 if outcome.promoted:
                     logger.info(
                         "m1.promotion.succeeded trigger=daemon_cycle source_count=%d episode_id=%s",
@@ -804,6 +808,28 @@ class MaezDaemon:
                 "newest_created_at": None,
                 "newest_age_hours": None,
                 "staleness_status": "unavailable",
+                "error": str(exc)[:120],
+            }
+
+    def _m1_status_health(self) -> dict:
+        """Content-free M1 state for observation."""
+        promoter = getattr(self, "m1_promoter", None)
+        if promoter is None:
+            return {
+                "enabled": False,
+                "pending_source_count": None,
+                "pending_state": "unavailable",
+                "last_flush_checked_at": None,
+            }
+        try:
+            with self._m1_lock:
+                return promoter.status_health()
+        except Exception as exc:
+            return {
+                "enabled": False,
+                "pending_source_count": None,
+                "pending_state": "unavailable",
+                "last_flush_checked_at": None,
                 "error": str(exc)[:120],
             }
 
@@ -2617,20 +2643,24 @@ class MaezDaemon:
             trust_tier="lived",
         )
         try:
-            if getattr(self, "m1_promoter", None) is not None:
-                _m1_outcome = self.m1_promoter.consider_audited_exchange(
-                    owner_text=text,
-                    maez_reply=reply,
-                    raw_memory_id=_m1_raw_memory_id,
-                    occurred_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                )
+            if (
+                source in M1_ALLOWED_PROMOTION_SOURCES
+                and getattr(self, "m1_promoter", None) is not None
+            ):
+                with self._m1_lock:
+                    _m1_outcome = self.m1_promoter.consider_audited_exchange(
+                        owner_text=text,
+                        maez_reply=reply,
+                        raw_memory_id=_m1_raw_memory_id,
+                        occurred_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    )
                 if _m1_outcome.promoted:
                     logger.info(
                         "m1.promotion.succeeded trigger=turn_close source_count=%d episode_id=%s",
                         _m1_outcome.source_id_count,
                         _m1_outcome.episode_id,
                     )
-                elif _m1_outcome.skipped_reason:
+                elif _m1_outcome.skipped_reason and _m1_outcome.skipped_reason != "disabled":
                     logger.info(
                         "m1.promotion.skipped_%s trigger=turn_close",
                         _m1_outcome.skipped_reason,
@@ -5280,6 +5310,7 @@ class MaezDaemon:
                     "memory": self.memory.memory_stats(),
                     "lived_episodes": {
                         "staleness": self._m1_staleness_health(),
+                        "m1": self._m1_status_health(),
                     },
                     "system": {
                         "cpu_percent": snap["cpu"]["percent"],

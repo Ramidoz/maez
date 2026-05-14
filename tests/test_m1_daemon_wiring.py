@@ -55,6 +55,26 @@ class M1DaemonWiringTests(unittest.TestCase):
         self.assertIn("owner_text=text", body[m1_idx:m1_idx + 600])
         self.assertIn("maez_reply=reply", body[m1_idx:m1_idx + 600])
 
+    def test_m1_promotion_is_gated_to_telegram_surfaces(self):
+        src = _read("daemon/maez_daemon.py")
+        body = _method_body(src, "handle_message")
+
+        self.assertIn("M1_ALLOWED_PROMOTION_SOURCES", src)
+        self.assertIn("source in M1_ALLOWED_PROMOTION_SOURCES", body)
+        self.assertLess(
+            body.find("source in M1_ALLOWED_PROMOTION_SOURCES"),
+            body.find("self.m1_promoter.consider_audited_exchange("),
+        )
+
+    def test_m1_daemon_calls_are_lock_guarded(self):
+        src = _read("daemon/maez_daemon.py")
+        handle_body = _method_body(src, "handle_message")
+        flush_body = _method_body(src, "_m1_flush_due_windows")
+
+        self.assertIn("self._m1_lock", src)
+        self.assertIn("with self._m1_lock:", handle_body)
+        self.assertIn("with self._m1_lock:", flush_body)
+
     def test_loop_flushes_m1_on_daemon_cycle(self):
         body = _method_body(_read("daemon/maez_daemon.py"), "_loop")
         cycle_idx = body.find("self.cycle_count += 1")
@@ -69,8 +89,10 @@ class M1DaemonWiringTests(unittest.TestCase):
         body = _method_body(_read("daemon/maez_daemon.py"), "_run_health_server")
 
         self.assertIn("self._m1_staleness_health()", body)
+        self.assertIn("self._m1_status_health()", body)
         self.assertIn('"lived_episodes"', body)
         self.assertIn('"staleness"', body)
+        self.assertIn('"m1"', body)
 
     def test_m1_does_not_import_private_thoughts(self):
         import core.memory.m1_lived_episode_promotion as m1
@@ -78,4 +100,3 @@ class M1DaemonWiringTests(unittest.TestCase):
         src = inspect.getsource(m1)
         self.assertNotIn("private_thoughts", src)
         self.assertNotIn("PrivateThoughts", src)
-

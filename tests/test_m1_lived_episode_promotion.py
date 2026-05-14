@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -51,6 +52,9 @@ class MarkerDetectionTests(unittest.TestCase):
 
         self.assertFalse(marker_is_owner_authored("don't remember this"))
         self.assertFalse(marker_is_owner_authored("he said remember this"))
+        self.assertFalse(marker_is_owner_authored("Anna said remember this"))
+        self.assertFalse(marker_is_owner_authored("my mom told me save this"))
+        self.assertFalse(marker_is_owner_authored("Bob asked me to remember this"))
         self.assertFalse(marker_is_owner_authored("I'm quoting 'save this'"))
 
 
@@ -95,6 +99,25 @@ class PromotionBehaviorTests(M1PromotionTestCase):
         self.assertIn("Bonded Telegram exchange.", ep["summary"])
         self.assertNotIn("today we proved", ep["summary"])
         self.assertNotIn("I hear you", ep["summary"])
+
+    def test_explicit_marker_promotes_current_exchange_not_prior_pending_turns(self):
+        self.promoter.consider_audited_exchange(
+            owner_text="ordinary setup",
+            maez_reply="Okay.",
+            raw_memory_id="raw-prior",
+            occurred_at="2026-05-14T17:55:00+00:00",
+        )
+
+        outcome = self.promoter.consider_audited_exchange(
+            owner_text="remember this",
+            maez_reply="Okay.",
+            raw_memory_id="raw-current",
+            occurred_at="2026-05-14T18:00:00+00:00",
+        )
+
+        self.assertTrue(outcome.promoted)
+        ep = self.episodes.get(outcome.episode_id or "")
+        self.assertEqual(ep["source_memory_ids"], ["raw-current"])
 
     def test_disabled_promoter_records_no_episode(self):
         promoter = M1LivedEpisodePromoter(
@@ -194,9 +217,58 @@ class PromotionBehaviorTests(M1PromotionTestCase):
             trigger="explicit_marker",
             reason="explicit_marker",
         )
-        self.assertTrue(partial.promoted)
-        ep = self.episodes.get(partial.episode_id or "")
-        self.assertEqual(ep["source_memory_ids"], ["raw-dup-2"])
+        self.assertFalse(partial.promoted)
+        self.assertEqual(partial.skipped_reason, "partial_overlap")
+
+    def test_sidecar_reconstructs_idempotency_from_existing_lived_episodes(self):
+        self.episodes.add(
+            title="Bonded conversation with Rohit",
+            summary="Bonded Telegram exchange. 1 audited owner/Maez pair at t.",
+            participants=["Rohit", "Maez"],
+            source_memory_ids=["raw-restored"],
+            source_kind="telegram_exchange",
+            occurred_at="2026-05-14T18:00:00+00:00",
+            authorship="bonded_dialogue",
+            memory_voice="mixed_owner_maez",
+        )
+        fresh_sidecar = M1PromotionStore(str(Path(self._td.name) / "fresh_sidecar.db"))
+        promoter = M1LivedEpisodePromoter(
+            episode_store=self.episodes,
+            promotion_store=fresh_sidecar,
+            config=M1Config(enabled=True),
+            now_fn=lambda: self.now,
+        )
+
+        replay = promoter.promote_window(
+            source_memory_ids=["raw-restored"],
+            first_owner_at="2026-05-14T18:00:00+00:00",
+            last_owner_at="2026-05-14T18:00:00+00:00",
+            pair_count=1,
+            trigger="explicit_marker",
+            reason="explicit_marker",
+        )
+
+        self.assertFalse(replay.promoted)
+        self.assertEqual(replay.skipped_reason, "duplicate_source")
+
+    def test_promotion_provenance_envelope_is_inspectable(self):
+        outcome = self.promoter.consider_audited_exchange(
+            owner_text="remember this",
+            maez_reply="Okay.",
+            raw_memory_id="raw-prov",
+            occurred_at="2026-05-14T18:00:00+00:00",
+        )
+
+        provenance = self.sidecar.get_provenance(outcome.episode_id or "")
+
+        self.assertEqual(provenance["producer_version"], "m1.v1")
+        self.assertEqual(provenance["promotion_trigger"], "explicit_marker")
+        self.assertEqual(provenance["promotion_reason"], "explicit_marker")
+        self.assertEqual(provenance["consent_posture"], "bonded_user_dialogue")
+        self.assertEqual(provenance["source_id_count"], 1)
+        self.assertIn("promoted_at", provenance)
+        self.assertIn("window_start", provenance)
+        self.assertIn("window_end", provenance)
 
     def test_daily_promotion_cap_limits_new_episodes(self):
         promoter = M1LivedEpisodePromoter(
@@ -223,6 +295,9 @@ class PromotionBehaviorTests(M1PromotionTestCase):
         self.assertFalse(second.promoted)
         self.assertEqual(second.skipped_reason, "rate_limited")
         self.assertEqual(len(self.episodes.list_active()), 1)
+        pending = self.sidecar.load_pending_window()
+        self.assertEqual(pending.promotion_state, "deferred_rate_limited")
+        self.assertEqual(pending.source_memory_ids, ["raw-cap-2"])
 
     def test_silence_flush_promotes_eligible_window_without_new_owner_message(self):
         self.promoter.consider_audited_exchange(
@@ -287,3 +362,13 @@ class StalenessHealthTests(unittest.TestCase):
             )["staleness_status"],
             "alarm",
         )
+
+
+class BackupManifestTests(unittest.TestCase):
+    def test_m1_sidecar_is_in_decision_22_backup_manifest(self):
+        manifest = json.loads(
+            Path("scripts/backup/backup_state_manifest.json").read_text()
+        )
+        paths = {entry["path"] for entry in manifest["entries"]}
+
+        self.assertIn("memory/m1_lived_episode_promotion.db", paths)

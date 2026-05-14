@@ -120,6 +120,37 @@ class TemporalAnchorWindowTests(unittest.TestCase):
             reference_time=datetime(2026, 5, 13, 22, 30, tzinfo=CHICAGO),
         )
         self.assertTrue(result.anchor_detected)
+
+    def test_m1_telegram_exchange_uses_structural_summary_not_generic_storage_title(self):
+        from core.memory.temporal_anchor_recall import build_temporal_anchor_recall_brief
+
+        store = _FakeEpisodeStore()
+        store.rows.append(
+            {
+                "id": "ep-m1",
+                "created_at": "2026-05-07T18:00:00+00:00",
+                "occurred_at": "2026-05-07T18:00:00+00:00",
+                "title": "Bonded conversation with Rohit",
+                "summary": (
+                    "Bonded Telegram exchange. 1 audited owner/Maez pair at "
+                    "2026-05-07T18:00:00+00:00. Participants: Rohit, Maez."
+                ),
+                "source_memory_ids": ["raw-m1"],
+                "source_kind": "telegram_exchange",
+                "importance": 3,
+                "status": "active",
+            }
+        )
+
+        result = build_temporal_anchor_recall_brief(
+            "Do you remember last week?",
+            episode_store=store,
+            reference_time=datetime(2026, 5, 14, 12, 0, tzinfo=CHICAGO),
+        )
+
+        self.assertEqual(result.search_status, "evidence_found")
+        self.assertIn("Bonded Telegram exchange.", result.brief_text)
+        self.assertNotIn("Bonded conversation with Rohit", result.brief_text)
         self.assertEqual(result.anchor_kind, "last_week")
 
 
