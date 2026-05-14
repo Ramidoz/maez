@@ -140,15 +140,21 @@ audit-rail rewrite path.
 
 **Fix landed:**
 
-Not yet.
+`fix(audit): implement ARS omission rewrites`
 
 **Regression test:**
 
-Not yet. Needs a natural-text test for the prompt above that verifies Maez can
-answer memory uncertainty without exposing `_REWRITE_SENTENCE` verbatim.
+Added before implementation:
 
-**Status:** open. Candidate fix should preserve legitimate self-claim refusal
-while replacing the visible sentinel with a natural Telegram-surface rewrite.
+- `tests.test_self_claim_audit.AuditRewriteStrategy.test_partial_omission_preserves_grounded_context_without_sentinel`
+- `tests.test_self_claim_audit.AuditRewriteStrategy.test_audit_rewrite_probe_corpus_contains_morning_memory_case`
+- `tests.test_self_claim_audit.AuditRewriteStrategy.test_probe_corpus_fixture_rewrites_without_sentinel`
+- `tests/data/audit_rewrite_probe_corpus.jsonl` row `ars-2026-05-13-morning-memory`
+
+**Status:** implementation pending post-implementation review and live
+conversation evidence. Unit tests prove the old sentinel does not appear in the
+fixture rewrite; live closure still requires normal conversation without the
+old phrase or clipped/evasive ARS behavior.
 
 ---
 

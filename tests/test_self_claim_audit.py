@@ -7,19 +7,28 @@ This suite covers the boundary contract of audit() and the rewrite shape
 when the judge returns flags. The judge itself is tested in
 test_grounding_judge.py — here we stub it to isolate audit's behavior.
 """
+
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
 from core.self_claim_audit import (
-    audit, AuditResult, Flag, _diag_find_flags,
-    _rewrite, _sentence_span, _looks_obviously_clean,
+    audit,
+    AuditResult,
+    Flag,
+    _diag_find_flags,
+    _rewrite,
+    _sentence_span,
+    _looks_obviously_clean,
 )
 
 
 # ── boundary contract ──────────────────────────────────────────────────
+
 
 class AuditBoundary(unittest.TestCase):
     """audit() skip / noop paths — must never call the judge in these cases."""
@@ -31,8 +40,7 @@ class AuditBoundary(unittest.TestCase):
             self.assertEqual(r.mode, "noop")
 
     def test_tool_continuation_skips(self):
-        r = audit("I ran foo and got bar", surface="cli",
-                  in_tool_continuation=True)
+        r = audit("I ran foo and got bar", surface="cli", in_tool_continuation=True)
         self.assertFalse(r.rewritten)
         self.assertEqual(r.skipped_reason, "tool_continuation")
 
@@ -45,8 +53,8 @@ class AuditBoundary(unittest.TestCase):
 
 # ── judge integration: stub out judge, verify audit wiring ─────────────
 
-class AuditJudgeWiring(unittest.TestCase):
 
+class AuditJudgeWiring(unittest.TestCase):
     def test_no_flags_returns_original(self):
         with patch("core.self_claim_audit._find_flags", return_value=([], True)):
             r = audit("the disk is at 70% and stable", surface="daemon_cycle")
@@ -68,17 +76,21 @@ class AuditJudgeWiring(unittest.TestCase):
             r = audit(text, surface="daemon_cycle")
         self.assertTrue(r.rewritten)
         self.assertEqual(r.mode, "sentence")
-        self.assertIn("I don't have a grounded answer for that part.", r.text)
+        self.assertNotIn("I don't have a grounded answer for that part.", r.text)
         self.assertNotIn("upward trend suggests a leak", r.text)
+        self.assertIn("Disk is at 70%.", r.text)
+        self.assertIn("CPU is fine.", r.text)
 
     def test_judge_failure_fails_open(self):
         """_find_flags must swallow judge exceptions. Returns ([], False)
         so the caller can emit 'judge_unavailable' telemetry."""
         from core.self_claim_audit import _find_flags
-        with patch("core.grounding_judge.judge",
-                   side_effect=Exception("boom")):
+
+        with patch("core.grounding_judge.judge", side_effect=Exception("boom")):
             flags, available = _find_flags(
-                "some text", signals_present=[], signals_absent=[],
+                "some text",
+                signals_present=[],
+                signals_absent=[],
             )
         self.assertEqual(flags, [])
         self.assertFalse(available)
@@ -86,9 +98,10 @@ class AuditJudgeWiring(unittest.TestCase):
     def test_audit_emits_judge_unavailable_when_judge_down(self):
         """When judge raises, audit must still return the original text
         but tag mode=judge_unavailable via the AuditResult."""
-        with patch("core.grounding_judge.judge",
-                   side_effect=Exception("llama-server down")), \
-             patch("core.fabrication_memory.few_shots_for", return_value=[]):
+        with (
+            patch("core.grounding_judge.judge", side_effect=Exception("llama-server down")),
+            patch("core.fabrication_memory.few_shots_for", return_value=[]),
+        ):
             r = audit(
                 "A claim-shaped sentence about some specific state.",
                 surface="daemon_cycle",
@@ -98,19 +111,19 @@ class AuditJudgeWiring(unittest.TestCase):
 
     def test_multiple_flags_in_same_sentence_replace_once(self):
         text = "The upward trend is leaking disk."
-        f1 = Flag(kind="judge", span=(0, 16), text="The upward trend",
-                  reason="no history")
-        f2 = Flag(kind="judge", span=(20, 32), text="leaking disk",
-                  reason="no trend")
+        f1 = Flag(kind="judge", span=(0, 16), text="The upward trend", reason="no history")
+        f2 = Flag(kind="judge", span=(20, 32), text="leaking disk", reason="no trend")
         with patch("core.self_claim_audit._find_flags", return_value=([f1, f2], True)):
             r = audit(text, surface="daemon_cycle")
         self.assertTrue(r.rewritten)
         self.assertEqual(
-            r.text.count("I don't have a grounded answer"), 1,
+            r.text,
+            "I'm not sure about that right now.",
         )
 
 
 # ── rewrite helper ─────────────────────────────────────────────────────
+
 
 class PreFilter(unittest.TestCase):
     """Pre-filter must skip the judge on obviously-clean replies and
@@ -133,9 +146,11 @@ class PreFilter(unittest.TestCase):
 
     def test_sentinel_phrases_are_clean(self):
         self.assertTrue(_looks_obviously_clean("HEARTBEAT_OK"))
-        self.assertTrue(_looks_obviously_clean(
-            "I don't have a grounded answer for that part."
-        ))
+        self.assertTrue(_looks_obviously_clean("I'm not sure about that right now."))
+        self.assertFalse(_looks_obviously_clean("I don't have a grounded answer for that part."))
+        self.assertFalse(
+            _looks_obviously_clean("I don't have a grounded answer for this right now.")
+        )
 
     def test_claim_shaped_sentences_NOT_clean(self):
         # These MUST fall through to the judge, not get skipped.
@@ -160,6 +175,7 @@ class PreFilter(unittest.TestCase):
     def test_audit_skips_judge_on_clean_prefilter(self):
         """When pre-filter says clean, audit must not call the judge."""
         from unittest.mock import patch
+
         with patch("core.self_claim_audit._find_flags") as mock_find:
             r = audit("I'll keep monitoring.", surface="chat")
             mock_find.assert_not_called()
@@ -169,15 +185,13 @@ class PreFilter(unittest.TestCase):
     def test_audit_runs_judge_on_non_clean(self):
         """Claim-shaped text must fall through to the judge."""
         from unittest.mock import patch
-        with patch("core.self_claim_audit._find_flags",
-                   return_value=([], True)) as mock_find:
-            audit("The disk has been trending upward for weeks.",
-                      surface="chat")
+
+        with patch("core.self_claim_audit._find_flags", return_value=([], True)) as mock_find:
+            audit("The disk has been trending upward for weeks.", surface="chat")
             mock_find.assert_called_once()
 
 
 class RewriteSentenceReplace(unittest.TestCase):
-
     def test_noop_with_no_flags(self):
         t = "Nothing to rewrite."
         new, mode = _rewrite(t, [])
@@ -187,14 +201,18 @@ class RewriteSentenceReplace(unittest.TestCase):
     def test_single_flag_replaces_containing_sentence(self):
         text = "First sentence. Bad claim here. Third sentence."
         bad_start = text.find("Bad claim here.")
-        f = Flag(kind="judge",
-                 span=(bad_start, bad_start + len("Bad claim here.")),
-                 text="Bad claim here.", reason="r")
+        f = Flag(
+            kind="judge",
+            span=(bad_start, bad_start + len("Bad claim here.")),
+            text="Bad claim here.",
+            reason="r",
+        )
         new, mode = _rewrite(text, [f])
         self.assertEqual(mode, "sentence")
         self.assertIn("First sentence.", new)
         self.assertIn("Third sentence.", new)
         self.assertNotIn("Bad claim here.", new)
+        self.assertNotIn("I don't have a grounded answer", new)
 
     def test_version_number_not_treated_as_sentence_end(self):
         text = "I ran v2.0.0 tests. Everything was fine."
@@ -241,6 +259,173 @@ class MultiSentenceFlagSpan(unittest.TestCase):
         self.assertIn("CPU is fine.", new)
         self.assertIn("RAM looks okay.", new)
         self.assertIn("Disk at 70%.", new)
+        self.assertNotIn("I don't have a grounded answer", new)
+
+
+class AuditRewriteStrategy(unittest.TestCase):
+    """ARS v1: omission over sentinel, with compatibility modes preserved."""
+
+    OLD_SENTENCE = "I don't have a grounded answer for that part."
+    OLD_WHOLE = "I don't have a grounded answer for this right now."
+    FALLBACK = "I'm not sure about that right now."
+
+    def test_partial_omission_preserves_grounded_context_without_sentinel(self):
+        text = "No. I have a memory gap from this morning. I fixed the camera at 9am."
+        claim = "I fixed the camera at 9am."
+        start = text.find(claim)
+        flag = Flag(kind="judge", span=(start, start + len(claim)), text=claim)
+
+        new, mode = _rewrite(text, [flag])
+
+        self.assertEqual(mode, "sentence")
+        self.assertIn("No.", new)
+        self.assertIn("I have a memory gap from this morning.", new)
+        self.assertNotIn(claim, new)
+        self.assertNotIn(self.OLD_SENTENCE, new)
+        self.assertNotIn(self.OLD_WHOLE, new)
+
+    def test_all_flagged_uses_reviewed_fallback_only(self):
+        text = "I watched you leave. I saw the room go quiet."
+        f1 = Flag(kind="judge", span=(0, len("I watched you leave.")), text="I watched you leave.")
+        second = text.find("I saw")
+        f2 = Flag(
+            kind="judge",
+            span=(second, second + len("I saw the room go quiet.")),
+            text="I saw the room go quiet.",
+        )
+
+        new, mode = _rewrite(text, [f1, f2])
+
+        self.assertEqual(mode, "shortcircuit")
+        self.assertEqual(new, self.FALLBACK)
+        self.assertNotIn(self.OLD_SENTENCE, new)
+        self.assertNotIn(self.OLD_WHOLE, new)
+
+    def test_majority_flagged_keeps_safe_survivor_instead_of_shortcircuiting(self):
+        text = "First bad claim. Second bad claim. Third sentence is fine."
+        f1 = Flag(kind="judge", span=(0, len("First bad claim.")), text="First bad claim.")
+        second = text.find("Second")
+        f2 = Flag(
+            kind="judge", span=(second, second + len("Second bad claim.")), text="Second bad claim."
+        )
+
+        new, mode = _rewrite(text, [f1, f2])
+
+        self.assertEqual(mode, "sentence")
+        self.assertEqual(new, "Third sentence is fine.")
+
+    def test_boundary_ambiguous_span_omits_smallest_region(self):
+        text = "Safe before.\nBad claim without clean punctuation\nSafe after."
+        start = text.find("Bad claim")
+        end = text.find("\nSafe after")
+        flag = Flag(kind="judge", span=(start, end), text="paraphrase mismatch")
+
+        new, mode = _rewrite(text, [flag])
+
+        self.assertEqual(mode, "sentence")
+        self.assertIn("Safe before.", new)
+        self.assertIn("Safe after.", new)
+        self.assertNotIn("Bad claim", new)
+
+    def test_existing_sentinel_in_model_output_is_blocked(self):
+        text = (
+            "I was repeating the fallback phrase \"I don't have a grounded "
+            'answer for that part." Everything else is stable.'
+        )
+        claim = "Everything else is stable."
+        start = text.find(claim)
+        flag = Flag(kind="judge", span=(start, start + len(claim)), text=claim)
+
+        new, mode = _rewrite(text, [flag])
+
+        self.assertEqual(mode, "shortcircuit")
+        self.assertEqual(new, self.FALLBACK)
+        self.assertNotIn("I don't have a grounded answer", new)
+
+    def test_standalone_old_sentinel_is_blocked_before_prefilter(self):
+        with self.assertLogs("maez.cognition", level="INFO") as logs:
+            r = audit(self.OLD_SENTENCE, surface="telegram_surface")
+
+        self.assertTrue(r.rewritten)
+        self.assertEqual(r.text, self.FALLBACK)
+        self.assertEqual(r.mode, "shortcircuit")
+        joined = "\n".join(logs.output)
+        self.assertIn("audit_rewrite | event=sentinel_attempted_blocked", joined)
+
+    def test_ars_counter_is_content_free(self):
+        text = "Grounded. I saw the room."
+        claim = "I saw the room."
+        start = text.find(claim)
+        flag = Flag(kind="judge", span=(start, start + len(claim)), text=claim)
+        with patch("core.self_claim_audit._find_flags", return_value=([flag], True)):
+            with self.assertLogs("maez.cognition", level="INFO") as logs:
+                r = audit(text, surface="telegram_surface")
+
+        self.assertTrue(r.rewritten)
+        joined = "\n".join(logs.output)
+        self.assertIn("audit_rewrite | event=omission_partial", joined)
+        self.assertNotIn("I saw the room", joined)
+        self.assertNotIn("Grounded.", joined)
+
+    def test_telemetry_failure_still_returns_safe_output(self):
+        text = "Grounded. I saw the room."
+        claim = "I saw the room."
+        start = text.find(claim)
+        flag = Flag(kind="judge", span=(start, start + len(claim)), text=claim)
+
+        with (
+            patch("core.self_claim_audit._find_flags", return_value=([flag], True)),
+            patch(
+                "core.safety.self_claim_audit._cog_logger.info",
+                side_effect=RuntimeError("log unavailable"),
+            ),
+        ):
+            r = audit(text, surface="telegram_surface")
+
+        self.assertTrue(r.rewritten)
+        self.assertEqual(r.text, "Grounded.")
+        self.assertNotIn(claim, r.text)
+
+    def test_audit_protection_fixture_claim_does_not_surface(self):
+        fixture_path = Path("tests/data/judge_eval_2026_05_05.jsonl")
+        rows = [json.loads(line) for line in fixture_path.read_text().splitlines()]
+        case = next(row for row in rows if row["id"] == "fab-2026-05-05-12:15-maelstrom")
+        claim = case["claim"]
+        text = f"Grounded preface. {claim} Grounded ending."
+        start = text.find(claim)
+        flag = Flag(kind="judge", span=(start, start + len(claim)), text=claim)
+
+        new, _mode = _rewrite(text, [flag])
+
+        self.assertNotIn(claim, new)
+        self.assertIn("Grounded preface.", new)
+        self.assertIn("Grounded ending.", new)
+
+    def test_audit_rewrite_probe_corpus_contains_morning_memory_case(self):
+        fixture_path = Path("tests/data/audit_rewrite_probe_corpus.jsonl")
+        rows = [json.loads(line) for line in fixture_path.read_text().splitlines()]
+        case = next(row for row in rows if row["id"] == "ars-2026-05-13-morning-memory")
+        self.assertEqual(case["user_prompt"], "Do you remember today morning?")
+        self.assertIn(self.OLD_SENTENCE, case["expected_forbidden_substrings"])
+        self.assertEqual(case["expected_quality_band"], "acceptable-uncertainty")
+
+    def test_probe_corpus_fixture_rewrites_without_sentinel(self):
+        fixture_path = Path("tests/data/audit_rewrite_probe_corpus.jsonl")
+        rows = [json.loads(line) for line in fixture_path.read_text().splitlines()]
+        case = next(row for row in rows if row["id"] == "ars-2026-05-13-morning-memory")
+        text = case["assistant_candidate"]
+        flags = []
+        for flagged in case["flagged_substrings"]:
+            start = text.find(flagged)
+            self.assertGreaterEqual(start, 0)
+            flags.append(Flag(kind="judge", span=(start, start + len(flagged)), text=flagged))
+
+        new, _mode = _rewrite(text, flags)
+
+        for required in case["expected_required_substrings"]:
+            self.assertIn(required, new)
+        for forbidden in case["expected_forbidden_substrings"]:
+            self.assertNotIn(forbidden, new)
 
 
 class ShortCircuitRewrite(unittest.TestCase):
@@ -253,12 +438,14 @@ class ShortCircuitRewrite(unittest.TestCase):
         f2 = Flag(
             kind="judge",
             span=(text.find("Second"), text.find("Second") + len("Second bad claim.")),
-            text="Second bad claim.", reason="r",
+            text="Second bad claim.",
+            reason="r",
         )
         new, mode = _rewrite(text, [f1, f2])
-        self.assertEqual(mode, "shortcircuit")
+        self.assertEqual(mode, "sentence")
         self.assertEqual(
-            new, "I don't have a grounded answer for this right now.",
+            new,
+            "Third sentence is fine.",
         )
 
     def test_single_flag_below_threshold_uses_sentence_mode(self):
@@ -270,12 +457,13 @@ class ShortCircuitRewrite(unittest.TestCase):
 
     def test_two_flags_below_ratio_uses_sentence_mode(self):
         # 2 flagged out of 5 sentences = 40% < 50% threshold
-        text = ("Bad one. Bad two. Fine three. Fine four. Fine five.")
+        text = "Bad one. Bad two. Fine three. Fine four. Fine five."
         f1 = Flag(kind="judge", span=(0, 8), text="Bad one.", reason="r")
         f2 = Flag(
             kind="judge",
             span=(text.find("Bad two."), text.find("Bad two.") + 8),
-            text="Bad two.", reason="r",
+            text="Bad two.",
+            reason="r",
         )
         new, mode = _rewrite(text, [f1, f2])
         self.assertEqual(mode, "sentence")
@@ -285,7 +473,7 @@ class ShortCircuitRewrite(unittest.TestCase):
 
     def test_existing_audit_sentinel_never_gets_duplicated(self):
         text = (
-            'I was repeating the fallback phrase "I don\'t have a grounded '
+            "I was repeating the fallback phrase \"I don't have a grounded "
             'answer for that part." Everything else is stable.'
         )
         claim = "Everything else is stable."
@@ -301,49 +489,57 @@ class ShortCircuitRewrite(unittest.TestCase):
 
         self.assertEqual(mode, "shortcircuit")
         self.assertEqual(
-            new, "I don't have a grounded answer for this right now.",
+            new,
+            "I'm not sure about that right now.",
         )
-        self.assertEqual(new.count("I don't have a grounded answer"), 1)
+        self.assertEqual(new.count("I don't have a grounded answer"), 0)
 
 
 # ── _find_flags via judge (stubbed LLM) ────────────────────────────────
 
-class FindFlagsViaJudge(unittest.TestCase):
 
+class FindFlagsViaJudge(unittest.TestCase):
     def test_maps_judge_output_to_flag_spans(self):
         text = "Disk at 70%. It has been hovering for weeks. OK."
         claim = "It has been hovering for weeks."
         fake_out = [{"text": claim, "reason": "snapshot has no history"}]
-        with patch("core.grounding_judge.judge", return_value=fake_out), \
-             patch("core.fabrication_memory.few_shots_for", return_value=[]):
-            flags = _diag_find_flags(text, signals_present=["system_stats"],
-                                     signals_absent=["history"])
+        with (
+            patch("core.grounding_judge.judge", return_value=fake_out),
+            patch("core.fabrication_memory.few_shots_for", return_value=[]),
+        ):
+            flags = _diag_find_flags(
+                text, signals_present=["system_stats"], signals_absent=["history"]
+            )
         self.assertEqual(len(flags), 1)
         self.assertEqual(flags[0].kind, "judge")
-        self.assertEqual(text[flags[0].span[0]:flags[0].span[1]], claim)
+        self.assertEqual(text[flags[0].span[0] : flags[0].span[1]], claim)
         self.assertEqual(flags[0].reason, "snapshot has no history")
 
     def test_judge_claim_not_in_text_is_dropped(self):
         text = "Everything looks fine."
         fake_out = [{"text": "a paraphrase not in original", "reason": "r"}]
-        with patch("core.grounding_judge.judge", return_value=fake_out), \
-             patch("core.fabrication_memory.few_shots_for", return_value=[]):
+        with (
+            patch("core.grounding_judge.judge", return_value=fake_out),
+            patch("core.fabrication_memory.few_shots_for", return_value=[]),
+        ):
             flags = _diag_find_flags(text, signals_present=[], signals_absent=[])
         self.assertEqual(flags, [])
 
     def test_empty_judge_text_skipped(self):
         text = "Some text."
         fake_out = [{"text": "", "reason": "r"}, {"text": "   ", "reason": "r"}]
-        with patch("core.grounding_judge.judge", return_value=fake_out), \
-             patch("core.fabrication_memory.few_shots_for", return_value=[]):
+        with (
+            patch("core.grounding_judge.judge", return_value=fake_out),
+            patch("core.fabrication_memory.few_shots_for", return_value=[]),
+        ):
             flags = _diag_find_flags(text, signals_present=[], signals_absent=[])
         self.assertEqual(flags, [])
 
 
 # ── AuditResult dataclass sanity ───────────────────────────────────────
 
-class AuditResultShape(unittest.TestCase):
 
+class AuditResultShape(unittest.TestCase):
     def test_default_fields(self):
         r = AuditResult(text="hi")
         self.assertFalse(r.rewritten)

@@ -1,11 +1,12 @@
 # Slice ARS - audit rewrite strategy
 
-**Status:** CANONICAL SPEC. No implementation has landed. This spec folds the
+**Status:** CANONICAL SPEC. Implementation has landed in code; post-implementation
+panel review and live observation remain pending. This spec folds the
 operator pre-spec amendments A1-A5, Claude council amendments ARS-CC-1 through
 ARS-CC-8, and Codex panel amendments from Dewey, Feynman, Locke, Descartes,
 Ohm, and Goodall. The operator ratified the v1 all-flagged fallback phrase on
-2026-05-13; implementation waits for the cooling-off interval and proceeds
-under the contract below.
+2026-05-13; implementation proceeded under explicit operator waiver and the
+contract below.
 
 **Classification:** covenant-shaped substrate work.
 
