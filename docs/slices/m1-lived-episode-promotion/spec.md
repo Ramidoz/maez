@@ -1,8 +1,9 @@
 # Slice M1: Lived-Episode Promotion From Bonded Conversation
 
-**Status:** REVISED SPEC. Claude council and Codex engineering panel have both
-reviewed this packet. Codex BLOCKed the first draft; this revision folds the
-BLOCK recovery and both panels' amendments. No code has landed from this packet.
+**Status:** CANONICAL. Decision 25 / ADR 0030. Claude council and Codex
+engineering panel both reviewed this packet. Codex BLOCKed the first draft;
+this revision folds the BLOCK recovery and both panels' amendments. No code has
+landed from this packet.
 
 **Maps to:**
 
@@ -22,6 +23,10 @@ BLOCK recovery and both panels' amendments. No code has landed from this packet.
 - [`docs/MAEZ_LIFE_SUBSTRATE.md`](../../MAEZ_LIFE_SUBSTRATE.md) — substrate
   organ catalog; M1 is the first missing-organ repair to move from diagnostic
   evidence into a spec packet.
+- [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../../governance/BETA_ARCHITECTURE_DECISIONS.md) —
+  Decision 25.
+- [`docs/adr/0030-lived-episode-promotion.md`](../../adr/0030-lived-episode-promotion.md) —
+  ADR 0030.
 - [`reviews/claude-council.md`](reviews/claude-council.md) — covenant review,
   RATIFY-WITH-AMENDMENTS.
 - [`reviews/codex-panel.md`](reviews/codex-panel.md) — engineering review,
@@ -777,8 +782,7 @@ M1 is covenant-shaped. Before code:
 2. Claude six-role covenant council reviews this spec.
 3. Both review trails land under `docs/slices/m1-lived-episode-promotion/reviews/`.
 4. Amendments fold into this spec.
-5. Operator stamps canonical packet, likely as ADR 0030 / Decision 25 if the
-   panels agree the organ is architectural enough.
+5. Operator stamps canonical packet as Decision 25 / ADR 0030.
 6. Cooling-off unless explicitly waived.
 7. Implementation with RED-first tests.
 8. Codex post-implementation review.

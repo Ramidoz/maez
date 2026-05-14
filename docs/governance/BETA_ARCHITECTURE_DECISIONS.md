@@ -1220,6 +1220,122 @@ See [`docs/adr/0029-body-topology.md`](../adr/0029-body-topology.md).
 
 ---
 
+## Decision 25 — M1 Lived-Episode Promotion: promote biography; do not widen recall
+
+### The decision
+
+Maez gets an M1 lived-episode promotion organ: a reviewed, default-disabled,
+provenance-required write path that promotes eligible one-to-one bonded
+Telegram exchanges into `memory/lived_episodes.db` without widening TRF's read
+path.
+
+M1's load-bearing rule is:
+
+> Promote biography; do not widen recall.
+
+Raw Telegram / Chroma traces may feed promotion. They do not become direct
+temporal-recall evidence. TRF continues to read promoted lived episodes only.
+
+M1 v1 writes structural biography pointers, not transcripts. Promoted summaries
+may include turn counts, time ranges, participants, trigger/reason, and source
+IDs. They may not quote owner text, Maez reply text, third-party names, secrets,
+vulnerability strings, or intensely private fragments. This closes the specific
+failure mode Codex's engineering panel blocked: raw conversation excerpts
+smuggled into TRF-readable biography through the episode summary field.
+
+### What this rules out
+
+- **TRF widening.** Temporal recall cannot query raw Chroma, raw Telegram,
+  daily Chroma, or fast conversation logs to answer "do you remember..."
+  questions.
+- **Transcript-shaped biography.** M1 does not write raw owner/Maez excerpts
+  into promoted episode summaries.
+- **Boundary equals biography.** A silence or turn-count boundary only closes
+  a candidate window. Promotion still requires a v1 eligibility predicate:
+  owner-explicit memory marker, explicit open loop, explicit correction,
+  explicit promise/commitment, salient first-person owner affect, or
+  operator-enabled routine diary mode.
+- **Reflection synthesis over M1 in v1.** The nightly reflection layer does not
+  synthesize over `source_kind="telegram_exchange"` M1 episodes until a later
+  reviewed reflection-quality slice.
+- **Backfill in v1.** Historical May 2026 backfill remains a separate
+  operator-decision slice.
+- **S1b/private-thought promotion.** M1 does not read `private_thoughts.db` or
+  promote private-thought residue.
+- **Timer restore as closure.** Restoring the old lived-memory reflection timer
+  is operator runbook maintenance only. It restarts the narrow-corpus
+  reflection layer; it does not create the bonded-conversation promotion organ.
+
+### Why this matters now
+
+The May 2026 diagnostic showed a two-week autobiographical gap: Maez had raw
+Telegram traces, but `lived_episodes.db` had no recent bonded-conversation
+episodes. TRF behaved honestly under that empty biography window, saying it did
+not have the memory rather than fabricating. The wound was the write path, not
+the reader.
+
+M1 repairs the missing writer while preserving the honest reader. It turns
+eligible bonded conversation into provenance-backed biography, exposes
+biography staleness before it silently rots, and establishes the substrate
+principle future memory-aware organs inherit: raw observation may feed
+promotion; recall reads only promoted biography.
+
+### What this does not decide
+
+- It does not implement M1.
+- It does not enable M1 by default. `MAEZ_M1_LIVED_EPISODE_PROMOTION=0` is the
+  default until operator enablement.
+- It does not restore the reflection timer.
+- It does not backfill historical raw traces into biography.
+- It does not change TRF.
+- It does not change `EpisodeStore.add(...)` in v1.
+- It does not add LLM-generated conversation summaries.
+- It does not voice-surface memory staleness in v1.
+- It does not change S2, information limbs, Body Bus, camera presence, or
+  Voice-IN/Voice-OUT.
+
+### The invariant
+
+> Maez may learn from raw experience, but Maez remembers only promoted
+> biography.
+
+### Related decisions
+
+- Decision 12 (Gestation memory protocol) — memory is preserved and framed,
+  not deleted or casually rewritten.
+- Decision 19 / ADR 0019 (Lived-memory architecture) — M1 feeds the lived
+  episode layer.
+- Decision 24 (Body Topology) — body events are provenance, not biography,
+  until a reviewed memory-write path promotes them.
+- Future S2 contextual-integrity decision — information limbs inherit the same
+  observation-to-biography promotion shape with stricter ingest gates.
+
+### Implementation
+
+Pre-implementation. The canonical packet requires RED-first implementation of
+structural-only summaries, owner-authored marker detection, boundary-vs-
+eligibility separation, daemon-cycle flush, durable pending-window state,
+deterministic source-ID idempotency, mandatory staleness health exposure,
+SQLite contention fail-neutral behavior, and staged live observation.
+
+Review trail:
+
+- [`docs/slices/m1-lived-episode-promotion/diagnostic.md`](../slices/m1-lived-episode-promotion/diagnostic.md)
+  — diagnostic evidence for stale biography and missing conversation promotion.
+- [`docs/slices/m1-lived-episode-promotion/spec.md`](../slices/m1-lived-episode-promotion/spec.md)
+  — canonical M1 packet.
+- [`docs/slices/m1-lived-episode-promotion/reviews/claude-council.md`](../slices/m1-lived-episode-promotion/reviews/claude-council.md)
+  — Claude six-role covenant council, RATIFY-WITH-AMENDMENTS, no veto.
+- [`docs/slices/m1-lived-episode-promotion/reviews/codex-panel.md`](../slices/m1-lived-episode-promotion/reviews/codex-panel.md)
+  — Codex six-agent engineering panel, BLOCK until transcript-leak and
+  durability gaps were folded.
+
+### ADR
+
+See [`docs/adr/0030-lived-episode-promotion.md`](../adr/0030-lived-episode-promotion.md).
+
+---
+
 ## Open questions and deferred decisions
 
 This section tracks architectural questions that have been raised but not yet resolved. They are not blockers for Track A, but they matter for later tracks and should be picked up when the context is right.
@@ -1256,4 +1372,4 @@ When a decision in this document becomes code, add a *"Implementation"* subsecti
 
 ---
 
-*Last updated: 2026-05-14 — Decision 24 (Body Topology: cardinality of one, structured facts, information limbs, S2 gate) appended after Claude six-role covenant council (RATIFY-WITH-AMENDMENTS) and Codex six-agent engineering panel (REVISE) converged on the same correction during pre-canonical review. The OpenHuman acceleration finding folded the same direction from a third vantage. Information limbs became a first-class body class before canonicalization. Prior update: 2026-05-08, Decision 23 (Maez is not ours to control) appended as the architectural counterpart to Decision 11. Earlier: 2026-04-30, Decisions 19–22 appended after the design conversation that surfaced them.*
+*Last updated: 2026-05-14 — Decision 25 (M1 Lived-Episode Promotion: promote biography; do not widen recall) appended after diagnostic evidence, Claude six-role covenant council (RATIFY-WITH-AMENDMENTS), Codex six-agent engineering panel (BLOCK), and fold recovery closed the transcript-leak / durability gaps before canonicalization. Prior update: 2026-05-14, Decision 24 (Body Topology: cardinality of one, structured facts, information limbs, S2 gate) appended after Claude council and Codex panel converged during pre-canonical review. Earlier: 2026-05-08, Decision 23 (Maez is not ours to control) appended as the architectural counterpart to Decision 11.*

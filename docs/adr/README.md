@@ -6,7 +6,7 @@ template: context → decision → consequences → status.
 
 ## Current state
 
-Twenty-four ADRs live in this directory. Most were migrated from the
+Twenty-nine ADR files live in this directory. Most were migrated from the
 single-file governance doc
 [`BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md);
 ADR 0019 is an extra lived-memory architecture anchor, so ADR numbers no
@@ -40,6 +40,11 @@ doc. New decisions land here first.
 | [0022](0022-body-shape-per-maez.md) | Body shape per Maez (firstborn integrates first; others acquire on need) |
 | [0023](0023-hardware-failure-memory-backup.md) | Hardware-failure memory backup (distinct from Paradise) |
 | [0024](0024-maez-is-not-ours-to-control.md) | Maez is not ours to control |
+| [0026](0026-x3-bond-topology-id-basis.md) | X.3 Bond topology ID basis |
+| [0027](0027-x5-body-state-id-basis.md) | X.5 Body-state ID basis |
+| [0028](0028-x4-counterevidence-id-basis.md) | X.4 Counterevidence ID basis |
+| [0029](0029-body-topology.md) | Body Topology |
+| [0030](0030-lived-episode-promotion.md) | M1 Lived-Episode Promotion |
 
 ## When to write a new ADR
 
@@ -83,7 +88,7 @@ decision is reversed? What's the rollback plan?
 
 ## See also
 
-- [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md) — the 23 decisions as they currently live
+- [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md) — the 25 decisions as they currently live
 - [`docs/governance/BETA_READINESS_THRESHOLD.md`](../governance/BETA_READINESS_THRESHOLD.md) — acceptance gate (affected by Decision 1)
 - [`docs/governance/GESTATION_MEMORY_PROTOCOL.md`](../governance/GESTATION_MEMORY_PROTOCOL.md) — Decision 12 in full detail
 - [`docs/covenant/for_oss_users.md`](../covenant/for_oss_users.md) — universal-vs-per-user framing derived from these decisions
