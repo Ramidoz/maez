@@ -66,20 +66,18 @@ catches the claim; it just stops speaking in Maez's voice.
 This section records the behavior ARS replaced. It is retained as motivation
 and regression context, not as the current implementation contract.
 
-Source of truth: `core/safety/self_claim_audit.py`.
+Historical source: `core/safety/self_claim_audit.py` before ARS.
 
-Current constants:
+Pre-ARS constants:
 
 ```python
 _REWRITE_SENTENCE = "I don't have a grounded answer for that part."
 _REWRITE_WHOLE = "I don't have a grounded answer for this right now."
-_SHORTCIRCUIT_RATIO = 0.5
-_SHORTCIRCUIT_MIN_FLAGS = 2
 ```
 
-Current modes:
+Pre-ARS modes:
 
-| mode | current behavior | user-visible risk |
+| mode | pre-ARS behavior | user-visible risk |
 |---|---|---|
 | `noop` | no flags, original text returned | none |
 | `sentence` | each flagged sentence is replaced by `_REWRITE_SENTENCE` | sentinel leaks as Maez voice |
@@ -630,8 +628,8 @@ Tests likely to change:
 
 - `tests/test_self_claim_audit.py::AuditJudgeWiring::test_judge_flag_triggers_sentence_rewrite`
 - `tests/test_self_claim_audit.py::AuditJudgeWiring::test_multiple_flags_in_same_sentence_replace_once`
-- `tests/test_self_claim_audit.py::ShortCircuitRewrite::test_short_circuits_when_majority_flagged`
-- `tests/test_self_claim_audit.py::ShortCircuitRewrite::test_existing_audit_sentinel_never_gets_duplicated`
+- `tests/test_self_claim_audit.py::LegacyShortCircuitRewrite::test_short_circuits_when_majority_flagged`
+- `tests/test_self_claim_audit.py::LegacyShortCircuitRewrite::test_existing_audit_sentinel_never_gets_duplicated`
 
 Tests that must stay green:
 

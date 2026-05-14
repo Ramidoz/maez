@@ -119,16 +119,14 @@ def accepts_provenance(value: str) -> bool:
 
 _REWRITE_SENTENCE = "I don't have a grounded answer for that part."
 _REWRITE_WHOLE = "I don't have a grounded answer for this right now."
-_REWRITE_SENTENCE_STEM = _REWRITE_SENTENCE.rstrip(".")
 _ARS_ALL_FLAGGED_FALLBACK = "I'm not sure about that right now."
-_OLD_REWRITE_SENTINELS = (_REWRITE_SENTENCE, _REWRITE_WHOLE)
 _OLD_REWRITE_SENTINEL_PATTERNS = (
     re.compile(
-        r"\bi\s+don'?t\s+have\s+a\s+grounded\s+answer\s+for\s+that\s+part\s*[.!?]?",
+        r"\bi\s+(?:don'?t|do\s+not)\s+have\s+a\s+grounded\s+answer\s+for\s+that\s+part\s*[.!?]?",
         re.IGNORECASE,
     ),
     re.compile(
-        r"\bi\s+don'?t\s+have\s+a\s+grounded\s+answer\s+for\s+this\s+right\s+now\s*[.!?]?",
+        r"\bi\s+(?:don'?t|do\s+not)\s+have\s+a\s+grounded\s+answer\s+for\s+this\s+right\s+now\s*[.!?]?",
         re.IGNORECASE,
     ),
 )

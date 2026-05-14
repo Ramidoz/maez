@@ -409,6 +409,7 @@ class AuditRewriteStrategy(unittest.TestCase):
             "I don't have a grounded answer for that part",
             "I don't have a grounded answer for that part!",
             "I don't have a grounded answer for that part?",
+            "I do not have a grounded answer for that part.",
             "I don't   have   a   grounded   answer   for   that   part.",
         ]
         for text in variants:
@@ -542,9 +543,8 @@ class AuditRewriteStrategy(unittest.TestCase):
             self.assertNotIn(forbidden, new)
 
 
-class ShortCircuitRewrite(unittest.TestCase):
-    """When ≥50% of sentences are flagged (and ≥2 flagged), the whole
-    response is replaced rather than punctuating fragments with sentinels."""
+class LegacyShortCircuitRewrite(unittest.TestCase):
+    """Legacy short-circuit thresholds no longer erase safe survivor text."""
 
     def test_short_circuits_when_majority_flagged(self):
         text = "First bad claim. Second bad claim. Third sentence is fine."
