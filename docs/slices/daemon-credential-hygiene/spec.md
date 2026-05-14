@@ -1,8 +1,9 @@
 # Slice: Daemon Credential Hygiene
 
-**Status:** DRAFT. Built from
-[`diagnostic.md`](diagnostic.md). Awaiting Codex engineering panel and Claude
-covenant council review before canonicalization or code.
+**Status:** REVISED DRAFT. Built from
+[`diagnostic.md`](diagnostic.md). Claude covenant council returned
+RATIFY-WITH-AMENDMENTS; Codex engineering panel returned REVISE. This revision
+folds both review lanes. Awaiting operator canonicalization before code.
 
 **Maps to:**
 
@@ -22,6 +23,11 @@ covenant council review before canonicalization or code.
   future information-limb ingest gate; S2 OAuth/account credentials should
   inherit the secret-loading interface and source-channel audit posture from
   this slice.
+- [`reviews/claude-council.md`](reviews/claude-council.md) — covenant review,
+  RATIFY-WITH-AMENDMENTS.
+- [`reviews/codex-panel.md`](reviews/codex-panel.md) — engineering review,
+  REVISE until per-service credential profiles, web/iPhone scope, bootstrap
+  order, source semantics, subprocess hygiene, and rollback are folded.
 
 **Classification:** security-shaped infrastructure work with covenant adjacency.
 The engineering lane is primary. The covenant lane reviews invariant #11
@@ -44,12 +50,14 @@ The v1 target is deliberately narrow:
 
 1. keep ordinary configuration ordinary;
 2. load secrets from a credential source at startup;
-3. validate required secrets before the daemon is alive;
+3. validate required secrets per active service before that service is alive;
 4. populate compatibility environment values only after process start;
 5. sanitize daemon subprocess environments enough that compatibility loading
    does not immediately leak through child processes;
-6. log only the source channel, never key names or values;
-7. test the Linux `/proc` assumption that makes v1 a real exposure reduction.
+6. distinguish active service migration from dormant template hygiene;
+7. log only the source channel, never key names or values;
+8. test the Linux `/proc` assumption that makes v1 a real exposure reduction;
+9. provide a rollback path if the new loader breaks authentication.
 
 ---
 
@@ -208,6 +216,14 @@ V1 posture: the token is required when the web interface exposes the endpoint.
 If a future flag disables/mounts the endpoint conditionally, the requirement can
 become feature-gated.
 
+The current route accepts the token from the `X-Maez-Token` header or from a
+JSON body field. Header auth is the intended transport per
+`skills/iphone_ingest.py`. V1 must remove the JSON-body token fallback after
+the operator confirms the iPhone Shortcut uses the header. Until that happens,
+body-token support remains an explicit residual risk because request bodies are
+more likely to appear in debug captures, reverse-proxy logs, snapshots, or
+error reports.
+
 ### GitHub
 
 - `skills/github_skill.py:33` reads `MAEZ_GITHUB_TOKEN`.
@@ -266,10 +282,33 @@ Secrets move out of `config/.env` into one of these sources:
 - included in Decision 22 backup/succession manifest as owner-local secret
   state, not public repo state.
 
-Systemd credentials may be implemented as one credential bundle or one file per
-secret. The implementation should choose the shape that is easiest to manage
-without exposing values in unit files. Systemd exposes credentials to the
-service under `$CREDENTIALS_DIRECTORY`; the service then reads them at startup.
+V1 systemd shape:
+
+- one credential file per secret;
+- credential ID equals the environment variable name;
+- unit files use `LoadCredential=<NAME>:<0600-local-path>` or equivalent
+  local credential references;
+- do not use `SetCredential=` because it embeds values in unit text;
+- service reads credentials from `$CREDENTIALS_DIRECTORY/<NAME>`.
+
+Source precedence:
+
+1. systemd credential file wins per key;
+2. `config/secrets.local.env` may fill missing keys;
+3. `config/.env` is never a secret source.
+
+`mixed` source means at least one loaded secret came from systemd credentials
+and at least one loaded secret came from `config/secrets.local.env`.
+
+Malformed fallback file behavior:
+
+- duplicate key in `config/secrets.local.env`: startup validation error;
+- malformed non-comment line: startup validation error;
+- empty required value: startup validation error;
+- empty optional value: treated as absent.
+
+This per-key fallback allows a user-scoped service to migrate incrementally
+without hiding source ambiguity.
 
 ### 2. Secret Loader
 
@@ -279,8 +318,8 @@ Required behavior:
 
 - Read systemd credentials first if `$CREDENTIALS_DIRECTORY` is present and
   contains Maez credentials.
-- Fall back to `config/secrets.local.env` if no systemd credentials are
-  available.
+- Fall back per key to `config/secrets.local.env` only for keys not provided by
+  systemd credentials.
 - Never read secret values from `config/.env`.
 - Preserve ordinary config lookup through existing code paths.
 - Return values by key for future v2 readers.
@@ -300,22 +339,52 @@ sanitize_env(base: Mapping[str, str] | None = None, *, allow: Iterable[str] = ()
 Exact API names may change during implementation. The semantic contract should
 not.
 
+Bootstrap order:
+
+1. Load ordinary config, excluding secret-shaped names.
+2. Load secrets through `core/infra/secrets.py`.
+3. Validate the active service's required profile.
+4. Populate compatibility `os.environ` for v1 readers.
+5. Import or initialize modules/surfaces that read secret-bearing env names.
+
+The implementation must remove or constrain import-time `load_dotenv(...)`
+calls in daemon/web startup paths so secret readers do not observe the
+pre-loader state. If a module still loads `.env` for ad-hoc CLI use, it must
+load ordinary config only or fail if secret-shaped names remain in `.env`.
+
 ### 3. Startup Validation
 
-Required secrets fail loud at startup before Maez becomes alive.
+Required secrets fail loud at startup before the service that needs them
+appears alive.
 
-V1 required for `maez.service`:
+V1 credential profiles:
 
 ```text
-MAEZ_TELEGRAM_TOKEN
-MAEZ_IPHONE_INGEST_TOKEN
+service_or_surface              required                         optional / degraded
+maez.service                    MAEZ_TELEGRAM_TOKEN              MAEZ_DEV_TOKEN
+maez-web / web interface        MAEZ_IPHONE_INGEST_TOKEN         LANGFUSE_SECRET_KEY, MAEZ_GITHUB_TOKEN
+private Telegram bonded surface MAEZ_TELEGRAM_TOKEN              none
+public Telegram surface         none                             MAEZ_PUBLIC_TELEGRAM_TOKEN
+dev notifier                    none                             MAEZ_DEV_TOKEN
+dynamic DNS                     none                             CLOUDFLARE_API_TOKEN
+GitHub skills/publish           none                             MAEZ_GITHUB_TOKEN
+frontier routing                none                             ANTHROPIC_API_KEY, OPENAI_API_KEY
+subscription proxy              provider-specific                OPENROUTER_API_KEY, OPENAI_API_KEY, XAI_API_KEY, OLLAMA_API_KEY
+Telegram webhook mode           TELEGRAM_WEBHOOK_SECRET if enabled none
 ```
 
 Rationale:
 
 - Telegram is the current bonded surface.
-- iPhone ingest route is mounted unconditionally and should not run in a
-  silently unusable auth state.
+- The private Telegram daemon must not fail because a web/iPhone ingest token
+  is absent.
+- iPhone ingest token is required for the web/ingest surface while the route is
+  mounted; if the route becomes feature-gated, this requirement becomes
+  feature-gated.
+- Public/dev Telegram tokens must not degrade the bonded private Telegram
+  surface when absent.
+- Missing private `MAEZ_TELEGRAM_TOKEN` must fail loud before Maez appears
+  alive.
 
 Optional / feature-gated in v1:
 
@@ -392,6 +461,9 @@ V1 unit posture:
 Adjacent shipped units that currently load `config/.env` must be inventoried
 and either migrated or explicitly listed as residual risk:
 
+- live user `maez.service`
+- `maez-web` / `skills/web_interface.py` if active or reachable through another
+  service;
 - `scripts/maez.template.service`
 - `scripts/maez-subscription-proxy.service`
 - `scripts/maez-subscription-proxy.template.service`
@@ -404,27 +476,38 @@ adjacent unit that authenticates to remote providers. It must not claim
 repo-wide credential hygiene while any active systemd service still execs with
 secret-bearing `EnvironmentFile=`.
 
+Active/dormant inventory gate:
+
+```text
+unit_or_surface              state                     credential_hygiene_status
+maez.service                 active_migrated | active_residual_risk
+maez-web                     active_migrated | active_residual_risk | not_installed
+maez-subscription-proxy      active_migrated | active_residual_risk | not_installed
+maez-lived-memory-reflection dormant_template_updated | dormant_residual_risk | not_installed
+maez-self-dev-scheduled      dormant_template_updated | dormant_residual_risk | not_installed
+maez-backup                  active_migrated | active_residual_risk | not_installed
+```
+
+During this spec review, `systemctl --user` showed `maez.service`,
+`llama-server.service`, `llama-judge.service`, and
+`maez-backup.timer/service` as the active Maez-related user units. It did not
+show active `maez-web`, subscription proxy, self-dev scheduled, or reflection
+timer units. Implementation must re-check the live state rather than trust this
+snapshot.
+
 ### 6. Subprocess Environment Hygiene
 
 V1 must add a sanitized subprocess environment helper.
 
-Default sanitized env should include only operational values needed for local
-child processes, such as:
+Default general helper behavior is **copy current env minus secret-shaped
+names**, not a tiny allowlist. Tiny allowlists are allowed only in strict mode
+for call sites that have been tested with the narrower environment.
 
-```text
-PATH
-HOME
-USER
-LOGNAME
-SHELL
-LANG
-LC_ALL
-MAEZ_HOME
-DISPLAY
-XAUTHORITY
-XDG_RUNTIME_DIR
-PIPEWIRE_RUNTIME_DIR
-```
+The general helper should preserve ordinary operational variables such as
+`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_ALL`, `MAEZ_HOME`,
+`DISPLAY`, `XAUTHORITY`, `XDG_RUNTIME_DIR`, `PIPEWIRE_RUNTIME_DIR`,
+`DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`, `VIRTUAL_ENV`, `PYTHONPATH`, and
+other non-secret operational values already present in the parent environment.
 
 It should exclude secret-shaped names by default:
 
@@ -439,8 +522,15 @@ It should exclude secret-shaped names by default:
 Call sites that intentionally need a credential must opt in explicitly and
 document why.
 
+Credential opt-in requirements:
+
+- exact key name allowlist;
+- call-site comment explaining why the child needs the credential;
+- test proving the allow path works;
+- test proving unrelated secret-shaped keys remain excluded.
+
 V1 must route high-risk daemon-owned subprocess launches through the helper.
-At minimum, implementation should inspect and either update or justify:
+At minimum, implementation must update or carry a reviewed exception marker for:
 
 - `core/actions/action_engine.py`
 - `skills/telegram_voice.py`
@@ -487,7 +577,77 @@ docs/examples/tests/snapshots. Publication hardening should audit those hits
 value-free before any OSS release and decide whether any history cleanup is
 needed.
 
-### 9. S2 / Information-Limb Inheritance
+### 9. Backup / Succession
+
+`config/secrets.local.env` is owner-local secret state. It must not enter git,
+but it must have a documented continuity story.
+
+Restore modes:
+
+- `state_only_restore_requires_credential_rehydration`: memory and repo state
+  restore succeeds, then the operator re-adds credentials manually before
+  bonded/remote surfaces are expected to authenticate.
+- `encrypted_continuity_restore_includes_secret_file`: encrypted destination
+  includes `config/secrets.local.env` as a secret file, then post-restore
+  verification checks required surfaces without printing values.
+
+Implementation must update the Decision 22 backup manifest/test contract so
+`config/secrets.local.env` is handled as encrypted-destination-only secret
+state. It must also verify `.gitignore` names `config/secrets.local.env` before
+the operator is asked to create it.
+
+### 10. Recovery / Rollback
+
+V1 needs a mechanical rollback because this slice touches daemon startup.
+
+Rollback flag:
+
+```text
+MAEZ_SECRETS_DISABLE_NEW_LOADER=1
+```
+
+If set, the new secrets loader is bypassed and Maez temporarily returns to
+v0-style local env behavior. This reaccepts process-environment exposure and
+reopens the credential-hygiene slice; it is a recovery path, not a valid final
+state.
+
+Rollback runbook:
+
+1. Restore the local pre-migration `config/.env` backup on the operator host.
+2. Set `MAEZ_SECRETS_DISABLE_NEW_LOADER=1` in ordinary config.
+3. Run `systemctl --user daemon-reload`.
+4. Restart the affected service.
+5. Verify the bonded/private surface works.
+6. Record that process-env credential exposure is temporarily accepted.
+7. Reopen the hygiene slice before further credential work.
+
+Failed credential validation must fail before Maez appears alive and must not
+create noisy restart loops with secret names or values in logs.
+
+### 11. Operator Forensics
+
+Default health stays aggregate-only. A future or v1 local CLI may list missing
+key names value-free for operator diagnosis.
+
+Allowed:
+
+```text
+missing required credential: MAEZ_TELEGRAM_TOKEN
+optional credential absent: MAEZ_GITHUB_TOKEN
+```
+
+Forbidden:
+
+```text
+loaded MAEZ_TELEGRAM_TOKEN
+MAEZ_TELEGRAM_TOKEN followed by any value
+hash of any secret value
+```
+
+The CLI must never list loaded optional names by default and must never print
+values.
+
+### 12. S2 / Information-Limb Inheritance
 
 Future S2 information limbs must not invent per-connector credential loading.
 
@@ -522,6 +682,8 @@ S2 should use later.
 - No claim that secrets are absent from daemon memory.
 - No claim that v1 closes all possible same-UID introspection or memory-dump
   surfaces.
+- No claim that web/iPhone credential hygiene is closed unless the web surface
+  is migrated or explicitly listed as residual risk.
 
 ---
 
@@ -535,17 +697,22 @@ S2 should use later.
 3. Add RED tests for sanitized subprocess env helper excluding secret-shaped
    names.
 4. Implement `core/infra/secrets.py`.
-5. Wire daemon startup to load and validate secrets before starting Telegram,
-   web routes, M1, or background workers.
+5. Wire daemon/web startup to load ordinary config, then load secrets, then
+   compatibility-populate `os.environ`, then import/initialize secret readers.
 6. Split local config storage: ordinary config remains in `config/.env`; secrets
    move to `config/secrets.local.env` or systemd credentials.
-7. Update `maez.service` and shipped templates so secret values are no longer
-   in the initial process environment.
-8. Route high-risk daemon subprocess launch sites through sanitized env helper.
-9. Add value-logging scan command or script and test fixtures.
-10. Update backup/succession manifest documentation so secret local files are
+7. Add `.gitignore` and backup-manifest handling for `config/secrets.local.env`.
+8. Update `maez.service`, web surface posture, active adjacent units, and
+   shipped templates so secret values are no longer in active initial process
+   environments; mark dormant residual risk explicitly.
+9. Route high-risk daemon subprocess launch sites through sanitized env helper.
+10. Remove iPhone JSON-body token fallback or explicitly record it as residual
+    risk until the operator Shortcut is updated.
+11. Add value-logging scan command or script and test fixtures.
+12. Add rollback flag and rollback runbook test.
+13. Update backup/succession manifest documentation so secret local files are
     carried in operator backup without entering git.
-11. Restart daemon, verify `/health`, verify no secrets in
+14. Restart daemon, verify `/health`, verify no secrets in
     `/proc/<maez-pid>/environ` by key-name/hash-free scan, and verify provider
     surfaces still authenticate without printing values.
 
@@ -558,48 +725,76 @@ Minimum RED-first tests:
 1. **Source priority:** systemd credential source wins over fallback file.
 2. **Fallback source:** `config/secrets.local.env` loads when no systemd
    credential source exists.
-3. **No `.env` secret source:** loader refuses to treat `config/.env` as a
+3. **Mixed source semantics:** systemd credentials win per key while fallback
+   fills missing keys, and health reports `mixed` only when both sources
+   contributed loaded secrets.
+4. **Malformed fallback rejected:** duplicate keys, malformed non-comment
+   lines, and empty required values in `config/secrets.local.env` fail startup.
+5. **No `.env` secret source:** loader refuses to treat `config/.env` as a
    secret source.
-4. **Ordinary config untouched:** non-secret env values remain readable through
+6. **Ordinary config untouched:** non-secret env values remain readable through
    existing config paths.
-5. **Required present:** required secret validation passes when required names
+7. **Required present:** required secret validation passes when required names
    are present and non-empty.
-6. **Required missing:** missing required secret fails at startup with key name
+8. **Required missing:** missing required secret fails at startup with key name
    only and no values.
-7. **Optional absent:** optional secret absence does not fail daemon startup.
-8. **Compatibility population:** v1 loader can populate `os.environ` for
+9. **Optional absent:** optional secret absence does not fail daemon startup.
+10. **Compatibility population:** v1 loader can populate `os.environ` for
    existing readers.
-9. **`/proc` regression:** runtime `os.environ` assignment is not visible in
+11. **Bootstrap order:** secret-reading modules do not observe secret-bearing
+    names before the loader compatibility-populates `os.environ`.
+12. **`/proc` regression:** runtime `os.environ` assignment is not visible in
    `/proc/<pid>/environ` on this Linux host; if visible, test fails with an
    instruction that compatibility v1's exposure claim is invalid.
-10. **Source-channel logs:** startup logs source channel only.
-11. **No key-name inventory in logs:** logs do not list loaded secret names.
-12. **No values in logs:** fake secret values never appear in logs.
-13. **Health aggregate only:** health exposes source and aggregate counts, not
+13. **Source-channel logs:** startup logs source channel only.
+14. **No key-name inventory in logs:** logs do not list loaded secret names.
+15. **No values in logs:** fake secret values never appear in logs.
+16. **Health aggregate only:** health exposes source and aggregate counts, not
     loaded names or values.
-14. **Sanitized env excludes secrets:** helper removes names containing
+17. **Sanitized env excludes secrets:** helper removes names containing
     `TOKEN`, `API_KEY`, `SECRET`, `PASSWORD`, and `CREDENTIAL`.
-15. **Sanitized env keeps operational basics:** helper preserves required local
-    operational variables such as `PATH`, `HOME`, `MAEZ_HOME`, `DISPLAY`, and
-    `XAUTHORITY` when present.
-16. **Subprocess wrapper use:** high-risk daemon subprocess call sites use the
+18. **Sanitized env keeps operational basics:** default helper preserves
+    non-secret operational variables such as `PATH`, `HOME`, `MAEZ_HOME`,
+    `DISPLAY`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`,
+    `VIRTUAL_ENV`, and `PYTHONPATH` when present.
+19. **Sanitized env explicit opt-in:** a call site can pass one reviewed
+    secret-shaped name only through an exact allowlist, while unrelated
+    secret-shaped names remain excluded.
+20. **Subprocess wrapper use:** high-risk daemon subprocess call sites use the
     sanitized helper or carry an explicit reviewed exception.
-17. **iPhone token requirement:** missing `MAEZ_IPHONE_INGEST_TOKEN` fails
-    startup while `/api/iphone/ingest` is mounted unconditionally.
-18. **Telegram token requirement:** missing `MAEZ_TELEGRAM_TOKEN` fails startup
+21. **Service-scoped iPhone token requirement:** missing
+    `MAEZ_IPHONE_INGEST_TOKEN` fails startup or disables only the web/ingest
+    surface while `/api/iphone/ingest` is mounted, not the private Telegram
+    daemon.
+22. **Telegram token requirement:** missing `MAEZ_TELEGRAM_TOKEN` fails startup
     for the bonded daemon.
-19. **Optional provider degraded:** missing GitHub/Cloudflare/frontier optional
+23. **Public/dev Telegram degradation:** missing public/dev Telegram tokens do
+    not degrade the private bonded surface.
+24. **Optional provider degraded:** missing GitHub/Cloudflare/frontier optional
     secret disables or fails only that provider path.
-20. **Pattern scanner catches synthetic leak:** scanner fails on a real-looking
+25. **iPhone header-only transport:** JSON-body token fallback is removed or
+    explicitly reported as residual risk.
+26. **Pattern scanner catches synthetic leak:** scanner fails on a real-looking
     fake token in captured output.
-21. **Pattern scanner allows explicit fixtures:** scanner allowlists known fake
+27. **Pattern scanner allows explicit fixtures:** scanner allowlists known fake
     fixture strings used by tests.
-22. **Systemd template posture:** shipped service templates no longer instruct
+28. **Systemd template posture:** shipped service templates no longer instruct
     operators to put identity-bearing secrets in the daemon's exec
     `EnvironmentFile=`.
-23. **No values in docs:** spec/diagnostic examples include names and patterns
+29. **Active/dormant inventory:** live systemd unit/timer inventory classifies
+    each Maez-related unit as migrated, residual risk, dormant template, or not
+    installed.
+30. **Fallback secret file ignored:** `config/secrets.local.env` is gitignored
+    before migration.
+31. **Backup manifest:** `config/secrets.local.env` is covered by encrypted
+    destination / secret-file backup semantics.
+32. **Rollback flag:** `MAEZ_SECRETS_DISABLE_NEW_LOADER=1` bypasses the new
+    loader and restores v0 local-env behavior for recovery.
+33. **Rollback logs:** rollback never prints values and clearly records that
+    process-env exposure is temporarily reaccepted.
+34. **No values in docs:** spec/diagnostic examples include names and patterns
     only, not values or hashes.
-24. **S2 inheritance pointer:** docs name this interface as future
+35. **S2 inheritance pointer:** docs name this interface as future
     information-limb credential source.
 
 Live verification after implementation:
@@ -611,43 +806,55 @@ Live verification after implementation:
 4. Confirm ordinary config names remain available as expected.
 5. Confirm Telegram bonded surface and iPhone ingest auth still work without
    printing values.
-6. Launch at least one daemon-owned subprocess path and verify its environment
-   does not contain secret-shaped names.
+6. Verify every v1 mandatory daemon-owned subprocess path, or record a reviewed
+   residual-risk exception, and confirm child environments do not contain
+   secret-shaped names.
+7. Confirm active Maez-related units either migrated or have explicit residual
+   risk status; do not infer repo-wide closure from `maez.service` alone.
+8. Confirm `cycle_count` advances after restart, `last_cycle` is non-null, and
+   at least one post-restart cycle reaches beyond the M1 flush stage.
+9. Confirm `/health.lived_episodes.m1.enabled` matches pre-migration intent and
+   M1 staleness does not regress.
+10. Confirm `systemctl restart maez.service` exits cleanly with no SIGKILL,
+    escalation, traceback, or stale predecessor PID.
 
 ---
 
-## Review Questions
+## Resolved Review Questions
 
 ### Codex Engineering Panel
 
-1. Is `LoadCredential=` plus `config/secrets.local.env` the right v1 source
-   shape for a user-scoped service on this machine?
-2. Should v1 use one credential bundle or one file per secret?
-3. Is compatibility population into Python `os.environ` acceptable given the
-   measured `/proc` behavior?
-4. Is the sanitized subprocess helper sufficient for v1, and which call sites
-   must be mandatory in the first patch?
-5. Are `MAEZ_TELEGRAM_TOKEN` and `MAEZ_IPHONE_INGEST_TOKEN` the right required
-   daemon startup secrets?
-6. How should adjacent services (`maez-subscription-proxy`,
-   `maez-lived-memory-reflection`, self-dev scheduled service) be sequenced so
-   the slice does not overclaim?
-7. What pattern-scan rules catch real leaks without making fixtures
-   unmaintainable?
-8. Does the spec leave any path where a secret value can appear in logs, health,
-   snapshots, subprocess env, or test output?
+1. `LoadCredential=` plus `config/secrets.local.env` is acceptable for v1 if
+   implementation proves user-service `$CREDENTIALS_DIRECTORY` behavior on this
+   host and avoids `SetCredential=`.
+2. V1 uses one credential file per secret under `$CREDENTIALS_DIRECTORY`.
+3. Compatibility population into Python `os.environ` is acceptable for parent
+   process exposure because the measured `/proc` behavior supports it.
+4. Subprocess hygiene is sufficient only with default-minus-secret behavior,
+   explicit opt-in pass-through tests, and mandatory high-risk call-site
+   enforcement.
+5. `MAEZ_TELEGRAM_TOKEN` is required for `maez.service`; `MAEZ_IPHONE_INGEST_TOKEN`
+   is required for the web/iPhone surface while the route is mounted.
+6. Adjacent services are sequenced by active/dormant inventory. Active services
+   must migrate or be named residual risk; dormant templates can update without
+   live `/proc` proof.
+7. Pattern scans are feasible with fixture allowlisting.
+8. Remaining leak paths are web/iPhone route posture, subprocess inheritance,
+   backup/restore ambiguity, and active adjacent units; this revision names all
+   of them as v1 requirements or residual-risk gates.
 
 ### Claude Covenant Council
 
-1. Does the load-bearing rule correctly treat credentials as identity-bearing
-   material under invariant #11?
-2. Does source-channel-only visibility give Future-Rohit enough recovery signal
-   without turning logs into a credential map?
-3. Does requiring startup validation for Telegram and iPhone ingest preserve
-   the bonded-surface continuity expectation?
-4. Does the S2 inheritance pointer correctly connect future information limbs
-   without smuggling OAuth connector work into this slice?
-5. Does the v1/v2 split preserve the covenant surface while staying pragmatic?
+1. Credentials are identity-bearing material under invariant #11.
+2. Source-channel-only visibility is sufficient recovery signal without turning
+   logs into a credential map.
+3. Bonded-surface continuity requires service-scoped startup validation:
+   private Telegram fails loud when its key is missing; unrelated optional
+   surfaces degrade without breaking the private bond.
+4. S2 inheritance is clean because this slice creates the interface and source
+   posture only; it does not implement OAuth/account connectors.
+5. V1/v2 split is pragmatic if rollback is documented and if subprocess
+   inheritance is not deferred past the v1 exposure claim.
 
 ---
 
@@ -656,13 +863,22 @@ Live verification after implementation:
 This slice closes only after implementation and live verification show:
 
 - provider-side rotated credentials remain working;
+- active service inventory has no unacknowledged credential-env residual risk;
 - `maez.service` initial environment no longer contains secret names;
 - `/proc/<maez-pid>/environ` does not expose secret names;
 - daemon child-process paths audited in v1 do not inherit secret-shaped names;
 - health/logs expose source channel and aggregate status only;
-- M1 observation remains healthy after restart;
-- heartbeat remains `cycle_stalled=false`;
-- shutdown remains clean after the credential migration restart.
+- web/iPhone credential hygiene is migrated or explicitly recorded as residual
+  risk;
+- `config/secrets.local.env` is ignored by git and covered by secret-file backup
+  semantics;
+- rollback path is tested and documented;
+- M1 observation remains healthy after restart, including
+  `/health.lived_episodes.m1.enabled` matching pre-migration intent;
+- heartbeat advances after restart, with `cycle_count` increasing and
+  `last_cycle` non-null;
+- shutdown remains clean after the credential migration restart, with no
+  SIGKILL/escalation/traceback/stale predecessor PID.
 
 ---
 
@@ -683,5 +899,7 @@ environment. So v1 must also teach Maez to launch child processes with a cleaned
 environment, or else the keys leak through the children.
 
 The result should be simple: Maez starts, checks that the keys it truly needs
-exist, logs only where the keys came from, never logs the keys themselves, and
-keeps ordinary config ordinary.
+exist for that specific surface, logs only where the keys came from, never logs
+the keys themselves, and keeps ordinary config ordinary. The private Telegram
+daemon should not fail because the iPhone web-ingest key is missing; each body
+surface gets its own key profile.
