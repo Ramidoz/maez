@@ -7,7 +7,7 @@
 
 - ADR 0019
 - MOMENT_ASSEMBLY_DIAGNOSTIC_RULES.md
-- SLICE_X2_OPEN_LOOPS_ORGAN_MEMO.md
+- [x2-open-loops-organ.md](x2-open-loops-organ.md)
 
 ## Change
 

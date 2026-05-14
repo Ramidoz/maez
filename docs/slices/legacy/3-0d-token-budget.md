@@ -2,7 +2,7 @@
 
 **Status:** RATIFIED 2026-05-07 (commit ae179e9). Decisions in §8 are locked; departures require a memo amendment.
 **Author:** Claude (drafted 2026-05-07)
-**Companion docs:** [LEDGER_ENVELOPE_SCHEMA.md](LEDGER_ENVELOPE_SCHEMA.md) §3, [LEDGER_2_5C_ACCEPTANCE.md](LEDGER_2_5C_ACCEPTANCE.md)
+**Companion docs:** [LEDGER_ENVELOPE_SCHEMA.md](../../LEDGER_ENVELOPE_SCHEMA.md) §3, [LEDGER_2_5C_ACCEPTANCE.md](../../LEDGER_2_5C_ACCEPTANCE.md)
 **Anchor in code (not yet edited):** `daemon/maez_daemon.py` ~L1711–1780 (memory recall cap + sys-prompt construction)
 
 ---

@@ -10,6 +10,9 @@ must make contradiction structurally observable without turning it into
 audit evidence, narration, confidence scoring, bond-shape density, or a
 second source of truth.
 
+Canonical organ memo:
+[`docs/slices/organs/x4-counterevidence-organ.md`](../slices/organs/x4-counterevidence-organ.md).
+
 ## Decision
 
 Counterevidence candidate handles use a content-free typed-handle hash

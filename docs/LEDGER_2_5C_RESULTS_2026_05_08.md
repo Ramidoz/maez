@@ -84,7 +84,7 @@ CPU replacement (or system-level remedy) under Premium Plus warranty is the prim
 
 **Owner waiver applied:**
 
-> 2.5c crash-integrity gate: PASSED. Conversational-shape coverage: INCOMPLETE. The missing behavioral classes are explicitly transferred into the replay harness's birth-readiness probe corpus (see [SLICE_GESTATION_BOUNDARY_MEMO.md](SLICE_GESTATION_BOUNDARY_MEMO.md) §5). This makes the waiver disciplined — the missing coverage becomes a measurable gate at birth-event time, not a hand-wavy "we'll see."
+> 2.5c crash-integrity gate: PASSED. Conversational-shape coverage: INCOMPLETE. The missing behavioral classes are explicitly transferred into the replay harness's birth-readiness probe corpus (see [docs/slices/legacy/gestation-boundary.md](slices/legacy/gestation-boundary.md) §5). This makes the waiver disciplined — the missing coverage becomes a measurable gate at birth-event time, not a hand-wavy "we'll see."
 >
 > Production ledger flip is **NOT** authorized by this waiver. The sandbox DB is preserved as test evidence and never promoted to `memory/ledger.db`. Real gestation accumulation begins on the first write to `memory/ledger.db` after the gestation boundary slice ships — not before.
 

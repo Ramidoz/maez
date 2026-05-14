@@ -4,9 +4,9 @@
 **Date:** 2026-05-08.
 **Author:** Claude, with Rohit's locked decisions inline.
 **Companion docs:**
-- [LEDGER_2_5C_RESULTS_2026_05_08.md](LEDGER_2_5C_RESULTS_2026_05_08.md) — what this slice unblocks
-- [LEDGER_ENVELOPE_SCHEMA.md](LEDGER_ENVELOPE_SCHEMA.md) — envelope/turn shapes this slice extends
-- [SLICE_3_0c_CARVEOUT_MEMO.md](SLICE_3_0c_CARVEOUT_MEMO.md), [SLICE_3_0d_TOKEN_BUDGET_MEMO.md](SLICE_3_0d_TOKEN_BUDGET_MEMO.md) — slice-3 substrate this builds on
+- [LEDGER_2_5C_RESULTS_2026_05_08.md](../../LEDGER_2_5C_RESULTS_2026_05_08.md) — what this slice unblocks
+- [LEDGER_ENVELOPE_SCHEMA.md](../../LEDGER_ENVELOPE_SCHEMA.md) — envelope/turn shapes this slice extends
+- [3-0c-carveout.md](3-0c-carveout.md), [3-0d-token-budget.md](3-0d-token-budget.md) — slice-3 substrate this builds on
 
 ---
 

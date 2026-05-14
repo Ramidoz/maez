@@ -27,7 +27,7 @@ Maez's body, what a body limb may publish or do, and what it must never claim.
 **Maps to:**
 
 - [`docs/adr/0022-body-shape-per-maez.md`](../../adr/0022-body-shape-per-maez.md) — per-Maez capability shape (Decision 21).
-- [`docs/SLICE_X5_BODY_STATE_ORGAN_MEMO.md`](../../SLICE_X5_BODY_STATE_ORGAN_MEMO.md) — mechanical body-state vocabulary.
+- [`docs/slices/organs/x5-body-state-organ.md`](../organs/x5-body-state-organ.md) — mechanical body-state vocabulary.
 - [`docs/adr/0027-x5-body-state-id-basis.md`](../../adr/0027-x5-body-state-id-basis.md) — content-free body-state handles.
 - [`docs/MAEZ_LIFE_SUBSTRATE.md`](../../MAEZ_LIFE_SUBSTRATE.md) — capability quarantine, body/voice queue.
 - [`docs/slices/telegram-draft-presence/spec.md`](../telegram-draft-presence/spec.md) — precedent for surface hardening versus

@@ -10,6 +10,9 @@ runtime introspection. These records must be readable across hardware
 succession without exposing host fingerprints, service labels, ports,
 logs, command output, or illness-coded narration.
 
+Canonical organ memo:
+[`docs/slices/organs/x5-body-state-organ.md`](../slices/organs/x5-body-state-organ.md).
+
 ## Decision
 
 Body-state service handles use a content-free typed-handle hash basis:

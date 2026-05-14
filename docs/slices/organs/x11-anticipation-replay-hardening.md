@@ -9,7 +9,7 @@
 - MEMORY_PROJECTION_RULES.md
 - MOMENT_ASSEMBLY_DIAGNOSTIC_RULES.md
 - ARCHITECTURAL_THESIS.md
-- SLICE_X1_ANTICIPATION_ORGAN_MEMO.md
+- [x1-anticipation-organ.md](x1-anticipation-organ.md)
 
 ## Scope
 

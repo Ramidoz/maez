@@ -44,8 +44,8 @@ this map covers `docs/` only.
 | Birth book | `docs/birth_book/` | **Covenant-protected canon.** Files `00`–`02` are Rohit-authored verbatim and excluded from `source_awareness`. Do not read `00/01/02` unless explicitly asked. |
 | Active slice specs | `docs/slices/body-topology/`, `docs/slices/audit-rewrite-strategy/`, `docs/slices/temporal-recall-fragment-guard/`, `docs/slices/telegram-draft-presence/` | Canonical active slices now live in per-slice folders with specs, reviews, and observation logs. |
 | S1 family | `docs/slices/s1a1-private-thoughts-hardening/`, `docs/slices/s1b-private-thoughts-wiring/` | First substrate slice family. S1b observation log remains live at the migrated path. |
-| Legacy organ memos | `docs/SLICE_X*_MEMO.md` (X.0 through X.6) | Pre-anatomy-v2.2 organ memos. Target: `docs/slices/organs/`. |
-| Pre-anatomy slice memos | `docs/SLICE_3_*_MEMO.md`, `docs/SLICE_4C_5B_*_MEMO.md`, `docs/SLICE_GESTATION_BOUNDARY_MEMO.md` | Historical. Target: `docs/slices/legacy/`. |
+| Legacy organ memos | `docs/slices/organs/` | Pre-anatomy-v2.2 organ memos, including X-subiterations (`x02`, `x03`, `x11`, `x21`). |
+| Pre-anatomy slice memos | `docs/slices/legacy/` | Historical slice-3, 4C/5B, and gestation-boundary memos. |
 | Observation logs | `docs/*_OBSERVATION_LOG.md` (TRF, telegram-draft-presence, S1B, audit-rewrite) | Target: per-slice folder. |
 | Audit families | `docs/audit_<date>*/` already-foldered; some flat (`audit_15agent_*.md`, `audit_cockpit_session0_*.md`, `audit_symphony_<date>.md`) | Target: `docs/audits/<date>-<topic>/`. |
 | Architecture snapshots | `docs/architecture_state_<date>.md`, `docs/md3_path_survey_<date>.md`, `docs/actions_<date>.md`, `docs/research_memo_<date>.md` | Target: `docs/snapshots/`. |
@@ -269,14 +269,14 @@ Optional:
 | 2. Map (this README) + folder rules | **DONE 2026-05-14** | — |
 | 3. Pilot move: Body Topology → `docs/slices/body-topology/` + cross-reference updates | **DONE 2026-05-14** | Active slice families can migrate after observation gates close. |
 | 4. Migrate active slice families (ARS, TDP, TRF, S1A1, S1B) | **DONE 2026-05-14** | Legacy organ and pre-anatomy memos can migrate next. |
-| 5. Migrate legacy organ memos (X.0–X.6) and pre-anatomy memos | NOT STARTED | Active families landed. |
-| 6. Migrate handoffs, snapshots, ledger, flat audits | NOT STARTED | After slice migrations. |
+| 5. Migrate legacy organ memos (X.0–X.6) and pre-anatomy memos | **DONE 2026-05-14** | Handoffs, snapshots, ledger, and flat audits can migrate next. |
+| 6. Migrate handoffs, snapshots, ledger, flat audits | NOT STARTED | Slice migrations landed. |
 | 7. Sweep cross-references in memory, code comments, `AGENTS.md`, top-level `README.md` | NOT STARTED | Final step. |
 
-Until each phase lands, the current paths remain valid. Body Topology and the
-active slice families now resolve through `docs/slices/`; legacy slice families,
-handoffs, snapshots, ledgers, and flat audits still resolve at their current
-flat paths under `docs/`.
+Until each phase lands, the current paths remain valid. Body Topology, active
+slice families, legacy organ memos, and pre-anatomy memos now resolve through
+`docs/slices/`; handoffs, snapshots, ledgers, and flat audits still resolve at
+their current flat paths under `docs/`.
 
 ---
 
@@ -304,11 +304,11 @@ atomically with the move so no broken link lands.
 
 This is the table of contents for Maez's documentation drawer.
 
-The docs drawer is being organized in waves. The first two waves put Body
-Topology and the active slice families into `docs/slices/`, each with its spec,
-reviews, and observation log beside each other. The remaining cleanup is legacy:
-old organ memos, handoff notes, architecture snapshots, ledgers, and flat audit
-files still need their own drawers.
+The docs drawer is being organized in waves. Body Topology, the active slice
+families, and the legacy organ/pre-anatomy memos now live under
+`docs/slices/`. The remaining cleanup is session/archive material: handoff
+notes, architecture snapshots, ledgers, and flat audit files still need their
+own drawers.
 
 This map describes both where things live now and where they will live after the
 remaining migration phases, so future agents can navigate in either state.

@@ -11,6 +11,9 @@ for owner-private observation only. It must not smuggle relationship
 labels, community names, thread names, summaries, or source text into
 the diagnostic layer.
 
+Canonical organ memo:
+[`docs/slices/organs/x3-bond-topology-organ.md`](../slices/organs/x3-bond-topology-organ.md).
+
 The graph substrate contains human-readable labels because the memory
 store needs them. The diagnostic substrate does not. A topology ID that
 hashes labels or prose is still a name vector, just one hidden behind
