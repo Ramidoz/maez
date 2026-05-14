@@ -1,0 +1,138 @@
+{
+  "schema_version": "1.0",
+  "updated_at": "2026-05-14",
+  "purpose": "Small owner-facing board for what is live, observing, wounded, queued, and intentionally held.",
+  "observation_gates": [
+    {
+      "id": "m1-lived-episode-promotion",
+      "label": "M1 lived-episode promotion",
+      "status": "observing",
+      "summary": "Honest writer is live. Closure requires one week of natural use and structural recall evidence.",
+      "closure": "One full week, at least 3 natural bonded Telegram conversations, at least 1 explicit-marker promotion, at least 1 temporal recall probe finding a promoted episode, no raw quote leakage.",
+      "doc": "/docs/slices/m1-lived-episode-promotion/observation-log.md"
+    },
+    {
+      "id": "ars-audit-rewrite",
+      "label": "ARS audit rewrite",
+      "status": "observing",
+      "summary": "Old audit sentinel removed from active rewrite paths; awaiting live conversation confirmation.",
+      "closure": "Live conversation confirms old sentinel phrase is absent and ARS does not clip into a new evasive shape.",
+      "doc": "/docs/slices/audit-rewrite-strategy/observation-log.md"
+    },
+    {
+      "id": "trf-temporal-recall",
+      "label": "TRF temporal recall + fragment guard",
+      "status": "observing",
+      "summary": "Temporal fallback and fragment guard shipped; awaiting natural temporal-memory turns.",
+      "closure": "One full day or at least 3 natural temporal-memory turns with no broken fragments.",
+      "doc": "/docs/slices/temporal-recall-fragment-guard/observation-log.md"
+    },
+    {
+      "id": "s1b-private-thoughts",
+      "label": "S1b private-thoughts wiring",
+      "status": "operator-decision",
+      "summary": "Producer-only observation ran cleanly earlier; consumer enablement remains an operator decision.",
+      "closure": "Verify cycle count and 24h gate, then decide whether to enable the bounded consumer.",
+      "doc": "/docs/slices/s1b-private-thoughts-wiring/observation-log.md"
+    }
+  ],
+  "open_wounds": [
+    {
+      "id": "daemon-cycle-stuck",
+      "severity": "high",
+      "label": "Daemon background cycle stuck",
+      "summary": "Health is alive and Telegram works, but cycle_count is stuck at 2 after Cycle 2 began.",
+      "next_action": "Queue daemon-cycle diagnostic. Add instrumentation around silent per-cycle calls before patching."
+    },
+    {
+      "id": "sigterm-sigkill-shutdown",
+      "severity": "medium",
+      "label": "SIGTERM requires SIGKILL on maez.service restart",
+      "summary": "Shutdown begins cleanly, but process remains alive until systemd kill. Not attributed to M1 by current evidence.",
+      "next_action": "Diagnose with thread dumps or Python faulthandler; treat as separate daemon-shutdown slice."
+    },
+    {
+      "id": "sqlite-resource-warning",
+      "severity": "low",
+      "label": "sqlite ResourceWarning noise",
+      "summary": "Known warning noise from test/runtime paths; non-blocking but should become N-track or catalog work.",
+      "next_action": "Record as operational-noise cleanup when focus is available."
+    },
+    {
+      "id": "s2-wip-held",
+      "severity": "medium",
+      "label": "S2 contextual integrity WIP held",
+      "summary": "Scoping memo and Codex panel fold are mid-flight. Held behind M1 stabilization.",
+      "next_action": "Resume after M1 observation has enough evidence."
+    },
+    {
+      "id": "audit-2026-05-13-redaction",
+      "severity": "medium",
+      "label": "Raw audit directory held",
+      "summary": "docs/audit_2026-05-13 remains untracked because it contains file:line vulnerability citations.",
+      "next_action": "Future redaction pass or explicit decision to keep local-only."
+    }
+  ],
+  "next_moves": [
+    {
+      "rank": 1,
+      "label": "Let M1 observe real Telegram use",
+      "why": "M1 just wrote first biography episodes; more natural evidence matters more than more architecture."
+    },
+    {
+      "rank": 2,
+      "label": "Draft daemon-cycle diagnostic slice",
+      "why": "The stuck cycle is now the highest active runtime wound."
+    },
+    {
+      "rank": 3,
+      "label": "Resume S2 fold after M1 stabilizes",
+      "why": "S2 unblocks information limbs, but it should not interrupt current M1 evidence gathering."
+    },
+    {
+      "rank": 4,
+      "label": "Camera presence planning",
+      "why": "Body Topology makes this the next lower-blast-radius body slice after current wounds are clear."
+    }
+  ],
+  "do_not_touch_yet": [
+    {
+      "label": "Do not widen TRF to raw memory",
+      "reason": "Retrieval is not grounding. M1 writes promoted biography; TRF reads promoted biography."
+    },
+    {
+      "label": "Do not disable M1 because of SIGTERM",
+      "reason": "Current evidence does not attribute the shutdown issue to M1."
+    },
+    {
+      "label": "Do not enable TDP",
+      "reason": "Telegram draft presence failed live UX and remains disabled."
+    },
+    {
+      "label": "Do not track raw audit_2026-05-13 as-is",
+      "reason": "It may expose file:line vulnerability citations in a public repo."
+    }
+  ],
+  "links": [
+    {
+      "label": "M1 observation log",
+      "path": "/docs/slices/m1-lived-episode-promotion/observation-log.md"
+    },
+    {
+      "label": "S2 scoping memo",
+      "path": "/docs/slices/s2-contextual-integrity-at-ingest/scoping.md"
+    },
+    {
+      "label": "Geek-out catalog",
+      "path": "/docs/GEEK_OUT_CATALOG.md"
+    },
+    {
+      "label": "Task treemap",
+      "path": "/docs/TASK_TREEMAP.md"
+    },
+    {
+      "label": "Docs map",
+      "path": "/docs/README.md"
+    }
+  ]
+}

@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Maez · Project Panel</title>
+<style>
+:root {
+  --bg: #0d0c09;
+  --panel: #17130e;
+  --panel-soft: #211a12;
+  --border: #332a1d;
+  --ink: #f2eadb;
+  --muted: #a99a83;
+  --quiet: #6f6252;
+  --amber: #e5a13a;
+  --green: #91c76d;
+  --red: #e57565;
+  --blue: #7fa7c8;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(229, 161, 58, 0.08), transparent 28rem),
+    linear-gradient(180deg, #100d09 0%, var(--bg) 55%);
+  color: var(--ink);
+  font: 14px/1.55 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+code, .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 34px 20px 54px; }
+.top {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-start;
+  margin-bottom: 22px;
+}
+.eyebrow {
+  color: var(--amber);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 700;
+}
+h1 { margin: 6px 0 5px; font-size: clamp(30px, 5vw, 54px); line-height: 1; }
+.subtitle { color: var(--muted); max-width: 700px; }
+.nav { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.pill {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 7px 11px;
+  background: rgba(23, 19, 14, 0.78);
+  color: var(--muted);
+}
+.grid { display: grid; gap: 14px; }
+.live-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); margin-bottom: 18px; }
+.two { grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr); }
+.card {
+  background: rgba(23, 19, 14, 0.88);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.16);
+}
+.card.soft { background: rgba(33, 26, 18, 0.72); }
+.k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; }
+.v { margin-top: 5px; font-size: 20px; font-weight: 750; }
+.ok { color: var(--green); }
+.warn { color: var(--amber); }
+.bad { color: var(--red); }
+.section { margin-top: 20px; }
+.section h2 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--amber);
+}
+.item {
+  border-top: 1px solid rgba(51, 42, 29, 0.8);
+  padding: 13px 0;
+}
+.item:first-child { border-top: none; padding-top: 0; }
+.row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.title { font-weight: 750; }
+.body { color: var(--muted); margin-top: 5px; }
+.small { color: var(--quiet); font-size: 12px; margin-top: 7px; }
+.tag {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.04);
+}
+.tag.ok { border-color: rgba(145, 199, 109, 0.26); }
+.tag.warn { border-color: rgba(229, 161, 58, 0.30); }
+.tag.bad { border-color: rgba(229, 117, 101, 0.32); }
+.move {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  gap: 10px;
+  border-top: 1px solid rgba(51, 42, 29, 0.8);
+  padding: 12px 0;
+}
+.rank {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--panel-soft);
+  color: var(--amber);
+  font-weight: 800;
+}
+.empty { color: var(--quiet); }
+@media (max-width: 920px) {
+  .top, .two { grid-template-columns: 1fr; display: block; }
+  .nav { justify-content: flex-start; margin-top: 14px; }
+  .live-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .live-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header class="top">
+    <div>
+      <div class="eyebrow">Maez local</div>
+      <h1>Project Panel</h1>
+      <p class="subtitle">A clean board for what is live, what is observing, what hurts, and what not to touch yet.</p>
+    </div>
+    <nav class="nav">
+      <a class="pill" href="/dashboard">Architecture dashboard</a>
+      <a class="pill" href="/health">Health JSON</a>
+    </nav>
+  </header>
+
+  <section class="grid live-grid" id="liveCards">
+    <div class="card"><div class="k">daemon</div><div class="v" id="liveDaemon">loading</div></div>
+    <div class="card"><div class="k">cycle</div><div class="v" id="liveCycle">-</div></div>
+    <div class="card"><div class="k">M1</div><div class="v" id="liveM1">-</div></div>
+    <div class="card"><div class="k">biography</div><div class="v" id="liveBio">-</div></div>
+    <div class="card"><div class="k">memory</div><div class="v" id="liveMemory">-</div></div>
+  </section>
+
+  <section class="grid two">
+    <div>
+      <section class="section card">
+        <h2>Observation Gates</h2>
+        <div id="observationGates" class="empty">Loading gates...</div>
+      </section>
+      <section class="section card">
+        <h2>Open Wounds</h2>
+        <div id="openWounds" class="empty">Loading wounds...</div>
+      </section>
+    </div>
+    <div>
+      <section class="section card soft">
+        <h2>Next Moves</h2>
+        <div id="nextMoves" class="empty">Loading queue...</div>
+      </section>
+      <section class="section card soft">
+        <h2>Do Not Touch Yet</h2>
+        <div id="doNotTouch" class="empty">Loading holds...</div>
+      </section>
+      <section class="section card soft">
+        <h2>Links</h2>
+        <div id="links" class="empty">Loading links...</div>
+      </section>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function classForStatus(value) {
+  const v = String(value || '').toLowerCase();
+  if (['ok', 'alive', 'enabled', 'observing', 'closed'].includes(v)) return 'ok';
+  if (['warn', 'warning', 'operator-decision', 'held', 'pending'].includes(v)) return 'warn';
+  if (['alarm', 'blocked', 'high', 'error', 'offline'].includes(v)) return 'bad';
+  return '';
+}
+
+function tag(text, cls) {
+  return `<span class="tag ${cls || classForStatus(text)}">${text || 'unknown'}</span>`;
+}
+
+function renderItems(id, rows, render) {
+  const el = $(id);
+  if (!rows || rows.length === 0) {
+    el.innerHTML = '<div class="empty">Nothing here.</div>';
+    return;
+  }
+  el.innerHTML = rows.map(render).join('');
+}
+
+async function loadHealth() {
+  try {
+    const res = await fetch('/health', { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const h = await res.json();
+    const m1 = h.lived_episodes && h.lived_episodes.m1;
+    const stale = h.lived_episodes && h.lived_episodes.staleness;
+    const memory = h.memory || {};
+    const total = memory.total || ((memory.raw || 0) + (memory.daily || 0) + (memory.core || 0));
+
+    $('liveDaemon').textContent = h.status || 'unknown';
+    $('liveDaemon').className = 'v ' + classForStatus(h.status);
+    $('liveCycle').textContent = h.cycle_count == null ? '-' : String(h.cycle_count);
+    $('liveM1').textContent = m1 && m1.enabled ? 'enabled' : 'off';
+    $('liveM1').className = 'v ' + (m1 && m1.enabled ? 'ok' : 'warn');
+    $('liveBio').textContent = stale ? stale.staleness_status : '-';
+    $('liveBio').className = 'v ' + classForStatus(stale && stale.staleness_status);
+    $('liveMemory').textContent = total ? total.toLocaleString() : '-';
+  } catch (err) {
+    $('liveDaemon').textContent = 'offline';
+    $('liveDaemon').className = 'v bad';
+  }
+}
+
+async function loadState() {
+  const res = await fetch('/project-panel/state', { cache: 'no-store' });
+  if (!res.ok) throw new Error('state HTTP ' + res.status);
+  const s = await res.json();
+
+  renderItems('observationGates', s.observation_gates, (g) => `
+    <article class="item">
+      <div class="row"><div class="title">${g.label}</div>${tag(g.status)}</div>
+      <div class="body">${g.summary}</div>
+      <div class="small"><strong>Closure:</strong> ${g.closure}</div>
+    </article>
+  `);
+
+  renderItems('openWounds', s.open_wounds, (w) => `
+    <article class="item">
+      <div class="row"><div class="title">${w.label}</div>${tag(w.severity)}</div>
+      <div class="body">${w.summary}</div>
+      <div class="small"><strong>Next:</strong> ${w.next_action}</div>
+    </article>
+  `);
+
+  renderItems('nextMoves', s.next_moves, (m) => `
+    <article class="move">
+      <div class="rank">${m.rank}</div>
+      <div><div class="title">${m.label}</div><div class="body">${m.why}</div></div>
+    </article>
+  `);
+
+  renderItems('doNotTouch', s.do_not_touch_yet, (h) => `
+    <article class="item">
+      <div class="title">${h.label}</div>
+      <div class="body">${h.reason}</div>
+    </article>
+  `);
+
+  renderItems('links', s.links, (l) => `
+    <article class="item">
+      <a class="title" href="/project-panel/doc/${String(l.path || '').replace(/^\/+/, '')}">${l.label}</a>
+      <div class="small mono">${l.path}</div>
+    </article>
+  `);
+}
+
+loadHealth();
+loadState().catch((err) => {
+  $('observationGates').textContent = 'Could not load project state: ' + err.message;
+});
+setInterval(loadHealth, 10000);
+</script>
+</body>
+</html>

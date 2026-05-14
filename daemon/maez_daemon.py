@@ -5480,6 +5480,32 @@ class MaezDaemon:
             """Local-only interactive dashboard. Bound to 127.0.0.1, never nginx-proxied."""
             return send_file(str(BASE_DIR / "ui" / "dashboard_local.html"))
 
+        @app.route("/project-panel")
+        def project_panel():
+            """Local-only work tracker for the owner. Never nginx-proxied."""
+            return send_file(str(BASE_DIR / "ui" / "project_panel.html"))
+
+        @app.route("/project-panel/state")
+        def project_panel_state():
+            """Small tracked state file for the project panel."""
+            return send_file(
+                str(BASE_DIR / "docs" / "project-panel" / "state.json"),
+                mimetype="application/json",
+            )
+
+        @app.route("/project-panel/doc/<path:doc_path>")
+        def project_panel_doc(doc_path: str):
+            """Read-only docs viewer for project-panel links."""
+            docs_root = (BASE_DIR / "docs").resolve()
+            target = (BASE_DIR / doc_path).resolve()
+            try:
+                target.relative_to(docs_root)
+            except ValueError:
+                return jsonify({"error": "outside_docs"}), 404
+            if not target.is_file():
+                return jsonify({"error": "not_found"}), 404
+            return send_file(str(target), mimetype="text/plain; charset=utf-8")
+
         @app.route("/")
         def root():
             return jsonify({"name": "Maez", "status": "running"})
