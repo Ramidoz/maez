@@ -309,6 +309,10 @@ If the model itself produces the old sentinel phrase in raw text:
 - A multi-sentence response containing an old sentinel string must not be marked
   safe just because one sentence resembles an uncertainty statement.
 - Tests must cover the recursive case from Geek-Out Catalog Entry 1.
+- Future substrate-plan refresh note: ARS v1 uses specific-string blocking for
+  the old known sentinel phrases. A later audit-rail refresh should evaluate
+  category-based sentinel detection for mechanical safety-rail phrases without
+  expanding this slice.
 
 ---
 

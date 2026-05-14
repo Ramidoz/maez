@@ -151,10 +151,10 @@ Added before implementation:
 - `tests.test_self_claim_audit.AuditRewriteStrategy.test_probe_corpus_fixture_rewrites_without_sentinel`
 - `tests/data/audit_rewrite_probe_corpus.jsonl` row `ars-2026-05-13-morning-memory`
 
-**Status:** implementation pending post-implementation review and live
-conversation evidence. Unit tests prove the old sentinel does not appear in the
-fixture rewrite; live closure still requires normal conversation without the
-old phrase or clipped/evasive ARS behavior.
+**Status:** fix landed and both panels have ratified with mechanical amendments.
+Unit tests prove the old sentinel does not appear in the fixture rewrite. Full
+closure still requires live conversation confirmation without the old phrase or
+clipped/evasive ARS behavior.
 
 ---
 

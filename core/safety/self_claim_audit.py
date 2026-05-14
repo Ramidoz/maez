@@ -117,6 +117,8 @@ def accepts_provenance(value: str) -> bool:
     return value in _es.PROVENANCE_VALUES
 
 
+# RETAINED FOR PATTERN MATCHING ONLY: these are deprecated pre-ARS phrases.
+# They must remain recognizable so ARS can block them from user-visible voice.
 _REWRITE_SENTENCE = "I don't have a grounded answer for that part."
 _REWRITE_WHOLE = "I don't have a grounded answer for this right now."
 _ARS_ALL_FLAGGED_FALLBACK = "I'm not sure about that right now."
