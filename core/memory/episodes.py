@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Sequence
@@ -47,6 +48,7 @@ CREATE TABLE IF NOT EXISTS episodes (
 
 CREATE INDEX IF NOT EXISTS episodes_status_idx ON episodes(status);
 CREATE INDEX IF NOT EXISTS episodes_occurred_idx ON episodes(occurred_at);
+CREATE INDEX IF NOT EXISTS episodes_created_idx ON episodes(created_at);
 CREATE INDEX IF NOT EXISTS episodes_source_kind_idx ON episodes(source_kind);
 """
 
@@ -80,14 +82,15 @@ class EpisodeStore:
     def __init__(self, db_path: str):
         self._path = Path(db_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as c:
-            c.executescript(_SCHEMA)
-            for stmt in _MIGRATIONS:
-                try:
-                    c.execute(stmt)
-                except sqlite3.OperationalError:
-                    # Column already exists. Idempotent re-run.
-                    pass
+        with closing(self._connect()) as c:
+            with c:
+                c.executescript(_SCHEMA)
+                for stmt in _MIGRATIONS:
+                    try:
+                        c.execute(stmt)
+                    except sqlite3.OperationalError:
+                        # Column already exists. Idempotent re-run.
+                        pass
 
     def _connect(self) -> sqlite3.Connection:
         c = sqlite3.connect(str(self._path))
@@ -114,42 +117,79 @@ class EpisodeStore:
                 "Episode requires at least one source_memory_id (ADR 0019 evidence requirement)"
             )
         episode_id = f"ep-{uuid.uuid4().hex[:12]}"
-        with self._connect() as c:
-            c.execute(
-                "INSERT INTO episodes ("
-                "id, created_at, occurred_at, title, summary, "
-                "participants_json, emotional_tone, importance, "
-                "open_loop, source_memory_ids_json, source_kind, status, "
-                "authorship, memory_voice"
-                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    episode_id,
-                    _now_iso(),
-                    occurred_at,
-                    title,
-                    summary,
-                    json.dumps(list(participants)),
-                    emotional_tone,
-                    int(importance),
-                    open_loop,
-                    json.dumps(list(source_memory_ids)),
-                    source_kind,
-                    "active",
-                    authorship,
-                    memory_voice,
-                ),
-            )
+        with closing(self._connect()) as c:
+            with c:
+                c.execute(
+                    "INSERT INTO episodes ("
+                    "id, created_at, occurred_at, title, summary, "
+                    "participants_json, emotional_tone, importance, "
+                    "open_loop, source_memory_ids_json, source_kind, status, "
+                    "authorship, memory_voice"
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        episode_id,
+                        _now_iso(),
+                        occurred_at,
+                        title,
+                        summary,
+                        json.dumps(list(participants)),
+                        emotional_tone,
+                        int(importance),
+                        open_loop,
+                        json.dumps(list(source_memory_ids)),
+                        source_kind,
+                        "active",
+                        authorship,
+                        memory_voice,
+                    ),
+                )
         return episode_id
 
     def get(self, episode_id: str) -> Optional[dict]:
-        with self._connect() as c:
+        with closing(self._connect()) as c:
             row = c.execute("SELECT * FROM episodes WHERE id = ?", (episode_id,)).fetchone()
         return None if row is None else self._row_to_dict(row)
 
     def list_active(self) -> list[dict]:
-        with self._connect() as c:
+        with closing(self._connect()) as c:
             rows = c.execute(
                 "SELECT * FROM episodes WHERE status = 'active' ORDER BY created_at DESC"
+            ).fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
+    def list_active_in_window(
+        self,
+        *,
+        window_start: str,
+        window_end: str,
+        limit: int,
+        busy_timeout_ms: int = 150,
+    ) -> list[dict]:
+        """Return active episodes in a bounded wall-clock window.
+
+        The query uses ``occurred_at`` when present and falls back to
+        ``created_at`` for older rows. Callers pass ``limit=max_items + 1`` when
+        they need truncation detection without materializing the whole store.
+        """
+        with closing(self._connect()) as c:
+            timeout = max(0, int(busy_timeout_ms))
+            c.execute(f"PRAGMA busy_timeout = {timeout}")
+            rows = c.execute(
+                "SELECT * FROM episodes "
+                "WHERE status = 'active' "
+                "AND ("
+                "  (occurred_at IS NOT NULL AND occurred_at >= ? AND occurred_at < ?) "
+                "  OR (occurred_at IS NULL AND created_at >= ? AND created_at < ?)"
+                ") "
+                "ORDER BY COALESCE(occurred_at, created_at) DESC "
+                "LIMIT ?",
+                (
+                    window_start,
+                    window_end,
+                    window_start,
+                    window_end,
+                    int(limit),
+                ),
             ).fetchall()
         return [self._row_to_dict(r) for r in rows]
 

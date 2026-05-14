@@ -1,12 +1,13 @@
 # Slice TRF - temporal recall and ARS fragment guard
 
-**Status:** DRAFT SPEC. Not canonical. No implementation has landed.
+**Status:** CANONICAL + IMPLEMENTED. Both-panel post-implementation review and
+live Telegram observation remain pending before Geek-Out Entry 5 can close.
 
 **Classification:** covenant-shaped memory + audit-voice work.
 
-**Touches, if implemented:** `core/memory/lived_recall.py`,
-`core/memory/temporal_arithmetic.py`, `core/safety/self_claim_audit.py`, and the
-daemon chat path around `daemon/maez_daemon.py::handle_message`.
+**Implementation touches:** `core/memory/temporal_anchor_recall.py`,
+`core/safety/temporal_fragment_guard.py`, and the daemon chat path around
+`daemon/maez_daemon.py::handle_message`.
 
 **Maps to:**
 - [`docs/GEEK_OUT_CATALOG.md`](GEEK_OUT_CATALOG.md) - Entry 5, Last-Week Recall
@@ -197,8 +198,14 @@ The helper does three things:
 
 1. detect whether the query contains one of the v1 anchors;
 2. compute the requested wall-clock window using the question's reference time;
-3. return a content/evidence brief from active episodes whose `occurred_at` or
-   `created_at` falls inside that window.
+3. return a capped content/evidence brief from active episodes whose
+   `occurred_at` or `created_at` falls inside that window.
+
+The daemon path must use a windowed episode-store query, not `list_active()` plus
+Python filtering. The query should fetch at most `max_items + 1` rows so
+truncation can be detected without materializing the whole episode store.
+If a store implementation lacks the windowed query, the helper returns
+`helper_unavailable`; it must not fall back to a full-store scan.
 
 This is a bounded supplement to `build_lived_recall_brief`, not a replacement.
 The normal lived-recall path still runs. The temporal-anchor brief is added only
@@ -267,9 +274,10 @@ V1 must include a narrow kill switch:
 MAEZ_TEMPORAL_ANCHOR_RECALL=0
 ```
 
-When disabled, only the temporal-anchor helper is skipped. ARS remains active,
-the normal lived-recall path remains active, and the fragment guard remains
-available for ARS post-omission cleanup.
+When disabled, only the temporal-anchor helper's evidence lookup and brief
+injection are skipped. Anchor detection still reports `helper_unavailable`, ARS
+remains active, the normal lived-recall path remains active, and the fragment
+guard remains available for ARS post-omission cleanup.
 
 ### Daemon insertion point
 
@@ -393,9 +401,18 @@ State-specific fallback text:
 |---|---|
 | `bounded_search_no_match` | `I'm not finding that clearly right now.` |
 | `helper_unavailable` | `I can't check that clearly right now.` |
+| `evidence_found` + affect-only fragment | `I found something from that window, but I need to answer it carefully.` |
 
 `not finding` is forbidden for `helper_unavailable`, because no bounded search
 successfully happened.
+
+`not finding` is also forbidden when `evidence_found=True`. If bounded evidence
+exists and the post-ARS reply contains an approved retrieval posture such as
+`I found one memory from last week`, the fragment guard does not rewrite it.
+An explicit bare memory claim such as `I remember last week...` remains
+guardable, because "some evidence exists in the window" is not proof that every
+model-authored memory claim is grounded. This preserves safety if audit fails
+open before the guard runs.
 
 ---
 
@@ -530,7 +547,7 @@ V1 cannot perfectly distinguish "memory exists but retrieval missed it" from
 
 | state | operational signal | response posture |
 |---|---|---|
-| bounded temporal evidence found | temporal-anchor brief has one or more evidence items | answer from evidence; audit may allow memory claim |
+| bounded temporal evidence found | temporal-anchor brief has one or more evidence items | answer from evidence with approved retrieval posture; bare `I remember...` claims remain guardable |
 | bounded search no match | helper ran and returned zero items | say Maez is not finding it clearly; preserve current-message context |
 | helper unavailable | helper errors, times out, or store unavailable | say Maez cannot check that clearly right now; do not claim absence |
 
@@ -594,13 +611,17 @@ Implementation must be RED-first. Mandatory tests:
 7. More than four matching episodes are deterministically ranked, truncated to
    `max_items=4`, and marked `truncated=True`.
 8. Exactly four matching episodes return `truncated=False`.
-9. `MAEZ_TEMPORAL_ANCHOR_RECALL=0` disables only the temporal-anchor helper.
+9. `MAEZ_TEMPORAL_ANCHOR_RECALL=0` disables only evidence lookup/brief
+   injection; fragment cleanup still sees `anchor_detected=True` with
+   `helper_unavailable`.
 10. The daemon chat path injects temporal-anchor recall only for v1 anchors.
 11. The daemon insertion sequence is: legacy recall, lived recall,
    temporal-anchor recall if enabled and anchor detected, evidence-ID
    registration, generation, audit/ARS, fragment guard, final send.
 12. If temporal-anchor recall finds evidence, the brief includes evidence IDs
    and date annotations.
+12a. Trace evidence IDs include both episode IDs and source memory IDs exposed
+    in the temporal brief.
 13. If temporal-anchor recall finds no evidence, the result explicitly records
    `bounded_search_no_match` without claiming memory absence.
 14. A bounded no-match result must not produce "I don't remember", "I have no
@@ -630,6 +651,11 @@ Implementation must be RED-first. Mandatory tests:
 25. Fragment guard does not activate when `temporal_result.anchor_detected=False`.
 26. Audit protection is preserved: ungrounded memory claims still do not
     surface.
+26a. `evidence_found` plus approved retrieval posture is not rewritten into a
+    false no-match fallback; `evidence_found` plus a bare explicit memory claim
+    or affect-only fragment uses the evidence-found fallback.
+26b. Audit fail-open plus `evidence_found` must not let a bare explicit memory
+    claim such as `I remember last week. You were struggling then.` surface.
 27. Old ARS sentinel phrases remain absent from user-visible output.
 28. Natural-text probe: the live prompt `I feel much better compared to last
     week. You remember last week right?` produces either an evidence-backed
@@ -675,6 +701,9 @@ Negative controls:
 
 The live prompts must assert no clipped/evasive fragment. Negative controls must
 assert the temporal helper does not activate without memory/continuity intent.
+First-person user memory statements such as "I remember last week was hard" are
+sharing, not recall requests, unless they also contain a direct Maez recall
+question.
 
 Store these probes in `tests/data/trf_probe_corpus.jsonl` so future agents can
 extend the executable corpus without editing this spec.
@@ -799,3 +828,6 @@ record:
 - operator decision.
 
 No user text, model text, memory body text, or omitted text belongs in the log.
+If repeated exact witness language ("I hear that you feel ...") starts feeling
+mechanical in live use, record it as a new geek-out catalog candidate rather
+than silently expanding this slice.

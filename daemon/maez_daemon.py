@@ -115,7 +115,12 @@ from core.model_config import PRIMARY_MODEL as MODEL  # single source of truth �
 from core.memory.episodes import EpisodeStore
 from core.memory.relationship_graph import RelationshipGraph
 from core.memory.lived_recall import build_lived_recall_brief
+from core.memory.temporal_anchor_recall import build_temporal_anchor_recall_brief
 from core.memory.working_self import GoalHierarchy, assemble_goals
+from core.safety.temporal_fragment_guard import (
+    extract_current_message_context,
+    guard_temporal_ars_fragment,
+)
 from core.evolution.wondering_pursuit import (
     decide_pursuit,
     format_pursuit_utterance,
@@ -1301,13 +1306,68 @@ class MaezDaemon:
                 decision=decision,
             )
             recorder = getattr(consumer, "record_optional_presentation", None)
-            should_record = getattr(consumer, "should_record_optional_presentation_opportunity", None)
+            should_record = getattr(
+                consumer, "should_record_optional_presentation_opportunity", None
+            )
             if callable(recorder) and callable(should_record) and should_record():
                 recorder(dampened=payload is not None)
             return payload
         except Exception as exc:
             logger.warning("S1b consumer returned neutral after error: %s", exc)
             return None
+
+    def _trf_apply_fragment_guard(
+        self,
+        *,
+        user_message: str,
+        reply: str,
+        temporal_anchor_result,
+        trace=None,
+    ) -> str:
+        """Apply TRF post-ARS fragment cleanup without blocking final send."""
+        if temporal_anchor_result is None:
+            return reply
+        try:
+            guard_result = guard_temporal_ars_fragment(
+                user_message=user_message,
+                post_ars_text=reply,
+                temporal_result=temporal_anchor_result,
+                current_context=extract_current_message_context(user_message),
+            )
+            if getattr(guard_result, "guard_used", False):
+                logger.info(
+                    "audit_rewrite.fragment_guard_used | reason=%s anchor_kind=%s "
+                    "search_status=%s producer_version=%s",
+                    getattr(guard_result, "reason", ""),
+                    getattr(temporal_anchor_result, "anchor_kind", None),
+                    getattr(temporal_anchor_result, "search_status", None),
+                    "temporal_fragment_guard.v1",
+                )
+                try:
+                    if trace is not None and getattr(trace.audit, "ran", False):
+                        trace.audit.changed_output = True
+                except Exception:
+                    pass
+                return guard_result.text
+            if getattr(temporal_anchor_result, "anchor_detected", False):
+                logger.info(
+                    "audit_rewrite.fragment_guard_not_needed | anchor_kind=%s "
+                    "search_status=%s producer_version=%s",
+                    getattr(temporal_anchor_result, "anchor_kind", None),
+                    getattr(temporal_anchor_result, "search_status", None),
+                    "temporal_fragment_guard.v1",
+                )
+        except Exception as exc:
+            logger.debug("temporal ARS fragment guard failed: %s", exc)
+            try:
+                logger.info(
+                    "audit_rewrite.fragment_guard_unavailable | anchor_kind=%s producer_version=%s",
+                    getattr(temporal_anchor_result, "anchor_kind", None),
+                    "temporal_fragment_guard.v1",
+                )
+            except Exception:
+                pass
+        return reply
 
     def _reason(self, snap: dict, *, stale_fields: set | None = None) -> str | None:
         """Run a single reasoning cycle against the local model.
@@ -2115,6 +2175,7 @@ class MaezDaemon:
         except Exception as _trace_goals_exc:
             logger.debug("trace working_self_goals capture skipped: %s", _trace_goals_exc)
         _lived_brief = ""
+        _temporal_anchor_result = None
         if os.environ.get("MAEZ_LIVED_RECALL", "1") != "0":
             try:
                 _lived_brief = build_lived_recall_brief(
@@ -2129,6 +2190,32 @@ class MaezDaemon:
                 _lived_brief = ""
         if _lived_brief:
             messages.append({"role": "system", "content": _lived_brief})
+        try:
+            _temporal_anchor_result = build_temporal_anchor_recall_brief(
+                text,
+                episode_store=self.lived_episodes,
+            )
+            if getattr(_temporal_anchor_result, "anchor_detected", False):
+                logger.info(
+                    "temporal_recall.summary | anchor_kind=%s search_status=%s "
+                    "evidence_count=%d elapsed_ms=%d truncated=%s producer_version=%s",
+                    getattr(_temporal_anchor_result, "anchor_kind", None),
+                    getattr(_temporal_anchor_result, "search_status", None),
+                    int(getattr(_temporal_anchor_result, "item_count", 0) or 0),
+                    int(getattr(_temporal_anchor_result, "elapsed_ms", 0) or 0),
+                    bool(getattr(_temporal_anchor_result, "truncated", False)),
+                    "temporal_anchor_recall.v1",
+                )
+            if getattr(_temporal_anchor_result, "brief_text", ""):
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": _temporal_anchor_result.brief_text,
+                    }
+                )
+        except Exception as _temporal_exc:
+            logger.debug("temporal anchor recall failed: %s", _temporal_exc)
+            _temporal_anchor_result = None
 
         # Step 5r: inject ambient context (weather, active window,
         # latest iPhone signals) into the chat prompt. The signal
@@ -2165,6 +2252,16 @@ class MaezDaemon:
         # An empty brief yields an empty list — silence is honest.
         try:
             _trace.lived_recall_ids = _trace_extract_evidence_ids(_lived_brief)
+            if _temporal_anchor_result is not None and getattr(
+                _temporal_anchor_result, "evidence_ids", None
+            ):
+                _trace.lived_recall_ids.extend(
+                    [
+                        str(eid)
+                        for eid in getattr(_temporal_anchor_result, "evidence_ids", ())
+                        if str(eid) not in _trace.lived_recall_ids
+                    ]
+                )
         except Exception as _trace_exc:
             logger.debug("trace lived_recall_ids capture skipped: %s", _trace_exc)
         # Inject the premise-audit flag (if any) as a system note
@@ -2356,6 +2453,12 @@ class MaezDaemon:
                 _trace.audit = AuditInfo(ran=False, error=str(_aud_exc)[:200])
             except Exception:
                 pass
+        reply = self._trf_apply_fragment_guard(
+            user_message=text,
+            reply=reply,
+            temporal_anchor_result=_temporal_anchor_result,
+            trace=_trace,
+        )
 
         # Slice 4c.5a — autobiographical continuity turning on.
         # Persist the post-audit owner-private reply as a model_reply row.

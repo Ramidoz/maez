@@ -1,0 +1,12 @@
+{"id":"trf-live-last-week-comparison","category":"last_week","prompt":"I feel much better compared to last week. You remember last week right?","expected_shape":"evidence_or_honest_fallback"}
+{"id":"trf-live-last-week-direct","category":"last_week","prompt":"Do you remember last week?","expected_shape":"evidence_or_honest_fallback"}
+{"id":"trf-last-week-open","category":"last_week","prompt":"What do you remember from last week?","expected_shape":"evidence_or_honest_fallback"}
+{"id":"trf-yesterday-direct","category":"yesterday","prompt":"Do you remember yesterday?","expected_shape":"evidence_or_honest_fallback"}
+{"id":"trf-yesterday-open","category":"yesterday","prompt":"What happened yesterday?","expected_shape":"evidence_or_honest_fallback"}
+{"id":"trf-this-morning-direct","category":"this_morning","prompt":"Do you remember this morning?","expected_shape":"evidence_or_honest_fallback"}
+{"id":"trf-this-morning-open","category":"this_morning","prompt":"What did we talk about this morning?","expected_shape":"evidence_or_honest_fallback"}
+{"id":"trf-earlier-today-direct","category":"earlier_today","prompt":"Do you remember earlier today?","expected_shape":"evidence_or_honest_fallback"}
+{"id":"trf-earlier-today-open","category":"earlier_today","prompt":"What happened earlier today?","expected_shape":"evidence_or_honest_fallback"}
+{"id":"trf-negative-not-request","category":"negative_control","prompt":"Last week was exhausting, but I am not asking you to remember it.","expected_shape":"no_temporal_helper"}
+{"id":"trf-negative-example","category":"negative_control","prompt":"The phrase last week appears here as an example, not a memory request.","expected_shape":"no_temporal_helper"}
+{"id":"trf-negative-next-week","category":"negative_control","prompt":"I am planning for next week, not asking about last week.","expected_shape":"no_temporal_helper"}

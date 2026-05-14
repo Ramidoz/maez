@@ -262,19 +262,26 @@ recall plus post-ARS answer shape.
 
 **Fix landed:**
 
-Not yet. Draft spec:
+TRF implementation in progress/landed after canonical spec:
 
 - `docs/SLICE_TEMPORAL_RECALL_AND_ARS_FRAGMENT_GUARD.md`
+- `core/memory/temporal_anchor_recall.py`
+- `core/safety/temporal_fragment_guard.py`
+- `daemon/maez_daemon.py`
 
 **Regression test:**
 
-Not yet. The spec requires RED-first tests for:
+Added before implementation:
 
-- temporal-anchor recall on `last week`
-- no-fragment ARS output after partial omission
-- audit protection preservation
-- live natural-text probe based on this Telegram turn
+- `tests.test_temporal_recall_fragment_guard.TemporalAnchorWindowTests.test_last_week_uses_previous_completed_monday_sunday`
+- `tests.test_temporal_recall_fragment_guard.TemporalAnchorRecallTests.test_brief_returns_episodes_inside_window_without_keyword_overlap`
+- `tests.test_temporal_recall_fragment_guard.TemporalFragmentGuardTests.test_guard_replaces_fragment_with_ratified_fallback_and_witness`
+- `tests.test_temporal_recall_fragment_guard.TemporalFragmentGuardTests.test_guard_does_not_let_ungrounded_model_claims_through`
+- `tests.test_temporal_recall_fragment_guard.DaemonTRFWiringTests.test_daemon_wires_trf_after_lived_recall_and_after_audit`
+- `tests/data/trf_probe_corpus.jsonl`
 
-**Status:** open. Do not close until live Telegram confirms the old sentinel is
-absent AND the answer is complete: either evidence-backed memory, or an honest
-"not finding it clearly" fallback that preserves the grounded current message.
+**Status:** fix landed locally; post-implementation panels and live Telegram
+confirmation pending. Do not close until live Telegram confirms the old
+sentinel is absent AND the answer is complete: either evidence-backed memory,
+or an honest "not finding it clearly" fallback that preserves the grounded
+current message.
