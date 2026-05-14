@@ -375,6 +375,8 @@ class MaezDaemon:
         self.boot_time = None
         self.cycle_count = 0
         self.last_cycle_time = None
+        self._cycle_stage = "not_started"
+        self._cycle_stage_started_at = None
         self.system_prompt = self._load_soul()
         self.memory = MemoryManager()
         # 5x.F.A — per-cycle recall-context bag. The authoritative
@@ -832,6 +834,46 @@ class MaezDaemon:
                 "last_flush_checked_at": None,
                 "error": str(exc)[:120],
             }
+
+    def _mark_cycle_stage(self, stage: str) -> None:
+        """Record the current daemon-cycle stage for hang diagnosis."""
+        self._cycle_stage = stage
+        self._cycle_stage_started_at = datetime.now(timezone.utc).isoformat()
+        logger.debug("Cycle %d stage: %s", self.cycle_count, stage)
+
+    def _cycle_heartbeat_health(self) -> dict:
+        """Content-free reasoning-loop heartbeat for /health and the project panel."""
+        now = time.time()
+        cycle_age_seconds = None
+        stage_age_seconds = None
+        if self.last_cycle_time:
+            try:
+                cycle_age_seconds = int(
+                    now - datetime.fromisoformat(self.last_cycle_time).timestamp()
+                )
+            except Exception:
+                cycle_age_seconds = None
+        if self._cycle_stage_started_at:
+            try:
+                stage_age_seconds = int(
+                    now - datetime.fromisoformat(self._cycle_stage_started_at).timestamp()
+                )
+            except Exception:
+                stage_age_seconds = None
+
+        stalled_after_seconds = max(LOOP_INTERVAL * 3, 90)
+        cycle_stalled = (
+            bool(self.running)
+            and cycle_age_seconds is not None
+            and cycle_age_seconds > stalled_after_seconds
+        )
+        return {
+            "stage": self._cycle_stage,
+            "stage_age_seconds": stage_age_seconds,
+            "cycle_age_seconds": cycle_age_seconds,
+            "cycle_stalled": cycle_stalled,
+            "stalled_after_seconds": stalled_after_seconds,
+        }
 
     def _watch_soul(self):
         """Watch soul.md for changes and hot-reload."""
@@ -3929,8 +3971,10 @@ class MaezDaemon:
             self.cycle_count += 1
             self.last_cycle_time = datetime.now(timezone.utc).isoformat()
             cycle_start = time.time()
+            self._mark_cycle_stage("cycle_start")
 
             logger.info("--- Cycle %d ---", self.cycle_count)
+            self._mark_cycle_stage("m1_flush_due_windows")
             self._m1_flush_due_windows()
 
             # 5x.F.A — reset the per-cycle recall-context bag at cycle
@@ -3951,6 +3995,7 @@ class MaezDaemon:
             self._cycle_recall_context = _crc_empty()
 
             # Execute deferred actions from previous cycle
+            self._mark_cycle_stage("deferred_actions")
             tier1_results = self.actions.execute_pending()
             tier2_results = self.actions.execute_tier2_pending()
             for r in tier1_results + tier2_results:
@@ -3964,6 +4009,7 @@ class MaezDaemon:
             # back when the hour is up. Failure here must never crash
             # the cycle, so the whole block is guarded.
             try:
+                self._mark_cycle_stage("card_reminders")
                 pipe = (
                     self.telegram._get_pipeline()
                     if hasattr(self.telegram, "_get_pipeline")
@@ -3982,10 +4028,12 @@ class MaezDaemon:
                 logger.debug("card reminder tick failed: %s", e)
 
             # Broadcast cycle start to UI
+            self._mark_cycle_stage("broadcast_cycle_start")
             self._ws_broadcast({"type": "cycle_start", "cycle": self.cycle_count})
             self._s1b_residue_events = []
 
             # Collect system perception
+            self._mark_cycle_stage("perception_snapshot")
             snap = perception_snapshot()
             logger.info(
                 "Perception: CPU %.1f%%, RAM %.1f%%, GPU %s%%, %s°C",
@@ -3996,6 +4044,7 @@ class MaezDaemon:
             )
 
             # Screen perception — every N cycles using gemma4 vision
+            self._mark_cycle_stage("screen_perception")
             self._screen_cycle_counter += 1
             if self._screen_cycle_counter >= self.SCREEN_OBSERVE_EVERY_N_CYCLES:
                 self._screen_cycle_counter = 0
@@ -4009,6 +4058,7 @@ class MaezDaemon:
                     logger.warning("Screen perception error: %s", e)
 
             # Calendar perception — refresh every ~5 minutes
+            self._mark_cycle_stage("calendar_perception")
             self._calendar_cycle_counter += 1
             if self._calendar_cycle_counter >= self.CALENDAR_OBSERVE_EVERY_N_CYCLES:
                 self._calendar_cycle_counter = 0
@@ -4042,6 +4092,7 @@ class MaezDaemon:
                     logger.warning("Calendar perception error: %s", e)
 
             # Presence detection — every ~60 seconds
+            self._mark_cycle_stage("presence_perception")
             self._presence_cycle_counter += 1
             if self._presence_cycle_counter >= self.PRESENCE_EVERY_N_CYCLES:
                 self._presence_cycle_counter = 0
@@ -4143,6 +4194,7 @@ class MaezDaemon:
                     logger.warning("Presence error: %s", e)
 
             # Git awareness — every ~5 minutes
+            self._mark_cycle_stage("git_awareness")
             self._git_cycle_counter += 1
             if self._git_cycle_counter >= self.GIT_EVERY_N_CYCLES:
                 self._git_cycle_counter = 0
@@ -4160,6 +4212,7 @@ class MaezDaemon:
                     logger.debug("git dirty count update failed: %s", e)
 
             # GitHub — every 10 cycles
+            self._mark_cycle_stage("github_context")
             self._github_counter += 1
             if self._github_counter >= 10:
                 self._github_counter = 0
@@ -4176,6 +4229,7 @@ class MaezDaemon:
             # signals weren't persisted. persist_to_memory closes that
             # gap; both sides of the fix have to land for the audit
             # path to see the signal.
+            self._mark_cycle_stage("reddit_context")
             self._reddit_counter += 1
             if self._reddit_counter >= 15:
                 self._reddit_counter = 0
@@ -4198,11 +4252,13 @@ class MaezDaemon:
 
             # Public bot context — every cycle
             try:
+                self._mark_cycle_stage("public_context")
                 self._last_public_context = self._get_public_context()
             except Exception as e:
                 logger.debug("Public context failed: %s", e)
 
             # Evolution quality check — every 20 cycles
+            self._mark_cycle_stage("evolution_check")
             if self.cycle_count % 20 == 0:
                 try:
                     from skills.evolution_engine import check_and_revert
@@ -4212,6 +4268,7 @@ class MaezDaemon:
                     logger.debug("Evolution check failed: %s", e)
 
             # Disk cleanup check — every 2 hours, if disk > 75%
+            self._mark_cycle_stage("disk_check")
             if self.cycle_count % 240 == 0 and snap["disk"].get("/", {}).get("percent", 0) > 75:
                 try:
                     report = disk_scan()
@@ -4226,6 +4283,7 @@ class MaezDaemon:
                     logger.error("Disk scan failed: %s", e)
 
             # Cognition self-critique — every 20 cycles
+            self._mark_cycle_stage("cognition_self_critique")
             self._cognition_critique_counter += 1
             if self._cognition_critique_counter >= 20:
                 self._cognition_critique_counter = 0
@@ -4251,6 +4309,7 @@ class MaezDaemon:
             # to prevent the same insight being appended hundreds of times.
             # The substring check alone failed when a consolidated lessons
             # section paraphrased the insight (past vs present tense).
+            self._mark_cycle_stage("self_reflection")
             self._reflection_cycle_counter += 1
             if self._reflection_cycle_counter >= self.REFLECTION_EVERY_N_CYCLES:
                 self._reflection_cycle_counter = 0
@@ -4292,6 +4351,7 @@ class MaezDaemon:
                 stale_fields,
             )
 
+            self._mark_cycle_stage("perception_signature_gate")
             _presence_state = (
                 "at_desk"
                 if (self._last_presence_snap is not None and self._last_presence_snap.rohit_present)
@@ -4333,6 +4393,7 @@ class MaezDaemon:
                         self.cycle_count,
                         sorted(stale),
                     )
+                self._mark_cycle_stage("reasoning_model")
                 result = self._reason(snap, stale_fields=stale)
             if result is None:
                 # Either gate skipped, or _reason couldn't run. No-op.
@@ -4357,6 +4418,7 @@ class MaezDaemon:
                 # narration is grounded and passes through; if absent,
                 # activity_claim fires and rewrites.
                 try:
+                    self._mark_cycle_stage("response_audit")
                     _audit_transcript_parts = []
                     _cycle_signals_present = []
                     _cycle_signals_absent = []
@@ -4435,6 +4497,7 @@ class MaezDaemon:
 
                 logger.info("Cycle %d response:\n%s", self.cycle_count, result)
                 # Store response with full perception snapshot + screen context
+                self._mark_cycle_stage("cognition_score")
                 screen_note = ""
                 screen_activity = "unknown"
                 focus_level = "unknown"
@@ -4584,6 +4647,7 @@ class MaezDaemon:
                     else "unknown",
                 }
                 mem_metadata.update(cog_metadata)
+                self._mark_cycle_stage("memory_store")
                 self.memory.store(
                     full_thought,
                     cycle=self.cycle_count,
@@ -4615,6 +4679,7 @@ class MaezDaemon:
             # _reason() ran first. If there's no room left in the cycle, the
             # wondering step skips this pass so the primary loop never degrades.
             try:
+                self._mark_cycle_stage("wondering")
                 cycle_deadline = cycle_start + LOOP_INTERVAL - 2.0
                 if time.time() < cycle_deadline - 10:
                     from daemon.wondering_cycle import advance_one
@@ -4626,6 +4691,7 @@ class MaezDaemon:
                 logger.debug("wondering cycle failed: %s", e)
 
             # Continuity checkpoint + orientation expiry
+            self._mark_cycle_stage("continuity")
             if result:
                 self._continuity_checkpoint_counter += 1
                 if self._continuity_checkpoint_counter >= CONTINUITY_CHECKPOINT_INTERVAL:
@@ -4657,6 +4723,7 @@ class MaezDaemon:
                         logger.info("Continuity orientation complete. Resuming normal operation.")
 
             # Proactive search if thought shows knowledge gap
+            self._mark_cycle_stage("proactive_search")
             if result:
                 sq = self._should_search(result)
                 if sq:
@@ -4673,6 +4740,7 @@ class MaezDaemon:
                         logger.debug("Proactive search failed: %s", e)
 
             # Check system thresholds for alerts (runs even if reasoning failed)
+            self._mark_cycle_stage("threshold_alerts")
             self._check_and_alert(snap)
 
             # Follow-up delivery — every 5 cycles
@@ -4690,6 +4758,7 @@ class MaezDaemon:
             # or pending list, and send a grounded report. If the action
             # hasn't completed yet, skip — try again next window. No LLM
             # role-play.
+            self._mark_cycle_stage("followup_delivery")
             if self.cycle_count % 5 == 0:
                 try:
                     self.followup_queue.expire_old()
@@ -4740,6 +4809,7 @@ class MaezDaemon:
                     logger.debug("Followup check failed: %s", e)
 
             # Proactive opinion — every 50 cycles
+            self._mark_cycle_stage("proactive_opinion")
             if self.cycle_count % 50 == 0:
                 self._check_proactive_opinion()
 
@@ -4752,6 +4822,7 @@ class MaezDaemon:
             # next loop tick sees should_run_now() == False and won't
             # re-spawn while an earlier dream is still in flight.
             try:
+                self._mark_cycle_stage("dream_check")
                 _now = time.time()
                 _absence = (_now - self._last_departure_time) if self._last_departure_time else 0.0
                 if self.dream.is_idle(
@@ -4792,6 +4863,7 @@ class MaezDaemon:
                 logger.debug("Dream cycle check failed: %s", e)
 
             # Sleep in small increments so shutdown is responsive
+            self._mark_cycle_stage("cycle_sleep")
             for _ in range(LOOP_INTERVAL):
                 if not self.running:
                     break
@@ -5304,6 +5376,7 @@ class MaezDaemon:
                     "boot_time": self.boot_time,
                     "cycle_count": self.cycle_count,
                     "last_cycle": self.last_cycle_time,
+                    "reasoning_loop": self._cycle_heartbeat_health(),
                     "uptime_seconds": int(
                         time.time() - datetime.fromisoformat(self.boot_time).timestamp()
                     ),

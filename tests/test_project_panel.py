@@ -62,6 +62,26 @@ class ProjectPanelContractTests(unittest.TestCase):
         self.assertNotIn("cdnjs", page)
         self.assertNotIn("fonts.googleapis", page)
 
+    def test_health_exposes_reasoning_loop_heartbeat_fields(self):
+        src = (_REPO / "daemon" / "maez_daemon.py").read_text()
+
+        self.assertIn("self._cycle_stage", src)
+        self.assertIn("self._mark_cycle_stage(", src)
+        self.assertIn("def _cycle_heartbeat_health(self)", src)
+        self.assertIn('"reasoning_loop": self._cycle_heartbeat_health()', src)
+        self.assertIn('"cycle_age_seconds"', src)
+        self.assertIn('"cycle_stalled"', src)
+        self.assertIn('"stage"', src)
+        self.assertIn('"stage_age_seconds"', src)
+
+    def test_project_panel_displays_reasoning_loop_heartbeat(self):
+        page = (_REPO / "ui" / "project_panel.html").read_text()
+
+        self.assertIn("id=\"liveHeartbeat\"", page)
+        self.assertIn("h.reasoning_loop", page)
+        self.assertIn("cycle_stalled", page)
+        self.assertIn("cycle_age_seconds", page)
+
 
 if __name__ == "__main__":
     unittest.main()

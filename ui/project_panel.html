@@ -56,7 +56,7 @@ h1 { margin: 6px 0 5px; font-size: clamp(30px, 5vw, 54px); line-height: 1; }
   color: var(--muted);
 }
 .grid { display: grid; gap: 14px; }
-.live-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); margin-bottom: 18px; }
+.live-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); margin-bottom: 18px; }
 .two { grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr); }
 .card {
   background: rgba(23, 19, 14, 0.88);
@@ -146,6 +146,7 @@ h1 { margin: 6px 0 5px; font-size: clamp(30px, 5vw, 54px); line-height: 1; }
   <section class="grid live-grid" id="liveCards">
     <div class="card"><div class="k">daemon</div><div class="v" id="liveDaemon">loading</div></div>
     <div class="card"><div class="k">cycle</div><div class="v" id="liveCycle">-</div></div>
+    <div class="card"><div class="k">heartbeat</div><div class="v" id="liveHeartbeat">-</div><div class="small mono" id="liveHeartbeatStage">-</div></div>
     <div class="card"><div class="k">M1</div><div class="v" id="liveM1">-</div></div>
     <div class="card"><div class="k">biography</div><div class="v" id="liveBio">-</div></div>
     <div class="card"><div class="k">memory</div><div class="v" id="liveMemory">-</div></div>
@@ -210,12 +211,17 @@ async function loadHealth() {
     const h = await res.json();
     const m1 = h.lived_episodes && h.lived_episodes.m1;
     const stale = h.lived_episodes && h.lived_episodes.staleness;
+    const loop = h.reasoning_loop || {};
     const memory = h.memory || {};
     const total = memory.total || ((memory.raw || 0) + (memory.daily || 0) + (memory.core || 0));
 
     $('liveDaemon').textContent = h.status || 'unknown';
     $('liveDaemon').className = 'v ' + classForStatus(h.status);
     $('liveCycle').textContent = h.cycle_count == null ? '-' : String(h.cycle_count);
+    $('liveHeartbeat').textContent = loop.cycle_stalled ? 'stalled' : 'ok';
+    $('liveHeartbeat').className = 'v ' + (loop.cycle_stalled ? 'bad' : 'ok');
+    $('liveHeartbeatStage').textContent =
+      `${loop.stage || 'unknown'} · ${loop.cycle_age_seconds == null ? '-' : loop.cycle_age_seconds + 's'}`;
     $('liveM1').textContent = m1 && m1.enabled ? 'enabled' : 'off';
     $('liveM1').className = 'v ' + (m1 && m1.enabled ? 'ok' : 'warn');
     $('liveBio').textContent = stale ? stale.staleness_status : '-';
