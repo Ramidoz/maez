@@ -457,5 +457,51 @@ class MissingDailyAccessorFailsLoud(unittest.TestCase):
             mm_mod.MemoryManager = original
 
 
+class M1EpisodesExcludedFromReflectionSynthesis(unittest.TestCase):
+    def test_synthesis_pass_excludes_telegram_exchange_episodes(self):
+        from scripts.memory_reflection.nightly_lived_memory import (
+            ReflectionReport,
+            run_synthesis_pass,
+        )
+
+        store, graph, cleanup = _stores()
+        try:
+            store.add(
+                title="Bonded conversation with Rohit",
+                summary=(
+                    "Bonded Telegram exchange. 1 audited owner/Maez pair at "
+                    "2026-05-14T18:00:00+00:00. Participants: Rohit, Maez."
+                ),
+                participants=["Rohit", "Maez"],
+                source_memory_ids=["raw-m1-1"],
+                source_kind="telegram_exchange",
+                occurred_at="2026-05-14T18:00:00+00:00",
+                authorship="bonded_dialogue",
+                memory_voice="mixed_owner_maez",
+            )
+            report = ReflectionReport()
+            calls = []
+
+            def fake_llm(prompt: str) -> str:
+                calls.append(prompt)
+                return (
+                    '[{"reflection": "should not be generated", '
+                    '"evidence_ids": ["raw-m1-1"], "confidence": 0.9}]'
+                )
+
+            run_synthesis_pass(
+                episode_store=store,
+                llm_call=fake_llm,
+                report=report,
+            )
+
+            self.assertEqual(calls, [])
+            self.assertEqual(report.reflections_attempted, 0)
+            self.assertEqual(report.reflections_added, 0)
+            self.assertEqual(len(store.list_active()), 1)
+        finally:
+            cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()

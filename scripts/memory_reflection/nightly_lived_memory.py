@@ -404,7 +404,13 @@ def run_synthesis_pass(
     # `list_active` returns newest-first; take the recent window to
     # focus reflection on what's been happening lately rather than
     # ancient state.
-    recent = active[:recent_window_episodes]
+    # Decision 25 / ADR 0030: M1 telegram_exchange episodes are structural
+    # biography pointers in v1, not synthesis material. Reflection over bonded
+    # conversation episodes needs its own reviewed reflection-quality slice.
+    recent = [
+        ep for ep in active
+        if ep.get("source_kind") != "telegram_exchange"
+    ][:recent_window_episodes]
     if not recent:
         return
 

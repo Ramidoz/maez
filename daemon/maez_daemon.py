@@ -113,6 +113,12 @@ LEDGER_DB_PATH = Path(os.environ.get("MAEZ_LEDGER_DB_PATH") or (MEMORY_DIR / "le
 # --- Constants ---
 from core.model_config import PRIMARY_MODEL as MODEL  # single source of truth — /etc/maez/model.env
 from core.memory.episodes import EpisodeStore
+from core.memory.m1_lived_episode_promotion import (
+    M1Config,
+    M1LivedEpisodePromoter,
+    M1PromotionStore,
+    biography_staleness_health,
+)
 from core.memory.relationship_graph import RelationshipGraph
 from core.memory.lived_recall import build_lived_recall_brief
 from core.memory.temporal_anchor_recall import build_temporal_anchor_recall_brief
@@ -397,6 +403,19 @@ class MaezDaemon:
             _lived_dir = Path(__file__).resolve().parent.parent / "memory"
         self.lived_episodes = EpisodeStore(str(_lived_dir / "lived_episodes.db"))
         self.lived_graph = RelationshipGraph(str(_lived_dir / "lived_graph.db"))
+        try:
+            self.m1_promoter = M1LivedEpisodePromoter(
+                episode_store=self.lived_episodes,
+                promotion_store=M1PromotionStore(
+                    str(_lived_dir / "m1_lived_episode_promotion.db")
+                ),
+                config=M1Config(
+                    enabled=os.environ.get("MAEZ_M1_LIVED_EPISODE_PROMOTION", "0") == "1"
+                ),
+            )
+        except Exception as _m1_init_exc:
+            self.m1_promoter = None
+            logger.debug("M1 promoter init skipped: %s", _m1_init_exc)
         # Slice 6 — Canary tokens. Initialise the process-active
         # store at startup so brief composers can register canaries
         # for memory-bleeding detection. Tests bypass this by
@@ -753,6 +772,40 @@ class MaezDaemon:
         except FileNotFoundError:
             logger.error("Soul file not found at %s — running without identity", SOUL_PATH)
             return "You are Maez, a system-level AI agent."
+
+    def _m1_flush_due_windows(self) -> None:
+        """Daemon-cycle M1 silence-boundary seam. Best-effort and content-free."""
+        promoter = getattr(self, "m1_promoter", None)
+        if promoter is None:
+            return
+        try:
+            for outcome in promoter.flush_due_windows():
+                if outcome.promoted:
+                    logger.info(
+                        "m1.promotion.succeeded trigger=daemon_cycle source_count=%d episode_id=%s",
+                        outcome.source_id_count,
+                        outcome.episode_id,
+                    )
+                elif outcome.skipped_reason:
+                    logger.info(
+                        "m1.promotion.skipped_%s trigger=daemon_cycle",
+                        outcome.skipped_reason,
+                    )
+        except Exception as exc:
+            logger.debug("m1 daemon-cycle flush failed-neutral: %s", exc)
+
+    def _m1_staleness_health(self) -> dict:
+        """Content-free lived-episode freshness health for /health."""
+        try:
+            return biography_staleness_health(self.lived_episodes)
+        except Exception as exc:
+            return {
+                "active_count": None,
+                "newest_created_at": None,
+                "newest_age_hours": None,
+                "staleness_status": "unavailable",
+                "error": str(exc)[:120],
+            }
 
     def _watch_soul(self):
         """Watch soul.md for changes and hot-reload."""
@@ -2558,11 +2611,32 @@ class MaezDaemon:
         # exchange is bond transcript. NOTE: the string carries both
         # owner text and Maez reply — 5x.D should treat consolidations
         # of this row as mixed-origin, not pure owner-verbatim.
-        self.memory.store_telegram(
+        _m1_raw_memory_id = self.memory.store_telegram(
             f"the owner ({source}): {text}\nMaez: {reply}",
             provenance_source="user_utterance",
             trust_tier="lived",
         )
+        try:
+            if getattr(self, "m1_promoter", None) is not None:
+                _m1_outcome = self.m1_promoter.consider_audited_exchange(
+                    owner_text=text,
+                    maez_reply=reply,
+                    raw_memory_id=_m1_raw_memory_id,
+                    occurred_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                )
+                if _m1_outcome.promoted:
+                    logger.info(
+                        "m1.promotion.succeeded trigger=turn_close source_count=%d episode_id=%s",
+                        _m1_outcome.source_id_count,
+                        _m1_outcome.episode_id,
+                    )
+                elif _m1_outcome.skipped_reason:
+                    logger.info(
+                        "m1.promotion.skipped_%s trigger=turn_close",
+                        _m1_outcome.skipped_reason,
+                    )
+        except Exception as _m1_exc:
+            logger.debug("m1 turn-close promotion failed-neutral: %s", _m1_exc)
         self._ws_broadcast({"type": "message_reply", "text": reply})
 
         # Trace harness Slice 1 — finalize and emit the trace before
@@ -3827,6 +3901,7 @@ class MaezDaemon:
             cycle_start = time.time()
 
             logger.info("--- Cycle %d ---", self.cycle_count)
+            self._m1_flush_due_windows()
 
             # 5x.F.A — reset the per-cycle recall-context bag at cycle
             # top. Populated after `recall_for_cycle` (line ~1077);
@@ -5203,6 +5278,9 @@ class MaezDaemon:
                         time.time() - datetime.fromisoformat(self.boot_time).timestamp()
                     ),
                     "memory": self.memory.memory_stats(),
+                    "lived_episodes": {
+                        "staleness": self._m1_staleness_health(),
+                    },
                     "system": {
                         "cpu_percent": snap["cpu"]["percent"],
                         "ram_percent": snap["ram"]["percent"],
