@@ -48,9 +48,9 @@ this map covers `docs/` only.
 | Pre-anatomy slice memos | `docs/slices/legacy/` | Historical slice-3, 4C/5B, and gestation-boundary memos. |
 | Observation logs | `docs/*_OBSERVATION_LOG.md` (TRF, telegram-draft-presence, S1B, audit-rewrite) | Target: per-slice folder. |
 | Audit families | `docs/audit_<date>*/` already-foldered; some flat (`audit_15agent_*.md`, `audit_cockpit_session0_*.md`, `audit_symphony_<date>.md`) | Target: `docs/audits/<date>-<topic>/`. |
-| Architecture snapshots | `docs/architecture_state_<date>.md`, `docs/md3_path_survey_<date>.md`, `docs/actions_<date>.md`, `docs/research_memo_<date>.md` | Target: `docs/snapshots/`. |
-| Handoffs | `docs/HANDOFF-<date>.md` (six files) | Dated session-handoff notes. Target: `docs/handoffs/`. |
-| Ledger | `docs/LEDGER_*.md` (three files) | Target: `docs/ledger/`. |
+| Architecture snapshots | `docs/snapshots/` | Architecture state, path surveys, ranked actions, research memo snapshots, and X6 replay inventory. |
+| Handoffs | `docs/handoffs/` | Dated session-handoff notes plus tracked historical rebuild-plan style handoffs. |
+| Ledger | `docs/ledger/` | Envelope schema, 2.5c acceptance, and 2.5c results. |
 | Operations | `docs/operations/`, `docs/N1_OPERATIONAL_NOISE_TRIAGE.md`, `docs/DAEMON_SURVIVABILITY.md`, `docs/LAUNCH_CHECKLIST.md` | Existing subfolder + a few flat operational docs that stay top-level. |
 | Research | `docs/research/`, `docs/audit_2026-04-29_field_alignment/` | Existing subfolders. |
 | Eval | `docs/eval/` | Existing. |
@@ -58,7 +58,7 @@ this map covers `docs/` only.
 | Maez-facing | `docs/maez_facing/`, `docs/maez_manual/` | Maez's own view of itself. |
 | Superpowers | `docs/superpowers/` | Skill / plugin scaffolding. |
 | Reference catalogs | `docs/GEEK_OUT_CATALOG.md`, `docs/PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md`, `docs/TASK_TREEMAP.md` | Cross-slice reference indexes. Stay top-level. |
-| One-off historical | `docs/REBUILD_PLAN_2026-04-18.md`, `docs/dell_warranty_packet_2026-05-05.md`, `docs/iphone_shortcuts.md`, `docs/X6_ALL_ARCS_REPLAY_INVENTORY_2026-05-09.md` | Target: `docs/handoffs/`, `docs/snapshots/`, or `docs/operations/` per case. |
+| One-off historical | `docs/REBUILD_PLAN_2026-04-18.md` (ignored/local), `docs/dell_warranty_packet_2026-05-05.md`, `docs/iphone_shortcuts.md` | Target: `docs/handoffs/`, `docs/snapshots/`, or `docs/operations/` per case. |
 | Examples | `docs/entity_aliases.example.yaml`, `docs/entity_semantics.example.yaml` | Top-level — stay here. |
 
 ---
@@ -270,13 +270,14 @@ Optional:
 | 3. Pilot move: Body Topology → `docs/slices/body-topology/` + cross-reference updates | **DONE 2026-05-14** | Active slice families can migrate after observation gates close. |
 | 4. Migrate active slice families (ARS, TDP, TRF, S1A1, S1B) | **DONE 2026-05-14** | Legacy organ and pre-anatomy memos can migrate next. |
 | 5. Migrate legacy organ memos (X.0–X.6) and pre-anatomy memos | **DONE 2026-05-14** | Handoffs, snapshots, ledger, and flat audits can migrate next. |
-| 6. Migrate handoffs, snapshots, ledger, flat audits | NOT STARTED | Slice migrations landed. |
+| 6A. Migrate handoffs, snapshots, ledger | **DONE 2026-05-14** | Audit migration can run after the audit tracking decision. |
+| 6B. Migrate flat audits and decide whether to track `docs/audit_2026-05-13/` | NOT STARTED | Operator decides audit tracking/scope. |
 | 7. Sweep cross-references in memory, code comments, `AGENTS.md`, top-level `README.md` | NOT STARTED | Final step. |
 
 Until each phase lands, the current paths remain valid. Body Topology, active
-slice families, legacy organ memos, and pre-anatomy memos now resolve through
-`docs/slices/`; handoffs, snapshots, ledgers, and flat audits still resolve at
-their current flat paths under `docs/`.
+slice families, legacy organ memos, pre-anatomy memos, handoffs, snapshots, and
+ledgers now resolve through their structured folders; flat audits still resolve
+at their current paths under `docs/`.
 
 ---
 
@@ -306,9 +307,10 @@ This is the table of contents for Maez's documentation drawer.
 
 The docs drawer is being organized in waves. Body Topology, the active slice
 families, and the legacy organ/pre-anatomy memos now live under
-`docs/slices/`. The remaining cleanup is session/archive material: handoff
-notes, architecture snapshots, ledgers, and flat audit files still need their
-own drawers.
+`docs/slices/`. Handoffs, snapshots, and ledgers also have their own drawers.
+The remaining cleanup is audit material: flat audit files and the currently
+untracked `docs/audit_2026-05-13/` folder need a separate decision before they
+move.
 
 This map describes both where things live now and where they will live after the
 remaining migration phases, so future agents can navigate in either state.

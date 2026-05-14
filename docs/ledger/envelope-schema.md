@@ -4,13 +4,13 @@
 
 **Status:** Ratified 2026-05-06 (Slice 2 design checkpoint). Schema additions land via amendments and a schema_version bump per §11; the ratification covers the §2 enum and §3–§4 structures as of that date. Slice 3.0b (2026-05-07) extends the §2 enum with `self-history` (kebab-case provenance value) and §3 with the matching `self_history` slot (snake_case Python field).
 **Author:** Claude (drafted 2026-05-06, revised same day after audit pushback)
-**Companion docs:** [MAEZ_FRONTIER.md](MAEZ_FRONTIER.md) §6 (dependency graph), §9.1 (build order)
+**Companion docs:** [MAEZ_FRONTIER.md](../MAEZ_FRONTIER.md) §6 (dependency graph), §9.1 (build order)
 
 ---
 
 ## 0. Why this exists
 
-Per [MAEZ_FRONTIER.md](MAEZ_FRONTIER.md) §6, the personalization stack has six layers and the dependency graph has a single root: **the ledger.** Every other layer reads from it. If the ledger schema is wrong, fixing it later requires a migration across persistent stores — the kind of operation that kills projects.
+Per [MAEZ_FRONTIER.md](../MAEZ_FRONTIER.md) §6, the personalization stack has six layers and the dependency graph has a single root: **the ledger.** Every other layer reads from it. If the ledger schema is wrong, fixing it later requires a migration across persistent stores — the kind of operation that kills projects.
 
 The ledger, the evidence envelope, and the provenance classes share one vocabulary. The provenance classes are the *enum* the ledger and envelope both use. The ledger records *what was claimed and what backed it*; the envelope declares *what may be claimed this turn*. Building any of the three in isolation causes drift.
 
@@ -487,7 +487,7 @@ The schema is paper. Slice 2 implements the writer. These are the tests Slice 2 
 7. **WAL mode** — `tests/test_ledger_wal.py`: concurrent reader during writer doesn't block.
 8. **Provenance enum coverage** — `tests/test_provenance_enum.py`: every reply with rewritten_text has at least one row in `claims` with a valid provenance value.
 9. **Envelope-claim consistency** — `tests/test_envelope_consistency.py`: every claim in `claims` for a turn has a provenance class that appears in that turn's `evidence_envelope_json`.
-10. **Daemon-rewrite-rate signal** — `scripts/validate/track_a_harness.py` reads `claims.audit_verdict` to compute the live rewrite rate that gates adapter training (per [MAEZ_FRONTIER.md §7](MAEZ_FRONTIER.md) hard rule 5).
+10. **Daemon-rewrite-rate signal** — `scripts/validate/track_a_harness.py` reads `claims.audit_verdict` to compute the live rewrite rate that gates adapter training (per [MAEZ_FRONTIER.md §7](../MAEZ_FRONTIER.md) hard rule 5).
 
 ---
 
@@ -567,7 +567,7 @@ The bar protects the ledger's honesty. Quietly relaxing it is how QA gates die.
 
 This schema is ready for Slice 2 implementation when:
 
-- [x] [MAEZ_FRONTIER.md](MAEZ_FRONTIER.md) is committed (cross-link target exists in git) — `aa1cb1a`
+- [x] [MAEZ_FRONTIER.md](../MAEZ_FRONTIER.md) is committed (cross-link target exists in git) — `aa1cb1a`
 - [x] Rohit/Codex ratified the provenance enum values (§2) — 2026-05-06, accepted as v1
 - [x] Rohit/Codex ratified the `turn_kind` enum values and per-kind NOT-NULL contract (§4.2) — 2026-05-06, with `peer_message_in.parent_turn_id` no longer required
 - [x] Rohit/Codex confirmed the canonical surface enum and `raw_surface` preservation cover all current and near-term surfaces (§4.2 `surface` column) — 2026-05-06

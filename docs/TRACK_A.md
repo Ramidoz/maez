@@ -157,7 +157,7 @@ The paper is also out of date on the brain (says "quantized Gemma-class"; actual
 
 ## 2026-05-02 update — Track A surface absorbed since 2026-04-15
 
-A 4-agent audit pass on 2026-05-02 (see [`architecture_state_2026-05-02.md`](architecture_state_2026-05-02.md)) caught five Track-A-shaped surface slices that had landed since this anchor was last refreshed. Absorbing them now so the next agent reading TRACK_A.md sees a current picture:
+A 4-agent audit pass on 2026-05-02 (see [`architecture-state-2026-05-02.md`](snapshots/architecture-state-2026-05-02.md)) caught five Track-A-shaped surface slices that had landed since this anchor was last refreshed. Absorbing them now so the next agent reading TRACK_A.md sees a current picture:
 
 - **5x memory-provenance arc** (commits `abb1a28..cda2888`, ~10 commits). Closes the Zombie Agents (Yang et al. Feb 2026) threat model: untrusted-tier tagging, surfacing, promotion gating, filtering, bypass guard. The `claude_tier → SFT` and `external_web → core` laundering paths are now closed.
 - **Through-quotation defense** (5x.F arc, late 2026-05-01). Cycle-scoped recall context bag + downgrade rule on baseline-update lineage. Audit-before-store invariant in `core/safety/audited_output.py`.
