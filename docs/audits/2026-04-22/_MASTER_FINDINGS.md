@@ -37,7 +37,7 @@ Ranked by severity + blast radius + ease of fix.
 **Subsystem:** Brain loop
 **Severity:** blocker
 **Why it's here:** NameError crashes a production code path every time the retry-intent regex matches. Blast radius = every conversation turn that invokes recovery. Trivial fix.
-**Full context:** see `docs/audit_2026-04-22/01_brain_loop.md` → `blocker` section
+**Full context:** see `docs/audits/2026-04-22/01_brain_loop.md` → `blocker` section
 
 ### 2. 09-B1 — Token-filter asymmetry silently loses consequence retrieval
 **File:** `core/consequence_memory.py:290`

@@ -6,7 +6,7 @@ audit reports (per-module detail).
 
 If you want **the story of why Maez exists**, start at [`MAEZ_PITCH.md`](../MAEZ_PITCH.md).
 If you want **how it's built**, read this.
-If you want **what's broken right now**, read [`docs/audit_2026-04-22/_MASTER_FINDINGS.md`](audit_2026-04-22/_MASTER_FINDINGS.md).
+If you want **what's broken right now**, read [`docs/audits/2026-04-22/_MASTER_FINDINGS.md`](audits/2026-04-22/_MASTER_FINDINGS.md).
 
 ---
 
@@ -240,6 +240,6 @@ clock (this repo's [`ROADMAP.md`](ROADMAP.md)). The codebase can be
 - **Visual architecture:** [`ARCHITECTURE.md`](ARCHITECTURE.md) (debug map)
 - **Per-subsystem READMEs:** `core/<name>/README.md` (12 of them)
 - **Current readiness view:** [`docs/TRACK_A.md`](TRACK_A.md)
-- **Known issues:** [`docs/audit_2026-04-22/_MASTER_FINDINGS.md`](audit_2026-04-22/_MASTER_FINDINGS.md)
+- **Known issues:** [`docs/audits/2026-04-22/_MASTER_FINDINGS.md`](audits/2026-04-22/_MASTER_FINDINGS.md)
 - **Public roadmap:** [`docs/ROADMAP.md`](ROADMAP.md)
 - **Universal vs per-user covenant:** [`docs/covenant/for_oss_users.md`](covenant/for_oss_users.md)

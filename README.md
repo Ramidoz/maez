@@ -184,4 +184,4 @@ header; see [`NOTICE`](NOTICE) for third-party attributions.
 - **Security audit:** [`docs/governance/SECURITY_AUDIT.md`](docs/governance/SECURITY_AUDIT.md)
 - **Public progress log:** [`PROGRESS_PUBLIC.md`](PROGRESS_PUBLIC.md)
 - **Current track:** [`docs/TRACK_A.md`](docs/TRACK_A.md)
-- **Audit findings (Apr 2026):** [`docs/audit_2026-04-22/`](docs/audit_2026-04-22/)
+- **Audit findings (Apr 2026):** [`docs/audits/2026-04-22/`](docs/audits/2026-04-22/)

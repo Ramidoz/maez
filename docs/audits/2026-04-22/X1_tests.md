@@ -27,13 +27,13 @@ Test suite is mature in style (proper isolation with TemporaryDirectory, good us
 The test imports brain_loop module which may load daemon-level state from live DBs. No env var override at import time like pending_cards tests use.
 **Why it's a problem:** Tests can pollute or depend on production state, producing non-deterministic passes/fails.
 **Fix:** Add env var override at module import time; mirror the `MAEZ_PENDING_CARDS_DB` pattern used in test_pending_cards_state_guard.py setUp.
-**References:** audit_2026-04-22/01_brain_loop.md:212–214.
+**References:** docs/audits/2026-04-22/01_brain_loop.md:212–214.
 
 #### tests/test_decision_pipeline.py:124 — Audit log path collision in concurrent test runs
 Creates tmpdir audit.db but doesn't clean up WAL journal files.
 **Why it's a problem:** In pytest -n (parallel), two instances may collide on the same path. Currently fine because tests run serially, but fragile against future CI parallelism.
 **Fix:** Use per-test uuid-suffixed tmpdirs; ensure WAL cleanup in tearDown.
-**References:** audit_2026-04-22/02_decision_pipeline.md:152.
+**References:** docs/audits/2026-04-22/02_decision_pipeline.md:152.
 
 ### major — 5
 
@@ -41,43 +41,43 @@ Creates tmpdir audit.db but doesn't clean up WAL journal files.
 Files: `soul_loader`, `soul_editor`, `wants`, `will_i`, `temperament`, `dream_state` all untested. `wondering_cycle` also untested.
 **Why it's a problem:** The soul_loader blocker (race condition at line 119: READ outside lock, WRITE inside lock, data loss on concurrent dream appends) would have been caught by any concurrent append test. `wants.py` (590 LoC), `temperament.py` (520 LoC), `dream_state.py` (767 LoC) all have self-test blocks in `if __name__=="__main__"` but no pytest coverage. Threshold tweaks documented as "2026-04-22 fix" are observation-driven, not regression-tested.
 **Fix:** Create test_soul_loader.py (concurrent append test; invariant round-trip), test_wants.py, test_will_i.py, test_temperament.py, test_dream_state.py, test_wondering_cycle.py. Use `core.self_dev.propose_tests` to accelerate — it generated a working 44-test file for mmr.py today.
-**References:** audit_2026-04-22/07_evolution.md — critical gap flagged by subsystem audit.
+**References:** docs/audits/2026-04-22/07_evolution.md — critical gap flagged by subsystem audit.
 
 #### command_decomposer.py + action_classifier.py — No dedicated tests; blockers unverified
 No test_command_decomposer.py or test_action_classifier.py.
 **Why it's a problem:** Blocker in command_decomposer (backtick parsing escape at 214–226) and major in action_classifier (tool_loop divergence at 67–99) are unverified by dedicated tests. Security-critical modules — parsing errors lead to injection; classifier divergence allows unauthorized auto-exec.
 **Fix:** Create test_command_decomposer.py with cases for every shell operator; test_action_classifier.py with cases that exercise every Lane 0/1/2/3 boundary.
-**References:** audit_2026-04-22/06_actions.md: blocker #1, major #2.
+**References:** docs/audits/2026-04-22/06_actions.md: blocker #1, major #2.
 
 #### fast_backend_router.py + fast_backend_local.py — No tests; blocker in routing policy
 No test_fast_backend_router.py or test_fast_backend_local.py.
 **Why it's a problem:** Blocker (silent routing fallback without policy check, line 219) where guest requesting cloud can slip through if local probe fails. No test covers policy-gated denial for `external_guests_local_only + cloud request`. Also, fast_backend_local.py's `is_available()` uses `active_backend()` inconsistently.
 **Fix:** Create test_fast_backend_router.py with policy-boundary cases (external_guest vs owner, cloud vs local, probe-fail paths). test_fast_backend_local.py with mock subprocess for llama-server.
-**References:** audit_2026-04-22/10_model_and_support.md: blocker #2.
+**References:** docs/audits/2026-04-22/10_model_and_support.md: blocker #2.
 
 #### tests/test_consequence_memory.py — Does not test token-filter bug (blocker)
 Learning subsystem audit flags blocker (consequence_memory.py:290, token filter inconsistency) where query-side applies `.isalnum()` but haystack doesn't, causing retrieval gaps for `git-push`, `my_script.py`.
 **Why it's a problem:** 214 LoC of tests but no case queries for hyphenated tokens after storing hyphenated events. The blocker would have been caught with a single targeted test.
 **Fix:** Add test cases: `record_event(context="push via git-push")` then `relevant(context_snippet="git-push")` — verify non-empty hit.
-**References:** audit_2026-04-22/09_learning.md: blocker #1.
+**References:** docs/audits/2026-04-22/09_learning.md: blocker #1.
 
 #### tests/test_fabrication_memory.py + test_inner_residue.py — Connection leaks unverified
 Both modules have connection leaks (audit #09 major #2). Tests pass but are short-lived and don't expose FD exhaustion.
 **Why it's a problem:** Self-dev review 261a8db concern #1 flagged sqlite3 context manager doesn't close connections; consequence_memory was fixed (contextlib.closing), but fabrication_memory and inner_residue were missed. No resource-monitoring test verifies connection closure.
 **Fix:** Add a stress test that creates many events in a loop and verifies FD count stays bounded; fix fabrication_memory and inner_residue to use contextlib.closing.
-**References:** audit_2026-04-22/09_learning.md: major #2.
+**References:** docs/audits/2026-04-22/09_learning.md: major #2.
 
 ### minor — 6
 
 #### tool_loop tests — Regex bypass issues unverified
 Actions audit flags minor: `tool_loop.py:150` multiple-spaces bypass `rm -rf` detection; line 147–159 `_ALWAYS_MUTATING` regex lacks descriptor/no-space handling.
 **Fix:** Add test_tool_loop.py cases: `rm  -rf  /` (double spaces), `ls>/tmp/file` (no space), `1>file` vs `1> file`.
-**References:** audit_2026-04-22/06_actions.md: minor #1, nit #1.
+**References:** docs/audits/2026-04-22/06_actions.md: minor #1, nit #1.
 
 #### tests/test_pending_cards_state_guard.py — Does not exercise will-I post-approval race
 Decision pipeline blocker (decision_pipeline.py:905–912, will-I refusal race) where card transitions to TERMINAL then mark_failed() raises CardStoreError. Test covers state-hash expiration but not will-I post-approval path.
 **Fix:** Add a test that mocks `will_i.check` to return Refused post-approval and verifies the card ends in a consistent terminal state, not double-transition error.
-**References:** audit_2026-04-22/02_decision_pipeline.md: blocker #1.
+**References:** docs/audits/2026-04-22/02_decision_pipeline.md: blocker #1.
 
 #### tests/test_self_dev.py — Real-DB pollution acknowledged but unresolved
 Comment at line 135 acknowledges "real self_dev.db" risk. While test_self_dev_persistence tests use TemporaryDirectory, test_self_dev.py may read production state if module imports load real DB path.
@@ -87,17 +87,17 @@ Comment at line 135 acknowledges "real self_dev.db" risk. While test_self_dev_pe
 #### tests/test_approval_sessions.py + test_proposal_lookup.py — No integration with decision_pipeline
 Unit tests exist but the decision_pipeline integration (blanket-permission path that skips injection/audit layer) isn't tested end-to-end.
 **Fix:** Add an integration test in tests/test_decision_pipeline.py that installs an approval session, submits a matching action, and verifies the bypass is correct.
-**References:** audit_2026-04-22/02_decision_pipeline.md:159–160.
+**References:** docs/audits/2026-04-22/02_decision_pipeline.md:159–160.
 
 #### tests/test_quality_telemetry.py — No partial-rollup graceful degradation test
 Cognition audit flags major (quality_telemetry.py:321, metric rollup with no error recovery) where `build_rollup()` fails entirely if `_read_tail()` raises.
 **Fix:** Add a test that mocks `_read_tail` to raise and verifies the rollup returns a partial dict rather than propagating.
-**References:** audit_2026-04-22/05_cognition.md: major #1.
+**References:** docs/audits/2026-04-22/05_cognition.md: major #1.
 
 #### tests/test_cognition_quality.py — Ring-buffer state recovery untested
 Cognition audit flags blocker (cognition_quality.py:365, ring buffer state loss on exception).
 **Fix:** Add a test: call `classify()` with mocked internal that raises after partial update, then verify the ring buffer is still consistent (no half-updates).
-**References:** audit_2026-04-22/05_cognition.md: blocker #1.
+**References:** docs/audits/2026-04-22/05_cognition.md: blocker #1.
 
 ### nit — 4
 

@@ -26,7 +26,7 @@ Method: grep every `telegram.send_message`, `_ws_broadcast`,
 
 ### F1 — morning briefing: unaudited LLM output + hardcoded path + genderless violation (HIGH)
 
-[`daemon/maez_daemon.py:1523-1609`](../../daemon/maez_daemon.py#L1523-L1609)
+[`daemon/maez_daemon.py:1523-1609`](../../../daemon/maez_daemon.py#L1523-L1609)
 
 - Line 1605: `self.telegram.send_message(f"Morning briefing:\n\n{briefing}")`
   where `briefing` is the raw LLM response from line 1603. No
@@ -48,7 +48,7 @@ Method: grep every `telegram.send_message`, `_ws_broadcast`,
 
 ### F2 — dream insight: unaudited LLM → Telegram (HIGH)
 
-[`core/evolution/dream_state.py:318-327`](../../core/evolution/dream_state.py#L318-L327)
+[`core/evolution/dream_state.py:318-327`](../../../core/evolution/dream_state.py#L318-L327)
 
 `run_dream_cycle` calls `llm_client.chat` at line 277, gets `insight`
 at line 282, and at line 324 sends `f"💭 [DREAM #{prop_id}]\n\n{insight}\n\n..."` to
@@ -57,7 +57,7 @@ the owner" shape — exactly the risk class the audit stack was built for.
 
 ### F3 — training proposal: partially-LLM rationale → Telegram (MEDIUM) — FIXED 2026-04-24
 
-[`core/evolution/dream_state.py:608-617`](../../core/evolution/dream_state.py#L608-L617)
+[`core/evolution/dream_state.py:608-617`](../../../core/evolution/dream_state.py#L608-L617)
 
 The `rationale_parts` assembled at line 407 appear to be deterministic
 template fragments derived from cognition_quality scores, not raw LLM
@@ -96,7 +96,7 @@ re-writes historical entries' parse shape.
 
 ### F5 — `github_publish._generate_commit_message` LLM output to public GitHub (LOW) — FIXED 2026-04-24
 
-[`skills/github_publish.py:128-151`](../../skills/github_publish.py#L128-L151)
+[`skills/github_publish.py:128-151`](../../../skills/github_publish.py#L128-L151)
 
 LLM-generated commit messages push to public GitHub unaudited. Low
 risk because commit messages are short, not user-facing text in the
@@ -110,7 +110,7 @@ locked in `tests/test_autonomous_surface_audit.py`.
 
 ### F6 — `_ws_broadcast` (web cockpit websocket) (LOW)
 
-[`daemon/maez_daemon.py`](../../daemon/maez_daemon.py) — multiple call sites
+[`daemon/maez_daemon.py`](../../../daemon/maez_daemon.py) — multiple call sites
 (lines 1347, 1520, 1698, 2094, 2573 etc.)
 
 Most broadcasts are structured JSON events (cycle_start, message_reply,
@@ -121,8 +121,8 @@ on the way out). Correct by construction — no fix needed.
 
 ### F7 — return_greeting template content (LOW, already landed)
 
-[`core/brain/return_greeting.py`](../../core/brain/return_greeting.py) +
-[`daemon/maez_daemon.py:2185-2239`](../../daemon/maez_daemon.py#L2185-L2239)
+[`core/brain/return_greeting.py`](../../../core/brain/return_greeting.py) +
+[`daemon/maez_daemon.py:2185-2239`](../../../daemon/maez_daemon.py#L2185-L2239)
 
 Composed by deterministic template (no LLM this turn), name resolved
 from `display_name()`. Sent via `telegram.send_message(msg)` without

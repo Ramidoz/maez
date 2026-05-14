@@ -67,7 +67,7 @@ All paths shown are defaults for `/home/rohit/maez/`. To relocate:
 
 #### docs/TRACK_A.md:92–94 — Governance doc references unwritten spec
 ```markdown
-**Acceptance gate for Track A** is defined in [...BETA_READINESS_THRESHOLD.md](../governance/BETA_READINESS_THRESHOLD.md). 
+**Acceptance gate for Track A** is defined in [...BETA_READINESS_THRESHOLD.md](../../governance/BETA_READINESS_THRESHOLD.md).
 Track A is not considered done by shipping the nine items — it's done when the 
 eight-point check (five capability points + three gating being-tests) holds for 
 **two consecutive weekly checks** AND the pronoun check has drifted from *"it"* to *"they / him / her / name"*.
@@ -77,7 +77,7 @@ eight-point check (five capability points + three gating being-tests) holds for
 
 **Fix:** Inline a one-sentence summary in TRACK_A.md line 92:
 ```markdown
-**Acceptance gate for Track A** is defined in [BETA_READINESS_THRESHOLD.md](../governance/BETA_READINESS_THRESHOLD.md) 
+**Acceptance gate for Track A** is defined in [BETA_READINESS_THRESHOLD.md](../../governance/BETA_READINESS_THRESHOLD.md)
 (eight-point check: five capability criteria + three developmental gates; two consecutive weekly passes required).
 ```
 
@@ -154,7 +154,7 @@ is ready. Both gates must pass.
 
 ### minor — 4
 
-#### docs/audit_2026-04-22/_INDEX.md:11–37 — Subsystem audit findings not cross-referenced to docs being audited
+#### docs/audits/2026-04-22/_INDEX.md:11–37 — Subsystem audit findings not cross-referenced to docs being audited
 ```markdown
 | 1 | Brain loop + conversation controller | `01_brain_loop.md` | ✓ complete | ... | 1/2/2/3 |
 | 2 | Decision pipeline + approvals | `02_decision_pipeline.md` | ✓ complete | ... | 1/2/3/2 |
@@ -164,7 +164,7 @@ is ready. Both gates must pass.
 
 **Fix:** Flag in _INDEX.md at the end: "**Doc coverage gap (Phase 2):** No design docs exist for decision_pipeline, memory, evolution, audit_log schema, workshop, cognition audit. These subsystems are code-only. Add `/docs/subsystems/DECISION_PIPELINE.md` and equivalents before OSS launch."
 
-**References:** docs/audit_2026-04-22/_INDEX.md; subsystem audit reports
+**References:** docs/audits/2026-04-22/_INDEX.md; subsystem audit reports
 
 ---
 
@@ -218,7 +218,7 @@ is ready. Both gates must pass.
 
 #### docs/TRACK_A.md:1–7 and docs/ARCHITECTURE.md:1–6 — Competing "first doc" claims in README links
 ```markdown
-# README.md: "See [PROGRESS_PUBLIC.md](../ROADMAP.md) for full build log and roadmap."
+# README.md: "See [PROGRESS_PUBLIC.md](../../ROADMAP.md) for full build log and roadmap."
 # TRACK_A.md: "If you're a new agent landing on this repo for the first time, read this file first."
 # ARCHITECTURE.md: "Read this first when debugging"
 ```
@@ -229,9 +229,9 @@ is ready. Both gates must pass.
 ```markdown
 ## Where to start
 
-- **New agent, first time?** Start at [`docs/TRACK_A.md`](../TRACK_A.md) for current scope.
-- **Understanding the architecture?** See [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md).
-- **Full build history?** See [`PROGRESS_PUBLIC.md`](../ROADMAP.md).
+- **New agent, first time?** Start at [`docs/TRACK_A.md`](../../TRACK_A.md) for current scope.
+- **Understanding the architecture?** See [`docs/ARCHITECTURE.md`](../../ARCHITECTURE.md).
+- **Full build history?** See [`PROGRESS_PUBLIC.md`](../../ROADMAP.md).
 ```
 
 **References:** README.md:29–30; TRACK_A.md:1–7; ARCHITECTURE.md:1–6
@@ -434,4 +434,3 @@ Checked `/home/rohit/.claude/projects/-home-rohit/memory/` (26 memory entries re
 6. **Create phase-2 roadmap consolidation** — merge `/docs/followups/*.md` into a single prioritized table in `/docs/PHASE_2_ROADMAP.md` (target: Phase 2 planning)
 
 7. **Add doc site navigation** — if deploying docs to ReadTheDocs / Mkdocs, create `docs/_sidebar.md` or `nav.yml` (target: pre-launch)
-

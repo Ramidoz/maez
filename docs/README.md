@@ -46,13 +46,13 @@ this map covers `docs/` only.
 | S1 family | `docs/slices/s1a1-private-thoughts-hardening/`, `docs/slices/s1b-private-thoughts-wiring/` | First substrate slice family. S1b observation log remains live at the migrated path. |
 | Legacy organ memos | `docs/slices/organs/` | Pre-anatomy-v2.2 organ memos, including X-subiterations (`x02`, `x03`, `x11`, `x21`). |
 | Pre-anatomy slice memos | `docs/slices/legacy/` | Historical slice-3, 4C/5B, and gestation-boundary memos. |
-| Observation logs | `docs/*_OBSERVATION_LOG.md` (TRF, telegram-draft-presence, S1B, audit-rewrite) | Target: per-slice folder. |
-| Audit families | `docs/audit_<date>*/` already-foldered; some flat (`audit_15agent_*.md`, `audit_cockpit_session0_*.md`, `audit_symphony_<date>.md`) | Target: `docs/audits/<date>-<topic>/`. |
+| Observation logs | Per-slice `observation-log.md` files under `docs/slices/<slug>/` | Active observation logs moved with their slices. |
+| Audit families | `docs/audits/` | Tracked audit artifacts are date-first. `docs/audit_2026-05-13/` remains untracked and held pending a redaction/tracking decision. |
 | Architecture snapshots | `docs/snapshots/` | Architecture state, path surveys, ranked actions, research memo snapshots, and X6 replay inventory. |
 | Handoffs | `docs/handoffs/` | Dated session-handoff notes plus tracked historical rebuild-plan style handoffs. |
 | Ledger | `docs/ledger/` | Envelope schema, 2.5c acceptance, and 2.5c results. |
 | Operations | `docs/operations/`, `docs/N1_OPERATIONAL_NOISE_TRIAGE.md`, `docs/DAEMON_SURVIVABILITY.md`, `docs/LAUNCH_CHECKLIST.md` | Existing subfolder + a few flat operational docs that stay top-level. |
-| Research | `docs/research/`, `docs/audit_2026-04-29_field_alignment/` | Existing subfolders. |
+| Research | `docs/research/` | Existing subfolder. Field-alignment audits now live under `docs/audits/`. |
 | Eval | `docs/eval/` | Existing. |
 | Followups | `docs/followups/` | Existing. |
 | Maez-facing | `docs/maez_facing/`, `docs/maez_manual/` | Maez's own view of itself. |
@@ -161,8 +161,8 @@ docs/
     2026-05-04-symphony/
     2026-05-04-symphony-index.md
     2026-05-04-15agent.md
-    2026-05-04-cockpit-session0.md
-    2026-05-13/
+    2026-05-05-cockpit-session0.md
+    audit_2026-05-13/                  ← held untracked until redaction/tracking decision
 
   snapshots/
     architecture-state-2026-05-02.md
@@ -271,13 +271,14 @@ Optional:
 | 4. Migrate active slice families (ARS, TDP, TRF, S1A1, S1B) | **DONE 2026-05-14** | Legacy organ and pre-anatomy memos can migrate next. |
 | 5. Migrate legacy organ memos (X.0–X.6) and pre-anatomy memos | **DONE 2026-05-14** | Handoffs, snapshots, ledger, and flat audits can migrate next. |
 | 6A. Migrate handoffs, snapshots, ledger | **DONE 2026-05-14** | Audit migration can run after the audit tracking decision. |
-| 6B. Migrate flat audits and decide whether to track `docs/audit_2026-05-13/` | NOT STARTED | Operator decides audit tracking/scope. |
+| 6B. Migrate tracked audit artifacts | **DONE 2026-05-14** | Decide separately whether to redact/track `docs/audit_2026-05-13/`. |
 | 7. Sweep cross-references in memory, code comments, `AGENTS.md`, top-level `README.md` | NOT STARTED | Final step. |
 
 Until each phase lands, the current paths remain valid. Body Topology, active
-slice families, legacy organ memos, pre-anatomy memos, handoffs, snapshots, and
-ledgers now resolve through their structured folders; flat audits still resolve
-at their current paths under `docs/`.
+slice families, legacy organ memos, pre-anatomy memos, handoffs, snapshots,
+ledgers, and tracked audits now resolve through their structured folders.
+`docs/audit_2026-05-13/` remains untracked and held pending a separate
+redaction/tracking decision.
 
 ---
 
@@ -307,10 +308,10 @@ This is the table of contents for Maez's documentation drawer.
 
 The docs drawer is being organized in waves. Body Topology, the active slice
 families, and the legacy organ/pre-anatomy memos now live under
-`docs/slices/`. Handoffs, snapshots, and ledgers also have their own drawers.
-The remaining cleanup is audit material: flat audit files and the currently
-untracked `docs/audit_2026-05-13/` folder need a separate decision before they
-move.
+`docs/slices/`. Handoffs, snapshots, ledgers, and tracked audits also have
+their own drawers. The remaining cleanup is the currently untracked
+`docs/audit_2026-05-13/` folder, which needs a separate redaction/tracking
+decision before it moves.
 
 This map describes both where things live now and where they will live after the
 remaining migration phases, so future agents can navigate in either state.

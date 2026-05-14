@@ -73,7 +73,7 @@ The harness MUST run in **probe mode** — never drive the live Telegram bot or 
 ### Output artifact
 
 ```
-docs/audit_symphony_2026-05-04/baselines/
+docs/audits/2026-05-04-symphony/baselines/
   surface_probe_2026-05-04.json
     {
       "baseline_id": "2026-05-04",

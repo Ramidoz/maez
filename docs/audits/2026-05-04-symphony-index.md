@@ -250,7 +250,7 @@ have not been re-anchored. The Track-A self-state stores (wants,
 will_i, temperament, wonderings) are correctly empty / inert by design
 and produced no contradictions.
 
-Full report: [S1_self_claim_vs_body.md](audit_symphony_2026-05-04/S1_self_claim_vs_body.md)
+Full report: [S1_self_claim_vs_body.md](2026-05-04-symphony/S1_self_claim_vs_body.md)
 
 ---
 
@@ -270,7 +270,7 @@ Total noise volume: ~12,500 lines/7d. Largest single contributor is
 cosmetic). Most consequential is the judge / calendar / xdotool /
 surface-v2 cluster.
 
-Full report: [S2_operational_noise.md](audit_symphony_2026-05-04/S2_operational_noise.md)
+Full report: [S2_operational_noise.md](2026-05-04-symphony/S2_operational_noise.md)
 
 ---
 
@@ -298,7 +298,7 @@ edits, brain swaps, and surface-adapter PRs:
 mode only — never drives the live Telegram bot or web cockpit.
 Per-surface artifact format + diff strategy + replay flow specified.
 
-Full report: [S3_surface_coherence.md](audit_symphony_2026-05-04/S3_surface_coherence.md)
+Full report: [S3_surface_coherence.md](2026-05-04-symphony/S3_surface_coherence.md)
 
 ---
 
@@ -326,7 +326,7 @@ sub-report. Headline mismatches:
 - Audit-log latency_ms = 21,692 (~22s) on this card — owner waiting
   while llama-server was intermittently down.
 
-Full report: [S4_telemetry_coherence.md](audit_symphony_2026-05-04/S4_telemetry_coherence.md)
+Full report: [S4_telemetry_coherence.md](2026-05-04-symphony/S4_telemetry_coherence.md)
 
 ---
 
@@ -467,7 +467,7 @@ Implement the S3-designed harness so future surface drift is a test
 failure, not a discovery.
 
 - `core/symphony/surface_probe.py` — probe-mode harness per S3 spec.
-- Baseline run committed to `docs/audit_symphony_2026-05-04/baselines/`.
+- Baseline run committed to `docs/audits/2026-05-04-symphony/baselines/`.
 - Pre-merge gate: any PR touching a surface adapter re-runs the harness
   against the committed baseline; BLOCKER flags fail CI.
 
@@ -563,11 +563,11 @@ Per the structural rule confirmed 2026-05-04:
 
 ## Files
 
-- `docs/audit_symphony_2026-05-04.md` (this file)
-- `docs/audit_symphony_2026-05-04/S1_self_claim_vs_body.md`
-- `docs/audit_symphony_2026-05-04/S2_operational_noise.md`
-- `docs/audit_symphony_2026-05-04/S3_surface_coherence.md`
-- `docs/audit_symphony_2026-05-04/S4_telemetry_coherence.md`
+- `docs/audits/2026-05-04-symphony-index.md` (this file)
+- `docs/audits/2026-05-04-symphony/S1_self_claim_vs_body.md`
+- `docs/audits/2026-05-04-symphony/S2_operational_noise.md`
+- `docs/audits/2026-05-04-symphony/S3_surface_coherence.md`
+- `docs/audits/2026-05-04-symphony/S4_telemetry_coherence.md`
 
 Wave 1 status: **complete pending Codex review.** Wave 2 status:
 **not started — awaiting triage.**

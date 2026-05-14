@@ -202,7 +202,7 @@ None of these are blockers for v0.1.0-alpha.
 ## 2026-05-04 audit Tier-2 deferrals — load-bearing items that need their own slice
 
 The 2026-05-04 15-agent audit
-([`docs/audit_15agent_2026-05-04.md`](../audit_15agent_2026-05-04.md))
+([`docs/audits/2026-05-04-15agent.md`](../audits/2026-05-04-15agent.md))
 Tier-2 mechanical track is fully closed across commits `acb57f3`,
 `534f504`, `cfcb266`, `13cee12`, `0566b03`. Four items were
 deliberately deferred to their own slices — recorded here so they

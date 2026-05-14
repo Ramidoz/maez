@@ -9,7 +9,7 @@ outside contributors is actively being built out (Phase 6 of the
 
 Currently welcoming:
 - **Bug fixes** with a regression test that would have caught the bug.
-- **Test coverage** for modules flagged in the [2026-04-22 audit](audit_2026-04-22/_MASTER_FINDINGS.md) as untested.
+- **Test coverage** for modules flagged in the [2026-04-22 audit](audits/2026-04-22/_MASTER_FINDINGS.md) as untested.
 - **Platform work** for Ubuntu / Debian variants, documentation
   improvements, install-script robustness.
 - **Self-dev findings** — run the post-commit review hook on your

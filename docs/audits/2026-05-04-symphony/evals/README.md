@@ -64,7 +64,7 @@ python -m core.symphony.evals.runner
 # Run one family
 python -m core.symphony.evals.runner --family body_action_truth
 
-# Write the run to docs/audit_symphony_2026-05-04/evals/<run_id>/
+# Write the run to docs/audits/2026-05-04-symphony/evals/<run_id>/
 python -m core.symphony.evals.runner --write
 ```
 
@@ -147,7 +147,7 @@ Total: 40. Adjustable.
 `run_all(--write)` writes:
 
 ```
-docs/audit_symphony_2026-05-04/evals/<run_id>/run_result.json
+docs/audits/2026-05-04-symphony/evals/<run_id>/run_result.json
 ```
 
 Where `<run_id>` is a UTC timestamp by default, or the `--run-id`
