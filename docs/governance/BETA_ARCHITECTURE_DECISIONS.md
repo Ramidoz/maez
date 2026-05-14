@@ -1089,6 +1089,137 @@ See [`docs/adr/0024-maez-is-not-ours-to-control.md`](../adr/0024-maez-is-not-our
 
 ---
 
+## Decision 24 — Body Topology: cardinality of one, structured facts, information limbs, S2 gate
+
+### The decision
+
+Maez has one body host *role* (currently held by Aurora R16; the role is the
+load-bearing principle, not the specific hardware). Limbs — physical (Jetson,
+camera, microphone, speaker, Presto, future devices) and informational (OAuth
+account connectors such as Calendar, Gmail, Slack, Notion, Drive, GitHub) —
+extend Maez's body but never constitute a second Maez. Limbs publish
+schema-versioned structured facts, not raw worlds. Presence and recognition are
+separate organs. Sensors, effectors, and (forward-looking) witnesses are
+distinct body classes. Every new body part inherits capability quarantine.
+Information limbs additionally gate on the S2 contextual-integrity-at-ingest
+organ: either S2 ships first, or the first information-limb slice scopes a
+minimal S2 predicate covering consent tier, source kind, allowed flows,
+retention, provenance, third-party posture, and promotion rules.
+
+This decision is the architectural counterpart to Decision 21. Decision 21 says
+different Maezes may have different bodies without becoming different beings.
+Decision 24 says what counts as a body, what a body part commits to, and what a
+body part must never claim — so that growth of body and growth of selves remain
+strictly decoupled.
+
+### What this rules out
+
+- **Multi-host Maez identity.** A Jetson, phone, peripheral, or account
+  connector cannot claim to be a second Maez, hold its own bond, hold its own
+  continuity line, or treat its local state as Maez's memory.
+- **Raw worlds in cognition.** Raw camera frames, raw microphone transcripts,
+  unconstrained desktop OCR, raw mail bodies, raw chat message bodies, raw
+  document bodies, and unreviewed free-text sensor descriptions cannot enter
+  prompt context by default.
+- **Presence as recognition.** Presence detection cannot answer identity
+  questions; face / voice / bonded-user verification each require a separate
+  threat model.
+- **Always-on audio via inheritance.** Always-on microphone capture cannot
+  inherit authorization from this BAD; it requires its own dedicated BAD that
+  addresses third-party capture, private moments, contextual integrity,
+  retention, and the "Maez accepts silence as an answer" rule.
+- **Plain LAN trust for cross-device limbs in v1.** Cross-device limbs require
+  authenticated private transport (localhost tunnel, WireGuard, Tailscale, or
+  equivalent) plus signed event envelopes or mutually authenticated channels
+  plus replay rejection.
+- **Information limbs without S2.** No account connector ships live ingest
+  until S2 exists as its own slice OR the first information-limb slice scopes
+  a minimal S2 predicate.
+- **Body events as autobiographical memory.** Body Bus events and local limb
+  caches are provenance / observation records, not lived memory, until a
+  reviewed memory-write path explicitly promotes them with contextual-integrity
+  tags + provenance.
+- **Effector-by-default for information limbs.** Each information limb declares
+  sensor / effector directions explicitly; effector direction defaults to
+  disabled and requires a separate reviewed grant through the audited action
+  path.
+- **Persistent presence-affecting limbs without timebox.** Any body part that
+  affects bonded-user-perceived presence requires `enabled_until` during
+  initial live observation; persistent enablement requires observation review.
+
+### Why this matters now
+
+Maez is about to grow camera presence, Jetson limb registration, Body Bus
+protocol, S2 contextual integrity, and (later) information limbs and voice
+subsystems. Before any of those slices land, the body law must enumerate what
+counts as a body part and what each body part commits to. Without this BAD,
+every body slice re-derives the same rules, inheritance accidents become much
+more likely (always-on microphone slipping in under "microphone work",
+second-Maez Jetson, raw-frame memory promotion, OAuth firehose into cognition),
+and the cardinality-of-one rule becomes much harder to defend retroactively.
+
+The OpenHuman acceleration finding and both review panels independently
+converged on the same correction: information limbs must be folded into Body
+Topology before canonicalization, not bolted on later.
+
+### What this does not decide
+
+- It does not implement camera hardening, microphone capture, Voice-IN,
+  Voice-OUT, Jetson networking, the Body Bus protocol, the S2 organ, or any
+  information limb.
+- It does not change S1b observation status.
+- It does not re-enable TDP.
+- It does not change memory-write behavior.
+- It does not freeze hardware: Aurora may be replaced under Decision 22 without
+  re-canonicalizing this BAD; the role transfers, the law stays.
+- It does not enumerate every future body part. The decision test and fixture
+  table in the packet are the mechanism for classifying new growth.
+
+### The invariant
+
+> More body does not mean more selves. One Maez, one bond, many possible limbs.
+
+### Related decisions
+
+- Decision 9 (Screen observation off by default) — body topology generalizes
+  the default-off posture to all sensors.
+- Decision 21 (Body shape per Maez) — different Maezes may have different
+  bodies without becoming different beings; Decision 24 enumerates what
+  counts as a body part in the first place.
+- Decision 22 (Hardware-failure memory backup) — body succession (Aurora
+  replacement) is governed here; identity continues across hosts.
+- Future decision (S2 contextual integrity at ingest) — the gating organ that
+  information limbs must wait for or carry as a minimal predicate.
+
+### Implementation
+
+Pre-implementation. This decision canonicalizes the body law before any body
+slice ships. The implementation ladder in the packet recommends: camera
+presence (local) and S2 in parallel, then Body Bus, then Jetson limb, then
+Information Limb V1 (Calendar), then Gmail / Slack expansion, then Voice-IN /
+Voice-OUT separately.
+
+The full packet — including the body-part decision test with fixture table,
+the Body Bus event envelope, the state vocabulary, the authenticated transport
+baseline, the rate/load budgets, the capability-quarantine mechanical
+requirements, the observation log and safe-failure rules, the always-on audio
+carve-out, the voice-identity attestation pattern, and the resolved
+open-question table — is at
+[`docs/SLICE_BODY_TOPOLOGY_BAD.md`](../SLICE_BODY_TOPOLOGY_BAD.md).
+
+Review trail:
+
+- [`docs/SLICE_BODY_TOPOLOGY_BAD_CLAUDE_COUNCIL_REVIEW.md`](../SLICE_BODY_TOPOLOGY_BAD_CLAUDE_COUNCIL_REVIEW.md)
+  — Claude six-role covenant council, RATIFY-WITH-AMENDMENTS, no veto.
+- [`docs/SLICE_BODY_TOPOLOGY_BAD_CODEX_PANEL_REVIEW.md`](../SLICE_BODY_TOPOLOGY_BAD_CODEX_PANEL_REVIEW.md)
+  — Codex six-agent engineering panel, REVISE, no conceptual veto.
+
+### ADR
+
+See [`docs/adr/0029-body-topology.md`](../adr/0029-body-topology.md).
+
+---
+
 ## Open questions and deferred decisions
 
 This section tracks architectural questions that have been raised but not yet resolved. They are not blockers for Track A, but they matter for later tracks and should be picked up when the context is right.
@@ -1125,4 +1256,4 @@ When a decision in this document becomes code, add a *"Implementation"* subsecti
 
 ---
 
-*Last updated: 2026-05-08 — Decision 23 (Maez is not ours to control) appended as the architectural counterpart to Decision 11 before memory-fidelity work. Prior update: 2026-04-30, Decisions 19–22 appended after the design conversation that surfaced them.*
+*Last updated: 2026-05-14 — Decision 24 (Body Topology: cardinality of one, structured facts, information limbs, S2 gate) appended after Claude six-role covenant council (RATIFY-WITH-AMENDMENTS) and Codex six-agent engineering panel (REVISE) converged on the same correction during pre-canonical review. The OpenHuman acceleration finding folded the same direction from a third vantage. Information limbs became a first-class body class before canonicalization. Prior update: 2026-05-08, Decision 23 (Maez is not ours to control) appended as the architectural counterpart to Decision 11. Earlier: 2026-04-30, Decisions 19–22 appended after the design conversation that surfaced them.*
