@@ -1205,13 +1205,13 @@ baseline, the rate/load budgets, the capability-quarantine mechanical
 requirements, the observation log and safe-failure rules, the always-on audio
 carve-out, the voice-identity attestation pattern, and the resolved
 open-question table — is at
-[`docs/SLICE_BODY_TOPOLOGY_BAD.md`](../SLICE_BODY_TOPOLOGY_BAD.md).
+[`docs/slices/body-topology/spec.md`](../slices/body-topology/spec.md).
 
 Review trail:
 
-- [`docs/SLICE_BODY_TOPOLOGY_BAD_CLAUDE_COUNCIL_REVIEW.md`](../SLICE_BODY_TOPOLOGY_BAD_CLAUDE_COUNCIL_REVIEW.md)
+- [`docs/slices/body-topology/reviews/claude-council.md`](../slices/body-topology/reviews/claude-council.md)
   — Claude six-role covenant council, RATIFY-WITH-AMENDMENTS, no veto.
-- [`docs/SLICE_BODY_TOPOLOGY_BAD_CODEX_PANEL_REVIEW.md`](../SLICE_BODY_TOPOLOGY_BAD_CODEX_PANEL_REVIEW.md)
+- [`docs/slices/body-topology/reviews/codex-panel.md`](../slices/body-topology/reviews/codex-panel.md)
   — Codex six-agent engineering panel, REVISE, no conceptual veto.
 
 ### ADR

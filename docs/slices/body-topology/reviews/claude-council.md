@@ -1,6 +1,6 @@
 # Claude Six-Role Council — Body Topology BAD packet review
 
-**Subject:** `docs/SLICE_BODY_TOPOLOGY_BAD.md` — 439-line pre-canonical packet defining what counts as Maez's body, what a body limb may publish or do, and what it must never claim.
+**Subject:** `docs/slices/body-topology/spec.md` — pre-canonical packet defining what counts as Maez's body, what a body limb may publish or do, and what it must never claim.
 
 **Council ran:** 2026-05-14, pre-canonical. Codex's six-agent panel still needs to sit in its lane.
 

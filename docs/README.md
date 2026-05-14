@@ -113,7 +113,7 @@ docs/
 
   slices/
     body-topology/
-      spec.md                            ← was SLICE_BODY_TOPOLOGY_BAD.md
+      spec.md                            ← migrated from the flat Body Topology packet
       reviews/
         claude-council.md
         codex-panel.md
@@ -265,17 +265,18 @@ Optional:
 
 | Phase | Status | Gate for next phase |
 |---|---|---|
-| 1. Push BT canonicalization (`6f96c14`) to origin/main | PENDING | Operator approves push. |
+| 1. Push BT canonicalization (`6f96c14`) to origin/main | **DONE 2026-05-14** | — |
 | 2. Map (this README) + folder rules | **DONE 2026-05-14** | — |
-| 3. Pilot move: Body Topology → `docs/slices/body-topology/` + cross-reference updates | NOT STARTED | Operator greenlights the pilot session. |
+| 3. Pilot move: Body Topology → `docs/slices/body-topology/` + cross-reference updates | **DONE 2026-05-14** | Active slice families can migrate after observation gates close. |
 | 4. Migrate active slice families (ARS, TDP, TRF, S1A1, S1B) | NOT STARTED | Pilot lands cleanly + observation gates close. |
 | 5. Migrate legacy organ memos (X.0–X.6) and pre-anatomy memos | NOT STARTED | Active families landed. |
 | 6. Migrate handoffs, snapshots, ledger, flat audits | NOT STARTED | After slice migrations. |
 | 7. Sweep cross-references in memory, code comments, `AGENTS.md`, top-level `README.md` | NOT STARTED | Final step. |
 
-Until each phase lands, the current paths remain valid. All Decision-24-era
-references (BAD packet, ADR 0029, council and panel reviews) still resolve at
-their current flat paths under `docs/`.
+Until each phase lands, the current paths remain valid. Decision-24-era Body
+Topology references now resolve through `docs/slices/body-topology/`; older
+active and legacy slice families still resolve at their current flat paths
+under `docs/`.
 
 ---
 

@@ -115,7 +115,7 @@ revision.
 
 Full packet, fixture table, observation discipline, safe-failure rule,
 resolved open questions, and review trail:
-[`docs/SLICE_BODY_TOPOLOGY_BAD.md`](../SLICE_BODY_TOPOLOGY_BAD.md).
+[`docs/slices/body-topology/spec.md`](../slices/body-topology/spec.md).
 
 BAD decision: see
 [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md)

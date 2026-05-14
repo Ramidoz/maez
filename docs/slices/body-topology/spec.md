@@ -7,15 +7,15 @@ Maez's body, what a body limb may publish or do, and what it must never claim.
 
 **Canonical anchors:**
 
-- BAD: [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](governance/BETA_ARCHITECTURE_DECISIONS.md) — Decision 24.
-- ADR: [`docs/adr/0029-body-topology.md`](adr/0029-body-topology.md).
+- BAD: [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../../governance/BETA_ARCHITECTURE_DECISIONS.md) — Decision 24.
+- ADR: [`docs/adr/0029-body-topology.md`](../../adr/0029-body-topology.md).
 
 **Review trail (complete):**
 
-- `docs/SLICE_BODY_TOPOLOGY_BAD_CLAUDE_COUNCIL_REVIEW.md` — Claude six-role covenant
+- [`docs/slices/body-topology/reviews/claude-council.md`](reviews/claude-council.md) — Claude six-role covenant
   council. Verdict: RATIFY-WITH-AMENDMENTS, no veto. Amendments BT-CC-1…9 + votes
   on the five open questions.
-- `docs/SLICE_BODY_TOPOLOGY_BAD_CODEX_PANEL_REVIEW.md` — Codex six-agent engineering
+- [`docs/slices/body-topology/reviews/codex-panel.md`](reviews/codex-panel.md) — Codex six-agent engineering
   panel. Verdict: REVISE, no conceptual veto. Amendments BT-CX-1…16.
 - Both lanes converged independently on the same correction: **information limbs**
   as a first-class body class folded BEFORE canonicalization, and the **S2
@@ -26,11 +26,11 @@ Maez's body, what a body limb may publish or do, and what it must never claim.
 
 **Maps to:**
 
-- `docs/adr/0022-body-shape-per-maez.md` — per-Maez capability shape (Decision 21).
-- `docs/SLICE_X5_BODY_STATE_ORGAN_MEMO.md` — mechanical body-state vocabulary.
-- `docs/adr/0027-x5-body-state-id-basis.md` — content-free body-state handles.
-- `docs/MAEZ_LIFE_SUBSTRATE.md` — capability quarantine, body/voice queue.
-- `docs/SLICE_TELEGRAM_DRAFT_PRESENCE.md` — precedent for surface hardening versus
+- [`docs/adr/0022-body-shape-per-maez.md`](../../adr/0022-body-shape-per-maez.md) — per-Maez capability shape (Decision 21).
+- [`docs/SLICE_X5_BODY_STATE_ORGAN_MEMO.md`](../../SLICE_X5_BODY_STATE_ORGAN_MEMO.md) — mechanical body-state vocabulary.
+- [`docs/adr/0027-x5-body-state-id-basis.md`](../../adr/0027-x5-body-state-id-basis.md) — content-free body-state handles.
+- [`docs/MAEZ_LIFE_SUBSTRATE.md`](../../MAEZ_LIFE_SUBSTRATE.md) — capability quarantine, body/voice queue.
+- [`docs/SLICE_TELEGRAM_DRAFT_PRESENCE.md`](../../SLICE_TELEGRAM_DRAFT_PRESENCE.md) — precedent for surface hardening versus
   new body part.
 
 ---
@@ -861,9 +861,9 @@ body of this packet; preserved here as a provenance trail.
 
 Pre-canonical (complete):
 
-1. ✅ Claude six-role covenant council — `docs/SLICE_BODY_TOPOLOGY_BAD_CLAUDE_COUNCIL_REVIEW.md`.
+1. ✅ Claude six-role covenant council — [`docs/slices/body-topology/reviews/claude-council.md`](reviews/claude-council.md).
    Verdict: RATIFY-WITH-AMENDMENTS, no veto.
-2. ✅ Codex six-agent engineering panel — `docs/SLICE_BODY_TOPOLOGY_BAD_CODEX_PANEL_REVIEW.md`.
+2. ✅ Codex six-agent engineering panel — [`docs/slices/body-topology/reviews/codex-panel.md`](reviews/codex-panel.md).
    Verdict: REVISE, no conceptual veto.
 3. ✅ Amendments folded into this packet (BT-CC-1…9, BT-CX-1…16, OH-CC family).
 4. ✅ Operator canonicalization: appended to BAD as **Decision 24** (2026-05-14)

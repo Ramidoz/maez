@@ -1,6 +1,6 @@
 # Codex Six-Agent Panel — Body Topology BAD packet review
 
-**Subject:** `docs/SLICE_BODY_TOPOLOGY_BAD.md` — pre-canonical packet defining
+**Subject:** `docs/slices/body-topology/spec.md` — pre-canonical packet defining
 Maez body topology, limb identity, sensor/effector separation, and Body Bus
 constraints.
 
@@ -8,7 +8,7 @@ constraints.
 
 **This is an engineering implementability review, not a covenant council.**
 Claude's council reviewed the covenant/voice/body-coherence lane in
-`docs/SLICE_BODY_TOPOLOGY_BAD_CLAUDE_COUNCIL_REVIEW.md`. This panel reviews
+`docs/slices/body-topology/reviews/claude-council.md`. This panel reviews
 whether future slices can implement the packet without relitigating ambiguous
 contracts.
 
