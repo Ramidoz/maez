@@ -94,6 +94,19 @@ _enrollment = None
 _enrollment_loaded = False
 
 
+def _configure_cv2_runtime(cv2_module) -> None:
+    """Keep OpenCV's native worker pool bounded for presence checks."""
+    try:
+        cv2_module.setNumThreads(1)
+    except Exception:
+        pass
+    try:
+        if hasattr(cv2_module, "ocl"):
+            cv2_module.ocl.setUseOpenCL(False)
+    except Exception:
+        pass
+
+
 def _load_enrollment():
     """Load the owner's face embeddings. Called once lazily."""
     global _enrollment, _enrollment_loaded
@@ -183,6 +196,7 @@ def _detect_and_recognize() -> tuple:
             import cv2
         except Exception as e:
             return _mark_detection_unavailable(f"cv2 unavailable: {e}", "cv2")
+        _configure_cv2_runtime(cv2)
         try:
             import mediapipe as mp
         except Exception as e:
@@ -336,6 +350,28 @@ def observe() -> PresenceSnapshot:
             success=False,
             error=str(e),
         )
+
+
+def shutdown() -> None:
+    """Release persistent native presence resources during daemon stop."""
+    global _detector
+    detector = _detector
+    _detector = None
+    if detector is not None:
+        try:
+            detector.close()
+        except Exception as e:
+            logger.debug("Presence detector close failed: %s", e)
+    try:
+        import cv2
+
+        _configure_cv2_runtime(cv2)
+        try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
+    except Exception as e:
+        logger.debug("OpenCV shutdown cleanup skipped: %s", e)
 
 
 def is_present() -> bool:

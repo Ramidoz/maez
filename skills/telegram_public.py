@@ -133,6 +133,11 @@ class UserProfileStore:
         except Exception:
             return []
 
+    def close(self) -> None:
+        close = getattr(self.client, "close", None)
+        if callable(close):
+            close()
+
 
 # ─── Manipulation Detector ─────────────────────────────────────────────────────
 
@@ -488,6 +493,11 @@ Respond naturally. Be present. Be real."""
             loop.call_soon_threadsafe(loop.stop)
         except Exception:
             pass
+
+        try:
+            self.store.close()
+        except Exception as e:
+            logger.debug("Public user store close failed: %s", e)
 
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=10)

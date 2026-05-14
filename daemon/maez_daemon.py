@@ -63,7 +63,11 @@ from core.action_engine import ActionEngine
 from skills.screen_perception import observe as screen_observe, ScreenObservation
 from skills.calendar_perception import observe as calendar_observe, CalendarSnapshot
 from memory.quality_tracker import QualityTracker
-from skills.presence_perception import observe as presence_observe, PresenceSnapshot
+from skills.presence_perception import (
+    observe as presence_observe,
+    PresenceSnapshot,
+    shutdown as presence_shutdown,
+)
 from skills.github_skill import GitHubSkill
 from skills.reddit_skill import RedditSkill
 from skills.followup_queue import FollowUpQueue
@@ -2798,6 +2802,7 @@ class MaezDaemon:
 
     def _get_public_context(self) -> str:
         """Get summary of recent public bot conversations for reasoning context."""
+        client = None
         try:
             import chromadb
             from chromadb.config import Settings
@@ -2846,6 +2851,13 @@ class MaezDaemon:
         except Exception as e:
             logger.debug("Public context unavailable: %s", e)
             return ""
+        finally:
+            close = getattr(client, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as e:
+                    logger.debug("Public context Chroma client close failed: %s", e)
 
     def handle_voice_stream(self, text: str) -> str:
         """Stream LLM response sentence-by-sentence to TTS. Returns full reply."""
@@ -5302,6 +5314,10 @@ class MaezDaemon:
         except Exception as e:
             logger.debug("Presence worker shutdown failed: %s", e)
         try:
+            presence_shutdown()
+        except Exception as e:
+            logger.debug("Presence native shutdown failed: %s", e)
+        try:
             self.telegram.stop()
         except Exception as e:
             logger.debug("Telegram bot stop failed: %s", e)
@@ -5391,6 +5407,10 @@ class MaezDaemon:
                 ).start()
         except Exception as e:
             logger.debug("Health server stop trigger failed: %s", e)
+        try:
+            self.memory.close()
+        except Exception as e:
+            logger.debug("Memory manager close failed: %s", e)
         try:
             SHUTDOWN_FILE.write_text(datetime.now(timezone.utc).isoformat())
         except OSError:

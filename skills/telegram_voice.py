@@ -108,6 +108,7 @@ def _get_circadian_context() -> str:
 
 def _get_public_context_for_telegram() -> str:
     """Fetch recent public bot conversations for Telegram prompt context."""
+    client = None
     try:
         import chromadb
         import time as _time
@@ -151,6 +152,13 @@ def _get_public_context_for_telegram() -> str:
         return "\n".join(lines)
     except Exception:
         return ""
+    finally:
+        close = getattr(client, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
 
 SOUL_PATH = Path("/home/rohit/maez/config/soul.md")
 from core.model_config import PRIMARY_MODEL as MODEL  # /etc/maez/model.env — single source of truth

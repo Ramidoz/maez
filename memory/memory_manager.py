@@ -567,6 +567,22 @@ class MemoryManager:
             stats["raw"], stats["daily"], stats["core"],
         )
 
+    def close(self) -> None:
+        """Close Chroma clients owned by this manager.
+
+        ChromaDB's Rust backend owns Tokio / SQLx worker pools. The
+        daemon must explicitly close the clients during shutdown so those
+        native workers do not keep the process alive until systemd SIGKILL.
+        """
+        for attr in ("_raw_client", "_daily_client", "_core_client"):
+            client = getattr(self, attr, None)
+            close = getattr(client, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as exc:  # noqa: BLE001 - shutdown is best-effort
+                    logger.debug("Chroma client %s close failed: %s", attr, exc)
+
     # ------------------------------------------------------------------ #
     #  TIER 1 — Raw Archive                                                #
     # ------------------------------------------------------------------ #
