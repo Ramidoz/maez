@@ -5416,6 +5416,15 @@ class MaezDaemon:
         except OSError:
             pass
         self._remove_pid()
+        # When stop() is invoked by SIGTERM/SIGINT, the graceful ladder
+        # above has already written continuity, stopped surfaces, closed
+        # memory clients, and removed the PID. Native libraries such as
+        # Chroma's Tokio/SQLx runtime can still keep non-Python workers
+        # alive after Python work is complete. Exit the process explicitly
+        # so systemd records a clean stop instead of escalating to SIGKILL.
+        if signum is not None:
+            logging.shutdown()
+            os._exit(0)
 
     def _run_health_server(self):
         """Minimal Flask health check endpoint."""

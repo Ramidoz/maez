@@ -79,6 +79,17 @@ class ShutdownLifecycleTests(unittest.TestCase):
         self.assertIn("presence_shutdown()", src)
         self.assertIn("self.memory.close()", src)
 
+    def test_signal_stop_exits_after_graceful_shutdown_ladder(self) -> None:
+        src = DAEMON_SRC.read_text()
+        stop_start = src.index("def stop(self, signum=None, frame=None):")
+        stop_end = src.index("def _run_health_server", stop_start)
+        block = src[stop_start:stop_end]
+
+        self.assertIn("if signum is not None:", block)
+        self.assertIn("logging.shutdown()", block)
+        self.assertIn("os._exit(0)", block)
+        self.assertLess(block.index("self._remove_pid()"), block.index("os._exit(0)"))
+
     def test_public_context_closes_temporary_chroma_client(self) -> None:
         src = DAEMON_SRC.read_text()
         start = src.index("def _get_public_context")
