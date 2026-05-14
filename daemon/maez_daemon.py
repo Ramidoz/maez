@@ -475,6 +475,11 @@ class MaezDaemon:
         from core.health.bounded_worker import BoundedSingletonWorker
 
         self._dream_worker = BoundedSingletonWorker(name="dream-cycle")
+        # Native camera / MediaPipe calls can wedge below Python.
+        # Isolate presence observation from the main reasoning loop:
+        # if the sensor blocks, Maez records presence as unavailable
+        # and keeps the daemon heartbeat moving.
+        self._presence_worker = BoundedSingletonWorker(name="presence-observe")
         self._last_alert_time = 0.0
         self._last_screen_obs: ScreenObservation | None = None
         self._screen_cycle_counter = 0
@@ -874,6 +879,43 @@ class MaezDaemon:
             "cycle_stalled": cycle_stalled,
             "stalled_after_seconds": stalled_after_seconds,
         }
+
+    def _presence_unavailable(self, error: str) -> PresenceSnapshot:
+        return PresenceSnapshot(
+            rohit_present=False,
+            confidence=0.0,
+            session_minutes=0.0,
+            absent_minutes=0.0,
+            just_arrived=False,
+            just_left=False,
+            person_identified="unknown",
+            success=False,
+            error=error,
+        )
+
+    def _observe_presence_bounded(self) -> PresenceSnapshot:
+        """Run camera presence detection without blocking the reasoning loop."""
+        timeout_s = 5.0
+        if self._presence_worker.in_flight():
+            return self._presence_unavailable("presence observation still running")
+
+        result_holder: dict[str, PresenceSnapshot | None] = {"value": None}
+
+        def _call() -> None:
+            result_holder["value"] = presence_observe()
+
+        if not self._presence_worker.submit(_call):
+            return self._presence_unavailable("presence observation worker unavailable")
+
+        if not self._presence_worker.join(timeout=timeout_s):
+            msg = f"presence observation timed out after {timeout_s:.1f}s"
+            logger.warning(msg)
+            return self._presence_unavailable(msg)
+
+        value = result_holder.get("value")
+        if isinstance(value, PresenceSnapshot):
+            return value
+        return self._presence_unavailable("presence observation returned no snapshot")
 
     def _watch_soul(self):
         """Watch soul.md for changes and hot-reload."""
@@ -4097,7 +4139,7 @@ class MaezDaemon:
             if self._presence_cycle_counter >= self.PRESENCE_EVERY_N_CYCLES:
                 self._presence_cycle_counter = 0
                 try:
-                    self._last_presence_snap = presence_observe()
+                    self._last_presence_snap = self._observe_presence_bounded()
                     if self._last_presence_snap.success:
                         person = self._last_presence_snap.person_identified
 
@@ -5254,6 +5296,11 @@ class MaezDaemon:
                 logger.warning("Dream worker did not finish within shutdown timeout")
         except Exception as e:
             logger.debug("Dream worker shutdown failed: %s", e)
+        try:
+            if not self._presence_worker.shutdown(timeout=1.0):
+                logger.warning("Presence worker did not finish within shutdown timeout")
+        except Exception as e:
+            logger.debug("Presence worker shutdown failed: %s", e)
         try:
             self.telegram.stop()
         except Exception as e:
