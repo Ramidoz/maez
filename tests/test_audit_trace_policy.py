@@ -425,7 +425,7 @@ class DirectAuditPathTests(unittest.TestCase):
 
 class GovernanceDocTests(unittest.TestCase):
     def test_slice_memo_cites_four_governance_artifacts_and_thesis_question(self):
-        memo = Path("docs/SLICE_4C_5B_TRACE_AUDIT_REFUSAL_MEMO.md")
+        memo = Path("docs/slices/legacy/4c-5b-trace-audit-refusal.md")
         self.assertTrue(memo.exists())
         text = memo.read_text()
         self.assertIn("ADR 0024", text)

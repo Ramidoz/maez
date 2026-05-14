@@ -14,9 +14,9 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: ^docs/birth_book/|^docs/audit_2026-04-22/|\.md$
+        exclude: ^docs/birth_book/|^docs/audits/2026-04-22/|\.md$
       - id: end-of-file-fixer
-        exclude: ^docs/birth_book/|^docs/audit_2026-04-22/
+        exclude: ^docs/birth_book/|^docs/audits/2026-04-22/
       - id: check-yaml
       - id: check-toml
       - id: check-added-large-files

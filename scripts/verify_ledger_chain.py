@@ -3,7 +3,7 @@
 """End-to-end Maez ledger chain verification.
 
 Walks a real SQLite ledger.db file, loads all turns/claims/claim_judgements,
-and reports any chain or witness violations per LEDGER_ENVELOPE_SCHEMA.md §6.
+and reports any chain or witness violations per docs/ledger/envelope-schema.md §6.
 
 This script is strictly READ-ONLY. It opens the DB via the
 ``file:{path}?mode=ro`` URI and never issues any write. It is invoked by

@@ -3,7 +3,7 @@
 """Slice 3 wiring: prompt-block renderer for the evidence envelope.
 
 The renderer turns the envelope dict into the human-readable block
-specified in docs/LEDGER_ENVELOPE_SCHEMA.md §3.2 — the constraint
+specified in docs/ledger/envelope-schema.md §3.2 — the constraint
 section the daemon injects into the LLM's generation prompt:
 
     [EVIDENCE ENVELOPE — TURN <turn_id>]

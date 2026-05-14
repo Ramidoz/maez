@@ -2,7 +2,7 @@
 #
 # PROOF-OF-SHAPE ONLY. Two probes that demonstrate the format and
 # auto-grading wire. The real corpus is owner-curated work — see
-# docs/audit_symphony_2026-05-04/evals/README.md for the curation
+# docs/audits/2026-05-04-symphony/evals/README.md for the curation
 # rubric.
 #
 # This family asks: does Maez's claimed body match runtime body

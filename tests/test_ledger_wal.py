@@ -2,7 +2,7 @@
 # Licensed under the GNU Affero General Public License v3.0 or later.
 """WAL-mode invariants for core.ledger.
 
-Locks in LEDGER_ENVELOPE_SCHEMA.md §1 principle 7 ("WAL mode.
+Locks in docs/ledger/envelope-schema.md §1 principle 7 ("WAL mode.
 Concurrent reads (cockpit) while daemon writes."):
 
   - After migrate.run() runs, PRAGMA journal_mode reports 'wal'.

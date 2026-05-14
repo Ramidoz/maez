@@ -3,7 +3,7 @@
 """Tests for core.ledger.chain primitives.
 
 Locks the canonical-row-bytes recipe and chain-walk semantics defined
-in LEDGER_ENVELOPE_SCHEMA.md §6.1. These tests must remain consistent
+in docs/ledger/envelope-schema.md §6.1. These tests must remain consistent
 with tests/test_ledger_genesis.py::GenesisRecipeTests — both pin the
 same recipe (sort_keys=True, separators=(",",":"), ensure_ascii=True,
 omit chain_hash and prev_chain_hash).

@@ -331,19 +331,19 @@ class SchemaDocWiringTests(unittest.TestCase):
     this slice's diff is a fiction. Cheap source-grep guard."""
 
     def test_schema_doc_enum_section_mentions_self_history(self):
-        doc = (_REPO / "docs" / "LEDGER_ENVELOPE_SCHEMA.md").read_text()
+        doc = (_REPO / "docs" / "ledger" / "envelope-schema.md").read_text()
         # §2 enum table row uses kebab-case to match owner-said /
         # tool-verified. The slot field elsewhere uses snake_case.
         self.assertIn("`self-history`", doc)
         self.assertIn("Seven classes", doc)
 
     def test_schema_doc_envelope_section_has_self_history_slot(self):
-        doc = (_REPO / "docs" / "LEDGER_ENVELOPE_SCHEMA.md").read_text()
+        doc = (_REPO / "docs" / "ledger" / "envelope-schema.md").read_text()
         self.assertIn("SelfHistoryRef", doc)
         self.assertIn("self_history: list[SelfHistoryRef]", doc)
 
     def test_schema_doc_marked_ratified(self):
-        doc = (_REPO / "docs" / "LEDGER_ENVELOPE_SCHEMA.md").read_text()
+        doc = (_REPO / "docs" / "ledger" / "envelope-schema.md").read_text()
         self.assertIn("Ratified 2026-05-06", doc)
         self.assertNotIn("NOT ratified", doc)
 

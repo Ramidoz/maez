@@ -1,7 +1,7 @@
 -- 0002_triggers.sql
 -- Append-only enforcement for the Maez ledger.
 --
--- Per docs/LEDGER_ENVELOPE_SCHEMA.md §1 principle 2 ("Append-only") and
+-- Per docs/ledger/envelope-schema.md §1 principle 2 ("Append-only") and
 -- §10 / §10.1 (claims-extraction + ratification: claim_judgements is
 -- strictly immutable; the proposed single-UPDATE carve-out was REJECTED),
 -- the tables `turns`, `claims`, and `claim_judgements` must reject every

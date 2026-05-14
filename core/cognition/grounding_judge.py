@@ -251,7 +251,7 @@ def _call_dedicated_judge(prompt: str) -> str:
 
 
 # Slice 3 proper (2026-05-07): carve-out classification block.
-# Encodes the ratified docs/SLICE_3_0c_CARVEOUT_MEMO.md (§§2-5, §7) as
+# Encodes the ratified docs/slices/legacy/3-0c-carveout.md (§§2-5, §7) as
 # verbatim prompt content. The carve-out lets the judge admit stable,
 # non-temporal, non-personal background facts ("Paris is the capital of
 # France") without requiring an EVIDENCE entry, while categorically

@@ -12,7 +12,7 @@ the harness in its minimum-viable shape:
     block (or canonical identity rendering), plus a boolean axis
     set (audit_gate_present, tool_manifest_present,
     circadian_present, body_truth_present).
-  - Output artifact: `docs/audit_symphony_2026-05-04/baselines/
+  - Output artifact: `docs/audits/2026-05-04-symphony/baselines/
     surface_probe_<baseline_id>.json`
   - Replay: `--compare-baseline 2026-05-04` computes per-axis
     deltas and exits non-zero on flip.

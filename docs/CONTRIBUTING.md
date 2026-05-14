@@ -110,7 +110,7 @@ diff; the commit message is for the reader who has to understand
 intent six months from now.
 
 - Bullet the shape of the change if it's mechanical across files.
-- Reference finding IDs from docs/audit_*/_MASTER_FINDINGS.md
+- Reference finding IDs from docs/audits/*/_MASTER_FINDINGS.md
   when the commit closes one.
 - Note what tests now cover it.
 

@@ -60,7 +60,7 @@ Audit
   - Phase 1.G closed 11 of 12 blockers + 12 majors + 4 minors in 6
     themed commits; the 12th blocker (06-B1 backtick escape) reviewed
     and found non-exploitable as described
-  - All audit reports preserved in docs/audit_2026-04-22/
+  - All audit reports preserved in docs/audits/2026-04-22/
 
 Docs + governance
   - Root README with grandmother framing, pitch-stack layering,

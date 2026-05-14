@@ -3,7 +3,7 @@
 """Evidence-envelope builder (Slice 3 proper, 2026-05-07).
 
 Implements the ratified contracts from
-``docs/SLICE_3_0d_TOKEN_BUDGET_MEMO.md``:
+``docs/slices/legacy/3-0d-token-budget.md``:
 
   §1   3K-token total cap → 12K-char enforcement (chars_per_token=4)
   §2   Per-section caps (tool_results 8x200, claimable 15x100,

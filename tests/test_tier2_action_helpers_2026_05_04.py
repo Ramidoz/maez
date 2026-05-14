@@ -1,7 +1,7 @@
 # Copyright © 2026 Rohit Ananthan
 # Licensed under the GNU Affero General Public License v3.0 or later.
 """REGRESSION GUARDS for the Tier-2 audit items closed on 2026-05-04
-(see docs/audit_15agent_2026-05-04.md):
+(see docs/audits/2026-05-04-15agent.md):
 
   T2.x  command_decomposer: backtick-style command substitution
         recognition was narrower than bash actually supports.

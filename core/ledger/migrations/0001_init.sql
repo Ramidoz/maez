@@ -1,5 +1,5 @@
 -- 0001_init.sql — Maez ledger initial schema migration
--- Source of truth: docs/LEDGER_ENVELOPE_SCHEMA.md §4.1–§4.4
+-- Source of truth: docs/ledger/envelope-schema.md §4.1–§4.4
 -- Safe to re-run (every CREATE uses IF NOT EXISTS).
 -- This file contains schema only. Triggers live in 0002_triggers.sql.
 -- Seeding (schema_version, genesis_hash) is performed by migrate.py.

@@ -153,7 +153,7 @@ AFTERNOON (2026-04-24) — voice de-hardcoding + autonomous audit
                    (`DreamState.run_dream_cycle`) routed through
                    audit stack before telegram send. 7 source-
                    inspection regression tests. Full audit at
-                   docs/audit_2026-04-24/autonomous_surface_audit.md.
+                   docs/audits/2026-04-24/autonomous_surface_audit.md.
 
   a7f99fb (14:22)  F4: _clean_exchange handles both daemon and
                    web/voice storage forms. Three surfaces stored
@@ -263,7 +263,7 @@ Pattern that connects four of today's bugs
   audit stack (`audit_assistant_text` + `output_command_guard`).
   They bypass the guardrails every interactive surface now has.
   Two fixes landed today (11484b5 covers F1+F2). The audit doc
-  at docs/audit_2026-04-24/autonomous_surface_audit.md tracks
+  at docs/audits/2026-04-24/autonomous_surface_audit.md tracks
   F3 (training proposal) and F5 (github commit-message LLM) as
   remaining defense-in-depth items. The meta-level lesson: every
   scheduled/daemon-triggered code path that emits text to a

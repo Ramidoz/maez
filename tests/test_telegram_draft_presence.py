@@ -2,7 +2,7 @@
 # Licensed under the GNU Affero General Public License v3.0 or later.
 """Telegram draft-presence slice tests.
 
-These tests pin the contract from docs/SLICE_TELEGRAM_DRAFT_PRESENCE.md:
+These tests pin the contract from docs/slices/telegram-draft-presence/spec.md:
 empty Maez-authored draft text only, default-disabled owner-local config,
 wrapper-isolated Bot API call, fail-neutral behavior, and no gating of the
 final reply path.

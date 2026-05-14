@@ -5,7 +5,7 @@
 Pins:
   1. MAEZ_LEDGER_WRITES env-flag parsing (strict, default-off, with
      warning on unrecognized non-empty non-falsy values).
-  2. Per-kind NOT-NULL contract (LEDGER_ENVELOPE_SCHEMA.md §4.2),
+  2. Per-kind NOT-NULL contract (docs/ledger/envelope-schema.md §4.2),
      enforced BEFORE the SQL INSERT (not as a DB error).
   3. Per-kind forbidden-field contract.
   4. Atomicity: validation failure → no row inserted, no meta change.

@@ -3,7 +3,7 @@
 # Licensed under the GNU Affero General Public License v3.0 or later.
 """replay_harness.py — birth-readiness and regression probe runner for Maez.
 
-Per docs/SLICE_GESTATION_BOUNDARY_MEMO.md §5, the replay harness has
+Per docs/slices/legacy/gestation-boundary.md §5, the replay harness has
 two modes as of Slice 3.6:
 
   - birth_readiness  — compare current behavior vs expected post-birth

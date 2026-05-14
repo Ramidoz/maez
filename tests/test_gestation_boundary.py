@@ -3,7 +3,7 @@
 """Gestation Boundary slice — schema + chain hash invariant + writer
 + recall + self_history label tests.
 
-Per docs/SLICE_GESTATION_BOUNDARY_MEMO.md (locked 2026-05-08):
+Per docs/slices/legacy/gestation-boundary.md (locked 2026-05-08):
 
   §6.1  Schema migration adds `lifecycle_stage` column to turns.
         Default 'gestation'. MUST NOT be included in chain-hash

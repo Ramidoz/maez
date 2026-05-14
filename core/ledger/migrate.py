@@ -18,7 +18,7 @@ What ``run()`` does, in order:
    filename stem + applied_at timestamp.
 6. Seeds ``meta`` with ``('schema_version', '1')`` if not present.
 7. Inserts the canonical genesis row into ``turns`` if not present,
-   computes its ``chain_hash`` per LEDGER_ENVELOPE_SCHEMA.md §6.1,
+   computes its ``chain_hash`` per docs/ledger/envelope-schema.md §6.1,
    and records ``('genesis_hash', <chain_hash>)`` in ``meta``.
 8. Commits and closes the connection.
 

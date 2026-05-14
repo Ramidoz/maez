@@ -38,7 +38,7 @@ Cites:
 - Debenedetti et al. (2024), "Defending against Prompt Injection
   with Capabilities" — CaMeL, arxiv 2503.18813.
 - Audit slice queue #6 in
-  ``docs/audit_2026-04-29_field_alignment/FIELD_ALIGNMENT.md``.
+  ``docs/audits/2026-04-29-field-alignment/FIELD_ALIGNMENT.md``.
 - ``feedback_chat_self_claim_hallucination.md`` — the named
   regression this slice helps detect.
 """

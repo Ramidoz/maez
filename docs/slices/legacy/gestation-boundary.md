@@ -4,8 +4,8 @@
 **Date:** 2026-05-08.
 **Author:** Claude, with Rohit's locked decisions inline.
 **Companion docs:**
-- [LEDGER_2_5C_RESULTS_2026_05_08.md](../../ledger/2-5c-results-2026-05-08.md) — what this slice unblocks
-- [LEDGER_ENVELOPE_SCHEMA.md](../../ledger/envelope-schema.md) — envelope/turn shapes this slice extends
+- [docs/ledger/2-5c-results-2026-05-08.md](../../ledger/2-5c-results-2026-05-08.md) — what this slice unblocks
+- [docs/ledger/envelope-schema.md](../../ledger/envelope-schema.md) — envelope/turn shapes this slice extends
 - [3-0c-carveout.md](3-0c-carveout.md), [3-0d-token-budget.md](3-0d-token-budget.md) — slice-3 substrate this builds on
 
 ---

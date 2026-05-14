@@ -3,7 +3,7 @@
 """TDD tests for core.ledger.reconcile.
 
 Locks the contract for the cross-DB reconciliation job per
-LEDGER_ENVELOPE_SCHEMA.md §5 (cross-DB FK contract) and §6.2 (crash
+docs/ledger/envelope-schema.md §5 (cross-DB FK contract) and §6.2 (crash
 semantics + reconciliation invariants).
 
 The module under test does not yet exist; hard import below fails

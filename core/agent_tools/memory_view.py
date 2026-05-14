@@ -27,7 +27,7 @@ Cites:
 - Mem-GPT / Letta (Packer et al. 2023) — original
   agent-memory-management toolset shape.
 - Audit slice queue #7 in
-  ``docs/audit_2026-04-29_field_alignment/FIELD_ALIGNMENT.md``.
+  ``docs/audits/2026-04-29-field-alignment/FIELD_ALIGNMENT.md``.
 """
 
 from __future__ import annotations

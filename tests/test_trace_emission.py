@@ -6,7 +6,7 @@
 What this pins:
 
 - The trace schema serializes deterministically to JSONL; every field
-  named in `docs/HANDOFF-2026-04-28.md` Slice 1 is preserved.
+  named in `docs/handoffs/2026-04-28.md` Slice 1 is preserved.
 - The writer is daily-bucketed, append-only, thread-safe, and
   **never raises** on caller path — synthesis must not break when
   tracing fails.

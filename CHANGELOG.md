@@ -62,7 +62,7 @@ independent timelines, covered in
   `docs/covenant/for_oss_users.md` (universal-vs-per-user framing),
   `docs/adr/0001..0018` (stable per-decision anchors cross-linking
   the governance doc), twelve per-subpackage READMEs.
-- **Comprehensive audit record.** `docs/audit_2026-04-22/` contains
+- **Comprehensive audit record.** `docs/audits/2026-04-22/` contains
   the 85-finding audit that shipped as Phase 1 — twelve agent
   reports, a master consolidation with top-20 ranking, and the six
   themed fix-now commit batches that closed 11 of 12 blockers.

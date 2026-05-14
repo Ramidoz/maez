@@ -2,7 +2,7 @@ Maez — session snapshot
 ========================
 Session window: 2026-04-24 23:30 CDT → 2026-04-25 01:14 CDT
                 (late-night extension of the 04-24 arc; primary
-                handoff for context is HANDOFF-2026-04-24.md, this
+                handoff for context is docs/handoffs/2026-04-24.md, this
                 snapshot covers only the four-commit bridge)
 Primary work:   Scenario continuity probes (3-5 turn arcs); ledger
                 local-day summary alignment; expansion to 15-probe

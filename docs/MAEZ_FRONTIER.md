@@ -4,7 +4,7 @@
 **Date:** 2026-05-06
 **Status:** Project A live + actively completing; Project B–D designed
 **License:** BSL 1.1 (self-hosting free forever; commercial hosting pays for hosting, never for the idea)
-**Companion documents:** [MAEZ_PITCH.md](../MAEZ_PITCH.md) · [PROGRESS.md](../PROGRESS.md) · [HANDOFF-2026-05-06.md](handoffs/2026-05-06.md)
+**Companion documents:** [MAEZ_PITCH.md](../MAEZ_PITCH.md) · [PROGRESS.md](../PROGRESS.md) · [docs/handoffs/2026-05-06.md](handoffs/2026-05-06.md)
 
 ---
 
@@ -574,7 +574,7 @@ Each clause is load-bearing. None of the frontier labs ships systems that have a
 
 - [MAEZ_PITCH.md](../MAEZ_PITCH.md) — public-facing emotional + architectural pitch
 - [PROGRESS.md](../PROGRESS.md) — running build log; ground truth for "what landed"
-- [HANDOFF-2026-05-06.md](handoffs/2026-05-06.md) — most recent session handoff; hardware state, open queue
+- [docs/handoffs/2026-05-06.md](handoffs/2026-05-06.md) — most recent session handoff; hardware state, open queue
 - soul.md — covenant text, HARD CONSTRAINTS section is germline (immutable)
 - [training/extract_training_pairs.py](../training/extract_training_pairs.py) — voice-LoRA dataset filtering discipline; reference implementation for adapter curation
 - [scripts/validate/track_a_harness.py](../scripts/validate/track_a_harness.py) — Track A acceptance gate composer

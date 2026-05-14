@@ -442,7 +442,7 @@ def read_baseline(path: Path) -> dict[str, Any]:
 
 def _default_baseline_path(baseline_id: str) -> Path:
     return (
-        REPO / "docs" / "audit_symphony_2026-05-04"
+        REPO / "docs" / "audits" / "2026-05-04-symphony"
         / "baselines" / f"surface_probe_{baseline_id}.json"
     )
 
@@ -463,7 +463,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument(
         "--write", action="store_true",
         help="Write the baseline to "
-             "docs/audit_symphony_2026-05-04/baselines/.",
+             "docs/audits/2026-05-04-symphony/baselines/.",
     )
     p.add_argument(
         "--compare", default=None,

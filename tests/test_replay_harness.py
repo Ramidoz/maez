@@ -2,7 +2,7 @@
 # Licensed under the GNU Affero General Public License v3.0 or later.
 """Replay harness slice — fixture loader, probe runner, two-mode comparator.
 
-Per docs/SLICE_GESTATION_BOUNDARY_MEMO.md §5:
+Per docs/slices/legacy/gestation-boundary.md §5:
   - Birth-readiness probes replace the 2.5c volume gate. Each probe
     targets one of the missing behavior classes (continuity, surface
     interleaving, real-content claims, envelope pressure, concurrency,

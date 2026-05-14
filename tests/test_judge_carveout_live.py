@@ -3,7 +3,7 @@
 """Slice 3 proper — live-endpoint behavioral tests for the carve-out.
 
 Drives every §2 positive and §4 negative from
-docs/SLICE_3_0c_CARVEOUT_MEMO.md through the real judge endpoint and
+docs/slices/legacy/3-0c-carveout.md through the real judge endpoint and
 asserts the ratified outcome:
 
   - Positive carve-out claims: judge returns no flags (carve-out

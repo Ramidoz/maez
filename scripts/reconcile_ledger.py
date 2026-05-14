@@ -3,7 +3,7 @@
 """Maez ledger reconciliation CLI.
 
 Wraps ``core.ledger.reconcile.reconcile`` with the operator surface
-described in LEDGER_ENVELOPE_SCHEMA.md §6.2.
+described in docs/ledger/envelope-schema.md §6.2.
 
 Usage:
     python scripts/reconcile_ledger.py LEDGER_DB \\

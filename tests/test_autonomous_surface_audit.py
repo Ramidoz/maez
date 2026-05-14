@@ -5,7 +5,7 @@
 
 After two voice regressions in 24h (nightly `_write_readme` template
 overwrite + `Welcome back the owner` greeting), the 2026-04-24
-audit (docs/audit_2026-04-24/autonomous_surface_audit.md) found two
+audit (docs/audits/2026-04-24/autonomous_surface_audit.md) found two
 more autonomous paths emitting LLM output to Telegram without the
 audit stack: `_send_morning_briefing` (F1) and
 `DreamState.run_dream_cycle` (F2).

@@ -3,7 +3,7 @@
 # See LICENSE for full text.
 """Maez per-turn trace emission — structured JSONL traces.
 
-Slice 1 of the trace harness work (`docs/HANDOFF-2026-04-28.md`):
+Slice 1 of the trace harness work (`docs/handoffs/2026-04-28.md`):
 this package writes one JSONL line per owner-bridge /message turn so a
 deterministic trace harness, semantic judge, or cockpit replay tool can
 later consume them without scraping mixed log lines.

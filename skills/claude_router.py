@@ -260,7 +260,7 @@ def log_trajectory(entry: dict[str, Any]) -> None:
         # the default-deny gate by pre-setting this key. Any
         # future opt-in must flow through an explicit operator-
         # reviewed audit path, not the trajectory write helper.
-        # See actions_2026-05-04.md for the operator-review contract.
+        # See docs/snapshots/actions-2026-05-04.md for the operator-review contract.
         entry["training_eligible"] = 0
         with TRAJECTORY_LOCK:
             with path.open("a") as f:

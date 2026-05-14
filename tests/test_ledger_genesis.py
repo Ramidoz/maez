@@ -2,7 +2,7 @@
 # Licensed under the GNU Affero General Public License v3.0 or later.
 """Genesis-row and meta-table invariants for core.ledger.
 
-Locks in the schema-doc contract from LEDGER_ENVELOPE_SCHEMA.md
+Locks in the schema-doc contract from docs/ledger/envelope-schema.md
 (§4.1 meta seeding, §6.1 chain construction):
 
   - migrate.run() seeds meta with schema_version='1' and a 64-char-hex

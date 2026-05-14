@@ -178,7 +178,7 @@ def check_trace_harness(
     over recent JSONL traces and folds the result into the parent
     summary. Advisory: WARNs/FAILs surface but never gate the parent
     harness's exit code (per the soak-before-promote discipline in
-    docs/HANDOFF-2026-04-28.md).
+    docs/handoffs/2026-04-28.md).
     """
     from scripts.validate.trace_harness import run as run_trace_harness
 

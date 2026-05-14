@@ -4,7 +4,7 @@
 
 Pure functions implementing the tamper-evidence chain construction and
 witness-binding verification described in
-docs/LEDGER_ENVELOPE_SCHEMA.md §6.1.
+docs/ledger/envelope-schema.md §6.1.
 
 Public API:
 
@@ -61,7 +61,7 @@ __all__ = [
 # is added to the `turns` table by migration 0003 with default
 # 'gestation' (pre-birth) or 'lived' (post-birth, set by writer when
 # meta.birth_event_turn_id is populated). Per
-# docs/SLICE_GESTATION_BOUNDARY_MEMO.md §6.1, this column MUST NOT be
+# docs/slices/legacy/gestation-boundary.md §6.1, this column MUST NOT be
 # included in chain-hash canonical bytes — otherwise existing chains
 # break the moment migration 0003 lands. Add it to the strip set so
 # rows with or without the column produce identical chain hashes.

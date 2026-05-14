@@ -272,7 +272,7 @@ Optional:
 | 5. Migrate legacy organ memos (X.0–X.6) and pre-anatomy memos | **DONE 2026-05-14** | Handoffs, snapshots, ledger, and flat audits can migrate next. |
 | 6A. Migrate handoffs, snapshots, ledger | **DONE 2026-05-14** | Audit migration can run after the audit tracking decision. |
 | 6B. Migrate tracked audit artifacts | **DONE 2026-05-14** | Decide separately whether to redact/track `docs/audit_2026-05-13/`. |
-| 7. Sweep cross-references in memory, code comments, `AGENTS.md`, top-level `README.md` | NOT STARTED | Final step. |
+| 7. Sweep cross-references in memory, code comments, `AGENTS.md`, top-level `README.md` | **DONE 2026-05-14** | Final tracked-doc migration sweep complete; memory hits reported but not edited. |
 
 Until each phase lands, the current paths remain valid. Body Topology, active
 slice families, legacy organ memos, pre-anatomy memos, handoffs, snapshots,
@@ -306,17 +306,15 @@ atomically with the move so no broken link lands.
 
 This is the table of contents for Maez's documentation drawer.
 
-The docs drawer is being organized in waves. Body Topology, the active slice
-families, and the legacy organ/pre-anatomy memos now live under
-`docs/slices/`. Handoffs, snapshots, ledgers, and tracked audits also have
-their own drawers. The remaining cleanup is the currently untracked
-`docs/audit_2026-05-13/` folder, which needs a separate redaction/tracking
-decision before it moves.
+The docs drawer is now organized. Body Topology, the active slice families, and
+the legacy organ/pre-anatomy memos live under `docs/slices/`. Handoffs,
+snapshots, ledgers, and tracked audits also have their own drawers. The
+remaining cleanup is the currently untracked `docs/audit_2026-05-13/` folder,
+which needs a separate redaction/tracking decision before it moves.
 
-This map describes both where things live now and where they will live after the
-remaining migration phases, so future agents can navigate in either state.
-Until each move lands, the old paths for unmigrated files still work and every
-existing reference stays valid.
+This map describes where things live now. The old flat-path references have been
+swept from tracked repo surfaces; memory-layer hits were deliberately reported,
+not edited.
 
 New docs going forward should use the target layout — for example, the next
 slice spec lands directly at `docs/slices/<slug>/spec.md`, not as another flat

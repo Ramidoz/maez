@@ -2221,7 +2221,7 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         )
 
     def test_slice_memo_answers_thesis_question(self):
-        path = _REPO / "docs" / "SLICE_X0_MOMENT_ASSEMBLY_DIAGNOSTIC_MEMO.md"
+        path = _REPO / "docs" / "slices" / "organs" / "x0-moment-assembly-diagnostic.md"
         text = path.read_text(encoding="utf-8")
         self.assertIn(
             "Does this let the bond shape Maez's attention without corrupting what Maez knows to be true?",
@@ -2234,7 +2234,7 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("coordination", text)
 
     def test_x02_slice_memo_names_runtime_enforcement_deferral(self):
-        path = _REPO / "docs" / "SLICE_X02_BYPASS_AUTO_FIRE_MEMO.md"
+        path = _REPO / "docs" / "slices" / "organs" / "x02-bypass-auto-fire.md"
         text = path.read_text(encoding="utf-8")
         self.assertIn("complete_moment_assembly_turn", text)
         self.assertIn("exactly one", text)
@@ -2244,7 +2244,7 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("Does this let the bond shape Maez's attention", text)
 
     def test_x03_slice_memo_pins_runtime_enforcement_contract(self):
-        path = _REPO / "docs" / "SLICE_X03_RUNTIME_CLOSURE_COVERAGE_MEMO.md"
+        path = _REPO / "docs" / "slices" / "organs" / "x03-runtime-closure-coverage.md"
         text = path.read_text(encoding="utf-8")
         self.assertIn(
             "Covenant clauses are documentation discipline, not enforcement. "
@@ -2258,7 +2258,7 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("Does this let the bond shape Maez's attention", text)
 
     def test_x1_slice_memo_pins_anticipation_contract(self):
-        path = _REPO / "docs" / "SLICE_X1_ANTICIPATION_ORGAN_MEMO.md"
+        path = _REPO / "docs" / "slices" / "organs" / "x1-anticipation-organ.md"
         text = path.read_text(encoding="utf-8")
         self.assertIn("closed enum", text)
         self.assertIn("JSONL replay", text)
@@ -2270,7 +2270,9 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("Does this let the bond shape Maez's attention", text)
 
     def test_x2_slice_memo_and_rules_pin_open_loop_contract(self):
-        memo = (_REPO / "docs" / "SLICE_X2_OPEN_LOOPS_ORGAN_MEMO.md").read_text(encoding="utf-8")
+        memo = (_REPO / "docs" / "slices" / "organs" / "x2-open-loops-organ.md").read_text(
+            encoding="utf-8"
+        )
         rules = (_REPO / "docs" / "governance" / "MOMENT_ASSEMBLY_DIAGNOSTIC_RULES.md").read_text(
             encoding="utf-8"
         )
@@ -2289,7 +2291,7 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("changing hash basis requires ADR", adr)
 
     def test_x21_slice_memo_pins_loop_id_basis_rename(self):
-        path = _REPO / "docs" / "SLICE_X21_OPEN_LOOP_VERSION_RENAME_MEMO.md"
+        path = _REPO / "docs" / "slices" / "organs" / "x21-open-loop-version-rename.md"
         text = path.read_text(encoding="utf-8")
 
         self.assertIn("loop_id_basis_version", text)
@@ -2298,7 +2300,9 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("Predicted Effect", text)
 
     def test_x3_slice_memo_rules_and_adr_pin_bond_topology_contract(self):
-        memo = (_REPO / "docs" / "SLICE_X3_BOND_TOPOLOGY_ORGAN_MEMO.md").read_text(encoding="utf-8")
+        memo = (_REPO / "docs" / "slices" / "organs" / "x3-bond-topology-organ.md").read_text(
+            encoding="utf-8"
+        )
         rules = (_REPO / "docs" / "governance" / "MOMENT_ASSEMBLY_DIAGNOSTIC_RULES.md").read_text(
             encoding="utf-8"
         )
@@ -2321,7 +2325,9 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("BOND_TOPOLOGY_EDGE_HASH_PREFIX", adr)
 
     def test_x5_slice_memo_rules_and_adr_pin_body_state_contract(self):
-        memo = (_REPO / "docs" / "SLICE_X5_BODY_STATE_ORGAN_MEMO.md").read_text(encoding="utf-8")
+        memo = (_REPO / "docs" / "slices" / "organs" / "x5-body-state-organ.md").read_text(
+            encoding="utf-8"
+        )
         rules = (_REPO / "docs" / "governance" / "MOMENT_ASSEMBLY_DIAGNOSTIC_RULES.md").read_text(
             encoding="utf-8"
         )
@@ -2350,7 +2356,7 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("mechanical-enum vocabulary", rules)
 
     def test_x4_slice_memo_rules_and_adr_pin_counterevidence_contract(self):
-        memo = (_REPO / "docs" / "SLICE_X4_COUNTEREVIDENCE_ORGAN_MEMO.md").read_text(
+        memo = (_REPO / "docs" / "slices" / "organs" / "x4-counterevidence-organ.md").read_text(
             encoding="utf-8"
         )
         rules = (_REPO / "docs" / "governance" / "MOMENT_ASSEMBLY_DIAGNOSTIC_RULES.md").read_text(
@@ -2384,7 +2390,7 @@ class MomentAssemblyGovernanceDocTests(unittest.TestCase):
         self.assertIn("Subject_class invariant", rules)
 
     def test_x11_slice_memo_pins_replay_hardening_contract(self):
-        path = _REPO / "docs" / "SLICE_X11_ANTICIPATION_REPLAY_HARDENING_MEMO.md"
+        path = _REPO / "docs" / "slices" / "organs" / "x11-anticipation-replay-hardening.md"
         text = path.read_text(encoding="utf-8")
         self.assertIn("partial rows", text)
         self.assertIn("warns once", text.lower())

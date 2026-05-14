@@ -45,7 +45,7 @@ def recent_turns_by_kind(
     label hook.
 
     ``recall_gestation`` (Gestation Boundary slice, 2026-05-08, per
-    docs/SLICE_GESTATION_BOUNDARY_MEMO.md §4):
+    docs/slices/legacy/gestation-boundary.md §4):
 
       * ``"user"`` (default) — user-facing recall: rows are sorted
         with ``lifecycle_stage='lived'`` first, then ``'gestation'``,

@@ -318,7 +318,7 @@ class DreamState:
         # emitting proper code-formatted commands is the right fix
         # at the source.
         if self.telegram is not None:
-            # 2026-04-24 audit pass (docs/audit_2026-04-24/
+            # 2026-04-24 audit pass (docs/audits/2026-04-24/
             # autonomous_surface_audit.md, F2): `insight` is raw LLM
             # output — route it through the same audit stack the
             # interactive reply path uses so an ungrounded or

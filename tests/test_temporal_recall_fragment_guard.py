@@ -2,7 +2,7 @@
 # Licensed under the GNU Affero General Public License v3.0 or later.
 """TRF tests: temporal-anchor recall + ARS fragment guard.
 
-These tests pin docs/SLICE_TEMPORAL_RECALL_AND_ARS_FRAGMENT_GUARD.md.
+These tests pin docs/slices/temporal-recall-fragment-guard/spec.md.
 They intentionally exercise pure helpers first so daemon wiring stays
 thin and auditable.
 """

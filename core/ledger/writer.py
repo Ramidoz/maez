@@ -3,7 +3,7 @@
 """Maez ledger production writer.
 
 Implements the append-only writer for the ledger ``turns`` table. Every
-write computes a ``chain_hash`` per LEDGER_ENVELOPE_SCHEMA.md §6.1 and
+write computes a ``chain_hash`` per docs/ledger/envelope-schema.md §6.1 and
 updates the ``meta.last_chain_hash`` head pointer in the same SQLite
 transaction so the chain has a verifiable head at all times.
 
@@ -65,7 +65,7 @@ _TRUE_VALUES = {"1", "true"}
 _FALSE_VALUES = {"0", "false", "no", "off", ""}
 _REHEARSAL_ROOT = Path(__file__).resolve().parents[2] / "logs" / "rehearsal"
 
-# Per-kind contract from LEDGER_ENVELOPE_SCHEMA.md §4.2.
+# Per-kind contract from docs/ledger/envelope-schema.md §4.2.
 # Field names below are the kwarg base names used by write_turn — they
 # are substrings of the underlying column names (e.g. "evidence_envelope"
 # is a substring of "evidence_envelope_json"), so error messages remain

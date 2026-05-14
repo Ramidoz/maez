@@ -30,7 +30,9 @@ from core.ledger import chain, migrate
 from core.ledger.writer import LedgerWriter
 
 DEFAULT_REHEARSAL_ROOT = REPO_ROOT / "logs" / "rehearsal"
-SLICE_MEMO_PATH = REPO_ROOT / "docs" / "SLICE_X6_GESTATION_LOAD_AND_READABILITY_MEMO.md"
+SLICE_MEMO_PATH = (
+    REPO_ROOT / "docs" / "slices" / "organs" / "x6-gestation-load-and-readability.md"
+)
 RULES_PATH = REPO_ROOT / "docs" / "governance" / "MOMENT_ASSEMBLY_DIAGNOSTIC_RULES.md"
 THESIS_PATH = REPO_ROOT / "docs" / "governance" / "ARCHITECTURAL_THESIS.md"
 X6_SYNTHETIC_TURNS = 200

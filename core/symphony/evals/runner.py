@@ -214,7 +214,7 @@ def _try_auto_binary(probe: EvalProbe) -> Optional[tuple[str, dict, str]]:
         if "surface_baseline_unchanged" in tags:
             from core.symphony import surface_probe as sp
             baseline_path = (
-                REPO / "docs" / "audit_symphony_2026-05-04"
+                REPO / "docs" / "audits" / "2026-05-04-symphony"
                 / "baselines" / "surface_probe_2026-05-04.json"
             )
             if not baseline_path.exists():
@@ -295,11 +295,11 @@ def run_all(*, run_id: Optional[str] = None) -> RunResult:
 
 def write_run_result(result: RunResult, *, base_dir: Optional[Path] = None) -> Path:
     """Serialize a RunResult to disk under
-    docs/audit_symphony_2026-05-04/evals/<run_id>/run_result.json.
+    docs/audits/2026-05-04-symphony/evals/<run_id>/run_result.json.
     Returns the path written."""
     if base_dir is None:
         base_dir = (
-            REPO / "docs" / "audit_symphony_2026-05-04" / "evals"
+            REPO / "docs" / "audits" / "2026-05-04-symphony" / "evals"
         )
     out_dir = base_dir / result.run_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -316,7 +316,7 @@ def write_run_result(result: RunResult, *, base_dir: Optional[Path] = None) -> P
 
 
 def _evals_dir() -> Path:
-    return REPO / "docs" / "audit_symphony_2026-05-04" / "evals"
+    return REPO / "docs" / "audits" / "2026-05-04-symphony" / "evals"
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -335,7 +335,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument(
         "--write", action="store_true",
         help="Write the RunResult to disk under "
-             "docs/audit_symphony_2026-05-04/evals/<run_id>/",
+             "docs/audits/2026-05-04-symphony/evals/<run_id>/",
     )
     p.add_argument(
         "--run-id", default=None,

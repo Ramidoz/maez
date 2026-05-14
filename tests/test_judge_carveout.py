@@ -2,7 +2,7 @@
 # Licensed under the GNU Affero General Public License v3.0 or later.
 """Slice 3 proper — carve-out classification block in the judge prompt.
 
-Per docs/SLICE_3_0c_CARVEOUT_MEMO.md (RATIFIED 2026-05-07), the judge
+Per docs/slices/legacy/3-0c-carveout.md (RATIFIED 2026-05-07), the judge
 prompt MUST encode:
   §3 exclusion list (verbatim categories)
   §2/§4 positive carve-out examples

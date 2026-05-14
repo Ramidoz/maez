@@ -3,7 +3,7 @@
 """Evidence-envelope vocabulary and structural validation.
 
 This module is the single source of truth for two coordinated artifacts
-defined in ``docs/LEDGER_ENVELOPE_SCHEMA.md``:
+defined in ``docs/ledger/envelope-schema.md``:
 
   1. The provenance enum (§2). Every ``ClaimSlot`` in an evidence
      envelope, and every row in ``claim_judgements.provenance``, MUST
@@ -48,7 +48,7 @@ __all__ = [
 LIFECYCLE_STAGES: frozenset[str] = frozenset({"gestation", "lived"})
 
 
-# Provenance enum — see LEDGER_ENVELOPE_SCHEMA.md §2.
+# Provenance enum — see docs/ledger/envelope-schema.md §2.
 # String values are kebab-case / lowercase / no aliases.
 #
 # Slice 3.0b additions (2026-05-07):

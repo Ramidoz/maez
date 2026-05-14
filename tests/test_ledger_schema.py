@@ -4,7 +4,7 @@
 
 The ledger is the per-turn audit/evidence root of Maez's personalization
 stack. This file locks in the schema declared in
-docs/LEDGER_ENVELOPE_SCHEMA.md §4.1–§4.4 so it cannot drift without a
+docs/ledger/envelope-schema.md §4.1–§4.4 so it cannot drift without a
 test failure.
 
 These tests are TDD-first: core.ledger.migrate does not yet exist. The

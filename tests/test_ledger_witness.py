@@ -3,7 +3,7 @@
 """TDD tests for core.ledger.chain witness verification.
 
 These tests lock in the witness-binding contract from
-LEDGER_ENVELOPE_SCHEMA.md §6.1:
+docs/ledger/envelope-schema.md §6.1:
 
   - claims.parent_turn_chain_hash MUST equal the parent turn's
     chain_hash at insert time.
@@ -41,7 +41,7 @@ _WRONG_HEX_C = "1234567890abcdef" * 4
 
 
 def _build_synthetic_turn(turn_id: str, prev_chain_hash: str | None) -> dict:
-    """Produce a turn dict shaped per LEDGER_ENVELOPE_SCHEMA.md §4.2."""
+    """Produce a turn dict shaped per docs/ledger/envelope-schema.md §4.2."""
     row = {
         "turn_id": turn_id,
         "tenant_id": "owner",

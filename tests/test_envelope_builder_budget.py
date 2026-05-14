@@ -2,7 +2,7 @@
 # Licensed under the GNU Affero General Public License v3.0 or later.
 """Slice 3.0d cap + telemetry contract tests for BoundedEnvelopeBuilder.
 
-Locks the ratified docs/SLICE_3_0d_TOKEN_BUDGET_MEMO.md as executable
+Locks the ratified docs/slices/legacy/3-0d-token-budget.md as executable
 contract:
 
   §1   3K-token total cap → 12K-char enforcement (chars_per_token=4)
@@ -601,7 +601,7 @@ class ToolResultsCompressionRuleTests(unittest.TestCase):
 
 
 class SchemaMetadataTests(unittest.TestCase):
-    """Per LEDGER_ENVELOPE_SCHEMA.md §3.1, the envelope carries
+    """Per docs/ledger/envelope-schema.md §3.1, the envelope carries
     schema_version, built_at, and (when supplied) turn_id at the top
     level. Reviewer-flagged: the minimal fallback memo §3a explicitly
     requires schema_version on the truncated shape."""

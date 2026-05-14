@@ -34,7 +34,7 @@ Docs (untracked, NOT staged — awaiting review):
   docs/MAEZ_LIFE_SUBSTRATE.md                        (v1.0, 12-organ plan +
                                                        dependency graph +
                                                        S1a/S1a.1/S1b split)
-  docs/SLICE_S1A1_PRIVATE_THOUGHTS_HARDENING.md      (S1a.1 slice memo with
+  docs/slices/s1a1-private-thoughts-hardening/spec.md      (S1a.1 slice memo with
                                                        6 amendments)
   docs/TRACK_A.md                                    (modified — added peer-docs
                                                        cross-reference section)

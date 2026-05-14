@@ -11,7 +11,7 @@ _parse_session_snapshot) and hand-written snapshots from prior
 sessions.
 
 What this is NOT:
-  • Not a handoff doc. ``docs/HANDOFF-YYYY-MM-DD.md`` is the
+  • Not a handoff doc. ``docs/handoffs/YYYY-MM-DD.md`` is the
     narrative artifact (manually written, "next-action recipe"
     shaped). The snapshot is the mechanical companion —
     auto-generated, parser-readable, time-stamped.
@@ -262,7 +262,7 @@ def _next_priorities_bullets() -> list[str]:
     # Most recent in-flight session-snapshot.
     out.append(
         "Run the substrate observation greps from "
-        "HANDOFF-2026-05-01.md if present"
+        "docs/handoffs/2026-05-01.md if present"
     )
     return out
 
@@ -378,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
             "in logs/snapshots/. Mechanical state capture; a "
             "consumer at skills/web_interface.py:_parse_session_snapshot "
             "renders this in the cockpit. Distinct from the narrative "
-            "docs/HANDOFF-*.md."
+            "docs/handoffs/*.md."
         ),
     )
     p.add_argument(

@@ -3,7 +3,7 @@
 """Append-only invariant tests for the Maez ledger.
 
 The ledger is the root of the personalization stack
-(see docs/LEDGER_ENVELOPE_SCHEMA.md §0). Its honesty rests on a
+(see docs/ledger/envelope-schema.md §0). Its honesty rests on a
 single load-bearing rule: rows in `turns`, `claims`, and
 `claim_judgements` are NEVER updated and NEVER deleted. Corrections
 are append-only — a new row that links back via `correction_of`,
@@ -56,7 +56,7 @@ def tearDownModule():
 
 
 # Columns we expect to exist on each table. These are the column
-# names from docs/LEDGER_ENVELOPE_SCHEMA.md §4. Each is tested for
+# names from docs/ledger/envelope-schema.md §4. Each is tested for
 # UPDATE refusal individually because §1 principle 2 + §10 promise
 # is a per-column promise, not a "most columns" promise.
 _TURNS_COLUMNS = (
@@ -289,7 +289,7 @@ class _AppendOnlyMixin:
             msg=(
                 f"UPDATE on {self.table}.{column} was permitted; the "
                 f"append-only trigger is missing or misconfigured. "
-                f"Per docs/LEDGER_ENVELOPE_SCHEMA.md §1 principle 2 "
+                f"Per docs/ledger/envelope-schema.md §1 principle 2 "
                 f"and §10 (ratified 2026-05-06), {self.table} is "
                 f"strictly immutable."
             ),

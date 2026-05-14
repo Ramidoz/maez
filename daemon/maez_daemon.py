@@ -2819,7 +2819,7 @@ class MaezDaemon:
         minutes after several restarts), `_last_briefing_date` was
         in-memory only and every restart re-enabled the briefing.
 
-        2026-04-24 audit pass (see docs/audit_2026-04-24/
+        2026-04-24 audit pass (see docs/audits/2026-04-24/
         autonomous_surface_audit.md, F1): (a) the briefing now goes
         through `audit_assistant_text` before send so an LLM
         fabrication has the same backstop as interactive replies;

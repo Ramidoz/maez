@@ -135,7 +135,7 @@ class FamilyResult:
 class RunResult:
     """Top-level result for a `run_all()` invocation.
 
-    Serialized to docs/audit_symphony_2026-05-04/evals/<run_id>/
+    Serialized to docs/audits/2026-05-04-symphony/evals/<run_id>/
     run_result.json — the canonical record of one harness run.
     """
     run_id: str

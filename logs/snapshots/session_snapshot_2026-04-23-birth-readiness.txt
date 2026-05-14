@@ -204,6 +204,6 @@ What the next session picks up
    make the ground under Track A stable enough for birth to be
    safe when it comes.
 
-6. docs/HANDOFF-2026-04-23.md still points at this snapshot as
+6. docs/handoffs/2026-04-23.md still points at this snapshot as
    the read-list anchor. Refresh that doc if the pass moves past
    the specific operational state documented there.

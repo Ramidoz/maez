@@ -67,6 +67,6 @@ PRODUCTION STATE
 NEXT SESSION PRIORITIES
 ========================================
 
-- Read latest handoff: docs/HANDOFF-2026-05-01.md
+- Read latest handoff: docs/handoffs/2026-05-01.md
 - Track A anchor: docs/TRACK_A.md
-- Run the substrate observation greps from HANDOFF-2026-05-01.md if present
+- Run the substrate observation greps from docs/handoffs/2026-05-01.md if present

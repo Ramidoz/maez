@@ -219,7 +219,7 @@ def _record(
     Every row is hard-coded to 0 at the INSERT site so no caller
     (including a buggy or compromised producer) can bypass the
     default-deny gate. Opt-in flows through a separate operator-
-    reviewed audit path; see actions_2026-05-04.md.
+    reviewed audit path; see docs/snapshots/actions-2026-05-04.md.
     """
     try:
         phash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
@@ -272,7 +272,7 @@ def training_eligible_calls(
     is the schema-level invariant; ``caller`` is the runtime check
     (``self_dev/*`` and ``longmemeval-judge`` are notable callers
     that should NEVER be in the default allowlist — see ACTION-Hi-1
-    rationale in actions_2026-05-04.md).
+    rationale in docs/snapshots/actions-2026-05-04.md).
 
     Returns row dicts. Caller types should be filtered by the
     consuming exporter; this function only reports what's eligible.

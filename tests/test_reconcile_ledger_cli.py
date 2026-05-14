@@ -3,7 +3,7 @@
 """TDD tests for scripts/reconcile_ledger.py.
 
 The script does not exist yet; subprocess invocation will fail until
-it lands. Pins the CLI contract per LEDGER_ENVELOPE_SCHEMA.md §6.2:
+it lands. Pins the CLI contract per docs/ledger/envelope-schema.md §6.2:
 
   - default is dry-run (no writes)
   - --apply requires MAEZ_LEDGER_WRITES=1

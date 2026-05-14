@@ -320,9 +320,9 @@ class X6ReadabilityAndInvariantTests(unittest.TestCase):
         self.assertEqual(hits, [])
 
     def test_x6_slice_memo_and_rules_pin_rehearsal_contract(self):
-        memo = (_REPO / "docs" / "SLICE_X6_GESTATION_LOAD_AND_READABILITY_MEMO.md").read_text(
-            encoding="utf-8"
-        )
+        memo = (
+            _REPO / "docs" / "slices" / "organs" / "x6-gestation-load-and-readability.md"
+        ).read_text(encoding="utf-8")
         rules = (
             _REPO / "docs" / "governance" / "MOMENT_ASSEMBLY_DIAGNOSTIC_RULES.md"
         ).read_text(encoding="utf-8")
