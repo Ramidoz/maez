@@ -267,6 +267,7 @@ Proposed environment/local-config names:
 ```text
 MAEZ_CAMERA_PRESENCE_MODE=disabled|observe
 MAEZ_CAMERA_PRESENCE_ENABLED_UNTIL=2026-05-22T23:59:59-05:00
+MAEZ_CAMERA_PRESENCE_CAMERA_INDEX=1   # optional owner-local device selector
 ```
 
 Rules:
@@ -275,6 +276,8 @@ Rules:
 - `observe` without valid `enabled_until` means disabled;
 - expired `enabled_until` means `expired_disabled`;
 - malformed `enabled_until` means disabled with `last_error_class`;
+- unset camera index means the implementation default is used;
+- malformed camera index logs a bounded warning and falls back to default;
 - `developer_legacy` is rejected by daemon mode resolution;
 - no configuration value may contain camera output, labels, or identity.
 

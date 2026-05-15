@@ -20,6 +20,7 @@ from typing import Optional
 logger = logging.getLogger("maez")
 
 CAMERA_INDEX = 0
+CAMERA_INDEX_ENV = "MAEZ_CAMERA_PRESENCE_CAMERA_INDEX"
 try:
     from core.infra import paths as _paths
 
@@ -92,6 +93,22 @@ def _configure_cv2_runtime(cv2_module) -> None:
     except Exception:
         pass
 
+
+def _camera_index() -> int:
+    """Resolve the local camera index without widening observation surface."""
+    raw_index = (os.environ.get(CAMERA_INDEX_ENV) or "").strip()
+    if raw_index:
+        try:
+            return int(raw_index)
+        except ValueError:
+            logger.warning(
+                "Invalid %s=%r; using default camera index",
+                CAMERA_INDEX_ENV,
+                raw_index,
+            )
+    return CAMERA_INDEX
+
+
 @dataclass
 class PresenceSnapshot:
     presence_detected: bool
@@ -134,9 +151,10 @@ def _detect_presence() -> tuple:
         if detector is None:
             return _mark_detection_unavailable("face detector failed to initialize")
 
-        cap = cv2.VideoCapture(CAMERA_INDEX)
+        camera_index = _camera_index()
+        cap = cv2.VideoCapture(camera_index)
         if not cap.isOpened():
-            return _mark_detection_unavailable(f"camera {CAMERA_INDEX} not available")
+            return _mark_detection_unavailable(f"camera {camera_index} not available")
 
         detections = 0
         max_conf = 0.0
