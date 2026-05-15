@@ -240,7 +240,6 @@ _FILE_TAGS = {
     'skills/screen_perception.py': ['browser_usage', 'development_tools'],
     'skills/presence_perception.py': ['rohit_presence'],
     'skills/face_enrollment.py': ['rohit_presence'],
-    'skills/calendar_perception.py': ['calendar'],
     'skills/wake_word.py': ['general_presence'],
     'skills/voice_input.py': ['general_presence'],
     'skills/voice_output.py': ['general_presence'],

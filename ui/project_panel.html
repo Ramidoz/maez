@@ -56,7 +56,7 @@ h1 { margin: 6px 0 5px; font-size: clamp(30px, 5vw, 54px); line-height: 1; }
   color: var(--muted);
 }
 .grid { display: grid; gap: 14px; }
-.live-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); margin-bottom: 18px; }
+.live-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); margin-bottom: 18px; }
 .two { grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr); }
 .card {
   background: rgba(23, 19, 14, 0.88);
@@ -149,6 +149,7 @@ h1 { margin: 6px 0 5px; font-size: clamp(30px, 5vw, 54px); line-height: 1; }
     <div class="card"><div class="k">heartbeat</div><div class="v" id="liveHeartbeat">-</div><div class="small mono" id="liveHeartbeatStage">-</div></div>
     <div class="card"><div class="k">M1</div><div class="v" id="liveM1">-</div></div>
     <div class="card"><div class="k">biography</div><div class="v" id="liveBio">-</div></div>
+    <div class="card"><div class="k">Calendar</div><div class="v" id="liveCalendar">-</div><div class="small mono" id="liveCalendarMode">-</div></div>
     <div class="card"><div class="k">memory</div><div class="v" id="liveMemory">-</div></div>
   </section>
 
@@ -212,6 +213,7 @@ async function loadHealth() {
     const m1 = h.lived_episodes && h.lived_episodes.m1;
     const stale = h.lived_episodes && h.lived_episodes.staleness;
     const loop = h.reasoning_loop || {};
+    const calendar = h.calendar || {};
     const memory = h.memory || {};
     const total = memory.total || ((memory.raw || 0) + (memory.daily || 0) + (memory.core || 0));
 
@@ -226,6 +228,9 @@ async function loadHealth() {
     $('liveM1').className = 'v ' + (m1 && m1.enabled ? 'ok' : 'warn');
     $('liveBio').textContent = stale ? stale.staleness_status : '-';
     $('liveBio').className = 'v ' + classForStatus(stale && stale.staleness_status);
+    $('liveCalendar').textContent = calendar.connector_state || '-';
+    $('liveCalendar').className = 'v ' + classForStatus(calendar.connector_state);
+    $('liveCalendarMode').textContent = calendar.mode || '-';
     $('liveMemory').textContent = total ? total.toLocaleString() : '-';
   } catch (err) {
     $('liveDaemon').textContent = 'offline';

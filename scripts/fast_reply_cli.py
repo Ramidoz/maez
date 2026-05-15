@@ -50,7 +50,6 @@ from core.fast_conversation_log import get_log
 from skills.fast_reply_prototype import fast_reply, FORBIDDEN_HOT_PATH_IMPORTS
 from skills.screen_cache_worker import ScreenCacheWorker
 from skills.system_cache_worker import SystemCacheWorker
-from skills.calendar_cache_worker import CalendarCacheWorker
 
 
 def _format_metrics_block(m) -> str:
@@ -171,9 +170,8 @@ def main() -> int:
     if args.prime_perception:
         sw = ScreenCacheWorker(cache=cache)
         ssw = SystemCacheWorker(cache=cache)
-        cw = CalendarCacheWorker(cache=cache)
-        sw.start(); ssw.start(); cw.start()
-        workers = [sw, ssw, cw]
+        sw.start(); ssw.start()
+        workers = [sw, ssw]
         # Give them a moment to populate at least the cheap sources.
         time.sleep(1.2)
 

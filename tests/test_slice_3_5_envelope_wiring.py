@@ -9,6 +9,7 @@ paths plus CLI and web /chat. These tests are source-level because the
 live daemon/web/CLI entry points are not safe to import/run on unstable
 hardware during the slice.
 """
+
 from __future__ import annotations
 
 import re
@@ -29,7 +30,7 @@ def _method_body(src: str, name: str) -> str:
         start = src.find(f"async def {name}")
     if start == -1:
         raise AssertionError(f"{name} not found")
-    m = re.search(r"\n    (?:async\s+)?def ", src[start + 20:])
+    m = re.search(r"\n    (?:async\s+)?def ", src[start + 20 :])
     end = start + 20 + m.start() if m else len(src)
     return src[start:end]
 
@@ -50,7 +51,7 @@ class DaemonSlice35WiringTests(unittest.TestCase):
                 body = _method_body(src, method)
                 surface_pos = body.find(f'surface="{surface}"')
                 self.assertGreater(surface_pos, 0, f"{surface} call not found")
-                call_window = body[surface_pos:surface_pos + 2500]
+                call_window = body[surface_pos : surface_pos + 2500]
                 self.assertIn(
                     "evidence_envelope=",
                     call_window,
@@ -75,7 +76,7 @@ class DaemonSlice35WiringTests(unittest.TestCase):
             "generation, not audit-only after the fact.",
         )
 
-    def test_daemon_cycle_presence_and_calendar_require_success(self):
+    def test_daemon_cycle_presence_requires_success_and_calendar_is_absent_by_default(self):
         src = _read("daemon/maez_daemon.py")
         body = _method_body(src, "_reason")
         self.assertIn(
@@ -84,12 +85,8 @@ class DaemonSlice35WiringTests(unittest.TestCase):
             "presence snapshot must not be claimable merely because a "
             "failed snapshot object exists.",
         )
-        self.assertIn(
-            'getattr(\n            self._last_calendar_snap, "success", False',
-            body,
-            "calendar must not be claimable merely because a failed "
-            "snapshot object exists.",
-        )
+        self.assertNotIn("calendar — live", body)
+        self.assertIn("Calendar v1 not enabled", body)
         loop_body = _method_body(src, "_loop")
         self.assertIn(
             'getattr(\n                        self._last_presence_snap, "success", False',
@@ -97,12 +94,7 @@ class DaemonSlice35WiringTests(unittest.TestCase):
             "daemon_cycle audit manifest must match the envelope prompt "
             "semantics for failed presence snapshots.",
         )
-        self.assertIn(
-            'getattr(\n                        self._last_calendar_snap, "success", False',
-            loop_body,
-            "daemon_cycle audit manifest must match the envelope prompt "
-            "semantics for failed calendar snapshots.",
-        )
+        self.assertIn('_cycle_signals_absent.append("calendar")', loop_body)
 
 
 class WebSlice35WiringTests(unittest.TestCase):
@@ -113,16 +105,20 @@ class WebSlice35WiringTests(unittest.TestCase):
         self.assertIn("build_envelope", body)
         self.assertIn("render_envelope_for_prompt", body)
         self.assertIn("_evidence_envelope", body)
-        self.assertIn("messages_list.append({\"role\": \"system\", \"content\": _envelope_block})", body)
-        self.assertIn("messages_list.insert(-1, {\"role\": \"system\", \"content\": _envelope_block})", body)
+        self.assertIn('messages_list.append({"role": "system", "content": _envelope_block})', body)
+        self.assertIn(
+            'messages_list.insert(-1, {"role": "system", "content": _envelope_block})', body
+        )
         self.assertIn('"name": "web_tool_loop"', body)
         self.assertIn('"summary": jarvis_transcript_web', body)
-        self.assertIn("simple_msgs.insert(-1, {\"role\": \"system\", \"content\": _envelope_block})", body)
+        self.assertIn(
+            'simple_msgs.insert(-1, {"role": "system", "content": _envelope_block})', body
+        )
         self.assertIn("system_parts =", body)
-        self.assertIn("system_prompt_for_api = \"\\n\\n\".join(system_parts)", body)
+        self.assertIn('system_prompt_for_api = "\\n\\n".join(system_parts)', body)
         audit_idx = body.rfind("reply = audit_assistant_text(")
         self.assertGreater(audit_idx, 0)
-        self.assertIn("evidence_envelope=_evidence_envelope", body[audit_idx:audit_idx + 250])
+        self.assertIn("evidence_envelope=_evidence_envelope", body[audit_idx : audit_idx + 250])
 
     def test_daemon_render_failure_nulls_envelope_before_audit(self):
         src = _read("daemon/maez_daemon.py")
@@ -136,7 +132,7 @@ class WebSlice35WiringTests(unittest.TestCase):
             with self.subTest(surface=surface):
                 idx = src.find(f"render failed for {surface}")
                 self.assertGreater(idx, 0)
-                window = src[idx:idx + 350]
+                window = src[idx : idx + 350]
                 if surface == "daemon_cycle":
                     self.assertIn("_cycle_evidence_envelope = None", window)
                 else:
@@ -161,7 +157,7 @@ class WebSlice35WiringTests(unittest.TestCase):
         body = _method_body(_read("skills/web_interface.py"), "chat")
         audit_idx = body.rfind("reply = audit_assistant_text(")
         self.assertGreater(audit_idx, 0)
-        audit_window = body[audit_idx:audit_idx + 350]
+        audit_window = body[audit_idx : audit_idx + 350]
         self.assertIn("signals_present=_web_signals_present", audit_window)
         self.assertIn("signals_absent=_web_signals_absent", audit_window)
         self.assertIn("evidence_envelope=_evidence_envelope", audit_window)
@@ -175,8 +171,8 @@ class CliSlice35WiringTests(unittest.TestCase):
         self.assertIn("_evidence_envelope", src)
         audit_idx = src.find('surface="cli"')
         self.assertGreater(audit_idx, 0)
-        self.assertIn("evidence_envelope=_evidence_envelope", src[audit_idx:audit_idx + 350])
-        self.assertIn("in_tool_continuation=(iteration > 0)", src[audit_idx:audit_idx + 350])
+        self.assertIn("evidence_envelope=_evidence_envelope", src[audit_idx : audit_idx + 350])
+        self.assertIn("in_tool_continuation=(iteration > 0)", src[audit_idx : audit_idx + 350])
 
 
 class TelegramPublicSlice35WiringTests(unittest.TestCase):

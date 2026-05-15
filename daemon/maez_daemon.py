@@ -68,11 +68,12 @@ from core.memory.cycle_recall_context import (
     make_empty as _crc_empty,
 )
 from core.perception import snapshot as perception_snapshot, format_snapshot
+from core.information_limb.calendar_v1 import build_calendar_health
+from core.information_limb.calendar_v1_config import CalendarMode, resolve_calendar_mode
 from skills.telegram_voice import TelegramVoice
 from skills.telegram_public import MaezPublicBot
 from core.action_engine import ActionEngine
 from skills.screen_perception import observe as screen_observe, ScreenObservation
-from skills.calendar_perception import observe as calendar_observe, CalendarSnapshot
 from memory.quality_tracker import QualityTracker
 from skills.presence_perception import (
     observe as presence_observe,
@@ -125,6 +126,7 @@ PID_FILE = BASE_DIR / "daemon" / "maez.pid"
 SHUTDOWN_FILE = BASE_DIR / "daemon" / "last_shutdown"
 LEDGER_DB_PATH = Path(os.environ.get("MAEZ_LEDGER_DB_PATH") or (MEMORY_DIR / "ledger.db"))
 M1_ALLOWED_PROMOTION_SOURCES = frozenset({"telegram_surface", "telegram_text"})
+CALENDAR_MODE = resolve_calendar_mode(os.environ)
 
 # --- Constants ---
 from core.model_config import PRIMARY_MODEL as MODEL  # single source of truth — /etc/maez/model.env
@@ -499,10 +501,16 @@ class MaezDaemon:
         self._last_screen_obs: ScreenObservation | None = None
         self._screen_cycle_counter = 0
         self.SCREEN_OBSERVE_EVERY_N_CYCLES = 2  # observe every 2 cycles (~60s)
-        self._last_calendar_snap: CalendarSnapshot | None = None
+        self._calendar_mode = CALENDAR_MODE
+        self._calendar_legacy_enabled = self._calendar_mode == CalendarMode.LEGACY_DEV_ONLY
+        self._calendar_observe = None
+        if self._calendar_legacy_enabled:
+            from skills.calendar_perception import observe as _legacy_calendar_observe
+
+            self._calendar_observe = _legacy_calendar_observe
+        self._last_calendar_snap = None
         self._calendar_cycle_counter = 0
         self.CALENDAR_OBSERVE_EVERY_N_CYCLES = 10  # every ~5 minutes
-        self._calendar_alerted_events: set = set()
         self._quality_tracker = QualityTracker()
         self._reflection_cycle_counter = 0
         self.REFLECTION_EVERY_N_CYCLES = 20  # every ~10 minutes
@@ -854,6 +862,14 @@ class MaezDaemon:
                 "last_flush_checked_at": None,
                 "error": str(exc)[:120],
             }
+
+    def _calendar_health(self) -> dict:
+        """Content-free Calendar v1 state for /health."""
+
+        return build_calendar_health(
+            mode=self._calendar_mode.value,
+            auth_ready=False,
+        )
 
     def _mark_cycle_stage(self, stage: str) -> None:
         """Record the current daemon-cycle stage for hang diagnosis."""
@@ -1630,10 +1646,6 @@ class MaezDaemon:
         if self._last_screen_obs is not None:
             prompt += f"\n{self._last_screen_obs.format_for_context()}\n"
 
-        # Add calendar context if available
-        if self._last_calendar_snap is not None:
-            prompt += f"\n{self._last_calendar_snap.format_for_context()}\n"
-
         # Add presence context if available — gated by Patch A so a
         # stale presence (no transitions for 3+ stored thoughts) gets
         # stripped from the prompt and the model doesn't repeat
@@ -1752,9 +1764,6 @@ class MaezDaemon:
         presence_present = self._last_presence_snap is not None and getattr(
             self._last_presence_snap, "success", False
         )
-        calendar_present = self._last_calendar_snap is not None and getattr(
-            self._last_calendar_snap, "success", False
-        )
         signals_present = []
         signals_absent = []
         if True:
@@ -1769,10 +1778,7 @@ class MaezDaemon:
             signals_present.append("presence snapshot — live")
         else:
             signals_absent.append("presence snapshot — UNAVAILABLE this cycle")
-        if calendar_present:
-            signals_present.append("calendar — live")
-        else:
-            signals_absent.append("calendar — UNAVAILABLE this cycle (OAuth or API)")
+        signals_absent.append("calendar — UNAVAILABLE this cycle (Calendar v1 not enabled)")
 
         signal_manifest = (
             "SIGNALS PRESENT THIS CYCLE:\n" + "\n".join(f"  ✓ {s}" for s in signals_present) + "\n"
@@ -3071,12 +3077,10 @@ class MaezDaemon:
         logger.info("Preparing morning briefing")
 
         try:
-            # Calendar
-            cal_text = ""
-            if self._last_calendar_snap and self._last_calendar_snap.success:
-                cal_text = self._last_calendar_snap.format_for_context()
-            else:
-                cal_text = "Calendar not yet loaded."
+            # Calendar v1 intentionally has no morning-briefing flow. The
+            # legacy Calendar path used raw provider text; Decision 28 removes
+            # that path instead of treating it as fallback context.
+            cal_text = "Calendar unavailable through the S2-bounded v1 path."
 
             # Git
             from skills.git_awareness import get_summary_for_telegram
@@ -3094,14 +3098,7 @@ class MaezDaemon:
             stats = self.memory.memory_stats()
             _briefing_signals_present = ["git status summary", "system stats"]
             _briefing_signals_absent = []
-            if self._last_calendar_snap is not None and getattr(
-                self._last_calendar_snap,
-                "success",
-                False,
-            ):
-                _briefing_signals_present.append("calendar")
-            else:
-                _briefing_signals_absent.append("calendar")
+            _briefing_signals_absent.append("calendar")
             if news.get("success"):
                 _briefing_signals_present.append("rss news search")
             else:
@@ -4122,39 +4119,29 @@ class MaezDaemon:
                 except Exception as e:
                     logger.warning("Screen perception error: %s", e)
 
-            # Calendar perception — refresh every ~5 minutes
-            self._mark_cycle_stage("calendar_perception")
-            self._calendar_cycle_counter += 1
-            if self._calendar_cycle_counter >= self.CALENDAR_OBSERVE_EVERY_N_CYCLES:
-                self._calendar_cycle_counter = 0
-                try:
-                    self._last_calendar_snap = calendar_observe()
-                    if self._last_calendar_snap.success:
-                        logger.info(
-                            "Calendar: %d events upcoming", len(self._last_calendar_snap.events)
-                        )
-                        # Fire Telegram alerts for imminent events
-                        alerts = self._last_calendar_snap.get_alert_events(
-                            self._calendar_alerted_events
-                        )
-                        for event, threshold, key in alerts:
-                            msg = f"⏰ '{event.title}' starts in {threshold} minutes."
-                            if event.location:
-                                msg += f"\n📍 {event.location}"
-                            try:
-                                self.telegram.send_message(msg)
-                                speak_msg = f"{event.title} starts in {threshold} minutes."
-                                speak(speak_msg, priority=True)
-                                self._calendar_alerted_events.add(key)
-                                logger.info(
-                                    "Calendar alert sent: %s in %dm", event.title, threshold
-                                )
-                            except Exception as te:
-                                logger.warning("Calendar Telegram alert failed: %s", te)
-                    else:
-                        logger.debug("Calendar fetch failed: %s", self._last_calendar_snap.error)
-                except Exception as e:
-                    logger.warning("Calendar perception error: %s", e)
+            # Calendar legacy perception is developer-test-only. Decision 28
+            # forbids raw Calendar prompt context and proactive reminder voice,
+            # so this mode may refresh a snapshot for manual diagnostics but
+            # never sends alerts or writes raw Calendar text into memory.
+            if self._calendar_legacy_enabled and self._calendar_observe is not None:
+                self._mark_cycle_stage("calendar_perception_legacy_dev_only")
+                self._calendar_cycle_counter += 1
+                if self._calendar_cycle_counter >= self.CALENDAR_OBSERVE_EVERY_N_CYCLES:
+                    self._calendar_cycle_counter = 0
+                    try:
+                        self._last_calendar_snap = self._calendar_observe()
+                        if getattr(self._last_calendar_snap, "success", False):
+                            logger.info(
+                                "Calendar legacy-dev snapshot refreshed: %d events",
+                                len(getattr(self._last_calendar_snap, "events", [])),
+                            )
+                        else:
+                            logger.debug(
+                                "Calendar legacy-dev fetch failed: %s",
+                                getattr(self._last_calendar_snap, "error", "unknown"),
+                            )
+                    except Exception as e:
+                        logger.warning("Calendar legacy-dev perception error: %s", e)
 
             # Presence detection — every ~60 seconds
             self._mark_cycle_stage("presence_perception")
@@ -4571,15 +4558,10 @@ class MaezDaemon:
                     screen_activity = self._last_screen_obs.activity
                     focus_level = self._last_screen_obs.focus_level
 
-                calendar_note = ""
-                next_event = "none"
-                if self._last_calendar_snap and self._last_calendar_snap.success:
-                    calendar_note = f" | {self._last_calendar_snap.format_for_memory()}"
-                    if self._last_calendar_snap.next_event:
-                        next_event = self._last_calendar_snap.next_event.title
+                next_event = "calendar_unavailable"
 
                 # Score and classify BEFORE storage — enriched metadata in one write
-                full_thought = result + screen_note + calendar_note
+                full_thought = result + screen_note
                 cog_metadata = cog_score_and_classify(full_thought)
                 self._last_cog_metadata = cog_metadata
 
@@ -4658,7 +4640,7 @@ class MaezDaemon:
                                         )
 
                                     # Re-score the (audited) retry
-                                    retry_thought = retry_content + screen_note + calendar_note
+                                    retry_thought = retry_content + screen_note
                                     retry_cog = cog_score_and_classify(retry_thought)
 
                                     if retry_cog.get("cog_score", 0) > initial_score:
@@ -5472,6 +5454,7 @@ class MaezDaemon:
                         "staleness": self._m1_staleness_health(),
                         "m1": self._m1_status_health(),
                     },
+                    "calendar": self._calendar_health(),
                     "credentials": _credential_health(),
                     "system": {
                         "cpu_percent": snap["cpu"]["percent"],

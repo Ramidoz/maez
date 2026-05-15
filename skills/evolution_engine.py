@@ -99,7 +99,6 @@ EVOLVABLE_SKILLS = {
     'skills/git_awareness.py',
     'skills/screen_perception.py',
     'skills/presence_perception.py',
-    'skills/calendar_perception.py',
     'skills/self_analysis.py',
 }
 
@@ -235,7 +234,7 @@ def _weakness_to_file(weakness: str) -> Optional[str]:
         'web search': 'skills/web_search.py', 'search': 'skills/web_search.py',
         'disk': 'skills/disk_cleanup.py', 'git': 'skills/git_awareness.py',
         'screen': 'skills/screen_perception.py', 'presence': 'skills/presence_perception.py',
-        'calendar': 'skills/calendar_perception.py', 'memory': 'skills/self_analysis.py',
+        'memory': 'skills/self_analysis.py',
         'repetitive': 'skills/self_analysis.py',
     }
     for kw, fp in mapping.items():

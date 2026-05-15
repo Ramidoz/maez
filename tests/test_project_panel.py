@@ -24,7 +24,7 @@ class ProjectPanelContractTests(unittest.TestCase):
         self.assertIn('@app.route("/project-panel/doc/<path:doc_path>")', src)
         self.assertIn('send_file(str(BASE_DIR / "ui" / "project_panel.html"))', src)
         self.assertIn('BASE_DIR / "docs" / "project-panel" / "state.json"', src)
-        self.assertIn('target.relative_to(docs_root)', src)
+        self.assertIn("target.relative_to(docs_root)", src)
 
     def test_project_panel_state_is_minimal_and_readable(self):
         state_path = _REPO / "docs" / "project-panel" / "state.json"
@@ -55,10 +55,10 @@ class ProjectPanelContractTests(unittest.TestCase):
         self.assertIn("fetch('/health'", page)
         self.assertIn("fetch('/project-panel/state'", page)
         self.assertIn("/project-panel/doc/", page)
-        self.assertIn("id=\"liveCards\"", page)
-        self.assertIn("id=\"observationGates\"", page)
-        self.assertIn("id=\"openWounds\"", page)
-        self.assertIn("id=\"nextMoves\"", page)
+        self.assertIn('id="liveCards"', page)
+        self.assertIn('id="observationGates"', page)
+        self.assertIn('id="openWounds"', page)
+        self.assertIn('id="nextMoves"', page)
         self.assertNotIn("cdnjs", page)
         self.assertNotIn("fonts.googleapis", page)
 
@@ -77,10 +77,21 @@ class ProjectPanelContractTests(unittest.TestCase):
     def test_project_panel_displays_reasoning_loop_heartbeat(self):
         page = (_REPO / "ui" / "project_panel.html").read_text()
 
-        self.assertIn("id=\"liveHeartbeat\"", page)
+        self.assertIn('id="liveHeartbeat"', page)
         self.assertIn("h.reasoning_loop", page)
         self.assertIn("cycle_stalled", page)
         self.assertIn("cycle_age_seconds", page)
+
+    def test_project_panel_displays_calendar_v1_health_state(self):
+        page = (_REPO / "ui" / "project_panel.html").read_text()
+
+        self.assertIn('id="liveCalendar"', page)
+        self.assertIn("h.calendar", page)
+        self.assertIn("connector_state", page)
+        self.assertNotIn("event_title", page)
+        self.assertNotIn("attendee", page)
+        self.assertNotIn("event_location", page)
+        self.assertNotIn("description", page)
 
 
 if __name__ == "__main__":
