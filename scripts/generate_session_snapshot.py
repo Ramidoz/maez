@@ -158,6 +158,20 @@ def _systemctl_pid(unit: str) -> str | None:
         return None
 
 
+def _systemctl_load_state(unit: str) -> str | None:
+    try:
+        out = subprocess.run(
+            ["systemctl", "--user", "show", "-p", "LoadState", "--value", unit],
+            capture_output=True, text=True, check=False, timeout=5,
+        )
+        if out.returncode != 0:
+            return None
+        state = out.stdout.strip()
+        return state or None
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+
 def _systemctl_active(unit: str) -> bool:
     try:
         out = subprocess.run(
@@ -182,9 +196,15 @@ _TRACKED_UNITS = (
 def _service_state() -> list[str]:
     out = []
     for unit in _TRACKED_UNITS:
+        load_state = _systemctl_load_state(unit)
         active = _systemctl_active(unit)
         pid = _systemctl_pid(unit)
-        marker = "active" if active else "inactive"
+        if load_state == "not-found":
+            marker = "not-installed"
+        elif load_state is None:
+            marker = "unknown"
+        else:
+            marker = "active" if active else "inactive"
         if pid:
             out.append(f"{unit}: {marker} (PID {pid})")
         else:

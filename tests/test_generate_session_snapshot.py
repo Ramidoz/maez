@@ -155,7 +155,9 @@ class TestServiceState(unittest.TestCase):
             commands.append(list(args))
             if args[:3] == ["systemctl", "--user", "is-active"]:
                 return subprocess.CompletedProcess(args, 0, stdout="active\n", stderr="")
-            if args[:3] == ["systemctl", "--user", "show"]:
+            if args[:3] == ["systemctl", "--user", "show"] and "LoadState" in args:
+                return subprocess.CompletedProcess(args, 0, stdout="loaded\n", stderr="")
+            if args[:3] == ["systemctl", "--user", "show"] and "MainPID" in args:
                 return subprocess.CompletedProcess(args, 0, stdout="123\n", stderr="")
             return subprocess.CompletedProcess(args, 1, stdout="inactive\n", stderr="")
 
@@ -169,6 +171,26 @@ class TestServiceState(unittest.TestCase):
             all(cmd[:2] == ["systemctl", "--user"] for cmd in commands),
             commands,
         )
+
+    def test_service_state_marks_missing_user_units_not_installed(self):
+        import subprocess
+
+        from scripts import generate_session_snapshot as gss
+
+        def fake_run(args, *a, **kw):
+            if args[:3] == ["systemctl", "--user", "is-active"]:
+                return subprocess.CompletedProcess(args, 4, stdout="inactive\n", stderr="")
+            if args[:3] == ["systemctl", "--user", "show"] and "LoadState" in args:
+                return subprocess.CompletedProcess(args, 0, stdout="not-found\n", stderr="")
+            if args[:3] == ["systemctl", "--user", "show"] and "MainPID" in args:
+                return subprocess.CompletedProcess(args, 0, stdout="0\n", stderr="")
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+        with mock.patch.object(subprocess, "run", side_effect=fake_run):
+            state = gss._service_state()
+
+        self.assertTrue(state)
+        self.assertTrue(all(row.endswith(": not-installed") for row in state), state)
 
 
 class TestCli(unittest.TestCase):
