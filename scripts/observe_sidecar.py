@@ -21,6 +21,7 @@ from urllib.request import urlopen
 DEFAULT_HEALTH_URL = "http://127.0.0.1:11435/health"
 DEFAULT_INTERVAL_SECONDS = 30.0
 DEFAULT_DURATION_SECONDS = 3600.0
+_PRESENCE_THREAD_MARKERS = ("presence", "mediapipe", "opencv", "camera")
 
 
 def _utc_now() -> str:
@@ -48,6 +49,10 @@ def project_health(
         "service": {
             "active": (service or {}).get("active"),
             "nrestarts": (service or {}).get("nrestarts"),
+            "main_pid": (service or {}).get("main_pid"),
+            "memory_current_bytes": (service or {}).get("memory_current_bytes"),
+            "tasks_current": (service or {}).get("tasks_current"),
+            "presence_native_thread_count": (service or {}).get("presence_native_thread_count"),
         },
         "heartbeat": _pick(
             health,
@@ -124,6 +129,8 @@ def red_gates(sample: dict[str, Any]) -> list[str]:
     camera_error = camera.get("last_error_class") or ""
     if camera.get("enabled") and camera_error:
         gates.append(f"camera_{camera_error}")
+    if not camera.get("enabled") and (service.get("presence_native_thread_count") or 0) > 0:
+        gates.append("camera_presence_threads_stranded")
 
     if m1.get("enabled") is False:
         gates.append("m1_disabled")
@@ -141,6 +148,45 @@ def fetch_health(url: str) -> dict[str, Any]:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _parse_int(raw: str) -> int | None:
+    try:
+        return int((raw or "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _systemctl_show_value(prop: str) -> str:
+    return subprocess.run(
+        ["systemctl", "--user", "show", "maez.service", "-p", prop, "--value"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+
+
+def presence_native_thread_count(
+    pid: int | None,
+    *,
+    proc_root: Path = Path("/proc"),
+) -> int:
+    """Count camera/native-looking daemon threads without recording names."""
+
+    if not pid or pid <= 0:
+        return 0
+    task_dir = proc_root / str(pid) / "task"
+    if not task_dir.exists():
+        return 0
+    count = 0
+    for comm_path in task_dir.glob("*/comm"):
+        try:
+            name = comm_path.read_text(encoding="utf-8", errors="replace").strip().lower()
+        except OSError:
+            continue
+        if any(marker in name for marker in _PRESENCE_THREAD_MARKERS):
+            count += 1
+    return count
+
+
 def service_status() -> dict[str, Any]:
     active = subprocess.run(
         ["systemctl", "--user", "is-active", "maez.service"],
@@ -148,17 +194,19 @@ def service_status() -> dict[str, Any]:
         text=True,
         check=False,
     ).stdout.strip()
-    nrestarts_raw = subprocess.run(
-        ["systemctl", "--user", "show", "maez.service", "-p", "NRestarts", "--value"],
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout.strip()
-    try:
-        nrestarts: int | str | None = int(nrestarts_raw)
-    except ValueError:
-        nrestarts = nrestarts_raw or None
-    return {"active": active or None, "nrestarts": nrestarts}
+    nrestarts_raw = _systemctl_show_value("NRestarts")
+    nrestarts = _parse_int(nrestarts_raw)
+    main_pid = _parse_int(_systemctl_show_value("MainPID"))
+    memory_current = _parse_int(_systemctl_show_value("MemoryCurrent"))
+    tasks_current = _parse_int(_systemctl_show_value("TasksCurrent"))
+    return {
+        "active": active or None,
+        "nrestarts": nrestarts if nrestarts is not None else nrestarts_raw or None,
+        "main_pid": main_pid,
+        "memory_current_bytes": memory_current,
+        "tasks_current": tasks_current,
+        "presence_native_thread_count": presence_native_thread_count(main_pid),
+    }
 
 
 def default_output_path() -> Path:
