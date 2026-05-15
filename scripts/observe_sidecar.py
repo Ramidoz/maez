@@ -76,6 +76,7 @@ def project_health(
                 "last_observed_at",
                 "received_at",
                 "stale_after_seconds",
+                "voice_guard_rejected_count",
             ),
         ),
         "calendar": _pick(
@@ -132,6 +133,8 @@ def red_gates(sample: dict[str, Any]) -> list[str]:
     camera_error = camera.get("last_error_class") or ""
     if camera.get("enabled") and camera_error:
         gates.append(f"camera_{camera_error}")
+    if _sample_int(camera, "voice_guard_rejected_count") > 0:
+        gates.append("camera_presence_voice_guard_rejected")
     if not camera.get("enabled") and (service.get("presence_native_thread_count") or 0) > 0:
         gates.append("camera_presence_threads_stranded")
 

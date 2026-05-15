@@ -145,6 +145,18 @@ class CameraPresenceDaemonAdapterTests(unittest.TestCase):
         self.assertNotIn("XAUTHORITY", env)
         self.assertNotIn("WAYLAND_DISPLAY", env)
 
+    def test_camera_presence_health_includes_voice_guard_counter(self):
+        from daemon.maez_daemon import MaezDaemon
+
+        daemon = _daemon_with_state()
+        with patch(
+            "daemon.maez_daemon.camera_presence_voice_health",
+            return_value={"voice_guard_rejected_count": 2},
+        ):
+            health = MaezDaemon._camera_presence_health(daemon)
+
+        self.assertEqual(health["voice_guard_rejected_count"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

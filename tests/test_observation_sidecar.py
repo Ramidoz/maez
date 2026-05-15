@@ -19,6 +19,7 @@ class ObservationSidecarTests(unittest.TestCase):
                 "last_error_class": "",
                 "source_id": "aurora_camera_presence",
                 "source_instance_id": "aurora_camera_presence.primary",
+                "voice_guard_rejected_count": 0,
             },
             "calendar": {
                 "mode": "disabled",
@@ -42,6 +43,7 @@ class ObservationSidecarTests(unittest.TestCase):
 
         self.assertEqual(sample["heartbeat"]["cycle_count"], 12)
         self.assertEqual(sample["camera_presence"]["presence_state"], "present")
+        self.assertEqual(sample["camera_presence"]["voice_guard_rejected_count"], 0)
         self.assertEqual(sample["calendar"]["mode"], "disabled")
         self.assertEqual(sample["m1"]["identity_fallback_count"], 0)
         self.assertEqual(sample["m1"]["invalid_eligibility_reason_rejected_count"], 0)
@@ -82,6 +84,7 @@ class ObservationSidecarTests(unittest.TestCase):
                 "enabled": True,
                 "last_error_class": "detector_timeout",
                 "sensor_state": "unavailable",
+                "voice_guard_rejected_count": 1,
             },
             "calendar": {"mode": "disabled"},
             "m1": {
@@ -98,6 +101,7 @@ class ObservationSidecarTests(unittest.TestCase):
             [
                 "heartbeat_stalled",
                 "camera_detector_timeout",
+                "camera_presence_voice_guard_rejected",
                 "m1_staleness_alarm",
                 "m1_identity_fallback",
                 "m1_invalid_eligibility_reason_rejected",

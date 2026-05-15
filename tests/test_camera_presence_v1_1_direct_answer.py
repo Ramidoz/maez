@@ -142,6 +142,16 @@ class CameraPresenceDirectAnswerTests(unittest.TestCase):
 
 
 class CameraPresenceVoiceGuardTests(unittest.TestCase):
+    def setUp(self):
+        from core.body.camera_presence_voice import reset_camera_presence_voice_counters_for_tests
+
+        reset_camera_presence_voice_counters_for_tests()
+
+    def tearDown(self):
+        from core.body.camera_presence_voice import reset_camera_presence_voice_counters_for_tests
+
+        reset_camera_presence_voice_counters_for_tests()
+
     def test_presence_voice_guard_accepts_approved_answer(self):
         from core.body.camera_presence_voice import presence_voice_guard
 
@@ -170,6 +180,14 @@ class CameraPresenceVoiceGuardTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             presence_voice_guard("I do not have a camera.", state=_observe_state())
+
+    def test_presence_voice_guard_rejection_increments_content_free_counter(self):
+        from core.body.camera_presence_voice import camera_presence_voice_health, presence_voice_guard
+
+        with self.assertRaises(ValueError):
+            presence_voice_guard("I can see you sitting there.", state=_observe_state())
+
+        self.assertEqual(camera_presence_voice_health()["voice_guard_rejected_count"], 1)
 
 
 class CameraPresenceDirectAnswerWiringTests(unittest.IsolatedAsyncioTestCase):

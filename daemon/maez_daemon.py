@@ -79,7 +79,7 @@ from core.body.camera_presence_state import (
     CameraPresenceState,
     resolve_camera_presence_state,
 )
-from core.body.camera_presence_voice import answer_camera_presence_question
+from core.body.camera_presence_voice import answer_camera_presence_question, camera_presence_voice_health
 from skills.telegram_voice import TelegramVoice
 from skills.telegram_public import MaezPublicBot
 from core.action_engine import ActionEngine
@@ -915,10 +915,16 @@ class MaezDaemon:
 
         try:
             self._camera_presence_state = self._camera_presence_state.with_freshness()
-            return self._camera_presence_state.to_health()
+            return {
+                **self._camera_presence_state.to_health(),
+                **camera_presence_voice_health(),
+            }
         except Exception as exc:
             logger.warning("Camera presence health degraded: %s", exc)
-            return CameraPresenceState(last_error_class="unknown").to_health()
+            return {
+                **CameraPresenceState(last_error_class="unknown").to_health(),
+                **camera_presence_voice_health(),
+            }
 
     def _mark_cycle_stage(self, stage: str) -> None:
         """Record the current daemon-cycle stage for hang diagnosis."""

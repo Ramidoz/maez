@@ -9,6 +9,7 @@ identity, room content, duration narrative, or surveillance voice.
 from __future__ import annotations
 
 import re
+import threading
 from typing import Pattern
 
 from core.body.camera_presence_state import CameraPresenceState
@@ -42,6 +43,11 @@ _FORBIDDEN_PATTERNS: tuple[Pattern[str], ...] = (
     re.compile(r"\bthinking about how quiet\b", re.I),
 )
 
+_VOICE_COUNTER_LOCK = threading.Lock()
+_VOICE_COUNTERS = {
+    "voice_guard_rejected_count": 0,
+}
+
 
 def is_camera_presence_question(text: str) -> bool:
     """Return True for direct owner questions about the camera sensor state."""
@@ -56,14 +62,34 @@ def _is_reading_question(text: str) -> bool:
     return any(pattern.search(text or "") for pattern in _READING_QUESTION_PATTERNS)
 
 
+def _increment_voice_counter(name: str) -> None:
+    with _VOICE_COUNTER_LOCK:
+        _VOICE_COUNTERS[name] = int(_VOICE_COUNTERS.get(name, 0)) + 1
+
+
+def camera_presence_voice_health() -> dict[str, int]:
+    """Return content-free camera voice-guard counters for /health."""
+
+    with _VOICE_COUNTER_LOCK:
+        return dict(_VOICE_COUNTERS)
+
+
+def reset_camera_presence_voice_counters_for_tests() -> None:
+    with _VOICE_COUNTER_LOCK:
+        for key in _VOICE_COUNTERS:
+            _VOICE_COUNTERS[key] = 0
+
+
 def presence_voice_guard(text: str, *, state: CameraPresenceState) -> str:
     """Reject camera answer text that drifts into forbidden voice classes."""
 
     answer = (text or "").strip()
     for pattern in _FORBIDDEN_PATTERNS:
         if pattern.search(answer):
+            _increment_voice_counter("voice_guard_rejected_count")
             raise ValueError("camera presence answer violates voice guard")
     if state.enabled and re.search(r"\bi do not have a camera\b", answer, re.I):
+        _increment_voice_counter("voice_guard_rejected_count")
         raise ValueError("camera presence answer denies active observation mode")
     return answer
 
