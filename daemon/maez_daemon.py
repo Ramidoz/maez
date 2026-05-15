@@ -968,6 +968,14 @@ class MaezDaemon:
             )
         return self._camera_presence_state
 
+    @staticmethod
+    def _presence_probe_env() -> dict[str, str]:
+        """Build a secret-free, headless env for native camera child probes."""
+        env = sanitize_env()
+        for name in ("DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY"):
+            env.pop(name, None)
+        return env
+
     def _run_presence_probe(self, *, timeout_s: float):
         """Run native camera detection in a killable child process."""
         cmd = [sys.executable, "-m", "skills.presence_perception", "--json-once"]
@@ -978,7 +986,7 @@ class MaezDaemon:
                 capture_output=True,
                 text=True,
                 timeout=timeout_s,
-                env=sanitize_env(),
+                env=self._presence_probe_env(),
             )
         except subprocess.TimeoutExpired:
             return SimpleNamespace(

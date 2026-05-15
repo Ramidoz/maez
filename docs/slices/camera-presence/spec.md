@@ -659,6 +659,9 @@ Required lifecycle primitives:
   content-free JSON only;
 - child-process environments are sanitized through Decision 26
   `sanitize_env()`;
+- child-process environments remove GUI display variables (`DISPLAY`,
+  `XAUTHORITY`, `WAYLAND_DISPLAY`) so MediaPipe/OpenCV does not bind to the
+  daemon's desktop session during headless observation;
 - reasoning loop uses bounded submission and `join(timeout=...)` only for
   within-cycle waiting;
 - daemon stop uses `BoundedSingletonWorker.shutdown(timeout=...)`, not

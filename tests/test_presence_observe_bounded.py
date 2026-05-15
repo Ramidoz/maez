@@ -41,7 +41,11 @@ class PresenceObserveBoundedTests(unittest.TestCase):
         self.assertIn('"-m", "skills.presence_perception"', self.src)
         self.assertIn("--json-once", self.src)
         self.assertIn("subprocess.run(", self.src)
-        self.assertIn("env=sanitize_env()", self.src)
+        self.assertIn("def _presence_probe_env()", self.src)
+        self.assertIn("env=self._presence_probe_env()", self.src)
+        self.assertIn('"DISPLAY"', self.src)
+        self.assertIn('"XAUTHORITY"', self.src)
+        self.assertIn('"WAYLAND_DISPLAY"', self.src)
 
     def test_shutdown_closes_presence_worker(self):
         stop_body = self.src.split("def stop(self, signum=None, frame=None):", 1)[1]

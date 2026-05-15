@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import os
 from types import SimpleNamespace
 import threading
 import unittest
@@ -121,6 +122,28 @@ class CameraPresenceDaemonAdapterTests(unittest.TestCase):
 
         self.assertEqual(state.presence_state, "unknown")
         self.assertIsNone(state.last_observed_at)
+
+    def test_presence_probe_child_env_is_secret_free_and_headless(self):
+        from daemon.maez_daemon import MaezDaemon
+
+        with patch.dict(
+            os.environ,
+            {
+                "DISPLAY": ":1",
+                "XAUTHORITY": "/run/user/1000/gdm/Xauthority",
+                "WAYLAND_DISPLAY": "wayland-0",
+                "OPENAI_API_KEY": "sk-test-secret",
+                "MAEZ_CAMERA_PRESENCE_CAMERA_INDEX": "1",
+            },
+            clear=False,
+        ):
+            env = MaezDaemon._presence_probe_env()
+
+        self.assertEqual(env.get("MAEZ_CAMERA_PRESENCE_CAMERA_INDEX"), "1")
+        self.assertNotIn("OPENAI_API_KEY", env)
+        self.assertNotIn("DISPLAY", env)
+        self.assertNotIn("XAUTHORITY", env)
+        self.assertNotIn("WAYLAND_DISPLAY", env)
 
 
 if __name__ == "__main__":
