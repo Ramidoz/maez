@@ -27,6 +27,21 @@ VALID_MODES = frozenset({"disabled", "observe", "expired_disabled"})
 VALID_PRESENCE_STATES = frozenset({"present", "absent", "unknown", "sensor_unavailable"})
 VALID_SENSOR_STATES = frozenset({"disabled", "available", "unavailable", "stale", "unknown"})
 VALID_CONFIDENCE_BUCKETS = frozenset({"none", "low", "medium", "high", "unavailable"})
+VALID_ERROR_CLASSES = frozenset(
+    {
+        "",
+        "dependency_missing",
+        "model_missing",
+        "camera_unavailable",
+        "camera_busy",
+        "detector_timeout",
+        "detector_error",
+        "native_shutdown_timeout",
+        "timebox_expired",
+        "config_invalid",
+        "unknown",
+    }
+)
 
 
 def _utc_now() -> datetime:
@@ -45,6 +60,40 @@ def _telemetry_handle(source_instance_id: str = SOURCE_INSTANCE_ID) -> str:
     return f"camera_presence:{digest[:12]}"
 
 
+def normalize_error_class(error_class: str) -> str:
+    """Map raw detector/runtime failures to the closed content-free vocabulary."""
+
+    raw = (error_class or "").strip()
+    if raw in VALID_ERROR_CLASSES:
+        return raw
+    lowered = raw.lower()
+    if not lowered:
+        return ""
+    if "timeout" in lowered or "timed out" in lowered:
+        return "detector_timeout"
+    if "model" in lowered or "blaze_face" in lowered:
+        return "model_missing"
+    if "still running" in lowered or "worker unavailable" in lowered:
+        return "camera_busy"
+    if "cv2 unavailable" in lowered or "mediapipe unavailable" in lowered:
+        return "dependency_missing"
+    if "dependency" in lowered or "no module named" in lowered or "shared object" in lowered:
+        return "dependency_missing"
+    if "camera" in lowered and ("busy" in lowered or "in use" in lowered):
+        return "camera_busy"
+    if "camera" in lowered and ("unavailable" in lowered or "not available" in lowered or "cannot open" in lowered):
+        return "camera_unavailable"
+    if "shutdown" in lowered:
+        return "native_shutdown_timeout"
+    if "timebox" in lowered or "enabled_until" in lowered:
+        return "timebox_expired"
+    if "config" in lowered:
+        return "config_invalid"
+    if "detector" in lowered or "detection" in lowered:
+        return "detector_error"
+    return "unknown"
+
+
 @dataclass(frozen=True)
 class CameraPresenceReading:
     presence_state: str
@@ -58,6 +107,8 @@ class CameraPresenceReading:
             raise ValueError(f"invalid presence_state: {self.presence_state!r}")
         if self.confidence_bucket not in VALID_CONFIDENCE_BUCKETS:
             raise ValueError(f"invalid confidence_bucket: {self.confidence_bucket!r}")
+        if self.last_error_class not in VALID_ERROR_CLASSES:
+            raise ValueError(f"invalid last_error_class: {self.last_error_class!r}")
         if self.sensor_state not in VALID_SENSOR_STATES:
             raise ValueError(f"invalid sensor_state: {self.sensor_state!r}")
         if self.observed_at.tzinfo is None:
@@ -99,6 +150,8 @@ class CameraPresenceState:
             raise ValueError(f"invalid presence_state: {self.presence_state!r}")
         if self.confidence_bucket not in VALID_CONFIDENCE_BUCKETS:
             raise ValueError(f"invalid confidence_bucket: {self.confidence_bucket!r}")
+        if self.last_error_class not in VALID_ERROR_CLASSES:
+            raise ValueError(f"invalid last_error_class: {self.last_error_class!r}")
 
     @property
     def enabled(self) -> bool:
@@ -135,6 +188,19 @@ class CameraPresenceState:
             received_at=current_time,
             last_error_class=reading.last_error_class,
         ).with_freshness(now=current_time)
+
+    def commit_unavailable(
+        self,
+        error_class: str,
+        *,
+        token: ObservationToken,
+        now: datetime | None = None,
+        shutdown_started: bool = False,
+    ) -> "CameraPresenceState":
+        current_time = (now or _utc_now()).astimezone(timezone.utc)
+        if not self._token_still_valid(token=token, now=current_time, shutdown_started=shutdown_started):
+            return self.with_freshness(now=current_time)
+        return self.unavailable(error_class=error_class, now=current_time)
 
     def _token_still_valid(
         self,
@@ -194,7 +260,7 @@ class CameraPresenceState:
             presence_state="sensor_unavailable",
             confidence_bucket="unavailable",
             received_at=(now or _utc_now()).astimezone(timezone.utc),
-            last_error_class=error_class,
+            last_error_class=normalize_error_class(error_class),
         )
 
     def to_health(self) -> dict[str, object]:
@@ -236,7 +302,7 @@ def resolve_camera_presence_state(
 
     raw_enabled_until = (env.get(ENABLED_UNTIL_ENV) or "").strip()
     if not raw_enabled_until:
-        return CameraPresenceState(last_error_class="timebox_missing")
+        return CameraPresenceState(last_error_class="config_invalid")
     try:
         enabled_until_at = _parse_enabled_until(raw_enabled_until)
     except ValueError:

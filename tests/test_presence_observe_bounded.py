@@ -41,6 +41,13 @@ class PresenceObserveBoundedTests(unittest.TestCase):
 
         self.assertIn("self._presence_worker.shutdown(timeout=", stop_body)
         self.assertIn("Presence worker did not finish within shutdown timeout", stop_body)
+        self.assertIn("native_shutdown_timeout", stop_body)
+
+    def test_disabled_mode_shutdown_does_not_import_native_presence_cleanup(self):
+        stop_body = self.src.split("def stop(self, signum=None, frame=None):", 1)[1]
+
+        self.assertIn("self._presence_native_initialized", self.src)
+        self.assertIn("if self._presence_native_initialized:", stop_body)
 
 
 if __name__ == "__main__":

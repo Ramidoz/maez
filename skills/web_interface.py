@@ -6364,6 +6364,7 @@ def api_maez_state():
     stats = memory.memory_stats()
     daemon_health = dict(_daemon_health())
     daemon_health.pop("credentials", None)
+    daemon_health.pop("camera_presence", None)
     return jsonify(
         {
             "daemon": daemon_health,

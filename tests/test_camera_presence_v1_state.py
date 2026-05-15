@@ -77,7 +77,7 @@ class CameraPresenceModeResolutionTests(unittest.TestCase):
         )
 
         self.assertEqual(missing.mode, "disabled")
-        self.assertEqual(missing.last_error_class, "timebox_missing")
+        self.assertEqual(missing.last_error_class, "config_invalid")
         self.assertEqual(malformed.mode, "disabled")
         self.assertEqual(malformed.last_error_class, "config_invalid")
         self.assertEqual(expired.mode, "expired_disabled")
@@ -94,6 +94,26 @@ class CameraPresenceModeResolutionTests(unittest.TestCase):
 
         self.assertEqual(state.mode, "disabled")
         self.assertEqual(state.last_error_class, "config_invalid")
+
+    def test_error_classes_are_closed_and_normalized(self):
+        from core.body.camera_presence_state import CameraPresenceState
+
+        state = CameraPresenceState(mode="observe", enabled_until="x")
+
+        timed_out = state.unavailable(error_class="presence observation timed out after 5.0s")
+        model_missing = state.unavailable(
+            error_class="face detection model unavailable: /home/rohit/maez/models/blaze_face.tflite"
+        )
+        dependency_missing = state.unavailable(error_class="cv2 unavailable: missing shared object")
+        busy = state.unavailable(error_class="presence observation still running")
+
+        self.assertEqual(timed_out.last_error_class, "detector_timeout")
+        self.assertEqual(model_missing.last_error_class, "model_missing")
+        self.assertEqual(dependency_missing.last_error_class, "dependency_missing")
+        self.assertEqual(busy.last_error_class, "camera_busy")
+        encoded = json.dumps(model_missing.to_health(), sort_keys=True)
+        self.assertNotIn("/home/rohit", encoded)
+        self.assertNotIn("blaze_face.tflite", encoded)
 
 
 class CameraPresenceObservationCommitTests(unittest.TestCase):
@@ -128,6 +148,31 @@ class CameraPresenceObservationCommitTests(unittest.TestCase):
         self.assertEqual(committed.sensor_state, "disabled")
         self.assertEqual(committed.presence_state, "unknown")
         self.assertEqual(committed.confidence_bucket, "none")
+
+    def test_unavailable_commit_uses_same_token_expiry_oracle(self):
+        from core.body.camera_presence_state import resolve_camera_presence_state
+
+        start = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+        enabled_until = (start + timedelta(seconds=1)).isoformat()
+        state = resolve_camera_presence_state(
+            {
+                "MAEZ_CAMERA_PRESENCE_MODE": "observe",
+                "MAEZ_CAMERA_PRESENCE_ENABLED_UNTIL": enabled_until,
+            },
+            now=start,
+        )
+        token = state.make_observation_token(submitted_at=start)
+
+        committed = state.commit_unavailable(
+            "camera 0 not available",
+            token=token,
+            now=start + timedelta(seconds=2),
+        )
+
+        self.assertEqual(committed.mode, "expired_disabled")
+        self.assertEqual(committed.sensor_state, "disabled")
+        self.assertEqual(committed.presence_state, "unknown")
+        self.assertEqual(committed.last_error_class, "timebox_expired")
 
     def test_stale_reading_clears_present_to_unknown(self):
         from core.body.camera_presence_state import (

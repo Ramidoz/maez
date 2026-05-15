@@ -487,7 +487,6 @@
         "skills.git_awareness",
         "skills.github_publish",
         "skills.github_skill",
-        "skills.presence_perception",
         "skills.reddit_skill",
         "skills.screen_perception",
         "skills.self_analysis",
@@ -1044,9 +1043,7 @@
       "last_hash": "b24586a50d54de6d21781ff42537d571e422d637313e3a2859e9fc59471f056b",
       "last_indexed": "2026-04-08T19:31:39.834161+00:00",
       "summary": "face_enrollment.py \u2014 Teach Maez who the owner is",
-      "tags": [
-        "rohit_presence"
-      ],
+      "tags": [],
       "parse_error": null
     },
     "skills/screen_perception.py": {
@@ -1258,7 +1255,7 @@
     "skills/presence_perception.py": {
       "path": "skills/presence_perception.py",
       "file_type": "python",
-      "purpose": "presence_perception.py \u2014 Camera-based presence + face recognition for Maez",
+      "purpose": "presence_perception.py \u2014 Timeboxed anonymous camera presence detection for Maez",
       "category": "skills",
       "risk_level": "medium",
       "self_edit_scope": "read_only",
@@ -1278,10 +1275,8 @@
       ],
       "last_hash": "eba2727b73776ec8a4f28c8bd1c930247f8993a35e004b1e1afea01d59900cb9",
       "last_indexed": "2026-04-08T19:31:39.834161+00:00",
-      "summary": "presence_perception.py \u2014 Camera-based presence + face recognition for Maez",
-      "tags": [
-        "rohit_presence"
-      ],
+      "summary": "presence_perception.py \u2014 Timeboxed anonymous camera presence detection for Maez",
+      "tags": [],
       "parse_error": null
     }
   }

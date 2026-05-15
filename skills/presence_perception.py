@@ -35,6 +35,7 @@ PRESENCE_THRESHOLD = 2
 
 # Persistent face detector — initialized once, reused forever
 _detector = None
+_native_initialized = False
 _detection_error: Optional[str] = None
 _missing_dependency_logged: set[str] = set()
 
@@ -105,7 +106,7 @@ def _detect_presence() -> tuple:
     Open camera and detect anonymous human-shaped presence with MediaPipe.
     Returns (detection_count, max_confidence).
     """
-    global _detection_error
+    global _detection_error, _native_initialized
     _detection_error = None
     try:
         try:
@@ -120,6 +121,7 @@ def _detect_presence() -> tuple:
                 f"mediapipe unavailable: {e}",
                 "mediapipe",
             )
+        _native_initialized = True
 
         if not os.path.exists(MODEL_PATH):
             return _mark_detection_unavailable(
@@ -139,21 +141,22 @@ def _detect_presence() -> tuple:
         detections = 0
         max_conf = 0.0
 
-        for _ in range(FRAMES_TO_CHECK):
-            ret, frame = cap.read()
-            if not ret:
-                continue
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            result = detector.detect(mp_image)
-            if result.detections:
-                conf = result.detections[0].categories[0].score
-                if conf >= MIN_CONFIDENCE:
-                    detections += 1
-                    if conf > max_conf:
-                        max_conf = conf
-
-        cap.release()
+        try:
+            for _ in range(FRAMES_TO_CHECK):
+                ret, frame = cap.read()
+                if not ret:
+                    continue
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                result = detector.detect(mp_image)
+                if result.detections:
+                    conf = result.detections[0].categories[0].score
+                    if conf >= MIN_CONFIDENCE:
+                        detections += 1
+                        if conf > max_conf:
+                            max_conf = conf
+        finally:
+            cap.release()
         # detector stays open (persistent)
 
         return detections, max_conf
@@ -200,6 +203,8 @@ def shutdown() -> None:
     global _detector
     detector = _detector
     _detector = None
+    if not _native_initialized and detector is None:
+        return
     if detector is not None:
         try:
             detector.close()

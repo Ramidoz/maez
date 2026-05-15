@@ -497,6 +497,7 @@ class MaezDaemon:
         # if the sensor blocks, Maez records presence as unavailable
         # and keeps the daemon heartbeat moving.
         self._presence_worker = BoundedSingletonWorker(name="presence-observe")
+        self._presence_native_initialized = False
         self._camera_presence_state = resolve_camera_presence_state(os.environ)
         self._last_alert_time = 0.0
         self._last_screen_obs: ScreenObservation | None = None
@@ -911,7 +912,7 @@ class MaezDaemon:
             return self._camera_presence_state.to_health()
         except Exception as exc:
             logger.warning("Camera presence health degraded: %s", exc)
-            return CameraPresenceState(last_error_class="source_unavailable").to_health()
+            return CameraPresenceState(last_error_class="unknown").to_health()
 
     def _mark_cycle_stage(self, stage: str) -> None:
         """Record the current daemon-cycle stage for hang diagnosis."""
@@ -953,13 +954,21 @@ class MaezDaemon:
             "stalled_after_seconds": stalled_after_seconds,
         }
 
-    def _presence_unavailable(self, error: str) -> CameraPresenceState:
-        return self._camera_presence_state.unavailable(error_class=error)
+    def _presence_unavailable(self, error: str, *, token=None) -> CameraPresenceState:
+        if token is None:
+            self._camera_presence_state = self._camera_presence_state.unavailable(error_class=error)
+        else:
+            self._camera_presence_state = self._camera_presence_state.commit_unavailable(
+                error,
+                token=token,
+                shutdown_started=self._shutdown_started.is_set(),
+            )
+        return self._camera_presence_state
 
     def _observe_presence_bounded(self) -> CameraPresenceState:
         """Run camera presence detection without blocking the reasoning loop."""
         self._camera_presence_state = self._camera_presence_state.with_freshness()
-        if not self._camera_presence_state.enabled:
+        if self._shutdown_started.is_set() or not self._camera_presence_state.enabled:
             return self._camera_presence_state
 
         timeout_s = 5.0
@@ -972,15 +981,16 @@ class MaezDaemon:
         def _call() -> None:
             from skills.presence_perception import observe as presence_observe
 
+            self._presence_native_initialized = True
             result_holder["value"] = presence_observe()
 
         if not self._presence_worker.submit(_call):
-            return self._presence_unavailable("presence observation worker unavailable")
+            return self._presence_unavailable("presence observation worker unavailable", token=token)
 
         if not self._presence_worker.join(timeout=timeout_s):
             msg = f"presence observation timed out after {timeout_s:.1f}s"
             logger.warning(msg)
-            return self._presence_unavailable(msg)
+            return self._presence_unavailable(msg, token=token)
 
         snap = result_holder.get("value")
         if snap is not None and getattr(snap, "success", False):
@@ -1001,12 +1011,13 @@ class MaezDaemon:
             self._camera_presence_state = self._camera_presence_state.commit_observation(
                 reading,
                 token=token,
+                shutdown_started=self._shutdown_started.is_set(),
             )
             return self._camera_presence_state
         if snap is not None:
             error = getattr(snap, "error", None) or "sensor_unavailable"
-            return self._presence_unavailable(str(error))
-        return self._presence_unavailable("presence observation returned no snapshot")
+            return self._presence_unavailable(str(error), token=token)
+        return self._presence_unavailable("presence observation returned no snapshot", token=token)
 
     def _watch_soul(self):
         """Watch soul.md for changes and hot-reload."""
@@ -5232,12 +5243,16 @@ class MaezDaemon:
         try:
             if not self._presence_worker.shutdown(timeout=1.0):
                 logger.warning("Presence worker did not finish within shutdown timeout")
+                self._camera_presence_state = self._camera_presence_state.unavailable(
+                    error_class="native_shutdown_timeout",
+                )
         except Exception as e:
             logger.debug("Presence worker shutdown failed: %s", e)
         try:
-            from skills.presence_perception import shutdown as presence_shutdown
+            if self._presence_native_initialized:
+                from skills.presence_perception import shutdown as presence_shutdown
 
-            presence_shutdown()
+                presence_shutdown()
         except Exception as e:
             logger.debug("Presence native shutdown failed: %s", e)
         try:

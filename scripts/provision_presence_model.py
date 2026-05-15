@@ -45,16 +45,17 @@ def provision_model(
     model_path = model_path or paths.models_dir() / MODEL_FILENAME
     if urlparse(url).scheme != "https":
         raise ModelProvisionError("presence model URL must use https")
-    if model_path.is_symlink():
-        raise ModelProvisionError(f"presence model target is a symlink: {model_path}")
-    if model_path.exists() and _sha256(model_path.read_bytes()) == expected_sha256:
-        return model_path
-
     model_path.parent.mkdir(parents=True, exist_ok=True)
     if model_path.parent.is_symlink():
         raise ModelProvisionError(f"presence model parent is a symlink: {model_path.parent}")
     if model_path.parent.stat().st_mode & 0o022:
         raise ModelProvisionError(f"presence model parent is group/world-writable: {model_path.parent}")
+    if model_path.is_symlink():
+        raise ModelProvisionError(f"presence model target is a symlink: {model_path}")
+    if model_path.exists() and _sha256(model_path.read_bytes()) == expected_sha256:
+        os.chmod(model_path, 0o644)
+        return model_path
+
     with urlopen(url, timeout=30) as response:
         data = response.read()
     if len(data) > max_bytes:

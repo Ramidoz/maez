@@ -12,6 +12,7 @@ import sys
 import tomllib
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
@@ -92,10 +93,35 @@ class CameraPresenceLegacyDisablementSourceTests(unittest.TestCase):
             1,
         )[0]
 
-        self.assertNotIn("camera_presence", route)
         self.assertNotIn("presence_state", route)
         self.assertNotIn("last_observed_at", route)
         self.assertNotIn("enabled_until", route)
+        self.assertIn('daemon_health.pop("camera_presence", None)', route)
+
+    def test_public_maez_state_strips_daemon_camera_presence_payload(self):
+        from skills import web_interface as wi
+
+        with (
+            patch.object(
+                wi,
+                "_daemon_health",
+                return_value={
+                    "ok": True,
+                    "camera_presence": {
+                        "presence_state": "present",
+                        "enabled_until": "2026-05-15T12:05:00+00:00",
+                        "last_observed_at": "2026-05-15T12:00:00+00:00",
+                    },
+                },
+            ),
+            patch.object(wi.memory, "memory_stats", return_value={"raw": 0, "daily": 0, "core": 0, "total": 0}),
+            patch.object(wi.accounts, "count", return_value=1),
+        ):
+            response = wi.app.test_client().get("/api/maez-state")
+
+        self.assertEqual(response.status_code, 200)
+        daemon = response.get_json()["daemon"]
+        self.assertNotIn("camera_presence", daemon)
 
     def test_web_explanation_surfaces_do_not_translate_camera_presence(self):
         web_src = _read("skills/web_interface.py")
@@ -106,11 +132,14 @@ class CameraPresenceLegacyDisablementSourceTests(unittest.TestCase):
     def test_static_capability_surfaces_do_not_advertise_presence_recognition(self):
         source_awareness = _read("core/memory/source_awareness.py")
         evolution_engine = _read("skills/evolution_engine.py")
+        runtime_source_awareness = _read("memory/source_awareness.json")
 
         self.assertNotIn("'skills/presence_perception.py': ['rohit_presence']", source_awareness)
         self.assertNotIn("'skills/face_enrollment.py': ['rohit_presence']", source_awareness)
         self.assertNotIn("'skills/presence_perception.py',", evolution_engine)
         self.assertNotIn("'presence': 'skills/presence_perception.py'", evolution_engine)
+        self.assertNotIn("Camera-based presence + face recognition", runtime_source_awareness)
+        self.assertNotIn('"rohit_presence"', runtime_source_awareness)
 
     def test_v1_presence_runtime_extra_excludes_face_recognition_stack(self):
         data = tomllib.loads(_read("pyproject.toml"))
@@ -145,6 +174,14 @@ class CameraPresenceLegacyDisablementSourceTests(unittest.TestCase):
         self.assertNotIn("total_sessions_today", src)
         self.assertNotIn("the owner arrived", src)
         self.assertNotIn("the owner left desk", src)
+
+    def test_live_presence_module_releases_camera_in_finally(self):
+        src = _read("skills/presence_perception.py")
+        open_idx = src.find("cap = cv2.VideoCapture")
+        self.assertGreater(open_idx, -1)
+        window = src[open_idx : open_idx + 1400]
+        self.assertIn("finally:", window)
+        self.assertIn("cap.release()", window)
 
 
 if __name__ == "__main__":

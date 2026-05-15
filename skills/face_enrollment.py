@@ -14,6 +14,7 @@ import os
 import pickle
 import sys
 import time
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +32,35 @@ except Exception:
 CAPTURE_INTERVAL = 0.5
 
 
+def _ensure_owner_only_parent(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+
+
+def _save_enrollment_data(path: Path, enrollment_data: dict) -> None:
+    _ensure_owner_only_parent(path)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "wb") as f:
+        pickle.dump(enrollment_data, f)
+    os.chmod(tmp_path, 0o600)
+    tmp_path.replace(path)
+    os.chmod(path, 0o600)
+
+
+def _biometric_artifact_owner_only(path: Path) -> bool:
+    try:
+        return (path.parent.stat().st_mode & 0o077) == 0 and (path.stat().st_mode & 0o077) == 0
+    except OSError:
+        return False
+
+
 def enroll(name: str = "the owner") -> bool:
     import cv2
     import face_recognition
     import numpy as np
 
-    os.makedirs(os.path.dirname(ENROLLMENT_PATH), exist_ok=True)
+    enrollment_path = Path(ENROLLMENT_PATH)
+    _ensure_owner_only_parent(enrollment_path)
 
     print(f"\nEnrolling face for: {name}")
     print(f"Camera will capture {NUM_ENROLLMENT_FRAMES} frames.")
@@ -96,8 +120,7 @@ def enroll(name: str = "the owner") -> bool:
         'enrolled_at': time.time(),
     }
 
-    with open(ENROLLMENT_PATH, 'wb') as f:
-        pickle.dump(enrollment_data, f)
+    _save_enrollment_data(enrollment_path, enrollment_data)
 
     print(f"\nSUCCESS: {frame_count} frames enrolled for {name}")
     print(f"Saved to: {ENROLLMENT_PATH}")
@@ -154,10 +177,14 @@ def _emit_enrollment_core_memory(*, mm, frame_count: int,
 
 
 def load_enrollment() -> dict:
-    if not os.path.exists(ENROLLMENT_PATH):
+    path = Path(ENROLLMENT_PATH)
+    if not path.exists():
+        return None
+    if not _biometric_artifact_owner_only(path):
+        logger.error("Refusing to load permissive face enrollment artifact")
         return None
     try:
-        with open(ENROLLMENT_PATH, 'rb') as f:
+        with open(path, 'rb') as f:
             return pickle.load(f)
     except Exception as e:
         logger.error("Failed to load enrollment: %s", e)

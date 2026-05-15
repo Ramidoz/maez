@@ -127,6 +127,23 @@ class PresenceModelProvisionTests(unittest.TestCase):
             self.assertFalse(model_path.with_suffix(".tflite.tmp").exists())
             self.assertEqual(0, model_path.stat().st_mode & 0o022)
 
+    def test_existing_valid_model_is_permission_hardened_before_return(self):
+        payload = b"fake-tflite-model"
+        expected_sha = hashlib.sha256(payload).hexdigest()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            model_path = Path(tmp) / "blaze_face.tflite"
+            model_path.write_bytes(payload)
+            model_path.chmod(0o666)
+
+            provision_presence_model.provision_model(
+                model_path=model_path,
+                expected_sha256=expected_sha,
+                urlopen=lambda _url, timeout: self.fail("valid model should not download"),
+            )
+
+            self.assertEqual(0, model_path.stat().st_mode & 0o022)
+
 
 if __name__ == "__main__":
     unittest.main()
