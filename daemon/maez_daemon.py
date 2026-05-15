@@ -71,16 +71,16 @@ from core.perception import snapshot as perception_snapshot, format_snapshot
 from core.information_limb.calendar_v1 import build_calendar_health
 from core.information_limb.calendar_store import CalendarStore, CalendarStoreError
 from core.information_limb.calendar_v1_config import CalendarMode, resolve_calendar_mode
+from core.body.camera_presence_state import (
+    CameraPresenceReading,
+    CameraPresenceState,
+    resolve_camera_presence_state,
+)
 from skills.telegram_voice import TelegramVoice
 from skills.telegram_public import MaezPublicBot
 from core.action_engine import ActionEngine
 from skills.screen_perception import observe as screen_observe, ScreenObservation
 from memory.quality_tracker import QualityTracker
-from skills.presence_perception import (
-    observe as presence_observe,
-    PresenceSnapshot,
-    shutdown as presence_shutdown,
-)
 from skills.github_skill import GitHubSkill
 from skills.reddit_skill import RedditSkill
 from skills.followup_queue import FollowUpQueue
@@ -323,10 +323,6 @@ _STATIC_CYCLE_INSTRUCTIONS = (
     "    what app is open, what window is focused, or what the owner is\n"
     "    working on. Say 'I don't have a screen signal this cycle' or\n"
     "    simply omit any activity claim.\n"
-    "  • If presence is ABSENT in the cycle context, do NOT claim the owner\n"
-    "    is at their desk, stepped away, is in deep focus, just returned,\n"
-    "    etc. These are presence claims — they require a presence signal.\n"
-    "    Without one, don't make them.\n"
     "  • Only the sources listed under SIGNALS PRESENT may be cited.\n"
     "  • Invented activity narration pollutes memory. Don't do it.\n\n"
     "CYCLE TASK — do the following based on the cycle context below:\n"
@@ -501,6 +497,7 @@ class MaezDaemon:
         # if the sensor blocks, Maez records presence as unavailable
         # and keeps the daemon heartbeat moving.
         self._presence_worker = BoundedSingletonWorker(name="presence-observe")
+        self._camera_presence_state = resolve_camera_presence_state(os.environ)
         self._last_alert_time = 0.0
         self._last_screen_obs: ScreenObservation | None = None
         self._screen_cycle_counter = 0
@@ -694,7 +691,7 @@ class MaezDaemon:
         self._continuity_active = False
         self._continuity_cycles_remaining = 0
         self._continuity_checkpoint_counter = 0
-        self._last_presence_snap: PresenceSnapshot | None = None
+        self._last_presence_snap: CameraPresenceState | None = self._camera_presence_state
         self._presence_cycle_counter = 0
         self.PRESENCE_EVERY_N_CYCLES = 2  # every ~60 seconds
         self._greeted_this_session = False
@@ -906,6 +903,16 @@ class MaezDaemon:
             auth_ready=False,
         )
 
+    def _camera_presence_health(self) -> dict:
+        """Content-free Camera Presence v1 state for /health."""
+
+        try:
+            self._camera_presence_state = self._camera_presence_state.with_freshness()
+            return self._camera_presence_state.to_health()
+        except Exception as exc:
+            logger.warning("Camera presence health degraded: %s", exc)
+            return CameraPresenceState(last_error_class="source_unavailable").to_health()
+
     def _mark_cycle_stage(self, stage: str) -> None:
         """Record the current daemon-cycle stage for hang diagnosis."""
         self._cycle_stage = stage
@@ -946,28 +953,25 @@ class MaezDaemon:
             "stalled_after_seconds": stalled_after_seconds,
         }
 
-    def _presence_unavailable(self, error: str) -> PresenceSnapshot:
-        return PresenceSnapshot(
-            rohit_present=False,
-            confidence=0.0,
-            session_minutes=0.0,
-            absent_minutes=0.0,
-            just_arrived=False,
-            just_left=False,
-            person_identified="unknown",
-            success=False,
-            error=error,
-        )
+    def _presence_unavailable(self, error: str) -> CameraPresenceState:
+        return self._camera_presence_state.unavailable(error_class=error)
 
-    def _observe_presence_bounded(self) -> PresenceSnapshot:
+    def _observe_presence_bounded(self) -> CameraPresenceState:
         """Run camera presence detection without blocking the reasoning loop."""
+        self._camera_presence_state = self._camera_presence_state.with_freshness()
+        if not self._camera_presence_state.enabled:
+            return self._camera_presence_state
+
         timeout_s = 5.0
         if self._presence_worker.in_flight():
             return self._presence_unavailable("presence observation still running")
 
-        result_holder: dict[str, PresenceSnapshot | None] = {"value": None}
+        token = self._camera_presence_state.make_observation_token()
+        result_holder: dict[str, object | None] = {"value": None}
 
         def _call() -> None:
+            from skills.presence_perception import observe as presence_observe
+
             result_holder["value"] = presence_observe()
 
         if not self._presence_worker.submit(_call):
@@ -978,9 +982,30 @@ class MaezDaemon:
             logger.warning(msg)
             return self._presence_unavailable(msg)
 
-        value = result_holder.get("value")
-        if isinstance(value, PresenceSnapshot):
-            return value
+        snap = result_holder.get("value")
+        if snap is not None and getattr(snap, "success", False):
+            confidence = float(getattr(snap, "confidence", 0.0) or 0.0)
+            if confidence >= 0.8:
+                bucket = "high"
+            elif confidence >= 0.6:
+                bucket = "medium"
+            elif confidence > 0:
+                bucket = "low"
+            else:
+                bucket = "none"
+            reading = CameraPresenceReading(
+                presence_state="present" if getattr(snap, "presence_detected", False) else "absent",
+                confidence_bucket=bucket,
+                observed_at=datetime.now(timezone.utc),
+            )
+            self._camera_presence_state = self._camera_presence_state.commit_observation(
+                reading,
+                token=token,
+            )
+            return self._camera_presence_state
+        if snap is not None:
+            error = getattr(snap, "error", None) or "sensor_unavailable"
+            return self._presence_unavailable(str(error))
         return self._presence_unavailable("presence observation returned no snapshot")
 
     def _watch_soul(self):
@@ -1144,7 +1169,7 @@ class MaezDaemon:
 
         2026-04-23 memory-integrity contract (Commit 1):
           - Input is a memory WINDOW, not live signals. The grounding
-            manifest marks screen/presence/calendar as "stale" (drawn
+            manifest marks screen/calendar as "stale" (drawn
             from memory) rather than "present" (live this turn) so the
             audit applies the right invariant.
           - The sent text is audited before `telegram.send_message()`.
@@ -1171,11 +1196,10 @@ class MaezDaemon:
             )
             # Aggregated-window manifest. The input to the proactive
             # LLM call was RAW MEMORY, not live perception — so the
-            # audit should know screen/presence/calendar are derived
+            # audit should know screen/calendar are derived
             # from the reviewed window, not observable right now.
             proactive_signals_absent = [
                 "live screen observation (input was memory window)",
-                "live presence snapshot (input was memory window)",
                 "live calendar (input was memory window)",
             ]
             proactive_signals_present = [
@@ -1681,13 +1705,6 @@ class MaezDaemon:
         if self._last_screen_obs is not None:
             prompt += f"\n{self._last_screen_obs.format_for_context()}\n"
 
-        # Add presence context if available — gated by Patch A so a
-        # stale presence (no transitions for 3+ stored thoughts) gets
-        # stripped from the prompt and the model doesn't repeat
-        # "Rohit is at the desk" across cycles where nothing changed.
-        if self._last_presence_snap is not None and "presence" not in _stale:
-            prompt += f"\n{self._last_presence_snap.format_for_context()}\n"
-
         # Add git context if available — same gating for the AWCC
         # fixation pattern (3+ thoughts mentioning the same
         # uncommitted-files state).
@@ -1796,9 +1813,6 @@ class MaezDaemon:
         screen_present = self._last_screen_obs is not None and getattr(
             self._last_screen_obs, "success", False
         )
-        presence_present = self._last_presence_snap is not None and getattr(
-            self._last_presence_snap, "success", False
-        )
         signals_present = []
         signals_absent = []
         if True:
@@ -1809,10 +1823,6 @@ class MaezDaemon:
             signals_absent.append(
                 "screen observation — UNAVAILABLE this cycle (vision source down or capture failed)"
             )
-        if presence_present:
-            signals_present.append("presence snapshot — live")
-        else:
-            signals_absent.append("presence snapshot — UNAVAILABLE this cycle")
         signals_absent.append("calendar — UNAVAILABLE this cycle (Calendar v1 not enabled)")
 
         signal_manifest = (
@@ -2172,17 +2182,6 @@ class MaezDaemon:
                 )
             else:
                 _mark_signal_absent("screen observation", "screen observation")
-
-            if self._last_presence_snap is None:
-                _mark_signal_absent("presence snapshot", "presence snapshot")
-            elif not getattr(self._last_presence_snap, "success", False):
-                _err = getattr(self._last_presence_snap, "error", None) or "unknown"
-                _mark_signal_absent(
-                    "presence snapshot",
-                    f"presence snapshot — unavailable: {_err}",
-                )
-            else:
-                _mark_signal_present("presence snapshot", "presence snapshot")
 
             if self._last_calendar_snap is not None:
                 _mark_signal_present("calendar", "calendar")
@@ -4178,105 +4177,18 @@ class MaezDaemon:
                     except Exception as e:
                         logger.warning("Calendar legacy-dev perception error: %s", e)
 
-            # Presence detection — every ~60 seconds
+            # Camera Presence v1 — health/panel-only body sensor. It never
+            # triggers greetings, prompt context, memory, audit grounding, or
+            # dream cadence.
             self._mark_cycle_stage("presence_perception")
             self._presence_cycle_counter += 1
-            if self._presence_cycle_counter >= self.PRESENCE_EVERY_N_CYCLES:
+            if (
+                self._camera_presence_state.enabled
+                and self._presence_cycle_counter >= self.PRESENCE_EVERY_N_CYCLES
+            ):
                 self._presence_cycle_counter = 0
                 try:
                     self._last_presence_snap = self._observe_presence_bounded()
-                    if self._last_presence_snap.success:
-                        person = self._last_presence_snap.person_identified
-
-                        # Track departures
-                        if self._last_presence_snap.just_left:
-                            self._last_departure_time = time.time()
-                            logger.info("the owner left desk — noted")
-
-                        # Track arrivals and greet based on absence duration
-                        if self._last_presence_snap.just_arrived:
-                            self._greeted_this_session = False
-
-                            # Calculate absence duration
-                            absence_secs = 0
-                            if self._last_departure_time is not None:
-                                absence_secs = time.time() - self._last_departure_time
-                            self._last_absence_duration = absence_secs
-                            # T2.5 (2026-05-04 audit) — clear the
-                            # departure stamp now that we've consumed
-                            # it. Otherwise a stale departure time
-                            # leaks into the NEXT arrival's absence
-                            # calc if presence-detection ever fires
-                            # two arrivals without an intervening
-                            # explicit departure (e.g. a brief face-
-                            # detection dropout that does not produce
-                            # just_left=True). Clean slate for the
-                            # next departure-detection cycle.
-                            self._last_departure_time = None
-
-                            # Suppress greetings within 2 minutes of daemon start
-                            startup_grace = True
-                            try:
-                                with open("/tmp/maez_started_at") as f:
-                                    started = float(f.read().strip())
-                                startup_grace = time.time() - started > 120
-                            except Exception:
-                                pass
-
-                            if (
-                                person in ("the owner", "unknown")
-                                and startup_grace
-                                and not self._greeted_this_session
-                            ):
-                                if absence_secs < 1200:
-                                    # Under 20 minutes — no greeting
-                                    logger.debug(
-                                        "the owner back after %.0fs — no greeting (< 20min)",
-                                        absence_secs,
-                                    )
-                                else:
-                                    # 2026-04-25: simplified greeting —
-                                    # name + absence duration only. No
-                                    # re-quoting prior exchanges; that
-                                    # duplicated chat_history threading
-                                    # (commit cc462c5) and led to uncanny
-                                    # re-quotes of casual greetings and
-                                    # closed remarks. See
-                                    # core/brain/return_greeting.py.
-                                    from core.brain.return_greeting import (
-                                        compose_return_greeting,
-                                    )
-                                    from core.memory.identity import (
-                                        display_name as _display_name,
-                                    )
-
-                                    msg = compose_return_greeting(
-                                        display_name=_display_name(),
-                                        absence_secs=absence_secs,
-                                    )
-                                    if msg:
-                                        self.telegram.send_message(msg)
-                                        self._greeted_this_session = True
-                                        self._last_greeted_at = time.time()
-                                        hrs = int(absence_secs // 3600)
-                                        mins = int((absence_secs % 3600) // 60)
-                                        logger.info(
-                                            "Greeted %s (away %dh %dm)",
-                                            _display_name(),
-                                            hrs,
-                                            mins,
-                                        )
-
-                        # Morning briefing check
-                        if self._last_presence_snap.just_arrived and person in (
-                            "the owner",
-                            "unknown",
-                        ):
-                            self._send_morning_briefing(snap)
-
-                        # Stranger detected — log, don't greet
-                        if self._last_presence_snap.rohit_present and person == "stranger":
-                            logger.info("Stranger at desk — not greeting")
                 except Exception as e:
                     logger.warning("Presence error: %s", e)
 
@@ -4439,14 +4351,8 @@ class MaezDaemon:
             )
 
             self._mark_cycle_stage("perception_signature_gate")
-            _presence_state = (
-                "at_desk"
-                if (self._last_presence_snap is not None and self._last_presence_snap.rohit_present)
-                else "away"
-            )
             current_axes = extract_axes(
                 snap,
-                presence_state=_presence_state,
                 git_dirty_count=self._last_git_dirty_count,
             )
             current_sig = signature_from_axes(current_axes)
@@ -4501,7 +4407,7 @@ class MaezDaemon:
                 # remaining slippage at output time and rewrites
                 # before storage to raw memory. Transcript reflects
                 # which activity-sources actually had data this cycle —
-                # if screen/presence/calendar signals are present,
+                # if screen/calendar signals are present,
                 # narration is grounded and passes through; if absent,
                 # activity_claim fires and rewrites.
                 try:
@@ -4538,13 +4444,6 @@ class MaezDaemon:
                         _cycle_signals_absent.append("screen observation (endpoint unreachable)")
                     else:
                         _cycle_signals_absent.append("screen observation")
-                    if self._last_presence_snap is not None and getattr(
-                        self._last_presence_snap, "success", False
-                    ):
-                        _audit_transcript_parts.append("✓ presence_snapshot: present")
-                        _cycle_signals_present.append("presence snapshot")
-                    else:
-                        _cycle_signals_absent.append("presence snapshot")
                     if self._last_calendar_snap is not None and getattr(
                         self._last_calendar_snap, "success", False
                     ):
@@ -4724,9 +4623,6 @@ class MaezDaemon:
                     "screen_activity": screen_activity,
                     "focus_level": focus_level,
                     "next_event": next_event,
-                    "rohit_present": str(self._last_presence_snap.rohit_present)
-                    if self._last_presence_snap
-                    else "unknown",
                 }
                 mem_metadata.update(cog_metadata)
                 self._mark_cycle_stage("memory_store")
@@ -4906,11 +4802,8 @@ class MaezDaemon:
             try:
                 self._mark_cycle_stage("dream_check")
                 _now = time.time()
-                _absence = (_now - self._last_departure_time) if self._last_departure_time else 0.0
-                if self.dream.is_idle(
-                    self._last_presence_snap, _absence
-                ) and self.dream.should_run_now(_now):
-                    logger.info("Dream cycle triggered — the owner AFK %.0fs", _absence)
+                if self.dream.is_idle(None, 0.0) and self.dream.should_run_now(_now):
+                    logger.info("Dream cycle triggered — idle gate open")
 
                     def _run_dream_bg():
                         try:
@@ -5342,6 +5235,8 @@ class MaezDaemon:
         except Exception as e:
             logger.debug("Presence worker shutdown failed: %s", e)
         try:
+            from skills.presence_perception import shutdown as presence_shutdown
+
             presence_shutdown()
         except Exception as e:
             logger.debug("Presence native shutdown failed: %s", e)
@@ -5490,6 +5385,7 @@ class MaezDaemon:
                         "m1": self._m1_status_health(),
                     },
                     "calendar": self._calendar_health(),
+                    "camera_presence": self._camera_presence_health(),
                     "credentials": _credential_health(),
                     "system": {
                         "cpu_percent": snap["cpu"]["percent"],

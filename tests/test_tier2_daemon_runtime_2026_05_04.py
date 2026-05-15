@@ -24,10 +24,8 @@ T2.3 — capability-integration plan poller race on list_open() →
 T2.4 — same-file follow-up: list_open() → upsert() wasted work.
        Same fix shape; the regression guard is one concurrency test.
 
-T2.5 — dream-cycle race: _last_departure_time is not cleared when
-       just_arrived fires, so a stale departure leaks into the next
-       absence calculation if presence-detection ever produces two
-       arrivals without an intervening explicit departure event.
+T2.5 — superseded by Camera Presence v1: camera arrival/departure state
+       must not drive dream-idle timing at all.
 
 T2.6 — capability-planning loop silent 1-hour wait on exception.
        Must (a) log the exception type+message at WARNING and
@@ -244,27 +242,31 @@ class T2_3_PollAndPlanConcurrentRace(unittest.TestCase):
             self.assertEqual(len(rows), 1)
 
 
-# ── T2.5 — dream-cycle _last_departure_time clear on just_arrived ───
+# ── T2.5 — camera presence no longer drives dream arrival state ──────
 
 
 class T2_5_DepartureClearedOnArrival(unittest.TestCase):
-    """REGRESSION GUARDS for T2.5: when just_arrived fires, the
-    daemon must clear _last_departure_time after consuming it for
-    absence_secs. Otherwise a stale departure leaks across cycles."""
+    """REGRESSION GUARDS for T2.5 after Camera Presence v1.
 
-    def test_source_pin_clears_last_departure_on_arrival(self):
+    The old daemon path used camera arrival/departure transitions to drive
+    dream-idle timing. Decision 24's camera-presence v1 implementation removes
+    that behavioral consumer: camera state is health/panel-only.
+    """
+
+    def test_camera_presence_does_not_drive_dream_arrival_state(self):
         src = (REPO / "daemon" / "maez_daemon.py").read_text()
-        # Locate the just_arrived branch and confirm the clear.
-        idx = src.find("if self._last_presence_snap.just_arrived:")
-        self.assertGreater(idx, -1)
-        # Region covers from just_arrived check through the morning
-        # briefing block (~2000 chars is more than enough).
-        region = src[idx:idx + 2500]
+        loop_idx = src.find("def _loop(")
+        self.assertGreater(loop_idx, -1)
+        next_def = src.find("\n    def ", loop_idx + 20)
+        loop_body = src[loop_idx : next_def if next_def != -1 else len(src)]
+        self.assertNotIn("just_arrived", loop_body)
+        self.assertNotIn("just_left", loop_body)
+        self.assertNotIn("_last_departure_time", loop_body)
         self.assertIn(
-            "self._last_departure_time = None",
-            region,
-            "T2.5 regression: _last_departure_time is no longer "
-            "cleared on just_arrived; absence calc will drift",
+            "self.dream.is_idle(None, 0.0)",
+            loop_body,
+            "Camera Presence v1 must not feed presence or absence duration "
+            "into dream-idle timing.",
         )
 
 

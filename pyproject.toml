@@ -8,7 +8,7 @@
 #   python3.12 -m venv .venv
 #   . .venv/bin/activate
 #   pip install -e .                 # core runtime
-#   pip install -e .[vision]         # + face_recognition / dlib
+#   pip install -e .[vision]         # + camera presence detector deps
 #   pip install -e .[google]         # + calendar / drive APIs
 #   pip install -e .[dev]            # + linter + test tools
 #   pip install -e .[all]            # everything
@@ -75,11 +75,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Face recognition + vision perception. Heavy native deps (dlib,
-# opencv, mediapipe). Not required for core daemon; skip on headless servers.
+# Camera presence perception. Heavy native deps (opencv, mediapipe). Not
+# required for core daemon; skip on headless servers.
 vision = [
     "opencv-python>=4.10",
     "mediapipe>=0.10",
+]
+
+# Manual legacy biometric enrollment tooling. Kept out of the v1 camera
+# presence runtime path.
+legacy-face = [
     "face_recognition>=1.3",
 ]
 
@@ -104,7 +109,7 @@ dev = [
 
 # Everything — convenience for contributors who want the full surface.
 all = [
-    "maez[vision,telegram,google,dev]",
+    "maez[vision,telegram,google,dev,legacy-face]",
 ]
 
 [project.urls]

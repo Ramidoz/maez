@@ -2166,8 +2166,6 @@ def _humanize_signals_present(signals: list) -> str:
         parts.append("current CPU/RAM/disk readings")
     if "screen observation" in joined and "disabled" not in joined and "unreachable" not in joined:
         parts.append("a current screen view")
-    if "presence snapshot" in joined:
-        parts.append("a current presence reading")
     if "calendar" in joined and "unavailable" not in joined:
         parts.append("calendar context")
     if not parts:
@@ -2185,8 +2183,6 @@ def _humanize_signals_absent(signals: list) -> str:
     joined = " | ".join(str(s).lower() for s in signals)
     if "screen observation" in joined:
         parts.append("see your screen (vision retired)")
-    if "presence snapshot" in joined:
-        parts.append("tell whether you were at the desk")
     if "calendar" in joined:
         parts.append("read your calendar (OAuth needs refresh)")
     if "system stats" in joined and "system stats current" not in joined:

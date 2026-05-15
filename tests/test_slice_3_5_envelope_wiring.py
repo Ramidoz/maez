@@ -76,24 +76,19 @@ class DaemonSlice35WiringTests(unittest.TestCase):
             "generation, not audit-only after the fact.",
         )
 
-    def test_daemon_cycle_presence_requires_success_and_calendar_is_absent_by_default(self):
+    def test_daemon_cycle_camera_presence_is_not_an_envelope_signal(self):
         src = _read("daemon/maez_daemon.py")
         body = _method_body(src, "_reason")
-        self.assertIn(
-            'getattr(\n            self._last_presence_snap, "success", False',
-            body,
-            "presence snapshot must not be claimable merely because a "
-            "failed snapshot object exists.",
-        )
+        self.assertNotIn("presence", body.lower())
+        self.assertNotIn("[PRESENCE]", body)
         self.assertNotIn("calendar — live", body)
         self.assertIn("Calendar v1 not enabled", body)
         loop_body = _method_body(src, "_loop")
-        self.assertIn(
-            'getattr(\n                        self._last_presence_snap, "success", False',
-            loop_body,
-            "daemon_cycle audit manifest must match the envelope prompt "
-            "semantics for failed presence snapshots.",
-        )
+        audit_idx = loop_body.find('surface="daemon_cycle"')
+        self.assertGreater(audit_idx, 0)
+        audit_window = loop_body[audit_idx - 1500 : audit_idx + 1500]
+        self.assertNotIn("presence", audit_window.lower())
+        self.assertNotIn("[PRESENCE]", audit_window)
         self.assertIn('_cycle_signals_absent.append("calendar")', loop_body)
 
 

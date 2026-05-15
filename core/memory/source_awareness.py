@@ -238,8 +238,6 @@ _FILE_TAGS = {
     'skills/maez_watchdog.py': ['system_monitoring'],
     'skills/web_search.py': ['web_content'],
     'skills/screen_perception.py': ['browser_usage', 'development_tools'],
-    'skills/presence_perception.py': ['rohit_presence'],
-    'skills/face_enrollment.py': ['rohit_presence'],
     'skills/wake_word.py': ['general_presence'],
     'skills/voice_input.py': ['general_presence'],
     'skills/voice_output.py': ['general_presence'],

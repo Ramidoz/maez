@@ -98,7 +98,6 @@ EVOLVABLE_SKILLS = {
     'skills/disk_cleanup.py',
     'skills/git_awareness.py',
     'skills/screen_perception.py',
-    'skills/presence_perception.py',
     'skills/self_analysis.py',
 }
 
@@ -233,7 +232,7 @@ def _weakness_to_file(weakness: str) -> Optional[str]:
         'wake word': 'skills/wake_word.py', 'voice': 'skills/voice_output.py',
         'web search': 'skills/web_search.py', 'search': 'skills/web_search.py',
         'disk': 'skills/disk_cleanup.py', 'git': 'skills/git_awareness.py',
-        'screen': 'skills/screen_perception.py', 'presence': 'skills/presence_perception.py',
+        'screen': 'skills/screen_perception.py',
         'memory': 'skills/self_analysis.py',
         'repetitive': 'skills/self_analysis.py',
     }

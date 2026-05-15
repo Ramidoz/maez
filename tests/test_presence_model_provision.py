@@ -65,6 +65,68 @@ class PresenceModelProvisionTests(unittest.TestCase):
                 )
             self.assertFalse(model_path.exists())
 
+    def test_provision_rejects_non_https_url(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model_path = Path(tmp) / "blaze_face.tflite"
+            with self.assertRaises(provision_presence_model.ModelProvisionError):
+                provision_presence_model.provision_model(
+                    model_path=model_path,
+                    url="http://example.invalid/model.tflite",
+                    urlopen=lambda _url, timeout: FakeResponse(b"unused"),
+                )
+
+    def test_provision_rejects_oversized_payload(self):
+        payload = b"x" * 8
+
+        def fake_urlopen(_url, timeout):
+            return FakeResponse(payload)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            model_path = Path(tmp) / "blaze_face.tflite"
+            with self.assertRaises(provision_presence_model.ModelProvisionError):
+                provision_presence_model.provision_model(
+                    model_path=model_path,
+                    expected_sha256=hashlib.sha256(payload).hexdigest(),
+                    max_bytes=4,
+                    urlopen=fake_urlopen,
+                )
+            self.assertFalse(model_path.exists())
+
+    def test_provision_rejects_symlink_target(self):
+        payload = b"fake-tflite-model"
+
+        def fake_urlopen(_url, timeout):
+            return FakeResponse(payload)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "actual.tflite"
+            target.write_bytes(b"old")
+            model_path = Path(tmp) / "blaze_face.tflite"
+            model_path.symlink_to(target)
+            with self.assertRaises(provision_presence_model.ModelProvisionError):
+                provision_presence_model.provision_model(
+                    model_path=model_path,
+                    expected_sha256=hashlib.sha256(payload).hexdigest(),
+                    urlopen=fake_urlopen,
+                )
+
+    def test_provision_final_file_is_not_group_or_world_writable(self):
+        payload = b"fake-tflite-model"
+
+        def fake_urlopen(_url, timeout):
+            return FakeResponse(payload)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            model_path = Path(tmp) / "blaze_face.tflite"
+            provision_presence_model.provision_model(
+                model_path=model_path,
+                expected_sha256=hashlib.sha256(payload).hexdigest(),
+                urlopen=fake_urlopen,
+            )
+
+            self.assertFalse(model_path.with_suffix(".tflite.tmp").exists())
+            self.assertEqual(0, model_path.stat().st_mode & 0o022)
+
 
 if __name__ == "__main__":
     unittest.main()
