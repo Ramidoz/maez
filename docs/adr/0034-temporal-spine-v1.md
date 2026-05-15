@@ -82,9 +82,13 @@ This decision makes several shortcuts invalid:
 - treating Calendar OAuth success or burn-in as a grant for Calendar-backed
   temporal recall.
 
-Implementation remains future work. It must proceed RED-first through the S3
-spec's test contract, then receive both-lane post-implementation review and a
-recovery commit if gaps are found.
+Initial implementation landed on 2026-05-15 and is live in the daemon health
+surface. The implementation proceeded RED-first through the S3 spec's test
+contract, then received both-lane post-implementation review and a recovery
+commit. The recovery closed bounded EpisodeStore querying, diagnostic-free
+historical-row validation, generated DST-boundary validation, UTC-only
+half-open bounds, public/debug health stripping, and sidecar single-gate
+failure-mode behavior.
 
 Changing the load-bearing rule, shrinking the closed vocabulary in a way that
 breaks S2 inheritance, authoring temporal voice in S3, enabling Calendar-backed
@@ -98,6 +102,8 @@ decision.
 - [`docs/slices/temporal-spine/spec.md`](../slices/temporal-spine/spec.md)
 - [`docs/slices/temporal-spine/reviews/spec-codex-panel.md`](../slices/temporal-spine/reviews/spec-codex-panel.md)
 - [`docs/slices/temporal-spine/reviews/spec-claude-council.md`](../slices/temporal-spine/reviews/spec-claude-council.md)
+- [`docs/slices/temporal-spine/reviews/implementation-codex-panel.md`](../slices/temporal-spine/reviews/implementation-codex-panel.md)
+- [`docs/slices/temporal-spine/reviews/implementation-claude-council-recovery.md`](../slices/temporal-spine/reviews/implementation-claude-council-recovery.md)
 - [`docs/adr/0019-lived-memory-architecture.md`](0019-lived-memory-architecture.md)
 - [`docs/adr/0030-lived-episode-promotion.md`](0030-lived-episode-promotion.md)
 - [`docs/adr/0032-contextual-integrity-at-ingest.md`](0032-contextual-integrity-at-ingest.md)

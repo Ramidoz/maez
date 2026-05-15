@@ -1971,9 +1971,10 @@ only the result:
 
 ### Implementation
 
-Pre-implementation. S3 is canonical law/spec, not runtime behavior.
+Initial implementation landed on 2026-05-15 and is live in the daemon health
+surface. S3 is now both canonical law/spec and runtime contract module.
 
-Implementation must proceed RED-first after cooling-off:
+Implementation proceeded RED-first under an explicit same-day operator waiver:
 
 1. pure helper tests for `core.time.temporal_spine`;
 2. helper module implementation;
@@ -1982,7 +1983,13 @@ Implementation must proceed RED-first after cooling-off:
 5. sidecar projection/red-gate tests and wiring;
 6. import-graph deferred-store defense and public-state exclusion tests;
 7. focused tests, Ruff, full suite;
-8. post-implementation both-lane review and recovery if needed.
+8. post-implementation both-lane review and recovery.
+
+The recovery closed the post-implementation engineering findings: bounded SQL
+prefilter before canonical UTC verification, diagnostic-free stored-row parsing
+through `try_canonical_utc`, generated DST-boundary validation, UTC-only
+half-open bounds, public/debug health stripping, and sidecar single-gate
+failure-mode behavior.
 
 Review trail:
 
@@ -1994,6 +2001,10 @@ Review trail:
   — Codex engineering panel, REVISE/RATIFY-WITH-AMENDMENTS, folded.
 - [`docs/slices/temporal-spine/reviews/spec-claude-council.md`](../slices/temporal-spine/reviews/spec-claude-council.md)
   — Claude covenant council, REVISE, folded and verified.
+- [`docs/slices/temporal-spine/reviews/implementation-codex-panel.md`](../slices/temporal-spine/reviews/implementation-codex-panel.md)
+  — Codex post-implementation engineering panel, BLOCK/REVISE, recovered.
+- [`docs/slices/temporal-spine/reviews/implementation-claude-council-recovery.md`](../slices/temporal-spine/reviews/implementation-claude-council-recovery.md)
+  — Claude post-recovery covenant council, RATIFY closure.
 
 ### ADR
 

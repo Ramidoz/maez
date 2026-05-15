@@ -14,7 +14,7 @@ Each row maps to one of the [eleven covenant invariants](MAEZ_NORTH_STAR.md#the-
 
 | # | Organ | Realizes invariant | Status | Dependencies |
 |---|-------|--------------------|--------|--------------|
-| 1 | Temporal spine | #1 Time as Biography | `[ ✗ planned ]` | none (foundational) |
+| 1 | Temporal spine | #1 Time as Biography | `[ ✓ canonical · implemented · sidecar-watched ]` | none (foundational) |
 | 2 | Contextual integrity at ingest | #3 Contextual Integrity | `[ ✓ canonical · Calendar v1 first implementation disabled-default ]` | none (foundational; enables many) |
 | 3 | Rupture / repair scar | #5 Rupture and Repair | `[ ✗ planned ]` | #2 contextual integrity |
 | 4 | Crisis channel | #6 Crisis Routing | `[ ✗ planned ]` | private_thoughts (S1) · #10 clinical · #2 contextual |
@@ -41,6 +41,7 @@ This document's original v1.2 table predates the substrate-organ push of 2026-05
 - **S2 Contextual Integrity at Ingest** — canonicalized as Decision 27 / ADR 0032. This updates organ row #2 from planned to canonical.
 - **Calendar v1** — canonicalized as Decision 28 / ADR 0033 and implemented as the first S2-bounded information limb. It remains disabled-default until an explicit OAuth onboarding ceremony.
 - **Camera Presence v1 / v1.1** — implemented under Decision 24 as a body-sensor slice, not as a new BAD decision. It remains disabled/timeboxed by operator control, with sidecar observation running.
+- **Temporal Spine v1 (S3)** — canonicalized as Decision 29 / ADR 0034 and implemented. The shared `core.time.temporal_spine` contract is live in `/health.temporal_spine`, TRF uses UTC store predicates through S3, and the observation sidecar red-gates S3 drift counters.
 
 Future agents should treat these as inherited substrate, not as fresh design gaps. The next new information limb copies Calendar v1's Inheritance Ledger pattern; the next body sensor copies Camera Presence v1's Physical Observation Surface and killable-child-process lifecycle pattern.
 
@@ -124,6 +125,8 @@ S2 registry question: S1a.1 introduced [`PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md`](P
 ### S3 — Temporal spine
 
 Bi-temporal axes (event-time + ingest-time) become first-class. Age renders in voice and recall. Anniversaries, chapters, ruptures-over-time, restore events become queryable.
+
+**2026-05-15 status:** canonicalized as Decision 29 / ADR 0034 and implemented with post-implementation recovery. S3 v1 gives TRF, M1, Calendar, future relationship-validity work, and future temporal organs one shared rule: store and compare UTC instants; interpret human days in the bonded user's timezone. Calendar-backed anchors, anniversaries, chapters, and broad store migrations remain future reviewed grants.
 
 ### S4 — Clinical boundary
 
