@@ -42,7 +42,9 @@ def project_health(
     camera = health.get("camera_presence") or {}
     calendar = health.get("calendar") or {}
     reasoning_loop = health.get("reasoning_loop") or {}
-    m1 = ((health.get("lived_episodes") or {}).get("m1")) or {}
+    lived_episodes = health.get("lived_episodes") or {}
+    m1 = lived_episodes.get("m1") or {}
+    m1_staleness = lived_episodes.get("staleness") or {}
     credentials = health.get("credentials") or {}
     heartbeat = _pick(health, ("cycle_count",))
     heartbeat.update(_pick(
@@ -52,6 +54,23 @@ def project_health(
             "stage",
             "stage_age_seconds",
             "cycle_age_seconds",
+        ),
+    ))
+    m1_sample = _pick(
+        m1,
+        (
+            "enabled",
+            "identity_fallback_count",
+            "invalid_eligibility_reason_rejected_count",
+            "invalid_promotion_trigger_rejected_count",
+        ),
+    )
+    m1_sample.update(_pick(
+        m1_staleness,
+        (
+            "staleness_status",
+            "newest_age_hours",
+            "active_count",
         ),
     ))
 
@@ -91,18 +110,7 @@ def project_health(
                 "cache_age_seconds",
             ),
         ),
-        "m1": _pick(
-            m1,
-            (
-                "enabled",
-                "staleness_status",
-                "newest_age_hours",
-                "active_count",
-                "identity_fallback_count",
-                "invalid_eligibility_reason_rejected_count",
-                "invalid_promotion_trigger_rejected_count",
-            ),
-        ),
+        "m1": m1_sample,
         "credentials": _pick(
             credentials,
             (

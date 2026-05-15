@@ -95,6 +95,32 @@ class ObservationSidecarTests(unittest.TestCase):
         self.assertEqual(sample["heartbeat"]["stage"], "observe_camera")
         self.assertIn("heartbeat_stalled", red_gates(sample))
 
+    def test_project_health_reads_nested_lived_episode_staleness_for_m1_gate(self):
+        from scripts.observe_sidecar import project_health, red_gates
+
+        sample = project_health({
+            "camera_presence": {"mode": "disabled", "enabled": False},
+            "lived_episodes": {
+                "m1": {
+                    "enabled": True,
+                    "identity_fallback_count": 0,
+                    "invalid_eligibility_reason_rejected_count": 0,
+                    "invalid_promotion_trigger_rejected_count": 0,
+                },
+                "staleness": {
+                    "staleness_status": "alarm",
+                    "newest_age_hours": 72.0,
+                    "active_count": 12,
+                },
+            },
+            "credentials": {"required_present": True},
+        })
+
+        self.assertEqual(sample["m1"]["staleness_status"], "alarm")
+        self.assertEqual(sample["m1"]["newest_age_hours"], 72.0)
+        self.assertEqual(sample["m1"]["active_count"], 12)
+        self.assertIn("m1_staleness_alarm", red_gates(sample))
+
     def test_red_gates_report_only_gate_names(self):
         from scripts.observe_sidecar import red_gates
 
