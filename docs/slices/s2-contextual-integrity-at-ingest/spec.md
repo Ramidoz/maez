@@ -1,10 +1,10 @@
 # Slice S2: Contextual Integrity at Ingest
 
-**Status:** DRAFT BAD packet. Codex BAD-panel and Claude covenant verification
-folded. No code, no connector, no memory promotion. This packet folds the S2
-scoping memo plus scoping-stage Claude council, scoping-stage Codex panel,
-BAD-stage Codex engineering panel, and folded-BAD Claude covenant verification
-constraints into the candidate canonical law for information-limb ingest.
+**Status:** CANONICAL BAD packet. Decision 27 / ADR 0032. No code, no
+connector, no memory promotion. This packet folds the S2 scoping memo plus
+scoping-stage Claude council, scoping-stage Codex panel, BAD-stage Codex
+engineering panel, and folded-BAD Claude covenant verification constraints
+into canonical law for information-limb ingest.
 
 **Classification:** covenant-shaped memory and body law. S2 defines the ingest
 gate every information limb must pass before external account data can become
@@ -33,13 +33,15 @@ biography.
 - [`docs/slices/daemon-credential-hygiene/spec.md`](../daemon-credential-hygiene/spec.md) —
   Decision 26 credential handling inherited by all future information limbs.
 - [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../../governance/BETA_ARCHITECTURE_DECISIONS.md) —
-  Decisions 2, 4, 24, 25, 26.
+  Decisions 2, 4, 24, 25, 26, 27.
 - [`docs/adr/0029-body-topology.md`](../../adr/0029-body-topology.md) —
   body topology and S2 gate.
 - [`docs/adr/0030-lived-episode-promotion.md`](../../adr/0030-lived-episode-promotion.md) —
   lived-episode promotion.
 - [`docs/adr/0031-daemon-credential-hygiene.md`](../../adr/0031-daemon-credential-hygiene.md) —
   credential hygiene.
+- [`docs/adr/0032-contextual-integrity-at-ingest.md`](../../adr/0032-contextual-integrity-at-ingest.md) —
+  contextual integrity at ingest.
 
 ---
 

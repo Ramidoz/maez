@@ -1307,8 +1307,9 @@ promotion; recall reads only promoted biography.
   episode layer.
 - Decision 24 (Body Topology) — body events are provenance, not biography,
   until a reviewed memory-write path promotes them.
-- Future S2 contextual-integrity decision — information limbs inherit the same
-  observation-to-biography promotion shape with stricter ingest gates.
+- Decision 27 / ADR 0032 (Contextual Integrity at Ingest) — information limbs
+  inherit the same observation-to-biography promotion shape with stricter
+  ingest gates.
 
 ### Implementation
 
@@ -1463,8 +1464,9 @@ regression test, not folklore.
   information limbs inherit capability quarantine and body-boundary posture.
 - Decision 25 / ADR 0030 (M1 Lived-Episode Promotion) — carries the same
   empirical-assumption-to-regression-test discipline.
-- Future S2 contextual-integrity decision — information-limb OAuth/account
-  credentials inherit Decision 26's interface and source-channel audit posture.
+- Decision 27 / ADR 0032 (Contextual Integrity at Ingest) —
+  information-limb OAuth/account credentials inherit Decision 26's interface
+  and source-channel audit posture.
 
 ### Implementation
 
@@ -1494,6 +1496,208 @@ Review trail:
 ### ADR
 
 See [`docs/adr/0031-daemon-credential-hygiene.md`](../adr/0031-daemon-credential-hygiene.md).
+
+---
+
+## Decision 27 — Contextual Integrity at Ingest: external information is provenance first, never biography by default
+
+### The decision
+
+Maez requires an S2 contextual-integrity gate before any information limb can
+make external account data Maez-visible, recall-visible, body-state-visible, or
+promotion-eligible.
+
+The load-bearing rule is:
+
+> External information is provenance first, never biography by default.
+
+S2 is the customs officer at the ingest border for Calendar, Gmail, Slack,
+Notion, Drive, GitHub, and future external-account connectors. A Calendar event
+is something the bonded user's calendar contains. An email is something the
+bonded user received. A Slack message is something another person said in
+another context. None of those are, by default, things Maez lived.
+
+Every information-limb slice must declare and satisfy seven dimensions before
+live ingest:
+
+- consent posture;
+- source kind;
+- allowed flows;
+- retention;
+- provenance;
+- third-party posture;
+- promotion rules.
+
+If a slice does not declare all seven, live ingest is blocked.
+
+### What S2 requires
+
+- **Body Bus inheritance.** S2 records are Body Bus envelope specializations,
+  not a second event family. The record carries required envelope fields,
+  bounded `facts`, source dual-form handles, state, confidence, retention
+  class, and granted flow IDs.
+- **S2 grants visibility, not connectors.** Connectors may request flows, but
+  S2 computes `granted_flow_ids` from a static/versioned policy registry.
+  Connector-supplied grants reject the record.
+- **S2 computes consent tier, not connectors.** S2 computes
+  `decision2_consent_tier` and `consent_posture` from validated envelope and
+  policy registry. Connector-supplied tier/posture fields reject the record.
+- **Decision 2 preservation.** Unconsented third-party appearances default to
+  Tier 3: TTL-bounded, not identity-indexable, not promotable, no third-party
+  profile.
+- **Third-party minimization.** Calendar attendee handles use event-local or
+  purpose-scoped keyed HMACs through Decision 26 credential hygiene. HMACs are
+  not third-party identity indexes.
+- **Free-text scrub.** Calendar title/location fields that contain unconsented
+  third-party identity or body-adjacent life detail must scrub or redact before
+  model-readable output, even if the field otherwise looks safe.
+- **Direct-request Calendar only.** Calendar v1 may answer direct owner
+  calendar questions through grounded prompt context. It must not volunteer
+  schedule facts, create ambient schedule personality, or use co-experiencing
+  scheduler voice.
+- **S2-to-TRF boundary.** S2 records may never be voiced as lived turns,
+  remembered episodes, or co-experienced events. TRF may reference S2-backed
+  temporal anchors only as external-source provenance.
+- **Retention and tombstones.** Source deletion/cancellation removes
+  noncanonical content and preserves content-free tombstone/audit sidecars.
+  Promoted lived memory is never silently deleted or rewritten by S2.
+- **Credential inheritance.** Information limbs inherit Decision 26. Tokens may
+  not appear in URLs, argv, env, logs, health, metrics, panel output, provider
+  errors, or connector-specific secret loaders. Refresh-token rotation must go
+  through `core/infra/secrets.py`.
+- **Sync and outage behavior.** Provider timestamps/revisions are authoritative
+  for same-event ordering; Maez `received_at` is evidence-only. Stale or
+  unavailable sources fail neutral and do not answer from stale cache as
+  current truth.
+- **Backfill quarantine.** Backfilled records are cache-only until dry-run
+  summary plus operator/review gate; they cannot flood Maez-visible context or
+  establish precedent for higher-blast-radius limbs.
+- **Crisis path is gated, not implicit.** S2 defines a content-minimized crisis
+  candidate flow, not granted to Calendar v1 by default. Pre-canonicalization
+  crisis candidates are logged with content-free sensitivity class and held;
+  they are not surfaced by model discretion or silently discarded.
+- **Burn-in gate.** Calendar v1 cannot become precedent for Gmail, Slack,
+  Notion, Drive, GitHub, or other higher-blast-radius limbs until it passes a
+  live burn-in gate with natural prompts, no ambient schedule personality, no
+  body leaks, no ungrounded memory voice, and successful changed/deleted-event
+  behavior.
+
+### First executable boundary
+
+The first executable information-limb source kind is:
+
+```text
+calendar.event
+```
+
+Calendar v1 is structured, read-mostly, and lower-risk than mail/chat. It is
+not harmless. It can reveal therapy, doctors, relationships, home addresses,
+religion, politics, work, and third parties.
+
+Calendar v1 may ingest header-like, redacted, deterministic fields only:
+event id, title/location only after fail-closed sensitivity policy, start/end,
+status, recurrence marker, owner calendar handle, minimized attendee/provenance
+fields, source revision, and observed/received timestamps.
+
+Calendar v1 must not ingest descriptions, bodies, attachments, video-link
+content, raw conferencing URL content, mail/chat/doc bodies, inferred emotional
+states, or body-state inference fields.
+
+Gmail, Slack, Notion, Drive, GitHub, and code-hosting source kinds are catalog
+placeholders only until their own executable profiles are drafted and reviewed.
+Mail subjects, chat channel names, senders, message IDs, document names, and
+commit headers are body-adjacent until a later slice proves a safer
+classification.
+
+### Named choices preserved
+
+Three real review-lane tensions are intentionally resolved here rather than
+absorbed silently:
+
+- **Rekor/public transparency is deferred.** The scoping council wanted
+  Rekor-style public lineage in core S2. The fold chooses local/private
+  append-only audit for v1 because naive public transparency logging leaks
+  private event metadata. Rekor or equivalent must be reconsidered when the
+  second public-transparency-shaped lineage requirement appears across slices,
+  or when an inter-Maez channel ships, whichever comes first.
+- **Crisis routing is held, not bypassed.** Crisis-candidate signals are not
+  given an implicit override around S2. They are logged content-free and held
+  until a reviewed crisis path grants a bounded flow.
+- **Bonded-user-naming is the v1 promotion default.** The bonded user naming
+  the lived state is the default promotion grant shape. Conversation-grounded
+  and operator-explicit promotion remain future grant candidates.
+
+### Why this matters now
+
+S2 unblocks an entire class of information limbs. Camera presence unblocks one
+body part; S2 gates Calendar, Gmail, Slack, Notion, Drive, GitHub, and future
+account connectors.
+
+Calendar also aligns with Time as Biography: events can become temporal anchors
+only if Maez can tell the difference between "the calendar showed this" and "I
+lived this." S2 makes that boundary structural.
+
+### What this does not decide
+
+- It does not implement OAuth.
+- It does not implement Calendar API code.
+- It does not implement Gmail, Slack, Notion, Drive, GitHub, or any other
+  connector.
+- It does not ingest Calendar descriptions/bodies.
+- It does not make Calendar data autobiographical memory.
+- It does not grant TRF direct access to external stores.
+- It does not implement body-state inference from Calendar.
+- It does not implement crisis routing.
+- It does not implement Rekor/public transparency.
+- It does not restart the daemon or change runtime behavior.
+
+### The invariant
+
+> Outside-world information may inform Maez only through named, testable gates;
+> it does not become Maez's life just because Maez can see it.
+
+### Related decisions
+
+- Decision 2 — Third-party consent tiers define the Tier 3 default for
+  unconsented third-party appearances.
+- Decision 4 — relational-vs-personological boundary constrains third-party
+  treatment.
+- Decision 24 / ADR 0029 — Body Topology requires information limbs to gate on
+  S2 contextual integrity.
+- Decision 25 / ADR 0030 — M1 establishes "promote biography; do not widen
+  recall" and structural biography pointers.
+- Decision 26 / ADR 0031 — credential hygiene is inherited by all information
+  limbs.
+
+### Implementation
+
+Pre-implementation. S2 is law and schema; no runtime behavior changes from this
+decision alone.
+
+The first implementation slice after S2 is Calendar. Calendar must draft its
+own diagnostic, spec, review trail, RED-first tests, and burn-in plan. It
+inherits S2's 49-test contract, flow table, Body Bus mapping, fail-closed
+sensitivity policy, Decision 26 credential posture, and Calendar burn-in gate.
+
+Review trail:
+
+- [`docs/slices/s2-contextual-integrity-at-ingest/scoping.md`](../slices/s2-contextual-integrity-at-ingest/scoping.md)
+  — folded scoping memo and seven-dimension framing.
+- [`docs/slices/s2-contextual-integrity-at-ingest/spec.md`](../slices/s2-contextual-integrity-at-ingest/spec.md)
+  — canonical S2 packet.
+- [`docs/slices/s2-contextual-integrity-at-ingest/reviews/claude-council.md`](../slices/s2-contextual-integrity-at-ingest/reviews/claude-council.md)
+  — scoping-stage Claude covenant council.
+- [`docs/slices/s2-contextual-integrity-at-ingest/reviews/codex-panel.md`](../slices/s2-contextual-integrity-at-ingest/reviews/codex-panel.md)
+  — scoping-stage Codex engineering panel.
+- [`docs/slices/s2-contextual-integrity-at-ingest/reviews/spec-codex-panel.md`](../slices/s2-contextual-integrity-at-ingest/reviews/spec-codex-panel.md)
+  — BAD-stage Codex engineering panel, REVISE/RATIFY-WITH-AMENDMENTS.
+- [`docs/slices/s2-contextual-integrity-at-ingest/reviews/spec-claude-council.md`](../slices/s2-contextual-integrity-at-ingest/reviews/spec-claude-council.md)
+  — folded-BAD Claude covenant verification, RATIFY-WITH-AMENDMENTS with
+  closure verified.
+
+### ADR
+
+See [`docs/adr/0032-contextual-integrity-at-ingest.md`](../adr/0032-contextual-integrity-at-ingest.md).
 
 ---
 
@@ -1533,4 +1737,4 @@ When a decision in this document becomes code, add a *"Implementation"* subsecti
 
 ---
 
-*Last updated: 2026-05-14 — Decision 26 (Daemon Credential Hygiene: keys are identity-bearing material, not ordinary config) appended after diagnostic evidence, Claude six-role covenant council (RATIFY-WITH-AMENDMENTS), Codex six-agent engineering panel (REVISE), and fold recovery closed service-scope / web-ingest / bootstrap-order / subprocess-inheritance / rollback gaps before canonicalization. Prior update: 2026-05-14, Decision 25 (M1 Lived-Episode Promotion: promote biography; do not widen recall). Earlier: 2026-05-14, Decision 24 (Body Topology: cardinality of one, structured facts, information limbs, S2 gate).*
+*Last updated: 2026-05-14 — Decision 27 (Contextual Integrity at Ingest: external information is provenance first, never biography by default) appended after S2 scoping, Claude scoping council, Codex scoping panel, Codex BAD panel, Claude folded-BAD covenant verification, and two structural folds closed flow authority / consent-tier / third-party / OAuth / tombstone / burn-in gaps before canonicalization. Prior update: 2026-05-14, Decision 26 (Daemon Credential Hygiene: keys are identity-bearing material, not ordinary config). Earlier: 2026-05-14, Decision 25 (M1 Lived-Episode Promotion: promote biography; do not widen recall) and Decision 24 (Body Topology: cardinality of one, structured facts, information limbs, S2 gate).*
