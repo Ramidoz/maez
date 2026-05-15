@@ -123,6 +123,13 @@ class CalendarLegacyDisablementSourceTests(unittest.TestCase):
         self.assertIn('"calendar"', body)
         self.assertIn("self._calendar_health()", body)
 
+    def test_v1_mode_initializes_calendar_store_without_legacy_import(self):
+        init_body = _method_body(_read("daemon/maez_daemon.py"), "__init__")
+
+        self.assertIn("CalendarStore(", init_body)
+        self.assertIn("self._calendar_mode == CalendarMode.V1", init_body)
+        self.assertNotIn("calendar_observe()", init_body)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -36,6 +36,7 @@ def build_calendar_health(
     *,
     mode: str,
     auth_ready: bool = False,
+    connector_state_override: CalendarConnectorState | None = None,
     event_count: int = 0,
     read_model_count: int = 0,
     newest_age_bucket: str = "none",
@@ -44,7 +45,10 @@ def build_calendar_health(
 ) -> CalendarHealth:
     """Build Decision-28-compliant aggregate health telemetry."""
 
-    if mode == "disabled":
+    if connector_state_override is not None:
+        connector_state = connector_state_override
+        error = error_class
+    elif mode == "disabled":
         connector_state: CalendarConnectorState = "disabled"
         error = ""
     elif mode == "v1" and not auth_ready:

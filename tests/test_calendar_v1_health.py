@@ -42,3 +42,16 @@ class CalendarV1HealthTests(unittest.TestCase):
         self.assertEqual(health["connector_state"], "auth_unavailable")
         self.assertEqual(health["error_class"], "auth_access_expired")
         self.assertEqual(health["event_count"], 0)
+
+    def test_connector_state_override_is_content_free(self):
+        from core.information_limb.calendar_v1 import build_calendar_health
+
+        health = build_calendar_health(
+            mode="v1",
+            connector_state_override="source_unavailable",
+            error_class="calendar_store_schema_mismatch",
+        )
+
+        self.assertEqual(health["connector_state"], "source_unavailable")
+        self.assertEqual(health["error_class"], "calendar_store_schema_mismatch")
+        self.assertEqual(health["event_count"], 0)

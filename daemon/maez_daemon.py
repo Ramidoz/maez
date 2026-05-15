@@ -69,6 +69,7 @@ from core.memory.cycle_recall_context import (
 )
 from core.perception import snapshot as perception_snapshot, format_snapshot
 from core.information_limb.calendar_v1 import build_calendar_health
+from core.information_limb.calendar_store import CalendarStore, CalendarStoreError
 from core.information_limb.calendar_v1_config import CalendarMode, resolve_calendar_mode
 from skills.telegram_voice import TelegramVoice
 from skills.telegram_public import MaezPublicBot
@@ -127,6 +128,9 @@ SHUTDOWN_FILE = BASE_DIR / "daemon" / "last_shutdown"
 LEDGER_DB_PATH = Path(os.environ.get("MAEZ_LEDGER_DB_PATH") or (MEMORY_DIR / "ledger.db"))
 M1_ALLOWED_PROMOTION_SOURCES = frozenset({"telegram_surface", "telegram_text"})
 CALENDAR_MODE = resolve_calendar_mode(os.environ)
+CALENDAR_STORE_DB_PATH = Path(
+    os.environ.get("MAEZ_CALENDAR_STORE_DB") or (MEMORY_DIR / "calendar_v1.db")
+)
 
 # --- Constants ---
 from core.model_config import PRIMARY_MODEL as MODEL  # single source of truth — /etc/maez/model.env
@@ -504,6 +508,18 @@ class MaezDaemon:
         self._calendar_mode = CALENDAR_MODE
         self._calendar_legacy_enabled = self._calendar_mode == CalendarMode.LEGACY_DEV_ONLY
         self._calendar_observe = None
+        self._calendar_store = None
+        self._calendar_store_error_class = ""
+        if self._calendar_mode == CalendarMode.V1:
+            try:
+                self._calendar_store = CalendarStore(CALENDAR_STORE_DB_PATH)
+                self._calendar_store.initialize()
+            except CalendarStoreError as exc:
+                self._calendar_store_error_class = "calendar_store_schema_mismatch"
+                logger.warning("Calendar v1 store unavailable: %s", exc)
+            except Exception as exc:
+                self._calendar_store_error_class = "source_unavailable"
+                logger.warning("Calendar v1 store unavailable: %s", exc)
         if self._calendar_legacy_enabled:
             from skills.calendar_perception import observe as _legacy_calendar_observe
 
@@ -866,6 +882,25 @@ class MaezDaemon:
     def _calendar_health(self) -> dict:
         """Content-free Calendar v1 state for /health."""
 
+        if self._calendar_mode == CalendarMode.V1 and self._calendar_store is not None:
+            try:
+                return self._calendar_store.health_snapshot(
+                    mode=self._calendar_mode.value,
+                    auth_ready=False,
+                )
+            except Exception as exc:
+                logger.warning("Calendar v1 health degraded: %s", exc)
+                return build_calendar_health(
+                    mode=self._calendar_mode.value,
+                    connector_state_override="source_unavailable",
+                    error_class="source_unavailable",
+                )
+        if self._calendar_store_error_class:
+            return build_calendar_health(
+                mode=self._calendar_mode.value,
+                connector_state_override="source_unavailable",
+                error_class=self._calendar_store_error_class,
+            )
         return build_calendar_health(
             mode=self._calendar_mode.value,
             auth_ready=False,
