@@ -91,23 +91,36 @@ S3 v1 inherits existing substrate rather than replacing it:
 - **ADR 0019 (Lived memory architecture):** episodes and graph validity windows
   remain the canonical lived-memory stores. S3 v1 wraps and normalizes their
   temporal inputs; it does not replace them.
+- **Decision 2 (Third-party consent) and Decision 4 (Relational vs
+  personological knowledge):** S3 v1 only supports bonded-user-experienced
+  temporal anchors. Future event-anchored or third-party-linked anchors must
+  re-cite these decisions before they can interpret another person's time,
+  schedule, presence, or life pattern.
 - **Decision 25 / ADR 0030 (M1):** promoted lived episodes stay biography.
   S3 may normalize their time fields; it may not widen what M1 promotes or what
   TRF can read.
 - **Decision 27 / ADR 0032 (S2):** external-source time remains provenance
   first. S3 may help Calendar time become a safe anchor later, but v1 does not
-  convert Calendar into lived memory.
+  convert Calendar into lived memory. S2 envelope fields are inherited as
+  canonical vocabulary; S3 must not reject S2's required temporal fields.
 - **Decision 28 / ADR 0033 (Calendar v1):** Calendar stays disabled-default and
   external. S3 v1 does not cross the OAuth gate and does not add
-  Calendar-backed TRF recall.
+  Calendar-backed TRF recall. Any later Calendar-backed temporal anchor must
+  inherit Calendar v1's `calendar_voice_guard` by name, including its approved
+  phrases, forbidden phrases, and natural-language probe set.
 
 Load-bearing inherited rules:
 
 - retrieval does not license lived-memory claims;
 - source provenance and biography stay separate;
+- S2-into-TRF leakage remains forbidden: external-source time may not become
+  lived recall evidence or TRF phrasing merely because a temporal helper can
+  normalize it;
 - helper failure never establishes memory absence;
 - local human-day boundaries are part of voice honesty, not a formatting
   convenience;
+- S3 v1 does not author temporal voice phrasing. Voice authority stays with TRF
+  and future reviewed voice guards;
 - all new temporal observability is content-free.
 
 ---
@@ -118,7 +131,7 @@ Load-bearing inherited rules:
 | --- | --- |
 | V1 scope | Build a shared temporal-normalization module plus tests. Do not migrate stores in v1. |
 | Timezone source | All owner-local boundaries route through `MAEZ_OWNER_TIMEZONE` when set, then `core.memory.identity.timezone()`, falling back to UTC. TRF stops hardcoding `America/Chicago`. |
-| Canonical names | The shared vocabulary is `event_at`, `ingested_at`, `observed_at`, `valid_from`, `valid_to`, and `owner_local_date`. Existing store fields may remain, but adapters must map them explicitly. |
+| Canonical names | The shared vocabulary includes `event_at`, `ingested_at`, `observed_at`, `received_at`, `expires_at`, `deletion_observed_at`, `change_observed_at`, `valid_from`, `valid_to`, and computed-only `owner_local_date`. Existing store fields may remain, but adapters must map them explicitly. |
 | Storage strategy | Keep per-store fields in v1. Enforce normalization at module boundaries and document each store as canonical, wrapped, or deferred. |
 | Anchor expansion | No new anchors in v1. Existing TRF anchors are reimplemented through the shared temporal module only. |
 | Calendar inheritance | Calendar-backed temporal anchors remain out of scope for S3 v1. OAuth onboarding or Calendar burn-in success alone is not a grant. Any later Calendar-backed temporal-anchor path requires a reviewed S3 v1.1/v2 plus an S2-approved `flow.bounded_window_recall` retrieval posture and Calendar voice posture, and must phrase results as external-source provenance, not lived memory. |
@@ -209,6 +222,10 @@ TemporalInstantFieldName = Literal[
     "event_at",
     "ingested_at",
     "observed_at",
+    "received_at",
+    "expires_at",
+    "deletion_observed_at",
+    "change_observed_at",
     "valid_from",
     "valid_to",
 ]
@@ -264,6 +281,10 @@ def _reset_diagnostics_for_tests() -> None: ...
 Contract rules:
 
 - `canonical_utc(...)` returns an aware UTC `datetime`.
+- Closed vocabulary versioning rule: future S3 v1.1+ releases may add members
+  to `TemporalInstantFieldName`, `TemporalDerivedFieldName`,
+  `TemporalAnchorKind`, and `HelperUnavailableReason`, but may not rename or
+  remove existing members without a new canonical decision/ADR.
 - `canonical_utc(...)` accepts ISO datetime strings only. Bare date strings are
   malformed instants.
 - `Z`, `+00:00`, and other offset-aware strings normalize to UTC.
@@ -272,10 +293,21 @@ Contract rules:
 - `field_name` is validated before timestamp parsing. Invalid names raise
   `ValueError`, increment `invalid_field_name_rejected_count`, and must not
   increment timestamp counters.
+- If an input has both an invalid `field_name` and an invalid timestamp, the
+  field-name rejection wins. This preserves one counter per primary failure and
+  prevents malformed content from being parsed after an authority failure.
+- `owner_local_date` is computed-only. It must be derived from an instant plus
+  the current owner timezone and must not be persisted as a durable store field
+  in S3 v1, because owner timezone can change across moves, hardware migration,
+  or identity-config repair.
 - `owner_timezone()` source resolution is: non-empty `MAEZ_OWNER_TIMEZONE` first
   (`env`), otherwise `core.memory.identity.timezone()` (`identity`), empty/None
   identity result (`fallback_utc`), invalid candidate (`invalid_fallback_utc`).
   V1 must not require a new `identity.py` public API.
+- `owner_timezone()` resolves per call in v1. A cache may be introduced only in a
+  later measured v1.x optimization with explicit invalidation semantics. If
+  `identity.timezone()` raises, S3 maps the failure to `invalid_fallback_utc`
+  and UTC, never to a process crash.
 - If timezone resolution falls back because a configured timezone is invalid,
   diagnostics report `timezone_source="invalid_fallback_utc"` and
   `timezone_name="UTC"`. The invalid raw timezone string must not appear in
@@ -313,7 +345,12 @@ Contract rules:
   Snapshots and test resets are isolated by the same module-local lock.
 - `diagnostics_snapshot()` returns a copy, not a mutable module dictionary.
 - `_reset_diagnostics_for_tests()` is test-only; runtime, health, and sidecar
-  code must not call it.
+  code must not call it. The implementation must structurally enforce this
+  boundary with a test-mode guard, not prose alone.
+- S3 v1 trusts `datetime.now(timezone.utc)` and does not detect system clock or
+  NTP skew. Clock-skew detection is explicitly deferred to a future S3 v1.x
+  slice because useful skew signals need their own content-free/audience-tier
+  review.
 - Diagnostics expose counts and source labels only, never timestamp values.
 
 ---
@@ -374,6 +411,10 @@ For this inventory, "runtime path" means the S3 v1 module, TRF refactor,
 `/health.temporal_spine`, and observation-sidecar projection. A deferred store
 may still be active under its owning organ. Deferred means S3 v1 must not scan
 it, migrate it, normalize its rows, or red-gate on its timestamp shape.
+This is a structural import-graph rule, not only policy prose:
+`core.time.temporal_spine` must not import deferred-store modules at module load
+time, including `m1_lived_episode_promotion`, `private_thoughts`,
+`entity_index`, or Calendar v1 store/read-model modules.
 
 Initial v1 classification:
 
@@ -391,6 +432,11 @@ comparison across mixed `Z`, `+00:00`, local-offset, or naive ISO strings. Keep
 `EpisodeStore.list_active_in_window(...)` public signature unchanged, but make
 S3-touched TRF reads compare canonical UTC instants. Tests must include
 mixed-offset episodes near an owner-local boundary.
+
+`RelationshipGraph` validity uses its existing `valid_from <= now <= valid_to`
+semantics. S3's `half_open_contains(...)` helper uses `[start, end)` interval
+semantics and must not be applied to graph validity rows without a future graph
+reader review.
 
 ---
 
@@ -415,7 +461,10 @@ and tests, `/health.temporal_spine` means the JSON path
 
 Rules:
 
-- `timezone_name` is an IANA timezone label, not content.
+- `timezone_name` is an IANA timezone label and therefore owner-side geographic
+  metadata. It may appear only in operator-authenticated `/health` and
+  operator-owned sidecar samples. It must never be forwarded to public
+  `/api/maez-state`-style endpoints.
 - If identity timezone resolution fails because the configured timezone is
   invalid, health must report `timezone_source: "invalid_fallback_utc"` and
   `timezone_name: "UTC"`.
@@ -439,6 +488,15 @@ Rules:
   anchor phrases, timestamp values, source IDs, memory IDs, user text, or
   exception text. Unsupported anchors, invalid field names, naive timestamps,
   and helper-unavailable remain watch-only in v1.
+- Aggregation can still fingerprint behavior over time. The sidecar may record
+  the current aggregate counter values, but must not compute or store
+  per-interval counter deltas as a temporal behavior history in v1.
+- The sidecar must red-gate `temporal_spine_unavailable` if `GET /health`
+  succeeds but the `temporal_spine` key is absent.
+- If a later sample shows a temporal-spine counter lower than the prior sample
+  from the same daemon PID, the sidecar must red-gate
+  `temporal_spine_counter_reset`. This detects process/module reset without
+  storing raw event content.
 
 ---
 
@@ -462,57 +520,79 @@ Minimum tests before implementation:
 9. `canonical_utc_iso("2026-05-15T12:00:00Z")` emits `+00:00` UTC form.
 10. `canonical_utc_iso("2026-05-15T07:00:00-05:00")` emits the same instant in
     `+00:00` UTC form.
-11. naive `datetime` is treated as UTC and increments the naive counter.
-12. naive ISO datetime string input is treated as UTC and increments the naive
+11. S2 canonical fields `received_at`, `expires_at`, `deletion_observed_at`, and
+    `change_observed_at` are accepted `TemporalInstantFieldName` values.
+12. vocabulary versioning test proves existing closed Literal members are not
+    renamed or removed from the exported sets.
+13. naive `datetime` is treated as UTC and increments the naive counter.
+14. naive ISO datetime string input is treated as UTC and increments the naive
     counter.
-13. bare date strings are rejected as malformed instants.
-14. malformed timestamp raises `ValueError` and increments malformed counter.
-15. invalid `field_name` raises `ValueError`, increments
+15. bare date strings are rejected as malformed instants.
+16. malformed timestamp raises `ValueError` and increments malformed counter.
+17. invalid `field_name` raises `ValueError`, increments
     `invalid_field_name_rejected_count`, and does not parse the timestamp.
-16. ambiguous fall-back owner-local time preserves `fold`: fold 0 and fold 1
+18. invalid `field_name` plus malformed timestamp increments only
+    `invalid_field_name_rejected_count`.
+19. ambiguous fall-back owner-local time preserves `fold`: fold 0 and fold 1
     canonicalize to different UTC instants.
-17. nonexistent spring-forward owner-local time is rejected and increments the
+20. nonexistent spring-forward owner-local time is rejected and increments the
     malformed counter.
-18. `owner_local_date(...)` uses configured owner timezone, not UTC date.
-19. `temporal_window("earlier_today", ref)` matches local midnight through ref.
-20. `temporal_window("this_morning", ref)` matches local midnight through noon.
-21. `temporal_window("yesterday", ref)` follows local calendar day across DST.
-22. `temporal_window("last_week", ref)` uses previous completed Monday-Sunday.
-23. all windows are half-open.
-24. `TemporalWindow.start` / `end` are owner-local aware datetimes, and
+21. `owner_local_date(...)` uses configured owner timezone, not UTC date.
+22. `owner_local_date` is not persisted by S3 v1 store paths.
+23. `temporal_window("earlier_today", ref)` matches local midnight through ref.
+24. `temporal_window("this_morning", ref)` matches local midnight through noon.
+25. `temporal_window("yesterday", ref)` follows local calendar day across DST.
+26. `temporal_window("last_week", ref)` uses previous completed Monday-Sunday.
+27. all windows are half-open.
+28. `TemporalWindow.start` / `end` are owner-local aware datetimes, and
     `start_utc` / `end_utc` are UTC-aware datetimes suitable for store filters.
-25. unsupported anchor raises `ValueError` and increments unsupported counter.
-26. `temporal_window(...)` rejects a nonexistent owner-local `reference_time`;
+29. unsupported anchor raises `ValueError` and increments unsupported counter.
+30. unsupported raw query phrases do not increment unsupported-anchor counters.
+31. `temporal_window(...)` rejects a nonexistent owner-local `reference_time`;
     TRF maps that exception to `helper_unavailable`.
-27. no code path imports `ZoneInfo("America/Chicago")` in TRF after refactor.
-28. TRF `last week` behavior remains unchanged after the refactor.
-29. TRF `yesterday` DST test remains unchanged after the refactor.
-30. TRF still does not activate without memory intent.
-31. TRF still does not scan full episode store.
-32. TRF helper error remains `helper_unavailable`, not memory absence.
-33. TRF kill switch still disables only temporal-anchor evidence lookup.
-34. TRF passes `+00:00` UTC ISO bounds to `EpisodeStore.list_active_in_window(...)`;
+32. no code path imports `ZoneInfo("America/Chicago")` in TRF after refactor.
+33. TRF `last week` behavior remains unchanged after the refactor.
+34. TRF `yesterday` DST test remains unchanged after the refactor.
+35. TRF still does not activate without memory intent.
+36. TRF still does not scan full episode store.
+37. TRF helper error remains `helper_unavailable`, not memory absence.
+38. TRF store error and timeout remain helper-unavailable without incrementing
+    S3 `helper_unavailable_count`.
+39. TRF kill switch still disables only temporal-anchor evidence lookup.
+40. TRF passes `+00:00` UTC ISO bounds to `EpisodeStore.list_active_in_window(...)`;
     no local-offset ISO string reaches the SQLite range predicate.
-35. TRF includes an episode at `2026-05-11T04:30:00+00:00` for a Chicago
+41. TRF includes an episode at `2026-05-11T04:30:00+00:00` for a Chicago
     `last_week` window ending at local `2026-05-11T00:00:00-05:00`, and excludes
     an episode exactly at `2026-05-11T05:00:00+00:00`.
-36. Episode window tests cover mixed `Z`, `+00:00`, local-offset, and naive
+42. Episode window tests cover mixed `Z`, `+00:00`, local-offset, and naive
     strings; S3 correctness may not depend on raw ISO string ordering.
-37. `/health` exposes `temporal_spine` aggregate fields.
-38. `/health.temporal_spine` does not expose raw timestamps, source IDs, memory
+43. S3 v1 code does not author approved temporal voice phrasing; TRF remains
+    voice authority for current anchors.
+44. future Calendar-backed-anchor notes cite `calendar_voice_guard` by name.
+45. `core.time.temporal_spine` does not import deferred-store modules at module
+    load time.
+46. `/health` exposes `temporal_spine` aggregate fields.
+47. `/health.temporal_spine` does not expose raw timestamps, source IDs, memory
     IDs, user text, exception text, or invalid raw timezone strings.
-39. sidecar projects temporal-spine aggregate fields content-free through an
+48. `/api/maez-state`-style public endpoint does not expose
+    `/health.temporal_spine`.
+49. sidecar projects temporal-spine aggregate fields content-free through an
     explicit allowlist.
-40. sidecar red-gates invalid timezone fallback with exactly
+50. sidecar red-gates invalid timezone fallback with exactly
     `temporal_spine_invalid_timezone_fallback`.
-41. sidecar red-gates malformed timestamp count greater than zero with exactly
+51. sidecar red-gates malformed timestamp count greater than zero with exactly
     `temporal_spine_malformed_timestamp_rejected`.
-42. sidecar does not red-gate unsupported anchors by default.
-43. sidecar does not red-gate naive timestamps, invalid field names, or
+52. sidecar red-gates missing temporal-spine health with exactly
+    `temporal_spine_unavailable`.
+53. sidecar red-gates counter decreases within the same daemon PID with exactly
+    `temporal_spine_counter_reset`.
+54. sidecar does not red-gate unsupported anchors by default.
+55. sidecar does not red-gate naive timestamps, invalid field names, or
     helper-unavailable in v1.
-44. store-status inventory exists in docs and names canonical/wrapped/deferred.
-45. existing `tests.test_temporal_recall_fragment_guard` remains green.
-46. full suite remains green.
+56. sidecar samples do not store per-interval temporal counter deltas.
+57. store-status inventory exists in docs and names canonical/wrapped/deferred.
+58. existing `tests.test_temporal_recall_fragment_guard` remains green.
+59. full suite remains green.
 
 ---
 
@@ -535,6 +615,33 @@ The Codex engineering review surfaced four choices that must stay explicit:
   Calendar burn-in does not unlock Calendar-backed recall. That requires a
   separate reviewed S3 v1.1/v2 grant under S2 and Calendar voice posture.
 
+## Named Covenant Disagreements Preserved
+
+The Claude covenant council surfaced six choices that must remain named rather
+than silently absorbed:
+
+- **D1 - IANA timezone audience:** `timezone_name` is acceptable as
+  operator-authenticated health metadata, but not as public state. S3 chooses
+  audience binding over reducing timezone granularity because DST debugging
+  needs the IANA label.
+- **D2 - S2 vocabulary inheritance:** S3 admits S2 temporal envelope fields
+  (`received_at`, `expires_at`, `deletion_observed_at`,
+  `change_observed_at`) into the closed instant vocabulary. The alternative
+  would force canonical S2 callers to bend to S3, inverting precedence.
+- **D3 - Import-graph defense:** S3 uses a structural negative assertion against
+  deferred-store imports instead of relying only on prose. This follows the
+  Camera v1 precedent: substrate boundaries should be testable.
+- **D4 - Per-call owner timezone resolution:** S3 resolves timezone per call in
+  v1. Caching is deferred until a measured v1.x optimization can define
+  invalidation semantics.
+- **D5 - Clock-skew deferral:** S3 v1 trusts system UTC and names clock-skew
+  detection as out of scope. A useful skew detector would need a separate
+  content-free/audience-tier review.
+- **D6 - Decision 4 naming:** S3 names Decision 4 explicitly even though v1 has
+  no third-party event-anchor path. The next temporal slice is where the
+  relational/personological line will re-enter, so the inheritance must be
+  visible now.
+
 ---
 
 ## Review Protocol
@@ -548,7 +655,10 @@ implementation:
   spec; see [`reviews/spec-codex-panel.md`](reviews/spec-codex-panel.md).
 - Claude covenant council reviews the spec for invariant #1 alignment and for
   whether the "UTC storage, owner-local boundary" rule preserves voice honesty.
-- Fold both review lanes before code.
+  The first Claude council returned REVISE and was folded into this spec; see
+  [`reviews/spec-claude-council.md`](reviews/spec-claude-council.md).
+- Focused second-fold verification by both lanes is required before
+  canonicalization or implementation.
 
 Post-implementation:
 
@@ -569,11 +679,13 @@ Post-implementation:
 6. Add daemon health aggregate.
 7. RED tests for sidecar projection/red gates.
 8. Add sidecar projection/red gates.
-9. Add store-status inventory note to this spec or companion doc.
-10. Run focused tests, Ruff, full suite.
-11. Post-implementation both-lane review.
-12. Recovery commit if review finds gaps.
-13. Push only after recovery and verification.
+9. RED tests for import-graph deferred-store defense and public-state exclusion.
+10. Add import-graph guard tests and public-state exclusion wiring if needed.
+11. Add store-status inventory note to this spec or companion doc.
+12. Run focused tests, Ruff, full suite.
+13. Post-implementation both-lane review.
+14. Recovery commit if review finds gaps.
+15. Push only after recovery and verification.
 
 ---
 
