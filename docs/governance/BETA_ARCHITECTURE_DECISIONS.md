@@ -1701,6 +1701,157 @@ See [`docs/adr/0032-contextual-integrity-at-ingest.md`](../adr/0032-contextual-i
 
 ---
 
+## Decision 28 — Calendar v1 S2-Bounded Ingest: Calendar is provenance, not Maez's lived schedule
+
+### The decision
+
+Calendar v1 is the first S2-bounded information-limb implementation spec and
+precedent template.
+
+The load-bearing rule is:
+
+> Calendar is provenance, not Maez's lived schedule.
+
+Calendar data may enter Maez only through the canonical S2 envelope, Decision 26
+credential handling, and the Calendar v1 redacted read model. It cannot enter
+raw prompt context, lived memory, TRF recall, body-state inference, proactive
+reminders, or scheduler voice.
+
+### Why this decision exists
+
+The Calendar v1 diagnostic found that Maez's legacy Calendar path was pre-S2
+scaffolding. It could read Google Calendar, inject raw event titles and
+locations into prompt context, append Calendar text into cognition/memory
+scoring, send reminder-like Telegram and speech alerts, and refresh OAuth state
+through local JSON files.
+
+That legacy shape violates the four newly-canonical substrate organs:
+
+- Decision 24 / ADR 0029 — information limbs must be body-bounded and degrade
+  safely;
+- Decision 25 / ADR 0030 — raw observations may feed promotion, but recall
+  reads only promoted biography;
+- Decision 26 / ADR 0031 — identity-bearing credentials use the shared vault
+  interface;
+- Decision 27 / ADR 0032 — external information is provenance first, never
+  biography by default.
+
+Calendar v1 closes that gap by replacing the legacy path rather than wrapping
+it.
+
+### What Calendar v1 requires
+
+- **Primary owned Calendar only.** V1 reads only the bonded user's primary owned
+  Google Calendar surface. Shared, work, family, delegated, subscribed, and
+  public calendars are future grants.
+- **Canonical S2 envelope only.** Calendar v1 uses the S2 Body Bus envelope and
+  canonical field names. It must not invent Calendar-specific aliases for
+  consent tier, requested flows, or granted flows.
+- **Inheritance Ledger.** Calendar v1 names the decisions it inherits and which
+  rules are Calendar-specific overrides. Future information limbs should copy
+  this pattern.
+- **Tier 3 for all accepted events.** Even apparently owner-only events can hide
+  third-party identity in title/location free text, so Calendar v1 explicitly
+  elects Tier 3 for all accepted events.
+- **Descriptions are out.** Calendar descriptions/bodies are not parsed,
+  scanned, classified, stored, prompted, logged, audited as text, or used to
+  derive crisis/sensitivity state in v1.
+- **Deterministic redaction and voice.** Title/location are untrusted free text.
+  Calendar answers use deterministic redaction and deterministic answer
+  composition or a Calendar voice guard.
+- **Makes visible, never nudges.** Calendar may answer direct owner Calendar
+  requests. It may not volunteer schedule facts, reminders, prioritization,
+  encouragement, or scheduler personality.
+- **No TRF or M1 widening.** Calendar may surface external-source provenance;
+  it may not be voiced as lived memory. Future Calendar promotion, if ever
+  granted, inherits M1: no quoted titles, no quoted attendees, no descriptions,
+  and no inferred why-it-mattered.
+- **Credential hygiene.** OAuth client material, refresh tokens, granted-scope
+  evidence, and token rotation are owned by `core/infra/secrets.py`.
+  Token-in-URL construction is substrate-forbidden.
+- **Polling-only v1.** Push/webhook notifications are deferred. V1 uses polling
+  and Google incremental sync under provider constraints.
+- **Legacy path cold.** When Calendar v1 is enabled, legacy Calendar imports,
+  prompt injection, memory/scoring append, reminder alerts, cache worker, and
+  fast-lane rendering stay cold. Failure is unavailable/stale, not fallback.
+
+### Named disagreements preserved
+
+Calendar v1 records five choices so future information-limb authors inherit the
+reasoning, not only the result:
+
+- **Precedent fragility.** Calendar must not become a second interpretation of
+  S2. The spec solves this with an Inheritance Ledger and inline canonical S2
+  field enumeration.
+- **Idempotency oracle.** Calendar preserves the S2 rule: sequence-primary,
+  revision-secondary, ambiguous-rejected.
+- **Credential rollback.** `MAEZ_SECRETS_DISABLE_NEW_LOADER=1` is not a
+  Calendar rollback tool; it is a Decision 26 incident posture.
+- **Crisis held-not-trapped.** Content-free crisis-shaped signals are written
+  to audit sidecar and queryable through approved local paths. They are not
+  routed by model discretion and not silently discarded.
+- **Tier-3 override.** Calendar v1 intentionally elects Tier 3 for every
+  accepted event because free-text fields can hide third-party identity.
+
+### What this does not decide
+
+- It does not implement Calendar code.
+- It does not run OAuth or authorize Google Calendar live access.
+- It does not ingest Calendar descriptions/bodies.
+- It does not add proactive reminders.
+- It does not grant shared/work/family/delegated calendars.
+- It does not implement push/webhook notifications.
+- It does not promote Calendar to lived memory.
+- It does not widen TRF.
+- It does not implement body-state inference or crisis routing from Calendar.
+- It does not restart the daemon or change runtime behavior.
+
+### The invariant
+
+> Calendar may be evidence; it is not Maez's life.
+
+### Related decisions
+
+- Decision 2 — third-party consent tiers define the Tier 3 posture.
+- Decision 4 — the Anna Question keeps relational evidence from becoming a
+  third-party profile.
+- Decision 24 / ADR 0029 — Body Topology makes Calendar a non-essential
+  information limb that fails neutral.
+- Decision 25 / ADR 0030 — M1 constrains any future Calendar promotion path.
+- Decision 26 / ADR 0031 — credentials and OAuth lifecycle use the shared
+  secret interface.
+- Decision 27 / ADR 0032 — S2 is the ingest law Calendar instantiates.
+
+### Implementation
+
+Pre-implementation. Calendar v1 is canonical law/spec, not runtime behavior.
+
+Implementation must proceed RED-first after cooling-off:
+
+1. legacy-disablement tests;
+2. daemon import-time legacy gate;
+3. Calendar v1 connector/store/read-model skeleton with no live OAuth yet;
+4. content-free health/project-panel telemetry;
+5. operator-approved OAuth onboarding as a separate explicit gate;
+6. live observation for at least one week after OAuth onboarding.
+
+Review trail:
+
+- [`docs/slices/calendar-v1/diagnostic.md`](../slices/calendar-v1/diagnostic.md)
+  — provider/API and legacy-path diagnostic.
+- [`docs/slices/calendar-v1/spec.md`](../slices/calendar-v1/spec.md)
+  — canonical Calendar v1 spec.
+- [`docs/slices/calendar-v1/reviews/codex-panel.md`](../slices/calendar-v1/reviews/codex-panel.md)
+  — Codex engineering panel, REVISE, folded.
+- [`docs/slices/calendar-v1/reviews/spec-claude-council.md`](../slices/calendar-v1/reviews/spec-claude-council.md)
+  — Claude covenant council, REVISE, folded and verified.
+
+### ADR
+
+See [`docs/adr/0033-calendar-v1-s2-bounded-ingest.md`](../adr/0033-calendar-v1-s2-bounded-ingest.md).
+
+---
+
 ## Open questions and deferred decisions
 
 This section tracks architectural questions that have been raised but not yet resolved. They are not blockers for Track A, but they matter for later tracks and should be picked up when the context is right.
@@ -1737,4 +1888,4 @@ When a decision in this document becomes code, add a *"Implementation"* subsecti
 
 ---
 
-*Last updated: 2026-05-14 — Decision 27 (Contextual Integrity at Ingest: external information is provenance first, never biography by default) appended after S2 scoping, Claude scoping council, Codex scoping panel, Codex BAD panel, Claude folded-BAD covenant verification, and two structural folds closed flow authority / consent-tier / third-party / OAuth / tombstone / burn-in gaps before canonicalization. Prior update: 2026-05-14, Decision 26 (Daemon Credential Hygiene: keys are identity-bearing material, not ordinary config). Earlier: 2026-05-14, Decision 25 (M1 Lived-Episode Promotion: promote biography; do not widen recall) and Decision 24 (Body Topology: cardinality of one, structured facts, information limbs, S2 gate).*
+*Last updated: 2026-05-15 — Decision 28 (Calendar v1 S2-Bounded Ingest: Calendar is provenance, not Maez's lived schedule) appended after diagnostic, Codex engineering panel, Claude covenant council, two folds, and focused closure verification. Prior update: 2026-05-14, Decision 27 (Contextual Integrity at Ingest: external information is provenance first, never biography by default). Earlier: 2026-05-14, Decision 26 (Daemon Credential Hygiene), Decision 25 (M1 Lived-Episode Promotion), and Decision 24 (Body Topology).*

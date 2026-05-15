@@ -1,8 +1,9 @@
 # Slice Calendar v1: S2-Bounded Google Calendar Ingest
 
-**Status:** DRAFT SPEC. Built from [`diagnostic.md`](diagnostic.md),
-post-diagnostic covenant guidance, folded Codex engineering panel findings, and
-folded Claude covenant council findings. No code has landed from this packet.
+**Status:** CANONICAL. Decision 28 / ADR 0033. Built from
+[`diagnostic.md`](diagnostic.md), post-diagnostic covenant guidance, folded
+Codex engineering panel findings, and folded Claude covenant council findings.
+No code has landed from this packet.
 
 **Maps to:**
 
@@ -18,6 +19,8 @@ folded Claude covenant council findings. No code has landed from this packet.
   Decision 24 / ADR 0029, information limbs and safe degradation.
 - [`docs/adr/0032-contextual-integrity-at-ingest.md`](../../adr/0032-contextual-integrity-at-ingest.md) —
   S2 accepted ADR.
+- [`docs/adr/0033-calendar-v1-s2-bounded-ingest.md`](../../adr/0033-calendar-v1-s2-bounded-ingest.md) —
+  Calendar v1 accepted ADR.
 - [`reviews/codex-panel.md`](reviews/codex-panel.md) — Codex engineering panel,
   REVISE; this draft folds the required amendments.
 - [`reviews/spec-claude-council.md`](reviews/spec-claude-council.md) — Claude
