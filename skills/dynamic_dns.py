@@ -17,8 +17,14 @@ import urllib.error
 from pathlib import Path as _Path
 _MAEZ_HOME_PATH = _Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_MAEZ_HOME_PATH))
-from dotenv import load_dotenv
-load_dotenv(str(_MAEZ_HOME_PATH / "config" / ".env"))
+from core.infra.secrets import load_ordinary_config_for_process, load_secrets_for_process
+
+load_ordinary_config_for_process(env_file=_MAEZ_HOME_PATH / "config" / ".env")
+load_secrets_for_process(
+    required=set(),
+    optional={"CLOUDFLARE_API_TOKEN"},
+    populate_environ=True,
+)
 
 ZONE_ID = os.environ.get('CLOUDFLARE_ZONE_ID', '')
 API_TOKEN = os.environ.get('CLOUDFLARE_API_TOKEN', '')

@@ -24,7 +24,7 @@ from datetime import datetime
 # 2026-04-23 Commit 7b: public-bot reply model now tracks the current
 # primary brain via /etc/maez/model.env, not a hardcoded "gemma4:26b".
 from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
-from dotenv import load_dotenv
+from core.infra.secrets import load_ordinary_config_for_process, load_secrets_for_process
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -34,7 +34,12 @@ try:
 except Exception:
     from pathlib import Path as _Path
     _MAEZ_HOME_PATH = _Path(__file__).resolve().parent.parent
-load_dotenv(str(_MAEZ_HOME_PATH / "config" / ".env"))
+load_ordinary_config_for_process(env_file=_MAEZ_HOME_PATH / "config" / ".env")
+load_secrets_for_process(
+    required=set(),
+    optional={"MAEZ_PUBLIC_TELEGRAM_TOKEN", "MAEZ_TELEGRAM_TOKEN"},
+    populate_environ=True,
+)
 logger = logging.getLogger('maez.public')
 
 

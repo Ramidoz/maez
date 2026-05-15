@@ -27,6 +27,7 @@ from core.action_engine import (
     _continuous_command_violation as _continuous_check,
     _covenant_violation as _covenant_check,
 )
+from core.infra.secrets import sanitize_env
 
 try:
     from core.paths import home as _home
@@ -240,6 +241,7 @@ def run_shell(cmd: str, timeout: Optional[int] = None,
         r = subprocess.run(
             ["bash", "-lc", cmd],
             capture_output=True, text=True, timeout=t,
+            env=sanitize_env(),
         )
         out = (r.stdout or "")[:m]
         err = (r.stderr or "")[:m]

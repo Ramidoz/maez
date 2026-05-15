@@ -12,16 +12,19 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import requests
-from dotenv import load_dotenv
 
 try:
     from core.infra import paths as _paths
-    load_dotenv(str(_paths.env_file()))
+    from core.infra.secrets import load_ordinary_config_for_process, load_secrets_for_process
+
+    load_ordinary_config_for_process(env_file=_paths.env_file())
+    load_secrets_for_process(
+        required=set(),
+        optional={"MAEZ_GITHUB_TOKEN"},
+        populate_environ=True,
+    )
 except Exception:
-    from pathlib import Path as _Path
-    load_dotenv(str(
-        _Path(__file__).resolve().parent.parent / "config" / ".env"
-    ))
+    pass
 logger = logging.getLogger('maez.github')
 
 

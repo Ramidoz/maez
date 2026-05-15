@@ -69,6 +69,7 @@
     {"type": "file", "path": "config/entity_semantics.local.yaml", "required": false, "comment": "MSEL semantic mappings — owner-language phrase → canonical entity (Step 5n). Gitignored, lives nowhere else."},
 
     {"type": "secret_file", "path": "config/credentials.json", "comment": "API credentials. Encrypted destination required."},
+    {"type": "secret_file", "path": "config/secrets.local.env", "comment": "Decision 26 local credential fallback. Encrypted destination required."},
     {"type": "secret_file", "path": "config/token.json", "comment": "API tokens. Encrypted destination required."},
     {"type": "secret_file", "path": "config/model_state.json", "comment": "Model state with possible API hints. Encrypted destination required."},
     {"type": "secret_file", "path": "config/thunder_state.json", "comment": "Compute provider state. Encrypted destination required."}

@@ -1,0 +1,302 @@
+"""Credential-hygiene contract for Decision 26 / ADR 0031.
+
+Tests use synthetic paths and fake values only. They must never read or print
+the operator's real credential files.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import tempfile
+import textwrap
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+
+class TestSecretLoader(unittest.TestCase):
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.root = Path(self._td.name)
+        self.config = self.root / "config"
+        self.config.mkdir()
+        self.fallback = self.config / "secrets.local.env"
+        self.creds = self.root / "creds"
+        self.creds.mkdir()
+
+    def tearDown(self) -> None:
+        self._td.cleanup()
+
+    def test_source_priority_systemd_wins_and_fallback_fills_missing(self):
+        from core.infra.secrets import load_secrets_for_process
+
+        (self.creds / "MAEZ_TELEGRAM_TOKEN").write_text("systemd-token\n")
+        self.fallback.write_text(
+            "MAEZ_TELEGRAM_TOKEN=fallback-token\n"
+            "ANTHROPIC_API_KEY=fallback-anthropic\n",
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {"CREDENTIALS_DIRECTORY": str(self.creds)}, clear=True):
+            report = load_secrets_for_process(
+                required={"MAEZ_TELEGRAM_TOKEN"},
+                optional={"ANTHROPIC_API_KEY"},
+                fallback_file=self.fallback,
+                populate_environ=False,
+            )
+
+        self.assertEqual(report.source, "mixed")
+        self.assertEqual(report.loaded_count, 2)
+        self.assertEqual(report.get_secret("MAEZ_TELEGRAM_TOKEN"), "systemd-token")
+        self.assertEqual(report.get_secret("ANTHROPIC_API_KEY"), "fallback-anthropic")
+
+    def test_fallback_source_loads_without_systemd_credentials(self):
+        from core.infra.secrets import load_secrets_for_process
+
+        self.fallback.write_text("MAEZ_TELEGRAM_TOKEN=fallback-token\n", encoding="utf-8")
+
+        with patch.dict(os.environ, {}, clear=True):
+            report = load_secrets_for_process(
+                required={"MAEZ_TELEGRAM_TOKEN"},
+                optional=set(),
+                fallback_file=self.fallback,
+                populate_environ=False,
+            )
+
+        self.assertEqual(report.source, "secrets-local-env")
+        self.assertEqual(report.get_secret("MAEZ_TELEGRAM_TOKEN"), "fallback-token")
+
+    def test_malformed_fallback_rejected(self):
+        from core.infra.secrets import SecretLoadError, load_secrets_for_process
+
+        cases = [
+            "MAEZ_TELEGRAM_TOKEN=one\nMAEZ_TELEGRAM_TOKEN=two\n",
+            "not a key value line\n",
+            "MAEZ_TELEGRAM_TOKEN=\n",
+        ]
+        for body in cases:
+            with self.subTest(body=body):
+                self.fallback.write_text(body, encoding="utf-8")
+                with self.assertRaises(SecretLoadError):
+                    load_secrets_for_process(
+                        required={"MAEZ_TELEGRAM_TOKEN"},
+                        optional=set(),
+                        fallback_file=self.fallback,
+                        populate_environ=False,
+                    )
+
+    def test_config_env_is_not_a_secret_source_but_ordinary_config_loads(self):
+        from core.infra.secrets import (
+            load_ordinary_config_for_process,
+            load_secrets_for_process,
+        )
+
+        env_file = self.config / ".env"
+        env_file.write_text(
+            "MAEZ_HOME=/tmp/maez-test\n"
+            "MAEZ_TELEGRAM_TOKEN=must-not-load-from-dotenv\n",
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {}, clear=True):
+            loaded = load_ordinary_config_for_process(env_file=env_file)
+            report = load_secrets_for_process(
+                required=set(),
+                optional={"MAEZ_TELEGRAM_TOKEN"},
+                fallback_file=self.fallback,
+                populate_environ=False,
+            )
+            self.assertEqual(os.environ.get("MAEZ_HOME"), "/tmp/maez-test")
+            self.assertIsNone(os.environ.get("MAEZ_TELEGRAM_TOKEN"))
+
+        self.assertEqual(loaded, {"MAEZ_HOME"})
+        self.assertEqual(report.source, "none")
+        self.assertEqual(report.loaded_count, 0)
+
+    def test_required_missing_fails_with_name_only(self):
+        from core.infra.secrets import SecretLoadError, load_secrets_for_process
+
+        with self.assertRaises(SecretLoadError) as cm:
+            load_secrets_for_process(
+                required={"MAEZ_TELEGRAM_TOKEN"},
+                optional=set(),
+                fallback_file=self.fallback,
+                populate_environ=False,
+            )
+
+        msg = str(cm.exception)
+        self.assertIn("MAEZ_TELEGRAM_TOKEN", msg)
+        self.assertNotIn("=", msg)
+
+    def test_optional_absent_does_not_fail_and_compatibility_population_works(self):
+        from core.infra.secrets import load_secrets_for_process
+
+        self.fallback.write_text("MAEZ_TELEGRAM_TOKEN=fallback-token\n", encoding="utf-8")
+
+        with patch.dict(os.environ, {}, clear=True):
+            report = load_secrets_for_process(
+                required={"MAEZ_TELEGRAM_TOKEN"},
+                optional={"MAEZ_GITHUB_TOKEN"},
+                fallback_file=self.fallback,
+                populate_environ=True,
+            )
+            self.assertEqual(os.environ.get("MAEZ_TELEGRAM_TOKEN"), "fallback-token")
+            self.assertIsNone(os.environ.get("MAEZ_GITHUB_TOKEN"))
+
+        self.assertEqual(report.missing_required_count, 0)
+        self.assertEqual(report.missing_optional_count, 1)
+
+    def test_health_and_log_surface_are_aggregate_only(self):
+        from core.infra.secrets import load_secrets_for_process
+
+        self.fallback.write_text("MAEZ_TELEGRAM_TOKEN=fallback-token\n", encoding="utf-8")
+        report = load_secrets_for_process(
+            required={"MAEZ_TELEGRAM_TOKEN"},
+            optional={"MAEZ_GITHUB_TOKEN"},
+            fallback_file=self.fallback,
+            populate_environ=False,
+        )
+
+        health = report.health()
+        log_line = report.source_log_line()
+        self.assertEqual(health["source"], "secrets-local-env")
+        self.assertEqual(health["required_present"], True)
+        self.assertEqual(health["optional_loaded_count"], 0)
+        self.assertNotIn("MAEZ_TELEGRAM_TOKEN", repr(health))
+        self.assertNotIn("fallback-token", repr(health))
+        self.assertNotIn("MAEZ_TELEGRAM_TOKEN", log_line)
+        self.assertNotIn("fallback-token", log_line)
+
+
+class TestSanitizedEnvironment(unittest.TestCase):
+    def test_default_sanitized_env_removes_secret_shaped_names_and_keeps_basics(self):
+        from core.infra.secrets import sanitize_env
+
+        base = {
+            "PATH": "/bin",
+            "HOME": "/home/test",
+            "MAEZ_HOME": "/tmp/maez",
+            "DISPLAY": ":1",
+            "SSH_AUTH_SOCK": "/tmp/ssh",
+            "MAEZ_TELEGRAM_TOKEN": "fake-token",
+            "ANTHROPIC_API_KEY": "fake-key",
+            "NOT_A_SECRET": "remove-me-too",
+            "CREDENTIAL_PATH": "remove",
+        }
+
+        env = sanitize_env(base)
+        self.assertEqual(env["PATH"], "/bin")
+        self.assertEqual(env["HOME"], "/home/test")
+        self.assertEqual(env["MAEZ_HOME"], "/tmp/maez")
+        self.assertEqual(env["DISPLAY"], ":1")
+        self.assertNotIn("MAEZ_TELEGRAM_TOKEN", env)
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+        self.assertNotIn("NOT_A_SECRET", env)
+        self.assertNotIn("CREDENTIAL_PATH", env)
+
+    def test_exact_secret_opt_in_passes_one_name_only(self):
+        from core.infra.secrets import sanitize_env
+
+        base = {
+            "MAEZ_GITHUB_TOKEN": "allowed-fake",
+            "ANTHROPIC_API_KEY": "blocked-fake",
+        }
+        env = sanitize_env(base, allow={"MAEZ_GITHUB_TOKEN"})
+        self.assertEqual(env["MAEZ_GITHUB_TOKEN"], "allowed-fake")
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+
+
+class TestProcAndScanner(unittest.TestCase):
+    def test_runtime_assignment_not_visible_in_proc_environ_on_this_host(self):
+        script = textwrap.dedent(
+            """
+            import os
+            import sys
+            name = "MAEZ_PROC_REGRESSION_TOKEN"
+            os.environ[name] = "proc-regression-fake-value"
+            data = open(f"/proc/{os.getpid()}/environ", "rb").read()
+            sys.exit(1 if name.encode() in data else 0)
+            """
+        )
+        proc = subprocess.run([sys.executable, "-c", script], timeout=5)
+        self.assertEqual(
+            proc.returncode,
+            0,
+            "Runtime os.environ assignments are visible in /proc; v1 compatibility exposure claim is invalid.",
+        )
+
+    def test_pattern_scanner_catches_realistic_fake_and_allows_fixture(self):
+        from core.infra.secrets import find_secret_pattern_hits
+
+        bad = "token=123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabc"
+        ok = "fixture token sk-lf-test is intentionally allowed"
+        self.assertTrue(find_secret_pattern_hits(bad))
+        self.assertEqual(find_secret_pattern_hits(ok), [])
+
+
+class TestRepoPosture(unittest.TestCase):
+    def test_gitignore_ignores_local_secret_file(self):
+        text = Path(".gitignore").read_text(encoding="utf-8")
+        self.assertIn("config/secrets.local.env", text)
+
+    def test_backup_manifest_covers_local_secret_file_as_secret_file(self):
+        text = Path("scripts/backup/backup_state_manifest.json").read_text(encoding="utf-8")
+        self.assertIn('"type": "secret_file"', text)
+        self.assertIn('"path": "config/secrets.local.env"', text)
+
+    def test_service_templates_do_not_describe_config_env_as_token_storage(self):
+        for path in [
+            Path("scripts/maez.template.service"),
+            Path("scripts/maez-subscription-proxy.service"),
+            Path("scripts/maez-subscription-proxy.template.service"),
+            Path("scripts/maez-lived-memory-reflection.service"),
+            Path("scripts/maez-self-dev-scheduled.service"),
+            Path("scripts/maez-self-dev-scheduled.template.service"),
+        ]:
+            text = path.read_text(encoding="utf-8")
+            self.assertNotRegex(text, r"EnvironmentFile=.*config/\\.env")
+            self.assertNotIn("holds tokens", text)
+            self.assertNotIn("API_KEY", text)
+
+    def test_high_risk_daemon_subprocess_sites_use_sanitized_env_or_exception(self):
+        files = [
+            Path("core/actions/action_engine.py"),
+            Path("core/actions/tool_loop.py"),
+            Path("core/self_dev/__init__.py"),
+            Path("skills/web_interface.py"),
+            Path("skills/telegram_voice.py"),
+        ]
+        for path in files:
+            text = path.read_text(encoding="utf-8")
+            self.assertTrue(
+                "sanitize_env(" in text or "CREDENTIAL_HYGIENE_REVIEWED_EXCEPTION" in text,
+                f"{path} must use sanitize_env or carry a reviewed exception",
+            )
+
+    def test_high_risk_startup_imports_do_not_call_raw_load_dotenv(self):
+        files = [
+            Path("daemon/maez_daemon.py"),
+            Path("skills/web_interface.py"),
+            Path("skills/github_skill.py"),
+            Path("skills/github_publish.py"),
+            Path("skills/telegram_public.py"),
+            Path("skills/dynamic_dns.py"),
+        ]
+        for path in files:
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("from dotenv import load_dotenv", text, str(path))
+            self.assertNotIn("load_dotenv(", text, str(path))
+
+    def test_daemon_health_exposes_credential_aggregate_only(self):
+        text = Path("daemon/maez_daemon.py").read_text(encoding="utf-8")
+        self.assertIn('"credentials": _credential_health()', text)
+        health_line = next(
+            line for line in text.splitlines() if '"credentials": _credential_health()' in line
+        )
+        self.assertNotIn("MAEZ_TELEGRAM_TOKEN", health_line)
+
+
+if __name__ == "__main__":
+    unittest.main()

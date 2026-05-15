@@ -25,6 +25,7 @@ from telegram.ext import (
 
 import sys
 sys.path.insert(0, str(Path("/home/rohit/maez")))
+from core.infra.secrets import sanitize_env
 from core.health.shared_executor import get_shared_executor
 from core.perception import snapshot as perception_snapshot, format_snapshot
 from core.conversation_controller import ConversationController
@@ -2618,6 +2619,7 @@ class TelegramVoice:
                 services = _sp.run(
                     ["systemctl", "is-active", "maez", "maez-web", "nginx", "ollama"],
                     capture_output=True, text=True, timeout=5,
+                    env=sanitize_env(),
                 ).stdout.strip().split('\n')
                 svc_names = ['maez', 'maez-web', 'nginx', 'ollama']
                 svc_str = " | ".join(f"{n}: {s}" for n, s in zip(svc_names, services, strict=False))

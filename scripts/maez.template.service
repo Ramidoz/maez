@@ -17,7 +17,6 @@ Type=simple
 User=__MAEZ_USER__
 Group=__MAEZ_USER__
 WorkingDirectory=__MAEZ_HOME__
-EnvironmentFile=__MAEZ_HOME__/config/.env
 Environment=PYTHONUNBUFFERED=1
 Environment=MAEZ_HOME=__MAEZ_HOME__
 
@@ -26,6 +25,10 @@ Environment=MAEZ_HOME=__MAEZ_HOME__
 # degrades gracefully when the X socket isn't reachable.
 Environment=DISPLAY=:1
 Environment=XAUTHORITY=/run/user/__MAEZ_UID__/gdm/Xauthority
+
+# Decision 26: config/.env is ordinary config only and is loaded inside Python.
+# Identity-bearing credentials come from systemd credentials when configured, or
+# from __MAEZ_HOME__/config/secrets.local.env as the owner-local fallback.
 
 ExecStart=__MAEZ_HOME__/.venv/bin/python3 __MAEZ_HOME__/daemon/maez_daemon.py
 Restart=on-failure

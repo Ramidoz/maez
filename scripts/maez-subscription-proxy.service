@@ -9,9 +9,8 @@ Type=simple
 User=rohit
 Group=rohit
 WorkingDirectory=/home/rohit/maez
-# Loads OPENROUTER_API_KEY / OPENAI_API_KEY / etc. from the same env file
-# the daemon uses. Keep the perms on this file at 600 — it holds tokens.
-EnvironmentFile=/home/rohit/maez/config/.env
+# Decision 26: config/.env is ordinary config only. Provider credentials are
+# loaded inside Python from systemd credentials or config/secrets.local.env.
 Environment=PYTHONUNBUFFERED=1
 Environment=MAEZ_SUBSCRIPTION_PROXY_PORT=11438
 ExecStart=/home/rohit/maez/.venv/bin/python3 -m core.subscription_proxy

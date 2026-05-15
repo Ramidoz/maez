@@ -35,6 +35,7 @@ from memory.quality_tracker import QualityTracker
 # action_engine namespace (mock.patch("core.actions.action_engine.
 # audit_assistant_text", ...)).
 from core.safety.audited_output import audit_assistant_text
+from core.infra.secrets import sanitize_env
 # 5x.F.B: through-quotation downgrade rule consults F.A's
 # has_untrusted predicate. Single source of truth — re-implementing
 # the iteration here would create drift if F.A's tier semantics ever
@@ -963,6 +964,7 @@ class ActionEngine:
         result = subprocess.run(
             ["bash", "-c", cmd],
             capture_output=True, text=True, timeout=_timeout,
+            env=sanitize_env(),
         )
         # R3 hardening (Codex review of 017022d, 2026-05-04):
         # Detect failures on the FULL stdout/stderr BEFORE truncation.

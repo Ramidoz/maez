@@ -3,6 +3,7 @@ node_modules/
 __pycache__/
 *.pyc
 config/.env
+config/secrets.local.env
 config/token.json*
 config/credentials.json*
 memory/db/

@@ -139,7 +139,8 @@ seed_from_template "$MAEZ_HOME/.env.example"                        "$MAEZ_HOME/
 seed_from_template "$MAEZ_HOME/config/identity.template.yaml"       "$MAEZ_HOME/config/identity.yaml"
 seed_from_template "$MAEZ_HOME/config/soul.local.template.md"       "$MAEZ_HOME/config/soul.local.md"
 
-# config/.env should be owner-readable only (it will hold API keys).
+# config/.env holds ordinary config only. Identity-bearing credentials belong
+# in config/secrets.local.env or systemd credentials per Decision 26.
 chmod 600 "$MAEZ_HOME/config/.env" 2>/dev/null || true
 
 
@@ -256,7 +257,8 @@ cat <<EOF
   Config: $MAEZ_HOME/config/ (.env, identity.yaml, soul.local.md)
 
   Next steps:
-    1. Edit $MAEZ_HOME/config/.env if you want to add API keys.
+    1. Edit $MAEZ_HOME/config/.env for ordinary config.
+       Put API keys/tokens in $MAEZ_HOME/config/secrets.local.env (0600).
     2. Review $MAEZ_HOME/config/identity.yaml and adjust as needed.
     3. Start the daemon (see commands above).
     4. Tail logs: tail -f $MAEZ_HOME/logs/maez.log

@@ -24,9 +24,18 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 sys.path.insert(0, "/home/rohit/maez")
-from dotenv import load_dotenv
+from core.infra.secrets import (
+    load_ordinary_config_for_process,
+    load_secrets_for_process,
+    sanitize_env,
+)
 
-load_dotenv("/home/rohit/maez/config/.env")
+load_ordinary_config_for_process()
+load_secrets_for_process(
+    required=set(),
+    optional={"LANGFUSE_SECRET_KEY", "MAEZ_GITHUB_TOKEN", "MAEZ_IPHONE_INGEST_TOKEN"},
+    populate_environ=True,
+)
 
 from flask import Flask, jsonify, request, redirect, send_file, send_from_directory
 
@@ -776,6 +785,7 @@ def _service_state_cached(service_name, ttl=_SERVICE_STATE_TTL):
                 ["systemctl", "is-active", service_name + ".service"],
                 timeout=2.0,
                 stderr=subprocess.DEVNULL,
+                env=sanitize_env(),
             )
             .decode("utf-8")
             .strip()

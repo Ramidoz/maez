@@ -9,7 +9,8 @@ Type=oneshot
 User=__MAEZ_USER__
 Group=__MAEZ_USER__
 WorkingDirectory=__MAEZ_HOME__
-EnvironmentFile=__MAEZ_HOME__/config/.env
+# Decision 26: ordinary config is loaded inside Python; credentials come from
+# systemd credentials or config/secrets.local.env.
 Environment=PYTHONUNBUFFERED=1
 Environment=MAEZ_HOME=__MAEZ_HOME__
 ExecStart=__MAEZ_HOME__/.venv/bin/python3 -m core.self_dev_scheduler run

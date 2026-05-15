@@ -39,6 +39,8 @@ import json
 import logging
 import re
 from pathlib import Path
+
+from core.infra.secrets import sanitize_env
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
@@ -223,6 +225,7 @@ def _git_diff(target_ref: str) -> str:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True,
+            env=sanitize_env(),
         )
         try:
             stdout, stderr = proc.communicate(timeout=30)

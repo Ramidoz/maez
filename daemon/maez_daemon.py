@@ -20,17 +20,28 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-# Load environment from .env before any other imports that need it.
-# Route via core.paths so this works on any install (dev box, CI,
-# fresh contributor). Legacy hardcode kept as a last-resort fallback.
+# Decision 26: load ordinary config first, then credentials through the
+# dedicated loader before importing surfaces that read os.environ.
 try:
-    from core.paths import env_file as _env_file
+    from core.infra.secrets import (
+        SECRET_NAMES as _MAEZ_SECRET_NAMES,
+        SecretLoadError as _SecretLoadError,
+        credential_health as _credential_health,
+        load_ordinary_config_for_process as _load_ordinary_config_for_process,
+        load_secrets_for_process as _load_secrets_for_process,
+    )
 
-    load_dotenv(_env_file())
-except Exception:
-    load_dotenv(Path(__file__).resolve().parent.parent / "config" / ".env")
+    _load_ordinary_config_for_process()
+    _CREDENTIAL_REPORT = _load_secrets_for_process(
+        required=set(),
+        optional=set(_MAEZ_SECRET_NAMES),
+        populate_environ=True,
+    )
+except Exception as _credential_bootstrap_exc:
+    _CREDENTIAL_REPORT = None
+    _CREDENTIAL_BOOTSTRAP_ERROR = _credential_bootstrap_exc
+else:
+    _CREDENTIAL_BOOTSTRAP_ERROR = None
 
 import asyncio
 
@@ -5461,6 +5472,7 @@ class MaezDaemon:
                         "staleness": self._m1_staleness_health(),
                         "m1": self._m1_status_health(),
                     },
+                    "credentials": _credential_health(),
                     "system": {
                         "cpu_percent": snap["cpu"]["percent"],
                         "ram_percent": snap["ram"]["percent"],
@@ -5695,6 +5707,17 @@ def daemonize():
 
 
 def main():
+    if _CREDENTIAL_BOOTSTRAP_ERROR is not None:
+        raise SystemExit(f"credential bootstrap failed: {_CREDENTIAL_BOOTSTRAP_ERROR}")
+    try:
+        _load_secrets_for_process(
+            required={"MAEZ_TELEGRAM_TOKEN"},
+            optional=set(_MAEZ_SECRET_NAMES) - {"MAEZ_TELEGRAM_TOKEN"},
+            populate_environ=True,
+        )
+    except _SecretLoadError as exc:
+        raise SystemExit(str(exc)) from exc
+
     daemon = MaezDaemon()
 
     # Handle signals for graceful shutdown

@@ -13,11 +13,11 @@ import re
 import subprocess
 
 import requests
-from dotenv import load_dotenv
 
 # 2026-04-23 Commit 7b: commit-message generation now tracks the
 # current primary brain, not hardcoded "gemma4:26b".
 from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
+from core.infra.secrets import load_ordinary_config_for_process, load_secrets_for_process
 
 try:
     from core.infra import paths as _paths
@@ -25,7 +25,12 @@ try:
 except Exception:
     from pathlib import Path as _Path
     MAEZ_ROOT = str(_Path(__file__).resolve().parent.parent)
-load_dotenv(f'{MAEZ_ROOT}/config/.env')
+load_ordinary_config_for_process()
+load_secrets_for_process(
+    required=set(),
+    optional={"MAEZ_GITHUB_TOKEN"},
+    populate_environ=True,
+)
 logger = logging.getLogger("maez")
 REPO_NAME = 'maez'
 

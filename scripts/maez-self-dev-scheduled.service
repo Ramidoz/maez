@@ -9,7 +9,8 @@ Type=oneshot
 User=rohit
 Group=rohit
 WorkingDirectory=/home/rohit/maez
-EnvironmentFile=/home/rohit/maez/config/.env
+# Decision 26: ordinary config is loaded inside Python; credentials come from
+# systemd credentials or config/secrets.local.env.
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/home/rohit/maez/.venv/bin/python3 -m core.self_dev_scheduler run
 

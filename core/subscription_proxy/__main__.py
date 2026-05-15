@@ -15,6 +15,19 @@ import os
 
 import uvicorn
 
+from core.infra.secrets import (
+    SECRET_NAMES,
+    load_ordinary_config_for_process,
+    load_secrets_for_process,
+)
+
+load_ordinary_config_for_process()
+load_secrets_for_process(
+    required=set(),
+    optional=set(SECRET_NAMES),
+    populate_environ=True,
+)
+
 from core.subscription_proxy.server import app
 
 
