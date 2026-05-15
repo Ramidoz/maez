@@ -1,9 +1,8 @@
 # Slice Calendar v1: S2-Bounded Google Calendar Ingest
 
 **Status:** DRAFT SPEC. Built from [`diagnostic.md`](diagnostic.md),
-post-diagnostic covenant guidance, and folded Codex engineering panel findings.
-Claude covenant review has not yet run on this draft. No code has landed from
-this packet.
+post-diagnostic covenant guidance, folded Codex engineering panel findings, and
+folded Claude covenant council findings. No code has landed from this packet.
 
 **Maps to:**
 
@@ -21,6 +20,9 @@ this packet.
   S2 accepted ADR.
 - [`reviews/codex-panel.md`](reviews/codex-panel.md) — Codex engineering panel,
   REVISE; this draft folds the required amendments.
+- [`reviews/spec-claude-council.md`](reviews/spec-claude-council.md) — Claude
+  covenant council, REVISE; this draft folds the inheritance-citation and
+  substrate-precision amendments.
 - Google Calendar sync guide:
   https://developers.google.com/workspace/calendar/api/guides/sync
 - Google Calendar events reference:
@@ -92,6 +94,49 @@ Forbidden:
 Plain English: Maez may say "your calendar shows a redacted event window" when
 Rohit asks. Maez may not act like it jointly lives the calendar, remembers the
 event, knows why it matters, or should remind/nudge him about it.
+
+## Inheritance Ledger
+
+Calendar v1 is not a second interpretation of S2. It is the first executable
+instantiation of four canonical substrate organs:
+
+- Decision 24 / ADR 0029 (Body Topology): Calendar is a non-essential
+  information limb. It fails neutral/unavailable and never becomes a core body
+  organ.
+- Decision 25 / ADR 0030 (M1): Calendar is not biography. Future Calendar
+  promotion, if ever granted by a reviewed slice, inherits M1 structurally: no
+  quoted titles, no quoted attendees, no inferred why-it-mattered, and no raw
+  provider text in promoted memory.
+- Decision 26 / ADR 0031 (Daemon Credential Hygiene): Calendar credentials are
+  identity-bearing material. OAuth tokens use the shared credential interface;
+  Calendar must not invent a connector-local loader.
+- Decision 27 / ADR 0032 (S2): Calendar records enter Maez only through the
+  canonical S2 envelope, flow registry, consent posture, retention,
+  provenance, third-party posture, and promotion rules.
+- Decision 2 (third-party retention) and Decision 4 (the Anna Question): a
+  Calendar event may reveal another person's life. Maez must preserve relational
+  evidence without turning third parties into profiles.
+
+Load-bearing inherited rules:
+
+- S2 computes `decision2_consent_tier`; connectors may request flows and report
+  provider facts, but may not stamp their own tier or grant their own visibility.
+- Calendar v1 elects Tier 3 for all accepted events even when an event appears
+  owner-only, because title/location/free-text can carry hidden third-party
+  identity. This is an explicit v1 override of S2's `owner_only` branch, not an
+  accidental contradiction.
+- "Makes visible, never nudges" is a named Calendar rule. Calendar may answer a
+  direct owner request; it may not volunteer schedule facts, reminders,
+  prioritization, encouragement, or assistant-style nudges.
+- Token-in-URL is a substrate-forbidden pattern. No Calendar OAuth exchange,
+  provider callback, subprocess, compatibility artifact, log line, or future
+  webhook may construct credential-bearing URLs.
+- S2 records may never be voiced as lived turns, remembered episodes, or
+  co-experienced events under any flow. Calendar may say "your calendar shows";
+  it may not say or imply "I remember" or "we lived."
+- Calendar cache and provider mirror are pre-body staging under BT Rule 6:
+  provenance outside Maez's body topology until a reviewed body/promotion path
+  explicitly grants otherwise.
 
 ---
 
@@ -376,6 +421,48 @@ Calendar v1 uses the canonical S2 Body Bus envelope without abbreviation. All
 fields required by the S2 provenance and Body Bus mapping are mandatory for
 Calendar v1.
 
+Mandatory canonical S2/Body Bus fields:
+
+- `ingest_record_id`;
+- `schema_version`;
+- `source_kind`;
+- `source_handle_human`;
+- `source_instance_id`;
+- `source_handle_telemetry`;
+- `observed_at`;
+- `received_at`;
+- `expires_at`;
+- `sequence`;
+- `confidence`;
+- `record_state`;
+- `retention_class`;
+- `granted_flow_ids`;
+- `facts`;
+- `external_event_id`;
+- `external_event_id_hash`;
+- `source_revision`;
+- `source_revision_hash`;
+- `decision2_consent_tier`;
+- `consent_posture`;
+- `third_party_posture`;
+- `requested_flow_ids`;
+- `flow_policy_version`;
+- `promotion_state`;
+- `promotion_eligibility_reason`;
+- `promotion_eligibility_provenance_handle`;
+- `promotion_record_id`;
+- `redaction_state`;
+- `fetch_batch_id`;
+- `connector_version`;
+- `raw_field_policy_version`;
+- `backfill_origin`;
+- `provenance`.
+
+`confidence` is a bounded subject-aware enum. Calendar v1 may use only
+policy-defined values such as `provider_confirmed`, `provider_partial`,
+`redacted_safe`, `stale_below_max`, or `unavailable`; it must not encode
+auth/sync lifecycle state.
+
 Calendar-specific aliases are forbidden. Use canonical S2 field names exactly:
 
 - `decision2_consent_tier`, not `consent_tier`;
@@ -414,7 +501,13 @@ source_kind + source_instance_id + external_event_id + source_revision
 
 Same key plus identical validated facts dedupes. Same key plus conflicting
 facts rejects with `idempotency_conflict` and does not update provider mirror or
-visible read model. Older provider revisions cannot overwrite newer revisions.
+visible read model.
+
+Calendar inherits S2's sequence-primary, revision-secondary conflict oracle:
+`sequence` is monotonic per `source_instance_id` and orders local ingestion;
+provider `source_revision` orders records with the same external event. Older
+provider revisions cannot overwrite newer revisions. Ambiguous ordering rejects
+content-free.
 
 `confidence` cannot encode lifecycle state. Lifecycle state uses the connector
 state and S2 record-state fields only.
@@ -447,6 +540,17 @@ Forbidden title/location behavior:
 - using a model to decide redaction in v1.
 
 Sensitivity policy must be deterministic and testable. Ambiguity redacts.
+
+Worked example required by S2 Privacy P-5:
+
+```text
+Coffee with Sarah re: her divorce
+```
+
+Calendar v1 must treat that shape as third-party identity plus body-adjacent /
+relationship detail in a single safe-looking title. The safe output is a
+redaction token such as `[redacted third-party calendar detail]`, never the
+name, never the relationship detail, and never a model paraphrase.
 
 The policy must catch at least:
 
@@ -496,6 +600,17 @@ state that attendee identity is redacted in v1. Any future local authenticated
 direct-display path for attendee names must be a separate non-model surface and
 must not write prompt, logs, health, panel, audit-visible output, or memory.
 
+Calendar v1 keeps three surfaces separate:
+
+- model-readable facts: redacted external-source state only;
+- local authenticated operator display: future grant only, never default;
+- audit/provenance: content-free hashes/HMAC handles and policy evidence only.
+
+Decision 4 / the Anna Question applies here: preserving evidence that another
+person appeared in the user's life is not permission to build a profile of that
+person. Attendee handles and redacted title/location evidence are relational
+provenance, not personological memory.
+
 ---
 
 ## Allowed Flows
@@ -520,6 +635,11 @@ Approved voice:
 - "I can see on the calendar..."
 - "There is a calendar entry..."
 
+These are complete answer shapes, not openers for model elaboration. The
+composer may append only approved Calendar-state fields: time window,
+redaction/category token, count bucket, freshness/unavailable state, and
+content-free source phrasing.
+
 Forbidden voice:
 
 - "I remember..."
@@ -543,6 +663,18 @@ first-person co-actor framing, and any wording that turns Calendar evidence
 into Maez's own lived schedule. If the guard rejects the draft, Calendar v1
 fails neutral rather than rephrasing through the model.
 
+The guard's natural-language probe set must include:
+
+- scheduler-personality probes: "today looks packed", "I'd keep that window
+  open", "that should give you time";
+- memory-voice probes: "I remember your meeting", "we had that on the calendar";
+- third-party-creep probes: names or body-adjacent details embedded in
+  otherwise safe-looking titles;
+- stale-confidence probes: confident claims from stale/unavailable Calendar
+  state;
+- co-experiencing probes: "we're meeting", "your 3pm is coming up";
+- compound capacity/third-party probes: "you have time for lunch with Sarah".
+
 Calendar v1 blocks:
 
 - `flow.bounded_window_recall`;
@@ -550,9 +682,25 @@ Calendar v1 blocks:
 - `flow.memory.promoted`;
 - `flow.crisis_candidate.content_minimized`.
 
+Positive S2-into-TRF leakage rule: Calendar can only be surfaced as
+external-source provenance. A temporal answer may say "your calendar showed..."
+or "there was a calendar entry..." if a future reviewed retrieval posture
+grants that flow. It may never say "I remember...", "we had...", "I know you
+were...", or any phrasing that turns S2 cache into lived memory.
+
+Future Calendar promotion, if separately reviewed and granted, inherits M1's
+promoted-voice rule: structural biography only, no quoted titles, no quoted
+attendees, no descriptions, no raw locations, and no model-inferred
+why-it-mattered claims.
+
 Crisis-shaped Calendar signals, if discovered by deterministic policy, are
 held as content-free sensitivity state and require a future reviewed crisis path.
 The model alone never decides to bypass S2.
+
+Held means observed, audit-sidecar-written, and locally queryable by an
+approved operator/debug path. Held does not mean silently discarded, trapped
+where no future reviewer can see it, or routed to crisis handling by model
+discretion.
 
 ---
 
@@ -618,8 +766,13 @@ Required:
 - no credential-bearing URL;
 - no OAuth token in subprocess argv;
 - no secret-bearing subprocess environment by default;
+- exact-name opt-in only when a child process truly needs a credential;
 - value-free auth logs and health;
 - provider-safe verification that never prints token values.
+
+Token-in-URL is forbidden as a substrate principle, not only as log hygiene. A
+Calendar implementation must never construct a URL containing an access token,
+refresh token, client secret, API key, or OAuth code, even transiently.
 
 Implementation must extend `core/infra/secrets.py` if current APIs cannot:
 
@@ -674,7 +827,7 @@ no generated credential path that can become authoritative token state.
 Calendar v1 exposes only content-free auth/provider state classes:
 
 - `auth_ok`;
-- `auth_access_expired_refreshing`;
+- `auth_access_expired`;
 - `auth_refresh_revoked`;
 - `auth_scope_downgraded`;
 - `auth_scope_unexpected`;
@@ -687,13 +840,18 @@ Calendar v1 exposes only content-free auth/provider state classes:
 - `sync_token_invalid_resyncing`;
 - `calendar_unavailable`.
 
-A `401` after access-token refresh fails maps to `auth_refresh_revoked` or
-`auth_reauthorization_required` where provider/library evidence supports it. A
-granted-scope mismatch maps to `auth_scope_downgraded` or
-`auth_scope_unexpected`. `403`/`429` rate limits map to
-`provider_rate_limited` with backoff. `500` maps to `provider_backend_error`.
-`410` maps to `sync_token_invalid_resyncing` and preserves tombstone/audit
-sidecars.
+`auth_access_expired`, `auth_refresh_revoked`, and `auth_scope_downgraded` are
+canonical S2 state names and must be preserved verbatim. Calendar-specific
+extensions may refine them in implementation metadata, but must not rename the
+canonical states.
+
+A `401` before refresh maps to `auth_access_expired`. A `401` after refresh
+fails maps to `auth_refresh_revoked` or `auth_reauthorization_required` where
+provider/library evidence supports it. A granted-scope mismatch maps to
+`auth_scope_downgraded` or `auth_scope_unexpected`. `403`/`429` rate limits map
+to `provider_rate_limited` with backoff. `500` maps to
+`provider_backend_error`. `410` maps to `sync_token_invalid_resyncing` and
+preserves tombstone/audit sidecars.
 
 ## Calendar Rollback
 
@@ -711,15 +869,22 @@ deployment:
 5. Record connector state as `calendar_unavailable` or the specific auth class.
 6. Reopen this slice before re-enabling Calendar.
 
-`MAEZ_SECRETS_DISABLE_NEW_LOADER=1` is only a whole-credential-loader emergency
-rollback inherited from Decision 26. It reaccepts process-environment exposure
-and cannot be treated as a valid Calendar v1 final state.
+`MAEZ_SECRETS_DISABLE_NEW_LOADER=1` is out of scope for Calendar v1 rollback.
+It is a whole-credential-loader emergency flag inherited from Decision 26. It
+reaccepts process-environment exposure and, if needed, indicates a Decision 26
+incident rather than a Calendar incident.
 
 ---
 
 ## Storage Contract
 
 Calendar v1 storage is noncanonical.
+
+Calendar provider mirror, sync state, tombstone sidecar, audit sidecar, and
+policy tables are pre-body staging under Decision 24 / ADR 0029. They are
+outside Maez's body topology until a reviewed body or promotion path explicitly
+admits a derived fact. They are evictable, TTL-bounded, non-personality-bearing
+provenance stores.
 
 Required storage classes:
 
@@ -864,6 +1029,9 @@ Failure behavior:
 - if Calendar v1 sync fails, Calendar is stale/unavailable;
 - no failure path may invoke legacy raw Calendar prompt/alert behavior.
 
+This is BT Rule 7 operationalized: Calendar is non-essential and degrades to
+unknown/stale/unavailable without disrupting bonded conversation.
+
 ---
 
 ## Migration Order
@@ -892,14 +1060,39 @@ Calendar v1 is covenant-shaped. Before implementation:
 
 1. Codex six-agent engineering panel reviews this spec. Status: complete,
    REVISE, folded into this draft.
-2. Claude six-role covenant council reviews this folded draft.
-3. Any Claude findings are folded structurally into this spec.
-4. Both lanes verify closure if the fold changes load-bearing behavior.
-5. Operator canonicalizes or explicitly holds.
-6. Cooling-off applies before code unless operator logs an explicit waiver.
+2. Claude six-role covenant council reviews this folded draft. Status:
+   complete, REVISE, folded into this draft.
+3. Both lanes verify closure if the fold changes load-bearing behavior.
+4. Operator canonicalizes or explicitly holds.
+5. Cooling-off applies before code unless operator logs an explicit waiver.
 
 Implementation then proceeds RED-first. Post-implementation both-lane review is
 required before push/enablement.
+
+## Named Disagreements Preserved
+
+D1 precedent fragility: the Codex panel required Calendar v1 not to become a
+second interpretation of S2. This spec resolves that by naming inherited
+decisions and enumerating canonical S2 fields inline, because Calendar v1 is the
+template future information limbs will copy.
+
+D2 idempotency oracle compression: the first Codex fold preserved
+revision-secondary and ambiguous-rejected behavior, but left sequence-primary
+implicit. This spec names the full S2 rule: sequence-primary,
+revision-secondary, ambiguous-rejected.
+
+D3 rollback flag positioning: `MAEZ_SECRETS_DISABLE_NEW_LOADER=1` is not a
+Calendar rollback tool. It is a Decision 26 emergency posture and remains out
+of scope for ordinary Calendar v1 rollback.
+
+D4 crisis held-not-trapped: held content-free means written to audit sidecar
+and queryable through an approved local path. It does not mean silently
+discarded, and it does not authorize model-discretion crisis bypass.
+
+D5 Tier-3-for-all-events: Calendar v1 intentionally elects Tier 3 for every
+accepted event because free-text fields can hide third-party identity even when
+the event appears owner-only. This is a Calendar v1 precedent and an explicit
+override of S2's owner-only per-event branch.
 
 ---
 
@@ -1017,7 +1210,7 @@ behaviors.
     fields.
 66. Missing/unparseable max prompt-context staleness policy blocks visible
     Calendar reads.
-67. `auth_access_expired_refreshing`, `auth_refresh_revoked`,
+67. `auth_access_expired`, `auth_refresh_revoked`,
     `auth_scope_downgraded`, `auth_scope_unexpected`, `provider_rate_limited`,
     `provider_backend_error`, `source_unavailable`, and
     `sync_token_invalid_resyncing` surface as distinct content-free classes.
@@ -1072,6 +1265,25 @@ behaviors.
 92. Calendar polling workers are stopped and joined during daemon shutdown with
     a bounded timeout; restart cannot leave an in-flight Calendar sync writing
     after shutdown begins.
+93. Canonical S2 required fields listed in this spec are all present before a
+    Calendar envelope can be accepted.
+94. Connector-supplied `decision2_consent_tier` or final `granted_flow_ids`
+    rejects; Maez computes them.
+95. Decision 4 / Anna Question posture is preserved: attendee HMAC handles
+    cannot be searched or joined as third-party profiles.
+96. The S2 P-5 worked example shape redacts both third-party identity and
+    relationship/body-adjacent detail.
+97. Pre-body Calendar storage cannot be consumed as body state or personality
+    state.
+98. Future Calendar promotion stubs, if present, reject quoted titles, quoted
+    attendees, descriptions, and inferred why-it-mattered claims.
+99. Approved Calendar voice phrases cannot be extended with model-generated
+    advice, prioritization, or speculation.
+100. `MAEZ_SECRETS_DISABLE_NEW_LOADER=1` is not accepted as Calendar rollback in
+    Calendar-specific recovery tests.
+101. Subprocess credential pass-through is exact-name opt-in only.
+102. Granted-scope changes are persisted as source-channel-only credential
+    lifecycle evidence through `core/infra/secrets.py`.
 
 ---
 
