@@ -29,6 +29,7 @@ from core.infra.secrets import sanitize_env
 from core.health.shared_executor import get_shared_executor
 from core.perception import snapshot as perception_snapshot, format_snapshot
 from core.conversation_controller import ConversationController
+from core.body.camera_presence_voice import answer_camera_presence_question
 from memory.memory_manager import MemoryManager
 from skills.web_search import (
     search as web_search, format_for_context as web_format,
@@ -688,6 +689,22 @@ class TelegramVoice:
         except Exception as e:
             logger.debug("startup stale-card cleanup raised: %s", e)
         return self._decision_pipeline
+
+    def _camera_presence_direct_answer(self, user_text: str) -> str | None:
+        """Content-free v1.1 answer for direct camera-state questions."""
+
+        try:
+            provider = getattr(self, "_camera_presence_state_provider", None)
+            if callable(provider):
+                state = provider()
+            else:
+                state = getattr(getattr(self, "daemon", None), "_camera_presence_state", None)
+            if state is None:
+                return None
+            return answer_camera_presence_question(user_text, state)
+        except Exception as exc:
+            logger.debug("telegram camera presence direct-answer skipped: %s", exc)
+            return None
 
     def _send_card_message(self, chat_id, text: str, reply_to=None) -> str | None:
         """Send a Telegram message and return the posted message_id.
@@ -2412,6 +2429,13 @@ class TelegramVoice:
 
         user_text = update.message.text
         if not user_text:
+            return
+
+        camera_answer = self._camera_presence_direct_answer(user_text)
+        if camera_answer is not None:
+            await update.message.reply_text(
+                _audit_telegram_reply(camera_answer, surface="telegram_camera_presence")
+            )
             return
 
         # T1.11 (2026-05-04 audit) — fire gap-sense BEFORE the

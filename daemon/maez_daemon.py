@@ -79,6 +79,7 @@ from core.body.camera_presence_state import (
     CameraPresenceState,
     resolve_camera_presence_state,
 )
+from core.body.camera_presence_voice import answer_camera_presence_question
 from skills.telegram_voice import TelegramVoice
 from skills.telegram_public import MaezPublicBot
 from core.action_engine import ActionEngine
@@ -2099,6 +2100,14 @@ class MaezDaemon:
                 keyword overlap (incident: meta-harness at 04:42,
                 "it" at 04:53 lost the referent).
         """
+        try:
+            self._camera_presence_state = self._camera_presence_state.with_freshness()
+            camera_answer = answer_camera_presence_question(text, self._camera_presence_state)
+            if camera_answer is not None:
+                return camera_answer
+        except Exception as exc:
+            logger.debug("camera presence direct-answer skipped: %s", exc)
+
         from skills.web_search import (
             search as web_search,
             format_for_context as web_format,
