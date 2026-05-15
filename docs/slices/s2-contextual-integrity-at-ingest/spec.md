@@ -1,9 +1,10 @@
 # Slice S2: Contextual Integrity at Ingest
 
-**Status:** DRAFT BAD packet. Codex BAD-panel folded. No code, no connector,
-no memory promotion. This packet folds the S2 scoping memo plus scoping-stage
-Claude council, scoping-stage Codex panel, and BAD-stage Codex engineering
-panel constraints into the candidate canonical law for information-limb ingest.
+**Status:** DRAFT BAD packet. Codex BAD-panel and Claude covenant verification
+folded. No code, no connector, no memory promotion. This packet folds the S2
+scoping memo plus scoping-stage Claude council, scoping-stage Codex panel,
+BAD-stage Codex engineering panel, and folded-BAD Claude covenant verification
+constraints into the candidate canonical law for information-limb ingest.
 
 **Classification:** covenant-shaped memory and body law. S2 defines the ingest
 gate every information limb must pass before external account data can become
@@ -20,6 +21,9 @@ biography.
 - [`reviews/spec-codex-panel.md`](reviews/spec-codex-panel.md) — BAD-packet
   engineering review, REVISE/RATIFY-WITH-AMENDMENTS across six seats; this
   spec folds the required revisions.
+- [`reviews/spec-claude-council.md`](reviews/spec-claude-council.md) —
+  folded-BAD covenant verification, RATIFY-WITH-AMENDMENTS; this spec folds
+  the load-bearing amendments and preserves named disagreements.
 - [`docs/slices/body-topology/spec.md`](../body-topology/spec.md) — Decision
   24 Rule 7: information limbs gate on S2 contextual integrity.
 - [`docs/slices/m1-lived-episode-promotion/spec.md`](../m1-lived-episode-promotion/spec.md) —
@@ -83,7 +87,9 @@ Forbidden:
 - External source -> lived memory without a separate promotion path.
 - External source -> body-state inference bundled into first ingest.
 - External source -> third-party profile or nudge.
-- Credential-bearing URL or secret-bearing subprocess environment for any
+- Credential-bearing URL for any connector, provider callback, OAuth exchange,
+  Git remote, webhook setup, or subprocess.
+- Secret-bearing subprocess environment for any
   information-limb connector.
 
 Plain English: S2 lets Maez know "this was on the calendar" without letting
@@ -169,6 +175,12 @@ Decision 2 mapping:
 | `third_party_explicit_consent` | `tier2` | Scope and duration must follow the explicit consent record. Not Calendar v1 default. |
 | `inter_maez_consented` | `tier1` | Requires future Project C/inter-Maez consent. Not Calendar v1. |
 
+S2 computes `decision2_consent_tier` and `consent_posture` from the validated
+envelope plus versioned policy registry. Connectors may not supply final tier
+or posture values. Connector-supplied `decision2_consent_tier`,
+`consent_posture`, or equivalent consent downgrade/upgrade fields reject the
+record under Capability Quarantine.
+
 Constraints under that default:
 
 - relational/provenance metadata only;
@@ -236,13 +248,17 @@ Calendar v1 sensitivity policy:
 | --- | --- | --- |
 | unknown or ambiguous title/location | redact | `[redacted calendar detail]` |
 | medical, therapy, legal, religion, politics, sexuality, home address, invite-created sensitive, or recurring sensitive pattern | redact | `[sensitive calendar detail]` |
+| title/location containing unconsented third-party identity or body-adjacent life detail | scrub identity and detail or redact | `[redacted third-party calendar detail]` |
 | ordinary title explicitly classified safe by deterministic rules | allow | title string |
 | ordinary location explicitly classified safe by deterministic rules | allow | location string |
 
 The policy is fail-closed. Unknown patterns, classifier errors, or missing
 policy version redact the field. Calendar implementation must not invent an NLP
 privacy classifier in the connector slice; it must use the deterministic v1
-policy or reject the field.
+policy or reject the field. "Safe" classification is not enough if the field
+contains third-party identity in free text. Strings such as "Coffee with Sarah
+re: her divorce" must not put Sarah's name or body-adjacent detail into model
+context merely because the event field passed the ordinary title classifier.
 
 ### 3. Allowed Flows
 
@@ -260,6 +276,10 @@ Connectors may request flows, but connectors never grant visibility. S2 derives
 `granted_flow_ids` from a static/versioned policy registry. A connector-supplied
 `granted_flow_ids`, `allowed_flow_ids`, or equivalent visibility grant rejects
 the record.
+
+`flow_policy_version` binds at ingest. Replaying the same provider record under
+a different flow policy creates a new validated S2 revision or rejects with a
+content-free policy-mismatch counter; it must not silently widen visibility.
 
 Candidate flow IDs:
 
@@ -280,6 +300,13 @@ for direct owner questions such as "what is on my calendar tomorrow?"
 `flow.bounded_window_recall` requires a TRF-style approved retrieval posture
 before use. Retrieval results do not license direct "I remember" or "I know"
 claims.
+
+S2-into-TRF leakage rule:
+
+An S2 record may never be voiced as a lived turn, remembered episode, or
+co-experienced event under any flow. TRF may reference S2-backed temporal
+anchors only as external-source provenance, e.g. "your calendar showed..." or
+"there was a calendar entry...", never "I remember..." or "we had...".
 
 Flow records must be enforceable permissions:
 
@@ -307,6 +334,16 @@ phrases include "Your calendar shows..." and "I can see on the calendar...".
 Forbidden phrases include "I remember", "we have", "I know you're busy", or any
 inference about why the event matters.
 
+A direct owner request is an utterance whose main ask is to inspect calendar
+state or plan from explicitly requested calendar data. Vague distress,
+ordinary bonded conversation, or planning talk that does not ask for calendar
+lookup is not a direct owner request.
+
+Forbidden co-experiencing/scheduler voice also includes "you've got...",
+"your 3pm is coming up", "we're meeting...", first-person co-actor framing,
+reminder-like phrasing, or any wording that makes Maez sound like it jointly
+lives the calendar item.
+
 ### 4. Retention
 
 Noncanonical cache classes:
@@ -333,6 +370,12 @@ Noncanonical tombstone fields:
 - `source_revision_hash`
 - `retention_class`
 - `record_state = tombstoned`
+
+Tombstones must be audit-survivable. Cache-side tombstone rows may be compacted
+only after a content-free tombstone sidecar/audit artifact is durably written.
+The sidecar retains the tombstone hash, source kind, source telemetry handle,
+observed/deleted timestamps, schema version, and retention class. It must not
+retain title, location, attendee names, raw source IDs, descriptions, or bodies.
 
 Permanent retention is not a noncanonical cache class.
 
@@ -365,11 +408,11 @@ S2 Body Bus envelope mapping:
 | `source_id` | `source_handle_human` | yes | operator-readable account/calendar label; not for logs/health/metrics/panel |
 | `source_instance_id` | `source_instance_id` | yes | stable connector instance id |
 | `telemetry_handle` | `source_handle_telemetry` | yes | content-free hash for metrics/panel |
-| `observed_at` | `observed_at` | yes | provider event timestamp if available |
-| `received_at` | `received_at` | yes | Maez ingest timestamp |
+| `observed_at` | `observed_at` | yes | provider event timestamp if available; provider time is ordering authority |
+| `received_at` | `received_at` | yes | Maez ingest timestamp; evidence-only for clock-skew/debug |
 | `expires_at or ttl_ms` | `expires_at` | yes | mirror-source TTL or fixed/per-event TTL |
 | `sequence` | `sequence` | yes | monotonic per `source_instance_id` |
-| `confidence` | `confidence` | yes | bounded enum: `provider_record`, `redacted`, `tombstone`, `unknown` |
+| `confidence` | `confidence` | yes | subject-aware bounded enum; never lifecycle state |
 | `state` | `record_state` | yes | see transition table |
 | `retention_class` | `retention_class` | yes | `mirror_source_ttl` by default |
 | `allowed_flow_id` | `granted_flow_ids` | yes | policy-derived list; empty by default |
@@ -398,6 +441,26 @@ Additional required S2 fields:
 - `backfill_origin`
 - `provenance`
 
+Schema-version rule:
+
+Unknown, missing, future, or incompatible `schema_version` rejects the record
+with `record_state = rejected` and a content-free `schema_mismatch` counter.
+S2 must not best-effort parse unknown schema versions.
+
+Ordering rule:
+
+Provider `updated` / source revision timestamps are authoritative for ordering
+records with the same `external_event_id`. Maez `received_at` is evidence-only
+and must not overwrite newer provider revisions during local clock skew, NTP
+drift, VM suspend/resume, or retry replay.
+
+Confidence rule:
+
+`confidence` is about source quality and subject surface, not lifecycle. It must
+not encode tombstone/cache/promoted state. Calendar v1 confidence values are
+bounded to `provider_record`, `redacted_provider_record`, and `unknown`; any
+future inferred confidence requires a later slice.
+
 V1 integrity:
 
 - local DB integrity;
@@ -414,6 +477,16 @@ handles, titles, attendee hashes vulnerable to dictionary attack, precise event
 timestamps, credential-adjacent metadata, or any value that can reconstruct a
 private calendar record. V1 uses local/private append-only audit first. Public
 commitments, if later approved, must use salted/HMAC content-free commitments.
+
+Rekor scope choice:
+
+The scoping-stage council recommended elevating Rekor-style public lineage
+attestation into S2's core. The Codex BAD fold deferred it as an extension seam
+because naive public transparency logging can leak private event metadata. This
+spec deliberately chooses local/private append-only audit for v1. Rekor or an
+equivalent public-transparency mechanism must be reconsidered when the second
+public-transparency-shaped lineage requirement appears across slices, or when
+an inter-Maez channel ships, whichever comes first.
 
 ### 6. Third-Party Posture
 
@@ -438,8 +511,8 @@ Allowed:
 
 - "calendar event includes another attendee" as content-minimized provenance;
 - attendee count;
-- event-local or purpose-scoped hashed/minimized handles for idempotency and
-  dedupe;
+- event-local or purpose-scoped HMAC/minimized handles for idempotency and
+  dedupe, keyed through `core/infra/secrets.py`;
 - operator-visible attendee fields only through an explicitly granted direct
   display path.
 
@@ -452,6 +525,12 @@ Forbidden:
 - cross-source third-party enrichment.
 - attendee hash as cross-event search key unless Tier 1/2 consent exists;
 - third-party profile join key unless Tier 1/2 consent exists.
+
+Attendee hashes are not plain hashes. Local audit and dedupe handles must be
+keyed HMAC values with a key sourced through Decision 26 credential hygiene.
+The HMAC key must never appear in `config/.env`, logs, health, metrics, panel
+output, subprocess argv/env, or public attestation. Rotating the HMAC key is a
+credential lifecycle event.
 
 `operator_display_fields` and `model_readable_fields` are separate. Default
 Calendar v1 model-readable attendee surface is attendee count plus generic
@@ -490,9 +569,16 @@ Candidate future promotion grants:
 - conversation-grounded promotion;
 - operator-explicit promotion.
 
-The first grant candidate is bonded-user-naming because it preserves
-Human-Primacy: the bonded user names the lived state before Maez treats the
-external record as biographical substrate.
+The v1 declared default promotion grant is bonded-user-naming because it
+preserves Human-Primacy: the bonded user names the lived state before Maez
+treats the external record as biographical substrate. Conversation-grounded
+promotion and operator-explicit promotion remain future grant candidates that
+require later review.
+
+If a future Calendar promotion path is granted, its voice and summary posture
+inherits ADR 0030 / M1: structural biography pointers only. It must not quote
+Calendar titles, quote attendee names, quote locations, infer why the event
+mattered, or convert the external record into lived co-experience.
 
 ---
 
@@ -524,10 +610,19 @@ Record states:
 - `promoted`
 - `sync_stale`
 
+OAuth/auth connector states:
+
+- `auth_access_expired` — access token expired; refresh path may recover.
+- `auth_refresh_revoked` — refresh token or consent revoked; rupture event
+  requiring operator re-auth.
+- `auth_scope_downgraded` — provider-side scope narrowed; S2 must recompute
+  granted flows and may need to expire visible records.
+
 Transition rules:
 
 | Current state | Event | Guard | Next state | Side effects | Forbidden effects |
 | --- | --- | --- | --- | --- | --- |
+| none | fetch record | unknown/missing/incompatible `schema_version` | `rejected` | `schema_mismatch` counter only | no best-effort parse |
 | none | fetch record | envelope invalid or forbidden field present | `rejected` | content-free counter only | no cache content, no prompt context |
 | none | fetch record | valid envelope, no granted visible flow | `cached` | write noncanonical cache | no model read |
 | none/cached | policy evaluation | granted visible flow and redaction complete | `visible_ready` | write read model | no denied fields |
@@ -585,6 +680,13 @@ Idempotency key:
 source_kind + source_instance_id + external_event_id + source_revision
 ```
 
+Idempotency conflict oracle:
+
+The same idempotency key with identical validated facts dedupes. The same
+idempotency key with conflicting validated facts rejects with a content-free
+`idempotency_conflict` counter and does not update visible read models. A newer
+provider revision must arrive with a new source revision.
+
 Backfill mode requires:
 
 - lookback window;
@@ -605,6 +707,9 @@ Backfill records are cache-only by default:
 ---
 
 ## Cache Budget
+
+S2 cache is pre-body staging. It is not body state, not memory, and not a
+source of personality. Body-state consumers need explicit future grants.
 
 Every S2 source declares:
 
@@ -638,7 +743,9 @@ Eviction semantics:
 Allowed connector states:
 
 - `disabled`
-- `auth_expired`
+- `auth_access_expired`
+- `auth_refresh_revoked`
+- `auth_scope_downgraded`
 - `rate_limited`
 - `source_unavailable`
 - `stale`
@@ -696,11 +803,20 @@ Required:
 - credentials are identity-bearing material, not ordinary config;
 - `config/.env` is not a secret source;
 - no credential-bearing URLs;
+- token-in-URL construction is forbidden as its own rule, not only as a log
+  hygiene concern;
 - no secret values in subprocess argv;
 - no secret values in subprocess env by default;
 - no secret values in logs, health, metrics, or panel output;
 - exact-name opt-in only when a child process truly needs a credential;
 - provider auth tests must not print values.
+
+Refresh-token rotation:
+
+Rotated refresh tokens must be read from and written back through
+`core/infra/secrets.py` only. They must never transit `os.environ`, argv, logs,
+health, metrics, panel output, provider-error text, or connector-local config
+files. Rotation success/failure observability is aggregate-only.
 
 This rule applies to Calendar OAuth and to later Gmail, Slack, Notion, Drive,
 GitHub, Sigstore Rekor, and any future external account connector.
@@ -735,6 +851,12 @@ and provenance handle. It may not scan Gmail/Slack bodies, Calendar
 descriptions, titles, locations, attendee names, or message contents unless a
 future body-ingest/crisis slice explicitly grants those fields.
 
+Before a future reviewed crisis-routing slice canonicalizes this path, crisis
+candidate signals observed in S2 records are logged with content-free
+sensitivity class and held. They are not surfaced to the model, not treated as
+ordinary visible context, and not silently discarded. Crisis voice authority
+sits with the reviewed crisis path/operator review, never with the model alone.
+
 The first S2 implementation should record this inheritance as law, not as an
 implementation path.
 
@@ -765,24 +887,45 @@ for at least:
 18. stale source revision cannot overwrite newer validated record;
 19. illegal state transition rejected content-free;
 20. connector-supplied `granted_flow_ids` rejected;
-21. S2 policy registry computes grants from `requested_flow_ids`;
-22. `promotion_eligible` does not write memory or set `promotion_record_id`;
-23. noncanonical tombstone removes content and keeps only allowed tombstone
+21. connector-supplied `decision2_consent_tier` / `consent_posture` rejected;
+22. S2 policy registry computes grants from `requested_flow_ids`;
+23. S2 computes consent tier from validated envelope and policy registry;
+24. flow-policy-version change cannot silently widen visibility;
+25. idempotency conflict rejects content-free;
+26. `confidence` cannot encode lifecycle state;
+27. `promotion_eligible` does not write memory or set `promotion_record_id`;
+28. noncanonical tombstone removes content and keeps only allowed tombstone
     fields;
-24. attendee hash cannot be used as cross-event/profile search key under
+29. tombstone sidecar survives cache eviction without content-bearing fields;
+30. attendee HMAC cannot be used as cross-event/profile search key under
     Tier 3;
-25. `operator_display_fields` do not enter `model_readable_fields`;
-26. no ambient schedule facts volunteered when owner did not ask;
-27. Calendar answer uses approved voice posture and never says "I remember" or
+31. attendee HMAC key comes from `core/infra/secrets.py`, not connector config;
+32. title/location free-text scrubs unconsented third-party identity before
+    model-readable output;
+33. `operator_display_fields` do not enter `model_readable_fields`;
+34. S2 cache cannot be treated as body state without future grant;
+35. no ambient schedule facts volunteered when owner did not ask;
+36. Calendar answer uses approved voice posture and never says "I remember" or
     "I know";
-28. ambiguous title/location redacts by default;
-29. backfilled records are excluded from visible read models until operator gate;
-30. sync token invalidation triggers bounded full-resync behavior without stale
+37. Calendar answer never uses co-experiencing scheduler voice such as "you've
+    got" or "your 3pm is coming up";
+38. ambiguous title/location redacts by default;
+39. backfilled records are excluded from visible read models until operator gate;
+40. sync token invalidation triggers bounded full-resync behavior without stale
     current answer;
-31. webhook input, if later added, cannot bypass S2 envelope validation;
-32. logs/health/panel use `source_handle_telemetry`, not `source_handle_human`;
-33. OAuth code/state, refresh tokens, callback query secrets, and provider error
+41. webhook input, if later added, cannot bypass S2 envelope validation;
+42. logs/health/panel use `source_handle_telemetry`, not `source_handle_human`;
+43. unknown or incompatible `schema_version` rejects with `schema_mismatch`;
+44. provider timestamps order same-event revisions; `received_at` cannot
+    overwrite newer provider revision;
+45. access-expired, refresh-revoked, and scope-downgraded auth states surface as
+    separate content-free states;
+46. refresh-token rotation reads/writes only through `core/infra/secrets.py`;
+47. token-in-URL construction is rejected independently of logging behavior;
+48. OAuth code/state, refresh tokens, callback query secrets, and provider error
     payloads are redacted from logs/exceptions/argv/env.
+49. S2-backed records can never be voiced through TRF as lived turns,
+    remembered episodes, or co-experienced events.
 
 ## Calendar Burn-In Observation Gate
 
@@ -859,7 +1002,9 @@ No runtime behavior changes from S2 alone.
 2. Claude six-role covenant council reviews the folded BAD packet for:
    consent posture, third-party treatment, Human-Primacy, crisis-routing
    inheritance, retrieval voice posture, and never-delete interactions.
-3. Fold both review lanes.
+   Status: RATIFY-WITH-AMENDMENTS; folded here.
+3. Both lanes verify the second fold if operator requests belt-and-suspenders
+   review before canonicalization.
 4. Operator canonicalizes as the next governance decision + ADR.
 5. Only then does Calendar draft as the first information-limb implementation
    slice.
