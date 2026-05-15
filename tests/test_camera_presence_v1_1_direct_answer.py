@@ -28,11 +28,12 @@ def _expired_state():
 def _observe_state(*, sensor_state: str = "available", presence_state: str = "unknown"):
     from core.body.camera_presence_state import CameraPresenceState
 
-    enabled_until = datetime(2026, 5, 15, 18, 30, tzinfo=timezone.utc).isoformat()
+    enabled_until_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    enabled_until = enabled_until_at.isoformat()
     return CameraPresenceState(
         mode="observe",
         enabled_until=enabled_until,
-        enabled_until_at=datetime(2026, 5, 15, 18, 30, tzinfo=timezone.utc),
+        enabled_until_at=enabled_until_at,
         sensor_state=sensor_state,
         presence_state=presence_state,
     )
@@ -45,6 +46,18 @@ class CameraPresenceDirectAnswerTests(unittest.TestCase):
         self.assertIsNone(
             answer_camera_presence_question("what are we building next?", _disabled_state())
         )
+
+    def test_incidental_camera_mentions_and_commands_are_not_intercepted(self):
+        from core.body.camera_presence_voice import answer_camera_presence_question
+
+        incidental_messages = (
+            "turn the camera on",
+            "camera running logs are noisy",
+            "the camera enabled flag belongs in config",
+        )
+        for text in incidental_messages:
+            with self.subTest(text=text):
+                self.assertIsNone(answer_camera_presence_question(text, _disabled_state()))
 
     def test_disabled_question_returns_only_approved_state_text(self):
         from core.body.camera_presence_voice import answer_camera_presence_question
@@ -68,7 +81,7 @@ class CameraPresenceDirectAnswerTests(unittest.TestCase):
 
         self.assertEqual(
             answer,
-            "Camera presence observation is on until 2026-05-15T18:30:00+00:00.",
+            f"Camera presence observation is on until {state.enabled_until}.",
         )
 
     def test_unavailable_question_returns_only_unavailable_state_text(self):

@@ -16,7 +16,7 @@ from core.body.camera_presence_state import CameraPresenceState
 
 _QUESTION_PATTERNS: tuple[Pattern[str], ...] = (
     re.compile(r"\b(is|was)\s+the\s+(camera|eye)\s+(on|open|enabled|active)\b", re.I),
-    re.compile(r"\b(camera|camera presence)\s+(on|open|enabled|active|running)\b", re.I),
+    re.compile(r"^\s*(camera|camera presence)\s+(on|open|enabled|active|running)\s*\?\s*$", re.I),
     re.compile(r"\bare\s+you\s+(watching|looking at|seeing)\s+me\b", re.I),
     re.compile(r"\bcan\s+you\s+see\s+me\b", re.I),
     re.compile(r"\bdo\s+you\s+have\s+a\s+fresh\s+camera\s+(presence\s+)?reading\b", re.I),
