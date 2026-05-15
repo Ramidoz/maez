@@ -2637,7 +2637,7 @@ class TelegramVoice:
             elif intent == 'logs':
                 result = _sp.run(
                     ["tail", "-20", "/home/rohit/maez/logs/maez.log"],
-                    capture_output=True, text=True, timeout=5,
+                    capture_output=True, text=True, timeout=5, env=sanitize_env(),
                 )
                 errors = [l for l in result.stdout.split('\n') if 'ERROR' in l or 'WARNING' in l]
                 if errors:
@@ -2650,7 +2650,8 @@ class TelegramVoice:
 
             elif intent == 'claude_status':
                 result = _sp.run(
-                    ["pgrep", "-a", "claude"], capture_output=True, text=True, timeout=5,
+                    ["pgrep", "-a", "claude"],
+                    capture_output=True, text=True, timeout=5, env=sanitize_env(),
                 )
                 if result.stdout.strip():
                     lines = result.stdout.strip().split('\n')
@@ -2663,7 +2664,8 @@ class TelegramVoice:
 
             elif intent == 'disk':
                 result = _sp.run(
-                    ["df", "-h", "/", "/home"], capture_output=True, text=True, timeout=5,
+                    ["df", "-h", "/", "/home"],
+                    capture_output=True, text=True, timeout=5, env=sanitize_env(),
                 )
                 return f"Disk usage:\n{result.stdout.strip()}"
 

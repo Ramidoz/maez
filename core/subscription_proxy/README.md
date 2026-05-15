@@ -63,8 +63,10 @@ No overlap — each string claims exactly one adapter:
 
 ## Configuration
 
-All via environment variables. Set in `/home/rohit/maez/config/.env` so
-the systemd service picks them up.
+All via environment variables after Decision 26 credential loading. Put
+identity-bearing values in `/home/rohit/maez/config/secrets.local.env` or
+systemd credentials; keep ordinary non-secret config in
+`/home/rohit/maez/config/.env`.
 
 | Variable | Purpose | Default |
 |---|---|---|

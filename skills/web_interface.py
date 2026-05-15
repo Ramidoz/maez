@@ -32,8 +32,8 @@ from core.infra.secrets import (
 
 load_ordinary_config_for_process()
 load_secrets_for_process(
-    required=set(),
-    optional={"LANGFUSE_SECRET_KEY", "MAEZ_GITHUB_TOKEN", "MAEZ_IPHONE_INGEST_TOKEN"},
+    required={"MAEZ_IPHONE_INGEST_TOKEN"},
+    optional={"LANGFUSE_SECRET_KEY", "MAEZ_GITHUB_TOKEN"},
     populate_environ=True,
 )
 
@@ -1411,6 +1411,7 @@ def api_services():
             text=True,
             timeout=3.0,
             check=False,
+            env=sanitize_env(),
         )
         for line in (r.stdout or "").splitlines():
             toks = line.strip().split(None, 4)
@@ -1443,6 +1444,7 @@ def api_gpu():
             text=True,
             timeout=2.0,
             check=False,
+            env=sanitize_env(),
         )
         line = (r.stdout or "").strip().splitlines()[0] if r.stdout else ""
         if not line:
@@ -6364,9 +6366,11 @@ def api_maez_state():
     """Composite state for the field journal: daemon + memory + model + services + soul + thunder.
     Public; aggregates only, no PII. Source of truth for /journal dashboard."""
     stats = memory.memory_stats()
+    daemon_health = dict(_daemon_health())
+    daemon_health.pop("credentials", None)
     return jsonify(
         {
-            "daemon": _daemon_health(),
+            "daemon": daemon_health,
             "memory": {
                 "raw": stats.get("raw", 0),
                 "daily": stats.get("daily", 0),

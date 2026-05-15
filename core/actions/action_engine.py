@@ -817,6 +817,7 @@ class ActionEngine:
                             _out = subprocess.check_output(
                                 ["git", "-C", _cwd, "diff", "--name-only"],
                                 timeout=5.0,
+                                env=sanitize_env(),
                             ).decode("utf-8", errors="replace")
                             _files = [str(_ds.Path(_cwd) / p) for p in _out.splitlines() if p.strip()]
                         except Exception:
@@ -1391,6 +1392,7 @@ class ActionEngine:
         results = subprocess.run(
             ["find", str(p), "-maxdepth", "5", "-name", pattern, "-type", "f"],
             capture_output=True, text=True, timeout=15,
+            env=sanitize_env(),
         )
         return results.stdout.strip()[:3000] or "No files found"
 
@@ -1685,9 +1687,11 @@ class ActionEngine:
             ["find", "/tmp", "-maxdepth", "1", "-mtime", "+0",
              "-not", "-name", "tmp", "-not", "-name", ".", "-delete"],
             capture_output=True, text=True, timeout=30,
+            env=sanitize_env(),
         )
         df_result = subprocess.run(
             ["df", "-h", "/tmp"], capture_output=True, text=True, timeout=5,
+            env=sanitize_env(),
         )
         return f"Cleaned /tmp. Current: {df_result.stdout.strip()}"
 
@@ -1758,13 +1762,13 @@ class ActionEngine:
         cwd = str(BASE_DIR)
         add_result = subprocess.run(
             ["git", "add"] + files.split(), capture_output=True, text=True,
-            timeout=15, cwd=cwd,
+            timeout=15, cwd=cwd, env=sanitize_env(),
         )
         if add_result.returncode != 0:
             return f"git add failed: {add_result.stderr.strip()}"
         commit_result = subprocess.run(
             ["git", "commit", "-m", message], capture_output=True, text=True,
-            timeout=15, cwd=cwd,
+            timeout=15, cwd=cwd, env=sanitize_env(),
         )
         if commit_result.returncode != 0:
             return f"git commit failed: {commit_result.stderr.strip()}"
@@ -1818,7 +1822,7 @@ class ActionEngine:
     def _do_git_push(self, remote: str = "origin") -> str:
         result = subprocess.run(
             ["git", "push", remote], capture_output=True, text=True,
-            timeout=60, cwd="/home/rohit/maez",
+            timeout=60, cwd="/home/rohit/maez", env=sanitize_env(),
         )
         if result.returncode != 0:
             return f"Push failed: {result.stderr.strip()[:500]}"
@@ -1846,6 +1850,7 @@ class ActionEngine:
             result = subprocess.run(
                 ["ps", "-p", str(pid), "-o", "comm="],
                 capture_output=True, text=True, timeout=5,
+                env=sanitize_env(),
             )
             current_name = result.stdout.strip()
             if not current_name:
@@ -1881,6 +1886,7 @@ class ActionEngine:
         result = subprocess.run(
             ["sudo", "systemctl", "restart", service_name],
             capture_output=True, text=True, timeout=30,
+            env=sanitize_env(),
         )
         if result.returncode != 0:
             return f"Failed: {result.stderr.strip()}"
@@ -1905,11 +1911,13 @@ class ActionEngine:
         # Get before state
         df_before = subprocess.run(
             ["df", "-h", "/"], capture_output=True, text=True, timeout=5,
+            env=sanitize_env(),
         ).stdout.strip()
 
         # Clean apt cache
         subprocess.run(
             ["sudo", "apt-get", "clean"], capture_output=True, timeout=30,
+            env=sanitize_env(),
         )
 
         # Clean old /tmp files
@@ -1917,10 +1925,12 @@ class ActionEngine:
             ["find", "/tmp", "-maxdepth", "1", "-mtime", "+1",
              "-not", "-name", "tmp", "-not", "-name", ".", "-delete"],
             capture_output=True, timeout=30,
+            env=sanitize_env(),
         )
 
         df_after = subprocess.run(
             ["df", "-h", "/"], capture_output=True, text=True, timeout=5,
+            env=sanitize_env(),
         ).stdout.strip()
 
         return f"Before:\n{df_before}\nAfter:\n{df_after}"
@@ -1950,6 +1960,7 @@ class ActionEngine:
             ["sudo", "apt-get", "install", "-y", package],
             capture_output=True, text=True,
             timeout=self._APT_SHELL_TIMEOUT_S,  # 2026-04-16: 600s for apt
+            env=sanitize_env(),
         )
         if result.returncode != 0:
             return f"Failed: {result.stderr.strip()[:500]}"
@@ -1978,7 +1989,7 @@ class ActionEngine:
         result = subprocess.run(
             ["/home/rohit/maez/.venv/bin/python3", str(p)],
             capture_output=True, text=True, timeout=120,
-            cwd="/home/rohit/maez",
+            cwd="/home/rohit/maez", env=sanitize_env(),
         )
         output = result.stdout.strip()[:2000]
         if result.returncode != 0:
@@ -2056,6 +2067,7 @@ class ActionEngine:
         result = subprocess.run(
             ["sudo", "systemctl", "restart", service_name],
             capture_output=True, text=True, timeout=30,
+            env=sanitize_env(),
         )
         if result.returncode != 0:
             return f"Failed: {result.stderr.strip()}"
@@ -2078,6 +2090,7 @@ class ActionEngine:
         parts = shlex.split(rule)
         result = subprocess.run(
             ["sudo", "ufw"] + parts, capture_output=True, text=True, timeout=15,
+            env=sanitize_env(),
         )
         if result.returncode != 0:
             return f"ufw failed: {result.stderr.strip()}"
@@ -2099,6 +2112,7 @@ class ActionEngine:
     def _do_system_reboot(self, reason: str = "") -> str:
         subprocess.run(
             ["sudo", "reboot"], capture_output=True, text=True, timeout=10,
+            env=sanitize_env(),
         )
         return "Reboot initiated"
 
@@ -2140,6 +2154,7 @@ class ActionEngine:
         parts = shlex.split(cmd)
         result = subprocess.run(
             ["sudo"] + parts, capture_output=True, text=True, timeout=60,
+            env=sanitize_env(),
         )
         output = result.stdout.strip()[:2000]
         if result.returncode != 0:

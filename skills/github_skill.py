@@ -72,7 +72,7 @@ class GitHubSkill:
             self.enabled = False
             logger.warning(
                 "GitHub skill auto-disabled: PAT rejected with 401 at %s. "
-                "Update MAEZ_GITHUB_TOKEN in config/.env and restart maez.service.",
+                "Update MAEZ_GITHUB_TOKEN in config/secrets.local.env and restart maez.service.",
                 url,
             )
             return None

@@ -49,6 +49,9 @@ _ENV_LINE = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 
 _TELEGRAM_TOKEN_RE = re.compile(r"\b\d{8,}:[A-Za-z0-9_-]{20,}\b")
 _SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\b[A-Z0-9_]*(?:TOKEN|API_KEY|SECRET|PASSWORD|CREDENTIAL)\s*=\s*[^ \n\r\t]+"
+    ),
     re.compile(r"\bghp_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}\b"),
@@ -199,6 +202,12 @@ def _build_report(
     )
 
 
+def _purge_secret_environ(target: dict[str, str], *, keep: set[str]) -> None:
+    for name in list(target):
+        if is_secret_name(name) and name not in keep:
+            target.pop(name, None)
+
+
 def load_secrets_for_process(
     *,
     required: set[str],
@@ -218,7 +227,10 @@ def load_secrets_for_process(
     names = set(required) | set(optional)
 
     if target.get("MAEZ_SECRETS_DISABLE_NEW_LOADER") == "1":
-        secrets = {name: target[name] for name in names if target.get(name)}
+        legacy_file = paths.env_file()
+        secrets = _parse_env_file(legacy_file, allowed_names=names)
+        secrets = {k: v for k, v in secrets.items() if v}
+        secrets.update({name: target[name] for name in names if target.get(name)})
         report = _build_report(
             required=required,
             optional=optional,
@@ -226,6 +238,9 @@ def load_secrets_for_process(
             source="legacy-env",
             rollback_enabled=True,
         )
+        if populate_environ:
+            for name, value in secrets.items():
+                target[name] = value
         _LAST_REPORT = report
         return report
 
@@ -265,6 +280,7 @@ def load_secrets_for_process(
         rollback_enabled=False,
     )
     if populate_environ:
+        _purge_secret_environ(target, keep=set(secrets))
         for name, value in secrets.items():
             target[name] = value
     _LAST_REPORT = report
@@ -272,7 +288,9 @@ def load_secrets_for_process(
 
 
 def get_secret(name: str) -> str | None:
-    return _LAST_REPORT.get_secret(name) or os.environ.get(name)
+    if _LAST_REPORT.rollback_enabled:
+        return _LAST_REPORT.get_secret(name) or os.environ.get(name)
+    return _LAST_REPORT.get_secret(name)
 
 
 def credential_health() -> dict:
@@ -300,11 +318,10 @@ def sanitize_env(
 
 def find_secret_pattern_hits(text: str) -> list[str]:
     hits: list[str] = []
-    scrubbed = text
-    for fixture in _ALLOWED_FAKE_FIXTURES:
-        scrubbed = scrubbed.replace(fixture, "")
+    if text.strip() in _ALLOWED_FAKE_FIXTURES:
+        return []
     for pattern in _SECRET_VALUE_PATTERNS:
-        hits.extend(match.group(0) for match in pattern.finditer(scrubbed))
+        hits.extend(match.group(0) for match in pattern.finditer(text))
     return hits
 
 

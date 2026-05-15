@@ -17,7 +17,11 @@ import requests
 # 2026-04-23 Commit 7b: commit-message generation now tracks the
 # current primary brain, not hardcoded "gemma4:26b".
 from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
-from core.infra.secrets import load_ordinary_config_for_process, load_secrets_for_process
+from core.infra.secrets import (
+    load_ordinary_config_for_process,
+    load_secrets_for_process,
+    sanitize_env,
+)
 
 try:
     from core.infra import paths as _paths
@@ -47,7 +51,7 @@ class GitHubPublisher:
             pass
         self.username = os.environ.get('MAEZ_GITHUB_USERNAME') or _default_user
         self.repo = REPO_NAME
-        self.remote_url = f'https://{self.token}@github.com/{self.username}/{self.repo}.git'
+        self.remote_url = f'git@github.com:{self.username}/{self.repo}.git'
 
     def _headers(self):
         return {
@@ -98,7 +102,7 @@ class GitHubPublisher:
         """Initialize git repo and set remote if needed."""
         git = lambda *args: subprocess.run(
             ['git', '-C', MAEZ_ROOT] + list(args),
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=30, env=sanitize_env(),
         )
 
         # Init if not a repo
@@ -223,7 +227,7 @@ class GitHubPublisher:
         # Git operations
         git = lambda *args: subprocess.run(
             ['git', '-C', MAEZ_ROOT] + list(args),
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=30, env=sanitize_env(),
         )
 
         # Create .gitignore if missing

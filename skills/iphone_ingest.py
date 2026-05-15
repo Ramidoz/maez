@@ -7,7 +7,8 @@ iphone_ingest.py — Accept structured signals from iOS Shortcuts.
 Maez uses these to know the owner better over time: location, calendar, health,
 focus mode, battery, currently-playing music, workouts, manual notes.
 
-Auth: shared secret in X-Maez-Token header (MAEZ_IPHONE_INGEST_TOKEN in .env).
+Auth: shared secret in X-Maez-Token header
+(MAEZ_IPHONE_INGEST_TOKEN in config/secrets.local.env or systemd credentials).
 Store: logs/signals/YYYY-MM-DD.jsonl — one line per signal, for daemon to
 pick up and fold into context / memory.
 """
