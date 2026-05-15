@@ -30,6 +30,8 @@ class ObservationSidecarTests(unittest.TestCase):
                     "enabled": True,
                     "staleness_status": "ok",
                     "newest_age_hours": 1.5,
+                    "identity_fallback_count": 0,
+                    "invalid_eligibility_reason_rejected_count": 0,
                 }
             },
             "credentials": {"source": "secrets-local-env", "required_present": True},
@@ -41,6 +43,8 @@ class ObservationSidecarTests(unittest.TestCase):
         self.assertEqual(sample["heartbeat"]["cycle_count"], 12)
         self.assertEqual(sample["camera_presence"]["presence_state"], "present")
         self.assertEqual(sample["calendar"]["mode"], "disabled")
+        self.assertEqual(sample["m1"]["identity_fallback_count"], 0)
+        self.assertEqual(sample["m1"]["invalid_eligibility_reason_rejected_count"], 0)
         self.assertNotIn("raw_title", sample["calendar"])
         self.assertNotIn("source_id", sample["camera_presence"])
         self.assertNotIn("source_instance_id", sample["camera_presence"])
@@ -80,7 +84,12 @@ class ObservationSidecarTests(unittest.TestCase):
                 "sensor_state": "unavailable",
             },
             "calendar": {"mode": "disabled"},
-            "m1": {"enabled": True, "staleness_status": "alarm"},
+            "m1": {
+                "enabled": True,
+                "staleness_status": "alarm",
+                "identity_fallback_count": 1,
+                "invalid_eligibility_reason_rejected_count": 2,
+            },
             "credentials": {"required_present": False},
         }
 
@@ -90,6 +99,8 @@ class ObservationSidecarTests(unittest.TestCase):
                 "heartbeat_stalled",
                 "camera_detector_timeout",
                 "m1_staleness_alarm",
+                "m1_identity_fallback",
+                "m1_invalid_eligibility_reason_rejected",
                 "credentials_missing_required",
             ],
         )

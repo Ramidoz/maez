@@ -144,6 +144,7 @@ from core.memory.m1_lived_episode_promotion import (
     M1LivedEpisodePromoter,
     M1PromotionStore,
     biography_staleness_health,
+    m1_observability_health,
 )
 from core.memory.relationship_graph import RelationshipGraph
 from core.memory.lived_recall import build_lived_recall_brief
@@ -879,6 +880,7 @@ class MaezDaemon:
                 "pending_state": "unavailable",
                 "last_flush_checked_at": None,
                 "error": str(exc)[:120],
+                **m1_observability_health(),
             }
 
     def _calendar_health(self) -> dict:

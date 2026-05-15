@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import threading
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -55,6 +56,13 @@ VALID_PROMOTION_TRIGGERS = frozenset(
         "silence_boundary",
     }
 )
+
+_OBSERVABILITY_LOCK = threading.Lock()
+_OBSERVABILITY_COUNTERS = {
+    "identity_fallback_count": 0,
+    "invalid_eligibility_reason_rejected_count": 0,
+    "invalid_promotion_trigger_rejected_count": 0,
+}
 
 _THIRD_PARTY_MARKER_REPORT = re.compile(
     r"\b("
@@ -148,6 +156,24 @@ def _json_dumps(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
+def _increment_observability_counter(name: str) -> None:
+    with _OBSERVABILITY_LOCK:
+        _OBSERVABILITY_COUNTERS[name] = int(_OBSERVABILITY_COUNTERS.get(name, 0)) + 1
+
+
+def m1_observability_health() -> dict[str, int]:
+    """Return content-free M1 drift counters for health/sidecar observation."""
+
+    with _OBSERVABILITY_LOCK:
+        return dict(_OBSERVABILITY_COUNTERS)
+
+
+def reset_m1_observability_counters_for_tests() -> None:
+    with _OBSERVABILITY_LOCK:
+        for key in _OBSERVABILITY_COUNTERS:
+            _OBSERVABILITY_COUNTERS[key] = 0
+
+
 def _owner_display_name() -> str:
     try:
         from core.identity import display_name
@@ -155,12 +181,16 @@ def _owner_display_name() -> str:
         name = (display_name() or "").strip()
     except Exception:
         name = ""
-    return name or "Friend"
+    if name:
+        return name
+    _increment_observability_counter("identity_fallback_count")
+    return "Friend"
 
 
 def _validate_eligibility_reason(reason: str) -> str:
     normalized = (reason or "").strip()
     if normalized not in VALID_ELIGIBILITY_REASONS:
+        _increment_observability_counter("invalid_eligibility_reason_rejected_count")
         raise ValueError(f"invalid M1 eligibility reason: {reason!r}")
     return normalized
 
@@ -172,6 +202,7 @@ def _validate_eligibility_reasons(reasons: Sequence[str]) -> list[str]:
 def _validate_promotion_trigger(trigger: str) -> str:
     normalized = (trigger or "").strip()
     if normalized not in VALID_PROMOTION_TRIGGERS:
+        _increment_observability_counter("invalid_promotion_trigger_rejected_count")
         raise ValueError(f"invalid M1 promotion trigger: {trigger!r}")
     return normalized
 
@@ -641,6 +672,7 @@ class M1LivedEpisodePromoter:
             "pending_source_count": len(window.source_memory_ids),
             "pending_state": window.promotion_state,
             "last_flush_checked_at": window.last_flush_checked_at,
+            **m1_observability_health(),
         }
 
 

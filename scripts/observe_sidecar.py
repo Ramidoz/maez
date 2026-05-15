@@ -95,6 +95,9 @@ def project_health(
                 "staleness_status",
                 "newest_age_hours",
                 "active_count",
+                "identity_fallback_count",
+                "invalid_eligibility_reason_rejected_count",
+                "invalid_promotion_trigger_rejected_count",
             ),
         ),
         "credentials": _pick(
@@ -136,6 +139,12 @@ def red_gates(sample: dict[str, Any]) -> list[str]:
         gates.append("m1_disabled")
     if m1.get("staleness_status") == "alarm":
         gates.append("m1_staleness_alarm")
+    if _sample_int(m1, "identity_fallback_count") > 0:
+        gates.append("m1_identity_fallback")
+    if _sample_int(m1, "invalid_eligibility_reason_rejected_count") > 0:
+        gates.append("m1_invalid_eligibility_reason_rejected")
+    if _sample_int(m1, "invalid_promotion_trigger_rejected_count") > 0:
+        gates.append("m1_invalid_promotion_trigger_rejected")
 
     if credentials.get("required_present") is False:
         gates.append("credentials_missing_required")
@@ -153,6 +162,16 @@ def _parse_int(raw: str) -> int | None:
         return int((raw or "").strip())
     except (TypeError, ValueError):
         return None
+
+
+def _sample_int(mapping: dict[str, Any], key: str) -> int:
+    raw = mapping.get(key)
+    if isinstance(raw, bool):
+        return int(raw)
+    if isinstance(raw, int):
+        return raw
+    parsed = _parse_int(str(raw)) if raw is not None else None
+    return parsed if parsed is not None else 0
 
 
 def _systemctl_show_value(prop: str) -> str:

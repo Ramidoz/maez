@@ -28,11 +28,13 @@ from core.memory.m1_lived_episode_promotion import (
     biography_staleness_health,
     build_structural_summary,
     marker_is_owner_authored,
+    reset_m1_observability_counters_for_tests,
 )
 
 
 class M1PromotionTestCase(unittest.TestCase):
     def setUp(self):
+        reset_m1_observability_counters_for_tests()
         self._td = tempfile.TemporaryDirectory()
         root = Path(self._td.name)
         self.episodes = EpisodeStore(str(root / "lived_episodes.db"))
@@ -47,6 +49,7 @@ class M1PromotionTestCase(unittest.TestCase):
 
     def tearDown(self):
         self._td.cleanup()
+        reset_m1_observability_counters_for_tests()
 
 
 class MarkerDetectionTests(unittest.TestCase):
@@ -331,6 +334,25 @@ class PromotionBehaviorTests(M1PromotionTestCase):
                 trigger="explicit_marker",
                 reason="made_up_reason",
             )
+        self.assertEqual(
+            self.promoter.status_health()["invalid_eligibility_reason_rejected_count"],
+            1,
+        )
+
+    def test_status_health_reports_owner_identity_fallback_count(self):
+        import core.identity
+
+        with patch.object(core.identity, "display_name", return_value=""):
+            outcome = self.promoter.consider_audited_exchange(
+                owner_text="remember this",
+                maez_reply="Okay.",
+                raw_memory_id="raw-fallback-owner",
+                occurred_at="2026-05-14T18:00:00+00:00",
+            )
+
+        self.assertTrue(outcome.promoted)
+        health = self.promoter.status_health()
+        self.assertEqual(health["identity_fallback_count"], 1)
 
     def test_daily_promotion_cap_limits_new_episodes(self):
         promoter = M1LivedEpisodePromoter(
