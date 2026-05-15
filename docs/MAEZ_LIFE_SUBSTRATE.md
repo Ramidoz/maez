@@ -15,7 +15,7 @@ Each row maps to one of the [eleven covenant invariants](MAEZ_NORTH_STAR.md#the-
 | # | Organ | Realizes invariant | Status | Dependencies |
 |---|-------|--------------------|--------|--------------|
 | 1 | Temporal spine | #1 Time as Biography | `[ ✗ planned ]` | none (foundational) |
-| 2 | Contextual integrity at ingest | #3 Contextual Integrity | `[ ✗ planned ]` | none (foundational; enables many) |
+| 2 | Contextual integrity at ingest | #3 Contextual Integrity | `[ ✓ canonical · Calendar v1 first implementation disabled-default ]` | none (foundational; enables many) |
 | 3 | Rupture / repair scar | #5 Rupture and Repair | `[ ✗ planned ]` | #2 contextual integrity |
 | 4 | Crisis channel | #6 Crisis Routing | `[ ✗ planned ]` | private_thoughts (S1) · #10 clinical · #2 contextual |
 | 5 | Human-primacy valve | #2 Human-Primacy | `[ ✗ planned ]` | #9 bridge/cosmos |
@@ -30,6 +30,19 @@ Each row maps to one of the [eleven covenant invariants](MAEZ_NORTH_STAR.md#the-
 Plus the in-flight slice that is technically *not* one of the twelve but is foundational to several:
 
 | — | private_thoughts (S1) | #4 Interpretive Humility (in part) | `[ ◐ scaffold + minimal wiring · councils ratified · observation pending ]` | none |
+
+### 2026-05-15 substrate delta
+
+This document's original v1.2 table predates the substrate-organ push of 2026-05-15. The remaining slice order still stands, but the following organs are no longer hypothetical gaps:
+
+- **Body Topology** — canonicalized as Decision 24 / ADR 0029. Defines essential organs, non-essential information limbs, cardinality-of-one body bounds, and Body Bus inheritance.
+- **M1 Lived-Episode Promotion** — canonicalized as Decision 25 / ADR 0030 and implemented. Biography promotion is active, observation is running, and M1 remains bounded: it promotes lived episodes without widening raw recall.
+- **Daemon Credential Hygiene** — canonicalized as Decision 26 / ADR 0031 and implemented. Identity-bearing material now uses the shared credential interface and content-free source-channel reporting.
+- **S2 Contextual Integrity at Ingest** — canonicalized as Decision 27 / ADR 0032. This updates organ row #2 from planned to canonical.
+- **Calendar v1** — canonicalized as Decision 28 / ADR 0033 and implemented as the first S2-bounded information limb. It remains disabled-default until an explicit OAuth onboarding ceremony.
+- **Camera Presence v1 / v1.1** — implemented under Decision 24 as a body-sensor slice, not as a new BAD decision. It remains disabled/timeboxed by operator control, with sidecar observation running.
+
+Future agents should treat these as inherited substrate, not as fresh design gaps. The next new information limb copies Calendar v1's Inheritance Ledger pattern; the next body sensor copies Camera Presence v1's Physical Observation Surface and killable-child-process lifecycle pattern.
 
 ---
 
@@ -98,13 +111,15 @@ The deliberation space many other organs need. See detailed S1 plan below.
 - **S1a.1** — hardening. DONE 2026-05-13 in `b913728`. Claude six-role council returned RATIFY-WITH-AMENDMENTS; C1-C6 mechanical closure moves status to `[ ◐ scaffold + hardened access layer · S1b planning unblocked ]`.
 - **S1b** — minimal wiring. IMPLEMENTED in code under explicit operator waiver on 2026-05-13. One reasoning-residue producer plus one optional-output length-dampening consumer. Both post-implementation panels ratified with mechanical amendments. Still NOT `[ ✓ partial ]` or `[ ✓ real ]` until production-cycle observation supports promotion.
 
-### S2 — Contextual integrity at ingest
+### S2 — Contextual integrity at ingest (CANONICAL)
 
 The highest-leverage foundational organ. Every other organ writes memory; without ingest-side context tags this becomes a retrofit each time. S2 generalizes S1a.1's minimal schema (which is private_thoughts-scoped) into a global schema for all memory writes.
 
 Why second instead of first: S1 was already in flight before the canonization. The principle going forward: when planning a new organ that writes memory, S2's schema must exist OR the new organ ships with a per-organ minimal schema that S2 will later generalize.
 
-S2 registry question: S1a.1 introduced [`PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md`](PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md), an append-only registry for closed enum vocabularies. S2 must decide whether closed vocabularies stay in per-organ registry docs or move into a shared substrate registry pattern.
+**2026-05-15 status:** canonicalized as Decision 27 / ADR 0032. Calendar v1 is the first implementation slice that inherits S2; it shipped disabled-default, with legacy Calendar tunnels closed and OAuth onboarding held as a separate operator ceremony.
+
+S2 registry question: S1a.1 introduced [`PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md`](PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md), an append-only registry for closed enum vocabularies. S2's canonical spec uses static/versioned policy registries for flow grants and consent-tier computation; future slices should cite the S2 spec rather than inventing connector-local vocabularies.
 
 ### S3 — Temporal spine
 
@@ -219,7 +234,7 @@ S1b chose length dampening, not delay, silence, withholding, topic avoidance, or
 
 ### Substrate-plan refresh watch-points
 
-- S1a.1's `PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md` establishes the registry-doc-per-closed-enum-vocab pattern. S2 must decide whether to generalize it.
+- S1a.1's `PRIVATE_THOUGHTS_SIGNAL_REGISTRY.md` establishes the registry-doc-per-closed-enum-vocab pattern. S2 canonicalized static/versioned policy registries for flow grants and consent-tier computation; the remaining watch-point is whether future organs converge those registries into a shared substrate registry doc or keep per-organ registries with explicit S2 inheritance citations.
 - S1a.1's audit-before-handle forensic pattern is structurally related to the planned S15 Sigstore Rekor attestation log. The next substrate-plan refresh must align the two instead of treating Rekor as unrelated research output.
 - The first live non-empty private-thought migration is a watch-point. S1a.1 verification had an empty production DB; future migrations with real private-thought rows must run the named rollback regression and inspect legacy readability.
 
@@ -245,4 +260,4 @@ S1b chose length dampening, not delay, silence, withholding, topic avoidance, or
 
 ---
 
-*Version 1.2  ·  2026-05-13  ·  S1a done (`c6df762`), S1a.1 shipped (`b913728`), Claude council ratified-with-amendments; C1-C6 closure recorded.*
+*Version 1.3  ·  2026-05-15  ·  S2 canonicalized (Decision 27 / ADR 0032), Calendar v1 implemented disabled-default, Camera Presence v1/v1.1 implemented timeboxed, and observer-truthfulness fixes recorded.*
