@@ -139,6 +139,7 @@ class ObservationSidecarTests(unittest.TestCase):
                 "staleness_status": "alarm",
                 "identity_fallback_count": 1,
                 "invalid_eligibility_reason_rejected_count": 2,
+                "invalid_promotion_trigger_rejected_count": 3,
             },
             "credentials": {"required_present": False},
         }
@@ -152,6 +153,7 @@ class ObservationSidecarTests(unittest.TestCase):
                 "m1_staleness_alarm",
                 "m1_identity_fallback",
                 "m1_invalid_eligibility_reason_rejected",
+                "m1_invalid_promotion_trigger_rejected",
                 "credentials_missing_required",
             ],
         )
