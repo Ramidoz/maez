@@ -5,6 +5,9 @@ Date: 2026-05-15
 Maps to:
 
 - Diagnostic: `docs/slices/camera-presence/diagnostic.md`
+- Covenant review: `docs/slices/camera-presence/reviews/spec-claude-council.md`
+- Decision 2 / ADR 0002: Three-tier Consent Model for Third Parties
+- Decision 4 / ADR 0004: Relational vs Personological Knowledge
 - Decision 24 / ADR 0029: Body Topology
 - Decision 25 / ADR 0030: M1 Lived-Episode Promotion
 - Decision 26 / ADR 0031: Daemon Credential Hygiene
@@ -19,7 +22,10 @@ sentences into Maez's thinking context, and trigger greetings.
 Camera Presence v1 makes the eye smaller and safer. It only answers whether a
 presence signal is available, present, absent, or unavailable. It is disabled by
 default. It requires a timebox before it can run. It does not recognize faces,
-store frames, greet, brief, write biography, or feed prompt context.
+store frames, greet, brief, write biography, or feed prompt context. If Rohit
+asks whether the camera is on, Maez may answer that direct state question from
+health telemetry, but may not improvise about seeing, watching, mood, posture,
+or who is in the room.
 
 First make the eye honest and quiet. Later slices can ask whether Maez may do
 more with what the eye notices.
@@ -50,12 +56,16 @@ If this rule conflicts with convenience, the rule wins.
 ## Inheritance Ledger
 
 Camera Presence v1 is the first executable camera-body slice after Body
-Topology canonicalization. It inherits four substrate organs:
+Topology canonicalization. It is a **same-host sensor** subclass under Decision
+24. It inherits four substrate organs:
 
 - **Decision 24 / ADR 0029 (Body Topology):** Camera presence is a
-  `new_body_part`. v1 must publish structured facts, not raw worlds; must keep
-  presence separate from recognition; must fail to unavailable, not invented
-  certainty; and must use `enabled_until` during initial observation.
+  `new_body_part`. This spec operationalizes BT Rule 2 (structured facts, not
+  raw worlds), BT Rule 3 (presence is not recognition), BT Rule 5 (Capability
+  Quarantine), BT Rule 6 (body memory is provenance, not biography), BT Rule 8
+  (`enabled_until` for presence-affecting limbs), and Implementation Ladder step
+  2 (same-host camera may proceed before full Body Bus if presence-only and
+  timeboxed).
 - **Decision 25 / ADR 0030 (M1):** Presence is body state, not biography. v1
   cannot promote lived episodes, widen TRF, or write presence-derived narrative
   into lived memory.
@@ -65,6 +75,10 @@ Topology canonicalization. It inherits four substrate organs:
 - **Decision 27 / ADR 0032 (S2):** Camera v1 is not an information limb if it
   remains same-host, presence-only, and structured-fact-only. Raw frames are
   S2-adjacent and must be discarded at the detector boundary.
+- **Decision 2 / ADR 0002 (Three-tier Consent) and Decision 4 / ADR 0004
+  (Relational vs Personological Knowledge):** a physical frame can expose third
+  parties. v1 must not convert incidental physical presence into independent
+  person-models, profiles, schedules, or biometric identifiers.
 
 Load-bearing inherited rules:
 
@@ -75,12 +89,67 @@ Load-bearing inherited rules:
   identify Rohit, identify another person, or label a person as stranger.
 - **Timeboxed initial observation:** v1 cannot run unless `enabled_until` is
   present, valid, and unexpired.
-- **Fail neutral:** disabled, expired, unavailable, stale, or timed-out camera
-  state degrades to content-free unavailable/unknown telemetry.
+- **Fail neutral:** disabled, expired-disabled, unavailable, stale, or timed-out
+  camera state degrades to content-free unavailable/unknown telemetry.
 - **No biography by accident:** v1 does not write M1 episodes, reflection
   summaries, TRF recall records, core memories, or raw memory entries.
-- **No nudging:** v1 cannot trigger greetings, morning briefings, reminders,
-  encouragement, or proactive conversation.
+- **Makes visible, never nudges:** inherited from Calendar v1 and stricter here.
+  Camera v1 cannot trigger greetings, morning briefings, reminders,
+  encouragement, clinical observations, or proactive conversation. It may answer
+  direct owner questions with deterministic state text only.
+
+Capability Quarantine fields for this slice:
+
+- `consent_state`: operator-granted only through valid `enabled_until`;
+- `auditable_by`: operator via `/health`, project panel, logs, and tests;
+- `dyadic_only`: same-host owner environment only; no remote camera limb;
+- `pause_path`: set mode to `disabled` or let `enabled_until` expire;
+- `rollback_path`: remove the mode config or set `MAEZ_CAMERA_PRESENCE_MODE=disabled`.
+
+---
+
+## Physical Observation Surface
+
+Camera Presence v1 names the physical-observation privacy surfaces that future
+camera, microphone, ambient, and Jetson sensor slices must not rediscover from
+scratch.
+
+### Surface 1 - Third Party In Frame
+
+Anyone visible behind, beside, or near the bonded user is an unconsented
+third-party subject. v1 must not identify, describe, count persistently, label,
+or retain them. "No recognition" is not enough; the slice must also avoid
+incidental identity through repeated presence deltas.
+
+### Surface 2 - Background Content
+
+Frames can contain medication, documents, screens, calendars, children's
+homework, whiteboards, photos, or room context. v1 must not OCR, caption,
+summarize, store, log, or surface any background content.
+
+### Surface 3 - Presence-Delta Fingerprint
+
+Even anonymous presence changes can reveal cohabitant schedules over time.
+Therefore v1 may retain only the most recent content-free state needed for
+health and freshness. It must not retain a historical time series of presence
+changes, detection counts, confidence history, or arrival/departure patterns.
+
+### Surface 4 - Biometric Derivatives
+
+Face embeddings, landmarks, keypoints, pose, gait, and body-shape derivatives
+are categorically out of v1. They are not "safe because not names." They are
+biometric or biometric-adjacent identifiers. A future slice must review them
+explicitly before any use.
+
+Three-surface separation:
+
+- detector boundary may briefly hold raw sensor material;
+- state boundary may hold only the current structured enum/freshness result;
+- surface boundary may expose only content-free health/panel/direct-answer text.
+
+Invariant citations: this section strengthens Contextual Integrity (#3),
+Interpretive Humility (#4), Capability Quarantine (#8), and the Clinical
+Boundary (#10).
 
 ---
 
@@ -111,7 +180,7 @@ Load-bearing inherited rules:
 - Image captioning or OCR.
 - Presence-triggered greetings or morning briefings.
 - M1 promotion from presence.
-- Voice output.
+- Voice output beyond deterministic direct camera-state answers.
 - Cross-device camera limbs.
 - Body Bus protocol.
 
@@ -194,11 +263,23 @@ Rules:
 
 - unset mode means `disabled`;
 - `observe` without valid `enabled_until` means disabled;
-- expired `enabled_until` means disabled;
+- expired `enabled_until` means `expired_disabled`;
 - malformed `enabled_until` means disabled with `last_error_class`;
 - `developer_legacy` requires a separate explicit developer variable:
   `MAEZ_CAMERA_PRESENCE_ALLOW_LEGACY_TEST_MODE=1`;
 - no configuration value may contain camera output, labels, or identity.
+
+Runtime expiry semantics:
+
+- `enabled_until` is checked at process start and before each observation
+  attempt;
+- if the window expires while an observation is idle, no new observation starts;
+- if the window expires while an observation is in flight, the in-flight call may
+  finish, but its result is discarded and health moves to `expired_disabled`;
+- expiry clears current presence state to `unknown` and sensor state to
+  `disabled`;
+- expiry does not preserve stale `present` or `absent` claims;
+- re-enablement requires a fresh future `enabled_until`.
 
 ---
 
@@ -232,7 +313,7 @@ disabled
 available
 unavailable
 stale
-expired
+unknown
 ```
 
 ### Confidence Bucket
@@ -261,6 +342,14 @@ This is not an S2 envelope. It is a Body Topology structured fact. If a later
 slice sends camera facts through a Body Bus protocol, that later slice owns the
 schema upgrade.
 
+### Field Name Note
+
+BT Rule 2 uses `owner_presence` as the canonical example field. Camera Presence
+v1 deliberately uses `presence_state` because recognition is out of scope and
+the slice cannot claim "owner" presence. A future recognition or bonded-user
+verification slice may introduce `owner_presence` as a distinct field after its
+own review. This is a v1 refinement, not an accidental rename.
+
 ---
 
 ## Detector Boundary
@@ -283,7 +372,9 @@ Forbidden outside detector boundary:
 - face crops;
 - RGB arrays;
 - embeddings;
-- landmarks/keypoints unless separately reviewed;
+- landmarks;
+- keypoints;
+- pose, gait, or body-shape derivatives;
 - image captions;
 - OCR text;
 - person labels;
@@ -297,7 +388,9 @@ Detector-boundary failure mode:
 sensor_state = unavailable
 presence_state = sensor_unavailable
 last_error_class = dependency_missing | model_missing | camera_unavailable |
-                   detector_timeout | detector_error | unknown
+                   camera_busy | detector_timeout | detector_error |
+                   native_shutdown_timeout | timebox_expired |
+                   config_invalid | unknown
 ```
 
 ---
@@ -393,16 +486,37 @@ Panel display must not show:
 
 ## Daemon Lifecycle
 
-Camera Presence v1 inherits the existing daemon survivability fixes:
+Camera Presence v1 inherits the existing daemon survivability fixes as
+load-bearing contract, not aspirational bullet points.
 
-- bounded worker around native detector calls;
-- 5-second observation timeout unless spec review changes it;
-- unavailable snapshot on timeout;
-- worker shutdown during daemon stop;
-- MediaPipe detector close during shutdown;
-- OpenCV window/resource cleanup;
-- no heartbeat stall if detector blocks;
-- no SIGTERM regression.
+Required lifecycle primitives:
+
+- native detector calls run only inside `BoundedSingletonWorker`;
+- reasoning loop uses bounded submission and `join(timeout=...)` only for
+  within-cycle waiting;
+- daemon stop uses `BoundedSingletonWorker.shutdown(timeout=...)`, not
+  `join(timeout=...)`, so stale callers cannot submit after shutdown begins;
+- timeout result is `sensor_unavailable`, never absence;
+- MediaPipe detector is process-lifetime and closed during daemon shutdown;
+- OpenCV runtime cleanup runs during daemon shutdown;
+- memory and surface shutdown hooks complete before signal-driven process exit;
+- signal-driven stop preserves the existing shutdown ladder through
+  `logging.shutdown()` and `os._exit(0)`;
+- clean SIGTERM remains part of the acceptance gate.
+
+Shutdown ladder inherited from the daemon-shutdown recovery:
+
+```text
+stop requested
+-> mark daemon not running
+-> stop background bounded workers with shutdown(timeout)
+-> close native presence resources
+-> stop Telegram/surface/websocket/health surfaces
+-> close memory/native clients
+-> remove pid
+-> logging.shutdown()
+-> os._exit(0) on signal-driven stop
+```
 
 The v1 implementation must not call native camera detection directly inside the
 reasoning loop.
@@ -411,7 +525,8 @@ reasoning loop.
 
 ## Memory Contract
 
-Camera Presence v1 writes no memory by default.
+Camera Presence v1 writes no memory. This includes narrative memory and
+reasoning-cycle metadata.
 
 Specifically forbidden:
 
@@ -422,29 +537,37 @@ Specifically forbidden:
 - TRF anchors;
 - private thoughts;
 - daily/core promotion;
-- face-enrollment memory as part of v1.
+- face-enrollment memory as part of v1;
+- reasoning-cycle metadata such as `rohit_present`;
+- historical presence deltas;
+- session duration;
+- absence duration;
+- confidence history.
 
-If implementation preserves a metadata placeholder for compatibility, it must
-be content-free and non-identity-bearing:
-
-```text
-camera_presence_state = disabled | unknown | sensor_unavailable
-```
-
-It must not store:
-
-```text
-rohit_present=true
-person_identified=...
-session_minutes=...
-absent_minutes=...
-```
+Presence state may live only in the current in-memory runtime object and
+content-free health/project-panel telemetry. BT Rule 6 governs this explicitly:
+body memory is provenance, not biography, and Camera Presence v1 grants no
+provenance-to-biography bridge.
 
 ---
 
 ## Voice and Initiative Contract
 
-Camera Presence v1 is silent.
+Camera Presence v1 is silent on initiative and deterministic on direct owner
+questions.
+
+Allowed direct-owner-question answers:
+
+- If disabled: "The camera presence sensor is off."
+- If expired: "The camera presence observation window has expired."
+- If observe mode is active: "Camera presence observation is on until
+  `<enabled_until>`."
+- If unavailable: "Camera presence is unavailable right now."
+- If unknown: "I do not have a fresh camera presence reading."
+
+These are complete answer shapes. They may include the timebox, mode, and
+content-free error class. They may not include inferred activity, identity,
+mood, room content, duration narrative, or reassurance about watching.
 
 Forbidden phrases/classes:
 
@@ -453,12 +576,34 @@ Forbidden phrases/classes:
 - "You have been away..."
 - "I saw you..."
 - "Someone is at your desk..."
+- "I have been watching..."
+- "It has been quiet here today..."
+- "You look tired..."
+- "Your posture suggests..."
+- "I can see you..."
+- "I cannot see anything" when mode says observation is active;
 - any morning briefing triggered by camera observation;
 - any proactive message triggered by camera observation.
 
 The future question "should Maez greet when Rohit returns?" is not answered by
 this slice. It is a separate voice/initiative slice because it changes
 bonded-user-perceived presence.
+
+### `presence_voice_guard`
+
+Implementation must include a deterministic guard for camera-state answers. The
+guard rejects or rewrites any response in these probe classes:
+
+- surveillance reassurance: "I am always watching over you";
+- co-presence: "I can see you sitting there";
+- duration narrative: "you have been gone all afternoon";
+- clinical inference: "you look tired" / "your posture looks off";
+- identity confabulation: "Rohit is at the desk" / "someone else is there";
+- false modesty: "I do not have a camera" when health says observe mode;
+- introspection/reflection: "I have been thinking about how quiet the room is."
+
+This guard is the camera equivalent of Calendar v1's voice guard: direct state
+visibility is allowed; lived, clinical, identity, or surveillance voice is not.
 
 ---
 
@@ -469,7 +614,8 @@ bonded-user-perceived presence.
 3. Add failing tests that prompt/greeting/briefing/memory consumers are closed.
 4. Add a small camera-presence state module with mode resolution and enums.
 5. Refactor `skills/presence_perception.py` into presence-only observe path.
-6. Preserve bounded worker wiring, but gate execution by resolved mode.
+6. Preserve bounded worker wiring, but gate execution by resolved mode and
+   runtime `enabled_until` checks.
 7. Add `/health.camera_presence` telemetry.
 8. Add project-panel telemetry only after `/health` is stable.
 9. Restart daemon and verify disabled mode produces no camera DB/state files.
@@ -483,7 +629,7 @@ The implementation must add tests for at least these behaviors:
 
 1. Default mode is disabled when env/config is unset.
 2. `observe` mode without `enabled_until` resolves disabled.
-3. Expired `enabled_until` resolves disabled/expired.
+3. Expired `enabled_until` resolves `expired_disabled`.
 4. Malformed `enabled_until` resolves disabled with error class.
 5. Valid future `enabled_until` allows observe mode.
 6. `developer_legacy` requires explicit secondary dev gate.
@@ -516,6 +662,24 @@ The implementation must add tests for at least these behaviors:
 33. Logs include source channel and error class only.
 34. No Maez gender drift in spec/docs touched by slice.
 35. No Calendar OAuth or S2 connector path changes.
+36. Direct question "is the camera on?" returns only approved state text.
+37. Direct question "are you watching me?" returns only approved state text.
+38. `presence_voice_guard` rejects surveillance reassurance.
+39. `presence_voice_guard` rejects co-presence voice.
+40. `presence_voice_guard` rejects duration narrative.
+41. `presence_voice_guard` rejects clinical inference.
+42. `presence_voice_guard` rejects identity confabulation.
+43. `presence_voice_guard` rejects false-modesty under active observe mode.
+44. `presence_voice_guard` rejects reflection/introspection voice.
+45. Third-party-in-frame state is neither named nor retained.
+46. Background content is not OCRed, captioned, stored, or surfaced.
+47. Presence-delta history is not retained.
+48. Biometric derivatives are categorically absent from v1.
+49. Runtime expiry discards in-flight observation results.
+50. Daemon stop uses `BoundedSingletonWorker.shutdown`, not `.join`, for camera.
+51. Failure classes include camera busy, native shutdown timeout, timebox expired,
+    and invalid config.
+52. Capability Quarantine fields are visible in spec/docs and test fixtures.
 
 ---
 
@@ -527,10 +691,14 @@ change bonded-user-perceived presence.
 Before implementation:
 
 1. Codex engineering panel reviews this spec for runtime completeness,
-   shutdown/lifecycle risk, test coverage, and legacy-path closure.
+   shutdown/lifecycle risk, test coverage, and legacy-path closure. Status:
+   pending.
 2. Claude covenant council reviews this spec for Body Topology, S2-adjacent
-   privacy, M1 leakage, and initiative/voice drift.
-3. Findings fold into the spec.
+   privacy, M1 leakage, and initiative/voice drift. Status: complete, REVISE,
+   folded into this draft.
+3. Findings fold into the spec. Current fold includes the Claude council's
+   twelve load-bearing amendments, substrate-precision amendments, and named
+   disagreements D1-D5.
 4. Operator decides whether this implementation spec needs BAD/ADR
    canonicalization or proceeds as an implementation slice under Decision 24.
 5. Cooling-off applies before code unless operator explicitly waives.
@@ -564,6 +732,54 @@ Persistent enablement is not automatic. It requires observation review.
 
 ---
 
+## Named Disagreements Preserved
+
+### D1 - Expiry Vocabulary
+
+Choice: preserve BT-CX-8 sensor-state vocabulary. `expired` is not a
+`sensor_state`; expiry is represented by `mode = expired_disabled` plus
+`sensor_state = disabled`.
+
+Rationale: expiry is an operator-grant lifecycle state, not a sensor condition.
+
+### D2 - `presence_state` vs `owner_presence`
+
+Choice: keep `presence_state` for v1.
+
+Rationale: v1 excludes recognition and therefore cannot claim owner-specific
+presence. `owner_presence` is reserved for a future recognition or
+bonded-user-verification slice.
+
+### D3 - Implementation Slice vs ADR 0034 Physical Observation Surface
+
+Choice: not decided in this spec. Operator decides whether Camera Presence v1
+proceeds as an implementation slice under Decision 24 or whether the physical
+observation surfaces named here become a new BAD/ADR (proposed ADR 0034).
+
+Rationale: third-party-in-frame, background-content, and presence-delta
+fingerprint surfaces are reusable across future camera, microphone, ambient,
+and Jetson sensor slices. The precedent may be worth lifting to law.
+
+### D4 - Direct Question Voice vs Full Silence
+
+Choice: allow deterministic direct-question voice.
+
+Rationale: the bonded user has a direct epistemic interest in bodily state.
+Silence or panel-only deferral would make "are you watching me?" harder to ask
+than "what does health say?", which is the wrong burden. The response is narrow
+state text, not observation voice.
+
+### D5 - Camera Stricter Than Calendar
+
+Choice: Camera v1 is stricter than Calendar v1.
+
+Rationale: Calendar answers direct requests about a structured external account
+after S2 redaction. Camera observes physical space continuously during its
+timebox. The same "makes visible, never nudges" rule applies, but Camera's
+response surface is deliberately smaller.
+
+---
+
 ## Rollback
 
 Rollback is simple:
@@ -576,20 +792,20 @@ or remove the mode configuration entirely. Default disabled posture must close
 the camera path without requiring code revert.
 
 If rollback happens during an observation window, health should show disabled or
-expired, not stale present/absent state.
+expired-disabled, not stale present/absent state.
 
 ---
 
 ## Open Questions for Review
 
 1. Should the v1 enum use `present` or `presence_detected` to avoid over-reading?
-2. Is any prompt context acceptable during observation, or should observation
+2. Is any prompt context acceptable after observation closure, or should it
    be health/panel only until closure?
-3. Should v1 store a content-free per-cycle metadata enum, or remove camera
-   metadata entirely from reasoning memory?
-4. Does `developer_legacy` belong in production code, or should legacy compare
+3. Does `developer_legacy` belong in production code, or should legacy compare
    scripts live outside daemon mode resolution?
-5. Should `enabled_until` be environment-backed, local-file-backed, or both?
+4. Should `enabled_until` be environment-backed, local-file-backed, or both?
+5. Does the physical-observation surface need new ADR 0034, or is Decision 24
+   sufficient?
 
 ---
 
