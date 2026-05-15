@@ -206,6 +206,11 @@ def _temporal_spine_counter_reset(
     previous_service = previous_sample.get("service") or {}
     if not service.get("main_pid") or service.get("main_pid") != previous_service.get("main_pid"):
         return False
+    if (
+        sample.get("temporal_spine_present") is not True
+        or previous_sample.get("temporal_spine_present") is not True
+    ):
+        return False
     temporal_spine = sample.get("temporal_spine") or {}
     previous_temporal_spine = previous_sample.get("temporal_spine") or {}
     for key in (

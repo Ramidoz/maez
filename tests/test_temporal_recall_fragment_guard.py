@@ -84,6 +84,14 @@ class _RecordingEpisodeStore(_FakeEpisodeStore):
         )
 
 
+class _FailingWindowStore:
+    def __init__(self, exc: Exception):
+        self.exc = exc
+
+    def list_active_in_window(self, **_kwargs):
+        raise self.exc
+
+
 class TemporalAnchorWindowTests(unittest.TestCase):
     def test_last_week_uses_previous_completed_monday_sunday(self):
         from core.memory.temporal_anchor_recall import detect_temporal_anchor
@@ -121,7 +129,9 @@ class TemporalAnchorWindowTests(unittest.TestCase):
 
     def test_negative_controls_do_not_activate_without_memory_intent(self):
         from core.memory.temporal_anchor_recall import detect_temporal_anchor
+        from core.time import temporal_spine
 
+        temporal_spine._reset_diagnostics_for_tests()
         ref = datetime(2026, 5, 13, 22, 30, tzinfo=CHICAGO)
         for text in (
             "Last week was exhausting, but I am not asking you to remember it.",
@@ -133,6 +143,31 @@ class TemporalAnchorWindowTests(unittest.TestCase):
         ):
             result = detect_temporal_anchor(text, reference_time=ref)
             self.assertFalse(result.anchor_detected, text)
+        self.assertEqual(
+            temporal_spine.diagnostics_snapshot().unsupported_anchor_rejected_count,
+            0,
+        )
+
+    def test_raw_unsupported_temporal_phrases_do_not_increment_unsupported_counter(self):
+        from core.memory.temporal_anchor_recall import detect_temporal_anchor
+        from core.time import temporal_spine
+
+        temporal_spine._reset_diagnostics_for_tests()
+        ref = datetime(2026, 5, 13, 22, 30, tzinfo=CHICAGO)
+        for text in (
+            "Do you remember May 4, 2026?",
+            "What happened on Tuesday?",
+            "Do you remember April?",
+            "What was on my calendar yesterday?",
+            "Do you remember a few days ago?",
+        ):
+            result = detect_temporal_anchor(text, reference_time=ref)
+            self.assertFalse(result.anchor_detected, text)
+
+        self.assertEqual(
+            temporal_spine.diagnostics_snapshot().unsupported_anchor_rejected_count,
+            0,
+        )
 
     def test_first_person_memory_plus_direct_question_still_activates(self):
         from core.memory.temporal_anchor_recall import detect_temporal_anchor
@@ -230,6 +265,26 @@ class TemporalAnchorWindowTests(unittest.TestCase):
         self.assertFalse(result.memory_absence_established)
         self.assertEqual(temporal_spine.diagnostics_snapshot().helper_unavailable_count, 1)
 
+    def test_actual_nonexistent_reference_maps_to_helper_unavailable(self):
+        from core.memory.temporal_anchor_recall import build_temporal_anchor_recall_brief
+        from core.time import temporal_spine
+
+        temporal_spine._reset_diagnostics_for_tests()
+        store = _FakeEpisodeStore()
+
+        result = build_temporal_anchor_recall_brief(
+            "Do you remember earlier today?",
+            episode_store=store,
+            reference_time=datetime(2026, 3, 8, 2, 30, tzinfo=CHICAGO),
+        )
+
+        self.assertTrue(result.anchor_detected)
+        self.assertEqual(result.search_status, "helper_unavailable")
+        self.assertFalse(result.memory_absence_established)
+        snap = temporal_spine.diagnostics_snapshot()
+        self.assertEqual(snap.helper_unavailable_count, 1)
+        self.assertEqual(snap.malformed_timestamp_rejected_count, 1)
+
 
 class TemporalAnchorRecallTests(unittest.TestCase):
     def test_episode_store_window_query_filters_in_sql_and_limits(self):
@@ -261,6 +316,46 @@ class TemporalAnchorRecallTests(unittest.TestCase):
             )
         self.assertEqual(len(rows), 5)
         self.assertTrue(all("Current-week" not in row["title"] for row in rows))
+
+    def test_episode_store_window_query_does_not_materialize_all_active_rows(self):
+        import core.time.temporal_spine as temporal_spine
+        from core.memory.episodes import EpisodeStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = EpisodeStore(str(Path(tmp) / "episodes.db"))
+            for i in range(40):
+                store.add(
+                    title=f"Old event {i}",
+                    summary=f"Old event {i}",
+                    participants=["Rohit", "Maez"],
+                    source_memory_ids=[f"old-{i}"],
+                    source_kind="telegram",
+                    occurred_at=f"2026-01-{1 + (i % 20):02d}T12:00:00+00:00",
+                )
+            for i in range(3):
+                store.add(
+                    title=f"Candidate event {i}",
+                    summary=f"Candidate event {i}",
+                    participants=["Rohit", "Maez"],
+                    source_memory_ids=[f"candidate-{i}"],
+                    source_kind="telegram",
+                    occurred_at=f"2026-05-11T04:{10 + i:02d}:00+00:00",
+                )
+
+            with patch.object(
+                temporal_spine,
+                "try_canonical_utc",
+                wraps=temporal_spine.try_canonical_utc,
+            ) as parses:
+                rows = store.list_active_in_window(
+                    window_start="2026-05-11T04:00:00+00:00",
+                    window_end="2026-05-11T05:00:00+00:00",
+                    limit=10,
+                )
+
+        self.assertEqual(len(rows), 3)
+        self.assertLessEqual(parses.call_count, 8)
+        self.assertGreater(43, parses.call_count)
 
     def test_episode_store_window_query_filters_mixed_offsets_by_canonical_utc(self):
         from core.memory.episodes import EpisodeStore
@@ -324,6 +419,52 @@ class TemporalAnchorRecallTests(unittest.TestCase):
                 "Local offset inside previous date",
             },
         )
+
+    def test_episode_store_window_query_does_not_count_malformed_stored_rows(self):
+        from core.memory.episodes import EpisodeStore
+        from core.time import temporal_spine
+
+        temporal_spine._reset_diagnostics_for_tests()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = EpisodeStore(str(Path(tmp) / "episodes.db"))
+            store.add(
+                title="Inside",
+                summary="Inside",
+                participants=["Rohit", "Maez"],
+                source_memory_ids=["inside"],
+                source_kind="telegram",
+                occurred_at="2026-05-11T04:30:00+00:00",
+            )
+            with store._connect() as conn:
+                conn.execute(
+                    "UPDATE episodes SET occurred_at = ? WHERE title = ?",
+                    ("2026-05-11Tbad", "Inside"),
+                )
+                conn.commit()
+
+            rows = store.list_active_in_window(
+                window_start="2026-05-11T04:00:00+00:00",
+                window_end="2026-05-11T05:00:00+00:00",
+                limit=10,
+            )
+
+        self.assertEqual(rows, [])
+        self.assertEqual(
+            temporal_spine.diagnostics_snapshot().malformed_timestamp_rejected_count,
+            0,
+        )
+
+    def test_episode_store_window_query_keeps_sql_range_predicate(self):
+        import inspect
+        from core.memory.episodes import EpisodeStore
+
+        src = inspect.getsource(EpisodeStore.list_active_in_window)
+
+        self.assertNotIn(
+            "SELECT * FROM episodes WHERE status = 'active' ORDER BY created_at DESC", src
+        )
+        self.assertIn("substr(COALESCE(occurred_at, created_at), 1, 10)", src)
+        self.assertIn("status = 'active'", src)
 
     def test_brief_returns_episodes_inside_window_without_keyword_overlap(self):
         from core.memory.temporal_anchor_recall import build_temporal_anchor_recall_brief
@@ -473,6 +614,22 @@ class TemporalAnchorRecallTests(unittest.TestCase):
         self.assertEqual(result.search_status, "helper_unavailable")
         self.assertEqual(result.brief_text, "")
         self.assertFalse(result.memory_absence_established)
+
+    def test_store_errors_and_timeouts_do_not_increment_s3_helper_counter(self):
+        from core.memory.temporal_anchor_recall import build_temporal_anchor_recall_brief
+        from core.time import temporal_spine
+
+        for exc in (RuntimeError("store down"), TimeoutError("too slow")):
+            temporal_spine._reset_diagnostics_for_tests()
+            result = build_temporal_anchor_recall_brief(
+                "Do you remember last week?",
+                episode_store=_FailingWindowStore(exc),
+                reference_time=datetime(2026, 5, 13, 22, 30, tzinfo=CHICAGO),
+            )
+
+            self.assertEqual(result.search_status, "helper_unavailable")
+            self.assertFalse(result.memory_absence_established)
+            self.assertEqual(temporal_spine.diagnostics_snapshot().helper_unavailable_count, 0)
 
 
 class TemporalFragmentGuardTests(unittest.TestCase):

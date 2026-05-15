@@ -24,11 +24,9 @@ import json
 import sqlite3
 import uuid
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Sequence
-
-from core.time.temporal_spine import canonical_utc, half_open_contains
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS episodes (
@@ -184,23 +182,33 @@ class EpisodeStore:
         ``created_at`` for older rows. Callers pass ``limit=max_items + 1`` when
         they need truncation detection without materializing the whole store.
         """
-        start_utc = canonical_utc(window_start, field_name="event_at")
-        end_utc = canonical_utc(window_end, field_name="event_at")
+        from core.time.temporal_spine import try_canonical_utc
+
+        start_utc = try_canonical_utc(window_start, field_name="event_at")
+        end_utc = try_canonical_utc(window_end, field_name="event_at")
+        if start_utc is None or end_utc is None:
+            return []
+        candidate_start_day = (start_utc - timedelta(days=2)).date().isoformat()
+        candidate_end_day = (end_utc + timedelta(days=2)).date().isoformat()
         with closing(self._connect()) as c:
             timeout = max(0, int(busy_timeout_ms))
             c.execute(f"PRAGMA busy_timeout = {timeout}")
             rows = c.execute(
-                "SELECT * FROM episodes WHERE status = 'active' ORDER BY created_at DESC",
+                "SELECT * FROM episodes "
+                "WHERE status = 'active' "
+                "AND substr(COALESCE(occurred_at, created_at), 1, 10) >= ? "
+                "AND substr(COALESCE(occurred_at, created_at), 1, 10) <= ? "
+                "ORDER BY COALESCE(occurred_at, created_at) DESC",
+                (candidate_start_day, candidate_end_day),
             ).fetchall()
         matches: list[tuple[datetime, dict]] = []
         for row in rows:
             item = self._row_to_dict(row)
             raw_time = item.get("occurred_at") or item.get("created_at")
-            try:
-                if not half_open_contains(raw_time, start=start_utc, end=end_utc):
-                    continue
-                event_time = canonical_utc(raw_time, field_name="event_at")
-            except (TypeError, ValueError):
+            event_time = try_canonical_utc(raw_time, field_name="event_at")
+            if event_time is None:
+                continue
+            if not start_utc <= event_time < end_utc:
                 continue
             matches.append((event_time, item))
         matches.sort(key=lambda pair: pair[0], reverse=True)

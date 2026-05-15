@@ -8974,10 +8974,12 @@ def api_debug_services():
     services = {}
     for svc in ("maez", "maez-web", "llama-server"):
         services[svc] = _service_state_cached(svc)
+    daemon_health = dict(_daemon_health())
+    daemon_health.pop("temporal_spine", None)
     return jsonify(
         {
             "services": services,
-            "daemon": _daemon_health(),  # uses the 2.5s default — /health is slow
+            "daemon": daemon_health,  # uses the 2.5s default — /health is slow
             "checked_at": _utcnow_iso(),
         }
     )

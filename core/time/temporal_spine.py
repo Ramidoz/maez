@@ -128,6 +128,7 @@ def _zone_or_utc(candidate: str | None, *, source: TimezoneSource) -> ZoneInfo:
 
 
 def timezone_source() -> str:
+    owner_timezone()
     return diagnostics_snapshot().timezone_source
 
 
@@ -147,6 +148,26 @@ def canonical_utc(value: str | datetime, *, field_name: TemporalInstantFieldName
         parsed = parsed.replace(tzinfo=timezone.utc)
     else:
         _validate_existing_local_datetime(parsed)
+    return parsed.astimezone(timezone.utc)
+
+
+def try_canonical_utc(value: str | datetime, *, field_name: str) -> datetime | None:
+    """Best-effort UTC canonicalization for already-stored rows.
+
+    Store reads must not mutate S3 diagnostics: malformed historical rows are
+    data-quality facts about the store, not runtime API-boundary failures.
+    """
+
+    if str(field_name) not in _INSTANT_FIELDS:
+        return None
+    try:
+        parsed = _parse_instant(value, count_diagnostics=False)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        else:
+            _validate_existing_local_datetime(parsed, count_diagnostics=False)
+    except (TypeError, ValueError):
+        return None
     return parsed.astimezone(timezone.utc)
 
 
@@ -182,6 +203,8 @@ def temporal_window(anchor_kind: TemporalAnchorKind, reference_time: datetime) -
         _increment("unsupported_anchor_rejected_count")
         raise ValueError("unsupported temporal anchor kind")
 
+    _validate_existing_local_datetime(start, owner_zone=zone)
+    _validate_existing_local_datetime(end, owner_zone=zone)
     return TemporalWindow(
         anchor_kind=anchor_kind,
         start=start,
@@ -251,22 +274,25 @@ def _called_from_tests() -> bool:
     return False
 
 
-def _parse_instant(value: str | datetime) -> datetime:
+def _parse_instant(value: str | datetime, *, count_diagnostics: bool = True) -> datetime:
     if isinstance(value, datetime):
         return value
     if not isinstance(value, str) or not value.strip():
-        _increment("malformed_timestamp_rejected_count")
+        if count_diagnostics:
+            _increment("malformed_timestamp_rejected_count")
         raise ValueError("malformed temporal instant")
     raw = value.strip()
     if "T" not in raw and " " not in raw:
-        _increment("malformed_timestamp_rejected_count")
+        if count_diagnostics:
+            _increment("malformed_timestamp_rejected_count")
         raise ValueError("bare dates are not temporal instants")
     if raw.endswith("Z"):
         raw = raw[:-1] + "+00:00"
     try:
         return datetime.fromisoformat(raw)
     except ValueError as exc:
-        _increment("malformed_timestamp_rejected_count")
+        if count_diagnostics:
+            _increment("malformed_timestamp_rejected_count")
         raise ValueError("malformed temporal instant") from exc
 
 
@@ -284,6 +310,8 @@ def _reference_as_owner_local(reference_time: datetime, zone: ZoneInfo) -> datet
 def _aware_bound_to_utc(value: datetime, *, name: str) -> datetime:
     if value.tzinfo is None:
         raise ValueError(f"{name} bound must be timezone-aware")
+    if value.utcoffset() != timedelta(0):
+        raise ValueError(f"{name} bound must be UTC")
     return value.astimezone(timezone.utc)
 
 
@@ -291,6 +319,7 @@ def _validate_existing_local_datetime(
     value: datetime,
     *,
     owner_zone: ZoneInfo | None = None,
+    count_diagnostics: bool = True,
 ) -> None:
     zone_key = getattr(value.tzinfo, "key", None)
     if zone_key is None:
@@ -302,7 +331,8 @@ def _validate_existing_local_datetime(
     if roundtrip.replace(tzinfo=None) != value.replace(tzinfo=None) or getattr(
         roundtrip, "fold", 0
     ) != getattr(value, "fold", 0):
-        _increment("malformed_timestamp_rejected_count")
+        if count_diagnostics:
+            _increment("malformed_timestamp_rejected_count")
         raise ValueError("nonexistent owner-local datetime")
 
 
@@ -323,5 +353,6 @@ __all__ = [
     "temporal_spine_health",
     "temporal_window",
     "timezone_source",
+    "try_canonical_utc",
     "_reset_diagnostics_for_tests",
 ]
