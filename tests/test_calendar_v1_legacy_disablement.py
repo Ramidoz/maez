@@ -258,6 +258,7 @@ class CalendarLegacyDisablementSourceTests(unittest.TestCase):
         for path in ("ui/dashboard_local.html", "ui/dashboard_public.html"):
             src = _read(path)
             self.assertNotIn("Google Calendar, 8h lookahead", src)
+            self.assertNotIn("8h ahead", src)
             self.assertNotIn("15/5 minute meeting alerts", src)
             self.assertNotIn("Screen + system + calendar workers", src)
             self.assertNotIn(

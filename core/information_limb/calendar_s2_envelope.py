@@ -12,6 +12,7 @@ from typing import Any
 
 
 SOURCE_KIND = "calendar.event"
+# Source-scoped schema naming: canonical S2 envelope serialized for Calendar v1.
 SCHEMA_VERSION = "calendar.s2.v1"
 
 CANONICAL_S2_REQUIRED_FIELDS = frozenset(

@@ -424,6 +424,11 @@ Calendar v1 uses the canonical S2 Body Bus envelope without abbreviation. All
 fields required by the S2 provenance and Body Bus mapping are mandatory for
 Calendar v1.
 
+Calendar v1 uses source-scoped schema naming:
+`schema_version="calendar.s2.v1"` means the canonical S2 envelope serialized for
+`calendar.event`. Future information limbs should use the same `{source}.s2.v1`
+convention unless S2 itself revises the base envelope.
+
 Mandatory canonical S2/Body Bus fields:
 
 - `ingest_record_id`;
