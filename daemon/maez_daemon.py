@@ -14,11 +14,13 @@ import re
 import os
 import signal
 import socket
+import subprocess
 import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 # Decision 26: load ordinary config first, then credentials through the
 # dedicated loader before importing surfaces that read os.environ.
@@ -29,6 +31,7 @@ try:
         credential_health as _credential_health,
         load_ordinary_config_for_process as _load_ordinary_config_for_process,
         load_secrets_for_process as _load_secrets_for_process,
+        sanitize_env,
     )
 
     _load_ordinary_config_for_process()
@@ -965,6 +968,56 @@ class MaezDaemon:
             )
         return self._camera_presence_state
 
+    def _run_presence_probe(self, *, timeout_s: float):
+        """Run native camera detection in a killable child process."""
+        cmd = [sys.executable, "-m", "skills.presence_perception", "--json-once"]
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(BASE_DIR),
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                env=sanitize_env(),
+            )
+        except subprocess.TimeoutExpired:
+            return SimpleNamespace(
+                success=False,
+                presence_detected=False,
+                confidence=0.0,
+                error="detector_timeout",
+            )
+        except Exception:
+            return SimpleNamespace(
+                success=False,
+                presence_detected=False,
+                confidence=0.0,
+                error="detector_error",
+            )
+
+        if proc.returncode != 0:
+            return SimpleNamespace(
+                success=False,
+                presence_detected=False,
+                confidence=0.0,
+                error="detector_error",
+            )
+        try:
+            payload = json.loads(proc.stdout.strip())
+        except Exception:
+            return SimpleNamespace(
+                success=False,
+                presence_detected=False,
+                confidence=0.0,
+                error="detector_error",
+            )
+        return SimpleNamespace(
+            success=bool(payload.get("success")),
+            presence_detected=bool(payload.get("presence_detected")),
+            confidence=float(payload.get("confidence") or 0.0),
+            error=str(payload.get("error") or ""),
+        )
+
     def _observe_presence_bounded(self) -> CameraPresenceState:
         """Run camera presence detection without blocking the reasoning loop."""
         self._camera_presence_state = self._camera_presence_state.with_freshness()
@@ -979,10 +1032,8 @@ class MaezDaemon:
         result_holder: dict[str, object | None] = {"value": None}
 
         def _call() -> None:
-            from skills.presence_perception import observe as presence_observe
-
-            self._presence_native_initialized = True
-            result_holder["value"] = presence_observe()
+            child_timeout_s = max(0.5, timeout_s - 0.5)
+            result_holder["value"] = self._run_presence_probe(timeout_s=child_timeout_s)
 
         if not self._presence_worker.submit(_call):
             return self._presence_unavailable("presence observation worker unavailable", token=token)

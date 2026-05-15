@@ -655,13 +655,19 @@ load-bearing contract, not aspirational bullet points.
 Required lifecycle primitives:
 
 - native detector calls run only inside `BoundedSingletonWorker`;
+- native detector calls run in a killable child process; the daemon receives
+  content-free JSON only;
+- child-process environments are sanitized through Decision 26
+  `sanitize_env()`;
 - reasoning loop uses bounded submission and `join(timeout=...)` only for
   within-cycle waiting;
 - daemon stop uses `BoundedSingletonWorker.shutdown(timeout=...)`, not
   `join(timeout=...)`, so stale callers cannot submit after shutdown begins;
 - timeout result is `sensor_unavailable`, never absence;
-- MediaPipe detector is process-lifetime and closed during daemon shutdown;
-- OpenCV runtime cleanup runs during daemon shutdown;
+- MediaPipe/OpenCV native state is not initialized inside the long-lived daemon
+  process during v1 observation;
+- any child-process MediaPipe/OpenCV native state is released before the child
+  exits, or killed by the bounded subprocess timeout;
 - memory and surface shutdown hooks complete before signal-driven process exit;
 - signal-driven stop preserves the existing shutdown ladder through
   `logging.shutdown()` and `os._exit(0)`;
@@ -669,8 +675,9 @@ Required lifecycle primitives:
 
 Shutdown semantics are bounded best-effort, not native cancellation.
 `BoundedSingletonWorker.shutdown(timeout=...)` closes the submission gate before
-waiting. Python cannot cancel a wedged in-flight MediaPipe/OpenCV call. If the
-worker does not finish within timeout, daemon shutdown must:
+waiting. Python cannot cancel a wedged in-flight MediaPipe/OpenCV call inside
+the daemon process, so v1 isolates that native work in a killable child process.
+If the worker or child does not finish within timeout, daemon shutdown must:
 
 - record/log `last_error_class=native_shutdown_timeout`;
 - call presence native cleanup best-effort;
@@ -684,7 +691,7 @@ Shutdown ladder inherited from the daemon-shutdown recovery:
 stop requested
 -> mark daemon not running
 -> stop background bounded workers with shutdown(timeout)
--> close native presence resources
+-> close or kill native presence child work
 -> stop Telegram/surface/websocket/health surfaces
 -> close memory/native clients
 -> remove pid
@@ -693,7 +700,9 @@ stop requested
 ```
 
 The v1 implementation must not call native camera detection directly inside the
-reasoning loop.
+reasoning loop, and the daemon must not import the native detector for ordinary
+observation. The detector boundary is: daemon bounded worker -> sanitized
+subprocess -> content-free JSON result -> `CameraPresenceState`.
 
 ---
 

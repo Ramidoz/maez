@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 import threading
-import sys
 import unittest
 from unittest.mock import patch
 
@@ -46,10 +45,10 @@ def _daemon_with_state():
 
 
 class CameraPresenceDaemonAdapterTests(unittest.TestCase):
-    def _with_fake_observe(self, snap):
-        module = ModuleType("skills.presence_perception")
-        module.observe = lambda: snap
-        return patch.dict(sys.modules, {"skills.presence_perception": module})
+    def _with_fake_probe(self, snap):
+        from daemon.maez_daemon import MaezDaemon
+
+        return patch.object(MaezDaemon, "_run_presence_probe", return_value=snap)
 
     def test_successful_detection_maps_to_present_state(self):
         from daemon.maez_daemon import MaezDaemon
@@ -57,7 +56,7 @@ class CameraPresenceDaemonAdapterTests(unittest.TestCase):
         daemon = _daemon_with_state()
         snap = SimpleNamespace(success=True, presence_detected=True, confidence=0.91)
 
-        with self._with_fake_observe(snap):
+        with self._with_fake_probe(snap):
             state = MaezDaemon._observe_presence_bounded(daemon)
 
         self.assertIs(state, daemon._camera_presence_state)
@@ -71,7 +70,7 @@ class CameraPresenceDaemonAdapterTests(unittest.TestCase):
         daemon = _daemon_with_state()
         snap = SimpleNamespace(success=True, presence_detected=False, confidence=0.0)
 
-        with self._with_fake_observe(snap):
+        with self._with_fake_probe(snap):
             state = MaezDaemon._observe_presence_bounded(daemon)
 
         self.assertEqual(state.presence_state, "absent")
@@ -89,7 +88,7 @@ class CameraPresenceDaemonAdapterTests(unittest.TestCase):
             error="face detection model unavailable: /tmp/secret/blaze_face.tflite",
         )
 
-        with self._with_fake_observe(snap):
+        with self._with_fake_probe(snap):
             state = MaezDaemon._observe_presence_bounded(daemon)
 
         self.assertIs(state, daemon._camera_presence_state)
@@ -117,7 +116,7 @@ class CameraPresenceDaemonAdapterTests(unittest.TestCase):
         daemon._shutdown_started.set()
         snap = SimpleNamespace(success=True, presence_detected=True, confidence=0.91)
 
-        with self._with_fake_observe(snap):
+        with self._with_fake_probe(snap):
             state = MaezDaemon._observe_presence_bounded(daemon)
 
         self.assertEqual(state.presence_state, "unknown")

@@ -1,4 +1,5 @@
 import importlib
+import json
 import os
 import sys
 import types
@@ -80,6 +81,29 @@ class CameraPresenceCameraSelectionTests(unittest.TestCase):
 
         self.assertTrue(snapshot.success)
         self.assertEqual([1], opened_indices)
+
+    def test_json_once_cli_emits_content_free_snapshot(self):
+        from skills import presence_perception
+
+        module = importlib.reload(presence_perception)
+        snapshot = module.PresenceSnapshot(
+            presence_detected=False,
+            confidence=0.0,
+            success=True,
+        )
+
+        with patch.object(module, "observe", return_value=snapshot):
+            payload = json.loads(module.observe_json_once())
+
+        self.assertEqual(
+            {
+                "success": True,
+                "presence_detected": False,
+                "confidence": 0.0,
+                "error": "",
+            },
+            payload,
+        )
 
 
 if __name__ == "__main__":

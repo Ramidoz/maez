@@ -12,7 +12,9 @@ Returns PresenceSnapshot with anonymous presence state only.
 """
 
 import logging
+import json
 import os
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -216,6 +218,20 @@ def observe() -> PresenceSnapshot:
         )
 
 
+def observe_json_once() -> str:
+    """Return a content-free one-shot observation for daemon subprocess use."""
+    snap = observe()
+    return json.dumps(
+        {
+            "success": bool(snap.success),
+            "presence_detected": bool(snap.presence_detected),
+            "confidence": float(snap.confidence or 0.0),
+            "error": snap.error or "",
+        },
+        separators=(",", ":"),
+    )
+
+
 def shutdown() -> None:
     """Release persistent native presence resources during daemon stop."""
     global _detector
@@ -259,4 +275,10 @@ def test():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    if "--json-once" in sys.argv:
+        try:
+            print(observe_json_once())
+        finally:
+            shutdown()
+        raise SystemExit(0)
     test()

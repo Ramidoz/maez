@@ -36,6 +36,13 @@ class PresenceObserveBoundedTests(unittest.TestCase):
         self.assertIn("self._observe_presence_bounded()", loop)
         self.assertNotIn("presence_observe()", loop)
 
+    def test_daemon_uses_killable_subprocess_for_native_camera_probe(self):
+        self.assertIn("def _run_presence_probe(self", self.src)
+        self.assertIn('"-m", "skills.presence_perception"', self.src)
+        self.assertIn("--json-once", self.src)
+        self.assertIn("subprocess.run(", self.src)
+        self.assertIn("env=sanitize_env()", self.src)
+
     def test_shutdown_closes_presence_worker(self):
         stop_body = self.src.split("def stop(self, signum=None, frame=None):", 1)[1]
 
