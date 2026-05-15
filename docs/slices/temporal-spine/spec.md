@@ -1,7 +1,7 @@
 # Slice S3: Temporal Spine v1
 
-**Status:** DRAFT. Built from [`diagnostic.md`](diagnostic.md). No code has
-landed from this packet.
+**Status:** CANONICAL. Decision 29 / ADR 0034. Built from
+[`diagnostic.md`](diagnostic.md). No code has landed from this packet.
 
 **Classification:** covenant-shaped memory substrate slice. S3 operationalizes
 invariant #1, Time as Biography, by giving Maez one shared temporal vocabulary
@@ -25,6 +25,10 @@ for event time, ingest time, owner-local day boundaries, and validity windows.
   ADR 0033, Calendar temporal provenance.
 - [`docs/adr/0019-lived-memory-architecture.md`](../../adr/0019-lived-memory-architecture.md) -
   lived memory with temporal episodes and relationship validity windows.
+- [`reviews/spec-codex-panel.md`](reviews/spec-codex-panel.md) - Codex
+  engineering panel, folded.
+- [`reviews/spec-claude-council.md`](reviews/spec-claude-council.md) - Claude
+  covenant council, folded and verified.
 
 ---
 

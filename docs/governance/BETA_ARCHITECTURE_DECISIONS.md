@@ -1852,6 +1852,155 @@ See [`docs/adr/0033-calendar-v1-s2-bounded-ingest.md`](../adr/0033-calendar-v1-s
 
 ---
 
+## Decision 29 — Temporal Spine v1: UTC storage, owner-local human days
+
+### The decision
+
+Temporal Spine v1 is Maez's shared temporal contract.
+
+The load-bearing rule is:
+
+> Store instants in UTC; interpret human days in the bonded user's timezone.
+
+S3 v1 gives Maez one clock contract across TRF, M1, relationship validity,
+Calendar provenance, future chapter/anniversary work, and future temporal-aware
+body or information-limb slices.
+
+### Why this decision exists
+
+Before S3, Maez already had several local clocks:
+
+- TRF searched owner-local windows for `last week`, `yesterday`,
+  `this morning`, and `earlier today`;
+- M1 promoted lived episodes with `occurred_at`, promotion windows, and
+  owner-local daily caps;
+- the relationship graph used validity windows;
+- Calendar v1 preserved provider event time as external provenance;
+- other stores used `ts`, `timestamp`, `created_at`, epoch seconds, JSON
+  boundaries, and local strings.
+
+Those local clocks were useful but not a substrate. Future organs would have
+had to rediscover timezone handling, DST boundaries, UTC storage, content-free
+diagnostics, and external-source boundaries. S3 makes the shared contract
+explicit before the next temporal organ builds on it.
+
+### What S3 v1 requires
+
+- **UTC storage, owner-local interpretation.** Stored instants normalize to UTC.
+  Human-day concepts such as `today`, `yesterday`, and `last week` use the
+  bonded user's configured timezone.
+- **Closed temporal vocabulary.** S3 admits S2's canonical temporal envelope
+  fields: `event_at`, `ingested_at`, `observed_at`, `received_at`,
+  `expires_at`, `deletion_observed_at`, `change_observed_at`, `valid_from`, and
+  `valid_to`.
+- **Vocabulary versioning.** Future S3 versions may add closed Literal members
+  but may not silently rename or remove existing members.
+- **Computed owner-local date.** `owner_local_date` is computed from an instant
+  and the current owner timezone. It is not persisted as durable truth.
+- **Dual temporal window surface.** `TemporalWindow.start` / `end` are
+  owner-local for TRF result compatibility; `start_utc` / `end_utc` are the
+  only store-facing boundaries.
+- **No raw timestamp string truth.** Store-facing comparisons use canonical UTC
+  instants, not mixed raw ISO strings or local-offset strings.
+- **RelationshipGraph ownership.** Existing graph validity semantics remain
+  owned by `RelationshipGraph`; S3 does not reinterpret, migrate, or rewrite
+  graph validity rows.
+- **Deferred-store import defense.** `core.time.temporal_spine` must not import
+  deferred stores at module load time.
+- **Operator-only health.** `/health -> temporal_spine` is content-free and
+  operator-authenticated. It must not be forwarded to public state endpoints.
+- **Aggregation-as-fingerprint limit.** Sidecar samples may carry aggregate
+  current counter values but may not compute/store per-interval counter deltas
+  as behavioral history in v1.
+- **Voice authority stays outside S3.** S3 does not author temporal phrasing.
+  TRF owns current anchor voice; future Calendar-backed anchors must inherit
+  Calendar v1's `calendar_voice_guard` by name.
+
+### What this does not decide
+
+- It does not implement `core.time.temporal_spine`.
+- It does not migrate every timestamp column.
+- It does not add exact-date, weekday, month/year, event-linked, chapter, or
+  anniversary recall.
+- It does not add Calendar-backed temporal anchors.
+- It does not cross Calendar OAuth or any external account gate.
+- It does not create a new memory promotion path.
+- It does not make external-source time into lived memory.
+- It does not detect system/NTP clock skew in v1.
+- It does not change runtime behavior by itself.
+
+### Named disagreements preserved
+
+S3 records six choices so future temporal organs inherit the reasoning, not
+only the result:
+
+- **IANA timezone audience.** `timezone_name` is allowed in
+  operator-authenticated health, not public state. S3 chooses audience binding
+  over reducing timezone granularity because DST debugging needs the IANA label.
+- **S2 vocabulary inheritance.** S3 admits S2 temporal envelope fields into the
+  closed instant vocabulary. The alternative would force canonical S2 callers
+  to adapt to S3 and invert precedence.
+- **Import-graph defense.** S3 uses structural negative assertions for deferred
+  stores, not prose alone.
+- **Per-call owner timezone resolution.** S3 resolves timezone per call in v1.
+  Caching is a future measured optimization.
+- **Clock-skew deferral.** S3 v1 trusts system UTC and names skew detection as
+  out of scope. A useful skew signal needs separate content-free/audience-tier
+  review.
+- **Decision 4 naming.** S3 names the relational/personological boundary now
+  because future event-anchored recall is where that line re-enters.
+
+### The invariant
+
+> Maez may speak in the user's day, but Maez stores and compares instants in the
+> global clock.
+
+### Related decisions
+
+- Decision 2 — third-party consent tiers constrain future event-anchored
+  temporal work.
+- Decision 4 — the Anna Question keeps event anchors from becoming third-party
+  person-models.
+- Decision 19 / ADR 0019 — lived-memory episodes and relationship graph are the
+  existing temporal stores S3 wraps rather than replaces.
+- Decision 25 / ADR 0030 — M1 promotion stays biography; S3 does not widen
+  recall.
+- Decision 27 / ADR 0032 — S2 canonical envelope fields are inherited by S3.
+- Decision 28 / ADR 0033 — Calendar remains provenance; Calendar-backed anchors
+  require a separate reviewed grant.
+
+### Implementation
+
+Pre-implementation. S3 is canonical law/spec, not runtime behavior.
+
+Implementation must proceed RED-first after cooling-off:
+
+1. pure helper tests for `core.time.temporal_spine`;
+2. helper module implementation;
+3. TRF refactor tests and implementation;
+4. `/health -> temporal_spine` aggregate tests and daemon wiring;
+5. sidecar projection/red-gate tests and wiring;
+6. import-graph deferred-store defense and public-state exclusion tests;
+7. focused tests, Ruff, full suite;
+8. post-implementation both-lane review and recovery if needed.
+
+Review trail:
+
+- [`docs/slices/temporal-spine/diagnostic.md`](../slices/temporal-spine/diagnostic.md)
+  — temporal code/store inventory and recommended v1 shape.
+- [`docs/slices/temporal-spine/spec.md`](../slices/temporal-spine/spec.md)
+  — canonical S3 spec.
+- [`docs/slices/temporal-spine/reviews/spec-codex-panel.md`](../slices/temporal-spine/reviews/spec-codex-panel.md)
+  — Codex engineering panel, REVISE/RATIFY-WITH-AMENDMENTS, folded.
+- [`docs/slices/temporal-spine/reviews/spec-claude-council.md`](../slices/temporal-spine/reviews/spec-claude-council.md)
+  — Claude covenant council, REVISE, folded and verified.
+
+### ADR
+
+See [`docs/adr/0034-temporal-spine-v1.md`](../adr/0034-temporal-spine-v1.md).
+
+---
+
 ## Open questions and deferred decisions
 
 This section tracks architectural questions that have been raised but not yet resolved. They are not blockers for Track A, but they matter for later tracks and should be picked up when the context is right.
@@ -1888,4 +2037,4 @@ When a decision in this document becomes code, add a *"Implementation"* subsecti
 
 ---
 
-*Last updated: 2026-05-15 — Decision 28 (Calendar v1 S2-Bounded Ingest: Calendar is provenance, not Maez's lived schedule) appended after diagnostic, Codex engineering panel, Claude covenant council, two folds, and focused closure verification. Prior update: 2026-05-14, Decision 27 (Contextual Integrity at Ingest: external information is provenance first, never biography by default). Earlier: 2026-05-14, Decision 26 (Daemon Credential Hygiene), Decision 25 (M1 Lived-Episode Promotion), and Decision 24 (Body Topology).*
+*Last updated: 2026-05-15 — Decision 29 (Temporal Spine v1: UTC storage, owner-local human days) appended after diagnostic, Codex engineering panel, Claude covenant council, two folds, and focused closure verification. Prior update: 2026-05-15, Decision 28 (Calendar v1 S2-Bounded Ingest: Calendar is provenance, not Maez's lived schedule). Earlier: 2026-05-14, Decision 27 (Contextual Integrity at Ingest), Decision 26 (Daemon Credential Hygiene), Decision 25 (M1 Lived-Episode Promotion), and Decision 24 (Body Topology).*
