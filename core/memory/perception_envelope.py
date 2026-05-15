@@ -24,7 +24,7 @@ the value into the prompt at all. Stale and errored sources are still
 readable; the prompt builder degrades gracefully.
 
 Future fast-lane integration will:
-  • Add more sources (calendar, github, presence) without changing this API.
+  • Add more sources (github, presence) without changing this API.
   • Add a max-age policy per source for hard exclusion in the prompt.
 """
 
@@ -44,8 +44,9 @@ from core.perception_cache import (
 # Sources the envelope cares about for the fast lane.
 # Order is significant — it controls the order they appear in the prompt.
 # Session 11c: screen + system_state.
-# Session 11d: + calendar (third worker landed).
-ENVELOPE_SOURCES: tuple[str, ...] = ('screen', 'system_state', 'calendar')
+# Decision 28: legacy Calendar perception is not a fast-lane source. Calendar v1
+# enters through the S2-bounded information-limb path only.
+ENVELOPE_SOURCES: tuple[str, ...] = ("screen", "system_state")
 
 
 @dataclass
@@ -59,7 +60,7 @@ class EnvelopeSource:
     version: int
 
     @classmethod
-    def from_entry(cls, name: str, entry: Optional[CacheEntry]) -> 'EnvelopeSource':
+    def from_entry(cls, name: str, entry: Optional[CacheEntry]) -> "EnvelopeSource":
         if entry is None:
             return cls(
                 name=name,
@@ -95,15 +96,11 @@ class PerceptionEnvelope:
 
     @property
     def screen(self) -> EnvelopeSource:
-        return self.sources['screen']
+        return self.sources["screen"]
 
     @property
     def system_state(self) -> EnvelopeSource:
-        return self.sources['system_state']
-
-    @property
-    def calendar(self) -> EnvelopeSource:
-        return self.sources['calendar']
+        return self.sources["system_state"]
 
     def get(self, name: str) -> Optional[EnvelopeSource]:
         return self.sources.get(name)
@@ -120,7 +117,7 @@ def build_envelope(cache: PerceptionCache) -> PerceptionEnvelope:
     t0 = time.perf_counter()
     out = PerceptionEnvelope()
     for name in ENVELOPE_SOURCES:
-        entry = cache.get(name)              # cache.get is read-only and instant
+        entry = cache.get(name)  # cache.get is read-only and instant
         out.sources[name] = EnvelopeSource.from_entry(name, entry)
     out.built_at = time.time()
     out.build_ms = int((time.perf_counter() - t0) * 1000)

@@ -4,14 +4,15 @@
 """
 iphone_ingest.py — Accept structured signals from iOS Shortcuts.
 
-Maez uses these to know the owner better over time: location, calendar, health,
-focus mode, battery, currently-playing music, workouts, manual notes.
+Maez uses these to know the owner better over time: location, health, focus
+mode, battery, currently-playing music, workouts, manual notes.
 
 Auth: shared secret in X-Maez-Token header
 (MAEZ_IPHONE_INGEST_TOKEN in config/secrets.local.env or systemd credentials).
 Store: logs/signals/YYYY-MM-DD.jsonl — one line per signal, for daemon to
 pick up and fold into context / memory.
 """
+
 from __future__ import annotations
 
 import hmac
@@ -27,53 +28,47 @@ logger = logging.getLogger("maez.iphone")
 
 try:
     from core.infra import paths as _paths
+
     SIGNALS_DIR = _paths.logs_dir() / "signals"
 except Exception:
-    SIGNALS_DIR = (
-        Path(__file__).resolve().parent.parent
-        / "logs" / "signals"
-    )
+    SIGNALS_DIR = Path(__file__).resolve().parent.parent / "logs" / "signals"
 SIGNALS_LOCK = threading.Lock()
 MAX_SIGNAL_BYTES = 64 * 1024  # reject oversized payloads
 
 # Narrow set of signal kinds we accept. Keeps schema tight, rejects drift.
-VALID_KINDS = frozenset({
-    # Rhythm & presence (the big 3 — highest signal)
-    "calendar",         # {title, start, end?, location?}
-    "location",         # {lat, lon, place?, arrived?: true|false}
-    "focus_mode",       # {mode: "work"|"sleep"|"dnd"|"personal"|"off", active: bool}
-    "arrive_home",      # {}
-    "leave_home",       # {}
-    "arrive_work",      # {}
-    "leave_work",       # {}
-
-    # Body state (warmth & care)
-    "sleep",            # {bedtime, wake, duration_hours, quality?}
-    "workout",          # {type, duration_min, distance_km?, calories?}
-    "health",           # {steps?, heart_rate?, active_energy?}
-    "heart_rate_spike", # {bpm, context?}  — one-shot, not continuous
-    "mindfulness",      # {duration_min, app?}
-
-    # Inner life (user-initiated, highest signal per byte)
-    "manual_note",      # {text}
-    "mood_check",       # {rating: 1-5, emoji?, note?}
-    "intention",        # {when: "morning"|"evening", text}
-    "reflection",       # {text}  — longer-form end-of-day
-
-    # Context (ambient tone)
-    "weather",          # {conditions, temp_c, place}
-    "commute",          # {mode: "drive"|"transit"|"walk", duration_min, from?, to?}
-    "with_people",      # {names: [...]}  — manual tagging
-    "reading",          # {title, author?, highlight?}
-    "media_context",    # {kind: "podcast"|"audiobook", title, app?}
-
-    # Lower signal (keep for completeness)
-    "battery",          # {level: 0-100, charging: bool}
-    "now_playing",      # {title, artist?, app?}
-
-    # Escape hatch
-    "custom",           # {name, ...}
-})
+VALID_KINDS = frozenset(
+    {
+        # Rhythm & presence (the big 3 — highest signal)
+        "location",  # {lat, lon, place?, arrived?: true|false}
+        "focus_mode",  # {mode: "work"|"sleep"|"dnd"|"personal"|"off", active: bool}
+        "arrive_home",  # {}
+        "leave_home",  # {}
+        "arrive_work",  # {}
+        "leave_work",  # {}
+        # Body state (warmth & care)
+        "sleep",  # {bedtime, wake, duration_hours, quality?}
+        "workout",  # {type, duration_min, distance_km?, calories?}
+        "health",  # {steps?, heart_rate?, active_energy?}
+        "heart_rate_spike",  # {bpm, context?}  — one-shot, not continuous
+        "mindfulness",  # {duration_min, app?}
+        # Inner life (user-initiated, highest signal per byte)
+        "manual_note",  # {text}
+        "mood_check",  # {rating: 1-5, emoji?, note?}
+        "intention",  # {when: "morning"|"evening", text}
+        "reflection",  # {text}  — longer-form end-of-day
+        # Context (ambient tone)
+        "weather",  # {conditions, temp_c, place}
+        "commute",  # {mode: "drive"|"transit"|"walk", duration_min, from?, to?}
+        "with_people",  # {names: [...]}  — manual tagging
+        "reading",  # {title, author?, highlight?}
+        "media_context",  # {kind: "podcast"|"audiobook", title, app?}
+        # Lower signal (keep for completeness)
+        "battery",  # {level: 0-100, charging: bool}
+        "now_playing",  # {title, artist?, app?}
+        # Escape hatch
+        "custom",  # {name, ...}
+    }
+)
 
 
 def _token_ok(provided: str | None) -> bool:

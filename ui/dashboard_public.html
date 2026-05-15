@@ -2349,14 +2349,14 @@ html, body {
     // Perception branch
     { id: 'screen',   label: 'screen',   status: 'built', note: 'Qwen2.5-VL-3B vision analysis every 60s, served by a separate llama-server-vision process on port 8081 (~4.5 GB VRAM). Structured ACTIVITY / APPLICATION / DETAIL.', parent: 'percept' },
     { id: 'face',     label: 'face',     status: 'built', note: 'MediaPipe BlazeFace + dlib recognition. the owner enrolled with 20 reference frames.', parent: 'percept' },
-    { id: 'calendar', label: 'calendar', status: 'built', note: 'Google Calendar OAuth2, 8-hour lookahead, 15/5 minute meeting alerts.', parent: 'percept' },
+    { id: 'calendar', label: 'calendar', status: 'v1-disabled', note: 'Calendar v1 is S2-bounded and disabled until operator OAuth onboarding; no proactive alerts.', parent: 'percept' },
 
     // Evolution branch
     { id: 'proposal', label: 'proposals', status: 'proven', note: 'Daemon-native proposals generated from critique path every 20 cycles. Async worker. Currently stalled since April 9 — the self-modification rail needs a fix. Fixing it is the 11w priority.', parent: 'evol' },
     { id: 'wdog',     label: 'watchdog',  status: 'proven', note: '20–30 cycle regression window. Auto-rollback if unique insight rate drops.', parent: 'evol' },
 
     // Fast-lane branch
-    { id: 'cache',    label: 'percept cache', status: 'staging', note: 'Screen + system + calendar workers feed a shared in-memory cache.', parent: 'fast' },
+    { id: 'cache',    label: 'percept cache', status: 'staging', note: 'Screen + system workers feed a shared in-memory cache; legacy calendar worker disabled.', parent: 'fast' },
     { id: 'router',   label: 'router',        status: 'staging', note: 'Local-first with policy table. Guest scope pinned local-only.', parent: 'fast' },
     { id: 'redactor', label: 'cloud redactor',status: 'staging', note: 'Final defense before any cloud call: PII regex + Maez internal ID patterns.', parent: 'fast' },
     { id: 'auditlog', label: 'audit log',     status: 'staging', note: 'memory/fast_reply_audit.jsonl — metadata only, never raw content, size-rotated.', parent: 'fast' },

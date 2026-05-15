@@ -66,11 +66,13 @@ class CalendarPolicyResult:
         }
 
 
-def validate_requested_scope(scope: str) -> str:
+def validate_requested_scope(scope: str, *, allow_fallback: bool = False) -> str:
     """Return the approved scope or reject broad Calendar access."""
 
     if scope == FORBIDDEN_BROAD_SCOPE:
         raise CalendarPolicyError("calendar.readonly is forbidden in Calendar v1")
+    if scope == FALLBACK_GOOGLE_SCOPE and not allow_fallback:
+        raise CalendarPolicyError("fallback Calendar scope requires explicit escalation")
     if scope not in {DEFAULT_GOOGLE_SCOPE, FALLBACK_GOOGLE_SCOPE}:
         raise CalendarPolicyError(f"unsupported Calendar scope: {scope!r}")
     return scope
@@ -91,23 +93,25 @@ def normalize_provider_event(
 
     if selection.calendar_id != "primary":
         return _reject("non_primary_calendar", external_event_id_hash, source_revision_hash)
-    if not selection.owned:
+    if not selection.owned or not _provider_owner_evidence(event):
         return _reject("non_owned_event", external_event_id_hash, source_revision_hash)
 
     start_at = _parse_event_start(event.get("start") or {})
+    end_at = _parse_event_end(event.get("end") or {}, fallback_start=start_at)
     if start_at is None:
         return _reject("missing_start", external_event_id_hash, source_revision_hash)
 
     now_utc = _as_utc(now)
-    if start_at < now_utc:
+    horizon_end = now_utc + timedelta(days=selection.horizon_days_forward)
+    event_end = end_at or start_at
+    if event_end < now_utc:
         return _reject("before_forward_window", external_event_id_hash, source_revision_hash)
-    if start_at > now_utc + timedelta(days=selection.horizon_days_forward):
+    if start_at > horizon_end:
         return _reject("outside_forward_window", external_event_id_hash, source_revision_hash)
 
     facts = {
         "safe_title_token": _safe_token(event.get("summary")),
         "safe_location_token": _safe_token(event.get("location")),
-        "description_present": bool(event.get("description")),
         "attendee_count": len(event.get("attendees") or []),
         "provider_status": _safe_status(event.get("status")),
     }
@@ -125,12 +129,18 @@ def attendee_audit_handle(
     attendee_identity: str,
     source_instance_id: str,
     external_event_id: str,
+    purpose: str,
     hmac_key: str,
 ) -> str:
     """Return an event-lineage-scoped handle, not a people-profile key."""
 
+    if not isinstance(purpose, str) or not purpose.strip():
+        raise CalendarPolicyError("attendee HMAC purpose is required")
+    if not isinstance(hmac_key, str) or len(hmac_key) < 8:
+        raise CalendarPolicyError("attendee hmac key is missing or too short")
     material = "|".join(
         (
+            purpose.strip().lower(),
             source_instance_id.strip().lower(),
             external_event_id.strip(),
             attendee_identity.strip().lower(),
@@ -193,6 +203,17 @@ def _parse_event_start(start: dict[str, Any]) -> datetime | None:
     return None
 
 
+def _parse_event_end(end: dict[str, Any], *, fallback_start: datetime | None) -> datetime | None:
+    if not isinstance(end, dict):
+        return fallback_start
+    if isinstance(end.get("dateTime"), str):
+        return _parse_datetime(end["dateTime"])
+    if isinstance(end.get("date"), str):
+        parsed = date.fromisoformat(end["date"])
+        return datetime.combine(parsed, time.min, tzinfo=timezone.utc)
+    return fallback_start
+
+
 def _parse_datetime(value: str) -> datetime:
     normalized = value.replace("Z", "+00:00")
     parsed = datetime.fromisoformat(normalized)
@@ -203,3 +224,14 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _provider_owner_evidence(event: dict[str, Any]) -> bool:
+    organizer = event.get("organizer") or {}
+    creator = event.get("creator") or {}
+    return bool(
+        isinstance(organizer, dict)
+        and organizer.get("self") is True
+        or isinstance(creator, dict)
+        and creator.get("self") is True
+    )

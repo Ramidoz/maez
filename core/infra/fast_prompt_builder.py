@@ -52,10 +52,10 @@ from core.perception_envelope import PerceptionEnvelope, EnvelopeSource
 
 
 # Hard caps — see PROMPT BUDGET in module docstring
-RECENT_TURNS         = 4
-MAX_TURN_CHARS       = 300
+RECENT_TURNS = 4
+MAX_TURN_CHARS = 300
 MAX_PERCEPTION_CHARS = 600
-HARD_CAP_CHARS       = 6000
+HARD_CAP_CHARS = 6000
 
 
 # Compact identity baseline — the parts of the identity that don't
@@ -85,6 +85,7 @@ def compact_identity() -> str:
     sensor_clause = ""
     try:
         from core.infra import body_capabilities as _bc
+
         snap = _bc.body_capabilities()
         env = snap.get("env") or {}
         # Sensor reachability — describe what is actually present.
@@ -98,9 +99,7 @@ def compact_identity() -> str:
         if services.get("brain_8080"):
             sensors_present.append("memory")
         if sensors_present:
-            sensor_clause = (
-                f" Available signals: {', '.join(sensors_present)}."
-            )
+            sensor_clause = f" Available signals: {', '.join(sensors_present)}."
     except Exception:
         # Never break the fast-lane; if probe fails, skip the
         # sensor clause entirely (the conservative shape — claim
@@ -119,14 +118,14 @@ COMPACT_IDENTITY = compact_identity()
 
 @dataclass
 class TurnRecord:
-    role: str           # 'user' | 'maez'
+    role: str  # 'user' | 'maez'
     text: str
 
     def trimmed(self, max_chars: int = MAX_TURN_CHARS) -> str:
         t = self.text.strip()
         if len(t) <= max_chars:
             return t
-        return t[: max_chars - 1] + '…'
+        return t[: max_chars - 1] + "…"
 
 
 @dataclass
@@ -145,17 +144,20 @@ def _format_screen(src: EnvelopeSource) -> Optional[str]:
         return None
     v = src.value
     # Tolerate either a ScreenObservation dataclass or a stub with the same fields
-    activity    = getattr(v, 'activity',    '') or ''
-    application = getattr(v, 'application', '') or ''
-    detail      = getattr(v, 'detail',      '') or ''
-    focus_level = getattr(v, 'focus_level', '') or ''
+    activity = getattr(v, "activity", "") or ""
+    application = getattr(v, "application", "") or ""
+    detail = getattr(v, "detail", "") or ""
+    focus_level = getattr(v, "focus_level", "") or ""
     age_s = max(0, src.age_ms // 1000)
     tag = src.freshness_state.upper()
     bits = []
-    if application: bits.append(f"app={application}")
-    if focus_level: bits.append(f"focus={focus_level}")
-    if activity:    bits.append(f"activity={activity}")
-    if detail and detail.lower() != 'none':
+    if application:
+        bits.append(f"app={application}")
+    if focus_level:
+        bits.append(f"focus={focus_level}")
+    if activity:
+        bits.append(f"activity={activity}")
+    if detail and detail.lower() != "none":
         bits.append(f"detail={detail}")
     body = " | ".join(bits) if bits else "(no fields)"
     return f"  screen        [{tag} {age_s}s ago] {body}"
@@ -165,8 +167,9 @@ def _format_system_state(src: EnvelopeSource) -> Optional[str]:
     if not src.is_usable:
         return None
     v = src.value
+
     # core.perception.snapshot returns a TypedDict; tolerate dict access
-    def g(*path, default='?'):
+    def g(*path, default="?"):
         cur = v
         for p in path:
             try:
@@ -174,56 +177,29 @@ def _format_system_state(src: EnvelopeSource) -> Optional[str]:
             except (KeyError, TypeError, IndexError):
                 return default
         return cur
+
     age_s = max(0, src.age_ms // 1000)
     tag = src.freshness_state.upper()
-    cpu_pct  = g('cpu', 'percent', default='?')
-    ram_pct  = g('ram', 'percent', default='?')
-    disk_pct = g('disk', 'percent', default='?')
-    gpu      = v.get('gpu') if isinstance(v, dict) else getattr(v, 'gpu', None)
+    cpu_pct = g("cpu", "percent", default="?")
+    ram_pct = g("ram", "percent", default="?")
+    disk_pct = g("disk", "percent", default="?")
+    gpu = v.get("gpu") if isinstance(v, dict) else getattr(v, "gpu", None)
     parts = [f"cpu={cpu_pct}%", f"ram={ram_pct}%", f"disk={disk_pct}%"]
     if isinstance(gpu, dict):
-        gpu_util = gpu.get('utilization_pct', '?')
-        gpu_temp = gpu.get('temperature_c',   '?')
+        gpu_util = gpu.get("utilization_pct", "?")
+        gpu_temp = gpu.get("temperature_c", "?")
         parts.append(f"gpu={gpu_util}% {gpu_temp}C")
-    return f"  system_state  [{tag} {age_s}s ago] " + ' '.join(parts)
+    return f"  system_state  [{tag} {age_s}s ago] " + " ".join(parts)
 
 
 def _format_calendar(src: EnvelopeSource) -> Optional[str]:
-    """Render a usable calendar source as one or two compact lines."""
-    if not src.is_usable:
-        return None
-    v = src.value
-    age_s = max(0, src.age_ms // 1000)
-    tag = src.freshness_state.upper()
+    """Legacy Calendar snapshots are never prompt-formatted.
 
-    # CalendarSnapshot has .events (list), .current_event, .next_event
-    events = getattr(v, 'events', None) or []
-    current = getattr(v, 'current_event', None)
-    next_ev = getattr(v, 'next_event', None)
-
-    if not events and current is None and next_ev is None:
-        return f"  calendar      [{tag} {age_s}s ago] (nothing scheduled)"
-
-    bits = []
-    if current is not None:
-        title = getattr(current, 'title', '?')
-        bits.append(f"now={title}")
-    if next_ev is not None and next_ev is not current:
-        title = getattr(next_ev, 'title', '?')
-        mins = getattr(next_ev, 'minutes_until', None)
-        if isinstance(mins, (int, float)):
-            if mins < 60:
-                when = f"in {int(mins)}m"
-            else:
-                when = f"in {mins/60:.1f}h"
-            bits.append(f"next={title} ({when})")
-        else:
-            bits.append(f"next={title}")
-    if not bits and events:
-        # Fallback: just count
-        bits.append(f"{len(events)} upcoming")
-    body = " | ".join(bits) if bits else "(no parsed events)"
-    return f"  calendar      [{tag} {age_s}s ago] {body}"
+    Decision 28 routes Calendar through the S2 information-limb path only.
+    Leaving this formatter content-free prevents old envelope producers from
+    becoming a raw-title prompt tunnel.
+    """
+    return None
 
 
 def _format_perception(envelope: PerceptionEnvelope) -> tuple[str, list[str], list[str]]:
@@ -233,9 +209,8 @@ def _format_perception(envelope: PerceptionEnvelope) -> tuple[str, list[str], li
     lines: list[str] = []
 
     formatters = {
-        'screen':       _format_screen,
-        'system_state': _format_system_state,
-        'calendar':     _format_calendar,
+        "screen": _format_screen,
+        "system_state": _format_system_state,
     }
 
     for name, src in envelope.sources.items():
@@ -264,7 +239,7 @@ def _format_perception(envelope: PerceptionEnvelope) -> tuple[str, list[str], li
 
     # Trim if it overshoots the perception budget
     if len(block) > MAX_PERCEPTION_CHARS:
-        block = block[: MAX_PERCEPTION_CHARS - 1] + '…'
+        block = block[: MAX_PERCEPTION_CHARS - 1] + "…"
 
     return block, used, skipped
 
@@ -275,7 +250,7 @@ def _format_history(history: list[TurnRecord]) -> str:
     take = history[-RECENT_TURNS:]
     lines = ["conversation:"]
     for turn in take:
-        speaker = 'rohit' if turn.role == 'user' else 'maez'
+        speaker = "rohit" if turn.role == "user" else "maez"
         lines.append(f"  {speaker}: {turn.trimmed()}")
     return "\n".join(lines)
 
@@ -284,7 +259,7 @@ def build_fast_prompt(
     user_message: str,
     envelope: PerceptionEnvelope,
     history: Optional[list[TurnRecord]] = None,
-    trust_scope: str = 'rohit',
+    trust_scope: str = "rohit",
 ) -> BuiltPrompt:
     """Build the deterministic fast-lane prompt.
 
@@ -298,11 +273,11 @@ def build_fast_prompt(
     """
     history = history or []
 
-    identity_block   = "identity:\n  " + COMPACT_IDENTITY
-    scope_block      = f"scope:\n  trust_scope={trust_scope}"
+    identity_block = "identity:\n  " + COMPACT_IDENTITY
+    scope_block = f"scope:\n  trust_scope={trust_scope}"
     perception_block, used, skipped = _format_perception(envelope)
-    history_block    = _format_history(history)
-    user_block       = "current_message:\n  " + (user_message or '').strip()
+    history_block = _format_history(history)
+    user_block = "current_message:\n  " + (user_message or "").strip()
 
     sections = [identity_block, scope_block, perception_block, history_block, user_block]
     text = "\n\n".join(sections)
@@ -314,31 +289,31 @@ def build_fast_prompt(
         while len(text) > HARD_CAP_CHARS and len(trimmed_history) > 1:
             trimmed_history = trimmed_history[1:]
             history_block = _format_history(trimmed_history)
-            text = "\n\n".join([
-                identity_block, scope_block, perception_block, history_block, user_block
-            ])
+            text = "\n\n".join(
+                [identity_block, scope_block, perception_block, history_block, user_block]
+            )
             truncated = True
         # Step 2 — trim perception block
         if len(text) > HARD_CAP_CHARS:
             shrink = HARD_CAP_CHARS - (len(text) - len(perception_block)) - 4
             if shrink > 0:
-                perception_block = perception_block[:shrink] + '…'
+                perception_block = perception_block[:shrink] + "…"
             else:
                 perception_block = "perception:\n  (omitted: budget)"
-            text = "\n\n".join([
-                identity_block, scope_block, perception_block, history_block, user_block
-            ])
+            text = "\n\n".join(
+                [identity_block, scope_block, perception_block, history_block, user_block]
+            )
             truncated = True
 
     return BuiltPrompt(
         text=text,
         char_count=len(text),
         section_chars={
-            'identity':   len(identity_block),
-            'scope':      len(scope_block),
-            'perception': len(perception_block),
-            'history':    len(history_block),
-            'user':       len(user_block),
+            "identity": len(identity_block),
+            "scope": len(scope_block),
+            "perception": len(perception_block),
+            "history": len(history_block),
+            "user": len(user_block),
         },
         truncated=truncated,
         used_perception_sources=used,

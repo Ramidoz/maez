@@ -8,10 +8,12 @@ importing the daemon would start too much machinery.
 from __future__ import annotations
 
 import ast
+import os
 import re
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
@@ -129,6 +131,145 @@ class CalendarLegacyDisablementSourceTests(unittest.TestCase):
         self.assertIn("CalendarStore(", init_body)
         self.assertIn("self._calendar_mode == CalendarMode.V1", init_body)
         self.assertNotIn("calendar_observe()", init_body)
+
+    def test_iphone_ingest_rejects_legacy_calendar_signals(self):
+        from skills.iphone_ingest import ingest
+
+        with patch.dict(os.environ, {"MAEZ_IPHONE_INGEST_TOKEN": "secret"}, clear=False):
+            response, status = ingest(
+                {
+                    "kind": "calendar",
+                    "data": {
+                        "title": "Therapy with Sarah",
+                        "location": "Private clinic",
+                    },
+                },
+                provided_token="secret",
+            )
+
+        self.assertEqual(status, 400)
+        self.assertIn("unknown kind", response["error"])
+
+    def test_ambient_prompt_block_never_renders_calendar_signal_content(self):
+        from core.memory.ambient_format import _format
+
+        rendered = _format(
+            {
+                "now": "2026-05-15T12:00:00+00:00",
+                "signals_latest": {
+                    "calendar": {
+                        "timestamp": "2026-05-15T11:55:00+00:00",
+                        "data": {
+                            "title": "Therapy with Sarah",
+                            "location": "Private clinic",
+                        },
+                    }
+                },
+            }
+        )
+
+        self.assertNotIn("calendar:", rendered)
+        self.assertNotIn("Therapy with Sarah", rendered)
+        self.assertNotIn("Private clinic", rendered)
+
+    def test_legacy_calendar_cache_worker_fails_closed_without_dev_gate(self):
+        from core.perception_cache import ERROR, PerceptionCache
+        from skills.calendar_cache_worker import CalendarCacheWorker
+
+        calls = []
+        cache = PerceptionCache()
+        worker = CalendarCacheWorker(
+            cache=cache,
+            interval_s=0.01,
+            observe_timeout_s=0.01,
+            observe_fn=lambda: calls.append("called"),
+        )
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            self.assertLogs(
+                "skills.calendar_cache_worker",
+                level="WARNING",
+            ),
+        ):
+            worker.start()
+
+        self.assertEqual(calls, [])
+        self.assertIsNone(worker._thread)
+        entry = cache.get("calendar")
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.freshness_state, ERROR)
+        self.assertIn("disabled", entry.error or "")
+
+    def test_legacy_calendar_cache_default_observe_requires_dev_gate(self):
+        from skills.calendar_cache_worker import _default_observe
+
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "disabled"):
+                _default_observe()
+
+    def test_fast_lane_perception_envelope_excludes_legacy_calendar(self):
+        from core.perception_cache import PerceptionCache
+        from core.perception_envelope import ENVELOPE_SOURCES, build_envelope
+
+        cache = PerceptionCache()
+        cache.register("calendar", fresh_ms=1000, stale_ms=2000)
+        cache.set_value("calendar", object())
+
+        envelope = build_envelope(cache)
+
+        self.assertNotIn("calendar", ENVELOPE_SOURCES)
+        self.assertIsNone(envelope.get("calendar"))
+
+    def test_fast_prompt_builder_never_formats_legacy_calendar_titles(self):
+        from types import SimpleNamespace
+
+        from core.infra.fast_prompt_builder import build_fast_prompt
+        from core.perception_envelope import EnvelopeSource, PerceptionEnvelope
+
+        envelope = PerceptionEnvelope(
+            sources={
+                "calendar": EnvelopeSource(
+                    name="calendar",
+                    has_value=True,
+                    value=SimpleNamespace(
+                        current_event=SimpleNamespace(title="Therapy with Sarah"),
+                        next_event=SimpleNamespace(
+                            title="Private clinic follow-up",
+                            minutes_until=15,
+                        ),
+                        events=[object()],
+                    ),
+                    age_ms=0,
+                    freshness_state="fresh",
+                    error=None,
+                    version=1,
+                )
+            }
+        )
+
+        prompt = build_fast_prompt("hey", envelope)
+
+        self.assertNotIn("Therapy with Sarah", prompt.text)
+        self.assertNotIn("Private clinic", prompt.text)
+        self.assertNotIn("calendar", prompt.used_perception_sources)
+
+    def test_static_capability_surfaces_do_not_advertise_legacy_calendar_alerts(self):
+        for path in ("ui/dashboard_local.html", "ui/dashboard_public.html"):
+            src = _read(path)
+            self.assertNotIn("Google Calendar, 8h lookahead", src)
+            self.assertNotIn("15/5 minute meeting alerts", src)
+            self.assertNotIn("Screen + system + calendar workers", src)
+            self.assertNotIn(
+                "Screen + system + calendar workers feed a shared in-memory cache",
+                src,
+            )
+
+    def test_runtime_source_awareness_does_not_advertise_legacy_calendar_import(self):
+        source_awareness = _read("memory/source_awareness.json")
+
+        self.assertNotIn('"skills.calendar_perception"', source_awareness)
+        self.assertNotIn('"tags": [\n        "calendar"\n      ]', source_awareness)
 
 
 if __name__ == "__main__":

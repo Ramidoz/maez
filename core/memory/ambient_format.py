@@ -8,6 +8,7 @@ Kept small on purpose: every token added to every turn costs money/latency on
 the external route and compute on the local route. Inject only what actually
 changes a good response into a better-grounded one.
 """
+
 from __future__ import annotations
 
 import time
@@ -28,7 +29,8 @@ def _one_line(s: Any) -> str:
 
 
 def _humanize_signal_time(
-    signal_ts: str, reference_iso: str | None,
+    signal_ts: str,
+    reference_iso: str | None,
 ) -> str:
     """Render an ISO signal timestamp as a relative phrase against
     the ambient block's own ``now`` reference.
@@ -51,6 +53,7 @@ def _humanize_signal_time(
         return ""
     try:
         from datetime import timezone
+
         ev = datetime.fromisoformat(signal_ts.replace("Z", "+00:00"))
         if reference_iso:
             ref = datetime.fromisoformat(
@@ -75,18 +78,10 @@ def _humanize_signal_time(
             if abs_s < 3600.0:
                 minutes = max(1, int(round(abs_s / 60.0)))
                 unit = "minute" if minutes == 1 else "minutes"
-                return (
-                    f"{minutes} {unit} before now"
-                    if direction_past
-                    else f"in {minutes} {unit}"
-                )
+                return f"{minutes} {unit} before now" if direction_past else f"in {minutes} {unit}"
             hours = abs_s / 3600.0
             if hours < 1.5:
-                return (
-                    "about 1 hour before now"
-                    if direction_past
-                    else "in about 1 hour"
-                )
+                return "about 1 hour before now" if direction_past else "in about 1 hour"
             hours_int = int(round(hours))
             return (
                 f"about {hours_int} hours before now"
@@ -98,12 +93,21 @@ def _humanize_signal_time(
         from core.memory.temporal_arithmetic import (
             relative_time_phrase,
         )
-        return relative_time_phrase(ev, ref).replace(
-            "before question", "before now",
-        ).replace(
-            "after question", "from now",
-        ).replace(
-            "same day as question", "today",
+
+        return (
+            relative_time_phrase(ev, ref)
+            .replace(
+                "before question",
+                "before now",
+            )
+            .replace(
+                "after question",
+                "from now",
+            )
+            .replace(
+                "same day as question",
+                "today",
+            )
         )
     except (TypeError, ValueError, ImportError):
         return f"{signal_ts[:16]}Z"
@@ -115,6 +119,7 @@ def _format(ctx: dict[str, Any]) -> str:
     # would otherwise hallucinate. Keep these short.
     try:
         from core import paths
+
         today_iso = datetime.now().strftime("%Y-%m-%d (%A)")
         lines.append(f"Today: {today_iso}")
         lines.append(f"Your notes file: {paths.maez_notes_path()}")
@@ -128,6 +133,7 @@ def _format(ctx: dict[str, Any]) -> str:
         local_time = "?"
         try:
             import zoneinfo
+
             if tz:
                 local_time = datetime.now(zoneinfo.ZoneInfo(tz)).strftime("%a %I:%M %p %Z")
         except Exception:
@@ -144,9 +150,20 @@ def _format(ctx: dict[str, Any]) -> str:
     sigs = ctx.get("signals_latest") or {}
     # Only surface the most relevant recent signals — not everything, not old.
     shown: list[str] = []
-    for kind in ("focus_mode", "location", "mood_check", "intention",
-                 "arrive_home", "leave_home", "arrive_work", "leave_work",
-                 "workout", "calendar", "sleep", "reflection", "manual_note"):
+    for kind in (
+        "focus_mode",
+        "location",
+        "mood_check",
+        "intention",
+        "arrive_home",
+        "leave_home",
+        "arrive_work",
+        "leave_work",
+        "workout",
+        "sleep",
+        "reflection",
+        "manual_note",
+    ):
         entry = sigs.get(kind)
         if not entry:
             continue
@@ -169,8 +186,6 @@ def _format(ctx: dict[str, Any]) -> str:
             s = kind
         elif kind == "workout":
             s = f"workout: {data.get('type')} {data.get('duration_min')}min"
-        elif kind == "calendar":
-            s = f"calendar: {_one_line(data.get('title', ''))} at {data.get('start')}"
         elif kind == "sleep":
             s = f"sleep: {data.get('duration_hours')}h"
         elif kind == "reflection":

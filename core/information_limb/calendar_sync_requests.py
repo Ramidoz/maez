@@ -49,6 +49,7 @@ def build_incremental_events_request(*, calendar_id: str, sync_token: str) -> di
     return {
         "calendarId": _require_non_empty(calendar_id, "calendar id"),
         "syncToken": _require_non_empty(sync_token, "sync token"),
+        "singleEvents": True,
         "showDeleted": True,
         "fields": _FIELDS,
     }

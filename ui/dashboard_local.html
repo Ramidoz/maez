@@ -514,14 +514,14 @@ renderChecklist();
     // Perception children
     { id: 'screen',   label: 'Screen',  status: 'built', note: 'gemma4 vision every 60s.', parent: 'percept' },
     { id: 'face',     label: 'Face',    status: 'built', note: 'the owner enrolled, 20 frames.', parent: 'percept' },
-    { id: 'calendar', label: 'Calendar',status: 'built', note: 'Google Calendar, 8h lookahead.', parent: 'percept' },
+    { id: 'calendar', label: 'Calendar',status: 'v1-disabled', note: 'Calendar v1 is S2-bounded and disabled until operator OAuth onboarding.', parent: 'percept' },
 
     // Evolution
     { id: 'proposal',label: 'Proposals', status: 'proven', note: 'Daemon-native from critique path.', parent: 'evol' },
     { id: 'wdog',    label: 'Watchdog',  status: 'proven', note: '20-30 cycle regression window.', parent: 'evol' },
 
     // Fast-lane children
-    { id: 'cache',    label: 'Percept cache', status: 'staging', note: 'Screen + system + calendar workers.', parent: 'fast' },
+    { id: 'cache',    label: 'Percept cache', status: 'staging', note: 'Screen + system workers only; legacy calendar worker disabled.', parent: 'fast' },
     { id: 'router',   label: 'Backend router',status: 'staging', note: 'Local-first, policy-aware.', parent: 'fast' },
     { id: 'redactor', label: 'Cloud redactor',status: 'staging', note: 'PII + internal identifier patterns.', parent: 'fast' },
     { id: 'auditlog', label: 'Audit log',     status: 'staging', note: 'JSONL, metadata only, rotation.', parent: 'fast' },

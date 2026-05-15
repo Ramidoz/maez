@@ -84,6 +84,39 @@ class CalendarV1StoreTests(unittest.TestCase):
                     "description": "raw description must never land here",
                 },
             )
+        with self.assertRaisesRegex(CalendarStoreError, "forbidden"):
+            store.upsert_provider_mirror(
+                source_instance_id="primary",
+                external_event_id_hash="evt_hash",
+                source_revision_hash="rev_hash",
+                provider_updated_at="2026-05-15T12:00:00Z",
+                facts={
+                    "safe_title_token": "[calendar event]",
+                    "summary": "raw provider summary must never land here",
+                },
+            )
+        with self.assertRaisesRegex(CalendarStoreError, "forbidden"):
+            store.upsert_provider_mirror(
+                source_instance_id="primary",
+                external_event_id_hash="evt_hash",
+                source_revision_hash="rev_hash",
+                provider_updated_at="2026-05-15T12:00:00Z",
+                facts={
+                    "safe_title_token": "[calendar event]",
+                    "hangoutLink": "https://meet.google.example/raw",
+                },
+            )
+        with self.assertRaisesRegex(CalendarStoreError, "unknown"):
+            store.upsert_provider_mirror(
+                source_instance_id="primary",
+                external_event_id_hash="evt_hash",
+                source_revision_hash="rev_hash",
+                provider_updated_at="2026-05-15T12:00:00Z",
+                facts={
+                    "safe_title_token": "[calendar event]",
+                    "unreviewed_provider_field": "raw provider drift must never land here",
+                },
+            )
 
     def test_safe_title_and_location_tokens_cannot_carry_raw_text(self):
         from core.information_limb.calendar_store import CalendarStore, CalendarStoreError
@@ -130,10 +163,30 @@ class CalendarV1StoreTests(unittest.TestCase):
                 0
             ]
             tombstone = conn.execute(
-                "SELECT external_event_id_hash, record_state FROM calendar_tombstone_sidecar"
+                """
+                SELECT external_event_id_hash, source_handle_telemetry, retention_class, record_state
+                FROM calendar_tombstone_sidecar
+                """
             ).fetchone()
         self.assertEqual(mirror_count, 0)
-        self.assertEqual(tuple(tombstone), ("evt_hash", "tombstoned"))
+        self.assertEqual(tombstone[0], "evt_hash")
+        self.assertRegex(tombstone[1], r"^calendar_source:[0-9a-f]{64}$")
+        self.assertNotIn("primary", tombstone[1])
+        self.assertEqual(tombstone[2:], ("calendar_tombstone_sidecar", "tombstoned"))
+
+    def test_tombstone_sidecar_columns_are_content_free(self):
+        from core.information_limb.calendar_store import CalendarStore
+
+        store = CalendarStore(self.db_path)
+        store.initialize()
+
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(calendar_tombstone_sidecar)")
+            }
+
+        self.assertNotIn("source_instance_id", columns)
+        self.assertIn("retention_class", columns)
 
     def test_health_snapshot_is_aggregate_only(self):
         from core.information_limb.calendar_store import CalendarStore
