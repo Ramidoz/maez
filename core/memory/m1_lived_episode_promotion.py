@@ -315,12 +315,18 @@ class M1PromotionStore:
                 )
 
     def count_promotions_since(self, since_iso: str) -> int:
+        since = _parse_iso(since_iso).astimezone(timezone.utc)
         with closing(self._connect()) as conn:
-            row = conn.execute(
-                "SELECT COUNT(DISTINCT episode_id) AS n FROM source_index WHERE promoted_at >= ?",
-                (since_iso,),
-            ).fetchone()
-        return int(row["n"] if row is not None else 0)
+            rows = conn.execute("SELECT episode_id, promoted_at FROM source_index").fetchall()
+        counted: set[str] = set()
+        for row in rows:
+            try:
+                promoted_at = _parse_iso(str(row["promoted_at"])).astimezone(timezone.utc)
+            except Exception:
+                continue
+            if promoted_at >= since:
+                counted.add(str(row["episode_id"]))
+        return len(counted)
 
     def get_provenance(self, episode_id: str) -> dict:
         with closing(self._connect()) as conn:
@@ -528,7 +534,7 @@ class M1LivedEpisodePromoter:
         if len(unpromoted) < len([sid for sid in source_memory_ids if sid]):
             return PromotionOutcome(False, skipped_reason="partial_overlap")
 
-        now = self.now_fn()
+        now = self.now_fn().astimezone(timezone.utc)
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         if self.promotion_store.count_promotions_since(day_start.isoformat()) >= int(
             self.config.max_promotions_per_day

@@ -15,6 +15,7 @@ import unittest
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from core.memory.episodes import EpisodeStore
 from core.memory.m1_lived_episode_promotion import (
@@ -298,6 +299,32 @@ class PromotionBehaviorTests(M1PromotionTestCase):
         pending = self.sidecar.load_pending_window()
         self.assertEqual(pending.promotion_state, "deferred_rate_limited")
         self.assertEqual(pending.source_memory_ids, ["raw-cap-2"])
+
+    def test_daily_promotion_cap_counts_mixed_offset_rows_by_utc_day(self):
+        local_now = datetime(2026, 5, 15, 0, 30, tzinfo=ZoneInfo("America/Chicago"))
+        promoter = M1LivedEpisodePromoter(
+            episode_store=self.episodes,
+            promotion_store=self.sidecar,
+            config=M1Config(enabled=True, max_promotions_per_day=1),
+            now_fn=lambda: local_now,
+        )
+        self.sidecar.mark_promoted(
+            source_memory_ids=["raw-local-offset"],
+            episode_id="episode-local-offset",
+            window_id="prior-window",
+            promoted_at="2026-05-14T23:30:00-05:00",
+            provenance={},
+        )
+
+        outcome = promoter.consider_audited_exchange(
+            owner_text="remember this",
+            maez_reply="Okay.",
+            raw_memory_id="raw-cap-utc",
+            occurred_at="2026-05-15T05:30:00+00:00",
+        )
+
+        self.assertFalse(outcome.promoted)
+        self.assertEqual(outcome.skipped_reason, "rate_limited")
 
     def test_silence_flush_promotes_eligible_window_without_new_owner_message(self):
         self.promoter.consider_audited_exchange(
