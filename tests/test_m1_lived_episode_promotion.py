@@ -13,8 +13,10 @@ from __future__ import annotations
 import tempfile
 import unittest
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from core.memory.episodes import EpisodeStore
@@ -22,6 +24,7 @@ from core.memory.m1_lived_episode_promotion import (
     M1Config,
     M1LivedEpisodePromoter,
     M1PromotionStore,
+    PendingWindow,
     biography_staleness_health,
     build_structural_summary,
     marker_is_owner_authored,
@@ -76,6 +79,23 @@ class StructuralSummaryTests(unittest.TestCase):
         self.assertNotIn("Rohit said", summary)
         self.assertNotIn("Maez replied", summary)
 
+    def test_structural_summary_resolves_owner_name_from_identity(self):
+        from core import identity
+
+        with patch.dict(os.environ, {"MAEZ_OWNER_NAME": "Alex"}, clear=False):
+            identity.reload()
+            summary = build_structural_summary(
+                pair_count=1,
+                start_at="2026-05-14T18:00:00+00:00",
+                end_at="2026-05-14T18:00:00+00:00",
+                trigger="explicit_marker",
+                reason="explicit_marker",
+            )
+        identity.reload()
+
+        self.assertIn("Participants: Alex, Maez.", summary)
+        self.assertNotIn("Participants: Rohit, Maez.", summary)
+
 
 class PromotionBehaviorTests(M1PromotionTestCase):
     def test_default_config_is_disabled(self):
@@ -100,6 +120,25 @@ class PromotionBehaviorTests(M1PromotionTestCase):
         self.assertIn("Bonded Telegram exchange.", ep["summary"])
         self.assertNotIn("today we proved", ep["summary"])
         self.assertNotIn("I hear you", ep["summary"])
+
+    def test_promoted_episode_uses_identity_display_name_not_hardcoded_owner(self):
+        from core import identity
+
+        with patch.dict(os.environ, {"MAEZ_OWNER_NAME": "Alex"}, clear=False):
+            identity.reload()
+            outcome = self.promoter.consider_audited_exchange(
+                owner_text="remember this",
+                maez_reply="Okay.",
+                raw_memory_id="raw-identity",
+                occurred_at="2026-05-14T18:00:00+00:00",
+            )
+        identity.reload()
+
+        self.assertTrue(outcome.promoted)
+        ep = self.episodes.get(outcome.episode_id or "")
+        self.assertEqual(ep["title"], "Bonded conversation with Alex")
+        self.assertEqual(ep["participants"], ["Alex", "Maez"])
+        self.assertIn("Participants: Alex, Maez.", ep["summary"])
 
     def test_explicit_marker_promotes_current_exchange_not_prior_pending_turns(self):
         self.promoter.consider_audited_exchange(
@@ -270,6 +309,28 @@ class PromotionBehaviorTests(M1PromotionTestCase):
         self.assertIn("promoted_at", provenance)
         self.assertIn("window_start", provenance)
         self.assertIn("window_end", provenance)
+
+    def test_pending_window_rejects_unknown_eligibility_reason(self):
+        with self.assertRaises(ValueError):
+            PendingWindow(
+                window_id="bad-window",
+                source_memory_ids=["raw-bad"],
+                first_owner_at="2026-05-14T18:00:00+00:00",
+                last_owner_at="2026-05-14T18:00:00+00:00",
+                pair_count=1,
+                eligibility_reasons=["made_up_reason"],
+            )
+
+    def test_promote_window_rejects_unknown_promotion_reason(self):
+        with self.assertRaises(ValueError):
+            self.promoter.promote_window(
+                source_memory_ids=["raw-bad-reason"],
+                first_owner_at="2026-05-14T18:00:00+00:00",
+                last_owner_at="2026-05-14T18:00:00+00:00",
+                pair_count=1,
+                trigger="explicit_marker",
+                reason="made_up_reason",
+            )
 
     def test_daily_promotion_cap_limits_new_episodes(self):
         promoter = M1LivedEpisodePromoter(

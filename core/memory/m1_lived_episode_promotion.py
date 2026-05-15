@@ -38,6 +38,24 @@ _NEGATED_MARKERS = (
     "do not mark this",
 )
 
+VALID_ELIGIBILITY_REASONS = frozenset(
+    {
+        "explicit_marker",
+        "open_loop",
+        "correction",
+        "commitment",
+        "owner_affect",
+    }
+)
+
+VALID_PROMOTION_TRIGGERS = frozenset(
+    {
+        "explicit_marker",
+        "turn_count_boundary",
+        "silence_boundary",
+    }
+)
+
 _THIRD_PARTY_MARKER_REPORT = re.compile(
     r"\b("
     r"he|she|they|someone|somebody|"
@@ -70,6 +88,9 @@ class PendingWindow:
     promotion_state: str = "pending"
     last_flush_checked_at: str | None = None
     eligibility_reasons: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        _validate_eligibility_reasons(self.eligibility_reasons)
 
     def __repr__(self) -> str:
         return (
@@ -127,6 +148,34 @@ def _json_dumps(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
+def _owner_display_name() -> str:
+    try:
+        from core.identity import display_name
+
+        name = (display_name() or "").strip()
+    except Exception:
+        name = ""
+    return name or "Friend"
+
+
+def _validate_eligibility_reason(reason: str) -> str:
+    normalized = (reason or "").strip()
+    if normalized not in VALID_ELIGIBILITY_REASONS:
+        raise ValueError(f"invalid M1 eligibility reason: {reason!r}")
+    return normalized
+
+
+def _validate_eligibility_reasons(reasons: Sequence[str]) -> list[str]:
+    return [_validate_eligibility_reason(str(reason)) for reason in reasons]
+
+
+def _validate_promotion_trigger(trigger: str) -> str:
+    normalized = (trigger or "").strip()
+    if normalized not in VALID_PROMOTION_TRIGGERS:
+        raise ValueError(f"invalid M1 promotion trigger: {trigger!r}")
+    return normalized
+
+
 def marker_is_owner_authored(text: str) -> bool:
     """Return true for direct owner-authored marker phrases only."""
 
@@ -167,16 +216,18 @@ def build_structural_summary(
     end_at: str,
     trigger: str,
     reason: str,
+    owner_display_name: str | None = None,
 ) -> str:
+    owner_name = (owner_display_name or "").strip() or _owner_display_name()
     pair_label = "pair" if int(pair_count) == 1 else "pairs"
     if int(pair_count) == 1:
         return (
             f"Bonded Telegram exchange. 1 audited owner/Maez pair at {start_at}. "
-            f"Participants: Rohit, Maez. Owner-initiated; promoted by {reason}."
+            f"Participants: {owner_name}, Maez. Owner-initiated; promoted by {reason}."
         )[:400]
     return (
         f"Bonded Telegram exchange. {int(pair_count)} audited owner/Maez {pair_label} "
-        f"between {start_at} and {end_at}. Participants: Rohit, Maez. "
+        f"between {start_at} and {end_at}. Participants: {owner_name}, Maez. "
         f"Owner-initiated; concluded by {trigger}; promoted by {reason}."
     )[:400]
 
@@ -528,6 +579,8 @@ class M1LivedEpisodePromoter:
         reason: str,
         window_id: str = "m1-window-1",
     ) -> PromotionOutcome:
+        trigger = _validate_promotion_trigger(trigger)
+        reason = _validate_eligibility_reason(reason)
         unpromoted = self.promotion_store.filter_unpromoted(source_memory_ids)
         if not unpromoted:
             return PromotionOutcome(False, skipped_reason="duplicate_source")
@@ -542,17 +595,19 @@ class M1LivedEpisodePromoter:
             return PromotionOutcome(False, skipped_reason="rate_limited")
 
         promoted_at = now.isoformat(timespec="seconds")
+        owner_name = _owner_display_name()
         summary = build_structural_summary(
             pair_count=len(unpromoted),
             start_at=first_owner_at,
             end_at=last_owner_at,
             trigger=trigger,
             reason=reason,
+            owner_display_name=owner_name,
         )
         episode_id = self.episode_store.add(
-            title="Bonded conversation with Rohit",
+            title=f"Bonded conversation with {owner_name}",
             summary=summary,
-            participants=["Rohit", "Maez"],
+            participants=[owner_name, "Maez"],
             source_memory_ids=unpromoted,
             source_kind="telegram_exchange",
             occurred_at=first_owner_at,
