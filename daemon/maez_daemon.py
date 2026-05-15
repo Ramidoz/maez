@@ -79,7 +79,11 @@ from core.body.camera_presence_state import (
     CameraPresenceState,
     resolve_camera_presence_state,
 )
-from core.body.camera_presence_voice import answer_camera_presence_question, camera_presence_voice_health
+from core.body.camera_presence_voice import (
+    answer_camera_presence_question,
+    camera_presence_voice_health,
+)
+from core.time.temporal_spine import temporal_spine_health
 from skills.telegram_voice import TelegramVoice
 from skills.telegram_public import MaezPublicBot
 from core.action_engine import ActionEngine
@@ -432,9 +436,7 @@ class MaezDaemon:
         try:
             self.m1_promoter = M1LivedEpisodePromoter(
                 episode_store=self.lived_episodes,
-                promotion_store=M1PromotionStore(
-                    str(_lived_dir / "m1_lived_episode_promotion.db")
-                ),
+                promotion_store=M1PromotionStore(str(_lived_dir / "m1_lived_episode_promotion.db")),
                 config=M1Config(
                     enabled=os.environ.get("MAEZ_M1_LIVED_EPISODE_PROMOTION", "0") == "1"
                 ),
@@ -1053,7 +1055,9 @@ class MaezDaemon:
             result_holder["value"] = self._run_presence_probe(timeout_s=child_timeout_s)
 
         if not self._presence_worker.submit(_call):
-            return self._presence_unavailable("presence observation worker unavailable", token=token)
+            return self._presence_unavailable(
+                "presence observation worker unavailable", token=token
+            )
 
         if not self._presence_worker.join(timeout=timeout_s):
             msg = f"presence observation timed out after {timeout_s:.1f}s"
@@ -5478,6 +5482,7 @@ class MaezDaemon:
                     "calendar": self._calendar_health(),
                     "camera_presence": self._camera_presence_health(),
                     "credentials": _credential_health(),
+                    "temporal_spine": temporal_spine_health(),
                     "system": {
                         "cpu_percent": snap["cpu"]["percent"],
                         "ram_percent": snap["ram"]["percent"],

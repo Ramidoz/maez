@@ -62,6 +62,28 @@ class _FakeEpisodeStore:
         return rows[:limit]
 
 
+class _RecordingEpisodeStore(_FakeEpisodeStore):
+    def __init__(self):
+        super().__init__()
+        self.calls: list[dict] = []
+
+    def list_active_in_window(self, *, window_start: str, window_end: str, limit: int, **kwargs):
+        self.calls.append(
+            {
+                "window_start": window_start,
+                "window_end": window_end,
+                "limit": limit,
+                **kwargs,
+            }
+        )
+        return super().list_active_in_window(
+            window_start=window_start,
+            window_end=window_end,
+            limit=limit,
+            **kwargs,
+        )
+
+
 class TemporalAnchorWindowTests(unittest.TestCase):
     def test_last_week_uses_previous_completed_monday_sunday(self):
         from core.memory.temporal_anchor_recall import detect_temporal_anchor
@@ -153,6 +175,61 @@ class TemporalAnchorWindowTests(unittest.TestCase):
         self.assertNotIn("Bonded conversation with Rohit", result.brief_text)
         self.assertEqual(result.anchor_kind, "last_week")
 
+    def test_trf_passes_utc_store_bounds_not_owner_local_offsets(self):
+        from core.memory.temporal_anchor_recall import build_temporal_anchor_recall_brief
+
+        store = _RecordingEpisodeStore()
+        store.add_row(
+            "Late Sunday UTC, still Chicago last week",
+            "2026-05-11T04:30:00+00:00",
+            "inside-boundary",
+        )
+        store.add_row(
+            "Exactly at Chicago Monday boundary",
+            "2026-05-11T05:00:00+00:00",
+            "outside-boundary",
+        )
+
+        result = build_temporal_anchor_recall_brief(
+            "Do you remember last week?",
+            episode_store=store,
+            reference_time=datetime(2026, 5, 13, 22, 30, tzinfo=CHICAGO),
+        )
+
+        self.assertEqual(result.search_status, "evidence_found")
+        self.assertEqual(result.evidence_ids, ("ep-0", "inside-boundary"))
+        self.assertEqual(store.calls[0]["window_start"], "2026-05-04T05:00:00+00:00")
+        self.assertEqual(store.calls[0]["window_end"], "2026-05-11T05:00:00+00:00")
+        self.assertNotIn("-05:00", store.calls[0]["window_start"])
+        self.assertNotIn("-05:00", store.calls[0]["window_end"])
+
+    def test_temporal_spine_helper_exception_maps_to_helper_unavailable(self):
+        from core.memory.temporal_anchor_recall import build_temporal_anchor_recall_brief
+        from core.time import temporal_spine
+
+        temporal_spine._reset_diagnostics_for_tests()
+        store = _FakeEpisodeStore()
+
+        with patch(
+            "core.memory.temporal_anchor_recall.temporal_window",
+            side_effect=ValueError("synthetic temporal helper failure"),
+        ):
+            result = build_temporal_anchor_recall_brief(
+                "Do you remember yesterday?",
+                episode_store=store,
+                reference_time=datetime(2026, 5, 13, 22, 30, tzinfo=CHICAGO),
+            )
+
+        self.assertTrue(result.anchor_detected)
+        self.assertEqual(result.anchor_kind, "yesterday")
+        self.assertIsNone(result.window_start)
+        self.assertIsNone(result.window_end)
+        self.assertFalse(result.window_searched)
+        self.assertEqual(result.search_status, "helper_unavailable")
+        self.assertEqual(result.brief_text, "")
+        self.assertFalse(result.memory_absence_established)
+        self.assertEqual(temporal_spine.diagnostics_snapshot().helper_unavailable_count, 1)
+
 
 class TemporalAnchorRecallTests(unittest.TestCase):
     def test_episode_store_window_query_filters_in_sql_and_limits(self):
@@ -184,6 +261,69 @@ class TemporalAnchorRecallTests(unittest.TestCase):
             )
         self.assertEqual(len(rows), 5)
         self.assertTrue(all("Current-week" not in row["title"] for row in rows))
+
+    def test_episode_store_window_query_filters_mixed_offsets_by_canonical_utc(self):
+        from core.memory.episodes import EpisodeStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = EpisodeStore(str(Path(tmp) / "episodes.db"))
+            store.add(
+                title="Z inside",
+                summary="Z inside",
+                participants=["Rohit", "Maez"],
+                source_memory_ids=["z-inside"],
+                source_kind="telegram",
+                occurred_at="2026-05-11T04:30:00Z",
+            )
+            store.add(
+                title="UTC inside",
+                summary="UTC inside",
+                participants=["Rohit", "Maez"],
+                source_memory_ids=["utc-inside"],
+                source_kind="telegram",
+                occurred_at="2026-05-11T04:45:00+00:00",
+            )
+            store.add(
+                title="Local offset outside",
+                summary="Local offset outside",
+                participants=["Rohit", "Maez"],
+                source_memory_ids=["local-outside"],
+                source_kind="telegram",
+                occurred_at="2026-05-11T00:30:00-05:00",
+            )
+            store.add(
+                title="Local offset inside previous date",
+                summary="Local offset inside previous date",
+                participants=["Rohit", "Maez"],
+                source_memory_ids=["local-inside"],
+                source_kind="telegram",
+                occurred_at="2026-05-10T23:30:00-05:00",
+            )
+            store.add(
+                title="Naive inside",
+                summary="Naive inside",
+                participants=["Rohit", "Maez"],
+                source_memory_ids=["naive-inside"],
+                source_kind="telegram",
+                occurred_at="2026-05-11T04:50:00",
+            )
+
+            rows = store.list_active_in_window(
+                window_start="2026-05-11T04:00:00+00:00",
+                window_end="2026-05-11T05:00:00+00:00",
+                limit=10,
+            )
+
+        titles = {row["title"] for row in rows}
+        self.assertEqual(
+            titles,
+            {
+                "Z inside",
+                "UTC inside",
+                "Naive inside",
+                "Local offset inside previous date",
+            },
+        )
 
     def test_brief_returns_episodes_inside_window_without_keyword_overlap(self):
         from core.memory.temporal_anchor_recall import build_temporal_anchor_recall_brief

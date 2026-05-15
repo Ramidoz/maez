@@ -46,16 +46,19 @@ def project_health(
     m1 = lived_episodes.get("m1") or {}
     m1_staleness = lived_episodes.get("staleness") or {}
     credentials = health.get("credentials") or {}
+    temporal_spine = health.get("temporal_spine")
     heartbeat = _pick(health, ("cycle_count",))
-    heartbeat.update(_pick(
-        reasoning_loop,
-        (
-            "cycle_stalled",
-            "stage",
-            "stage_age_seconds",
-            "cycle_age_seconds",
-        ),
-    ))
+    heartbeat.update(
+        _pick(
+            reasoning_loop,
+            (
+                "cycle_stalled",
+                "stage",
+                "stage_age_seconds",
+                "cycle_age_seconds",
+            ),
+        )
+    )
     m1_sample = _pick(
         m1,
         (
@@ -65,14 +68,16 @@ def project_health(
             "invalid_promotion_trigger_rejected_count",
         ),
     )
-    m1_sample.update(_pick(
-        m1_staleness,
-        (
-            "staleness_status",
-            "newest_age_hours",
-            "active_count",
-        ),
-    ))
+    m1_sample.update(
+        _pick(
+            m1_staleness,
+            (
+                "staleness_status",
+                "newest_age_hours",
+                "active_count",
+            ),
+        )
+    )
 
     return {
         "observed_at": _utc_now(),
@@ -120,10 +125,27 @@ def project_health(
                 "rollback_enabled",
             ),
         ),
+        "temporal_spine": _pick(
+            temporal_spine or {},
+            (
+                "timezone_source",
+                "timezone_name",
+                "invalid_field_name_rejected_count",
+                "malformed_timestamp_rejected_count",
+                "naive_timestamp_assumed_utc_count",
+                "unsupported_anchor_rejected_count",
+                "helper_unavailable_count",
+            ),
+        ),
+        "temporal_spine_present": isinstance(temporal_spine, dict),
     }
 
 
-def red_gates(sample: dict[str, Any]) -> list[str]:
+def red_gates(
+    sample: dict[str, Any],
+    *,
+    previous_sample: dict[str, Any] | None = None,
+) -> list[str]:
     """Return content-free gate names that should interrupt build flow."""
 
     gates: list[str] = []
@@ -132,6 +154,7 @@ def red_gates(sample: dict[str, Any]) -> list[str]:
     camera = sample.get("camera_presence") or {}
     m1 = sample.get("m1") or {}
     credentials = sample.get("credentials") or {}
+    temporal_spine = sample.get("temporal_spine") or {}
 
     if service.get("active") not in (None, "active"):
         gates.append("maez_service_inactive")
@@ -161,8 +184,40 @@ def red_gates(sample: dict[str, Any]) -> list[str]:
 
     if credentials.get("required_present") is False:
         gates.append("credentials_missing_required")
+    if sample.get("temporal_spine_present") is False:
+        gates.append("temporal_spine_unavailable")
+    if temporal_spine.get("timezone_source") == "invalid_fallback_utc":
+        gates.append("temporal_spine_invalid_timezone_fallback")
+    if _sample_int(temporal_spine, "malformed_timestamp_rejected_count") > 0:
+        gates.append("temporal_spine_malformed_timestamp_rejected")
+    if _temporal_spine_counter_reset(sample, previous_sample):
+        gates.append("temporal_spine_counter_reset")
 
     return gates
+
+
+def _temporal_spine_counter_reset(
+    sample: dict[str, Any],
+    previous_sample: dict[str, Any] | None,
+) -> bool:
+    if not previous_sample:
+        return False
+    service = sample.get("service") or {}
+    previous_service = previous_sample.get("service") or {}
+    if not service.get("main_pid") or service.get("main_pid") != previous_service.get("main_pid"):
+        return False
+    temporal_spine = sample.get("temporal_spine") or {}
+    previous_temporal_spine = previous_sample.get("temporal_spine") or {}
+    for key in (
+        "invalid_field_name_rejected_count",
+        "malformed_timestamp_rejected_count",
+        "naive_timestamp_assumed_utc_count",
+        "unsupported_anchor_rejected_count",
+        "helper_unavailable_count",
+    ):
+        if _sample_int(temporal_spine, key) < _sample_int(previous_temporal_spine, key):
+            return True
+    return False
 
 
 def fetch_health(url: str) -> dict[str, Any]:
@@ -263,11 +318,12 @@ def run(
     deadline = time.monotonic() + duration_seconds
     samples = 0
     red: list[str] = []
+    previous_sample: dict[str, Any] | None = None
 
     while True:
         try:
             sample = project_health(fetch_health(health_url), service=service_status())
-            sample["red_gates"] = red_gates(sample)
+            sample["red_gates"] = red_gates(sample, previous_sample=previous_sample)
         except Exception as exc:
             sample = {
                 "observed_at": _utc_now(),
@@ -277,6 +333,8 @@ def run(
                 "calendar": {},
                 "m1": {},
                 "credentials": {},
+                "temporal_spine": {},
+                "temporal_spine_present": False,
                 "red_gates": ["observation_fetch_failed"],
                 "error_class": exc.__class__.__name__,
             }
@@ -288,6 +346,7 @@ def run(
             break
         if time.monotonic() >= deadline:
             break
+        previous_sample = sample
         time.sleep(interval_seconds)
 
     summary = {

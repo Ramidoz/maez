@@ -12,14 +12,20 @@ supplement to lived recall, not a replacement and not the full temporal spine.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import datetime
 import os
 import re
 import time as _time
 from typing import Literal
-from zoneinfo import ZoneInfo
 
-LOCAL_TZ = ZoneInfo("America/Chicago")
+from core.time.temporal_spine import (
+    canonical_utc,
+    canonical_utc_iso,
+    owner_timezone,
+    record_helper_unavailable,
+    temporal_window,
+)
+
 _KILL_SWITCH = "MAEZ_TEMPORAL_ANCHOR_RECALL"
 _DEFAULT_TIMEOUT_MS = 150
 _PRODUCER_VERSION = "temporal_anchor_recall.v1"
@@ -75,35 +81,16 @@ _DIRECT_MAEZ_RECALL_RE = re.compile(
 
 
 def _now_local() -> datetime:
-    return datetime.now(LOCAL_TZ)
+    return datetime.now(owner_timezone())
 
 
 def _as_local(dt: datetime | None) -> datetime:
+    zone = owner_timezone()
     if dt is None:
         return _now_local()
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=LOCAL_TZ)
-    return dt.astimezone(LOCAL_TZ)
-
-
-def _midnight(day: datetime) -> datetime:
-    return datetime.combine(day.date(), time.min, tzinfo=LOCAL_TZ)
-
-
-def _anchor_window(anchor_kind: str, reference_time: datetime) -> tuple[datetime, datetime]:
-    ref = _as_local(reference_time)
-    start_today = _midnight(ref)
-    if anchor_kind == "earlier_today":
-        return start_today, ref
-    if anchor_kind == "this_morning":
-        return start_today, datetime.combine(ref.date(), time(12, 0), tzinfo=LOCAL_TZ)
-    if anchor_kind == "yesterday":
-        end = start_today
-        return end - timedelta(days=1), end
-    if anchor_kind == "last_week":
-        this_monday = start_today - timedelta(days=start_today.weekday())
-        return this_monday - timedelta(days=7), this_monday
-    raise ValueError(f"unknown temporal anchor kind: {anchor_kind}")
+        return dt.replace(tzinfo=zone)
+    return dt.astimezone(zone)
 
 
 def detect_temporal_anchor(
@@ -125,13 +112,19 @@ def detect_temporal_anchor(
             break
     if matched_kind is None or _MEMORY_INTENT_RE.search(text) is None:
         return _empty_result(elapsed_ms=_elapsed_ms(started))
-    ref = _as_local(reference_time)
-    window_start, window_end = _anchor_window(matched_kind, ref)
+    try:
+        window = temporal_window(matched_kind, _as_local(reference_time))
+    except Exception:
+        record_helper_unavailable("temporal_helper_exception")
+        return _helper_unavailable_result(
+            anchor_kind=matched_kind,
+            elapsed_ms=_elapsed_ms(started),
+        )
     return TemporalAnchorRecallResult(
         anchor_detected=True,
         anchor_kind=matched_kind,
-        window_start=window_start,
-        window_end=window_end,
+        window_start=window.start,
+        window_end=window.end,
         window_searched=False,
         search_status="bounded_search_no_match",
         evidence_ids=(),
@@ -139,6 +132,23 @@ def detect_temporal_anchor(
         truncated=False,
         brief_text="",
         elapsed_ms=_elapsed_ms(started),
+        memory_absence_established=False,
+    )
+
+
+def _helper_unavailable_result(*, anchor_kind: str, elapsed_ms: int) -> TemporalAnchorRecallResult:
+    return TemporalAnchorRecallResult(
+        anchor_detected=True,
+        anchor_kind=anchor_kind,
+        window_start=None,
+        window_end=None,
+        window_searched=False,
+        search_status="helper_unavailable",
+        evidence_ids=(),
+        item_count=0,
+        truncated=False,
+        brief_text="",
+        elapsed_ms=elapsed_ms,
         memory_absence_established=False,
     )
 
@@ -175,7 +185,7 @@ def _parse_dt(value: object) -> datetime | None:
     if raw.endswith("Z"):
         raw = raw[:-1] + "+00:00"
     try:
-        parsed = datetime.fromisoformat(raw)
+        parsed = canonical_utc(raw, field_name="event_at")
     except ValueError:
         return None
     return _as_local(parsed)
@@ -264,8 +274,8 @@ def _rows_in_window(
     if callable(windowed):
         return list(
             windowed(
-                window_start=window_start.isoformat(),
-                window_end=window_end.isoformat(),
+                window_start=canonical_utc_iso(window_start, field_name="event_at"),
+                window_end=canonical_utc_iso(window_end, field_name="event_at"),
                 limit=max_items + 1,
                 busy_timeout_ms=timeout_ms,
             )
@@ -292,7 +302,20 @@ def build_temporal_anchor_recall_brief(
     if not detected.anchor_detected:
         return detected
     if detected.window_start is None or detected.window_end is None or detected.anchor_kind is None:
-        return _empty_result(elapsed_ms=_elapsed_ms(started), status="helper_unavailable")
+        return TemporalAnchorRecallResult(
+            anchor_detected=detected.anchor_detected,
+            anchor_kind=detected.anchor_kind,
+            window_start=None,
+            window_end=None,
+            window_searched=False,
+            search_status="helper_unavailable",
+            evidence_ids=(),
+            item_count=0,
+            truncated=False,
+            brief_text="",
+            elapsed_ms=_elapsed_ms(started),
+            memory_absence_established=False,
+        )
     if os.environ.get(_KILL_SWITCH, "1").strip() == "0":
         return TemporalAnchorRecallResult(
             anchor_detected=True,

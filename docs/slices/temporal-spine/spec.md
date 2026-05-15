@@ -1,7 +1,9 @@
 # Slice S3: Temporal Spine v1
 
 **Status:** CANONICAL. Decision 29 / ADR 0034. Built from
-[`diagnostic.md`](diagnostic.md). No code has landed from this packet.
+[`diagnostic.md`](diagnostic.md). Initial v1 implementation has landed under an
+explicit operator same-day code-start waiver; post-implementation both-lane
+review and any recovery remain required before push.
 
 **Classification:** covenant-shaped memory substrate slice. S3 operationalizes
 invariant #1, Time as Biography, by giving Maez one shared temporal vocabulary

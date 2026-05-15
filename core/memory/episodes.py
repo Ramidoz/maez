@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Sequence
 
+from core.time.temporal_spine import canonical_utc, half_open_contains
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS episodes (
     id TEXT PRIMARY KEY,
@@ -182,27 +184,27 @@ class EpisodeStore:
         ``created_at`` for older rows. Callers pass ``limit=max_items + 1`` when
         they need truncation detection without materializing the whole store.
         """
+        start_utc = canonical_utc(window_start, field_name="event_at")
+        end_utc = canonical_utc(window_end, field_name="event_at")
         with closing(self._connect()) as c:
             timeout = max(0, int(busy_timeout_ms))
             c.execute(f"PRAGMA busy_timeout = {timeout}")
             rows = c.execute(
-                "SELECT * FROM episodes "
-                "WHERE status = 'active' "
-                "AND ("
-                "  (occurred_at IS NOT NULL AND occurred_at >= ? AND occurred_at < ?) "
-                "  OR (occurred_at IS NULL AND created_at >= ? AND created_at < ?)"
-                ") "
-                "ORDER BY COALESCE(occurred_at, created_at) DESC "
-                "LIMIT ?",
-                (
-                    window_start,
-                    window_end,
-                    window_start,
-                    window_end,
-                    int(limit),
-                ),
+                "SELECT * FROM episodes WHERE status = 'active' ORDER BY created_at DESC",
             ).fetchall()
-        return [self._row_to_dict(r) for r in rows]
+        matches: list[tuple[datetime, dict]] = []
+        for row in rows:
+            item = self._row_to_dict(row)
+            raw_time = item.get("occurred_at") or item.get("created_at")
+            try:
+                if not half_open_contains(raw_time, start=start_utc, end=end_utc):
+                    continue
+                event_time = canonical_utc(raw_time, field_name="event_at")
+            except (TypeError, ValueError):
+                continue
+            matches.append((event_time, item))
+        matches.sort(key=lambda pair: pair[0], reverse=True)
+        return [item for _, item in matches[: int(limit)]]
 
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> dict:
