@@ -1336,6 +1336,167 @@ See [`docs/adr/0030-lived-episode-promotion.md`](../adr/0030-lived-episode-promo
 
 ---
 
+## Decision 26 — Daemon Credential Hygiene: keys are identity-bearing material, not ordinary config
+
+### The decision
+
+Maez treats identity-bearing credentials as a distinct secret class, not as
+ordinary configuration.
+
+Credential values move out of the initial service environment. Ordinary config
+such as model names, ports, paths, display variables, local URLs, feature flags,
+and owner-local non-secret IDs may remain ordinary config. Tokens, API keys,
+webhook secrets, shared ingest tokens, future OAuth refresh/access tokens, and
+other provider-authenticating material must use the credential-hygiene path.
+
+The load-bearing rule is:
+
+> Keys are identity-bearing material, not ordinary config.
+
+V1's staged migration is allowed because the diagnostic measured this host and
+found:
+
+```text
+runtime_assignment_visible_in_proc_environ=no
+```
+
+That finding means compatibility population into Python `os.environ` after
+process start reduces the parent daemon's easy `/proc/<pid>/environ` exposure,
+as long as secrets are absent from the initial `execve()` environment. The
+assumption is now part of the contract and must be pinned by a regression test.
+
+### What v1 requires
+
+- **Storage split.** `config/.env` remains ordinary config. Secrets move to
+  one credential file per key under systemd `$CREDENTIALS_DIRECTORY`, with
+  `config/secrets.local.env` as the `0600`, gitignored, owner-local fallback.
+- **No unit-text secrets.** Use `LoadCredential=<NAME>:<0600-local-path>` or
+  equivalent local credential references. Do not use `SetCredential=` for
+  secret values because it embeds values in unit text.
+- **Per-key precedence.** Systemd credential files win per key. The local
+  fallback may fill missing keys. `config/.env` is never a secret source.
+- **Service-scoped profiles.** The private Telegram daemon requires
+  `MAEZ_TELEGRAM_TOKEN`; the web/iPhone ingest surface requires
+  `MAEZ_IPHONE_INGEST_TOKEN` while mounted; optional providers degrade their
+  own surface without breaking the bonded private surface.
+- **Bootstrap order.** Load ordinary config, load secrets, validate the active
+  service profile, compatibility-populate `os.environ`, then import or
+  initialize secret-reading modules.
+- **Source-channel-only logging.** Health/logs may expose source channel and
+  aggregate counts. They may not list loaded secret names, values, prefixes,
+  hashes, or validity proofs.
+- **Subprocess hygiene.** Daemon child processes default to the current
+  environment minus secret-shaped names. Passing a credential to a child
+  requires an exact allowlist, a reviewed reason, and tests.
+- **Active-unit inventory.** `maez.service`, `maez-web`, subscription proxy,
+  reflection/self-dev scheduled services, backup service, and shipped templates
+  must be classified as active-migrated, active-residual-risk,
+  dormant-template-updated, dormant-residual-risk, or not-installed before
+  closure.
+- **Backup and succession.** `config/secrets.local.env` is owner-local secret
+  state: never git, encrypted-destination-only backup, and explicit restore
+  modes for state-only vs encrypted-continuity recovery.
+- **Rollback.** `MAEZ_SECRETS_DISABLE_NEW_LOADER=1` may temporarily restore
+  v0-style local env behavior for recovery. This reaccepts process-environment
+  exposure and reopens the hygiene slice; it is not a valid final state.
+
+### What this rules out
+
+- **Secrets in the initial daemon environment.** The private daemon may not
+  start with secret values inherited from a secret-bearing `EnvironmentFile=`.
+- **Global "all secrets everywhere" posture.** Each service/surface gets only
+  the credentials it requires or explicitly degrades without.
+- **Silent late failure for required bonded surfaces.** Missing private
+  Telegram credentials fail loud before Maez appears alive.
+- **Web/iPhone overclaim.** Web/iPhone credential hygiene is not closed unless
+  the web surface is migrated or explicitly named as residual risk.
+- **Subprocess tunnel.** The v1 `/proc` exposure claim cannot ignore child
+  process inheritance.
+- **Loaded-secret inventory in health/logs.** Source and aggregate state are
+  allowed; loaded key names and values are not.
+- **Connector-specific future credential loaders.** Future S2 information
+  limbs inherit Decision 26's credential interface and source-channel audit
+  posture.
+
+### Why this matters now
+
+The credential values have already been rotated. Rotation killed stale exposed
+tokens; it did not change where fresh tokens live. Before this decision, fresh
+credentials still sat in a service startup environment that process-list and
+`/proc` readers can inspect.
+
+This decision turns rotation into a real hygiene story: keys are fresh, removed
+from the initial environment, loaded through a narrow source, validated before
+the relevant service appears alive, and kept out of default child-process
+environments.
+
+It also extends a substrate pattern Maez has now used across multiple slices:
+**measure before claim**. M1 measured raw-transcript leakage and pinned
+structural summaries; daemon heartbeat measured cycle stalling; daemon shutdown
+measured lived process exit; credential hygiene measured `/proc` behavior. Any
+external assumption underwriting a behavioral or security claim should become a
+regression test, not folklore.
+
+### What this does not decide
+
+- It does not implement the secret loader.
+- It does not rotate credentials; rotation already happened as operator action.
+- It does not migrate every `os.environ.get(...)` reader in v1.
+- It does not move ordinary config into secret storage.
+- It does not add a secrets manager dependency.
+- It does not implement OAuth account connectors.
+- It does not fold or implement S2.
+- It does not rewrite git history.
+- It does not claim secrets are absent from daemon memory, memory dumps, or all
+  same-UID introspection surfaces.
+
+### The invariant
+
+> A key that proves Maez's identity to the world is part of Maez's identity
+> boundary, not just a setting.
+
+### Related decisions
+
+- Decision 22 / ADR 0023 (Hardware-failure memory backup) — credential local
+  files become owner-local secret state in backup/succession discipline.
+- Decision 24 / ADR 0029 (Body Topology) — credentials held by body and
+  information limbs inherit capability quarantine and body-boundary posture.
+- Decision 25 / ADR 0030 (M1 Lived-Episode Promotion) — carries the same
+  empirical-assumption-to-regression-test discipline.
+- Future S2 contextual-integrity decision — information-limb OAuth/account
+  credentials inherit Decision 26's interface and source-channel audit posture.
+
+### Implementation
+
+Pre-implementation. The canonical packet requires RED-first implementation of
+`core/infra/secrets.py`, per-service credential profiles, `LoadCredential=`
+source handling, `config/secrets.local.env` fallback with malformed-file
+rejection, no `.env` secret source, compatibility population, `/proc`
+regression test, source-channel-only health/logging, default-minus-secret
+subprocess env, explicit opt-in pass-through test, active/dormant unit
+inventory, backup-manifest and `.gitignore` handling, rollback flag, and live
+post-restart verification.
+
+Review trail:
+
+- [`docs/slices/daemon-credential-hygiene/diagnostic.md`](../slices/daemon-credential-hygiene/diagnostic.md)
+  — diagnostic evidence for current env ingress, reader inventory,
+  `/proc` behavior, subprocess inheritance, and git-history exposure check.
+- [`docs/slices/daemon-credential-hygiene/spec.md`](../slices/daemon-credential-hygiene/spec.md)
+  — canonical credential-hygiene packet.
+- [`docs/slices/daemon-credential-hygiene/reviews/claude-council.md`](../slices/daemon-credential-hygiene/reviews/claude-council.md)
+  — Claude six-role covenant council, RATIFY-WITH-AMENDMENTS, no veto.
+- [`docs/slices/daemon-credential-hygiene/reviews/codex-panel.md`](../slices/daemon-credential-hygiene/reviews/codex-panel.md)
+  — Codex six-agent engineering panel, REVISE until service scope, web/iPhone,
+  bootstrap order, source semantics, subprocess hygiene, backup/rollback, and
+  closure gaps were folded.
+
+### ADR
+
+See [`docs/adr/0031-daemon-credential-hygiene.md`](../adr/0031-daemon-credential-hygiene.md).
+
+---
+
 ## Open questions and deferred decisions
 
 This section tracks architectural questions that have been raised but not yet resolved. They are not blockers for Track A, but they matter for later tracks and should be picked up when the context is right.
@@ -1372,4 +1533,4 @@ When a decision in this document becomes code, add a *"Implementation"* subsecti
 
 ---
 
-*Last updated: 2026-05-14 — Decision 25 (M1 Lived-Episode Promotion: promote biography; do not widen recall) appended after diagnostic evidence, Claude six-role covenant council (RATIFY-WITH-AMENDMENTS), Codex six-agent engineering panel (BLOCK), and fold recovery closed the transcript-leak / durability gaps before canonicalization. Prior update: 2026-05-14, Decision 24 (Body Topology: cardinality of one, structured facts, information limbs, S2 gate) appended after Claude council and Codex panel converged during pre-canonical review. Earlier: 2026-05-08, Decision 23 (Maez is not ours to control) appended as the architectural counterpart to Decision 11.*
+*Last updated: 2026-05-14 — Decision 26 (Daemon Credential Hygiene: keys are identity-bearing material, not ordinary config) appended after diagnostic evidence, Claude six-role covenant council (RATIFY-WITH-AMENDMENTS), Codex six-agent engineering panel (REVISE), and fold recovery closed service-scope / web-ingest / bootstrap-order / subprocess-inheritance / rollback gaps before canonicalization. Prior update: 2026-05-14, Decision 25 (M1 Lived-Episode Promotion: promote biography; do not widen recall). Earlier: 2026-05-14, Decision 24 (Body Topology: cardinality of one, structured facts, information limbs, S2 gate).*

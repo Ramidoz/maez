@@ -1,9 +1,9 @@
 # Slice: Daemon Credential Hygiene
 
-**Status:** REVISED DRAFT. Built from
+**Status:** CANONICAL. Decision 26 / ADR 0031. Built from
 [`diagnostic.md`](diagnostic.md). Claude covenant council returned
 RATIFY-WITH-AMENDMENTS; Codex engineering panel returned REVISE. This revision
-folds both review lanes. Awaiting operator canonicalization before code.
+folds both review lanes. No code has landed from this packet.
 
 **Maps to:**
 
@@ -11,8 +11,9 @@ folds both review lanes. Awaiting operator canonicalization before code.
   `/proc/<pid>/environ` measurement, subprocess inheritance risk, git-history
   note.
 - [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../../governance/BETA_ARCHITECTURE_DECISIONS.md) —
-  governance anchor. This slice is expected to become the next BAD decision if
-  ratified.
+  Decision 26.
+- [`docs/adr/0031-daemon-credential-hygiene.md`](../../adr/0031-daemon-credential-hygiene.md) —
+  ADR 0031.
 - [`docs/adr/0023-hardware-failure-memory-backup.md`](../../adr/0023-hardware-failure-memory-backup.md) —
   Decision 22 continuity backup; credential files must become part of the
   operator's succession/restore discipline without being logged or published.
