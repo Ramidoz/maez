@@ -139,6 +139,11 @@ class TestPrivateStoresOnlyCounted(unittest.TestCase):
 
 
 class TestServiceState(unittest.TestCase):
+    def test_tracked_units_include_observation_sidecar(self):
+        from scripts import generate_session_snapshot as gss
+
+        self.assertIn("maez-observe-sidecar.service", gss._TRACKED_UNITS)
+
     def test_service_state_queries_user_units(self):
         import subprocess
 

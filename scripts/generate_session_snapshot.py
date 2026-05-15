@@ -171,6 +171,7 @@ def _systemctl_active(unit: str) -> bool:
 
 _TRACKED_UNITS = (
     "maez.service",
+    "maez-observe-sidecar.service",
     "maez-web.service",
     "maez-watchdog.service",
     "maez-subscription-proxy.service",
