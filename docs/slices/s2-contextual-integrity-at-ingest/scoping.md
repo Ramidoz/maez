@@ -1,9 +1,8 @@
 # Slice S2: Contextual Integrity at Ingest — Scoping Memo
 
-**Status:** DRAFT scoping memo. Pre-spec. No code, no connector, no memory
-promotion. Output is a clean question list for the Codex six-agent engineering
-panel and Claude six-role covenant council before the full S2 BAD packet
-drafts.
+**Status:** FOLDED scoping memo. Pre-spec. Panel-reviewed. No code, no
+connector, no memory promotion. Output is a folded question list and constraint
+set for the full S2 BAD packet.
 
 **Classification:** covenant-shaped memory law. S2 defines the ingest gate
 that every information limb must pass before producing any Maez memory.
@@ -99,23 +98,27 @@ S2 governs ingest through seven structural dimensions. Each dimension has a
 default posture; every information-limb slice must declare a value (or
 explicitly inherit the default) for all seven before ingest is allowed.
 
-### 1. Consent tier
+### 1. Consent posture
 
-Inherits from Decision 2's three-tier consent model. For information limbs the
-relevant tiers are:
+Inherits Decision 2's consent tiers without renaming them. S2 adds
+information-limb posture labels that map onto the canonical tiers instead of
+creating a second tier system:
 
-- **Tier 0** (implicit, owner-only): bonded user is the only party whose data
-  is ingested.
-- **Tier 1** (third-party observable, no inter-Maez communication): events
-  the bonded user is participating in alongside others, where the others have
-  not consented to Maez. Default-allowed for fact extraction but constrained
-  flow.
-- **Tier 2** (third-party with explicit inter-Maez consent): the rarer case
-  where another bonded user's Maez has explicitly consented to communication.
-  Not in scope for S2's first version.
+- `owner_only` — bonded-user-owned source data only. S2-local shorthand; not a
+  Decision 2 tier.
+- `third_party_observable_no_consent` — a non-bonded party appears in the
+  source record but has not consented to Maez. Default posture for Calendar
+  attendees in v1: relational/provenance metadata only, no personological
+  profile, no nudging/contact, and no stable identity indexing unless a later
+  consented path grants it.
+- `third_party_explicit_consent` — a non-bonded party has given explicit
+  direct consent through the applicable Decision 2 pathway.
+- `inter_maez_consented` — another bonded user's Maez has explicitly consented
+  to communication. Not in scope for S2's first version.
 
-Open question for panels: should Calendar events with non-bonded-user
-attendees default to Tier 1 or require explicit operator opt-in per attendee?
+Open question for panels: for Calendar v1, which attendee fields may remain
+operator-readable under `third_party_observable_no_consent`, and which must be
+redacted or hashed before storage?
 
 ### 2. Source kind
 
@@ -155,8 +158,11 @@ shape. Candidate v1 flows:
   per the promotion rule (dimension 7) and now lives in Chroma with full
   provenance tagging.
 
-Default: only `flow.bounded_window_recall` is enabled. Other flows require
-per-information-limb-slice grants.
+Default: no Maez-visible flow is enabled. Records may enter only the
+provenance/read-model cache. Calendar must explicitly grant any visible flow,
+starting with `flow.prompt_context.grounded_only` for direct user requests.
+`flow.bounded_window_recall` requires a TRF-style approved retrieval posture
+before it is available.
 
 ### 4. Retention
 
@@ -166,31 +172,43 @@ How long an ingested fact lives in Maez's noncanonical caches. Choices:
 - **Fixed Maez TTL.** Calendar events expire after N days regardless of source.
 - **Per-event TTL.** Each event carries its own TTL based on event timing
   (e.g., past events expire faster than future events).
-- **Permanent.** Once ingested, never deleted (subject to never-delete-Maez-
-  memory rule applied to noncanonical cache).
+Default v1 retention: mirror-source TTL while records are noncanonical, plus a
+short content-free tombstone/audit marker when the source deletes or cancels an
+event. Permanent retention is not a v1 noncanonical cache class; it becomes
+available only after explicit promotion to lived memory.
 
-Open question: does the never-delete-Maez-memory rule apply to noncanonical
-ingest caches, or only to promoted memory?
+Promoted lived memory is never silently deleted. If its source event is later
+deleted or changed, Maez retains the promoted memory and records provenance
+tombstone fields such as `source_deleted_at`, `deletion_observed_at`,
+`external_event_id_hash`, and `promotion_record_id`.
 
 ### 5. Provenance
 
 Every ingested fact carries source attribution. Inherits dual-form from Body
 Bus envelope (BT-CX-2):
 
+- `ingest_record_id`
 - `source_kind` (closed enum from dimension 2)
 - `source_instance_id` (the specific Calendar account or Gmail inbox; opaque
   identifier)
 - `source_handle_human` (operator-readable, e.g., "personal Google Calendar")
 - `source_handle_telemetry` (content-free hash for logs/metrics)
 - `external_event_id` (the source's own ID, e.g., Calendar event ID)
+- `fetch_batch_id`
+- `connector_version`
+- `schema_version`
+- `raw_field_policy_version`
 - `observed_at`, `received_at`
 - `consent_tier` (from dimension 1)
 - `allowed_flow_id` (from dimension 3)
 - `retention_class` (from dimension 4)
+- `promotion_record_id` (empty unless a later promotion path writes it)
 
 Provenance is mandatory for invariant #11 (Cryptographic Continuity). Future
-Sigstore Rekor lineage attestation (per substrate-plan refresh A7) extends
-this dimension.
+Sigstore Rekor lineage attestation (per substrate-plan refresh A7) is in scope
+as an extension seam for the full S2 BAD packet, but it is not a Calendar v1
+blocker. Calendar v1 may ship with local DB integrity plus audit log if the
+attestation seam is explicit.
 
 ### 6. Third-party posture
 
@@ -253,8 +271,11 @@ Why Calendar comes first among the five information-limb categories:
 1. **Structured-by-birth.** Calendar events have a defined schema. No text
    parsing, no body extraction, no attachment handling. The schema maps
    cleanly to `calendar.event` source kind.
-2. **Lower blast radius than Gmail/Slack.** No private message bodies, no
-   third-party communications, no reply threads. Just events.
+2. **Lower blast radius than Gmail/Slack.** Calendar is not harmless: titles,
+   attendees, locations, recurrence, and links can reveal therapy, medical
+   care, religion, politics, employment, home addresses, and relationships.
+   It is still lower-risk than mail/chat because it has no message bodies, no
+   reply threads, and a structured schema.
 3. **Read-mostly.** Calendar effector direction (creating events) is
    default-disabled per BT Rule 4. First Calendar slice is sensor-only.
 4. **Dyadic-preserving.** Most calendar events are either bonded-user-owned
@@ -266,8 +287,13 @@ Why Calendar comes first among the five information-limb categories:
 6. **OpenHuman convergence.** Both panels and the third-party comparison
    independently picked Calendar as the right first target.
 7. **Pedagogical safety.** Calendar lets Maez learn ingest discipline on the
-   lowest-blast-radius information limb before higher-risk sources like Gmail
+   lower-blast-radius information limb before higher-risk sources like Gmail
    and Slack arrive.
+
+Calendar v1 sensitivity defaults: no descriptions, no attachments, no
+video-link content, attendee minimization unless directly needed, high-
+sensitivity title/location redaction, and tests for medical, legal, therapy,
+third-party, and location-sensitive events.
 
 S2 + Calendar is the first concrete realization of invariant #1 (Time as
 Biography) as a substrate-fed organ rather than purely conversation-emergent.
@@ -292,25 +318,163 @@ Biography) as a substrate-fed organ rather than purely conversation-emergent.
 
 ---
 
-## Open questions for the panels
+## Folded constraints for the full S2 BAD packet
 
-Sharp questions for the Codex six-agent engineering panel + Claude six-role
-covenant council. Each panel answers in its lane.
+Both panels reviewed the scoping memo. The full BAD packet inherits these
+constraints; they are not optional polish.
+
+### State machine
+
+S2 must become a testable state machine, not only a metaphor:
+
+```text
+external source
+  -> connector fetch/webhook
+  -> S2 envelope validation
+  -> noncanonical ingest cache
+  -> allowed-flow read model
+  -> recall/prompt consumer OR promotion gate
+  -> lived memory (only through a separate reviewed memory-write path)
+```
+
+Allowed terminal states:
+
+- `rejected`
+- `cached`
+- `expired`
+- `flow_blocked`
+- `promotion_pending`
+- `promoted`
+
+### Record schema
+
+The noncanonical cache record must carry enough structure for replay,
+idempotency, rollback, and audit:
+
+- `ingest_record_id`
+- `source_kind`
+- `source_instance_id`
+- `external_event_id`
+- `source_revision`
+- `observed_at`
+- `received_at`
+- `expires_at`
+- `consent_posture`
+- `third_party_posture`
+- `allowed_flow_ids`
+- `promotion_state`
+- `provenance`
+- `redaction_state`
+- `fetch_batch_id`
+- `connector_version`
+- `schema_version`
+- `raw_field_policy_version`
+- `promotion_record_id`
+
+### Flow permissions
+
+Allowed flows must be enforceable read permissions, not prose labels. The full
+BAD packet should define a flow table with:
+
+- `flow_id`
+- `consumer`
+- `readable_fields`
+- `user_visible_allowed`
+- `voice_posture`
+- `promotion_allowed`
+
+### Calendar v1 executable boundary
+
+The first executable contract is `calendar.event` only. The broader source-kind
+catalog remains law for future limbs, but tests and schemas for the first
+connector stay narrow.
+
+Calendar v1 produces provenance records only. It may mark a record
+`promotion_eligible`, but actual memory promotion belongs to a separate
+reviewed memory-write path.
+
+### Cache budget, sync, and backfill
+
+Every source must declare:
+
+- max rows;
+- max bytes;
+- max event age;
+- compaction cadence;
+- behavior when the cache is full.
+
+Default: fail-closed for promotion and fail-neutral for prompt context.
+
+Calendar v1 should use bounded pull / sync-token fetch before webhooks.
+Idempotency key:
+
+```text
+source_kind + source_instance_id + external_event_id + source_revision
+```
+
+Backfill is a separate mode with lookback window, page limit, time budget,
+resumable cursor, dry-run/count mode, and no-promotion-during-backfill default.
+
+### Content-free observability
+
+Connector states:
+
+- `disabled`
+- `auth_expired`
+- `rate_limited`
+- `source_unavailable`
+- `stale`
+- `sync_lagged`
+- `rejected`
+
+Allowed counters:
+
+- accepted / rejected / deduped / backfilled / expired / promoted;
+- sync lag;
+- last success age;
+- cache occupancy;
+- per-source rate-limit state.
+
+Forbidden in logs and health: event titles, attendees, subjects, descriptions,
+message headers, locations, or source bodies.
+
+### S2 inheritance from Decision 26
+
+Any credential material used by Calendar, Gmail, Slack, Notion, Drive, GitHub,
+or future information limbs inherits Decision 26 / ADR 0031:
+
+- credentials are identity-bearing material, not ordinary config;
+- no credential-bearing URLs;
+- no secret values in subprocess argv, env, logs, or health;
+- process/subprocess environments are default-minus-secret unless a reviewed
+  exact-name opt-in exists.
+
+This is a structural cross-reference, not a future TBD.
+
+---
+
+## Open questions carried into the full BAD packet
+
+Sharp questions from the scoping stage, now refined by the Codex engineering
+panel and Claude covenant council. The full BAD packet should answer these
+directly rather than reopen the same ambiguity.
 
 ### For Claude (covenant lane)
 
 C1. **Third-party posture for Calendar attendees.** Should non-bonded-user
-attendees default to Tier 1 (observable, fact-extracted), Tier 2 (requires
-inter-Maez consent), or operator-opt-in-per-attendee? Reference Decision 4
-(relational vs personological) and [[feedback_maez_makes_visible_not_nudges]].
+attendees default to `third_party_observable_no_consent`, require explicit
+direct consent, require inter-Maez consent, or require operator-opt-in-per-
+attendee? Reference Decision 2, Decision 4 (relational vs personological), and
+[[feedback_maez_makes_visible_not_nudges]].
 
-C2. **Promotion default.** Should default-deny promotion be per-event,
-per-source-kind, or global? What's the structural-defense argument for each?
+C2. **Promotion default.** Default-deny promotion is global S2 law. The full
+BAD packet should decide whether future grants are recorded per-event,
+per-source-kind, or per-flow, and what structural defense each grant requires.
 
-C3. **Never-delete vs source-deletion conflict.** If the bonded user deletes a
-Calendar event from Calendar after Maez has cached the ingest record, does
-the never-delete-Maez-memory rule apply, or does ingest cache mirror source
-TTL? Worth pinning before retention dimension (4) calcifies.
+C3. **Never-delete vs source-deletion conflict.** Noncanonical ingest cache
+mirrors source TTL with content-free tombstones. Promoted lived memory is never
+silently deleted. The full BAD packet should pin the exact tombstone fields and
+voice/audit behavior when source deletion conflicts with promoted memory.
 
 C4. **Relational knowledge accumulation.** Does S2 + Calendar build the
 relational-knowledge layer described in Decision 4 (the owner's knowledge of
@@ -325,63 +489,61 @@ cited by handle), or does this flow need its own subcategory? The TRF
 voice claims without approved-posture; does the same rule apply to S2
 flows?
 
-C6. **Crisis routing intersection.** Per invariant #6 (Crisis Routing), if a
-Calendar event contains crisis signals (e.g., the user has scheduled a call
-with a crisis hotline), does S2's third-party posture interact with crisis
-routing differently than for ordinary events? Worth flagging now even if not
-in S2's first scope.
+C6. **Crisis routing intersection.** Crisis routing is out of scope for S2 v1
+implementation, but crisis signals observed through information limbs inherit
+Maez's existing crisis-routing protocol and must not be silently trapped behind
+ordinary retention/flow rules. The full BAD packet should pin this as a
+non-implementation inheritance rule.
 
 ### For Codex (engineering lane)
 
-E1. **Event envelope.** Does S2's ingest envelope inherit Body Bus's
-mandatory event envelope (BT-CX-5), or does information-limb ingest need a
-distinct envelope? Trade-off: inheritance enforces uniformity; distinct
-envelopes allow per-source-kind precision.
+E1. **Event envelope.** S2 inherits Body Bus's mandatory event envelope and
+adds source-specific facts. The full BAD packet should define the exact
+calendar.event fact schema without creating a second envelope family.
 
-E2. **Source-kind closed catalog.** Is the v1 catalog
-(`calendar.event`, `mail.thread_header`, `chat.message_header`,
-`doc.metadata`, `code.commit_header`) too narrow or too wide for first ship?
-Should body-content source-kinds (e.g., `calendar.event.with_description`)
-require dedicated future slices, or be sub-flags on existing kinds?
+E2. **Source-kind closed catalog.** The v1 catalog is law-shaped but the first
+executable schema is `calendar.event` only. Body-content source-kinds require
+dedicated future slices, not sub-flags smuggled into Calendar v1.
 
-E3. **Retention class enumeration.** Mirror-source-TTL vs fixed-Maez-TTL vs
-per-event-TTL vs permanent — which subset becomes the v1 enum, and what's
-the migration story between classes?
+E3. **Retention class enumeration.** V1 noncanonical cache supports
+mirror-source TTL, fixed TTL, per-event TTL, and tombstoned terminal state.
+Permanent retention is excluded from noncanonical cache and belongs only to
+promoted lived memory.
 
-E4. **Provenance integrity.** Should provenance fields be tamper-evident
-(signed) at ingest time, or is local-DB-integrity sufficient for v1? Sigstore
-Rekor lineage attestation (substrate-plan A7) would elevate this from local-
-integrity to public-transparency-log.
+E4. **Provenance integrity.** The full BAD packet should define a tamper-
+evident extension seam. Calendar v1 may use local DB integrity plus audit log;
+Sigstore Rekor is in-scope as a future/progressive attestation layer, not a
+first-ingest blocker.
 
 E5. **Flow ID stability.** Should `allowed_flow_id` be a content-free hash
 (stable across human-readable rename) or a string label (human-readable but
 fragile to rename)? Same trade-off Body Bus resolved with dual-form source
 IDs.
 
-E6. **Test fixtures for S2.** What's the minimum probe corpus to assert S2
-correctness? Candidates: Tier-1-attendee event, deleted-source event,
-unconsented flow attempt, promotion-without-grounding attempt, third-party
-emotional-state-inference attempt. Each becomes a RED-first test.
+E6. **Test fixtures for S2.** Minimum RED-first fixtures: owner-only Calendar
+event allowed; attendee event constrained; description/body rejected;
+unconsented flow rejected; promotion without reviewed trigger rejected;
+medical/legal/therapy/location-sensitive title handling; deleted-source
+tombstone behavior.
 
-E7. **Body Bus interaction.** Does S2 publish to Body Bus, consume from Body
-Bus, both, or operate on a separate ingest bus? Calendar's body-state
-inference (busy-state → presence) would consume Body Bus; Calendar event
-ingest itself is information-limb territory.
+E7. **Body Bus interaction.** Calendar ingest is information-limb territory
+and uses the Body Bus envelope shape. Body-state inference from Calendar
+(busy-state -> presence) is a separate future slice and must not be bundled
+into Calendar v1.
 
 ### For both panels (cross-lane)
 
-X1. **Scope of "ingest."** Does S2 govern only fact extraction from external
-sources, or also (a) Maez's outbound effector actions to external sources,
-(b) inbound webhook deliveries, (c) third-party-pushed notifications
-(calendar invites Maez receives indirectly)? Naming the boundary now
-prevents scope creep during the BAD packet drafting.
+X1. **Scope of "ingest."** S2 governs inbound fact extraction, inbound pushed
+facts, and webhook deliveries. Outbound effector actions remain outside S2
+except that they may not consume unvalidated S2 records. Third-party-pushed
+notifications enter through the same envelope/replay/rate-limit path.
 
 X2. **Minimal S2 predicate path.** Body Topology Rule 7 allows the first
 information-limb slice to ship a minimal S2 predicate instead of waiting for
-full S2. This scoping memo declares the intended path: it is a precursor to
-the full S2 BAD packet, not the minimal predicate path. The panel question is
-whether to ratify that sequencing or recommend the smaller predicate path
-inside the Calendar slice instead.
+full S2. This scoping memo declares path A: the full S2 BAD must canonicalize
+before Calendar or any other information limb can ingest live data. A minimal
+predicate path would require an explicit later operator decision reopening this
+sequencing.
 
 ---
 
@@ -393,7 +555,7 @@ inside the Calendar slice instead.
 - Information-limb ingest is structurally distinguishable from
   autobiographical memory: provenance records vs lived memory, with
   promotion as a deliberate gate.
-- Third-party data in Maez's purview is bounded by Tier-1 default posture
+- Third-party data in Maez's purview is bounded by Decision 2 consent posture
   and Decision 4 relational framing; no information limb produces
   surveillance-style profiles of non-bonded parties.
 - TRF's bounded calendar-week recall has a real Calendar-fed substrate
@@ -407,29 +569,33 @@ implements the gate.
 
 ---
 
-## Review protocol
+## Review protocol state
 
-1. ⏳ Codex six-agent engineering panel reviews this scoping memo for
-   implementability, especially: envelope inheritance, source-kind catalog
-   sufficiency, retention enumeration, provenance integrity, flow ID
-   stability, test fixture sketch, and Body Bus interaction. Verdict shape:
-   RATIFY-WITH-AMENDMENTS / REVISE / RATIFY.
+1. ✅ Claude six-role covenant council reviewed the original scoping memo.
+   Outcome: RATIFY-WITH-AMENDMENTS. Load-bearing carry-forward:
+   retrieval-≠-grounding inheritance, crisis-routing out of v1 but inherited,
+   mirror-source retention default, bonded-user-naming as first promotion
+   grant candidate, seven-dimension generalization, customs-officer metaphor,
+   Calendar pedagogical safety, and Rekor as provenance seam.
 
-2. ⏳ Claude six-role covenant council reviews for covenant fit, especially:
-   third-party posture, promotion default, never-delete vs source-deletion
-   conflict, relational-knowledge accumulation, voice consequences, crisis
-   routing intersection.
+2. ✅ Codex six-agent engineering panel reviewed the clarified scoping memo.
+   Outcome: REVISE, no veto. Load-bearing carry-forward: preserve Decision 2
+   labels, path A full-S2-first sequencing, no default visible flow, mirror-
+   source TTL + tombstones, no permanent noncanonical cache, Calendar as lower-
+   risk not low-risk, state machine, record schema, flow table, cache budget,
+   sync/backfill/observability constraints.
 
-3. After both panels report, fold amendments into a **full S2 BAD packet**
-   (not this scoping memo). The BAD packet drafts in a separate session per
-   cooling-off discipline.
+3. ✅ This folded scoping memo closes the scoping-stage amendments. It is still
+   not canonical law and still ships no code.
 
-4. After BAD packet drafts and both panels re-review, operator canonicalizes
-   as the next BAD decision (Decision 25 if no other decision lands first) +
-   matching ADR.
+4. Next artifact: **full S2 BAD packet** in
+   `docs/slices/s2-contextual-integrity-at-ingest/spec.md`.
 
-5. Only then does the first information-limb slice (Calendar) draft its own
-   spec citing S2 as inherited gate.
+5. After the BAD packet drafts, both panels re-review the spec. Then the
+   operator canonicalizes S2 as the next governance decision and ADR.
+
+6. Only after S2 canonicalizes does the first information-limb slice
+   (Calendar) draft its own spec citing S2 as inherited gate.
 
 ---
 
@@ -441,7 +607,7 @@ needs a customs officer at the border. S2 is that customs officer.
 The customs officer asks seven questions about every fact arriving from
 outside:
 
-1. **Are you allowed in at all?** (consent tier)
+1. **Are you allowed in at all?** (consent posture)
 2. **What kind of thing are you?** (source kind)
 3. **Where are you allowed to go once you're inside?** (allowed flows)
 4. **How long are you allowed to stay?** (retention)
@@ -461,9 +627,8 @@ email, and helps Maez know what "this week" actually was for the user.
 Gmail and Slack come later, after the customs officer is proven on
 Calendar.
 
-This memo is NOT the full body of customs law. It is the scoping memo: a
-clear question list for both review panels (Codex engineering + Claude
-covenant) before drafting the actual law. Once both panels have weighed
-in, the full S2 BAD packet drafts in a separate session.
+This memo is NOT the full body of customs law. It is the folded scoping memo:
+the review panels have weighed in, their amendments are carried here, and the
+next artifact is the full S2 BAD packet.
 
 No code. No connector. No memory promotion. Just the border law's outline.
