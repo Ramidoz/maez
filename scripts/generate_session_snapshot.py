@@ -147,7 +147,7 @@ def _test_count() -> int:
 def _systemctl_pid(unit: str) -> str | None:
     try:
         out = subprocess.run(
-            ["systemctl", "show", "-p", "MainPID", "--value", unit],
+            ["systemctl", "--user", "show", "-p", "MainPID", "--value", unit],
             capture_output=True, text=True, check=False, timeout=5,
         )
         if out.returncode != 0:
@@ -161,7 +161,7 @@ def _systemctl_pid(unit: str) -> str | None:
 def _systemctl_active(unit: str) -> bool:
     try:
         out = subprocess.run(
-            ["systemctl", "is-active", unit],
+            ["systemctl", "--user", "is-active", unit],
             capture_output=True, text=True, check=False, timeout=5,
         )
         return out.stdout.strip() == "active"

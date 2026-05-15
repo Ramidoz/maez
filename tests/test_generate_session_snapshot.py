@@ -138,6 +138,34 @@ class TestPrivateStoresOnlyCounted(unittest.TestCase):
         self.assertNotIn("residue_event_id", text)
 
 
+class TestServiceState(unittest.TestCase):
+    def test_service_state_queries_user_units(self):
+        import subprocess
+
+        from scripts import generate_session_snapshot as gss
+
+        commands: list[list[str]] = []
+
+        def fake_run(args, *a, **kw):
+            commands.append(list(args))
+            if args[:3] == ["systemctl", "--user", "is-active"]:
+                return subprocess.CompletedProcess(args, 0, stdout="active\n", stderr="")
+            if args[:3] == ["systemctl", "--user", "show"]:
+                return subprocess.CompletedProcess(args, 0, stdout="123\n", stderr="")
+            return subprocess.CompletedProcess(args, 1, stdout="inactive\n", stderr="")
+
+        with mock.patch.object(subprocess, "run", side_effect=fake_run):
+            state = gss._service_state()
+
+        self.assertTrue(state)
+        self.assertTrue(all("active (PID 123)" in row for row in state))
+        self.assertTrue(commands)
+        self.assertTrue(
+            all(cmd[:2] == ["systemctl", "--user"] for cmd in commands),
+            commands,
+        )
+
+
 class TestCli(unittest.TestCase):
     """CLI tests mock the git layer so a tmp-dir _REPO doesn't
     fail on `git rev-parse`. The render layer is exercised
