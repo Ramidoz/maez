@@ -41,8 +41,19 @@ def project_health(
 
     camera = health.get("camera_presence") or {}
     calendar = health.get("calendar") or {}
+    reasoning_loop = health.get("reasoning_loop") or {}
     m1 = ((health.get("lived_episodes") or {}).get("m1")) or {}
     credentials = health.get("credentials") or {}
+    heartbeat = _pick(health, ("cycle_count",))
+    heartbeat.update(_pick(
+        reasoning_loop,
+        (
+            "cycle_stalled",
+            "stage",
+            "stage_age_seconds",
+            "cycle_age_seconds",
+        ),
+    ))
 
     return {
         "observed_at": _utc_now(),
@@ -54,16 +65,7 @@ def project_health(
             "tasks_current": (service or {}).get("tasks_current"),
             "presence_native_thread_count": (service or {}).get("presence_native_thread_count"),
         },
-        "heartbeat": _pick(
-            health,
-            (
-                "cycle_count",
-                "cycle_stalled",
-                "stage",
-                "stage_age_seconds",
-                "cycle_age_seconds",
-            ),
-        ),
+        "heartbeat": heartbeat,
         "camera_presence": _pick(
             camera,
             (

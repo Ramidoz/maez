@@ -74,6 +74,27 @@ class ObservationSidecarTests(unittest.TestCase):
         self.assertNotIn("thread_names", sample["service"])
         self.assertNotIn("cmdline", sample["service"])
 
+    def test_project_health_reads_nested_reasoning_loop_for_heartbeat_gate(self):
+        from scripts.observe_sidecar import project_health, red_gates
+
+        sample = project_health({
+            "cycle_count": 20,
+            "reasoning_loop": {
+                "cycle_stalled": True,
+                "stage": "observe_camera",
+                "stage_age_seconds": 95,
+                "cycle_age_seconds": 130,
+            },
+            "camera_presence": {"mode": "disabled", "enabled": False},
+            "lived_episodes": {"m1": {"enabled": True}},
+            "credentials": {"required_present": True},
+        })
+
+        self.assertEqual(sample["heartbeat"]["cycle_count"], 20)
+        self.assertIs(sample["heartbeat"]["cycle_stalled"], True)
+        self.assertEqual(sample["heartbeat"]["stage"], "observe_camera")
+        self.assertIn("heartbeat_stalled", red_gates(sample))
+
     def test_red_gates_report_only_gate_names(self):
         from scripts.observe_sidecar import red_gates
 
