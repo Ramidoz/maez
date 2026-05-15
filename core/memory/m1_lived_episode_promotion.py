@@ -6,6 +6,9 @@
 Decision 25 / ADR 0030: promote biography; do not widen recall.
 This module owns the pure promotion mechanics. Daemon code wires it after
 audited Telegram storage and during daemon-cycle flush.
+
+Spec: docs/slices/m1-lived-episode-promotion/spec.md
+Reviews: docs/slices/m1-lived-episode-promotion/reviews/
 """
 
 from __future__ import annotations
