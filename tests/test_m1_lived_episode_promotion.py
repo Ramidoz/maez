@@ -17,7 +17,6 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
-from zoneinfo import ZoneInfo
 
 from core.memory.episodes import EpisodeStore
 from core.memory.m1_lived_episode_promotion import (
@@ -383,13 +382,13 @@ class PromotionBehaviorTests(M1PromotionTestCase):
         self.assertEqual(pending.promotion_state, "deferred_rate_limited")
         self.assertEqual(pending.source_memory_ids, ["raw-cap-2"])
 
-    def test_daily_promotion_cap_counts_mixed_offset_rows_by_utc_day(self):
-        local_now = datetime(2026, 5, 15, 0, 30, tzinfo=ZoneInfo("America/Chicago"))
+    def test_daily_promotion_cap_resets_at_owner_local_midnight(self):
+        utc_now = datetime(2026, 5, 15, 5, 30, tzinfo=timezone.utc)
         promoter = M1LivedEpisodePromoter(
             episode_store=self.episodes,
             promotion_store=self.sidecar,
             config=M1Config(enabled=True, max_promotions_per_day=1),
-            now_fn=lambda: local_now,
+            now_fn=lambda: utc_now,
         )
         self.sidecar.mark_promoted(
             source_memory_ids=["raw-local-offset"],
@@ -399,15 +398,18 @@ class PromotionBehaviorTests(M1PromotionTestCase):
             provenance={},
         )
 
-        outcome = promoter.consider_audited_exchange(
-            owner_text="remember this",
-            maez_reply="Okay.",
-            raw_memory_id="raw-cap-utc",
-            occurred_at="2026-05-15T05:30:00+00:00",
-        )
+        with patch(
+            "core.memory.m1_lived_episode_promotion._identity.timezone",
+            return_value="America/Chicago",
+        ):
+            outcome = promoter.consider_audited_exchange(
+                owner_text="remember this",
+                maez_reply="Okay.",
+                raw_memory_id="raw-cap-local",
+                occurred_at="2026-05-15T05:30:00+00:00",
+            )
 
-        self.assertFalse(outcome.promoted)
-        self.assertEqual(outcome.skipped_reason, "rate_limited")
+        self.assertTrue(outcome.promoted)
 
     def test_silence_flush_promotes_eligible_window_without_new_owner_message(self):
         self.promoter.consider_audited_exchange(

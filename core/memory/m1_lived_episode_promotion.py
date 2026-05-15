@@ -19,6 +19,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from core import identity as _identity
 
 
 _MARKERS = (
@@ -145,6 +148,13 @@ CREATE TABLE IF NOT EXISTS promotion_provenance (
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _owner_zoneinfo() -> ZoneInfo:
+    try:
+        return ZoneInfo(_identity.timezone() or "UTC")
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("UTC")
 
 
 def _parse_iso(value: str) -> datetime:
@@ -619,7 +629,10 @@ class M1LivedEpisodePromoter:
             return PromotionOutcome(False, skipped_reason="partial_overlap")
 
         now = self.now_fn().astimezone(timezone.utc)
-        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        local_now = now.astimezone(_owner_zoneinfo())
+        day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(
+            timezone.utc
+        )
         if self.promotion_store.count_promotions_since(day_start.isoformat()) >= int(
             self.config.max_promotions_per_day
         ):
