@@ -56,7 +56,9 @@ Allowed:
 - source event time -> normalized UTC instant -> store-specific field;
 - ingest/write time -> normalized UTC instant -> store-specific field;
 - owner-local calendar boundaries -> computed from identity timezone;
-- relationship validity -> half-open UTC intervals;
+- relationship validity -> preserve the existing `RelationshipGraph` half-open
+  `[valid_from, valid_to)` UTC interval semantics. S3 v1 must not reinterpret,
+  migrate, or rewrite graph validity rows;
 - temporal recall windows -> owner-local boundaries mapped to UTC-safe
   comparisons;
 - content-free counters for malformed, naive, unsupported, or unavailable
@@ -115,11 +117,11 @@ Load-bearing inherited rules:
 | Question | V1 decision |
 | --- | --- |
 | V1 scope | Build a shared temporal-normalization module plus tests. Do not migrate stores in v1. |
-| Timezone source | All owner-local boundaries route through `core.memory.identity.timezone()`, falling back to UTC. TRF stops hardcoding `America/Chicago`. |
+| Timezone source | All owner-local boundaries route through `MAEZ_OWNER_TIMEZONE` when set, then `core.memory.identity.timezone()`, falling back to UTC. TRF stops hardcoding `America/Chicago`. |
 | Canonical names | The shared vocabulary is `event_at`, `ingested_at`, `observed_at`, `valid_from`, `valid_to`, and `owner_local_date`. Existing store fields may remain, but adapters must map them explicitly. |
 | Storage strategy | Keep per-store fields in v1. Enforce normalization at module boundaries and document each store as canonical, wrapped, or deferred. |
 | Anchor expansion | No new anchors in v1. Existing TRF anchors are reimplemented through the shared temporal module only. |
-| Calendar inheritance | Calendar-backed temporal anchors remain out of scope until Calendar OAuth burn-in and a reviewed v1.1/v2 grant. |
+| Calendar inheritance | Calendar-backed temporal anchors remain out of scope for S3 v1. OAuth onboarding or Calendar burn-in success alone is not a grant. Any later Calendar-backed temporal-anchor path requires a reviewed S3 v1.1/v2 plus an S2-approved `flow.bounded_window_recall` retrieval posture and Calendar voice posture, and must phrase results as external-source provenance, not lived memory. |
 | Health surface | Add aggregate, content-free counters for malformed timestamps, naive timestamps assumed UTC, unsupported anchors, helper unavailable, and timezone source. |
 | Migration boundary | Legacy epoch/JSON stores are wrapped or documented; their owning organs migrate them later. |
 
@@ -203,12 +205,15 @@ from datetime import date, datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-TemporalFieldName = Literal[
+TemporalInstantFieldName = Literal[
     "event_at",
     "ingested_at",
     "observed_at",
     "valid_from",
     "valid_to",
+]
+
+TemporalDerivedFieldName = Literal[
     "owner_local_date",
 ]
 
@@ -219,16 +224,26 @@ TemporalAnchorKind = Literal[
     "last_week",
 ]
 
+HelperUnavailableReason = Literal[
+    "temporal_helper_exception",
+]
+
 @dataclass(frozen=True)
 class TemporalWindow:
     anchor_kind: TemporalAnchorKind
+    # Owner-local aware boundaries, preserved for TRF result compatibility.
     start: datetime
     end: datetime
+    # UTC-aware boundaries. Only these may be used for store filtering.
+    start_utc: datetime
+    end_utc: datetime
     timezone_name: str
 
 @dataclass(frozen=True)
 class TemporalDiagnostics:
     timezone_source: Literal["identity", "env", "fallback_utc", "invalid_fallback_utc"]
+    timezone_name: str
+    invalid_field_name_rejected_count: int
     malformed_timestamp_rejected_count: int
     naive_timestamp_assumed_utc_count: int
     unsupported_anchor_rejected_count: int
@@ -236,24 +251,69 @@ class TemporalDiagnostics:
 
 def owner_timezone() -> ZoneInfo: ...
 def timezone_source() -> str: ...
-def canonical_utc(value: str | datetime, *, field_name: str) -> datetime: ...
-def canonical_utc_iso(value: str | datetime, *, field_name: str) -> str: ...
+def canonical_utc(value: str | datetime, *, field_name: TemporalInstantFieldName) -> datetime: ...
+def canonical_utc_iso(value: str | datetime, *, field_name: TemporalInstantFieldName) -> str: ...
 def owner_local_date(value: str | datetime) -> date: ...
 def temporal_window(anchor_kind: TemporalAnchorKind, reference_time: datetime) -> TemporalWindow: ...
 def half_open_contains(value: str | datetime, *, start: datetime, end: datetime) -> bool: ...
-def diagnostics_snapshot() -> dict: ...
+def record_helper_unavailable(reason: HelperUnavailableReason) -> None: ...
+def diagnostics_snapshot() -> TemporalDiagnostics: ...
+def _reset_diagnostics_for_tests() -> None: ...
 ```
 
 Contract rules:
 
 - `canonical_utc(...)` returns an aware UTC `datetime`.
-- Naive datetimes are interpreted as UTC for backward compatibility, and the
-  naive-assumed counter increments.
-- Malformed strings raise `ValueError`, and the malformed counter increments.
-- Invalid identity timezone falls back to UTC and reports
-  `invalid_fallback_utc`.
-- Local windows are computed in owner timezone, then carried as aware datetimes.
+- `canonical_utc(...)` accepts ISO datetime strings only. Bare date strings are
+  malformed instants.
+- `Z`, `+00:00`, and other offset-aware strings normalize to UTC.
+- Naive ISO strings and naive `datetime` values are interpreted as UTC for
+  backward compatibility, and the naive-assumed counter increments.
+- `field_name` is validated before timestamp parsing. Invalid names raise
+  `ValueError`, increment `invalid_field_name_rejected_count`, and must not
+  increment timestamp counters.
+- `owner_timezone()` source resolution is: non-empty `MAEZ_OWNER_TIMEZONE` first
+  (`env`), otherwise `core.memory.identity.timezone()` (`identity`), empty/None
+  identity result (`fallback_utc`), invalid candidate (`invalid_fallback_utc`).
+  V1 must not require a new `identity.py` public API.
+- If timezone resolution falls back because a configured timezone is invalid,
+  diagnostics report `timezone_source="invalid_fallback_utc"` and
+  `timezone_name="UTC"`. The invalid raw timezone string must not appear in
+  health, logs, sidecar samples, or red-gate names.
+- `temporal_window(...)` treats a naive `reference_time` as owner-local wall
+  time, matching TRF v1. Naive-as-UTC applies only to instant-normalization
+  APIs such as `canonical_utc(...)`.
+- Ambiguous owner-local datetimes preserve Python `fold` semantics; fold 0 and
+  fold 1 are distinct instants.
+- Nonexistent owner-local datetimes are rejected with `ValueError`, increment
+  malformed timestamp count, and TRF must convert that helper exception to
+  `helper_unavailable`.
+- Local windows are computed from the owner timezone. `TemporalWindow.start` and
+  `TemporalWindow.end` are owner-local aware datetimes for TRF result/voice
+  compatibility; `TemporalWindow.start_utc` and `TemporalWindow.end_utc` are
+  aware UTC datetimes and are the only fields allowed for persistence filtering,
+  SQL window bounds, or cross-store comparison.
+- Store-facing window strings must be emitted through `canonical_utc_iso(...)`
+  or equivalent `+00:00` UTC serialization. Local-offset strings such as
+  `-05:00` / `-06:00` must not be passed to
+  `EpisodeStore.list_active_in_window(...)`.
+- `half_open_contains(...)` expects aware UTC bounds and compares canonical UTC
+  instants, not raw timestamp strings.
 - Windows are half-open: `start <= event < end`.
+- `unsupported_anchor_rejected_count` is a symbolic API-boundary counter only.
+  It increments when `temporal_window(...)` receives a value outside the closed
+  four-anchor enum. S3 v1 must not parse raw query text for exact dates,
+  weekdays, month/year phrases, event-linked phrases, "a few days ago",
+  Calendar phrases, or any other unsupported anchor.
+- `record_helper_unavailable(...)` increments only the aggregate
+  helper-unavailable counter. The reason is for code clarity and must not be
+  exposed in `/health` unless separately reviewed.
+- Diagnostic counter increments are lock-protected, best-effort, content-free,
+  process-local, monotonic until process restart, and must never raise.
+  Snapshots and test resets are isolated by the same module-local lock.
+- `diagnostics_snapshot()` returns a copy, not a mutable module dictionary.
+- `_reset_diagnostics_for_tests()` is test-only; runtime, health, and sidecar
+  code must not call it.
 - Diagnostics expose counts and source labels only, never timestamp values.
 
 ---
@@ -276,6 +336,28 @@ Required changes:
 
 No new temporal anchor may be added in this refactor.
 
+"Unchanged TRF behavior" means: when the resolved owner timezone is
+`America/Chicago`, existing anchor detection gates, result fields, status
+values, no-match/helper-unavailable postures, kill-switch semantics,
+bounded-window definitions, and fragment-guard inputs remain field-compatible
+with TRF v1. When the configured owner timezone differs, only the owner-local
+calendar boundaries intentionally move.
+
+TRF must preserve `TemporalAnchorRecallResult.window_start` and `window_end` as
+owner-local aware datetimes, but must pass only `TemporalWindow.start_utc` and
+`TemporalWindow.end_utc`, serialized in canonical `+00:00` UTC form, to
+`EpisodeStore.list_active_in_window(...)` or any persistence/window query.
+
+If TRF matches one of the four v1 anchors but
+`temporal_spine.temporal_window(...)` raises, TRF must return
+`anchor_detected=True`, the matched `anchor_kind`, `window_start=None`,
+`window_end=None`, `search_status="helper_unavailable"`, empty `brief_text`,
+and `memory_absence_established=False`. TRF must count that conversion through
+`record_helper_unavailable("temporal_helper_exception")`.
+
+`unsupported_anchor_rejected_count` must not be driven from raw user text. TRF
+`_ANCHOR_PATTERNS` remains limited to the existing four regexes.
+
 ---
 
 ## Store Status Inventory
@@ -288,27 +370,42 @@ S3 v1 must document each touched store in one of three buckets:
 | wrapped | existing fields remain, but access goes through S3 normalization helpers |
 | deferred | existing temporal fields remain unchanged and are out of v1 runtime path |
 
+For this inventory, "runtime path" means the S3 v1 module, TRF refactor,
+`/health.temporal_spine`, and observation-sidecar projection. A deferred store
+may still be active under its owning organ. Deferred means S3 v1 must not scan
+it, migrate it, normalize its rows, or red-gate on its timestamp shape.
+
 Initial v1 classification:
 
 | Store | V1 status | Reason |
 | --- | --- | --- |
-| `memory/lived_episodes.db` / `episodes` | wrapped | `occurred_at` and `created_at` remain, but TRF window reads use S3 helper semantics |
-| `memory/lived_graph.db` / `edges` | canonical-with-note | already canonicalizes validity windows to UTC text |
-| `memory/m1_lived_episode_promotion.db` | deferred | JSON promotion windows stay as-is; M1 behavior already tested |
-| `memory/private_thoughts.db` | deferred | S1 timestamp is not in S3 v1 runtime path |
-| `memory/entity_index.db` | deferred | entity observed times are not in S3 v1 runtime path |
-| Calendar v1 offline store | deferred | Calendar OAuth remains off; no Calendar-backed anchors in S3 v1 |
+| `memory/lived_episodes.db` / `episodes` | wrapped | `occurred_at` and `created_at` remain SQLite text. S3 v1 wraps the TRF read boundary only: TRF must pass UTC `+00:00` half-open bounds to `EpisodeStore.list_active_in_window(...)`. S3 v1 does not migrate rows or change `EpisodeStore.add(...)`. |
+| `memory/lived_graph.db` / `edges` | canonical | `RelationshipGraph` owns graph temporal canonicalization for `valid_from` / `valid_to` and `list_active(at_time=...)`; S3 v1 must not add direct SQL graph callers or migrate graph rows. |
+| `memory/m1_lived_episode_promotion.db` | deferred | M1 owns pending/promotion sidecar time, including JSON `first_owner_at`, `last_owner_at`, `window_start`, `window_end`, and `source_index.promoted_at`. S3 v1 may not read, migrate, or red-gate this sidecar. |
+| `memory/private_thoughts.db` | deferred | Private-thought timestamps, including S1/S1b `ts` epoch seconds, remain owned by S1/S1b. S3 v1 may not read, migrate, or use them for temporal-spine health. |
+| `memory/entity_index.db` | deferred | Entity `observed_at` / `created_at` remain owned by the entity-index organ and MSEL expansion. S3 v1 may not read, migrate, or normalize this store. |
+| Calendar v1 offline store (`memory/calendar_v1.db` when enabled) | deferred | Calendar storage is noncanonical pre-body staging; Calendar OAuth/anchors remain out of S3 v1. S3 v1 may not read Calendar provider/read-model tables, migrate them, or turn Calendar time into lived-memory anchors. |
+
+For wrapped `episodes` reads, S3 v1 must not rely on lexical SQLite TEXT
+comparison across mixed `Z`, `+00:00`, local-offset, or naive ISO strings. Keep
+`EpisodeStore.list_active_in_window(...)` public signature unchanged, but make
+S3-touched TRF reads compare canonical UTC instants. Tests must include
+mixed-offset episodes near an owner-local boundary.
 
 ---
 
 ## Health And Sidecar
 
-Add a content-free `/health.temporal_spine` section:
+Add `temporal_spine` as a nested object in the existing `GET /health`
+response. Do not add a new `/health.temporal_spine` Flask route. In this spec
+and tests, `/health.temporal_spine` means the JSON path
+`GET /health -> temporal_spine`.
 
 ```json
 {
   "timezone_source": "identity",
   "timezone_name": "America/Chicago",
+  "invalid_field_name_rejected_count": 0,
   "malformed_timestamp_rejected_count": 0,
   "naive_timestamp_assumed_utc_count": 0,
   "unsupported_anchor_rejected_count": 0,
@@ -319,14 +416,29 @@ Add a content-free `/health.temporal_spine` section:
 Rules:
 
 - `timezone_name` is an IANA timezone label, not content.
+- If identity timezone resolution fails because the configured timezone is
+  invalid, health must report `timezone_source: "invalid_fallback_utc"` and
+  `timezone_name: "UTC"`.
 - Counters are aggregate process counters only.
 - No raw query text, timestamp values, event IDs, source IDs, memory IDs, or
   anchor phrases from user text may appear in health.
-- The observation sidecar may red-gate nonzero malformed timestamps,
-  unsupported anchors, invalid timezone fallback, or helper unavailable if the
-  operator chooses. The first implementation should add gates for malformed
-  timestamp and invalid timezone fallback only; unsupported anchors can be
-  normal user behavior and should start as watch-only.
+- The invalid raw timezone string must not appear in health, logs, sidecar
+  samples, or red-gate names.
+- `scripts.observe_sidecar.project_health(...)` must project `temporal_spine`
+  with an explicit allowlist only: `timezone_source`, `timezone_name`,
+  `invalid_field_name_rejected_count`, `malformed_timestamp_rejected_count`,
+  `naive_timestamp_assumed_utc_count`, `unsupported_anchor_rejected_count`, and
+  `helper_unavailable_count`. It must not pass through the whole health
+  section.
+- The first implementation must add exactly these red-gate names:
+  `temporal_spine_invalid_timezone_fallback` when
+  `timezone_source == "invalid_fallback_utc"` and
+  `temporal_spine_malformed_timestamp_rejected` when
+  `malformed_timestamp_rejected_count > 0`.
+- No temporal-spine red gate may include timezone names, raw counter values,
+  anchor phrases, timestamp values, source IDs, memory IDs, user text, or
+  exception text. Unsupported anchors, invalid field names, naive timestamps,
+  and helper-unavailable remain watch-only in v1.
 
 ---
 
@@ -334,39 +446,94 @@ Rules:
 
 Minimum tests before implementation:
 
-1. `owner_timezone()` reads `core.memory.identity.timezone()`.
-2. invalid identity timezone falls back to UTC and reports
+1. `_reset_diagnostics_for_tests()` clears all counters and timezone-source
+   state between tests.
+2. diagnostics counters are isolated: one malformed timestamp test does not
+   affect the next naive timestamp test.
+3. diagnostics counters are thread-safe under concurrent increments.
+4. non-empty `MAEZ_OWNER_TIMEZONE` reports timezone source `env`.
+5. `owner_timezone()` reads `core.memory.identity.timezone()` when env is empty.
+6. invalid identity timezone falls back to UTC and reports
    `invalid_fallback_utc`.
-3. missing identity timezone falls back to UTC and reports `fallback_utc`.
-4. `canonical_utc_iso("2026-05-15T12:00:00Z")` emits `+00:00` UTC form.
-5. `canonical_utc_iso("2026-05-15T07:00:00-05:00")` emits the same instant in
-   `+00:00` UTC form.
-6. naive `datetime` is treated as UTC and increments the naive counter.
-7. malformed timestamp raises `ValueError` and increments malformed counter.
-8. `owner_local_date(...)` uses configured owner timezone, not UTC date.
-9. `temporal_window("earlier_today", ref)` matches local midnight through ref.
-10. `temporal_window("this_morning", ref)` matches local midnight through noon.
-11. `temporal_window("yesterday", ref)` follows local calendar day across DST.
-12. `temporal_window("last_week", ref)` uses previous completed Monday-Sunday.
-13. all windows are half-open.
-14. unsupported anchor increments unsupported counter.
-15. TRF `last week` behavior remains unchanged after the refactor.
-16. TRF `yesterday` DST test remains unchanged after the refactor.
-17. TRF still does not activate without memory intent.
-18. TRF still does not scan full episode store.
-19. TRF helper error remains `helper_unavailable`, not memory absence.
-20. TRF kill switch still disables only temporal-anchor evidence lookup.
-21. `/health` exposes `temporal_spine` aggregate fields.
-22. `/health.temporal_spine` does not expose raw timestamps, source IDs, memory
-   IDs, or user text.
-23. sidecar projects temporal-spine aggregate fields content-free.
-24. sidecar red-gates invalid timezone fallback.
-25. sidecar red-gates malformed timestamp count greater than zero.
-26. sidecar does not red-gate unsupported anchors by default.
-27. store-status inventory exists in docs and names canonical/wrapped/deferred.
-28. no code path imports `ZoneInfo("America/Chicago")` in TRF after refactor.
-29. existing `tests.test_temporal_recall_fragment_guard` remains green.
-30. full suite remains green.
+7. missing or empty identity timezone falls back to UTC and reports
+   `fallback_utc`.
+8. invalid raw timezone string is absent from health, sidecar samples, logs, and
+   red-gate names.
+9. `canonical_utc_iso("2026-05-15T12:00:00Z")` emits `+00:00` UTC form.
+10. `canonical_utc_iso("2026-05-15T07:00:00-05:00")` emits the same instant in
+    `+00:00` UTC form.
+11. naive `datetime` is treated as UTC and increments the naive counter.
+12. naive ISO datetime string input is treated as UTC and increments the naive
+    counter.
+13. bare date strings are rejected as malformed instants.
+14. malformed timestamp raises `ValueError` and increments malformed counter.
+15. invalid `field_name` raises `ValueError`, increments
+    `invalid_field_name_rejected_count`, and does not parse the timestamp.
+16. ambiguous fall-back owner-local time preserves `fold`: fold 0 and fold 1
+    canonicalize to different UTC instants.
+17. nonexistent spring-forward owner-local time is rejected and increments the
+    malformed counter.
+18. `owner_local_date(...)` uses configured owner timezone, not UTC date.
+19. `temporal_window("earlier_today", ref)` matches local midnight through ref.
+20. `temporal_window("this_morning", ref)` matches local midnight through noon.
+21. `temporal_window("yesterday", ref)` follows local calendar day across DST.
+22. `temporal_window("last_week", ref)` uses previous completed Monday-Sunday.
+23. all windows are half-open.
+24. `TemporalWindow.start` / `end` are owner-local aware datetimes, and
+    `start_utc` / `end_utc` are UTC-aware datetimes suitable for store filters.
+25. unsupported anchor raises `ValueError` and increments unsupported counter.
+26. `temporal_window(...)` rejects a nonexistent owner-local `reference_time`;
+    TRF maps that exception to `helper_unavailable`.
+27. no code path imports `ZoneInfo("America/Chicago")` in TRF after refactor.
+28. TRF `last week` behavior remains unchanged after the refactor.
+29. TRF `yesterday` DST test remains unchanged after the refactor.
+30. TRF still does not activate without memory intent.
+31. TRF still does not scan full episode store.
+32. TRF helper error remains `helper_unavailable`, not memory absence.
+33. TRF kill switch still disables only temporal-anchor evidence lookup.
+34. TRF passes `+00:00` UTC ISO bounds to `EpisodeStore.list_active_in_window(...)`;
+    no local-offset ISO string reaches the SQLite range predicate.
+35. TRF includes an episode at `2026-05-11T04:30:00+00:00` for a Chicago
+    `last_week` window ending at local `2026-05-11T00:00:00-05:00`, and excludes
+    an episode exactly at `2026-05-11T05:00:00+00:00`.
+36. Episode window tests cover mixed `Z`, `+00:00`, local-offset, and naive
+    strings; S3 correctness may not depend on raw ISO string ordering.
+37. `/health` exposes `temporal_spine` aggregate fields.
+38. `/health.temporal_spine` does not expose raw timestamps, source IDs, memory
+    IDs, user text, exception text, or invalid raw timezone strings.
+39. sidecar projects temporal-spine aggregate fields content-free through an
+    explicit allowlist.
+40. sidecar red-gates invalid timezone fallback with exactly
+    `temporal_spine_invalid_timezone_fallback`.
+41. sidecar red-gates malformed timestamp count greater than zero with exactly
+    `temporal_spine_malformed_timestamp_rejected`.
+42. sidecar does not red-gate unsupported anchors by default.
+43. sidecar does not red-gate naive timestamps, invalid field names, or
+    helper-unavailable in v1.
+44. store-status inventory exists in docs and names canonical/wrapped/deferred.
+45. existing `tests.test_temporal_recall_fragment_guard` remains green.
+46. full suite remains green.
+
+---
+
+## Named Engineering Choices Preserved
+
+The Codex engineering review surfaced four choices that must stay explicit:
+
+- **D1 - TemporalWindow dual surface:** `start` / `end` stay owner-local for
+  TRF result compatibility; `start_utc` / `end_utc` are the only store-facing
+  boundaries. This resolves the review tension between voice compatibility and
+  SQLite correctness without overloading one field pair.
+- **D2 - Deferred means outside S3, not inactive:** deferred stores may still
+  run under their owning organs. S3 v1 simply does not scan, migrate, normalize,
+  or red-gate them.
+- **D3 - Helper-unavailable counter scope:** `helper_unavailable_count` tracks
+  only temporal-spine helper exceptions converted to fail-neutral TRF posture.
+  Store errors, timeouts, and the TRF kill switch keep their existing TRF
+  behavior and do not increment this S3 counter.
+- **D4 - Calendar success is not a temporal grant:** OAuth onboarding or
+  Calendar burn-in does not unlock Calendar-backed recall. That requires a
+  separate reviewed S3 v1.1/v2 grant under S2 and Calendar voice posture.
 
 ---
 
@@ -376,7 +543,9 @@ S3 is covenant-shaped because it touches Time as Biography. Before
 implementation:
 
 - Codex engineering panel reviews the spec for implementation ambiguity,
-  race/counter behavior, store-boundary risk, and test completeness.
+  race/counter behavior, store-boundary risk, and test completeness. The first
+  Codex panel returned REVISE/RATIFY-WITH-AMENDMENTS and was folded into this
+  spec; see [`reviews/spec-codex-panel.md`](reviews/spec-codex-panel.md).
 - Claude covenant council reviews the spec for invariant #1 alignment and for
   whether the "UTC storage, owner-local boundary" rule preserves voice honesty.
 - Fold both review lanes before code.
