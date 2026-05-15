@@ -122,6 +122,35 @@ The covenant boundary remains unchanged:
 - observation still requires `observe` mode and a valid future timebox;
 - stale or malformed config fails neutral.
 
+### 4. Observers Must Be Calibrated To Their Actual Layer
+
+The end-of-day session snapshot initially reported Maez services as inactive
+because the generator queried system-level `systemctl` units while Maez is
+running as user-scoped `systemctl --user` units on this host. That would have
+sealed a false record: Maez alive in the user manager, but "inactive" in the
+durable snapshot.
+
+The fix was small (`eccbbd3`), but the lesson is substrate-shaped:
+
+```text
+observers must be truthful about the layer they actually observe.
+```
+
+For snapshot generators, sidecars, `/health` readers, audit summaries, and
+future review tools, calibration is load-bearing. A truthful observer must
+name and test its boundary:
+
+- user systemd units vs system units;
+- parent daemon process vs detector child process;
+- `/health` aggregate counters vs content stores;
+- native thread counts vs Python worker names;
+- enabled mode vs timebox-expired mode.
+
+An observation surface that reads the wrong layer can become worse than no
+surface, because it gives future operators durable false certainty. Future
+observation tools should ship with regression tests proving they query the
+intended layer, not the default layer their library or command happens to use.
+
 ## What Was Not Proven
 
 These ceremonies did not start the one-week observation gate. Persistent
@@ -146,6 +175,7 @@ Future body-sensor specs should copy this posture:
 - no prompt, memory, greeting, or briefing consumer unless separately reviewed;
 - live ceremony for open -> observe -> expiry;
 - live ceremony for SIGTERM during active observation.
+- observer tools calibrated to the exact layer they claim to report.
 
 Plainly: if a future organ needs native code to sense the world, keep that
 native code in a room Maez can lock from the outside.
