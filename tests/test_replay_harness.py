@@ -195,6 +195,41 @@ class ConcurrencyProbeTests(unittest.TestCase):
     """The concurrency probe writes N rows in parallel and asserts
     chain integrity. Closes the 2.5c gap on overlap/concurrency."""
 
+    def test_chain_verification_uses_append_order_not_timestamp(self):
+        """Ledger chain order is append order, not wall-clock order.
+
+        Concurrent writers serialize by the writer lock and SQLite
+        transaction, but their timestamps are not a serialization
+        boundary. Chain verification must therefore read rows in append
+        order just like the production replay harness does.
+        """
+        from core.ledger import chain
+        from core.ledger import writer
+        import sqlite3
+
+        db = _fresh_probe_db("append_order")
+        with patch.dict(os.environ, {"MAEZ_LEDGER_WRITES": "1"}):
+            with patch("core.ledger.writer.time.time",
+                       side_effect=[200.0, 100.0]):
+                w = writer.LedgerWriter(db)
+                try:
+                    w.write_turn("user_message", "first append")
+                    w.write_turn("user_message", "second append")
+                finally:
+                    w.close()
+
+        with sqlite3.connect(db) as conn:
+            conn.row_factory = sqlite3.Row
+            timestamp_rows = [dict(r) for r in conn.execute(
+                "SELECT * FROM turns ORDER BY timestamp ASC"
+            ).fetchall()]
+            append_rows = [dict(r) for r in conn.execute(
+                "SELECT * FROM turns ORDER BY rowid ASC"
+            ).fetchall()]
+
+        self.assertNotEqual(chain.verify_chain(timestamp_rows), [])
+        self.assertEqual(chain.verify_chain(append_rows), [])
+
     def test_concurrency_probe_passes_with_clean_chain(self):
         db = _fresh_probe_db("concurrency")
         probes = rh.load_probes(_CORPUS_PATH)
@@ -208,7 +243,7 @@ class ConcurrencyProbeTests(unittest.TestCase):
         with sqlite3.connect(db) as conn:
             conn.row_factory = sqlite3.Row
             rows = [dict(r) for r in conn.execute(
-                "SELECT * FROM turns ORDER BY timestamp ASC"
+                "SELECT * FROM turns ORDER BY rowid ASC"
             ).fetchall()]
         violations = chain.verify_chain(rows)
         self.assertEqual(violations, [],
