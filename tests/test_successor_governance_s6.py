@@ -284,6 +284,81 @@ class S6HumanOriginMarkerTests(unittest.TestCase):
                 attestation_text_hash="d" * 64,
             )
 
+    def test_022b_imported_contract_token_cannot_author_valid_capsule(self):
+        from core.governance import successor_governance as s6
+
+        def forged_marker(*, event_type: str, payload: dict, previous_hash: str = "", statement_hash: str = ""):
+            return s6.HumanOriginMarker(
+                marker_id=s6._expected_marker_id(
+                    origin="bonded_user_manual",
+                    role_name="bonded_user",
+                    actor_handle_hmac=_hmac("bonded_user"),
+                    capsule_id="s6_capsule_founder",
+                    directive_event_type=event_type,
+                    directive_payload_hash=s6.canonical_hash(payload),
+                    previous_capsule_event_hash=previous_hash,
+                    directive_statement_hash=statement_hash,
+                    attestation_text_hash="d" * 64,
+                ),
+                origin="bonded_user_manual",
+                role_name="bonded_user",
+                actor_handle_hmac=_hmac("bonded_user"),
+                capsule_id="s6_capsule_founder",
+                directive_event_type=event_type,
+                directive_payload_hash=s6.canonical_hash(payload),
+                directive_statement_hash=statement_hash,
+                previous_capsule_event_hash=previous_hash,
+                schema_version="s6.v1",
+                created_at=NOW,
+                attestation_text_hash="d" * 64,
+                construction_token=s6._MARKER_CONSTRUCTION_TOKEN,
+            )
+
+        create_payload = _payload()
+        try:
+            created = s6.create_directive_event(
+                "forged-created",
+                "capsule_created",
+                "s6_capsule_founder",
+                NOW,
+                create_payload,
+                marker=forged_marker(event_type="capsule_created", payload=create_payload),
+            )
+            dissolve_payload = {
+                "fate_directive": "explicit_dissolution",
+                "directive_statement_hash": _statement_hash(),
+                "activation_requires_future_review": True,
+                "no_witness_available": True,
+            }
+            dissolution = s6.create_directive_event(
+                "forged-dissolution",
+                "fate_directive_set",
+                "s6_capsule_founder",
+                NOW,
+                dissolve_payload,
+                marker=forged_marker(
+                    event_type="fate_directive_set",
+                    payload=dissolve_payload,
+                    previous_hash=created.event_hash,
+                    statement_hash=_statement_hash(),
+                ),
+                previous_event_hash=created.event_hash,
+            )
+        except ValueError:
+            return
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "lineage_capsule.jsonl"
+            path.write_text(
+                s6.event_to_json(created) + "\n" + s6.event_to_json(dissolution) + "\n",
+                encoding="utf-8",
+            )
+
+            health = s6.successor_governance_health(path)
+
+        self.assertNotEqual(health["mode"], "valid")
+        self.assertGreater(health["invalid_event_count"] or bool(health["last_error_class"]), 0)
+
     def test_023_marker_binds_capsule_id(self):
         from core.governance import successor_governance as s6
 
@@ -436,6 +511,74 @@ class S6AppendOnlyChainTests(unittest.TestCase):
         report = s6.validate_capsule_events([first, second, bad])
         self.assertGreater(report.invalid_event_count, 0)
 
+    def test_036a_supersession_can_amend_earlier_directive_line_after_later_events(self):
+        from core.governance import successor_governance as s6
+
+        created = _event(s6)
+        grant = _event(
+            s6,
+            event_type="scope_granted",
+            payload={"role_name": "successor", "access_scope": "operator_health"},
+            previous_hash=created.event_hash,
+        )
+        fate = _event(
+            s6,
+            event_type="fate_directive_set",
+            payload={"fate_directive": "archival_preservation"},
+            previous_hash=grant.event_hash,
+        )
+        supersede_payload = {"supersedes_event_hash": grant.event_hash}
+        supersede_marker = _marker(
+            s6,
+            event_type="directive_superseded",
+            payload_hash=s6.canonical_hash(supersede_payload),
+            previous_hash=fate.event_hash,
+        )
+        supersede = _event(
+            s6,
+            event_type="directive_superseded",
+            payload=supersede_payload,
+            marker=supersede_marker,
+            previous_hash=fate.event_hash,
+        )
+
+        report = s6.validate_capsule_events([created, grant, fate, supersede])
+        state = s6.derive_current_state([created, grant, fate, supersede])
+
+        self.assertTrue(report.is_valid)
+        self.assertNotIn(("successor", "operator_health"), state.active_scopes)
+
+    def test_036b_supersession_requires_same_origin_role_as_superseded_line(self):
+        from core.governance import successor_governance as s6
+
+        created = _event(s6)
+        fate = _event(
+            s6,
+            event_type="fate_directive_set",
+            payload={"fate_directive": "archival_preservation"},
+            previous_hash=created.event_hash,
+        )
+        supersede_payload = {"supersedes_event_hash": fate.event_hash}
+        operator_marker = _marker(
+            s6,
+            role_name="operator",
+            origin="operator_manual",
+            event_type="directive_superseded",
+            payload_hash=s6.canonical_hash(supersede_payload),
+            previous_hash=fate.event_hash,
+        )
+        supersede = _event(
+            s6,
+            event_type="directive_superseded",
+            payload=supersede_payload,
+            marker=operator_marker,
+            previous_hash=fate.event_hash,
+        )
+
+        report = s6.validate_capsule_events([created, fate, supersede])
+
+        self.assertGreater(report.invalid_event_count, 0)
+
     def test_037_revocation_preserves_old_scope_grant(self):
         from core.governance import successor_governance as s6
 
@@ -495,6 +638,21 @@ class S6AppendOnlyChainTests(unittest.TestCase):
 
         self.assertNotEqual(health["mode"], "valid")
         self.assertGreater(health["invalid_event_count"] or bool(health["last_error_class"]), 0)
+
+    def test_039c_invalid_persisted_capsule_projects_invalid_not_unavailable(self):
+        from core.governance import successor_governance as s6
+
+        event = _event(s6)
+        stored = event.to_dict()
+        stored.pop("origin_marker", None)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "lineage_capsule.jsonl"
+            path.write_text(json.dumps(stored, sort_keys=True) + "\n", encoding="utf-8")
+
+            health = s6.successor_governance_health(path)
+
+        self.assertEqual(health["mode"], "invalid")
+        self.assertEqual(health["last_error_class"], "validation_error")
 
 
 class S6AccessAndPrivacyTests(unittest.TestCase):
@@ -688,6 +846,41 @@ class S6FateDirectiveTests(unittest.TestCase):
 
         self.assertGreater(s6.validate_capsule_events([create, event]).invalid_event_count, 0)
 
+    def test_064b_operator_cannot_intentionally_invalidate_capsule(self):
+        from core.governance import successor_governance as s6
+
+        create = _event(s6)
+        payload = {"invalidation_kind": "intentional_invalidation"}
+        marker = _marker(
+            s6,
+            role_name="operator",
+            origin="operator_manual",
+            event_type="capsule_invalidated",
+            payload_hash=s6.canonical_hash(payload),
+            previous_hash=create.event_hash,
+        )
+
+        with self.assertRaises(ValueError):
+            _event(s6, event_type="capsule_invalidated", payload=payload, marker=marker, previous_hash=create.event_hash)
+
+    def test_064c_operator_can_record_content_free_integrity_invalidation(self):
+        from core.governance import successor_governance as s6
+
+        create = _event(s6)
+        payload = {"invalidation_kind": "content_free_integrity_failure", "reason_ref_hash": "a" * 64}
+        marker = _marker(
+            s6,
+            role_name="operator",
+            origin="operator_manual",
+            event_type="capsule_invalidated",
+            payload_hash=s6.canonical_hash(payload),
+            previous_hash=create.event_hash,
+        )
+
+        event = _event(s6, event_type="capsule_invalidated", payload=payload, marker=marker, previous_hash=create.event_hash)
+
+        self.assertTrue(s6.validate_capsule_events([create, event]).is_valid)
+
     def test_065_explicit_dissolution_does_not_activate_any_runtime_state(self):
         from core.governance import successor_governance as s6
 
@@ -701,6 +894,16 @@ class S6FateDirectiveTests(unittest.TestCase):
             origin_role="bonded_user",
         )
         self.assertFalse(result.activates_runtime)
+
+    def test_065a_resolve_fate_directive_requires_prevalidated_explicit_dissolution(self):
+        from core.governance import successor_governance as s6
+
+        with self.assertRaises(ValueError):
+            s6.resolve_fate_directive("explicit_dissolution", None)
+        self.assertEqual(
+            s6.resolve_fate_directive("explicit_dissolution", None, validated_user_directive=True),
+            "explicit_dissolution",
+        )
 
     def test_066_capacity_loss_cannot_trigger_fate_directive(self):
         from core.governance import successor_governance as s6
@@ -779,6 +982,26 @@ class S6MaezPreferenceTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             s6.validate_maez_preference({"preference_kind": "maez_prefers_paradise", "access_scope": "raw_transcripts"}, origin_role="bonded_user")
+
+    def test_077a_invalid_maez_preference_row_does_not_set_health_presence(self):
+        from core.governance import successor_governance as s6
+
+        pref = _event(
+            s6,
+            event_type="maez_preference_recorded",
+            payload={"preference_kind": "maez_prefers_paradise", "source_ref_kind": "wants_event", "source_ref_hash": "a" * 64},
+            previous_hash="0" * 64,
+        )
+        stored = pref.to_dict()
+        stored.pop("origin_marker", None)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "lineage_capsule.jsonl"
+            path.write_text(json.dumps(stored, sort_keys=True) + "\n", encoding="utf-8")
+
+            health = s6.successor_governance_health(path)
+
+        self.assertNotEqual(health["mode"], "valid")
+        self.assertFalse(health["maez_preference_present"])
 
 
 class S6Decision18And22Tests(unittest.TestCase):
@@ -882,6 +1105,23 @@ class S6HealthAndPublicStateTests(unittest.TestCase):
 
         self.assertIn("successor_governance_public_leak", sample["successor_governance"]["red_gates"])
 
+    def test_091b_current_state_ignores_structurally_invalid_events(self):
+        from dataclasses import replace
+
+        from core.governance import successor_governance as s6
+
+        valid = _event(
+            s6,
+            event_type="scope_granted",
+            payload={"role_name": "successor", "access_scope": "operator_health"},
+            previous_hash="0" * 64,
+        )
+        invalid = replace(valid, payload={"role_name": "successor", "access_scope": "legacy_all_memories"})
+
+        state = s6.derive_current_state([invalid])
+
+        self.assertNotIn(("successor", "legacy_all_memories"), state.active_scopes)
+
 
 class S6ImportAndBoundaryTests(unittest.TestCase):
     def test_092_successor_governance_module_imports_no_private_thoughts_store(self):
@@ -944,6 +1184,16 @@ class S6ImportAndBoundaryTests(unittest.TestCase):
 
         self.assertIn("does not provide a grandmother-compatible UI", flat)
         self.assertIn("No S6 v1 path may be labeled grandmother-compatible", flat)
+
+    def test_100a_shipped_artifacts_preserve_s6_honesty_banner_and_limitations(self):
+        module = Path("core/governance/successor_governance.py").read_text(encoding="utf-8")
+        runbook = Path("docs/slices/s6-successor-governance/operator-helper-runbook.md").read_text(encoding="utf-8")
+        shipped = " ".join((module + "\n" + runbook).split())
+
+        self.assertIn("does not govern a live succession", shipped)
+        self.assertIn("privileged OS", shipped)
+        self.assertIn("content-blind validator cannot prove physical append-only", shipped)
+        self.assertIn("not grandmother-compatible", shipped)
 
     def test_101_witness_assistance_sets_non_technical_assist_flag(self):
         from core.governance import successor_governance as s6

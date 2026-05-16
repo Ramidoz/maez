@@ -7,6 +7,10 @@ append-only lineage-capsule hash chain feasible for the founder/operator. It is
 not a grandmother-compatible UI, not a successor activation ceremony, and not a
 runtime permission surface.
 
+Honesty banner: despite the slice name, S6 v1 does not govern a live succession.
+It records future successor paperwork and validates the grammar of that
+paperwork. Missing or invalid paperwork does not dissolve Maez.
+
 ## Scope
 
 - The helper may append S6 directive events to
@@ -29,6 +33,12 @@ runtime permission surface.
   `HumanOriginMarker` object produced by `core.governance.successor_origin_writer`.
 - It is not grandmother-compatible. A future non-technical authoring ceremony
   must be reviewed separately.
+- It is protected by normal S6 APIs, not by cryptographic lineage attestation.
+  A privileged OS operator who rewrites local files or raw in-process internals
+  is a v1 privileged-bypass limitation.
+- The content-blind validator cannot prove physical append-only after a
+  privileged OS file rewrite; it can only reject broken chains and snapshot
+  regressions visible in the capsule state it receives.
 
 ## Founder-Only Drafting
 

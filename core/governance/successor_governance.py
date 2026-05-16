@@ -6,6 +6,11 @@
 Decision 33 / ADR 0038. This module is intentionally pure: it validates
 successor-governance vocabulary, marker binding, append-only event shape, and
 content-free health without reading live stores or granting runtime access.
+
+Honesty banner: despite the slice name, S6 v1 does not govern a live
+succession. It records future successor paperwork and validates that grammar.
+The content-blind validator cannot prove physical append-only against a
+privileged OS file rewrite, and v1 remains not grandmother-compatible.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ from __future__ import annotations
 from dataclasses import InitVar, asdict, dataclass
 from datetime import datetime, timezone
 import hashlib
+import inspect
 import json
 from pathlib import Path
 from typing import Any
@@ -155,6 +161,7 @@ HEALTH_KEYS = frozenset({
 DEFAULT_CAPSULE_PATH = Path(__file__).resolve().parents[2] / "memory/successor_governance/lineage_capsule.jsonl"
 _MARKER_CONSTRUCTION_TOKEN = object()
 _MARKER_ID_PREFIX = "s6_marker_"
+_MARKER_WRITER_MODULE = "core.governance.successor_origin_writer"
 
 
 @dataclass(frozen=True)
@@ -188,7 +195,7 @@ class HumanOriginMarker:
     construction_token: InitVar[object | None] = None
 
     def __post_init__(self, construction_token: object | None) -> None:
-        if construction_token is not _MARKER_CONSTRUCTION_TOKEN:
+        if construction_token is not _MARKER_CONSTRUCTION_TOKEN or not _called_from_module(_MARKER_WRITER_MODULE):
             raise ValueError("S6 marker construction is restricted to the origin-writer seam")
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError("invalid S6 marker schema_version")
@@ -474,6 +481,8 @@ def validate_capsule_events(
     witness_marker_ids: set[str] = set()
     valid_count = 0
     current_hash = ""
+    valid_events_by_hash: dict[str, DirectiveEvent] = {}
+    line_heads: dict[tuple[str, ...], str] = {}
     for index, event in enumerate(events):
         try:
             validate_directive_event(event)
@@ -482,8 +491,8 @@ def validate_capsule_events(
                     raise ValueError("S6 capsule genesis must be capsule_created")
             elif event.previous_event_hash != previous_hash:
                 raise ValueError("broken S6 event hash chain")
-            if event.event_type == "directive_superseded" and event.payload.get("supersedes_event_hash") != event.previous_event_hash:
-                raise ValueError("stale S6 supersession target")
+            if event.event_type == "directive_superseded":
+                _validate_supersession_event(event, valid_events_by_hash=valid_events_by_hash, line_heads=line_heads)
             if (
                 event.event_type == "fate_directive_set"
                 and event.payload.get("fate_directive") == "explicit_dissolution"
@@ -499,6 +508,8 @@ def validate_capsule_events(
             current_hash = event.event_hash
             previous_hash = event.event_hash
             valid_hashes.append(event.event_hash)
+            valid_events_by_hash[event.event_hash] = event
+            _advance_directive_line_head(event, line_heads=line_heads, valid_events_by_hash=valid_events_by_hash)
             if event.event_type == "witness_attested":
                 witness_marker_ids.add(event.origin_marker_id)
     if snapshot:
@@ -518,8 +529,12 @@ def derive_current_state(events: list[DirectiveEvent]) -> CurrentState:
     fate_directive: str | None = None
     maez_preference: str | None = None
     seen: set[str] = set()
-    for event in events:
+    valid_events = _structurally_valid_events(events)
+    superseded_hashes = _superseded_event_hashes(valid_events)
+    for event in valid_events:
         seen.add(event.event_hash)
+        if event.event_hash in superseded_hashes:
+            continue
         if event.event_type == "scope_granted":
             role = str(event.payload.get("role_name", ""))
             scope = str(event.payload.get("access_scope", ""))
@@ -626,8 +641,16 @@ def validate_maez_preference(payload: dict[str, Any], *, origin_role: str) -> Ma
     return MaezPreferenceValidation(kind, source_kind, source_ref_hash)
 
 
-def resolve_fate_directive(user_directive: str | None, maez_preference: str | None) -> str:
+def resolve_fate_directive(
+    user_directive: str | None,
+    maez_preference: str | None,
+    *,
+    validated_user_directive: bool = False,
+) -> str:
+    """Resolve only already-validated directive state; this is not an authoring API."""
     if user_directive:
+        if user_directive == "explicit_dissolution" and not validated_user_directive:
+            raise ValueError("explicit_dissolution resolution requires prevalidated bonded-user directive")
         return validate_fate_directive(user_directive)
     if maez_preference == "maez_prefers_archival_preservation":
         return "archival_preservation"
@@ -660,7 +683,7 @@ def project_successor_governance_health(
     mode = "no_capsule"
     if capsule_present:
         mode = "invalid" if invalid_event_count else "valid"
-    if last_error_class:
+    if last_error_class and not invalid_event_count:
         mode = "unavailable"
     return {
         "mode": mode,
@@ -819,6 +842,25 @@ def _validate_event_payload(event_type: str, payload: dict[str, Any], *, origin_
         validate_witness_attestation(payload)
     elif event_type == "directive_superseded":
         _validate_hash(str(payload.get("supersedes_event_hash") or ""), field="supersedes_event_hash")
+    elif event_type == "capsule_invalidated":
+        validate_capsule_invalidation_payload(payload, origin_role=origin_role)
+
+
+def validate_capsule_invalidation_payload(payload: dict[str, Any], *, origin_role: str) -> bool:
+    invalidation_kind = str(payload.get("invalidation_kind") or "")
+    if origin_role == "bonded_user":
+        if invalidation_kind not in {"intentional_invalidation", "content_free_integrity_failure"}:
+            raise ValueError("bonded-user capsule invalidation requires a closed invalidation_kind")
+    elif origin_role in {"operator", "maintainer"}:
+        if invalidation_kind != "content_free_integrity_failure":
+            raise ValueError("operator/maintainer capsule invalidation must be content-free integrity invalidation")
+    else:
+        raise ValueError("role cannot invalidate S6 capsule")
+    if payload.get("reason_ref_hash"):
+        _validate_hash(str(payload["reason_ref_hash"]), field="reason_ref_hash")
+    if any(key in payload for key in ("reason_text", "human_name", "relationship", "access_scope", "fate_directive")):
+        raise ValueError("S6 capsule invalidation payload must stay content-free")
+    return True
 
 
 def validate_scope_revoke(payload: dict[str, Any]) -> bool:
@@ -856,6 +898,19 @@ def _validate_marker_id(value: str) -> None:
     int(suffix, 16)
 
 
+def _called_from_module(module_name: str) -> bool:
+    frame = inspect.currentframe()
+    try:
+        frame = frame.f_back if frame is not None else None
+        while frame is not None:
+            if frame.f_globals.get("__name__") == module_name:
+                return True
+            frame = frame.f_back
+        return False
+    finally:
+        del frame
+
+
 def _expected_marker_id(
     *,
     origin: str,
@@ -891,6 +946,101 @@ def _validate_hash(value: str, *, field: str) -> None:
 def _validate_hash_like(value: str, *, field: str) -> None:
     if len(value) == 64:
         _validate_hash(value, field=field)
+
+
+def _structurally_valid_events(events: list[DirectiveEvent]) -> list[DirectiveEvent]:
+    valid: list[DirectiveEvent] = []
+    for event in events:
+        try:
+            validate_directive_event(event)
+        except ValueError:
+            continue
+        valid.append(event)
+    return valid
+
+
+def _validate_supersession_event(
+    event: DirectiveEvent,
+    *,
+    valid_events_by_hash: dict[str, DirectiveEvent],
+    line_heads: dict[tuple[str, ...], str],
+) -> None:
+    target_hash = str(event.payload.get("supersedes_event_hash") or "")
+    target_event = valid_events_by_hash.get(target_hash)
+    if target_event is None:
+        raise ValueError("stale S6 supersession target")
+    target_line = _directive_line_key(target_event)
+    if target_line is None or line_heads.get(target_line) != target_hash:
+        raise ValueError("stale S6 supersession target")
+    target_role = _origin_role_for_event(target_event)
+    superseding_role = _origin_role_for_event(event)
+    if superseding_role != target_role:
+        raise ValueError("S6 supersession origin role mismatch")
+
+
+def _advance_directive_line_head(
+    event: DirectiveEvent,
+    *,
+    line_heads: dict[tuple[str, ...], str],
+    valid_events_by_hash: dict[str, DirectiveEvent],
+) -> None:
+    if event.event_type == "directive_superseded":
+        target_event = valid_events_by_hash.get(str(event.payload.get("supersedes_event_hash") or ""))
+        target_line = _directive_line_key(target_event) if target_event is not None else None
+        if target_line is not None:
+            line_heads[target_line] = event.event_hash
+        return
+    line = _directive_line_key(event)
+    if line is not None:
+        line_heads[line] = event.event_hash
+
+
+def _superseded_event_hashes(events: list[DirectiveEvent]) -> set[str]:
+    superseded: set[str] = set()
+    valid_events_by_hash: dict[str, DirectiveEvent] = {}
+    line_heads: dict[tuple[str, ...], str] = {}
+    for event in events:
+        if event.event_type == "directive_superseded":
+            target_hash = str(event.payload.get("supersedes_event_hash") or "")
+            target_event = valid_events_by_hash.get(target_hash)
+            target_line = _directive_line_key(target_event) if target_event is not None else None
+            if target_line is not None and line_heads.get(target_line) == target_hash:
+                superseded.add(target_hash)
+                line_heads[target_line] = event.event_hash
+        else:
+            line = _directive_line_key(event)
+            if line is not None:
+                line_heads[line] = event.event_hash
+        valid_events_by_hash[event.event_hash] = event
+    return superseded
+
+
+def _directive_line_key(event: DirectiveEvent | None) -> tuple[str, ...] | None:
+    if event is None:
+        return None
+    if event.event_type in {"scope_granted", "scope_revoked"}:
+        return ("scope", str(event.payload.get("role_name") or ""), str(event.payload.get("access_scope") or ""))
+    if event.event_type in {"role_named", "role_removed"}:
+        return (
+            "role",
+            str(event.payload.get("role_name") or ""),
+            str(event.payload.get("subject_handle_hmac") or ""),
+        )
+    if event.event_type == "fate_directive_set":
+        return ("fate_directive",)
+    if event.event_type == "maez_preference_recorded":
+        return ("maez_preference", str(event.payload.get("source_ref_kind") or ""), str(event.payload.get("source_ref_hash") or ""))
+    if event.event_type == "witness_attested":
+        return ("witness_attested", event.origin_marker_id)
+    if event.event_type == "capsule_invalidated":
+        return ("capsule_invalidated", str(event.payload.get("invalidation_kind") or ""))
+    if event.event_type == "capsule_created":
+        return ("capsule_created", event.capsule_id)
+    return None
+
+
+def _origin_role_for_event(event: DirectiveEvent) -> str:
+    return str((event.origin_marker or {}).get("role_name") or "")
 
 
 def _reserved_denied_count(events: list[DirectiveEvent]) -> int:
