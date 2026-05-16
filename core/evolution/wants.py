@@ -285,12 +285,36 @@ def _statement_hash(statement: str) -> str:
     return "sha256:" + sha256(statement.encode("utf-8")).hexdigest()
 
 
+_STATEMENT_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _statement_tokens(statement: str) -> list[str]:
+    return _STATEMENT_TOKEN_RE.findall(statement.lower())
+
+
 def _looks_correction_only(prior: str, updated: str) -> bool:
-    prior_norm = _normalize_statement(prior).lower()
-    updated_norm = _normalize_statement(updated).lower()
-    if not prior_norm or not updated_norm:
+    prior_tokens = _statement_tokens(prior)
+    updated_tokens = _statement_tokens(updated)
+    if not prior_tokens or not updated_tokens:
         return False
-    return SequenceMatcher(None, prior_norm, updated_norm).ratio() >= 0.75
+    if prior_tokens == updated_tokens:
+        return True
+    if len(prior_tokens) != len(updated_tokens):
+        return False
+    changed = [
+        (before, after)
+        for before, after in zip(prior_tokens, updated_tokens, strict=True)
+        if before != after
+    ]
+    if len(changed) != 1:
+        return False
+    before, after = changed[0]
+    if before[0] != after[0]:
+        return False
+    if before.isdigit() or after.isdigit():
+        return False
+    return SequenceMatcher(None, before, after).ratio() >= 0.8
+
 
 
 def _contains_hard_want(statement: str) -> bool:

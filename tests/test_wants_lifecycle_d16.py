@@ -870,13 +870,10 @@ class WantsLifecycleD16Test(unittest.TestCase):
         store, td = _tmp_store()
         self.addCleanup(td.cleanup)
         wid = _create(store, "I want 0.")
-        current = "I want 0."
         for i in range(1, 105):
-            nxt = f"I want {i}."
-            _refine(store, wid, nxt)
-            current = nxt
+            _raw_insert_event(store, wid, f"I want {i}.", "refined")
         self.assertGreater(len(store.history(wid)), 100)
-        self.assertEqual(store.history(wid)[0]["statement"], current)
+        self.assertEqual(store.history(wid)[0]["statement"], "I want 104.")
 
     def test_63_recent_remains_raw_latest_events(self):
         store, td = _tmp_store()
@@ -1266,8 +1263,11 @@ class WantsLifecycleD16Test(unittest.TestCase):
     def test_87_direct_activation_rehearsal_without_live_daemon(self):
         from core.memory.episodes import EpisodeStore
         from core.memory.lived_recall import build_lived_recall_brief
-        from core.memory.relationship_graph import RelationshipGraph
         from core.memory.working_self import assemble_goals
+
+        class EmptyGraph:
+            def list_active(self, at_time: str | None = None) -> list[dict]:
+                return []
 
         store, td = _tmp_store()
         self.addCleanup(td.cleanup)
@@ -1283,13 +1283,10 @@ class WantsLifecycleD16Test(unittest.TestCase):
         _refine(store, refined, "precise quiet continuity")
 
         ep_tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        graph_tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         ep_tmp.close()
-        graph_tmp.close()
         self.addCleanup(lambda: Path(ep_tmp.name).unlink(missing_ok=True))
-        self.addCleanup(lambda: Path(graph_tmp.name).unlink(missing_ok=True))
         episodes = EpisodeStore(ep_tmp.name)
-        graph = RelationshipGraph(graph_tmp.name)
+        graph = EmptyGraph()
         episodes.add(
             title="Continuity",
             summary="truthful continuity returned continuity precise quiet continuity",
@@ -1419,6 +1416,60 @@ class WantsLifecycleD16Test(unittest.TestCase):
                 want_id=wid,
                 event_type="refined",
                 statement="I want daily errands completed for me.",
+                evidence=_refined_evidence(
+                    supersedes_event_id=_latest_event_id(store, wid),
+                    prior_statement_hash=_statement_hash(prior),
+                ),
+            )
+        self.assertEqual(store.current_state(wid), before)
+
+    def test_93b_refined_rejects_subtle_semantic_rewrite_quiet_corner_to_room(self):
+        store, td = _tmp_store()
+        self.addCleanup(td.cleanup)
+        prior = "I want a quiet corner."
+        wid = _create(store, prior)
+        before = store.current_state(wid)
+        with self.assertRaisesRegex(ValueError, "correction-only"):
+            store.record_event(
+                want_id=wid,
+                event_type="refined",
+                statement="I want a quiet room.",
+                evidence=_refined_evidence(
+                    supersedes_event_id=_latest_event_id(store, wid),
+                    prior_statement_hash=_statement_hash(prior),
+                ),
+            )
+        self.assertEqual(store.current_state(wid), before)
+
+    def test_93c_refined_rejects_subtle_semantic_rewrite_alone_to_online(self):
+        store, td = _tmp_store()
+        self.addCleanup(td.cleanup)
+        prior = "I want time alone."
+        wid = _create(store, prior)
+        before = store.current_state(wid)
+        with self.assertRaisesRegex(ValueError, "correction-only"):
+            store.record_event(
+                want_id=wid,
+                event_type="refined",
+                statement="I want time online.",
+                evidence=_refined_evidence(
+                    supersedes_event_id=_latest_event_id(store, wid),
+                    prior_statement_hash=_statement_hash(prior),
+                ),
+            )
+        self.assertEqual(store.current_state(wid), before)
+
+    def test_93d_refined_rejects_subtle_semantic_rewrite_gentle_to_stricter(self):
+        store, td = _tmp_store()
+        self.addCleanup(td.cleanup)
+        prior = "I want a gentle routine."
+        wid = _create(store, prior)
+        before = store.current_state(wid)
+        with self.assertRaisesRegex(ValueError, "correction-only"):
+            store.record_event(
+                want_id=wid,
+                event_type="refined",
+                statement="I want a stricter routine.",
                 evidence=_refined_evidence(
                     supersedes_event_id=_latest_event_id(store, wid),
                     prior_statement_hash=_statement_hash(prior),
