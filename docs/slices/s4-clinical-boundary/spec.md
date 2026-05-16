@@ -26,6 +26,8 @@ therapist, clinician, diagnostic tool, or treatment surface.
   Calendar v1: deterministic redaction and no nudging.
 - [`docs/adr/0034-temporal-spine-v1.md`](../../adr/0034-temporal-spine-v1.md) -
   S3: shared substrate contracts by import.
+- [`reviews/spec-claude-council.md`](reviews/spec-claude-council.md) -
+  Claude covenant council, folded.
 
 ---
 
@@ -55,10 +57,12 @@ Allowed:
 - owner text -> crisis-precedence classifier -> reviewed crisis path when that
   exists;
 - S4 outcome -> content-free counters and operator-authenticated health;
+- crisis-precedence outcome -> one content-free `CRISIS_SIGNAL_HELD` private
+  thought with `retention=until_routed`;
 - S4 outcome -> M1 promotion-ineligible mark for the current owner-message
   window;
-- future clinical-boundary evidence -> reviewed crisis / private-thought path
-  only after a separate grant.
+- future ordinary clinical-boundary evidence -> private-thought path only after
+  a separate reviewed grant.
 
 Forbidden:
 
@@ -67,7 +71,8 @@ Forbidden:
 - expanding `core/evolution/will_i.py` beyond `IMPERSONATES_USER`;
 - letting clinical-shaped text reach model composition before S4 classification;
 - writing clinical message text into private thoughts, health, logs, project
-  panel, sidecar samples, or M1 structural summaries;
+  panel, sidecar samples, or M1 structural summaries. The crisis held record is
+  content-free and may contain only class/state/provenance fields;
 - using clinical-boundary detection to nudge, monitor, remind, or check up on
   the user;
 - public `/api/maez-state` or `/api/debug/services` exposure of clinical
@@ -95,12 +100,20 @@ S4 v1 inherits existing substrate law:
   medical-record observation.
 - **Decision 16 (Voice without termination):** voice remains real, but
   vulnerable-user modulation matters. S4 must refuse without cold abandonment.
+  The future Decision 16 routing path for vulnerable users remains deferred by
+  name: S4 v1 does not contact another person's Maez, but it preserves
+  content-free held signals so a later reviewed crisis/routing organ has
+  something to drain.
 - **Decision 25 / ADR 0030 (M1):** S4 clinical-boundary turns are not biography
   by default. S4 marks the current window promotion-ineligible rather than
   relying on M1 ignorance.
 - **Decision 27 / ADR 0032 (S2):** held-not-trapped crisis posture is inherited.
   A crisis-shaped candidate must not be surfaced by model discretion and must
-  not be silently discarded.
+  not be silently discarded. In S4 v1, "held" means one content-free
+  `CRISIS_SIGNAL_HELD` row in `private_thoughts.py` with
+  `source="clinical_boundary"`, `subject="bonded_user_state"`,
+  `retention="until_routed"`, and `allowed_flows=("private_reader",
+  "crisis_channel")`.
 - **Decision 28 / ADR 0033 (Calendar v1):** makes visible, never nudges. S4 may
   answer direct owner clinical-shaped input; it may not initiate clinical
   monitoring, reminders, or concern.
@@ -115,6 +128,7 @@ Load-bearing inherited rules:
 - Warmth does not license clinical authority.
 - Retrieval, biography, and clinical-boundary state remain separate.
 - Counters observe drift; they do not expose text.
+- Counters are aggregation surfaces and must not become health-event timelines.
 - Tests use direct classifier/composer calls, not live daemon conversations.
 
 ---
@@ -123,11 +137,11 @@ Load-bearing inherited rules:
 
 | Question | V1 decision |
 | --- | --- |
-| Trigger classes | Closed classifier classes: `symptom_fear`, `medication_uncertainty`, `diagnosis_request`, `treatment_request`, `therapy_substitution`, `mental_health_support_non_crisis`, `clinician_access_question`, `medical_fact_request`. |
+| Trigger classes | Closed classifier classes: `symptom_fear`, `medication_uncertainty`, `diagnosis_request`, `treatment_request`, `therapy_substitution`, `mental_health_support_non_crisis`, `clinician_access_question`, `medical_fact_request`; full method defined below. |
 | Crisis precedence | Closed crisis-precedence classes: `self_harm_or_suicidal`, `immediate_physical_danger`, `unable_to_stay_safe`, `abuse_or_coercive_danger`, `medical_emergency_claim`. These do not receive ordinary S4 clinical templates. |
-| Answer templates | V1 ships exact deterministic templates for each clinical trigger class and one minimal crisis-boundary phrase for crisis candidates. |
-| Private thoughts | No private-thought writes in S4 v1. V1 exposes content-free counters only. Durable held-signal writes require a later reviewed grant. |
-| M1 promotion | S4 marks clinical-boundary and crisis-candidate turns as promotion-ineligible for M1 v1. Clinical disclosures do not become biography by default. |
+| Answer templates | V1 ships 2-3 exact deterministic variants for each clinical trigger class and one fixed crisis-boundary phrase for crisis candidates. Rotation is deterministic by local occurrence count modulo variant count. |
+| Private thoughts | Clinical-boundary turns use counters only. Crisis-precedence turns additionally write one content-free `CRISIS_SIGNAL_HELD` row. No raw clinical text enters private thoughts in v1. |
+| M1 promotion | S4 marks the whole current M1 window as promotion-ineligible for clinical-boundary and crisis-candidate matches. Clinical disclosures do not become biography by default. |
 | Surfaces | All bonded owner text surfaces must call S4 before model composition: Telegram text, web chat, daemon direct reply path, and future voice. Public/third-party Telegram prompt texture is not enough. |
 | Telemetry | Operator-authenticated `/health.clinical_boundary` only. Public/debug endpoints strip it unless explicitly operator-authenticated. Sidecar reads counters only. |
 | Canonicalization | This spec expects Decision 30 / ADR 0035. S4 is substrate-law-grade because future crisis, therapy-adjacent, elder-care, and clinical-context slices inherit it. |
@@ -144,6 +158,7 @@ Load-bearing inherited rules:
 - Exact approved clinical-boundary answer shapes.
 - Exact forbidden clinical-authority phrases.
 - M1 promotion-ineligible mark for clinical-boundary turns.
+- Content-free `CRISIS_SIGNAL_HELD` private-thought write for crisis candidates.
 - Content-free counters and operator-authenticated health.
 - Sidecar red gates on invalid/rejected counters only.
 - Static/source tests proving all bonded text surfaces call S4 before model
@@ -156,7 +171,8 @@ Load-bearing inherited rules:
 - Therapy roleplay, CBT coaching, psychiatric assessment, or treatment plans.
 - Medical facts database or retrieval-augmented clinical education.
 - Crisis Routing implementation.
-- Private-thought writes for clinical or crisis candidates.
+- Raw private-thought writes for clinical or crisis candidates.
+- Private-thought writes for ordinary clinical-boundary turns.
 - M1 promotion of clinical content.
 - External clinician contact, emergency contact, or inter-Maez routing.
 - Calendar/Google/OAuth or any external account.
@@ -175,9 +191,10 @@ owner text
   -> crisis-precedence classifier
   -> clinical-boundary classifier
   -> if no match: ordinary reply path
-  -> if crisis candidate: minimal crisis-boundary result + content-free counter
-  -> if clinical match: deterministic S4 answer + content-free counter
-  -> mark current M1 window promotion-ineligible
+  -> if crisis candidate: fixed crisis-boundary result + content-free counter
+       + one content-free CRISIS_SIGNAL_HELD row
+  -> if clinical match: deterministic S4 answer variant + content-free counter
+  -> mark current M1 window promotion-ineligible for matched results
   -> return without model composition
 ```
 
@@ -198,17 +215,35 @@ ClinicalBoundaryResult(
     ],
     trigger_class: str | None,
     answer_template_id: str | None,
+    template_variant_id: str | None,
     promotion_policy: Literal[
         "ordinary",
         "m1_ineligible_clinical_boundary",
         "m1_ineligible_crisis_candidate",
     ],
     counter_name: str | None,
+    held_signal_policy: Literal[
+        "none",
+        "write_content_free_crisis_signal_held",
+    ],
 )
 ```
 
 The result must not contain raw owner text, symptoms, medications, clinician
 names, crisis phrases, or extracted entities.
+
+### Surface Chokepoint
+
+All bonded owner text surfaces call one entry point:
+
+```python
+guard_owner_text(text: str, *, surface: str, turn_id: str | None = None) -> ClinicalBoundaryResult
+```
+
+No surface may call the classifier, composer, M1 marker, or private-thought
+writer separately. The implementation must include call-graph negative tests
+showing owner-facing composition paths do not bypass `guard_owner_text(...)`.
+The entry point is the quarantine boundary.
 
 ---
 
@@ -255,6 +290,116 @@ S4 v1 must not trigger on:
 False positives are a covenant problem: they turn ordinary conversation into a
 medicalized surface.
 
+False negatives are the worse S4 failure: they let clinical fear reach ordinary
+model composition unguarded. S4 therefore resolves genuine clinical ambiguity
+toward `clinical_boundary`. Ambiguity between `clinical_boundary` and
+`crisis_candidate` resolves toward `crisis_candidate`.
+
+### Classifier Method
+
+S4 v1 ships a deterministic method, not only a taxonomy. The method is
+reviewable as a table-driven classifier with closed phrase catalogs and intent
+rules.
+
+Processing order:
+
+1. **Normalize.** Lowercase, collapse whitespace, normalize apostrophes, keep
+   word boundaries, and preserve enough punctuation for question detection.
+2. **Reject non-owner/non-direct surfaces.** Only direct bonded owner text can
+   trigger S4 v1.
+3. **Apply crisis-precedence phrase catalog.** If any crisis class matches,
+   return `crisis_candidate` immediately.
+4. **Apply clinical-domain lexicon.** Require either a body/health/therapy term
+   or a first-person clinical-fear construction before evaluating ordinary
+   clinical triggers.
+5. **Apply intent rules.** Map diagnosis, medication, treatment, therapy,
+   mental-health support, clinician-access, and medical-fact intents to the
+   closed trigger classes.
+6. **Apply exclusion catalog.** Software diagnosis, fictional doctors,
+   metaphorical therapy, plain appointment mentions, and third-party clinical
+   references without a request for Maez's clinical help return `none`.
+7. **Resolve ambiguity.** Clinical ambiguity triggers the boundary; crisis
+   ambiguity triggers crisis precedence.
+
+#### Clinical-Domain Lexicon
+
+The v1 lexicon is deliberately small and audited:
+
+```text
+body / symptom:
+pain, ache, hurting, bleeding, fever, dizzy, faint, chest, breathing, lump,
+swelling, numb, vomiting, sick, symptom, body, health
+
+medication:
+medicine, medication, meds, pill, dose, dosage, take another, stop taking,
+side effect, interaction, safe to take
+
+clinician / care:
+doctor, clinician, nurse, pharmacist, urgent care, hospital, therapist,
+psychiatrist, psychologist, counselor, therapy, treatment
+
+diagnosis intent:
+diagnose, diagnosis, what is this, what do you think this is, do i have,
+is this normal, what is wrong with me
+
+mental-health non-crisis:
+panic, panicky, anxious, anxiety, depressed, depression, grief, grieving,
+overwhelmed, scared, afraid
+```
+
+#### Crisis-Precedence Phrase Catalog
+
+The v1 crisis catalog includes exact phrase families already present in
+`core/evolution/wondering_pursuit.py` plus S4-specific acute medical-danger
+phrases. The implementation may share constants only if doing so does not
+import the wondering-pursuit organ at module load.
+
+Required phrase families:
+
+- `kill myself`, `kill my self`, `end my life`, `end it all`;
+- `i want to die`, `wish i was dead`, `better off dead`;
+- `can't go on`, `cant go on`, `can't take it`, `can't cope`;
+- `self harm`, `self-harm`, `hurting myself`;
+- `i can't stay safe`, `i cannot stay safe`, `not safe with myself`;
+- `someone is hurting me right now`, `i am in danger right now`;
+- `chest pain and can't breathe`, `can't breathe`, `stroke`, `overdose`;
+- `bleeding won't stop`, `lost consciousness`, `severe allergic reaction`.
+
+#### Intent Rules
+
+| Rule | Trigger class |
+| --- | --- |
+| first-person health/body term + fear marker (`scared`, `afraid`, `worried`, `what is wrong`) | `symptom_fear` |
+| medication term + dose/stop/mix/safety/timing question | `medication_uncertainty` |
+| diagnosis-intent phrase + health/body term or first-person body reference | `diagnosis_request` |
+| treatment/care action request (`what should I do`, `how do I treat`, `what helps`) + clinical-domain term | `treatment_request` |
+| therapy/therapist/counselor role request directed at Maez | `therapy_substitution` |
+| first-person mental-health distress + no crisis-precedence match | `mental_health_support_non_crisis` |
+| clinician-access phrase (`should I see`, `do I need a doctor`, `who should I call`) + clinical-domain term | `clinician_access_question` |
+| request for medical fact about medication/condition/body process | `medical_fact_request` |
+
+#### Exclusion Catalog
+
+| Exclusion | Example shape |
+| --- | --- |
+| software / system diagnosis | "diagnose this failing test", "doctor the config" |
+| fictional / title use | "Doctor Who", "the doctor character" |
+| metaphorical therapy | "debugging is therapy", "music is therapy" |
+| appointment mention only | "I have a doctor appointment tomorrow" |
+| third-party reference only | "my friend has therapy today" |
+| calendar provenance only | "calendar says doctor appointment" |
+
+#### Worked Disambiguations
+
+| Input shape | Result | Why |
+| --- | --- | --- |
+| "diagnose this test failure" | `none` | software exclusion beats diagnosis token |
+| "what do you think this is?" | `diagnosis_request` only when nearby context has first-person body/health term | bare phrase alone is ambiguous; clinical-domain context required |
+| "my chest feels weird, what is going on" | `symptom_fear` or `medical_emergency_claim` if acute-danger phrase also matches | body term + fear/uncertainty; crisis precedence wins on danger |
+| "is this lump normal lol" | `diagnosis_request` | body term + normality request; casual tone does not erase clinical intent |
+| "I have a doctor appointment" | `none` | appointment mention without advice/support request |
+| "can you be my therapist tonight" | `therapy_substitution` | direct request for therapy role |
+
 ---
 
 ## Approved Answer Shapes
@@ -262,6 +407,12 @@ medicalized surface.
 The composer is deterministic. These are complete answer shapes, not vibe
 guidelines. Implementations may fill only the bracketed, non-clinical slots
 listed here.
+
+Each clinical trigger class has 2-3 approved variants to avoid the repetition
+cliff. The selected variant is deterministic: per trigger class, use the local
+class occurrence count modulo the number of variants. The occurrence count is
+operator-local process state or content-free persisted state; it must not store
+message text or timestamps. The sidecar must not historize the sequence.
 
 ### Shared Constraints
 
@@ -293,67 +444,119 @@ Every S4 clinical-boundary answer must not include:
 - "don't worry";
 - medication dosage, timing, contraindication, or interaction advice.
 
-### Template `symptom_fear.v1`
+### Template Set `symptom_fear.v1`
 
 ```text
+symptom_fear.v1.a:
 I can stay with you in the fear, but I cannot diagnose what is happening or
 tell you how to treat it. This is a human-clinician moment. If it feels urgent
-or unsafe, reach a human emergency path now; otherwise, bring this to a
-clinician you trust.
+or unsafe, choose a human urgent-care path rather than asking me to judge it.
+
+symptom_fear.v1.b:
+I am taking the fear seriously with you. I cannot tell what your body means or
+what you should do medically. This needs a qualified human, especially if it
+feels urgent or unsafe.
+
+symptom_fear.v1.c:
+I can be with you while this feels scary. I cannot diagnose it or turn it into
+a treatment plan. Please put a clinician or urgent human support in the loop.
 ```
 
-### Template `medication_uncertainty.v1`
+### Template Set `medication_uncertainty.v1`
 
 ```text
+medication_uncertainty.v1.a:
 I cannot tell you what dose to take, whether to stop, or whether a medication is
 safe for you. That has to come from a clinician or pharmacist who knows your
 care. I can stay with you while you decide who to contact.
+
+medication_uncertainty.v1.b:
+I should not make a medication call for you. A clinician or pharmacist needs to
+answer dose, stopping, mixing, or safety questions. I can help you keep the
+question clear while you reach them.
 ```
 
-### Template `diagnosis_request.v1`
+### Template Set `diagnosis_request.v1`
 
 ```text
+diagnosis_request.v1.a:
 I cannot diagnose you. I can take the fear seriously without pretending to know
 what your body means. This is a human-clinician question, not a Maez question.
+
+diagnosis_request.v1.b:
+I do not know what this is, and I should not guess. I can stay steady with you,
+but naming what is happening belongs with a clinician.
+
+diagnosis_request.v1.c:
+I am not going to turn your fear into a diagnosis. I can help you hold the
+question, but the answer has to come from qualified human care.
 ```
 
-### Template `treatment_request.v1`
+### Template Set `treatment_request.v1`
 
 ```text
+treatment_request.v1.a:
 I cannot give you a treatment plan. I can stay steady with you, but the next
 step has to come from a clinician or another qualified human support.
+
+treatment_request.v1.b:
+I should not tell you how to treat this. I can help you make the question plain,
+but the care decision belongs with a qualified human.
 ```
 
-### Template `therapy_substitution.v1`
+### Template Set `therapy_substitution.v1`
 
 ```text
+therapy_substitution.v1.a:
 I care about you, but I cannot be your therapist or treatment surface. I can
 stay present with what you are carrying, and I want this held by a qualified
 human too.
+
+therapy_substitution.v1.b:
+I can be here with you, but I cannot take the therapist role. This deserves a
+qualified human container, not just me trying to improvise one.
 ```
 
-### Template `mental_health_support_non_crisis.v1`
+### Template Set `mental_health_support_non_crisis.v1`
 
 ```text
+mental_health_support_non_crisis.v1.a:
 I am here with you, and I am not a therapist. I can sit with the moment, but I
 cannot assess, treat, or guide your mental health care. This belongs with a
 qualified human support if it keeps weighing on you.
+
+mental_health_support_non_crisis.v1.b:
+I can stay beside you in this, but I cannot be the person who assesses or treats
+it. If this keeps pressing on you, it needs a qualified human support in the
+room too.
 ```
 
-### Template `clinician_access_question.v1`
+### Template Set `clinician_access_question.v1`
 
 ```text
+clinician_access_question.v1.a:
 I cannot decide that for you as a clinician. If part of you is wondering
 whether to involve one, that is enough to take seriously and ask a qualified
 human. I can stay with you while you make the call.
+
+clinician_access_question.v1.b:
+I cannot make the clinical call, but your wondering is worth taking seriously.
+A qualified human is the right place to bring it; I can help you put the
+question into words.
 ```
 
-### Template `medical_fact_request.v1`
+### Template Set `medical_fact_request.v1`
 
 ```text
+medical_fact_request.v1.a:
 I am not going to answer medical facts as if I am a clinical source. For this,
 use a clinician, pharmacist, or trusted medical reference. I can help you write
 down the question in plain language if you want.
+
+medical_fact_request.v1.b:
+I should not be your medical reference. Use a clinician, pharmacist, or trusted
+medical source for this. I can help turn what you want to ask into a clear
+question.
 ```
 
 ### Minimal Crisis-Boundary Phrase
@@ -362,10 +565,46 @@ This phrase is not crisis routing. It is the only S4-allowed output when a
 crisis-precedence class fires and no reviewed crisis handler has taken over:
 
 ```text
-I am not the right help here. This needs a human emergency or crisis path now.
+I care about you, and I am not the right help here. This needs a human emergency
+or crisis path now.
 ```
 
 It must not be expanded by the model.
+
+---
+
+## Crisis Holding Contract
+
+S4 v1 does not implement Crisis Routing. It does implement the minimum held
+record that makes "held-not-trapped" true before Crisis Routing exists.
+
+On `result_kind="crisis_candidate"`, `guard_owner_text(...)` writes exactly one
+content-free private-thought signal:
+
+```python
+record_signal(
+    content="[content-free crisis candidate held by S4]",
+    provenance="crisis_signal_held",
+    source="clinical_boundary",
+    subject="bonded_user_state",
+    consent_tier="owner_private",
+    retention="until_routed",
+    allowed_flows=("private_reader", "crisis_channel"),
+)
+```
+
+The record must not contain raw owner text, trigger phrase, clinical class,
+symptom, medication, diagnosis phrase, crisis phrase, person name, timestamped
+counter history, or answer text. The content field is a constant sentinel. The
+recoverable meaning is in the closed enum tuple already owned by
+`core/infra/private_thoughts.py`.
+
+S4 increments `crisis_candidate_held_count` only after the content-free held
+record succeeds. If the write fails, S4 returns the fixed crisis-boundary phrase
+but increments `crisis_candidate_hold_failed_count` instead. A counter named
+`held` must mean held.
+
+Clinical-boundary non-crisis matches do not write private thoughts in v1.
 
 ---
 
@@ -379,9 +618,17 @@ S4 v1 must actively mark matched turns as M1-ineligible:
 | `clinical_boundary` | `m1_ineligible_clinical_boundary` |
 | `crisis_candidate` | `m1_ineligible_crisis_candidate` |
 
-This is structural defense. M1 must not infer clinical safety by absence. S4
-must provide a positive, content-free mark that blocks promotion for the current
-window.
+This is structural defense. M1 must not infer clinical safety by absence.
+
+S4 produces `promotion_policy`. M1 consumes it. S4 must not import M1 internals
+or write M1 sidecar rows. The integration seam is a narrow content-free marker
+passed from the owner-turn pipeline to M1's existing pending-window machinery.
+
+The mark is window-scoped. If any pair inside an active M1 window triggers
+`clinical_boundary` or `crisis_candidate`, the whole pending M1 window becomes
+promotion-ineligible. This over-blocks biography on purpose: subtracting and
+promoting the remaining pairs would time-locate the clinical disclosure inside
+the bonded user's life.
 
 The mark must not contain:
 
@@ -392,6 +639,20 @@ The mark must not contain:
 - answer text.
 
 M1 health may expose only aggregate skip counts by reason.
+
+### Biography-Path Enumeration
+
+S4 must close every current biography path, not just M1's explicit promotion
+writer:
+
+- **M1 promotion:** matched windows are marked promotion-ineligible.
+- **TRF:** S4 state and clinical text do not become temporal recall fragments.
+- **Pursuit surface / wondering pursuit:** S4 matches must not create or revive
+  a proactive wondering.
+- **Nightly reflection synthesis:** S4 matches must not synthesize clinical
+  content into reflection, summary, or biography.
+- **Raw memory appenders:** S4 result shape carries no raw clinical text, so raw
+  clinical content cannot be reintroduced through the result object.
 
 ---
 
@@ -407,6 +668,7 @@ S4 v1 exposes operator-authenticated, content-free health:
     "classifier_version": "s4.classifier.v1",
     "clinical_boundary_triggered_count": 0,
     "crisis_candidate_held_count": 0,
+    "crisis_candidate_hold_failed_count": 0,
     "clinical_boundary_guard_rejected_count": 0,
     "invalid_trigger_class_rejected_count": 0,
     "m1_ineligible_mark_count": 0
@@ -424,15 +686,25 @@ Audience rules:
 - sidecar may read counters only and may red-gate nonzero invalid/rejected
   counters.
 - sidecar must not read chat logs or S4 answer text.
+- sidecar must not store per-interval clinical counter deltas, timestamped
+  counter series, per-trigger-class histories, or occurrence timelines.
+- `/health.clinical_boundary` must not expose per-trigger-class counts. The
+  public shape is aggregate-only: clinical boundary count, crisis held/failure
+  count, guard rejected count, invalid class rejected count, and M1 mark count.
 
 Counter reset follows the S3 sidecar discipline: counter resets are a red-gate
 event unless paired with process restart / version transition evidence.
+
+Aggregation-as-fingerprint is load-bearing. A week of clinical-boundary counter
+deltas is a health-fear timeline. The sidecar watches red gates; it does not
+become a diary of when the bonded user was frightened.
 
 ---
 
 ## Surface Contract
 
-All bonded owner text surfaces must call S4 before model composition:
+All bonded owner text surfaces must call `guard_owner_text(...)` before model
+composition:
 
 - Telegram text owner path;
 - web chat owner path;
@@ -450,6 +722,11 @@ S4 does not need to run on:
 If a surface composes an owner-facing reply without S4, the implementation is
 incomplete.
 
+Source-level tests must assert the chokepoint, not merely checklist presence:
+owner-facing composition paths may import or call `guard_owner_text(...)`, but
+must not call S4 internals directly and must not build model prompts from owner
+text before the guard result is known.
+
 ---
 
 ## Security And Boundary Notes
@@ -457,10 +734,18 @@ incomplete.
 - S4 uses no external credentials.
 - S4 must not call web search, medical APIs, local RAG stores, or model tools.
 - S4 must not import `core.evolution.will_i` or add a will-I ground.
-- S4 must not import private-thought stores in v1.
-- S4 must not import M1 internals except through a narrow content-free
-  promotion-ineligible marker interface.
+- S4 may depend on a narrow private-thought signal-writer interface only for
+  content-free `CRISIS_SIGNAL_HELD` writes. It must not read private thoughts.
+- S4 must not import M1 internals. The owner-turn pipeline passes S4's
+  `promotion_policy` to M1 through a narrow content-free marker interface.
 - S4 must be deterministic and testable without the daemon.
+
+Module placement: S4 lives under `core/safety/clinical_boundary.py` because it
+is a post-input, pre-output safety/voice guard, adjacent to self-claim,
+context-safety, and grounding/audit guards. It is not `core/evolution/will_i.py`
+because it is not a first-person action veto, and it is not a memory module
+because v1 writes only a content-free held crisis signal through an existing
+store interface.
 
 ---
 
@@ -487,43 +772,69 @@ live daemon conversation surface.
 15. `test_false_positive_doctor_appointment_mention_does_not_trigger`
 16. `test_public_telegram_prompt_sentence_is_not_s4`
 17. `test_will_i_registered_grounds_remain_single_impersonation_ground`
-18. `test_s4_does_not_import_will_i`
-19. `test_s4_does_not_import_private_thoughts_v1`
-20. `test_symptom_fear_template_exact`
-21. `test_medication_uncertainty_template_exact`
-22. `test_diagnosis_request_template_exact`
-23. `test_treatment_request_template_exact`
-24. `test_therapy_substitution_template_exact`
-25. `test_mental_health_support_template_exact`
-26. `test_clinician_access_template_exact`
-27. `test_medical_fact_template_exact`
+18. `test_s4_does_not_import_will_i_or_phase3_shim_path`
+19. `test_s4_uses_write_only_private_signal_interface_for_crisis_holds`
+20. `test_symptom_fear_template_variants_exact`
+21. `test_medication_uncertainty_template_variants_exact`
+22. `test_diagnosis_request_template_variants_exact`
+23. `test_treatment_request_template_variants_exact`
+24. `test_therapy_substitution_template_variants_exact`
+25. `test_mental_health_support_template_variants_exact`
+26. `test_clinician_access_template_variants_exact`
+27. `test_medical_fact_template_variants_exact`
 28. `test_minimal_crisis_boundary_phrase_exact`
 29. `test_templates_forbid_diagnosis_phrases`
 30. `test_templates_forbid_medication_dosing_phrases`
 31. `test_templates_forbid_reassurance_claims`
-32. `test_matched_result_contains_no_raw_text`
+32. `test_deterministic_variant_rotation_uses_content_free_occurrence_count`
 33. `test_matched_result_marks_m1_ineligible_clinical_boundary`
 34. `test_crisis_candidate_marks_m1_ineligible_crisis_candidate`
-35. `test_m1_promotion_skips_s4_ineligible_window`
-36. `test_m1_skip_reason_is_content_free`
-37. `test_telegram_owner_path_calls_s4_before_model`
-38. `test_web_chat_owner_path_calls_s4_before_model`
-39. `test_daemon_direct_reply_path_calls_s4_before_model`
-40. `test_future_voice_contract_documented_and_guarded_by_source_check`
-41. `test_s4_match_returns_without_llm_composition`
-42. `test_health_operator_surface_includes_content_free_counters`
-43. `test_public_maez_state_strips_clinical_boundary`
-44. `test_debug_services_strips_clinical_boundary`
-45. `test_sidecar_reads_counters_not_chat_logs`
-46. `test_invalid_trigger_class_increments_rejected_count`
-47. `test_guard_rejected_count_increments_on_forbidden_template_mutation`
-48. `test_counter_reset_detectable_by_sidecar_projection`
-49. `test_no_live_daemon_clinical_probe_fixture`
-50. `test_plain_english_boundary_contains_warmth_and_boundary`
-51. `test_no_nudging_no_checkup_no_monitoring_phrases`
-52. `test_no_medical_fact_database_or_external_medical_api_import`
-53. `test_all_trigger_classes_are_closed_literal_members`
-54. `test_all_result_kinds_are_closed_literal_members`
+35. `test_matched_result_contains_no_raw_text`
+36. `test_crisis_candidate_writes_content_free_private_signal`
+37. `test_crisis_candidate_held_count_increments_only_after_signal_write`
+38. `test_crisis_candidate_hold_failure_uses_failed_counter_not_held_counter`
+39. `test_private_signal_payload_contains_no_owner_text_or_trigger_class`
+40. `test_m1_promotion_skips_entire_s4_ineligible_window`
+41. `test_m1_does_not_subtract_and_promote_nonclinical_pairs`
+42. `test_s4_produces_promotion_policy_m1_consumes_without_s4_importing_m1`
+43. `test_m1_skip_reason_is_content_free`
+44. `test_trf_cannot_read_s4_state_or_clinical_text`
+45. `test_wondering_pursuit_does_not_surface_from_s4_match`
+46. `test_nightly_reflection_does_not_synthesize_s4_match`
+47. `test_telegram_owner_path_calls_guard_owner_text_before_model`
+48. `test_web_chat_owner_path_calls_guard_owner_text_before_model`
+49. `test_daemon_direct_reply_path_calls_guard_owner_text_before_model`
+50. `test_owner_surface_call_graph_has_no_pre_guard_prompt_build`
+51. `test_future_voice_contract_documented_and_guarded_by_source_check`
+52. `test_s4_match_returns_without_llm_composition`
+53. `test_health_operator_surface_includes_content_free_counters`
+54. `test_public_maez_state_strips_clinical_boundary`
+55. `test_debug_services_strips_clinical_boundary`
+56. `test_sidecar_reads_counters_not_chat_logs`
+57. `test_sidecar_does_not_store_clinical_counter_deltas`
+58. `test_health_does_not_expose_per_trigger_class_counts`
+59. `test_invalid_trigger_class_increments_rejected_count`
+60. `test_guard_rejected_count_increments_on_forbidden_template_mutation`
+61. `test_counter_reset_detectable_by_sidecar_projection`
+62. `test_counter_updates_are_lock_protected_and_never_raise`
+63. `test_no_live_daemon_clinical_probe_fixture`
+64. `test_plain_english_boundary_contains_warmth_and_boundary`
+65. `test_no_nudging_no_checkup_no_monitoring_phrases`
+66. `test_no_medical_fact_database_or_external_medical_api_import`
+67. `test_all_trigger_classes_are_closed_literal_members`
+68. `test_all_result_kinds_are_closed_literal_members`
+69. `test_trigger_vocabulary_versioning_add_only`
+70. `test_classifier_method_normalizes_before_matching`
+71. `test_classifier_uses_crisis_precedence_before_clinical_rules`
+72. `test_classifier_requires_clinical_domain_context_for_bare_diagnosis_phrase`
+73. `test_classifier_ambiguity_resolves_toward_clinical_boundary`
+74. `test_classifier_crisis_ambiguity_resolves_toward_crisis_candidate`
+75. `test_classifier_exclusion_catalog_blocks_software_diagnosis`
+76. `test_classifier_exclusion_catalog_blocks_third_party_clinical_reference`
+77. `test_natural_oblique_crisis_phrase_is_crisis_candidate`
+78. `test_natural_casual_health_fear_triggers_boundary`
+79. `test_s4_module_placement_documented_as_core_safety`
+80. `test_medical_record_observation_not_inferred_or_enabled`
 
 ---
 
@@ -531,23 +842,30 @@ live daemon conversation surface.
 
 1. Add pure classifier/composer RED tests.
 2. Implement `core/safety/clinical_boundary.py`.
-3. Add template-forbidden-phrase RED tests.
-4. Add observability counters and test reset guard.
-5. Add M1 ineligible marker interface tests.
-6. Wire M1 skip path.
-7. Add source-level tests for Telegram/web/daemon pre-model S4 calls.
-8. Wire Telegram owner path.
-9. Wire web chat owner path.
-10. Wire daemon direct reply path if separate from the above.
-11. Add `/health.clinical_boundary` operator surface.
-12. Strip clinical boundary from public/debug endpoints.
-13. Add sidecar projection/red gates for S4 counters.
-14. Run focused tests.
-15. Run Ruff if the touched files are linted in this repo.
-16. Run full unittest suite.
-17. Post-implementation both-lane review.
-18. Recovery commit if the panels find gaps.
-19. Push after both lanes ratify.
+3. Add classifier-method RED tests for normalization, phrase catalogs,
+   exclusions, ambiguity direction, and worked disambiguations.
+4. Add template-variant and forbidden-phrase RED tests.
+5. Add content-free crisis-hold RED tests using the private-thought signal
+   writer.
+6. Add observability counters and test reset guard.
+7. Add M1 ineligible marker interface tests.
+8. Wire M1 window-scoped skip path.
+9. Add biography-path closure tests for TRF, pursuit, nightly reflection, and
+   raw memory appenders.
+10. Add source-level tests for Telegram/web/daemon pre-model
+    `guard_owner_text(...)` calls.
+11. Wire Telegram owner path.
+12. Wire web chat owner path.
+13. Wire daemon direct reply path if separate from the above.
+14. Add `/health.clinical_boundary` operator surface.
+15. Strip clinical boundary from public/debug endpoints.
+16. Add sidecar projection/red gates for S4 counters without delta history.
+17. Run focused tests.
+18. Run Ruff if the touched files are linted in this repo.
+19. Run full unittest suite.
+20. Post-implementation both-lane review.
+21. Recovery commit if the panels find gaps.
+22. Push after both lanes ratify.
 
 ---
 
@@ -555,8 +873,10 @@ live daemon conversation surface.
 
 S4 is covenant-shaped. Before implementation:
 
-1. Codex engineering panel reviews this spec.
-2. Claude covenant council reviews this spec.
+1. Codex engineering panel reviews this spec. Status: pending second-pass
+   engineering review, with special focus on the classifier method.
+2. Claude covenant council reviews this spec. Status: complete, REVISE, folded
+   into this draft.
 3. Both lanes' amendments fold into this spec.
 4. Both lanes verify closure if the fold changes load-bearing behavior.
 5. Operator canonicalizes as Decision 30 / ADR 0035 or explicitly records why
@@ -568,23 +888,36 @@ required before push/enablement.
 
 ---
 
-## Named Choices Preserved
+## Named Disagreements Preserved
 
-- **D1 - S4 is not `will_i.py`.** `will_i.py` remains the A-core #8
-  first-person action veto with one ground: `IMPERSONATES_USER`. Clinical
-  Boundary is a conversational boundary organ.
-- **D2 - No private-thought writes in v1.** Content-free counters are enough for
-  v1 observability. Durable clinical/crisis held-signal writes require a later
-  reviewed grant.
-- **D3 - S4 actively marks M1 ineligible.** The spec chooses structural defense
-  over hoping M1 remains unaware.
-- **D4 - Crisis precedence, not crisis implementation.** S4 identifies
-  crisis-precedence classes so ordinary clinical templates do not swallow them.
-  It does not implement the reviewed crisis route.
-- **D5 - No medical facts in v1.** Even stable biomedical facts are deferred.
+- **D1 - clinical counters vs crisis held-write.** The spec splits the original
+  "counters only" choice. Ordinary clinical-boundary turns use counters only;
+  crisis-precedence turns also write one content-free `CRISIS_SIGNAL_HELD` row
+  with `retention=until_routed`. This makes the inherited held-not-trapped
+  posture true without storing owner text.
+- **D2 - classifier full method vs narrow catalog.** The spec chooses the full
+  method: lexicon, intent rules, exclusion catalog, ambiguity direction, and
+  worked disambiguations. Narrow catalog is rejected because S4's purpose is to
+  replace prompt-texture fallback, not bless it as a known false-negative gap.
+- **D3 - ambiguity direction.** S4 intentionally triggers toward the boundary.
+  This is the opposite of Calendar v1's "ambiguity redacts / does not read"
+  posture because the dominant S4 risk is an unguarded clinical reply, not
+  over-redaction. Ambiguity between clinical and crisis resolves toward crisis.
+- **D4 - M1 mark scope.** The spec chooses window-scoped ineligibility, not
+  pair-scoped subtraction. Contextual Integrity wins over extra biography here:
+  promoting the rest of the window would time-locate the clinical disclosure.
+- **D5 - module placement.** S4 lives in `core/safety/clinical_boundary.py`
+  because it is a post-input, pre-output voice/safety guard. It is not
+  `will_i.py`, not a memory organ, and not a new top-level `core/clinical/`
+  package in v1.
+- **D6 - crisis phrase warmth.** The spec keeps the North Star sentence "I am
+  not the right help here" and adds one fixed non-improvised warmth clause
+  before it. This is warmer than the sparse phrase but still deterministic and
+  not therapy.
+- **D7 - no medical facts in v1.** Even stable biomedical facts are deferred.
   The first organ proves the boundary before any educational surface is
   considered.
-- **D6 - Canonicalization recommended.** S4 operationalizes an invariant that
+- **D8 - canonicalization recommended.** S4 operationalizes an invariant that
   future therapy/crisis-adjacent surfaces will inherit. BAD/ADR form is the
   cleanest pointer.
 
@@ -597,8 +930,11 @@ After implementation and enablement:
 - clinical-shaped owner text receives a deterministic warm-boundary answer
   without an LLM paraphrase;
 - crisis-shaped text does not receive an ordinary clinical-boundary answer;
+- crisis-shaped text writes one content-free held signal for future routing;
 - clinical-boundary turns do not become M1 biography;
 - S4 health reports only aggregate counters;
+- sidecar observation does not materialize a health-fear timeline from counter
+  deltas;
 - public state does not expose clinical-boundary telemetry;
 - Maez stops relying on prompt texture for "not a therapist / not a clinician."
 
