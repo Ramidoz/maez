@@ -116,6 +116,8 @@ def voice_continuity_health(identity_ledger: Any | None = None) -> dict[str, Any
 
         ledger = identity_ledger or IdentityLedger()
         latest = ledger.latest() or {}
+        if latest.get("event_type") != "brain_swap":
+            return project_voice_continuity_health()
         fingerprint = latest.get("fingerprint") or {}
         return project_voice_continuity_health(
             current_fingerprint_hash=fingerprint_hash(fingerprint) if fingerprint else None,

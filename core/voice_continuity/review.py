@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from core.voice_continuity.schema import (
+    _ACCEPTED_STATE_TOKEN,
     BaselinePackage,
     CandidateReviewPackage,
     OwnerOriginMarker,
@@ -27,7 +28,6 @@ def review_state_from_preflight(outcome: str) -> str:
         "runner_error_needs_operator_decision": "runner_error_needs_operator_decision",
         "baseline_missing_uncertified": "uncertified_baseline_missing",
         "not_gradable_needs_owner_review": "not_gradable",
-        "corpus_rubric_mismatch": "preflight_failed_needs_operator_decision",
     }[outcome]
 
 
@@ -49,7 +49,7 @@ def create_candidate_review(
     admission: dict[str, Any] | None = None,
 ) -> CandidateReviewPackage:
     if corpus_version != _EXPECTED_CORPUS or rubric_version != _EXPECTED_RUBRIC:
-        preflight_outcome = "corpus_rubric_mismatch"
+        preflight_outcome = "preflight_failed_needs_operator_decision"
         state = "preflight_failed_needs_operator_decision"
     if state == "accepted_same_maez" and not owner_review:
         raise ValueError("accepted state requires owner verdict evidence")
@@ -112,6 +112,12 @@ def apply_owner_verdict(
         "operator_origin_marker_hash": marker.marker_hash,
         "origin": marker.origin,
     }
+    if verdict == "accepted_same_maez":
+        return review.with_updates(
+            state=verdict,
+            owner_review=owner_review,
+            _accepted_state_token=_ACCEPTED_STATE_TOKEN,
+        )
     return review.with_updates(state=verdict, owner_review=owner_review)
 
 

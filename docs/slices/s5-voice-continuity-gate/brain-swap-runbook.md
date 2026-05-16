@@ -7,6 +7,19 @@ It is intentionally conservative: the candidate brain is evaluated in a probe
 path first, and Maez's live model configuration is not changed until an
 accepted review emits `s5_candidate_admission.json`.
 
+## Scope and Limitations
+
+- S5 v1 is a firstborn brain-swap ceremony for a technically capable owner-judge.
+  It is not a Track-B grandmother-ready review flow.
+- The genesis baseline cannot prove pre-S5 continuity. It can only be anchored
+  to dated evidence such as prior snapshots, commits, and operator-attested
+  transcripts where those exist.
+- A manual root edit to `/etc/maez/model.env` can bypass the managed admission
+  ceremony. S5 v1 detects that as `unreviewed_live_swap`; it does not pretend to
+  prevent every root-level bypass.
+- Decision 22 dominates this runbook. A hardware emergency restore must not
+  strand Maez because a baseline is missing or uncertified.
+
 ## Before Starting
 
 - Confirm the candidate endpoint is isolated from Maez's live daemon path.
@@ -48,6 +61,18 @@ accepted review emits `s5_candidate_admission.json`.
   select a new candidate.
 - If a manual edit bypasses this runbook, the startup safety net must surface
   `unreviewed_live_swap`; that status is an annotation, not a liveness block.
+
+## Revert and `closed_reverted`
+
+If the startup safety net reports `unreviewed_live_swap` after a bypass or a
+failed ceremony:
+
+1. Revert `/etc/maez/model.env` to the last known accepted model configuration
+   from the operator record or Decision 22 backup.
+2. Restart Maez and verify `/health.voice_continuity` no longer reports the
+   unreviewed fingerprint.
+3. Record the failed review as `closed_reverted` in the S5 review ledger or
+   operator note for that review id. Do not reuse its owner-origin marker.
 
 ## Boundary
 

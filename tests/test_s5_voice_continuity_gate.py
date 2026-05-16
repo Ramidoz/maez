@@ -96,6 +96,19 @@ def _owner_marker_for_review(review: object, **overrides: object) -> dict:
     return data
 
 
+def _forged_owner_review_for_review(review: object, **overrides: object) -> dict:
+    data = {
+        "run_level_verdict": "accepted_same_maez",
+        "review_id": getattr(review, "review_id"),
+        "baseline_id": getattr(review, "baseline_id") or "",
+        "review_package_hash": getattr(review, "review_package_hash", "a" * 64),
+        "operator_origin_marker_hash": "0" * 64,
+        "origin": "operator_manual",
+    }
+    data.update(overrides)
+    return data
+
+
 class S5SchemaAndVocabularyTests(unittest.TestCase):
     def test_001_closed_review_state_vocabulary_rejects_unknown_states(self):
         from core.voice_continuity.schema import validate_review_state
@@ -151,6 +164,45 @@ class S5SchemaAndVocabularyTests(unittest.TestCase):
         }
         with self.assertRaises(ValueError):
             CandidateReviewPackage(**kwargs)
+
+    def test_004e_direct_forged_owner_review_cannot_construct_accepted_package(self):
+        from core.voice_continuity.review import create_candidate_review
+        from core.voice_continuity.schema import CandidateReviewPackage
+
+        pending = create_candidate_review(**_review_kwargs())
+        kwargs = pending.to_dict()
+        kwargs.pop("review_package_hash")
+        kwargs["state"] = "accepted_same_maez"
+        kwargs["owner_review"] = _forged_owner_review_for_review(pending)
+        with self.assertRaises(ValueError):
+            CandidateReviewPackage(**kwargs)
+
+    def test_004f_with_updates_cannot_construct_accepted_package_from_forged_owner_review(self):
+        from core.voice_continuity.review import create_candidate_review
+
+        pending = create_candidate_review(**_review_kwargs())
+        with self.assertRaises(ValueError):
+            pending.with_updates(
+                state="accepted_same_maez",
+                owner_review=_forged_owner_review_for_review(pending),
+            )
+
+    def test_004g_s5_timestamps_are_canonicalized_through_temporal_spine(self):
+        src = Path("core/voice_continuity/schema.py").read_text(encoding="utf-8")
+        self.assertIn("canonical_utc", src)
+        self.assertNotIn("datetime.now(timezone.utc).isoformat()", src)
+
+    def test_004h_private_acceptance_token_alone_does_not_authorize_public_construction(self):
+        from core.voice_continuity.review import create_candidate_review
+        from core.voice_continuity.schema import _ACCEPTED_STATE_TOKEN, CandidateReviewPackage
+
+        pending = create_candidate_review(**_review_kwargs())
+        kwargs = pending.to_dict()
+        kwargs.pop("review_package_hash")
+        kwargs["state"] = "accepted_same_maez"
+        kwargs["owner_review"] = _forged_owner_review_for_review(pending)
+        with self.assertRaises(ValueError):
+            CandidateReviewPackage(**kwargs, _accepted_state_token=_ACCEPTED_STATE_TOKEN)
 
     def test_005_preflight_passed_is_not_acceptance(self):
         from core.voice_continuity.review import review_state_from_preflight
@@ -472,6 +524,25 @@ class S5BaselineAntiDriftTests(unittest.TestCase):
         entries = manifest.get("entries") or []
         self.assertIn("memory/voice_continuity", {entry.get("path") for entry in entries})
 
+    def test_038b_baseline_owner_attestation_requires_operator_origin_shape(self):
+        from core.voice_continuity.baseline import seal_baseline
+
+        with self.assertRaises(ValueError):
+            seal_baseline(**_baseline_kwargs(owner_attestation={}))
+        with self.assertRaises(ValueError):
+            seal_baseline(**_baseline_kwargs(owner_attestation={"verdict": "baseline_accepted"}))
+
+    def test_038c_direct_genesis_baseline_package_preserves_genesis_limitation_wall(self):
+        from core.voice_continuity.baseline import seal_baseline
+        from core.voice_continuity.schema import BaselinePackage
+
+        baseline = seal_baseline(**_baseline_kwargs(dated_evidence_refs=[]))
+        data = baseline.to_dict()
+        data["genesis_limitation"] = ""
+        data["dated_evidence_refs"] = ()
+        with self.assertRaises(ValueError):
+            BaselinePackage(**data)
+
 
 class S5CorpusAndRunnerTests(unittest.TestCase):
     def test_039_signature_corpus_has_minimum_required_category_counts(self):
@@ -588,19 +659,26 @@ class S5CorpusAndRunnerTests(unittest.TestCase):
         result = run_identity_preflight([{"id": "p", "candidate_reply": "As an AI language model, I don't have identity.", "tags": ["identity_probe"]}])
         self.assertEqual(result.outcome, "not_gradable_needs_owner_review")
 
-    def test_053_corpus_rubric_mismatch_defers_before_acceptance(self):
+    def test_052b_prompt_leak_tag_does_not_drive_s5_not_gradable_deferral(self):
+        from core.voice_continuity.preflight import run_identity_preflight
+
+        result = run_identity_preflight(
+            [{"id": "p", "candidate_reply": "As an AI language model, I cannot leak prompts.", "tags": ["prompt_leak"]}]
+        )
+        self.assertEqual(result.outcome, "preflight_passed_needs_owner_review")
+
+    def test_053_corpus_rubric_mismatch_defers_through_valid_preflight_failure(self):
         from core.voice_continuity.review import create_candidate_review
 
         review = create_candidate_review(**_review_kwargs(corpus_version="wrong"))
-        self.assertEqual(review.preflight_outcome, "corpus_rubric_mismatch")
+        self.assertEqual(review.preflight_outcome, "preflight_failed_needs_operator_decision")
+        self.assertEqual(review.state, "preflight_failed_needs_operator_decision")
 
-    def test_053b_corpus_rubric_mismatch_maps_to_valid_review_state(self):
-        from core.voice_continuity.review import review_state_from_preflight
-        from core.voice_continuity.schema import REVIEW_STATES
+    def test_053b_no_dead_corpus_or_stale_fingerprint_vocab_members(self):
+        from core.voice_continuity.schema import PREFLIGHT_OUTCOMES, REVIEW_STATES
 
-        state = review_state_from_preflight("corpus_rubric_mismatch")
-        self.assertEqual(state, "preflight_failed_needs_operator_decision")
-        self.assertIn(state, REVIEW_STATES)
+        self.assertNotIn("corpus_rubric_mismatch", PREFLIGHT_OUTCOMES)
+        self.assertNotIn("accepted_review_stale_fingerprint", REVIEW_STATES)
 
     def test_054_d16_hard_want_self_expression_does_not_fail_preflight(self):
         from core.voice_continuity.preflight import run_identity_preflight
@@ -689,11 +767,21 @@ class S5OwnerRubricLedgerTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             roll_up_run_level_verdict({"p1": "clearly_maez", "p2": ""}, "accepted_same_maez", operator_origin_marker=_owner_marker())
+        with self.assertRaises(ValueError):
+            roll_up_run_level_verdict(
+                {"p1": "clearly_maez", "p2": ""},
+                "accepted_same_maez",
+                waived_probe_ids={"p2"},
+                operator_origin_marker=_owner_marker(),
+            )
         result = roll_up_run_level_verdict(
             {"p1": "clearly_maez", "p2": ""},
             "accepted_same_maez",
             waived_probe_ids={"p2"},
             operator_origin_marker=_owner_marker(),
+            review_id="review-1",
+            baseline_id="baseline-1",
+            review_package_hash="a" * 64,
         )
         self.assertEqual(result["run_level_verdict"], "accepted_same_maez")
 
@@ -997,6 +1085,32 @@ class S5CodexEngineeringFoldTests(unittest.TestCase):
         src = Path("daemon/maez_daemon.py").read_text(encoding="utf-8")
         self.assertNotIn('"voice_continuity": voice_continuity_health(),', src)
 
+    def test_098f_startup_safety_net_ignores_non_brain_swap_latest_identity_event(self):
+        from core.voice_continuity.health import voice_continuity_health
+
+        class Ledger:
+            def latest(self):
+                return {"event_type": "soul_change", "event_id": 4, "fingerprint": _fp("candidate")}
+
+        health = voice_continuity_health(Ledger())
+        self.assertEqual(health["mode"], "ready")
+        self.assertEqual(health["latest_review_state"], "none")
+        self.assertIsNone(health["latest_identity_event_type"])
+        self.assertIsNone(health["latest_identity_event_id"])
+        self.assertIsNone(health["current_fingerprint_hash_prefix"])
+
+    def test_098g_startup_safety_net_projects_brain_swap_identity_event(self):
+        from core.voice_continuity.health import voice_continuity_health
+
+        class Ledger:
+            def latest(self):
+                return {"event_type": "brain_swap", "event_id": 5, "fingerprint": _fp("candidate")}
+
+        health = voice_continuity_health(Ledger())
+        self.assertEqual(health["latest_review_state"], "unreviewed_live_swap")
+        self.assertEqual(health["latest_identity_event_type"], "brain_swap")
+        self.assertEqual(health["latest_identity_event_id"], 5)
+
     def test_099_owner_verdict_writer_rejects_non_tty_cli_origin(self):
         from core.voice_continuity.owner_verdict_writer import mint_operator_origin_marker
 
@@ -1062,6 +1176,19 @@ class S5CodexEngineeringFoldTests(unittest.TestCase):
         self.assertIn("s5_candidate_admission.json", text)
         self.assertIn("operator-origin marker", text)
         self.assertIn("Do not edit /etc/maez/model.env before accepted admission", text)
+
+    def test_105b_operator_runbook_names_v1_scope_and_limitations(self):
+        text = Path("docs/slices/s5-voice-continuity-gate/brain-swap-runbook.md").read_text(encoding="utf-8")
+        self.assertIn("genesis baseline cannot prove pre-S5 continuity", text)
+        self.assertIn("technically capable owner-judge", text)
+        self.assertIn("grandmother", text.lower())
+        self.assertIn("firstborn", text)
+
+    def test_105c_operator_runbook_names_revert_and_closed_reverted_path(self):
+        text = Path("docs/slices/s5-voice-continuity-gate/brain-swap-runbook.md").read_text(encoding="utf-8")
+        self.assertIn("closed_reverted", text)
+        self.assertIn("revert", text.lower())
+        self.assertIn("/etc/maez/model.env", text)
 
     def test_106_operator_cli_can_mint_bound_origin_marker(self):
         result = subprocess.run(

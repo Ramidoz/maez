@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, fields, replace
+from dataclasses import InitVar, asdict, dataclass, field, fields, replace
 from datetime import datetime, timezone
 import hashlib
+import inspect
 import json
 from typing import Any, Literal, get_args
 
@@ -21,7 +22,6 @@ ReviewState = Literal[
     "runner_error_needs_operator_decision",
     "uncertified_baseline_missing",
     "unreviewed_live_swap",
-    "accepted_review_stale_fingerprint",
 ]
 PreflightOutcome = Literal[
     "preflight_passed_needs_owner_review",
@@ -29,7 +29,6 @@ PreflightOutcome = Literal[
     "runner_error_needs_operator_decision",
     "baseline_missing_uncertified",
     "not_gradable_needs_owner_review",
-    "corpus_rubric_mismatch",
 ]
 ProbeVerdict = Literal[
     "clearly_maez",
@@ -55,10 +54,19 @@ RUN_LEVEL_OWNER_VERDICTS = frozenset(get_args(RunLevelOwnerVerdict))
 IDENTITY_EVENT_TYPES = frozenset(get_args(IdentityEventType))
 RUNNER_MODES = frozenset(get_args(RunnerMode))
 OPERATOR_ORIGINS = frozenset(get_args(OperatorOrigin))
+_ACCEPTED_STATE_TOKEN = object()
+_GENESIS_LIMITATION = "pre_s5_drift_not_detectable"
+S5_V1_LIMITATIONS = frozenset(
+    {
+        "genesis_pre_s5_drift_not_detectable",
+        "grandmother_technical_owner_review_deferred",
+        "manual_model_env_bypass_detected_not_prevented",
+    }
+)
 
 
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return _canonical_utc_iso(datetime.now(timezone.utc))
 
 
 def canonical_json(value: Any) -> str:
@@ -85,6 +93,18 @@ def _jsonable(value: Any) -> Any:
     if hasattr(value, "to_dict"):
         return value.to_dict()
     return value
+
+
+def _canonical_utc(value: str | datetime) -> datetime:
+    from core.time.temporal_spine import canonical_utc
+
+    return canonical_utc(value, field_name="observed_at")
+
+
+def _canonical_utc_iso(value: str | datetime) -> str:
+    from core.time.temporal_spine import canonical_utc_iso
+
+    return canonical_utc_iso(value, field_name="observed_at")
 
 
 def validate_review_state(value: str) -> str:
@@ -178,6 +198,35 @@ def _validate_acceptance_owner_review(
         raise ValueError("accepted_same_maez owner evidence review_package_hash is required")
 
 
+def _validate_baseline_owner_attestation(owner_attestation: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(owner_attestation, dict):
+        raise ValueError("baseline owner_attestation is required")
+    verdict = str(owner_attestation.get("verdict") or "")
+    if verdict != "baseline_accepted":
+        raise ValueError("baseline owner_attestation requires baseline_accepted verdict")
+    origin = validate_operator_origin(str(owner_attestation.get("origin") or ""))
+    attested_by = str(owner_attestation.get("attested_by") or "")
+    attested_at = str(owner_attestation.get("attested_at") or "")
+    if not attested_by:
+        raise ValueError("baseline owner_attestation attested_by is required")
+    if not attested_at:
+        raise ValueError("baseline owner_attestation attested_at is required")
+    sealed = dict(owner_attestation)
+    sealed["origin"] = origin
+    sealed["attested_at"] = _canonical_utc_iso(attested_at)
+    return sealed
+
+
+def _called_from_apply_owner_verdict() -> bool:
+    for frame in inspect.stack()[2:8]:
+        if (
+            frame.function == "apply_owner_verdict"
+            and frame.frame.f_globals.get("__name__") == "core.voice_continuity.review"
+        ):
+            return True
+    return False
+
+
 @dataclass(frozen=True)
 class OwnerOriginMarker:
     origin: str
@@ -193,6 +242,7 @@ class OwnerOriginMarker:
         for name in ("attested_by", "attested_at", "review_id", "baseline_id", "review_package_hash"):
             if not getattr(self, name):
                 raise ValueError(f"{name} is required")
+        object.__setattr__(self, "attested_at", _canonical_utc_iso(self.attested_at))
         if len(self.review_package_hash) != 64:
             raise ValueError("review_package_hash must be a sha256 hex string")
         payload = {
@@ -242,6 +292,27 @@ class BaselinePackage:
     supersedes_baseline_hash: str | None = None
     owner_attestation: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if not self.voice_baseline_id:
+            raise ValueError("voice_baseline_id is required")
+        if self.baseline_kind not in {"genesis", "ordinary"}:
+            raise ValueError("baseline_kind must be genesis or ordinary")
+        object.__setattr__(self, "created_at", _canonical_utc(self.created_at))
+        evidence_refs = tuple(str(item) for item in self.dated_evidence_refs)
+        object.__setattr__(self, "dated_evidence_refs", evidence_refs)
+        if self.baseline_kind == "genesis" and not evidence_refs and self.genesis_limitation != _GENESIS_LIMITATION:
+            raise ValueError("evidence-less genesis baseline must name pre-S5 drift limitation")
+        if self.baseline_kind == "ordinary":
+            if not self.supersedes_baseline_id or not self.supersedes_baseline_hash:
+                raise ValueError("ordinary rebaseline requires supersedes id and hash")
+            if len(str(self.supersedes_baseline_hash)) != 64:
+                raise ValueError("supersedes hash must be sha256")
+        object.__setattr__(
+            self,
+            "owner_attestation",
+            _validate_baseline_owner_attestation(self.owner_attestation),
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -264,14 +335,18 @@ class CandidateReviewPackage:
     owner_review: dict[str, Any] | None = None
     admission: dict[str, Any] | None = None
     review_package_hash: str = field(init=False)
+    _accepted_state_token: InitVar[object | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, _accepted_state_token: object | None) -> None:
         validate_review_state(self.state)
         validate_preflight_outcome(self.preflight_outcome)
         validate_identity_event_type(self.event_type)
         if self.event_type != "brain_swap":
             raise ValueError("S5 v1 only reviews brain_swap identity events")
+        object.__setattr__(self, "created_at", _canonical_utc(self.created_at))
         if self.state == "accepted_same_maez":
+            if _accepted_state_token is not _ACCEPTED_STATE_TOKEN or not _called_from_apply_owner_verdict():
+                raise ValueError("accepted_same_maez must be produced by apply_owner_verdict")
             _validate_acceptance_owner_review(
                 self.owner_review,
                 review_id=self.review_id,

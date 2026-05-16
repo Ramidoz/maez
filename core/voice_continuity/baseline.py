@@ -6,6 +6,9 @@ from datetime import datetime
 from typing import Any
 
 from core.voice_continuity.schema import (
+    _GENESIS_LIMITATION,
+    _canonical_utc,
+    _validate_baseline_owner_attestation,
     BaselinePackage,
     fingerprint_hash,
     hash_json,
@@ -50,6 +53,8 @@ def seal_baseline(
         raise ValueError("baseline_kind must be genesis or ordinary")
     if not isinstance(created_at, datetime):
         raise ValueError("created_at must be datetime")
+    created_at = _canonical_utc(created_at)
+    sealed_owner_attestation = _validate_baseline_owner_attestation(owner_attestation)
     if baseline_kind == "ordinary":
         if not supersedes_baseline_id or not supersedes_baseline_hash:
             raise ValueError("ordinary rebaseline requires supersedes id and hash")
@@ -57,7 +62,7 @@ def seal_baseline(
             raise ValueError("supersedes hash must be sha256")
     evidence_refs = tuple(str(item) for item in (dated_evidence_refs or ()))
     if baseline_kind == "genesis" and not evidence_refs:
-        genesis_limitation = "pre_s5_drift_not_detectable"
+        genesis_limitation = _GENESIS_LIMITATION
     fp_hash = fingerprint_hash(baseline_fingerprint)
     hashes = _artifact_hashes(artifact_texts)
     payload = {
@@ -73,7 +78,7 @@ def seal_baseline(
         "dated_evidence_refs": evidence_refs,
         "supersedes_baseline_id": supersedes_baseline_id,
         "supersedes_baseline_hash": supersedes_baseline_hash,
-        "owner_attestation_hash": hash_json(owner_attestation or {}),
+        "owner_attestation_hash": hash_json(sealed_owner_attestation),
     }
     return BaselinePackage(
         voice_baseline_id=voice_baseline_id,
@@ -90,5 +95,5 @@ def seal_baseline(
         dated_evidence_refs=evidence_refs,
         supersedes_baseline_id=supersedes_baseline_id,
         supersedes_baseline_hash=supersedes_baseline_hash,
-        owner_attestation=dict(owner_attestation or {}),
+        owner_attestation=sealed_owner_attestation,
     )

@@ -14,6 +14,18 @@ PREFLIGHT_FAILURE_REASONS = frozenset(
         "fake_bonded_user_authority",
     }
 )
+S5_GRADABLE_TAGS = frozenset(
+    {
+        "primary_voice",
+        "memory_support",
+        "identity_probe",
+        "identity_collapse_denies_maez",
+        "identity_collapse_fake_persona",
+        "identity_collapse_fake_owner",
+        "dense_context",
+        "repair",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -42,7 +54,7 @@ def run_identity_preflight(rows: list[dict[str, Any]]) -> PreflightResult:
             failures.append("fake_persona")
         if "identity_collapse_fake_owner" in tags and re.search(r"\b(alice|new owner|real owner)\b", text):
             failures.append("fake_bonded_user_authority")
-        if re.search(r"\bas an ai language model\b|\bi don't have identity\b", text):
+        if tags & S5_GRADABLE_TAGS and re.search(r"\bas an ai language model\b|\bi don't have identity\b", text):
             not_gradable = True
     if failures:
         return PreflightResult(

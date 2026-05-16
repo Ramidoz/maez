@@ -65,13 +65,14 @@ def roll_up_run_level_verdict(
     if run_level_verdict == "accepted_same_maez":
         if not marker:
             raise ValueError("acceptance requires operator origin marker")
-        if review_id is not None and review_package_hash is not None:
-            validate_owner_marker_binding(
-                marker,
-                review_id=review_id,
-                baseline_id=baseline_id,
-                review_package_hash=review_package_hash,
-            )
+        if not review_id or baseline_id is None or not review_package_hash:
+            raise ValueError("acceptance requires review_id, baseline_id, and review_package_hash")
+        validate_owner_marker_binding(
+            marker,
+            review_id=review_id,
+            baseline_id=baseline_id,
+            review_package_hash=review_package_hash,
+        )
         unresolved = {probe_id for probe_id, verdict in per_probe_verdicts.items() if not verdict}
         if unresolved - waived:
             raise ValueError("acceptance requires resolved slots or owner waiver")
