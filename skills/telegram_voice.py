@@ -3544,6 +3544,14 @@ class TelegramVoice:
             _jarvis_system_prompt += "\n\n" + _cap_snippet()
         except Exception:
             pass
+        try:
+            from core.infra.capability_manual_context import manual_context_snippet
+
+            _manual_context = manual_context_snippet(user_text)
+            if _manual_context:
+                _jarvis_system_prompt += "\n\n" + _manual_context
+        except Exception:
+            pass
 
         # Slice 3 wiring (2026-05-07): build the evidence envelope so
         # the LLM sees what it MAY claim and what's forbidden BEFORE

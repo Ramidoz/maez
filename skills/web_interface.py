@@ -5612,6 +5612,20 @@ def chat():
             "- Reply naturally for the web. Do not pretend this message came from Telegram unless the owner asks.\n"
             "- Ambient context above is a passive snapshot; do not recite it back unless relevant.\n"
         )
+        try:
+            from core.capability_registry import prompt_snippet as _cap_snippet
+
+            owner_system += "\n\n" + _cap_snippet()
+        except Exception:
+            pass
+        try:
+            from core.infra.capability_manual_context import manual_context_snippet
+
+            _manual_context = manual_context_snippet(message)
+            if _manual_context:
+                owner_system += "\n\n" + _manual_context
+        except Exception:
+            pass
         # Same prompt-budget cap as the daemon's /message path so a
         # high-recall query can't push past the llama-server ctx.
         from core.cognition.envelope_builder import resolve_recall_cap_chars

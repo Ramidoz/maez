@@ -2436,6 +2436,14 @@ class MaezDaemon:
             sys_prompt += "\n\n" + _cap_snippet()
         except Exception:
             pass
+        try:
+            from core.infra.capability_manual_context import manual_context_snippet
+
+            _manual_context = manual_context_snippet(text)
+            if _manual_context:
+                sys_prompt += "\n\n" + _manual_context
+        except Exception:
+            pass
         if public_ctx:
             sys_prompt += (
                 "\n\nCRITICAL: The [MY CONVERSATIONS] section shows people you spoke with today. "

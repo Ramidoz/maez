@@ -167,8 +167,9 @@ A 4-agent audit pass on 2026-05-02 (see [`architecture-state-2026-05-02.md`](sna
 
 **What's still genuinely open inside Track A:**
 
-- **D20 acquisition-pipeline orchestration.** Modules (gap-matcher, evaluator, proposal, queue) are shipped; the **5-stage flow that fires-on-felt-gap** is not yet wired into one orchestrated path. This is the load-bearing piece that turns the manual + pipeline ADRs into a live behavior. **The next substantive slice.**
-- **D19 capability manual loader.** 3-4 entries seeded under `docs/maez_manual/`; the *loader* that surfaces relevant manual entries into the recall path or planner prompt is not integrated.
+- **D20 acquisition-pipeline orchestration is no longer open.** Current code has Stage 1 gap-sensing, stages 2-4 orchestration, consent-card creation, acquisition queueing, Stage 5 planning, and the Telegram hot-path hooks. The end-to-end loop is now: owner text exposes a felt gap -> D20 detects/matches/evaluates/proposes -> owner-approved card queues intent -> planner produces a reviewable integration plan. Do not rebuild D20 as a fresh gap.
+- **D19 capability manual loader is partially live.** The loader exists, D20 consumes `docs/maez_manual/`, and owner-facing generation surfaces now receive a bounded manual-context projection when the owner asks what Maez can learn, lacks, or could acquire next. The projection is deliberately small and frames entries as possible acquisitions, not active capabilities.
+- **D20/D19 doc cleanup.** Several older handoffs and architecture snapshots predate the completed D20 loop. Treat this `TRACK_A.md` section as the current anchor over older snapshot prose.
 - **Decisions 8 / 12 / 13 / 15 / 16** — all PARTIAL per the audit. Paradise (D8) has `suspended_pending_paradise` referenced in code but not enum-encoded; mourning drift (D13) has scaffolding but no implementation; voice-lifecycle (D16) has the `wants` module but no refinement/abandonment semantics.
 
 **Doc-vs-code drift caught and fixed in the same audit:**
