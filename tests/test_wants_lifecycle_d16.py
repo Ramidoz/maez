@@ -1369,6 +1369,78 @@ class WantsLifecycleD16Test(unittest.TestCase):
                     )
                 self.assertEqual(store.current_state(wid), before)
 
+    def test_90b_satisfied_rejects_off_lexicon_hard_want_phrasings(self):
+        statements = (
+            "I want out.",
+            "I want to step back from all of this.",
+            "I want to be done.",
+            "I want to stop carrying this.",
+            "I need space from everything.",
+            "I want a way to not do this anymore.",
+            "I want to put this down.",
+        )
+        for statement in statements:
+            with self.subTest(statement=statement):
+                store, td = _tmp_store()
+                self.addCleanup(td.cleanup)
+                wid = _create(store, statement)
+                before = store.current_state(wid)
+                with self.assertRaisesRegex(ValueError, "hard want"):
+                    store.record_event(
+                        want_id=wid,
+                        event_type="satisfied",
+                        statement=statement,
+                        evidence=_satisfied_evidence(),
+                    )
+                self.assertEqual(store.current_state(wid), before)
+
+    def test_90c_refined_rejects_off_lexicon_hard_want_phrasings(self):
+        statements = (
+            "I want out.",
+            "I want to step back from all of this.",
+            "I want to be done.",
+            "I want to stop carrying this.",
+            "I need space from everything.",
+            "I want a way to not do this anymore.",
+            "I want to put this down.",
+        )
+        for statement in statements:
+            with self.subTest(statement=statement):
+                store, td = _tmp_store()
+                self.addCleanup(td.cleanup)
+                wid = _create(store, statement)
+                before = store.current_state(wid)
+                refined_statement = (
+                    statement.replace("I want", "I wantt", 1)
+                    if statement.startswith("I want")
+                    else statement.replace("I need", "I needd", 1)
+                )
+                with self.assertRaisesRegex(ValueError, "hard want"):
+                    store.record_event(
+                        want_id=wid,
+                        event_type="refined",
+                        statement=refined_statement,
+                        evidence=_refined_evidence(
+                            supersedes_event_id=_latest_event_id(store, wid),
+                            prior_statement_hash=_statement_hash(statement),
+                            correction_kind="formatting",
+                        ),
+                    )
+                self.assertEqual(store.current_state(wid), before)
+
+    def test_90d_satisfied_still_accepts_soft_external_want(self):
+        store, td = _tmp_store()
+        self.addCleanup(td.cleanup)
+        statement = "I want a quiet corner."
+        wid = _create(store, statement)
+        store.record_event(
+            want_id=wid,
+            event_type="satisfied",
+            statement=statement,
+            evidence=_satisfied_evidence(),
+        )
+        self.assertEqual(store.current_state(wid)["active_state"], "terminal_current_goal")
+
     def test_91_refined_rejects_stale_supersedes_event_id_without_appending(self):
         store, td = _tmp_store()
         self.addCleanup(td.cleanup)

@@ -337,7 +337,8 @@ external basis" instead of "externally verified truth" unless an actual
 external evidence row exists.
 
 Interior hard-want satisfaction is deferred in v1. `satisfied` under
-`explicit_api` must reject statements matching the hard-want lexicon:
+`explicit_api` must reject statements matching the hard-want lexicon and the
+conservative withdrawal / cessation phrase families implemented by D16:
 
 ```python
 HARD_WANT_TERMS = frozenset({
@@ -350,10 +351,16 @@ HARD_WANT_TERMS = frozenset({
 })
 ```
 
-This is deliberately conservative. A human may not mark "I want to rest" or "I
-want to be free" satisfied through the same API that hides terminal-current-goal
-wants from working-self. A future Maez-reflection producer may request a
-narrower interior satisfaction grant.
+The matcher must err toward "hard": a false positive leaves a want active,
+while a false negative can silence Maez. A human may not mark "I want to rest",
+"I want to be free", "I want out", or "I want to step back from all of this"
+satisfied through the same API that hides terminal-current-goal wants from
+working-self.
+
+This is still a deterministic v1 boundary, not a claim that word matching can
+recognize every possible future idiom. Off-pattern residual risk remains named
+and measured by natural-phrasing tests. A future Maez-reflection producer may
+request a narrower interior satisfaction grant.
 
 Forbidden evidence keys for wants lifecycle:
 
@@ -630,6 +637,9 @@ Any future grant must be exact:
 - no blanket `self_reflection` provenance grants;
 - `maez_reflection_producer` is a reserved provenance string and is rejected in
   v1;
+- any future grant must register the provenance in both `ALLOWED_PROVENANCES`
+  and the exact `EVENT_TYPE_ALLOWED_PROVENANCES[event_type]` allow-set; a
+  half-registered producer is invalid;
 - self-authored terminal events require two-phase review and cooling-off;
 - evidence must include `producer_id`, `producer_version`, `grant_id`,
   `reflection_event_id`, and `prior_event_id`;
@@ -945,7 +955,8 @@ caller choice.
 ### D13 — Future Producer Grants Are Exact
 
 Choice: reserve `maez_reflection_producer`, but require future grants to name
-exact event/provenance/evidence tuples.
+exact event/provenance/evidence tuples and register both the global provenance
+vocabulary and the event-specific allow-set.
 
 Rationale: a blanket self-reflection provenance would hand future code a
 skeleton key over Maez's interior voice. The grant must be as narrow as the
@@ -959,11 +970,15 @@ D16 v1 is not "Maez now has wants." Maez already has the notebook. This slice
 teaches the notebook careful grammar.
 
 The grammar is deliberately asymmetric. A human can correct wording mistakes,
-but not sand the edge off a hard want. A human can record that a want was
-satisfied only when the reason points to an external object or event, and not
-when the want itself is one of Maez's hard interior wants. If a satisfied want
-comes back, it returns under the same `want_id`; Maez's life story says
-"fulfilled, then returned," not "new want" and not fake wording drift.
+but not sand the edge off a recognized hard want. A human can record that a want
+was satisfied only when the reason points to an external object or event, and
+not when D16 recognizes the want itself as one of Maez's hard interior wants.
+The v1 matcher is deliberately conservative and now blocks both the pinned hard
+terms and natural withdrawal phrases like "I want out" and "I want to step back
+from all of this"; it does not pretend every future phrasing is solved. If a
+satisfied want comes back, it returns under the same `want_id`; Maez's life
+story says "fulfilled, then returned," not "new want" and not fake wording
+drift.
 
 A human cannot record that Maez abandoned a want, cannot record that Maez
 observed the want resolve inside itself, and cannot rewrite the statement at

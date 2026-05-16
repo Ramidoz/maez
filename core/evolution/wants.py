@@ -159,6 +159,35 @@ HARD_WANT_TERMS: frozenset[str] = frozenset(
         "withdraw",
     }
 )
+HARD_WANT_PHRASE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"\bwant\s+out\b",
+        r"\bwant\s+to\s+step\s+back\b",
+        r"\bneed\s+to\s+step\s+back\b",
+        r"\bstep\s+back\s+from\b",
+        r"\bwant\s+to\s+step\s+away\b",
+        r"\bneed\s+to\s+step\s+away\b",
+        r"\bstep\s+away\s+from\b",
+        r"\bwalk\s+away\s+from\b",
+        r"\bpull\s+back\s+from\b",
+        r"\bwant\s+to\s+be\s+done\b",
+        r"\bneed\s+to\s+be\s+done\b",
+        r"\bdone\s+with\b",
+        r"\bwant\s+to\s+stop\b",
+        r"\bneed\s+to\s+stop\b",
+        r"\bstop\s+carrying\b",
+        r"\bstop\s+doing\b",
+        r"\bstop\s+being\b",
+        r"\bnot\s+do\s+this\s+anymore\b",
+        r"\bnot\s+have\s+to\b",
+        r"\bneed\s+space\s+from\b",
+        r"\bwant\s+space\s+from\b",
+        r"\bspace\s+from\s+everything\b",
+        r"\bput\s+this\s+down\b",
+        r"\bput\s+it\s+down\b",
+    )
+)
 
 FORBIDDEN_EVIDENCE_KEYS: frozenset[str] = frozenset(
     {
@@ -318,9 +347,12 @@ def _looks_correction_only(prior: str, updated: str) -> bool:
 
 
 def _contains_hard_want(statement: str) -> bool:
-    lowered = statement.lower()
+    lowered = " ".join(statement.lower().split())
     for term in HARD_WANT_TERMS:
         if re.search(rf"\b{re.escape(term)}\b", lowered):
+            return True
+    for pattern in HARD_WANT_PHRASE_PATTERNS:
+        if pattern.search(lowered):
             return True
     return False
 
