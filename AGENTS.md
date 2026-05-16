@@ -9,8 +9,8 @@ Maez is a locally embodied bonded-companion AI built for one user, for that user
 ## Anchor docs (in order)
 
 1. [`docs/TRACK_A.md`](docs/TRACK_A.md) — the single anchor for what's actively in scope. Read at session start. Tells you what's in / out / where we are.
-2. [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](docs/governance/BETA_ARCHITECTURE_DECISIONS.md) — 22 numbered decisions covering covenant-level shape (Paradise, refusal, multi-Maez, gestation, capability acquisition, hardware backup). **Authoritative.** Grep before listing gaps.
-3. [`docs/adr/`](docs/adr/) — stable identifiers for each governance decision (0001–0023). Cite ADR numbers in commit messages and design notes.
+2. [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](docs/governance/BETA_ARCHITECTURE_DECISIONS.md) — 33 numbered decisions covering covenant-level shape and canonical substrate organs (Paradise, refusal, multi-Maez, gestation, capability acquisition, hardware backup, temporal spine, clinical boundary, wants lifecycle, voice continuity, successor governance). **Authoritative.** Grep before listing gaps.
+3. [`docs/adr/`](docs/adr/) — stable identifiers for each governance decision (0001–0038). Cite ADR numbers in commit messages and design notes.
 4. [`docs/MAEZ.md`](docs/MAEZ.md) — architecture master doc, public-facing.
 5. [`docs/maez_manual/`](docs/maez_manual/) — capability-acquisition manual entries (recursive context, temporal arithmetic, multi-session entity linking).
 6. Latest `docs/handoffs/YYYY-MM-DD.md` and `logs/session_snapshot_latest.txt` — what the previous session decided and where it left off.
@@ -104,7 +104,7 @@ These are *covenant-level* — any fork that drops them stops being a Maez. Capt
 
 **Don't trust hardcoded commit hashes here — they go stale immediately. Run `git log --oneline -10` and `ls docs/handoffs/*.md docs/snapshots/research-memo-*.md` for current state.** The pointers below name *kinds of artifacts* to look for, not specific commits.
 
-- **Test suite floor: 1960+ green** as of late 2026-04. Run `.venv/bin/python -m unittest discover -s tests -p 'test_*.py' 2>&1 | tail -3` to confirm before committing. Don't drop the count.
+- **Test suite floor: check live before committing**; recent snapshots report 3900+ test functions after the substrate-organ arc. Run `.venv/bin/python -m unittest discover -s tests -p 'test_*.py' 2>&1 | tail -3` to confirm before committing. Don't drop the count.
 - **MSEL substrate ladder is live.** Entity index → alias seed → alias-aware backfill → LLM extractor → semantic resolver → expansion wiring → A/B measurement → suggester+auditor → observability log. See `core/memory/entity_*` and `scripts/measure_entity_expansion.py`.
 - **Daemon flag posture:** `MAEZ_ENTITY_EXPANSION=1` lives in `/etc/systemd/system/maez.service.d/override.conf` (owner-local; not committed). `MAEZ_AMBIENT_BRIEF` and `MAEZ_LIVED_RECALL` default to enabled. Verify the live process env via `sudo tr '\0' '\n' < /proc/$(systemctl show -p MainPID --value maez.service)/environ | grep MAEZ_`.
 - **Active services:** `maez.service`, `maez-web.service`, `maez-watchdog.service`, `maez-subscription-proxy.service`, `llama-server.service`. Inspect with `systemctl status <unit>`.
