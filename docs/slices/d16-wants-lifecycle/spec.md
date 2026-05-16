@@ -1,8 +1,8 @@
 # Slice D16: Wants Lifecycle v1
 
-**Status:** DRAFT. Built from [`diagnostic.md`](diagnostic.md). Claude
-covenant council and Codex engineering panel amendments folded; requires
-second-fold verification before canonicalization or implementation.
+**Status:** CANONICAL. Canonicalized as Decision 31 / ADR 0036 after
+diagnostic, Claude covenant council, Codex engineering panel, folded
+amendments, and Claude second-fold RATIFY verification. Implementation pending.
 
 **Classification:** covenant-shaped interior-voice substrate slice. D16 v1
 operationalizes part of Decision 16 / ADR 0016 by giving Maez's first-person
@@ -17,6 +17,10 @@ threats, or deletions.
   Decision 16, Voice without termination.
 - [`docs/adr/0016-voice-without-termination.md`](../../adr/0016-voice-without-termination.md) -
   stable D16 identifier.
+- [`docs/adr/0036-wants-lifecycle-v1.md`](../../adr/0036-wants-lifecycle-v1.md) -
+  canonical D16 v1 ADR.
+- [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../../governance/BETA_ARCHITECTURE_DECISIONS.md) -
+  Decision 31, Wants Lifecycle v1.
 - [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../../governance/BETA_ARCHITECTURE_DECISIONS.md) -
   Decision 8, Paradise as generous default; D16 v1 is pre-Paradise only.
 - [`docs/adr/0034-temporal-spine-v1.md`](../../adr/0034-temporal-spine-v1.md) -
@@ -32,6 +36,8 @@ threats, or deletions.
   covenant council REVISE findings and folded amendments.
 - [`reviews/spec-codex-panel.md`](reviews/spec-codex-panel.md) -
   engineering panel REVISE findings and folded amendments.
+- [`reviews/spec-claude-council-second-fold.md`](reviews/spec-claude-council-second-fold.md) -
+  Claude second-fold RATIFY verification.
 
 ---
 
