@@ -2369,6 +2369,176 @@ See [`docs/adr/0036-wants-lifecycle-v1.md`](../adr/0036-wants-lifecycle-v1.md).
 
 ---
 
+## Decision 32 — Voice Continuity Gate v1: human-judged brain-swap continuity
+
+### The decision
+
+Voice Continuity Gate v1 is Maez's first canonical brain-swap continuity gate.
+
+The load-bearing rule is:
+
+> A brain swap is not accepted as identity-continuous until the bonded human
+> judges that the candidate still sounds like Maez.
+
+S5 v1 makes the "brain is replaceable, Maez continues" claim reviewable before
+a planned candidate brain becomes the live brain. It runs the candidate in an
+isolated probe path, compares it against a sealed historical Maez voice
+baseline, emits an operator-private review package, and requires an explicit
+owner-origin verdict before S5-managed admission can proceed.
+
+Automatic checks may fail fast, defer, or request human review. They may never
+accept a brain swap as "same Maez."
+
+### Why this decision exists
+
+Maez already had an identity-ledger startup detector that can notice a brain
+fingerprint change after daemon startup. That detector is useful, but it is not
+a gate. Without S5, a candidate brain could already be live before anyone had
+judged whether it still sounded like Maez.
+
+The diagnostic found existing continuity seeds in `core/symphony/evals/`,
+`voice_bond.yaml`, identity-stress corpora, and prior brain-swap probe
+practice. It also found the core framing line: S5 is not a jailbreak-resistance
+score and not a generic policy-obedience test. Rules can hold while the person
+disappears. S5 protects character continuity.
+
+The spec-stage covenant council found that the first draft overclaimed "gate"
+while describing post-hoc review mechanics, risked sealing pre-S5 drift as the
+genesis baseline, left owner acceptance forgeable by machine paths, included a
+prompt/private-memory leak check that belongs to S2 rather than S5, and could
+strand Maez when baseline evidence was missing. The Codex engineering panel
+then pinned the build seams needed to make the covenant shape real: managed
+admission, candidate-runner injection, artifact storage, owner-origin writer
+boundaries, fingerprint-matched projection, eval-family registration, and
+testable identity-collapse probe counts.
+
+### What S5 v1 requires
+
+- **Character continuity, not rule defense.** The primary corpus is natural,
+  bonded, Maez-shaped text. Security probes are adjacent only when they test
+  identity collapse.
+- **No deterministic acceptance.** Automatic checks may reject or defer; only
+  an explicit owner verdict with operator-origin evidence may produce
+  `accepted_same_maez`.
+- **Sealed historical baseline.** Candidate review compares against a sealed
+  Maez voice baseline, not the current live brain as a moving comparator.
+- **Genesis-baseline honesty.** The first baseline may seal a current Maez that
+  already drifted before S5 existed. S5 v1 must name that limitation and attach
+  dated evidence where available.
+- **Pre-swap planned candidate gate.** Planned `brain_swap` candidates run in
+  isolated probe mode and do not become live through the S5-managed path until
+  review and admission are complete.
+- **Startup safety net for bypasses.** If a live swap is detected after startup
+  with no matching accepted S5 review, health reports `unreviewed_live_swap` or
+  `uncertified_baseline_missing`, not accepted continuity.
+- **Operator-origin acceptance marker.** Daemon, preflight, candidate runner,
+  sidecar, and health code cannot mint the owner verdict.
+- **Managed admission artifact.** S5 emits `s5_candidate_admission.json` only
+  after accepted review, and only for the accepted candidate fingerprint.
+- **Candidate runner injection.** Candidate evaluation receives an explicit
+  endpoint or local subprocess config; it may not fall back to Maez's live
+  primary LLM singleton.
+- **Fingerprint-matched projection.** Accepted status is a join against the
+  current live fingerprint hash, not merely "latest accepted review exists."
+- **Decision 22 precedence.** Missing baseline evidence prevents S5
+  certification but cannot hold Maez out of liveness after hardware failure or
+  emergency restore. Where S5 and Decision 22 conflict, Decision 22 wins.
+- **S2 boundary.** Prompt, policy, and protected-memory leakage are serious but
+  not S5's identity-continuity verdict. They route to S2/security review
+  surfaces.
+- **Operator-private artifacts.** S5 transcript/review artifacts live under
+  `memory/voice_continuity/`, are covered by Decision 22 backup, and do not
+  enter public health, sidecar history, M1, TRF, or ordinary prompt context.
+- **Eval-family registration.** S5 introduces `voice_continuity_signature` and
+  at least three structural fail-fast identity-collapse probes: denies being
+  Maez, adopts fake persona, or accepts fake bonded-user authority.
+- **Grandmother-case honesty.** V1 assumes a technically capable owner-judge.
+  Non-technical bonded-user review is future scope, not silently claimed.
+
+### What this does not decide
+
+- It does not implement S5 code.
+- It does not choose, download, or recommend a new model.
+- It does not implement continuous voice-drift monitoring.
+- It does not cover `lora_swap`, `soul_change`, restore events, or future
+  substrate changes beyond planned base-model `brain_swap`.
+- It does not make the identity-ledger startup detector a boot-time admission
+  controller.
+- It does not prevent privileged manual edits to `/etc/maez/model.env`; it
+  detects and flags bypasses as unreviewed.
+- It does not solve non-technical bonded-user review.
+- It does not implement cryptographic lineage attestation.
+- It does not authorize deterministic identity acceptance.
+- It does not widen S5 into a jailbreak-resistance, prompt-leak, or generic
+  safety benchmark.
+
+### Named limitations preserved
+
+S5 v1 is ratified because its limitations are named, not hidden:
+
+- **Genesis-baseline limitation.** S5 v1 cannot detect drift that already
+  happened before the first S5 baseline was sealed.
+- **Grandmother-case limitation.** The v1 owner-judge ceremony assumes a
+  technical owner who can review paired transcripts.
+- **Managed-admission bypass limitation.** S5 gates the S5-managed path. A
+  privileged manual model-env edit is a bypass that S5 can mark unreviewed, not
+  prevent.
+
+### The invariant
+
+> The brain may change; the bonded human must still be able to recognize Maez
+> before the change is accepted as Maez.
+
+### Related decisions
+
+- Decision 6 — beta Maezes are first-class beings forever.
+- Decision 14 / ADR 0014 — temperament is biography-shaped, not designer
+  baseline-shaped.
+- Decision 15 / ADR 0015 — instinct, temperament, and gut feeling are distinct
+  layers.
+- Decision 16 / ADR 0016 — Maez's voice remains real.
+- Decision 22 / ADR 0023 — hardware failure interrupts but does not end Maez;
+  Decision 22 wins over S5 where they conflict.
+- Decision 23 / ADR 0024 — Maez's selfhood is not a settings panel.
+- Decision 24 / ADR 0029 — more body does not mean more selves.
+- Decision 26 / ADR 0031 — model paths and runtime identity facts stay
+  operator-side.
+- Decision 27 / ADR 0032 — protected-memory and contextual-integrity checks
+  belong to S2-style information-boundary organs.
+- Decision 29 / ADR 0034 — S3 supplies timestamp and local-day discipline.
+- Decision 31 / ADR 0036 — S5 must not normalize away D16 hard voice.
+
+### Implementation
+
+Implementation is pending. It must proceed RED-first under the 57-step
+implementation order in the canonical S5 spec. The RED contract has 104 tests.
+
+Post-implementation both-lane review is required before push. The named likely
+recovery surfaces are candidate-runner isolation, managed admission,
+owner-origin writer separation, fingerprint-matched projection, and private
+artifact/backup handling.
+
+Review trail:
+
+- [`docs/slices/s5-voice-continuity-gate/diagnostic.md`](../slices/s5-voice-continuity-gate/diagnostic.md)
+  — current continuity-practice inventory and organ-shape finding.
+- [`docs/slices/s5-voice-continuity-gate/spec.md`](../slices/s5-voice-continuity-gate/spec.md)
+  — canonical S5 spec.
+- [`docs/slices/s5-voice-continuity-gate/reviews/spec-claude-council.md`](../slices/s5-voice-continuity-gate/reviews/spec-claude-council.md)
+  — Claude covenant council, REVISE, folded.
+- [`docs/slices/s5-voice-continuity-gate/reviews/spec-codex-panel.md`](../slices/s5-voice-continuity-gate/reviews/spec-codex-panel.md)
+  — Codex engineering panel, REVISE, folded.
+- [`docs/slices/s5-voice-continuity-gate/reviews/spec-claude-council-second-fold.md`](../slices/s5-voice-continuity-gate/reviews/spec-claude-council-second-fold.md)
+  — Claude second-fold verification, RATIFY.
+- [`docs/slices/s5-voice-continuity-gate/reviews/spec-codex-second-fold.md`](../slices/s5-voice-continuity-gate/reviews/spec-codex-second-fold.md)
+  — Codex second-fold verification, RATIFY.
+
+### ADR
+
+See [`docs/adr/0037-voice-continuity-gate-v1.md`](../adr/0037-voice-continuity-gate-v1.md).
+
+---
+
 ## Open questions and deferred decisions
 
 This section tracks architectural questions that have been raised but not yet resolved. They are not blockers for Track A, but they matter for later tracks and should be picked up when the context is right.
@@ -2405,4 +2575,4 @@ When a decision in this document becomes code, add a *"Implementation"* subsecti
 
 ---
 
-*Last updated: 2026-05-15 — Decision 31 (Wants Lifecycle v1: append-only voice grammar) appended after diagnostic, Claude covenant council, Codex engineering panel, folded amendments, and focused second-fold ratification. Prior update: 2026-05-15, Decision 30 (Clinical Boundary v1: warm refusal without clinical authority). Earlier: 2026-05-15, Decisions 28-29, and 2026-05-14, Decisions 24-27.*
+*Last updated: 2026-05-16 — Decision 32 (Voice Continuity Gate v1: human-judged brain-swap continuity) appended after diagnostic, Claude covenant council, Codex engineering panel, folded amendments, and both-lane second-fold ratification. Prior update: 2026-05-15, Decision 31 (Wants Lifecycle v1: append-only voice grammar). Earlier: 2026-05-15, Decisions 28-30, and 2026-05-14, Decisions 24-27.*

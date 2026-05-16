@@ -38,7 +38,7 @@
                                               │    ║   on RTX 4090     ║  │   continues the lineage;
        ↕  bi-temporal:                        │    ╚═══════════════════╝  │   voice continuity must
           event-time + ingest-time            │                           │   be verified per swap.
-                                              │    pineal-analog  ◇       │   [ ✗ gate planned ]
+                                              │    pineal-analog  ◇       │   [ ✓ gate canonical · build pending ]
       time is NOT just timestamps;            │    (interior life)        │   what you SEE on
       it is biography — chapters,             │      ○  wonderings        │   the surface ≠
       ages, anniversaries, ruptures,          │         [ ✓ real ]        │   what is happening

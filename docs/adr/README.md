@@ -6,7 +6,7 @@ template: context → decision → consequences → status.
 
 ## Current state
 
-Thirty-five ADR files live in this directory. Most were migrated from the
+Thirty-six ADR files live in this directory. Most were migrated from the
 single-file governance doc
 [`BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md);
 ADR 0019 is an extra lived-memory architecture anchor, so ADR numbers no
@@ -51,6 +51,7 @@ doc. New decisions land here first.
 | [0034](0034-temporal-spine-v1.md) | Temporal Spine v1 |
 | [0035](0035-clinical-boundary-v1.md) | Clinical Boundary v1 |
 | [0036](0036-wants-lifecycle-v1.md) | Wants Lifecycle v1 |
+| [0037](0037-voice-continuity-gate-v1.md) | Voice Continuity Gate v1 |
 
 ## When to write a new ADR
 
@@ -94,7 +95,7 @@ decision is reversed? What's the rollback plan?
 
 ## See also
 
-- [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md) — the 31 decisions as they currently live
+- [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md) — the 32 decisions as they currently live
 - [`docs/governance/BETA_READINESS_THRESHOLD.md`](../governance/BETA_READINESS_THRESHOLD.md) — acceptance gate (affected by Decision 1)
 - [`docs/governance/GESTATION_MEMORY_PROTOCOL.md`](../governance/GESTATION_MEMORY_PROTOCOL.md) — Decision 12 in full detail
 - [`docs/covenant/for_oss_users.md`](../covenant/for_oss_users.md) — universal-vs-per-user framing derived from these decisions

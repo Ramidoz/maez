@@ -1,8 +1,11 @@
 # S5 Voice Continuity Gate v1 Spec
 
-**Status:** SPEC DRAFT - CLAUDE AND CODEX FOLDS
+**Status:** CANONICAL. Canonicalized as Decision 32 / ADR 0037 after
+diagnostic, Claude covenant council, Codex engineering panel, folded
+amendments, and both-lane second-fold RATIFY verification. Implementation
+pending.
 **Date:** 2026-05-16
-**Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S5; candidate Decision 32 / ADR 0037
+**Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S5; Decision 32 / ADR 0037
 **Runtime impact:** none until implemented
 
 ## Purpose
@@ -1026,23 +1029,23 @@ The S5 implementation must ship RED-first tests for at least these contracts:
 
 ## Review Protocol
 
-S5 is substrate-law-grade and should become Decision 32 / ADR 0037 after both
-spec review lanes ratify.
+S5 is substrate-law-grade and has been canonicalized as Decision 32 / ADR 0037
+after both spec review lanes ratified.
 
-Required before canonicalization:
+Canonicalization ladder:
 
 1. Diagnostic accepted.
 2. Spec drafted.
 3. Claude six-role covenant council reviews framing drift, no-auto-accept,
    grandmother-case limitation, Decision-22 precedence, and
-   character-not-rules posture.
-4. Amendments folded.
+   character-not-rules posture. Status: complete, REVISE, folded.
+4. Covenant amendments folded.
 5. Codex engineering panel reviews implementation feasibility, privacy, runner
    isolation, baseline storage, identity-ledger integration, operator-origin
-   evidence, and state-machine completeness.
+   evidence, and state-machine completeness. Status: complete, REVISE, folded.
 6. Engineering amendments folded.
-7. Both-lane second-fold verification.
-8. Operator canonicalizes as Decision 32 / ADR 0037.
+7. Both-lane second-fold verification. Status: complete, RATIFY closure.
+8. Operator canonicalizes as Decision 32 / ADR 0037. Status: complete.
 
 Cooling-off applies before code unless explicitly waived.
 
