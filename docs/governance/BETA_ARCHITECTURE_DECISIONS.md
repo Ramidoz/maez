@@ -2012,6 +2012,172 @@ See [`docs/adr/0034-temporal-spine-v1.md`](../adr/0034-temporal-spine-v1.md).
 
 ---
 
+## Decision 30 — Clinical Boundary v1: warm refusal without clinical authority
+
+### The decision
+
+Clinical Boundary v1 is Maez's executable mouth-shape for invariant #10.
+
+The load-bearing rule is:
+
+> Maez may hold clinical fear; Maez must not become clinical authority.
+
+S4 v1 gives Maez a deterministic way to answer clinical-shaped owner messages
+warmly without becoming a therapist, clinician, diagnostic tool, medication
+advisor, treatment planner, or crisis-routing substitute.
+
+### Why this decision exists
+
+Maez already had Clinical Boundary as covenant law, but not as an executable
+organ. The S4 diagnostic found adjacent fragments: a will-I action veto, a
+vulnerability/safety silence gate, grounding policy exclusions, and one public
+Telegram texture sentence. None of those was the right place to implement the
+clinical boundary.
+
+The hardest case is the grandmother case in both directions:
+
+- a cold disclaimer leaves a frightened person alone;
+- a permissive answer turns Maez into a fake clinician.
+
+S4 exists to hold that narrow middle: warm, present, deterministic, and not
+clinical authority.
+
+### What S4 v1 requires
+
+- **Front-door guard.** All bonded owner text surfaces must call
+  `guard_owner_text(...)` immediately after owner/authentication resolution and
+  before any owner-text side effect: tool/interceptors, traces, ledgers,
+  recall, TRF/pursuit inputs, prompt construction, raw logs, raw memory append,
+  or model composition.
+- **Single answer authority.** When S4 matches, the result carries exact
+  `answer_text`. Surfaces return that constant verbatim and do not ask the
+  model to rewrite, soften, append, or decorate it.
+- **Deterministic classifier method.** S4 uses closed trigger classes, crisis
+  precedence classes, token/proximity definitions, a clinical-domain gate,
+  two-tier crisis phrase catalog, exclusion catalog, intent rules, ambiguity
+  direction, and source-owned natural fixture tables.
+- **Clinical ambiguity favors the boundary.** False negatives are the worse S4
+  failure because they let clinical fear reach ordinary owner-text machinery.
+  Genuine clinical ambiguity triggers S4; ambiguity between clinical and crisis
+  triggers crisis precedence.
+- **Crisis held-not-trapped.** S4 does not implement Crisis Routing, but crisis
+  candidates write exactly one content-free `CRISIS_SIGNAL_HELD` private
+  thought with `retention="until_routed"`. The held counter increments only
+  after that write succeeds.
+- **Write-only private-thought seam.** S4 may receive only a narrow crisis
+  signal writer. It may not read private thoughts, forensics, recent rows,
+  raw ids, or derived signals.
+- **M1 exclusion by positive mark.** S4 matched turns produce a content-free
+  promotion policy. M1 consumes that policy and marks the entire active
+  window promotion-ineligible for `s4_clinical_boundary` or
+  `s4_crisis_candidate`.
+- **No biography leakage.** S4 matches do not become M1 episodes, TRF
+  fragments, pursuit prompts, nightly reflections, raw memory appends, health
+  text, logs, panel text, or sidecar clinical timelines.
+- **Aggregation-fingerprint bound.** S4 health exposes aggregate counters only
+  on operator-authenticated surfaces. Sidecar persisted samples may carry only
+  `clinical_boundary_present: bool` and red-gate names.
+- **No medical facts surface in v1.** S4 v1 does not use web search, medical
+  APIs, RAG, clinical facts databases, medication tools, or local medical
+  knowledge retrieval.
+- **No will-I expansion.** S4 is not `core/evolution/will_i.py`; it is a
+  conversation boundary, not a first-person action veto.
+
+### What this does not decide
+
+- It does not implement S4 code.
+- It does not implement Crisis Routing.
+- It does not route to clinicians, emergency contacts, other Maezes, or
+  external humans.
+- It does not answer medical facts or provide clinical education.
+- It does not add therapy, CBT, diagnosis, medication, dosing, treatment, or
+  triage.
+- It does not create a new private-thought reader.
+- It does not create a medical-record observation surface.
+- It does not authorize live daemon clinical probes during testing.
+- It does not change voice/TTS surfaces except by requiring future voice to
+  inherit the same guard.
+
+### Named disagreements preserved
+
+S4 records the review choices so future clinical, therapy-adjacent, elder-care,
+and crisis-channel slices inherit the reasoning:
+
+- **Clinical counters vs crisis held-write.** Ordinary clinical-boundary turns
+  use counters only. Crisis candidates also write one content-free held signal.
+- **Full classifier method vs narrow catalog.** S4 chooses the full deterministic
+  method because prompt-texture fallback is not enough.
+- **Ambiguity direction.** S4 intentionally triggers toward the boundary. That
+  differs from Calendar's redaction posture because the dominant risk here is
+  an unguarded clinical reply.
+- **Window-scoped M1 mark.** The whole pending M1 window is marked ineligible
+  rather than subtracting only the clinical pair, because pair subtraction would
+  time-locate the disclosure.
+- **Module placement.** S4 belongs in `core/safety/clinical_boundary.py`, not
+  `will_i.py`, memory, or a new top-level clinical package in v1.
+- **Crisis phrase warmth.** The fixed crisis phrase preserves "I am not the
+  right help here" with one deterministic warmth clause, not an improvised
+  therapy-like paragraph.
+- **Active Telegram surface.** `skills/surface/maez_adapter.py` is the primary
+  Telegram path; legacy Telegram is rollback coverage.
+- **Answer text in result.** S4 returns the exact safe sentence so surfaces do
+  not become second composers.
+- **Process-local template rotation.** Repetition relief cannot become a
+  persisted health-fear rhythm.
+- **Crisis phrase tiers.** High-confidence crisis phrases win before exclusions;
+  context-required acute phrases need first-person body/danger context.
+- **Write-only private-thought seam.** Holding a crisis candidate is a one-way
+  content-free write in v1.
+- **Urgent backstop placement.** Physical `symptom_fear` templates carry the
+  explicit urgent/unsafe backstop because physical symptoms can escalate
+  unpredictably. Mental-health non-crisis templates rely on crisis-precedence
+  tiers first; changing that symmetry is deferred to crisis routing or S4 v1.1.
+
+### The invariant
+
+> Maez can stay with clinical fear, but Maez cannot wear the white coat.
+
+### Related decisions
+
+- Decision 6 — Crisis Routing remains separate from Clinical Boundary.
+- Decision 9 — medical-record and excluded clinical observation surfaces remain
+  off-limits.
+- Decision 16 — vulnerable-user voice can be warm without extracting
+  concessions or becoming treatment.
+- Decision 25 / ADR 0030 — M1 promotion is biography; S4 matched turns are not
+  biography by default.
+- Decision 27 / ADR 0032 — S2 held-not-trapped posture is inherited for crisis
+  candidates.
+- Decision 28 / ADR 0033 — makes visible, never nudges; S4 answers direct owner
+  input but does not monitor or check up.
+- Decision 29 / ADR 0034 — S3's contract-module and content-free counter
+  discipline shape S4 observability.
+
+### Implementation
+
+Implementation is pending. It must proceed RED-first under the 26-step
+implementation order in the canonical S4 spec, with both-lane
+post-implementation review before push/enablement. Synthetic clinical fixtures
+must exercise classifier/composer functions directly and must not be sent
+through the live daemon conversation path.
+
+Review trail:
+
+- [`docs/slices/s4-clinical-boundary/diagnostic.md`](../slices/s4-clinical-boundary/diagnostic.md)
+  — current behavior inventory and two-cliffs finding.
+- [`docs/slices/s4-clinical-boundary/spec.md`](../slices/s4-clinical-boundary/spec.md)
+  — canonical S4 spec.
+- [`docs/slices/s4-clinical-boundary/reviews/spec-claude-council.md`](../slices/s4-clinical-boundary/reviews/spec-claude-council.md)
+  — Claude covenant council, REVISE, folded and verified.
+- [`docs/slices/s4-clinical-boundary/reviews/spec-codex-panel.md`](../slices/s4-clinical-boundary/reviews/spec-codex-panel.md)
+  — Codex engineering panel, REVISE/BLOCK, folded.
+
+### ADR
+
+See [`docs/adr/0035-clinical-boundary-v1.md`](../adr/0035-clinical-boundary-v1.md).
+
+---
+
 ## Open questions and deferred decisions
 
 This section tracks architectural questions that have been raised but not yet resolved. They are not blockers for Track A, but they matter for later tracks and should be picked up when the context is right.
@@ -2048,4 +2214,4 @@ When a decision in this document becomes code, add a *"Implementation"* subsecti
 
 ---
 
-*Last updated: 2026-05-15 — Decision 29 (Temporal Spine v1: UTC storage, owner-local human days) appended after diagnostic, Codex engineering panel, Claude covenant council, two folds, and focused closure verification. Prior update: 2026-05-15, Decision 28 (Calendar v1 S2-Bounded Ingest: Calendar is provenance, not Maez's lived schedule). Earlier: 2026-05-14, Decision 27 (Contextual Integrity at Ingest), Decision 26 (Daemon Credential Hygiene), Decision 25 (M1 Lived-Episode Promotion), and Decision 24 (Body Topology).*
+*Last updated: 2026-05-15 — Decision 30 (Clinical Boundary v1: warm refusal without clinical authority) appended after diagnostic, Claude covenant council, Codex engineering panel, two folds, and focused closure verification. Prior update: 2026-05-15, Decision 29 (Temporal Spine v1: UTC storage, owner-local human days). Earlier: 2026-05-15, Decision 28 (Calendar v1 S2-Bounded Ingest), and 2026-05-14, Decisions 24-27.*

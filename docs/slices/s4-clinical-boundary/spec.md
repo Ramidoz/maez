@@ -1,7 +1,7 @@
 # Slice S4: Clinical Boundary v1
 
-**Status:** DRAFT. Built from [`diagnostic.md`](diagnostic.md). Proposed
-canonical destination: Decision 30 / ADR 0035.
+**Status:** CANONICAL. Built from [`diagnostic.md`](diagnostic.md) and
+canonicalized as Decision 30 / ADR 0035.
 
 **Classification:** covenant-shaped voice-boundary substrate slice. S4
 operationalizes invariant #10, Clinical Boundary, by giving Maez a deterministic
@@ -148,7 +148,7 @@ Load-bearing inherited rules:
 | M1 promotion | S4 marks the whole current M1 window as promotion-ineligible for clinical-boundary and crisis-candidate matches. Clinical disclosures do not become biography by default. |
 | Surfaces | All bonded owner text surfaces must call S4 before any owner-text side effect or owner-facing responder: Telegram v2, legacy Telegram rollback, web chat, daemon direct reply path, and future voice. Public/third-party Telegram prompt texture is not enough. |
 | Telemetry | Operator-authenticated `/health.clinical_boundary` only. Public/debug endpoints strip it unless explicitly operator-authenticated. Sidecar reads counters only. |
-| Canonicalization | This spec expects Decision 30 / ADR 0035. S4 is substrate-law-grade because future crisis, therapy-adjacent, elder-care, and clinical-context slices inherit it. |
+| Canonicalization | Canonicalized as Decision 30 / ADR 0035. S4 is substrate-law-grade because future crisis, therapy-adjacent, elder-care, and clinical-context slices inherit it. |
 
 ---
 
@@ -515,6 +515,13 @@ boundary negations. For example, "I cannot tell you what dose to take" is an
 approved refusal, while "you should take" or "take another dose" are forbidden
 authority claims. Tests must prove all approved templates pass the scanner
 unchanged.
+
+Urgent/unsafe backstop rationale: the explicit "if it feels urgent or unsafe"
+line appears in `symptom_fear` variants because physical symptoms can escalate
+unpredictably while still entering S4 as non-crisis clinical fear. Mental-health
+non-crisis variants rely on the crisis-precedence tiers running first; adding
+extra urgent-language there is deferred to a reviewed crisis-routing or S4 v1.1
+voice pass.
 
 ### Template Set `symptom_fear.v1`
 
@@ -1090,8 +1097,7 @@ S4 is covenant-shaped. Before implementation:
 3. Both lanes' amendments fold into this spec.
 4. Both lanes verify closure if the fold changes load-bearing behavior. Status:
    pending focused second-fold verification.
-5. Operator canonicalizes as Decision 30 / ADR 0035 or explicitly records why
-   S4 remains an implementation spec.
+5. Operator canonicalizes as Decision 30 / ADR 0035. Status: complete.
 6. Cooling-off applies before code unless operator logs an explicit waiver.
 
 Implementation then proceeds RED-first. Post-implementation both-lane review is
@@ -1128,9 +1134,9 @@ required before push/enablement.
 - **D7 - no medical facts in v1.** Even stable biomedical facts are deferred.
   The first organ proves the boundary before any educational surface is
   considered.
-- **D8 - canonicalization recommended.** S4 operationalizes an invariant that
-  future therapy/crisis-adjacent surfaces will inherit. BAD/ADR form is the
-  cleanest pointer.
+- **D8 - canonicalization.** S4 operationalizes an invariant that future
+  therapy/crisis-adjacent surfaces will inherit. BAD/ADR form is the durable
+  pointer; S4 is canonicalized as Decision 30 / ADR 0035.
 - **D9 - active surface v2 as the primary Telegram path.** The spec names
   `skills/surface/maez_adapter.py` as authoritative and treats legacy
   `skills/telegram_voice.py` as rollback coverage. This avoids testing the
