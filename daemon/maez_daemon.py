@@ -89,6 +89,7 @@ from core.safety.clinical_boundary import (
     guard_owner_text,
 )
 from core.time.temporal_spine import temporal_spine_health
+from core.voice_continuity import voice_continuity_health
 from skills.telegram_voice import TelegramVoice
 from skills.telegram_public import MaezPublicBot
 from core.action_engine import ActionEngine
@@ -5520,6 +5521,7 @@ class MaezDaemon:
                     "credentials": _credential_health(),
                     "temporal_spine": temporal_spine_health(),
                     "clinical_boundary": clinical_boundary_health(),
+                    "voice_continuity": voice_continuity_health(),
                     "system": {
                         "cpu_percent": snap["cpu"]["percent"],
                         "ram_percent": snap["ram"]["percent"],

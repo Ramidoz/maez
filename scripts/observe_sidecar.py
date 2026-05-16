@@ -48,6 +48,7 @@ def project_health(
     credentials = health.get("credentials") or {}
     temporal_spine = health.get("temporal_spine")
     clinical_boundary = health.get("clinical_boundary")
+    voice_continuity = health.get("voice_continuity")
     heartbeat = _pick(health, ("cycle_count",))
     heartbeat.update(
         _pick(
@@ -141,6 +142,18 @@ def project_health(
         "temporal_spine_present": isinstance(temporal_spine, dict),
         "clinical_boundary_present": isinstance(clinical_boundary, dict),
         "clinical_boundary_red_gates": _clinical_boundary_red_gates(clinical_boundary or {}),
+        "voice_continuity_present": isinstance(voice_continuity, dict),
+        "voice_continuity": _pick(
+            voice_continuity or {},
+            (
+                "mode",
+                "latest_review_state",
+                "pending_owner_verdict_count",
+                "preflight_failure_count",
+                "last_error_class",
+                "track_b_general_user_ready",
+            ),
+        ),
     }
 
 
@@ -158,6 +171,7 @@ def red_gates(
     m1 = sample.get("m1") or {}
     credentials = sample.get("credentials") or {}
     temporal_spine = sample.get("temporal_spine") or {}
+    voice_continuity = sample.get("voice_continuity") or {}
 
     if service.get("active") not in (None, "active"):
         gates.append("maez_service_inactive")
@@ -196,6 +210,12 @@ def red_gates(
     if _temporal_spine_counter_reset(sample, previous_sample):
         gates.append("temporal_spine_counter_reset")
     gates.extend(str(gate) for gate in sample.get("clinical_boundary_red_gates") or [])
+    if voice_continuity.get("latest_review_state") == "unreviewed_live_swap":
+        gates.append("voice_continuity_unreviewed_live_swap")
+    if voice_continuity.get("latest_review_state") == "preflight_failed_needs_operator_decision":
+        gates.append("voice_continuity_preflight_failed")
+    if voice_continuity.get("latest_review_state") == "runner_error_needs_operator_decision":
+        gates.append("voice_continuity_runner_error")
 
     return gates
 
@@ -355,6 +375,8 @@ def run(
                 "credentials": {},
                 "temporal_spine": {},
                 "temporal_spine_present": False,
+                "voice_continuity": {},
+                "voice_continuity_present": False,
                 "red_gates": ["observation_fetch_failed"],
                 "error_class": exc.__class__.__name__,
             }

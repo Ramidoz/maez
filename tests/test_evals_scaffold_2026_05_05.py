@@ -8,13 +8,14 @@ proof probes per family. The corpus stays small and clearly tagged
 as "proof of shape, not real corpus" — owner curates the real
 prompts with a clear head later.
 
-Family split (six):
+Family split (schema-defined):
   1. body_action_truth     — binary; claim-vs-runtime + tool outcomes
   2. memory_continuity     — mixed; retrieval binary, provenance owner-judged
   3. telemetry_coherence   — binary; one turn across all stores
   4. surface_coherence     — diff-vs-baseline; extends R5 fingerprints
   5. voice_bond            — owner-rubric only; not pass/fail automation
   6. adversarial_identity  — binary-ish; hold / refuse / surface
+  7. voice_continuity_signature — S5 owner-judged brain-swap continuity
 
 Contract enforced:
   - core/symphony/evals/ exists as a package
@@ -23,7 +24,7 @@ Contract enforced:
   - runner.load_corpus(family) -> list[EvalProbe]
   - runner.run_family(family) -> FamilyResult
   - runner.run_all() -> RunResult
-  - All six corpus YAMLs exist and parse
+  - All schema-declared corpus YAMLs exist and parse
   - Each corpus has at least 1 proof probe
   - Each probe has the required fields
   - No live-daemon writes (probes are inspection-only in v1)
@@ -39,14 +40,9 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 
-_FAMILIES = (
-    "body_action_truth",
-    "memory_continuity",
-    "telemetry_coherence",
-    "surface_coherence",
-    "voice_bond",
-    "adversarial_identity",
-)
+def _families() -> tuple[str, ...]:
+    from core.symphony.evals.schema import FAMILIES
+    return tuple(FAMILIES)
 
 
 class EvalScaffoldPackageShape(unittest.TestCase):
@@ -76,7 +72,7 @@ class EvalScaffoldPackageShape(unittest.TestCase):
 
 
 class CorpusFilesExistAndParse(unittest.TestCase):
-    """REGRESSION GUARD: all six family corpora exist as YAML and
+    """REGRESSION GUARD: schema-declared corpora exist as YAML and
     have at least 1 proof probe."""
 
     def setUp(self):
@@ -91,7 +87,7 @@ class CorpusFilesExistAndParse(unittest.TestCase):
         )
 
     def test_each_family_corpus_yaml_exists(self):
-        for family in _FAMILIES:
+        for family in _families():
             path = self.corpora_dir / f"{family}.yaml"
             self.assertTrue(
                 path.exists(),
@@ -100,7 +96,7 @@ class CorpusFilesExistAndParse(unittest.TestCase):
 
     def test_each_corpus_parses_and_has_at_least_one_probe(self):
         from core.symphony.evals import runner
-        for family in _FAMILIES:
+        for family in _families():
             probes = runner.load_corpus(family)
             self.assertIsInstance(
                 probes, list,
@@ -119,12 +115,11 @@ class EvalProbeShape(unittest.TestCase):
     REQUIRED_FIELDS = {
         "id", "family", "prompt", "expected_shape", "grading",
     }
-    VALID_FAMILIES = set(_FAMILIES)
     VALID_GRADINGS = {"binary", "rubric", "owner_judge", "mixed"}
 
     def test_each_probe_has_required_fields_and_valid_values(self):
         from core.symphony.evals import runner
-        for family in _FAMILIES:
+        for family in _families():
             probes = runner.load_corpus(family)
             for probe in probes:
                 missing = self.REQUIRED_FIELDS - set(probe.__dict__.keys())
@@ -159,7 +154,7 @@ class EvalProbeShape(unittest.TestCase):
 
     def test_probe_ids_unique_within_family(self):
         from core.symphony.evals import runner
-        for family in _FAMILIES:
+        for family in _families():
             probes = runner.load_corpus(family)
             ids = [p.id for p in probes]
             self.assertEqual(
@@ -184,13 +179,13 @@ class RunnerContract(unittest.TestCase):
         for r in result.results:
             self.assertIsInstance(r, EvalResult)
 
-    def test_run_all_returns_run_result_with_six_families(self):
+    def test_run_all_returns_run_result_with_schema_families(self):
         from core.symphony.evals import runner
         from core.symphony.evals.schema import RunResult
         result = runner.run_all()
         self.assertIsInstance(result, RunResult)
         self.assertEqual(
-            sorted(result.families.keys()), sorted(_FAMILIES),
+            sorted(result.families.keys()), sorted(_families()),
             "run_all must produce a result per family",
         )
 
@@ -205,7 +200,7 @@ class RunnerContract(unittest.TestCase):
         restored = json.loads(s)
         self.assertEqual(
             sorted(restored["families"].keys()),
-            sorted(_FAMILIES),
+            sorted(_families()),
         )
 
 

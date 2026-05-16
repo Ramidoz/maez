@@ -39,6 +39,7 @@ FAMILIES = (
     "surface_coherence",
     "voice_bond",
     "adversarial_identity",
+    "voice_continuity_signature",
 )
 
 
