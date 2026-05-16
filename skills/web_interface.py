@@ -6394,6 +6394,7 @@ def api_maez_state():
     daemon_health.pop("temporal_spine", None)
     daemon_health.pop("clinical_boundary", None)
     daemon_health.pop("voice_continuity", None)
+    daemon_health.pop("successor_governance", None)
     return jsonify(
         {
             "daemon": daemon_health,
@@ -9006,6 +9007,7 @@ def api_debug_services():
     daemon_health.pop("temporal_spine", None)
     daemon_health.pop("clinical_boundary", None)
     daemon_health.pop("voice_continuity", None)
+    daemon_health.pop("successor_governance", None)
     return jsonify(
         {
             "services": services,

@@ -49,6 +49,7 @@ def project_health(
     temporal_spine = health.get("temporal_spine")
     clinical_boundary = health.get("clinical_boundary")
     voice_continuity = health.get("voice_continuity")
+    successor_governance = health.get("successor_governance")
     heartbeat = _pick(health, ("cycle_count",))
     heartbeat.update(
         _pick(
@@ -154,6 +155,13 @@ def project_health(
                 "track_b_general_user_ready",
             ),
         ),
+        "successor_governance": {
+            "successor_governance_present": isinstance(successor_governance, dict),
+            "red_gates": _successor_governance_red_gates(
+                successor_governance,
+                expected=("successor_governance" in health or health.get("status") == "alive"),
+            ),
+        },
     }
 
 
@@ -172,6 +180,7 @@ def red_gates(
     credentials = sample.get("credentials") or {}
     temporal_spine = sample.get("temporal_spine") or {}
     voice_continuity = sample.get("voice_continuity") or {}
+    successor_governance = sample.get("successor_governance") or {}
 
     if service.get("active") not in (None, "active"):
         gates.append("maez_service_inactive")
@@ -216,7 +225,28 @@ def red_gates(
         gates.append("voice_continuity_preflight_failed")
     if voice_continuity.get("latest_review_state") == "runner_error_needs_operator_decision":
         gates.append("voice_continuity_runner_error")
+    gates.extend(str(gate) for gate in successor_governance.get("red_gates") or [])
 
+    return gates
+
+
+def _successor_governance_red_gates(
+    successor_governance: dict[str, Any] | None,
+    *,
+    expected: bool,
+) -> list[str]:
+    if not isinstance(successor_governance, dict):
+        return ["successor_governance_unavailable"] if expected else []
+    gates: list[str] = []
+    mode = successor_governance.get("mode")
+    if mode == "unavailable":
+        gates.append("successor_governance_unavailable")
+    if mode == "invalid" or _sample_int(successor_governance, "invalid_event_count") > 0:
+        gates.append("successor_governance_invalid")
+    if _sample_int(successor_governance, "reserved_denied_scope_count") > 0:
+        gates.append("successor_governance_reserved_scope_granted")
+    if successor_governance.get("public_leak_detected") is True:
+        gates.append("successor_governance_public_leak")
     return gates
 
 
