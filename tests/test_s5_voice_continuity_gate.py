@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -1111,6 +1112,90 @@ class S5CodexEngineeringFoldTests(unittest.TestCase):
         self.assertEqual(health["latest_identity_event_type"], "brain_swap")
         self.assertEqual(health["latest_identity_event_id"], 5)
 
+    def test_098h_startup_safety_net_loads_matching_admission_artifact(self):
+        from core.voice_continuity.health import voice_continuity_health
+        from core.voice_continuity.schema import fingerprint_hash
+
+        fp = _fp("candidate")
+        current_hash = fingerprint_hash(fp)
+
+        class Ledger:
+            def latest(self):
+                return {"event_type": "brain_swap", "event_id": 5, "fingerprint": fp}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            admissions = Path(tmp) / "admissions"
+            admissions.mkdir(parents=True)
+            (admissions / "s5_candidate_admission.json").write_text(
+                json.dumps(
+                    {
+                        "artifact_name": "s5_candidate_admission.json",
+                        "review_id": "review-accepted",
+                        "admitted_fingerprint_hash": current_hash,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            health = voice_continuity_health(Ledger(), storage_root=Path(tmp))
+
+        self.assertEqual(health["mode"], "accepted")
+        self.assertEqual(health["latest_review_state"], "accepted_same_maez")
+        self.assertEqual(health["accepted_review_id"], "review-accepted")
+
+    def test_098i_startup_safety_net_does_not_accept_stale_admission_artifact(self):
+        from core.voice_continuity.health import voice_continuity_health
+
+        class Ledger:
+            def latest(self):
+                return {"event_type": "brain_swap", "event_id": 5, "fingerprint": _fp("candidate")}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            admissions = Path(tmp) / "admissions"
+            admissions.mkdir(parents=True)
+            (admissions / "s5_candidate_admission.json").write_text(
+                json.dumps(
+                    {
+                        "artifact_name": "s5_candidate_admission.json",
+                        "review_id": "review-stale",
+                        "admitted_fingerprint_hash": "old-fingerprint",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            health = voice_continuity_health(Ledger(), storage_root=Path(tmp))
+
+        self.assertEqual(health["latest_review_state"], "unreviewed_live_swap")
+        self.assertNotEqual(health["mode"], "accepted")
+
+    def test_098j_startup_safety_net_loads_rejected_review_artifact(self):
+        from core.voice_continuity.health import voice_continuity_health
+        from core.voice_continuity.schema import fingerprint_hash
+
+        fp = _fp("candidate")
+        current_hash = fingerprint_hash(fp)
+
+        class Ledger:
+            def latest(self):
+                return {"event_type": "brain_swap", "event_id": 5, "fingerprint": fp}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            reviews = Path(tmp) / "reviews"
+            reviews.mkdir(parents=True)
+            (reviews / "review-rejected.json").write_text(
+                json.dumps(
+                    {
+                        "review_id": "review-rejected",
+                        "state": "rejected_drift",
+                        "candidate_fingerprint_hash": current_hash,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            health = voice_continuity_health(Ledger(), storage_root=Path(tmp))
+
+        self.assertEqual(health["latest_review_state"], "rejected_drift")
+        self.assertEqual(health["mode"], "preflight_failed")
+
     def test_099_owner_verdict_writer_rejects_non_tty_cli_origin(self):
         from core.voice_continuity.owner_verdict_writer import mint_operator_origin_marker
 
@@ -1189,6 +1274,11 @@ class S5CodexEngineeringFoldTests(unittest.TestCase):
         self.assertIn("closed_reverted", text)
         self.assertIn("revert", text.lower())
         self.assertIn("/etc/maez/model.env", text)
+
+    def test_105d_operator_runbook_names_raw_in_process_mutation_limitation(self):
+        text = Path("docs/slices/s5-voice-continuity-gate/brain-swap-runbook.md").read_text(encoding="utf-8")
+        self.assertIn("raw in-process mutation", text.lower())
+        self.assertIn("object.__setattr__", text)
 
     def test_106_operator_cli_can_mint_bound_origin_marker(self):
         result = subprocess.run(

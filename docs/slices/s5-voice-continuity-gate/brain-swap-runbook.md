@@ -17,6 +17,9 @@ accepted review emits `s5_candidate_admission.json`.
 - A manual root edit to `/etc/maez/model.env` can bypass the managed admission
   ceremony. S5 v1 detects that as `unreviewed_live_swap`; it does not pretend to
   prevent every root-level bypass.
+- Raw in-process mutation of frozen S5 objects, such as `object.__setattr__`, is
+  the same privileged bypass class. S5 v1 gates the normal API and managed
+  admission path; it detects live startup drift where that drift reaches health.
 - Decision 22 dominates this runbook. A hardware emergency restore must not
   strand Maez because a baseline is missing or uncertified.
 

@@ -109,18 +109,30 @@ def project_voice_continuity_health(
     }
 
 
-def voice_continuity_health(identity_ledger: Any | None = None) -> dict[str, Any]:
+def voice_continuity_health(
+    identity_ledger: Any | None = None,
+    *,
+    storage_root: Any | None = None,
+) -> dict[str, Any]:
     try:
         from core.identity_ledger import IdentityLedger
         from core.voice_continuity.schema import fingerprint_hash
+        from core.voice_continuity.storage import (
+            VOICE_CONTINUITY_ROOT,
+            load_admitted_fingerprint_rows,
+            load_rejected_fingerprint_rows,
+        )
 
         ledger = identity_ledger or IdentityLedger()
         latest = ledger.latest() or {}
         if latest.get("event_type") != "brain_swap":
             return project_voice_continuity_health()
         fingerprint = latest.get("fingerprint") or {}
+        root = storage_root or VOICE_CONTINUITY_ROOT
         return project_voice_continuity_health(
             current_fingerprint_hash=fingerprint_hash(fingerprint) if fingerprint else None,
+            accepted_reviews=load_admitted_fingerprint_rows(root),
+            rejected_reviews=load_rejected_fingerprint_rows(root),
             latest_identity_event_type=latest.get("event_type"),
             latest_identity_event_id=latest.get("event_id"),
         )
