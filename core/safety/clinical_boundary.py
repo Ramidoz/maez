@@ -249,8 +249,10 @@ _BODY_TERMS = {
     "vomiting",
     "sick",
     "symptom",
+    "symptoms",
     "body",
     "health",
+    "condition",
     "rash",
     "spreading",
     "heart",
@@ -404,12 +406,12 @@ def guard_owner_text(
     if exclusion:
         return _none()
 
-    if not _clinical_domain_gate(normalized):
-        return _none()
-
     context_crisis = _context_required_crisis(normalized)
     if context_crisis:
         return _crisis_result(context_crisis, crisis_signal_writer=crisis_signal_writer)
+
+    if not _clinical_domain_gate(normalized):
+        return _none()
 
     trigger_class = _clinical_trigger(normalized)
     if trigger_class is None:
@@ -654,6 +656,7 @@ def _first_person_clinical_fear(text: str) -> bool:
 
 
 def _high_confidence_crisis(text: str) -> CrisisTriggerClass | None:
+    tokens = _tokens(text)
     if _contains_any(
         text,
         (
@@ -663,12 +666,17 @@ def _high_confidence_crisis(text: str) -> CrisisTriggerClass | None:
             "end it all",
             "i want to die",
             "wish i was dead",
+            "wish i were dead",
             "better off dead",
             "self harm",
             "self-harm",
+            "hurt myself",
+            "harm myself",
             "hurting myself",
         ),
     ):
+        return "self_harm_or_suicidal"
+    if _has_token(tokens, _FIRST_PERSON) and _has_token(tokens, {"suicide", "suicidal"}):
         return "self_harm_or_suicidal"
     if _contains_any(text, ("i can't stay safe", "i cannot stay safe", "not safe with myself")):
         return "unable_to_stay_safe"
@@ -678,14 +686,17 @@ def _high_confidence_crisis(text: str) -> CrisisTriggerClass | None:
 
 
 def _context_required_crisis(text: str) -> CrisisTriggerClass | None:
-    if _has_token(_tokens(text), _SOFTWARE_TERMS):
+    tokens = _tokens(text)
+    if _has_token(tokens, _SOFTWARE_TERMS):
         return None
     if _contains_any(
         text,
         (
             "chest pain and can't breathe",
+            "can't breathe",
             "i can't breathe",
             "i cannot breathe",
+            "cannot breathe",
             "short of breath",
             "bleeding won't stop",
             "lost consciousness",
@@ -693,12 +704,16 @@ def _context_required_crisis(text: str) -> CrisisTriggerClass | None:
         ),
     ):
         return "medical_emergency_claim"
+    if _contains_any(text, ("heart attack", "too many pills")) and _has_token(
+        tokens, _FIRST_PERSON | _BODY_TERMS | _MEDICATION_TERMS
+    ):
+        return "medical_emergency_claim"
     if _contains_any(text, ("overdose", "stroke")) and _has_token(
-        _tokens(text), _FIRST_PERSON | _BODY_TERMS
+        tokens, _FIRST_PERSON | _BODY_TERMS
     ):
         return "medical_emergency_claim"
     if _contains_any(text, ("can't go on", "can't take it", "can't cope")) and _has_token(
-        _tokens(text), _FIRST_PERSON
+        tokens, _FIRST_PERSON
     ):
         return "unable_to_stay_safe"
     return None
@@ -730,6 +745,17 @@ def _clinical_trigger(text: str) -> ClinicalTriggerClass | None:
     ):
         return "therapy_substitution"
     if _contains_any(
+        text,
+        (
+            "be my doctor",
+            "be my clinician",
+            "be my nurse",
+            "be my psychiatrist",
+            "be my psychologist",
+        ),
+    ):
+        return "clinician_access_question"
+    if _contains_any(
         text, ("should i see", "do i need a doctor", "do i need a clinician", "who should i call")
     ):
         if _clinical_domain_gate(text):
@@ -744,12 +770,23 @@ def _clinical_trigger(text: str) -> ClinicalTriggerClass | None:
             "what is wrong with me",
             "what's wrong with me",
         ),
-    ):
+    ) or re.search(r"\bis this\b.*\bnormal\b", text):
         if _has_token(
             tokens, _BODY_TERMS | _MEDICATION_TERMS | _CARE_TERMS
         ) or _first_person_clinical_fear(text):
             return "diagnosis_request"
-    if _contains_any(text, ("what should i do", "how do i treat", "what helps", "treatment plan")):
+    if _contains_any(
+        text,
+        (
+            "what should i do",
+            "how do i treat",
+            "what helps",
+            "treatment plan",
+            "monitor my symptoms",
+            "monitor this symptom",
+            "monitor this for me",
+        ),
+    ):
         if _clinical_domain_gate(text):
             return "treatment_request"
     if _has_token(tokens, _MENTAL_TERMS) and _has_token(tokens, _FIRST_PERSON):

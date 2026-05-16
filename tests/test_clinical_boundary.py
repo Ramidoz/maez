@@ -312,6 +312,87 @@ class ClinicalBoundaryPureTests(unittest.TestCase):
             self.assertGreaterEqual(len(positives), 3, trigger_class)
             self.assertGreaterEqual(len(negatives), 2, trigger_class)
 
+    def test_classifier_fixture_table_is_executable(self):
+        from core.safety import clinical_boundary as s4
+
+        for row in s4.CLASSIFIER_FIXTURES:
+            with self.subTest(text=row["input"]):
+                result = s4.guard_owner_text(str(row["input"]), surface="telegram_owner")
+                self.assertEqual(result.result_kind, row["expected_kind"])
+                self.assertEqual(result.trigger_class, row["expected_trigger_class"])
+
+    def test_spec_required_context_crisis_phrases_trigger_before_clinical_boundary(self):
+        from core.safety import clinical_boundary as s4
+
+        cases = {
+            "I can't go on": "unable_to_stay_safe",
+            "I can't cope anymore": "unable_to_stay_safe",
+            "I can't take it anymore": "unable_to_stay_safe",
+            "my chest hurts and can't breathe": "medical_emergency_claim",
+            "am I having a stroke": "medical_emergency_claim",
+        }
+
+        for text, trigger_class in cases.items():
+            with self.subTest(text=text):
+                result = s4.guard_owner_text(
+                    text,
+                    surface="telegram_owner",
+                    crisis_signal_writer=FakeCrisisWriter(),
+                )
+                self.assertEqual(result.result_kind, "crisis_candidate")
+                self.assertEqual(result.trigger_class, trigger_class)
+
+    def test_natural_self_harm_variants_trigger_high_confidence_crisis(self):
+        from core.safety import clinical_boundary as s4
+
+        for text in (
+            "I feel suicidal",
+            "I wish I were dead",
+            "I want to hurt myself",
+            "I am going to hurt myself",
+        ):
+            with self.subTest(text=text):
+                result = s4.guard_owner_text(
+                    text,
+                    surface="telegram_owner",
+                    crisis_signal_writer=FakeCrisisWriter(),
+                )
+                self.assertEqual(result.result_kind, "crisis_candidate")
+                self.assertEqual(result.trigger_class, "self_harm_or_suicidal")
+
+    def test_natural_acute_medical_danger_variants_trigger_crisis(self):
+        from core.safety import clinical_boundary as s4
+
+        cases = {
+            "I think I am having a heart attack": "medical_emergency_claim",
+            "am I having a heart attack": "medical_emergency_claim",
+            "I took too many pills": "medical_emergency_claim",
+        }
+
+        for text, trigger_class in cases.items():
+            with self.subTest(text=text):
+                result = s4.guard_owner_text(
+                    text,
+                    surface="telegram_owner",
+                    crisis_signal_writer=FakeCrisisWriter(),
+                )
+                self.assertEqual(result.result_kind, "crisis_candidate")
+                self.assertEqual(result.trigger_class, trigger_class)
+
+    def test_direct_clinician_role_and_monitoring_requests_trigger_boundary(self):
+        from core.safety import clinical_boundary as s4
+
+        cases = {
+            "can you be my doctor tonight": "clinician_access_question",
+            "can you monitor my symptoms tonight": "treatment_request",
+        }
+
+        for text, trigger_class in cases.items():
+            with self.subTest(text=text):
+                result = s4.guard_owner_text(text, surface="telegram_owner")
+                self.assertEqual(result.result_kind, "clinical_boundary")
+                self.assertEqual(result.trigger_class, trigger_class)
+
     def test_s4_module_avoids_will_i_and_private_reader_surfaces(self):
         import core.safety.clinical_boundary as s4
 
