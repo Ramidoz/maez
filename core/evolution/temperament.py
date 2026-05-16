@@ -344,6 +344,52 @@ class Temperament:
             ).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
+    def biography_average(
+        self,
+        parameter: str,
+        *,
+        as_of: float | None = None,
+    ) -> float | None:
+        """Time-weighted average for a parameter's lived history.
+
+        Decision 13 needs a biography center-of-mass later. This helper only
+        computes that center from already-recorded temperament events; it does
+        not perform mourning drift or write any new temperament state.
+        """
+        if parameter not in PARAMETER_SET:
+            raise ValueError(
+                f"unknown parameter {parameter!r} "
+                f"(allowed: {list(PARAMETER_NAMES)})"
+            )
+        as_of_f = float(time.time() if as_of is None else as_of)
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT ts, value FROM temperament_events "
+                "WHERE parameter = ? AND ts <= ? "
+                "ORDER BY ts ASC, event_id ASC",
+                (parameter, as_of_f),
+            ).fetchall()
+        if not rows:
+            return None
+        if len(rows) == 1:
+            return float(rows[0][1])
+
+        weighted_sum = 0.0
+        total_duration = 0.0
+        for (ts, value), (next_ts, _next_value) in zip(rows, rows[1:], strict=False):
+            duration = max(0.0, float(next_ts) - float(ts))
+            weighted_sum += float(value) * duration
+            total_duration += duration
+
+        last_ts, last_value = rows[-1]
+        tail_duration = max(0.0, as_of_f - float(last_ts))
+        weighted_sum += float(last_value) * tail_duration
+        total_duration += tail_duration
+
+        if total_duration <= 0.0:
+            return float(rows[-1][1])
+        return weighted_sum / total_duration
+
     # -------------------------------------------------------------- #
     #  Helpers                                                        #
     # -------------------------------------------------------------- #
