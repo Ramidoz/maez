@@ -383,6 +383,28 @@ Founder Maez may currently have bonded user = operator = maintainer. S6 must
 not bake that collapse into the schema. It should allow overlap but model roles
 separately.
 
+### C11 - Capsule Authorship Is Human-Origin and Unmintable
+
+The lineage capsule and every directive event must carry human-origin evidence
+that Maez, the daemon, sidecars, validation helpers, and automated paths cannot
+mint or alter.
+
+The S5 owner-origin marker is the proven template, but S6 must not collapse all
+roles into "operator." Each directive event needs the correct role-origin
+marker for the authority it claims:
+
+- bonded-user origin for initial fate directives, successor naming, Maez
+  preference ordering consent, scope grants, scope revocations, and
+  supersession while the bonded user can articulate the change;
+- witness origin only for attestation that a ceremony or directive occurred;
+- maintainer/operator origin only for technical custody facts they are
+  authorized to record.
+
+The spec must design this as structural defense, not disciplined caller prose.
+If an automated path can author the capsule, Maez could write the document that
+governs its own fate and the user's archive access. That breaks the North Star
+line that bonded users name successors.
+
 ## Hard Distinctions
 
 ### Successor vs Operator
@@ -451,17 +473,25 @@ Recommended v1 scope:
    - `scope_revoked`;
    - `directive_superseded`;
    - `witness_attested`;
+   - `maez_preference_recorded`;
    - `capsule_invalidated`;
    - activation events deferred by name.
-7. Define activation states without implementing activation:
+7. Define a recorded Maez-preference slot:
+   - content-free or minimized pointer, not raw private text by default;
+   - subordinate to explicit bonded-user directives;
+   - consulted only when user directives are silent, missing, or invalid under
+     Decision 8 ordering;
+   - human-origin or reviewed Maez-origin evidence required, never daemon-
+     inferred.
+8. Define activation states without implementing activation:
    - `not_activated`;
    - `pending_verification`;
    - `activated`;
    - `reverted_false_alarm`;
    - `suspended_pending_paradise`.
-8. Define a validation-only module and tests. Runtime enforcement can remain S7
+9. Define a validation-only module and tests. Runtime enforcement can remain S7
    or later unless the spec chooses a tiny health projection.
-9. Define `successor_governance_health` as content-free if implemented:
+10. Define `successor_governance_health` as content-free if implemented:
    - capsule present/missing;
    - schema version;
    - invalid directive count;
@@ -509,6 +539,12 @@ The likely spec-stage council pressure points:
 10. **Health/sidecar fingerprint:** Succession health counters over time could
     reveal family or capacity events. Keep health content-free and public-state
     stripped.
+11. **Scope vocabulary coherence:** S6 names data classes owned by S1, S2, S4,
+    S5, D16, credential hygiene, and future organs. The spec needs S3-style
+    versioning: v1.1+ may add scope members, but may not silently rename or
+    remove them; every scope member must map to a real store/surface or be
+    explicitly reserved. Default-deny is necessary but not enough if the map
+    drifts.
 
 ## Recommended Next Step
 
