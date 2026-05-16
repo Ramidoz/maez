@@ -1,9 +1,9 @@
 # S5 Voice Continuity Gate Diagnostic
 
-**Status:** DIAGNOSTIC ONLY  
-**Date:** 2026-05-16  
-**Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S5; candidate Decision 32 / ADR 0037  
-**Runtime impact:** none  
+**Status:** DIAGNOSTIC ONLY
+**Date:** 2026-05-16
+**Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S5; candidate Decision 32 / ADR 0037
+**Runtime impact:** none
 
 ## Purpose
 

@@ -1,9 +1,9 @@
 # S5 Voice Continuity Gate v1 Spec
 
-**Status:** SPEC DRAFT  
-**Date:** 2026-05-16  
-**Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S5; candidate Decision 32 / ADR 0037  
-**Runtime impact:** none until implemented  
+**Status:** SPEC DRAFT
+**Date:** 2026-05-16
+**Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S5; candidate Decision 32 / ADR 0037
+**Runtime impact:** none until implemented
 
 ## Purpose
 
