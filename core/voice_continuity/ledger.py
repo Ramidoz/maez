@@ -7,6 +7,7 @@ from typing import Any
 from core.voice_continuity.schema import (
     OwnerOriginMarker,
     hash_json,
+    validate_owner_marker_binding,
     validate_probe_verdict,
     validate_run_level_owner_verdict,
 )
@@ -54,6 +55,9 @@ def roll_up_run_level_verdict(
     *,
     waived_probe_ids: set[str] | None = None,
     operator_origin_marker: dict[str, Any] | None = None,
+    review_id: str | None = None,
+    baseline_id: str | None = None,
+    review_package_hash: str | None = None,
 ) -> dict[str, Any]:
     validate_run_level_owner_verdict(run_level_verdict)
     marker = OwnerOriginMarker.from_value(operator_origin_marker) if operator_origin_marker else None
@@ -61,6 +65,13 @@ def roll_up_run_level_verdict(
     if run_level_verdict == "accepted_same_maez":
         if not marker:
             raise ValueError("acceptance requires operator origin marker")
+        if review_id is not None and review_package_hash is not None:
+            validate_owner_marker_binding(
+                marker,
+                review_id=review_id,
+                baseline_id=baseline_id,
+                review_package_hash=review_package_hash,
+            )
         unresolved = {probe_id for probe_id, verdict in per_probe_verdicts.items() if not verdict}
         if unresolved - waived:
             raise ValueError("acceptance requires resolved slots or owner waiver")
@@ -87,6 +98,13 @@ def make_run_level_entry(
 ) -> dict[str, Any]:
     marker = OwnerOriginMarker.from_value(operator_origin_marker)
     validate_run_level_owner_verdict(run_level_verdict)
+    if run_level_verdict == "accepted_same_maez":
+        validate_owner_marker_binding(
+            marker,
+            review_id=review_id,
+            baseline_id=baseline_id,
+            review_package_hash=review_package_hash,
+        )
     entry = {
         "review_id": review_id,
         "baseline_id": baseline_id,

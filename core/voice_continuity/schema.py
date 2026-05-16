@@ -13,12 +13,13 @@ ReviewState = Literal[
     "pending_owner_review",
     "accepted_same_maez",
     "rejected_drift",
+    "closed_reverted",
+    "superseded",
     "needs_rewrite",
     "not_gradable",
     "preflight_failed_needs_operator_decision",
     "runner_error_needs_operator_decision",
     "uncertified_baseline_missing",
-    "corpus_rubric_mismatch",
     "unreviewed_live_swap",
     "accepted_review_stale_fingerprint",
 ]
@@ -133,10 +134,48 @@ def validate_operator_origin(value: str) -> str:
     return value
 
 
+def validate_owner_marker_binding(
+    marker: OwnerOriginMarker,
+    *,
+    review_id: str,
+    baseline_id: str | None,
+    review_package_hash: str,
+) -> None:
+    if marker.review_id != review_id:
+        raise ValueError("operator-origin marker review_id does not match review")
+    if marker.baseline_id != (baseline_id or ""):
+        raise ValueError("operator-origin marker baseline_id does not match review")
+    if marker.review_package_hash != review_package_hash:
+        raise ValueError("operator-origin marker review_package_hash does not match review")
+
+
 def fingerprint_hash(fingerprint: dict[str, Any] | None) -> str:
     if not fingerprint:
         raise ValueError("candidate fingerprint is required")
     return hash_json(fingerprint)
+
+
+def _validate_acceptance_owner_review(
+    owner_review: dict[str, Any] | None,
+    *,
+    review_id: str,
+    baseline_id: str | None,
+) -> None:
+    if not isinstance(owner_review, dict):
+        raise ValueError("accepted_same_maez requires owner verdict evidence")
+    if owner_review.get("run_level_verdict") != "accepted_same_maez":
+        raise ValueError("accepted_same_maez requires accepted owner verdict")
+    marker_hash = str(owner_review.get("operator_origin_marker_hash") or "")
+    if len(marker_hash) != 64:
+        raise ValueError("accepted_same_maez requires operator-origin marker hash")
+    validate_operator_origin(str(owner_review.get("origin") or ""))
+    if owner_review.get("review_id") != review_id:
+        raise ValueError("accepted_same_maez owner evidence review_id mismatch")
+    if owner_review.get("baseline_id") != (baseline_id or ""):
+        raise ValueError("accepted_same_maez owner evidence baseline_id mismatch")
+    review_package_hash = str(owner_review.get("review_package_hash") or "")
+    if len(review_package_hash) != 64:
+        raise ValueError("accepted_same_maez owner evidence review_package_hash is required")
 
 
 @dataclass(frozen=True)
@@ -232,6 +271,12 @@ class CandidateReviewPackage:
         validate_identity_event_type(self.event_type)
         if self.event_type != "brain_swap":
             raise ValueError("S5 v1 only reviews brain_swap identity events")
+        if self.state == "accepted_same_maez":
+            _validate_acceptance_owner_review(
+                self.owner_review,
+                review_id=self.review_id,
+                baseline_id=self.baseline_id,
+            )
         payload = {
             item.name: getattr(self, item.name)
             for item in fields(self)

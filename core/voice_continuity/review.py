@@ -10,6 +10,7 @@ from core.voice_continuity.schema import (
     CandidateReviewPackage,
     OwnerOriginMarker,
     fingerprint_hash,
+    validate_owner_marker_binding,
     validate_preflight_outcome,
     validate_run_level_owner_verdict,
 )
@@ -26,7 +27,7 @@ def review_state_from_preflight(outcome: str) -> str:
         "runner_error_needs_operator_decision": "runner_error_needs_operator_decision",
         "baseline_missing_uncertified": "uncertified_baseline_missing",
         "not_gradable_needs_owner_review": "not_gradable",
-        "corpus_rubric_mismatch": "corpus_rubric_mismatch",
+        "corpus_rubric_mismatch": "preflight_failed_needs_operator_decision",
     }[outcome]
 
 
@@ -90,6 +91,12 @@ def apply_owner_verdict(
     marker = OwnerOriginMarker.from_value(operator_origin_marker) if operator_origin_marker else None
     if not marker:
         raise ValueError("owner verdict requires operator origin marker")
+    validate_owner_marker_binding(
+        marker,
+        review_id=review.review_id,
+        baseline_id=review.baseline_id,
+        review_package_hash=review.review_package_hash,
+    )
     if verdict == "accepted_same_maez":
         if review.state != "pending_owner_review":
             raise ValueError("only pending reviews can be accepted")
@@ -99,6 +106,9 @@ def apply_owner_verdict(
             raise ValueError("acceptance requires resolved review slots or waiver")
     owner_review = {
         "run_level_verdict": verdict,
+        "review_id": review.review_id,
+        "baseline_id": review.baseline_id or "",
+        "review_package_hash": review.review_package_hash,
         "operator_origin_marker_hash": marker.marker_hash,
         "origin": marker.origin,
     }

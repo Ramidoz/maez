@@ -14,6 +14,12 @@ def emit_admission_artifact(
 ) -> dict[str, Any]:
     if review.state != "accepted_same_maez":
         raise ValueError("managed admission requires accepted_same_maez review")
+    owner_review = review.owner_review or {}
+    if owner_review.get("run_level_verdict") != "accepted_same_maez":
+        raise ValueError("managed admission requires accepted owner verdict evidence")
+    marker_hash = str(owner_review.get("operator_origin_marker_hash") or "")
+    if len(marker_hash) != 64:
+        raise ValueError("managed admission requires operator-origin marker evidence")
     if not review.candidate_fingerprint_hash or candidate_fingerprint_hash != review.candidate_fingerprint_hash:
         raise ValueError("candidate fingerprint does not match accepted review")
     artifact = {
@@ -21,6 +27,7 @@ def emit_admission_artifact(
         "review_id": review.review_id,
         "baseline_id": review.baseline_id,
         "admitted_fingerprint_hash": candidate_fingerprint_hash,
+        "operator_origin_marker_hash": marker_hash,
         "review_package_hash": review.review_package_hash,
     }
     artifact["artifact_hash"] = hash_json(artifact)

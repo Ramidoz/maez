@@ -946,6 +946,11 @@ class MaezDaemon:
                 **camera_presence_voice_health(),
             }
 
+    def _voice_continuity_health(self) -> dict:
+        """Content-free S5 state joined to the live identity-ledger fingerprint."""
+
+        return voice_continuity_health(getattr(self, "_identity_ledger", None))
+
     def _mark_cycle_stage(self, stage: str) -> None:
         """Record the current daemon-cycle stage for hang diagnosis."""
         self._cycle_stage = stage
@@ -5521,7 +5526,7 @@ class MaezDaemon:
                     "credentials": _credential_health(),
                     "temporal_spine": temporal_spine_health(),
                     "clinical_boundary": clinical_boundary_health(),
-                    "voice_continuity": voice_continuity_health(),
+                    "voice_continuity": self._voice_continuity_health(),
                     "system": {
                         "cpu_percent": snap["cpu"]["percent"],
                         "ram_percent": snap["ram"]["percent"],

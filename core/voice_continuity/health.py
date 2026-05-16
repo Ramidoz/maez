@@ -5,6 +5,19 @@ from __future__ import annotations
 from typing import Any
 
 
+HEALTH_MODES = frozenset(
+    {
+        "disabled",
+        "ready",
+        "pending_review",
+        "preflight_failed",
+        "accepted",
+        "uncertified",
+        "unavailable",
+    }
+)
+
+
 def _prefix(value: str | None) -> str | None:
     return value[:12] if value else None
 
@@ -26,6 +39,20 @@ def project_live_swap_status(
     return "unreviewed_live_swap"
 
 
+def _mode_for_state(state: str) -> str:
+    if state == "accepted_same_maez":
+        return "accepted"
+    if state == "uncertified_baseline_missing":
+        return "uncertified"
+    if state in {"preflight_failed_needs_operator_decision", "rejected_drift"}:
+        return "preflight_failed"
+    if state == "runner_error_needs_operator_decision":
+        return "unavailable"
+    if state in {"pending_owner_review", "needs_rewrite", "not_gradable", "unreviewed_live_swap"}:
+        return "pending_review"
+    return "ready"
+
+
 def project_voice_continuity_health(
     *,
     latest_review_state: str | None = None,
@@ -43,33 +70,25 @@ def project_voice_continuity_health(
     decision22_emergency_restore: bool = False,
     **_: Any,
 ) -> dict[str, Any]:
-    if current_fingerprint_hash and accepted_reviews:
+    accepted_review_id = None
+    if current_fingerprint_hash:
         live_state = project_live_swap_status(
             current_fingerprint_hash=current_fingerprint_hash,
             accepted_reviews=accepted_reviews,
             rejected_reviews=rejected_reviews,
         )
+        latest_review_state = live_state
         if live_state == "accepted_same_maez":
-            latest_review_state = "accepted_same_maez"
-            mode = "accepted"
-        else:
-            latest_review_state = live_state
-            mode = "review_required"
-    elif latest_review_state == "uncertified_baseline_missing":
-        mode = "uncertified"
-    elif latest_review_state in {"pending_owner_review", "needs_rewrite", "not_gradable"}:
-        mode = "pending_review"
-    elif latest_review_state in {"preflight_failed_needs_operator_decision", "runner_error_needs_operator_decision"}:
-        mode = "operator_decision"
+            for row in accepted_reviews or []:
+                if row.get("candidate_fingerprint_hash") == current_fingerprint_hash:
+                    accepted_review_id = row.get("review_id")
+                    break
+        mode = _mode_for_state(live_state)
     else:
-        latest_review_state = latest_review_state or "no_review"
-        mode = "ready"
-    accepted_review_id = None
-    if latest_review_state == "accepted_same_maez":
-        for row in accepted_reviews or []:
-            if row.get("candidate_fingerprint_hash") == current_fingerprint_hash:
-                accepted_review_id = row.get("review_id")
-                break
+        latest_review_state = latest_review_state or "none"
+        mode = _mode_for_state(latest_review_state)
+    if mode not in HEALTH_MODES:
+        mode = "unavailable"
     return {
         "schema_version": 1,
         "mode": mode,
@@ -90,5 +109,21 @@ def project_voice_continuity_health(
     }
 
 
-def voice_continuity_health() -> dict[str, Any]:
-    return project_voice_continuity_health()
+def voice_continuity_health(identity_ledger: Any | None = None) -> dict[str, Any]:
+    try:
+        from core.identity_ledger import IdentityLedger
+        from core.voice_continuity.schema import fingerprint_hash
+
+        ledger = identity_ledger or IdentityLedger()
+        latest = ledger.latest() or {}
+        fingerprint = latest.get("fingerprint") or {}
+        return project_voice_continuity_health(
+            current_fingerprint_hash=fingerprint_hash(fingerprint) if fingerprint else None,
+            latest_identity_event_type=latest.get("event_type"),
+            latest_identity_event_id=latest.get("event_id"),
+        )
+    except Exception as exc:
+        return project_voice_continuity_health(
+            latest_review_state="runner_error_needs_operator_decision",
+            last_error_class=exc.__class__.__name__,
+        )
