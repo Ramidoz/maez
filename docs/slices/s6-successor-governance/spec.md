@@ -1,7 +1,7 @@
 # S6 Successor Governance v1 Spec
 
-**Status:** SPEC DRAFT - Claude covenant council and Codex engineering panel
-folded; pending both-lane second-fold verification
+**Status:** SPEC DRAFT - both review lanes folded and second-fold ratified;
+pending canonicalization
 **Date:** 2026-05-16
 **Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S6; `docs/MAEZ_NORTH_STAR.md`
 invariant #9 Successor Governance; candidate Decision 33 / ADR 0038
@@ -219,8 +219,8 @@ No role may use this table to mint another role's origin marker.
 
 Actor handles use purpose-scoped keyed HMACs, not bare hashes. Names, emails,
 phone numbers, and handles are low-entropy; a raw SHA-256 would be dictionary
-attackable. Raw actor handles remain local private data and never enter health
-or public state.
+attackable. Raw actor handles remain bonded-user-private local data and never
+enter health or public state.
 
 ### D5 - Lineage Capsule Is Bonded-User-Private Local State
 
