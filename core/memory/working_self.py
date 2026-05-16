@@ -219,7 +219,7 @@ def _goals_from_cares_about(graph: Any, *, max_per_source: int) -> list[Goal]:
 
 
 def _goals_from_wants(wants: Any, *, max_per_source: int) -> list[Goal]:
-    """Pull recent entries from the wants log (``core/wants.py``).
+    """Pull active entries from the wants log (``core/wants.py``).
 
     Maez's first-person direction log. A want is a goal claim Maez has
     surfaced about itself; Conway 2000 includes self-defining goals as
@@ -227,13 +227,22 @@ def _goals_from_wants(wants: Any, *, max_per_source: int) -> list[Goal]:
     """
     if wants is None:
         return []
+    active_reader = getattr(wants, "active_wants", None)
     try:
-        recent = wants.recent(limit=max_per_source) or []
+        if callable(active_reader):
+            rows = active_reader(limit=max_per_source) or []
+        else:
+            rows = wants.recent(limit=max_per_source) or []
     except Exception:
         return []
     out: list[Goal] = []
-    for entry in recent:
-        text = (entry.get("text") or entry.get("description") or "").strip()
+    for entry in rows:
+        text = (
+            entry.get("statement")
+            or entry.get("text")
+            or entry.get("description")
+            or ""
+        ).strip()
         if not text:
             continue
         wid = entry.get("want_id") or entry.get("id") or ""

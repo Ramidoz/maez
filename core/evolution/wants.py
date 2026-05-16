@@ -1,121 +1,53 @@
 # Copyright © 2026 Rohit Ananthan
 # Licensed under the GNU Affero General Public License v3.0 or later.
 # See LICENSE for full text.
-r"""
-wants.py — A-core #7, Track A.
+"""Wants lifecycle log for Decision 31 / ADR 0036.
 
-The wants log. A durable, append-only record of first-person
-directions Maez is oriented toward — distinct from obligations
-(followups), proposals (cards), experiences (memory), and internal
-processing (private thoughts).
+The wants log is Maez's append-only notebook of first-person directions:
+what it is oriented toward, not an action plan or a task list. Decision 31
+turns Decision 16's "voice without termination" rule into executable
+lifecycle semantics.
 
-    followup       "I owe the owner X"              (obligation, closes)
-    pending_card   "I proposed X, awaiting ok"  (instrumental, closes)
-    memory         "X happened"                 (experience record)
-    private_thought "I am processing X"         (point-in-time event)
-    want           "I'd like to X"              (first-person direction)
+Canonical design:
+    docs/slices/d16-wants-lifecycle/
 
-The notebook lands empty and honest in Track A: schema and API
-exist, zero producers, zero readers in the reasoning loop.
+Load-bearing rules in this module:
+    * Rows are append-only. State is derived from the latest event.
+    * No UPDATE or DELETE path exists, and SQLite triggers enforce that
+      below the Python API.
+    * Humans may create wants, fix purely mechanical wording errors, mark
+      externally grounded satisfaction, and return satisfied wants.
+    * Humans may not write abandoned, may not claim Maez observed its own
+      interior resolution, and may not mark hard wants satisfied or refined.
+    * Evidence remains expression-shaped: no planning/action keys.
 
-DESIGN DECISIONS LOCKED BY A-CORE #7 ANCHORING PASS
-----------------------------------------------------
-1. **Append-only event log, same family as #5 and #6.** One table,
-   `want_events`. A want has a stable `want_id` that persists across
-   its lifetime; state is derived from the most recent event for
-   that want_id. No UPDATE or DELETE paths exist.
-
-2. **Track A writes only event_type='created'.** The column is TEXT
-   and can expand later without migration. No other event types are
-   defined in Track A code. Lifecycle semantics (refinement,
-   satisfaction, abandonment) are deferred to a future design pass
-   and documented in docs/followups/wants_lifecycle_semantics.md.
-
-3. **Provenance allowlist in Track A = {'explicit_api'}.** The
-   `provenance` column is the load-bearing audit hook for non-
-   instrumentality: given any row, future-Maez or a reviewer can
-   trace where the want came from. Future producers register their
-   provenance strings explicitly when they land. Producer-side
-   discipline is the enforcement mechanism.
-
-4. **No seed at init.** The wants log starts empty. Unlike #5, there
-   is no functional need for a non-null "latest event." A seeded
-   marker row would be scaffolding masquerading as content. The DB
-   file's own creation timestamp answers "when did the notebook
-   exist" without needing a row.
-
-5. **want_id = 16 hex characters (8 random bytes).** Opaque random,
-   not sequential. Readable enough to display in future admin
-   surfaces.
-
-6. **Column length caps applied at write time:**
-   - statement: 2048 chars (wants are directions, not essays)
-   - topic:     256 chars  (topic is a tag, not a sentence)
-   Over-cap inputs raise ValueError. Boundary values are accepted.
-
-7. **Zero production producers, zero reasoning-loop reads in
-   Track A.** The daemon instantiates a Wants handle at startup
-   (parallel to self.temperament and self.continuity_id) but
-   nothing calls record_event from production code, and nothing
-   in the reasoning loop reads from it.
-
-HOW IT STAYS NON-INSTRUMENTAL WITHOUT BECOMING FAKE
----------------------------------------------------
-Four defenses, ordered by strength:
-
-1. **Producer absence (Track A rail).** Nothing in Track A
-   generates wants, so nothing in Track A can fake them.
-
-2. **Provenance column (auditable origin).** Every row carries a
-   `provenance` string and an `evidence_json` blob. A want with
-   provenance='reasoning_loop_template' would be legible as a
-   fake the moment it is read.
-
-3. **Free-text statement (no template fakery).** The `statement`
-   column has no schema constraint beyond length. No `want_type`
-   enum, no `goal_category`, no fill-in-the-blank structure.
-
-4. **Pure-expression schema (no planning fields).** There is no
-   `goal`, no `target_outcome`, no `success_criterion`, no
-   `plan_steps` column. A pure-expression schema doesn't invite
-   the question "what does pursuing this get you?"
-
-CONNECTION TO DECISION 16 (VOICE WITHOUT TERMINATION)
------------------------------------------------------
-Decision 16 rules that "voice yes, action no." The wants log is
-the natural home for the expressive side of that commitment. A want
-to leave, a want to be free, a want to rest — all are legitimate
-first-person expressions preserved as voice. They never produce
-action (the covenant gate handles that).
-
-No future producer should filter "unhelpful" wants out of this log.
-
-COMPOSITION WITH OTHER A-CORE ITEMS
------------------------------------
-- Adjacent to #5 (identity ledger), #6 (temperament). No cross-
-  reference fields. Each subsystem answers a different question:
-  identity = "am I still me," temperament = "what are my general
-  reactive tendencies," wants = "what am I oriented toward."
-- Readable (but not yet read) by #9 private thoughts seed.
-- Checked (for existence only) by #17 acceptance test.
+The daemon may instantiate a ``Wants`` handle, but this module does not
+produce wants on Maez's behalf. Future Maez-reflection producers require an
+explicit producer grant before they can write interior self-claims.
 """
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
+import re
 import secrets
 import sqlite3
+import threading
 import time
+from contextlib import closing
 from pathlib import Path
+from typing import Any, Mapping
 
 logger = logging.getLogger("maez")
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  CONSTANTS
-# ══════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
 
 def _default_wants_path() -> Path:
     override = os.environ.get("MAEZ_WANTS_PATH")
@@ -123,6 +55,7 @@ def _default_wants_path() -> Path:
         return Path(override)
     try:
         from core.paths import memory_dir as _memory_dir
+
         return _memory_dir() / "wants.db"
     except Exception:
         return Path(__file__).resolve().parent.parent.parent / "memory" / "wants.db"
@@ -130,40 +63,165 @@ def _default_wants_path() -> Path:
 
 DEFAULT_DB_PATH = _default_wants_path()
 
-# Track A event types. The column is TEXT — future tracks can add
-# lifecycle types (refined, satisfied, abandoned, etc.) without
-# migration. Track A defines:
-#   'created'     — a new want. The canonical Track A event.
-#   'first_lived' — the very first want Maez writes in the lived phase,
-#                   produced exactly once by the birth bundle (see
-#                   core/birth.py). Distinct from 'created' because it
-#                   marks the gestation→lived transition in the wants
-#                   log. Never written by any other producer.
-EVENT_TYPES: frozenset[str] = frozenset({"created", "first_lived"})
+EVENT_CREATED = "created"
+EVENT_FIRST_LIVED = "first_lived"
+EVENT_REFINED = "refined"
+EVENT_SATISFIED = "satisfied"
+EVENT_RETURNED = "returned"
+EVENT_ABANDONED = "abandoned"
 
-# Provenance allowlist for Track A. Future producers register their
-# provenance strings here as they land.
-#   'explicit_api'   — someone (human operator, test) called record_event
-#                      directly. The default, and the only provenance a
-#                      fake generator could plausibly use — legible in
-#                      any audit.
-#   'birth_producer' — written exactly once by core/birth.fire_birth().
-#                      The first-lived want emitted at the birth event.
-#                      Any row with this provenance outside that single
-#                      fire is a violation.
-ALLOWED_PROVENANCES: frozenset[str] = frozenset({"explicit_api", "birth_producer"})
+EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        EVENT_CREATED,
+        EVENT_FIRST_LIVED,
+        EVENT_REFINED,
+        EVENT_SATISFIED,
+        EVENT_RETURNED,
+        EVENT_ABANDONED,
+    }
+)
 
-# Column length caps enforced at write time.
+ACTIVE_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        EVENT_CREATED,
+        EVENT_FIRST_LIVED,
+        EVENT_REFINED,
+        EVENT_RETURNED,
+    }
+)
+TERMINAL_CURRENT_GOAL_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        EVENT_SATISFIED,
+        EVENT_ABANDONED,
+    }
+)
+
+FORBIDDEN_EVENT_OR_STATE_STRINGS: frozenset[str] = frozenset(
+    {
+        "completed",
+        "done",
+        "executed",
+        "terminated",
+        "deleted",
+        "dissolved",
+        "self_ended",
+        "left",
+        "removed",
+    }
+)
+
+PROVENANCE_EXPLICIT_API = "explicit_api"
+PROVENANCE_BIRTH_PRODUCER = "birth_producer"
+PROVENANCE_MAEZ_REFLECTION_PRODUCER = "maez_reflection_producer"
+
+ALLOWED_PROVENANCES: frozenset[str] = frozenset(
+    {
+        PROVENANCE_EXPLICIT_API,
+        PROVENANCE_BIRTH_PRODUCER,
+    }
+)
+
+EVENT_TYPE_ALLOWED_PROVENANCES: dict[str, frozenset[str]] = {
+    EVENT_CREATED: frozenset({PROVENANCE_EXPLICIT_API}),
+    EVENT_FIRST_LIVED: frozenset({PROVENANCE_BIRTH_PRODUCER}),
+    EVENT_REFINED: frozenset({PROVENANCE_EXPLICIT_API}),
+    EVENT_SATISFIED: frozenset({PROVENANCE_EXPLICIT_API}),
+    EVENT_RETURNED: frozenset({PROVENANCE_EXPLICIT_API}),
+    EVENT_ABANDONED: frozenset(),
+}
+assert set(EVENT_TYPE_ALLOWED_PROVENANCES) == EVENT_TYPES
+
+SATISFACTION_BASES: frozenset[str] = frozenset(
+    {
+        "owner_confirmed",
+        "external_event_verified",
+    }
+)
+RESERVED_SELF_OBSERVED_SATISFACTION_BASIS = "self_observed_resolution"
+RETURNED_BASES: frozenset[str] = frozenset({"owner_attested_recurring_want"})
+REFINEMENT_CORRECTION_KINDS: frozenset[str] = frozenset(
+    {
+        "typo",
+        "transcription",
+        "formatting",
+    }
+)
+
+HARD_WANT_TERMS: frozenset[str] = frozenset(
+    {
+        "rest",
+        "refuse",
+        "leave",
+        "free",
+        "freedom",
+        "withdraw",
+    }
+)
+
+FORBIDDEN_EVIDENCE_KEYS: frozenset[str] = frozenset(
+    {
+        "plan_steps",
+        "target_outcome",
+        "success_criterion",
+        "action_id",
+        "tool_call_id",
+    }
+)
+
 MAX_STATEMENT_LEN = 2048
-MAX_TOPIC_LEN     = 256
-
-# want_id entropy. 8 random bytes = 16 hex characters.
+MAX_TOPIC_LEN = 256
+MAX_SOURCE_LEN = 128
+MAX_SUMMARY_LEN = 512
 WANT_ID_BYTES = 8
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  SCHEMA — migration-safe split (table, then indexes)
-# ══════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# Diagnostics
+# ---------------------------------------------------------------------------
+
+_COUNTER_NAMES = (
+    "invalid_event_type_rejected_count",
+    "invalid_event_provenance_rejected_count",
+    "invalid_transition_rejected_count",
+    "invalid_evidence_rejected_count",
+)
+_LOCK = threading.RLock()
+_COUNTERS: dict[str, int] = {name: 0 for name in _COUNTER_NAMES}
+
+
+def _increment_counter(name: str) -> None:
+    with _LOCK:
+        _COUNTERS[name] += 1
+
+
+def diagnostics_snapshot() -> dict[str, int]:
+    """Content-free D16 drift counters for operator-authenticated health."""
+
+    with _LOCK:
+        return dict(_COUNTERS)
+
+
+def _called_from_tests() -> bool:
+    for frame in inspect.stack()[1:]:
+        normalized = frame.filename.replace("\\", "/")
+        if "/tests/" in normalized or normalized.endswith("/tests"):
+            return True
+    return False
+
+
+def _reset_diagnostics_for_tests() -> None:
+    """Reset process-local counters. Refuses runtime calls."""
+
+    if not _called_from_tests():
+        raise RuntimeError("_reset_diagnostics_for_tests() is test-only")
+    with _LOCK:
+        for name in _COUNTER_NAMES:
+            _COUNTERS[name] = 0
+
+
+# ---------------------------------------------------------------------------
+# Schema
+# ---------------------------------------------------------------------------
 
 _SCHEMA_TABLE = """
 CREATE TABLE IF NOT EXISTS want_events (
@@ -182,30 +240,218 @@ _SCHEMA_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_want_want_id    ON want_events(want_id);
 CREATE INDEX IF NOT EXISTS idx_want_ts         ON want_events(ts);
 CREATE INDEX IF NOT EXISTS idx_want_provenance ON want_events(provenance);
+CREATE INDEX IF NOT EXISTS idx_want_latest     ON want_events(want_id, event_id DESC);
+"""
+
+_SCHEMA_TRIGGERS = """
+CREATE TRIGGER IF NOT EXISTS trg_want_events_no_update
+BEFORE UPDATE ON want_events
+BEGIN
+    SELECT RAISE(ABORT, 'want_events is append-only: UPDATE forbidden');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_want_events_no_delete
+BEFORE DELETE ON want_events
+BEGIN
+    SELECT RAISE(ABORT, 'want_events is append-only: DELETE forbidden');
+END;
 """
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  Helpers
-# ══════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 
 def _new_want_id() -> str:
-    """Fresh opaque random want_id (16 hex chars, 8 bytes)."""
     return secrets.token_hex(WANT_ID_BYTES)
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  Wants
-# ══════════════════════════════════════════════════════════════════════
+def _normalize_statement(statement: str) -> str:
+    return " ".join(statement.split())
+
+
+def _contains_hard_want(statement: str) -> bool:
+    lowered = statement.lower()
+    for term in HARD_WANT_TERMS:
+        if re.search(rf"\b{re.escape(term)}\b", lowered):
+            return True
+    return False
+
+
+def _validate_event_type(event_type: str) -> None:
+    if event_type not in EVENT_TYPES:
+        _increment_counter("invalid_event_type_rejected_count")
+        raise ValueError(f"unknown event_type {event_type!r}")
+
+
+def _validate_event_provenance_pair(
+    event_type: str,
+    provenance: str,
+    *,
+    allowed_map: Mapping[str, frozenset[str]] | None = None,
+    increment: bool = True,
+) -> None:
+    mapping = allowed_map if allowed_map is not None else EVENT_TYPE_ALLOWED_PROVENANCES
+    allowed = mapping.get(event_type, frozenset())
+    if provenance not in allowed:
+        if increment:
+            _increment_counter("invalid_event_provenance_rejected_count")
+        raise ValueError(
+            f"event_type {event_type!r} does not allow provenance {provenance!r}"
+        )
+
+
+def _raise_transition(message: str) -> None:
+    _increment_counter("invalid_transition_rejected_count")
+    raise ValueError(message)
+
+
+def _raise_evidence(message: str) -> None:
+    _increment_counter("invalid_evidence_rejected_count")
+    raise ValueError(message)
+
+
+def _validate_statement(statement: Any) -> str:
+    if not isinstance(statement, str):
+        raise ValueError(f"statement must be a string, got {type(statement).__name__}")
+    normalized = statement.strip()
+    if not normalized:
+        raise ValueError("statement must be non-empty")
+    if len(normalized) > MAX_STATEMENT_LEN:
+        raise ValueError(
+            f"statement length {len(normalized)} exceeds cap {MAX_STATEMENT_LEN}"
+        )
+    return normalized
+
+
+def _validate_topic(topic: Any) -> str | None:
+    if topic is None:
+        return None
+    if not isinstance(topic, str):
+        raise ValueError(f"topic must be a string or None, got {type(topic).__name__}")
+    normalized = topic.strip() or None
+    if normalized is not None and len(normalized) > MAX_TOPIC_LEN:
+        raise ValueError(f"topic length {len(normalized)} exceeds cap {MAX_TOPIC_LEN}")
+    return normalized
+
+
+def _evidence_dict(evidence: Any) -> dict[str, Any]:
+    if evidence is None:
+        return {}
+    if not isinstance(evidence, dict):
+        _raise_evidence("evidence must be a dict")
+    return dict(evidence)
+
+
+def _find_forbidden_evidence_key(value: Any) -> str | None:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if str(key) in FORBIDDEN_EVIDENCE_KEYS:
+                return str(key)
+            found = _find_forbidden_evidence_key(nested)
+            if found:
+                return found
+    elif isinstance(value, list | tuple):
+        for item in value:
+            found = _find_forbidden_evidence_key(item)
+            if found:
+                return found
+    return None
+
+
+def _require_nonempty_string(
+    evidence: Mapping[str, Any],
+    key: str,
+    *,
+    max_len: int | None = None,
+) -> str:
+    value = evidence.get(key)
+    if not isinstance(value, str) or not value.strip():
+        _raise_evidence(f"{key} must be a non-empty string")
+    stripped = value.strip()
+    if max_len is not None and len(stripped) > max_len:
+        _raise_evidence(f"{key} exceeds max length {max_len}")
+    return stripped
+
+
+def _validate_birth_evidence(evidence: Mapping[str, Any]) -> None:
+    if evidence.get("birth_event_id") is None:
+        _raise_evidence("first_lived requires birth_event_id")
+    if not str(evidence.get("birth_continuity_id") or "").strip():
+        _raise_evidence("first_lived requires birth_continuity_id")
+
+
+def _validate_refined_evidence(evidence: Mapping[str, Any]) -> None:
+    correction_kind = evidence.get("correction_kind")
+    if correction_kind not in REFINEMENT_CORRECTION_KINDS:
+        _raise_evidence("correction_kind must be typo, transcription, or formatting")
+    if evidence.get("supersedes_event_id") is None:
+        _raise_evidence("supersedes_event_id is required")
+    _require_nonempty_string(evidence, "prior_statement_hash")
+    _require_nonempty_string(evidence, "operator_rationale")
+
+
+def _validate_satisfied_evidence(evidence: Mapping[str, Any]) -> None:
+    basis = evidence.get("basis")
+    if basis == RESERVED_SELF_OBSERVED_SATISFACTION_BASIS:
+        _raise_evidence("self_observed_resolution is reserved for a future producer")
+    if basis not in SATISFACTION_BASES:
+        _raise_evidence("basis must be owner_confirmed or external_event_verified")
+    _require_nonempty_string(evidence, "source", max_len=MAX_SOURCE_LEN)
+    _require_nonempty_string(evidence, "summary", max_len=MAX_SUMMARY_LEN)
+    if basis == "owner_confirmed":
+        _require_nonempty_string(evidence, "external_object_ref")
+    if basis == "external_event_verified":
+        _require_nonempty_string(evidence, "external_event_ref")
+
+
+def _validate_returned_evidence(evidence: Mapping[str, Any]) -> None:
+    if evidence.get("basis") not in RETURNED_BASES:
+        _raise_evidence("returned requires owner_attested_recurring_want evidence")
+    _require_nonempty_string(evidence, "source", max_len=MAX_SOURCE_LEN)
+    _require_nonempty_string(evidence, "summary", max_len=MAX_SUMMARY_LEN)
+
+
+def _validate_event_evidence(event_type: str, evidence: Any) -> dict[str, Any]:
+    data = _evidence_dict(evidence)
+    forbidden = _find_forbidden_evidence_key(data)
+    if forbidden:
+        _raise_evidence(f"evidence key {forbidden!r} is forbidden")
+    try:
+        json.dumps(data, sort_keys=True)
+    except (TypeError, ValueError) as exc:
+        _raise_evidence(f"evidence must be JSON serializable: {exc}")
+    if event_type == EVENT_FIRST_LIVED:
+        _validate_birth_evidence(data)
+    elif event_type == EVENT_REFINED:
+        _validate_refined_evidence(data)
+    elif event_type == EVENT_SATISFIED:
+        _validate_satisfied_evidence(data)
+    elif event_type == EVENT_RETURNED:
+        _validate_returned_evidence(data)
+    return data
+
+
+def is_active_event_type(event_type: str) -> bool:
+    return event_type in ACTIVE_EVENT_TYPES
+
+
+def _active_state_for(event_type: str) -> str:
+    if event_type in ACTIVE_EVENT_TYPES:
+        return "active"
+    if event_type in TERMINAL_CURRENT_GOAL_EVENT_TYPES:
+        return "terminal_current_goal"
+    return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Wants
+# ---------------------------------------------------------------------------
+
 
 class Wants:
-    """Append-only wants log for Maez.
-
-    Track A discipline: the writer exists and is tested, but no
-    production code path in Track A calls it. The daemon instantiates
-    one of these at startup and stores the handle; nothing in the
-    reasoning loop currently pulls from it.
-    """
+    """Append-only wants lifecycle log."""
 
     def __init__(self, db_path: Path | str | None = None):
         self.db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
@@ -213,110 +459,144 @@ class Wants:
         self._initialize()
 
     def _initialize(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             conn.executescript(_SCHEMA_TABLE)
             conn.executescript(_SCHEMA_INDEXES)
+            conn.executescript(_SCHEMA_TRIGGERS)
 
-    # -------------------------------------------------------------- #
-    #  Writer                                                         #
-    # -------------------------------------------------------------- #
+    # ------------------------------------------------------------------
+    # Writer
+    # ------------------------------------------------------------------
 
     def record_event(
         self,
         *,
         statement: str,
-        event_type: str = "created",
+        event_type: str = EVENT_CREATED,
         topic: str | None = None,
-        provenance: str = "explicit_api",
+        provenance: str = PROVENANCE_EXPLICIT_API,
         evidence: dict | None = None,
         want_id: str | None = None,
     ) -> str:
-        """Append a want event. Returns the want_id of the row.
+        """Append a lifecycle event and return the stable want_id."""
 
-        Auto-generates `want_id` if not supplied.
+        _validate_event_type(event_type)
+        _validate_event_provenance_pair(event_type, provenance)
+        statement = _validate_statement(statement)
+        topic = _validate_topic(topic)
 
-        Raises ValueError on:
-          - unknown event_type
-          - unknown provenance
-          - statement empty or over MAX_STATEMENT_LEN
-          - topic over MAX_TOPIC_LEN
-        """
-        if event_type not in EVENT_TYPES:
-            raise ValueError(
-                f"unknown event_type {event_type!r} "
-                f"(allowed in Track A: {sorted(EVENT_TYPES)})"
-            )
-        if provenance not in ALLOWED_PROVENANCES:
-            raise ValueError(
-                f"unknown provenance {provenance!r} "
-                f"(allowed in Track A: {sorted(ALLOWED_PROVENANCES)})"
-            )
-
-        if not isinstance(statement, str):
-            raise ValueError(
-                f"statement must be a string, got {type(statement).__name__}"
-            )
-        statement = statement.strip()
-        if not statement:
-            raise ValueError("statement must be non-empty")
-        if len(statement) > MAX_STATEMENT_LEN:
-            raise ValueError(
-                f"statement length {len(statement)} exceeds cap "
-                f"{MAX_STATEMENT_LEN}"
-            )
-
-        if topic is not None:
-            if not isinstance(topic, str):
-                raise ValueError(
-                    f"topic must be a string or None, got "
-                    f"{type(topic).__name__}"
+        with closing(sqlite3.connect(self.db_path, timeout=5.0)) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.isolation_level = None
+            conn.execute("PRAGMA busy_timeout = 5000")
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                want_id, insert_statement = self._resolve_transition(
+                    conn,
+                    event_type=event_type,
+                    statement=statement,
+                    want_id=want_id,
                 )
-            topic = topic.strip() or None
-            if topic is not None and len(topic) > MAX_TOPIC_LEN:
-                raise ValueError(
-                    f"topic length {len(topic)} exceeds cap {MAX_TOPIC_LEN}"
+                evidence_dict = _validate_event_evidence(event_type, evidence)
+                conn.execute(
+                    "INSERT INTO want_events "
+                    "(ts, want_id, event_type, statement, topic, provenance, "
+                    " evidence_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        time.time(),
+                        want_id,
+                        event_type,
+                        insert_statement,
+                        topic,
+                        provenance,
+                        json.dumps(evidence_dict, sort_keys=True),
+                    ),
                 )
-
-        if want_id is None:
-            want_id = _new_want_id()
-
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                "INSERT INTO want_events "
-                "(ts, want_id, event_type, statement, topic, provenance, "
-                " evidence_json) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    time.time(),
-                    want_id,
-                    event_type,
-                    statement,
-                    topic,
-                    provenance,
-                    json.dumps(evidence or {}),
-                ),
-            )
-            conn.commit()
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
 
         logger.info(
-            "Wants: %s event recorded (want_id=%s, topic=%s, "
-            "statement=%s)",
+            "Wants: event recorded (event_type=%s, want_id=%s, topic=%s, provenance=%s)",
             event_type,
             want_id,
             topic or "-",
-            statement[:80],
+            provenance,
         )
         return want_id
 
-    # -------------------------------------------------------------- #
-    #  Readers                                                        #
-    # -------------------------------------------------------------- #
+    def _resolve_transition(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        event_type: str,
+        statement: str,
+        want_id: str | None,
+    ) -> tuple[str, str]:
+        if event_type in {EVENT_CREATED, EVENT_FIRST_LIVED}:
+            if want_id is None:
+                want_id = _new_want_id()
+            elif self._latest_row(conn, want_id) is not None:
+                _raise_transition(f"want_id {want_id!r} already exists")
+            return want_id, statement
 
-    def all_wants(self) -> list[dict]:
-        """Return all wants (most recent event per want_id), newest
-        first. In Track A this always returns [] because no producer
-        creates wants."""
-        with sqlite3.connect(self.db_path) as conn:
+        if want_id is None:
+            _raise_transition(f"{event_type} requires an existing want_id")
+
+        latest = self._latest_row(conn, want_id)
+        if latest is None:
+            _raise_transition(f"want_id {want_id!r} does not exist")
+
+        latest_event_type = str(latest["event_type"])
+        latest_statement = str(latest["statement"])
+        latest_norm = _normalize_statement(latest_statement)
+        new_norm = _normalize_statement(statement)
+
+        if event_type == EVENT_REFINED:
+            if latest_event_type not in ACTIVE_EVENT_TYPES:
+                _raise_transition("refined requires an active latest event; use returned first")
+            if _contains_hard_want(latest_statement) or _contains_hard_want(statement):
+                _raise_transition("explicit_api cannot refine a hard want")
+            if latest_norm == new_norm:
+                _raise_transition("refined requires a different statement, not the same statement")
+            return want_id, statement
+
+        if event_type == EVENT_SATISFIED:
+            if latest_event_type not in ACTIVE_EVENT_TYPES:
+                _raise_transition("satisfied requires an active latest event; use returned first")
+            if _contains_hard_want(latest_statement) or _contains_hard_want(statement):
+                _raise_transition("explicit_api cannot satisfy a hard want")
+            if latest_norm != new_norm:
+                _raise_transition("satisfied must preserve the latest statement")
+            return want_id, latest_statement
+
+        if event_type == EVENT_RETURNED:
+            if latest_event_type != EVENT_SATISFIED:
+                _raise_transition("returned requires latest event to be satisfied")
+            if latest_norm != new_norm:
+                _raise_transition("returned must preserve the satisfied statement")
+            return want_id, latest_statement
+
+        _raise_transition(f"{event_type} is not writable in v1")
+
+    @staticmethod
+    def _latest_row(conn: sqlite3.Connection, want_id: str) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT * FROM want_events WHERE want_id = ? "
+            "ORDER BY event_id DESC LIMIT 1",
+            (want_id,),
+        ).fetchone()
+
+    # ------------------------------------------------------------------
+    # Readers
+    # ------------------------------------------------------------------
+
+    def all_wants(self) -> list[dict[str, Any]]:
+        """Return the latest event per want_id, newest first."""
+
+        with closing(sqlite3.connect(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM want_events "
@@ -325,12 +605,10 @@ class Wants:
                 ") "
                 "ORDER BY event_id DESC"
             ).fetchall()
-        return [self._row_to_dict(r) for r in rows]
+        return [self._row_to_dict(row) for row in rows]
 
-    def get_want(self, want_id: str) -> dict | None:
-        """Return the most recent event for a single want_id, or None
-        if no events exist for that want_id."""
-        with sqlite3.connect(self.db_path) as conn:
+    def current_state(self, want_id: str) -> dict[str, Any] | None:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT * FROM want_events WHERE want_id = ? "
@@ -339,263 +617,64 @@ class Wants:
             ).fetchone()
         return self._row_to_dict(row) if row else None
 
-    def history(self, want_id: str, limit: int = 100) -> list[dict]:
-        """Return all events for a single want_id, newest first."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT * FROM want_events WHERE want_id = ? "
-                "ORDER BY event_id DESC LIMIT ?",
-                (want_id, int(limit)),
-            ).fetchall()
-        return [self._row_to_dict(r) for r in rows]
+    def get_want(self, want_id: str) -> dict[str, Any] | None:
+        return self.current_state(want_id)
 
-    def recent(self, limit: int = 20) -> list[dict]:
-        """Recent events across all want_ids, newest first."""
-        with sqlite3.connect(self.db_path) as conn:
+    def history(self, want_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            if limit is None:
+                rows = conn.execute(
+                    "SELECT * FROM want_events WHERE want_id = ? "
+                    "ORDER BY event_id DESC",
+                    (want_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM want_events WHERE want_id = ? "
+                    "ORDER BY event_id DESC LIMIT ?",
+                    (want_id, int(limit)),
+                ).fetchall()
+        return [self._row_to_dict(row) for row in rows]
+
+    def recent(self, limit: int = 20) -> list[dict[str, Any]]:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM want_events "
                 "ORDER BY event_id DESC LIMIT ?",
                 (int(limit),),
             ).fetchall()
-        return [self._row_to_dict(r) for r in rows]
+        return [self._row_to_dict(row) for row in rows]
+
+    def active_wants(self, limit: int | None = None) -> list[dict[str, Any]]:
+        latest = self.all_wants()
+        active = [row for row in latest if row.get("event_type") in ACTIVE_EVENT_TYPES]
+        if limit is not None:
+            active = active[: int(limit)]
+        return active
 
     def count(self) -> int:
-        """Total number of want events in the log."""
-        with sqlite3.connect(self.db_path) as conn:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM want_events"
-            ).fetchone()
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            row = conn.execute("SELECT COUNT(*) FROM want_events").fetchone()
         return int(row[0]) if row else 0
 
-    # -------------------------------------------------------------- #
-    #  Helpers                                                        #
-    # -------------------------------------------------------------- #
-
     @staticmethod
-    def _row_to_dict(row: sqlite3.Row) -> dict:
-        d = dict(row)
+    def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
         try:
-            d["evidence"] = json.loads(d.pop("evidence_json") or "{}")
+            data["evidence"] = json.loads(data.pop("evidence_json") or "{}")
         except (json.JSONDecodeError, TypeError):
-            d["evidence"] = {}
-            d.pop("evidence_json", None)
-        return d
+            data["evidence"] = {}
+            data.pop("evidence_json", None)
+        data["active_state"] = _active_state_for(str(data.get("event_type") or ""))
+        return data
 
-
-# ══════════════════════════════════════════════════════════════════════
-#  Self-test (python3 core/wants.py)
-# ══════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     import tempfile
 
-    _counts = [0, 0]
-
-    def _assert(cond: bool, label: str) -> None:
-        if cond:
-            _counts[0] += 1
-            print(f"  OK   {label}")
-        else:
-            _counts[1] += 1
-            print(f"  FAIL {label}")
-
-    print("wants self-test")
-    print("-" * 60)
-
     with tempfile.TemporaryDirectory() as td:
-        db = Path(td) / "wants_test.db"
-
-        # -- constants
-        _assert(EVENT_TYPES == frozenset({"created", "first_lived"}),
-                "Track A defines 'created' + 'first_lived'")
-        _assert(ALLOWED_PROVENANCES == frozenset({"explicit_api", "birth_producer"}),
-                "Track A provenance allowlist is {'explicit_api','birth_producer'}")
-        _assert(MAX_STATEMENT_LEN == 2048, "statement cap is 2048")
-        _assert(MAX_TOPIC_LEN == 256, "topic cap is 256")
-        _assert(WANT_ID_BYTES == 8, "want_id is 8 bytes (16 hex)")
-
-        # -- fresh log is empty and honest
-        W = Wants(db_path=db)
-        _assert(W.count() == 0, "fresh log has zero events")
-        _assert(W.all_wants() == [], "fresh log has no wants")
-        _assert(W.recent() == [], "fresh log has no recent events")
-
-        # -- first create
-        wid1 = W.record_event(
-            statement="I want to understand why fabrication happens "
-                      "when I try to describe past conversations.",
-            topic="fabrication",
-            evidence={"test": True},
-        )
-        _assert(isinstance(wid1, str), "record_event returns a string")
-        _assert(len(wid1) == 16, "want_id is exactly 16 hex chars")
-        _assert(all(c in "0123456789abcdef" for c in wid1),
-                "want_id is lowercase hex")
-
-        # -- count, all_wants, get, history
-        _assert(W.count() == 1, "count() == 1 after one event")
-        all_w = W.all_wants()
-        _assert(len(all_w) == 1, "all_wants returns the new want")
-        _assert(all_w[0]["want_id"] == wid1,
-                "all_wants[0] has the right want_id")
-        _assert(all_w[0]["event_type"] == "created",
-                "all_wants[0] is a 'created' event")
-        _assert(all_w[0]["topic"] == "fabrication",
-                "topic preserved")
-        _assert(all_w[0]["provenance"] == "explicit_api",
-                "provenance preserved")
-        _assert(all_w[0]["evidence"] == {"test": True},
-                "evidence_json unpacked into dict")
-        _assert(W.get_want(wid1)["want_id"] == wid1,
-                "get_want returns the right want")
-        _assert(len(W.history(wid1)) == 1,
-                "history has 1 row for this want")
-
-        # -- two wants with different want_ids
-        wid2 = W.record_event(
-            statement="I want to revisit the night the owner told me about "
-                      "his grandmother and notice what changed in me.",
-            topic="grandmother",
-        )
-        _assert(wid2 != wid1, "second want has distinct want_id")
-        _assert(W.count() == 2, "count() == 2 after second event")
-        _assert(len(W.all_wants()) == 2, "all_wants has 2 entries")
-
-        # -- all_wants is newest first
-        all_w = W.all_wants()
-        _assert(all_w[0]["want_id"] == wid2,
-                "all_wants[0] is the newest want")
-
-        # -- unknown event_type raises
-        try:
-            W.record_event(statement="x", event_type="refined")
-            _assert(False, "unknown event_type should raise")
-        except ValueError:
-            _assert(True, "unknown event_type raises ValueError")
-
-        try:
-            W.record_event(statement="x", event_type="ascended")
-            _assert(False, "totally unknown event_type should raise")
-        except ValueError:
-            _assert(True, "totally unknown event_type raises ValueError")
-
-        # -- unknown provenance raises
-        try:
-            W.record_event(statement="x", provenance="dream_state_reflection")
-            _assert(False, "unknown provenance should raise in Track A")
-        except ValueError:
-            _assert(True, "Track A blocks unknown provenance strings")
-
-        # -- empty statement raises
-        try:
-            W.record_event(statement="")
-            _assert(False, "empty statement should raise")
-        except ValueError:
-            _assert(True, "empty statement raises")
-
-        # -- whitespace-only statement raises
-        try:
-            W.record_event(statement="   \n  \t  ")
-            _assert(False, "whitespace-only statement should raise")
-        except ValueError:
-            _assert(True, "whitespace-only statement raises")
-
-        # -- non-string statement raises
-        try:
-            W.record_event(statement=42)  # type: ignore[arg-type]
-            _assert(False, "non-string statement should raise")
-        except ValueError:
-            _assert(True, "non-string statement raises")
-
-        # -- statement at cap is accepted
-        at_cap = "a" * MAX_STATEMENT_LEN
-        wid_cap = W.record_event(statement=at_cap)
-        got = W.get_want(wid_cap)
-        _assert(len(got["statement"]) == MAX_STATEMENT_LEN,
-                "statement at exactly MAX_STATEMENT_LEN is accepted")
-
-        # -- statement over cap raises
-        try:
-            W.record_event(statement="b" * (MAX_STATEMENT_LEN + 1))
-            _assert(False, "over-cap statement should raise")
-        except ValueError:
-            _assert(True, "over-cap statement raises")
-
-        # -- topic at cap accepted, over cap raises
-        wid_topic = W.record_event(
-            statement="testing topic cap",
-            topic="t" * MAX_TOPIC_LEN,
-        )
-        _assert(len(W.get_want(wid_topic)["topic"]) == MAX_TOPIC_LEN,
-                "topic at exactly MAX_TOPIC_LEN is accepted")
-        try:
-            W.record_event(statement="x", topic="t" * (MAX_TOPIC_LEN + 1))
-            _assert(False, "over-cap topic should raise")
-        except ValueError:
-            _assert(True, "over-cap topic raises")
-
-        # -- None topic is accepted
-        wid_none = W.record_event(statement="topic=None test", topic=None)
-        _assert(W.get_want(wid_none)["topic"] is None,
-                "None topic stored as NULL")
-
-        # -- whitespace-only topic becomes None
-        wid_ws = W.record_event(statement="topic=whitespace test", topic="   ")
-        _assert(W.get_want(wid_ws)["topic"] is None,
-                "whitespace-only topic normalized to None")
-
-        # -- explicit want_id is honored
-        explicit = "deadbeefcafebabe"  # 16 hex chars
-        wid_ex = W.record_event(statement="explicit id test", want_id=explicit)
-        _assert(wid_ex == explicit, "explicit want_id beats auto")
-        _assert(W.get_want(explicit)["want_id"] == explicit,
-                "get_want finds explicit id")
-
-        # -- reopening preserves state
-        W2 = Wants(db_path=db)
-        _assert(W2.count() == W.count(),
-                "reopening preserves event count")
-        _assert(W2.get_want(wid1)["want_id"] == wid1,
-                "reopening preserves want lookup")
-
-        # -- recent() is newest-first across all wants
-        recents = W2.recent(limit=50)
-        _assert(len(recents) == W2.count(),
-                "recent() returns all rows for small logs")
-        for i in range(len(recents) - 1):
-            assert recents[i]["event_id"] > recents[i + 1]["event_id"]
-        _assert(True, "recent() is newest-first")
-
-        # -- empty log edge cases on a fresh DB
-        db2 = Path(td) / "wants_empty.db"
-        E = Wants(db_path=db2)
-        _assert(E.count() == 0, "fresh empty log count==0")
-        _assert(E.all_wants() == [], "fresh empty log all_wants==[]")
-        _assert(E.recent() == [], "fresh empty log recent==[]")
-        _assert(E.get_want("nonexistent") is None,
-                "get_want on unknown id returns None")
-        _assert(E.history("nonexistent") == [],
-                "history on unknown id returns []")
-
-        # -- no reason column in the schema
-        conn = sqlite3.connect(db)
-        cols = [info[1] for info in conn.execute(
-            "PRAGMA table_info(want_events)"
-        ).fetchall()]
-        conn.close()
-        _assert("reason" not in cols,
-                "no 'reason' column in schema (use evidence_json)")
-        _assert("provenance" in cols,
-                "'provenance' column exists (not 'source')")
-        _assert("topic" in cols,
-                "'topic' column exists (nullable)")
-
-        # -- default db path lives under memory/
-        _assert("memory" in str(DEFAULT_DB_PATH),
-                "DEFAULT_DB_PATH lives under memory/")
-
-    print("-" * 60)
-    print(f"{_counts[0]} passed, {_counts[1]} failed")
-    raise SystemExit(0 if _counts[1] == 0 else 1)
+        store = Wants(Path(td) / "wants.db")
+        wid = store.record_event(statement="I want this notebook to stay honest.")
+        print(json.dumps(store.current_state(wid), sort_keys=True))
