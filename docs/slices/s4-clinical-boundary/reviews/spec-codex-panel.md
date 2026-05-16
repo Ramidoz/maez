@@ -1,8 +1,8 @@
 # S4 Clinical Boundary v1 - Codex Engineering Panel
 
-**Date:** 2026-05-15  
-**Spec under review:** `docs/slices/s4-clinical-boundary/spec.md` at Claude fold `976037e`  
-**Mode:** read-only engineering review  
+**Date:** 2026-05-15
+**Spec under review:** `docs/slices/s4-clinical-boundary/spec.md` at Claude fold `976037e`
+**Mode:** read-only engineering review
 **Verdict:** REVISE, with one BLOCK-class surface-order finding
 
 S4 is architecturally sound, but the folded spec still underspecified the
@@ -34,7 +34,7 @@ implementation-completeness gaps in the spec.
 
 ### F1 - Guard Placement Is Too Late
 
-**Severity:** BLOCK  
+**Severity:** BLOCK
 **Owner:** surface chokepoint / runtime
 
 The spec says S4 runs before model composition. That is insufficient. Current
@@ -67,7 +67,7 @@ pre-guard operations in the spec and RED tests.
 
 ### F2 - Result Shape Must Carry The Exact Answer
 
-**Severity:** REVISE  
+**Severity:** REVISE
 **Owner:** composer / surface integration
 
 The result shape contains template ids but not `answer_text`. That forces every
@@ -81,7 +81,7 @@ prompt construction.
 
 ### F3 - Classifier Precedence Conflicts With Worked Examples
 
-**Severity:** REVISE  
+**Severity:** REVISE
 **Owner:** classifier
 
 The method says crisis catalog, clinical lexicon, intent rules, exclusions,
@@ -100,7 +100,7 @@ mechanics, crisis tiers, clinical lexicon, and fixture table.
 
 ### F4 - Crisis Holding Needs A Narrow Writer Seam
 
-**Severity:** RATIFY-WITH-AMENDMENTS  
+**Severity:** RATIFY-WITH-AMENDMENTS
 **Owner:** crisis holding / privacy
 
 The content-free crisis held row is the right shape. But S4 must not receive a
@@ -113,7 +113,7 @@ thought readers / forensic APIs.
 
 ### F5 - Held Counter Must Be Truthful Under Failure
 
-**Severity:** RATIFY-WITH-AMENDMENTS  
+**Severity:** RATIFY-WITH-AMENDMENTS
 **Owner:** crisis holding / counters
 
 The spec says `crisis_candidate_held_count` increments only after the write
@@ -123,7 +123,7 @@ fixed crisis phrase and increments `crisis_candidate_hold_failed_count`.
 
 ### F6 - M1 Ineligibility Seam Is Underspecified
 
-**Severity:** REVISE  
+**Severity:** REVISE
 **Owner:** memory / M1
 
 The spec says S4 produces `promotion_policy`, but it does not define the
@@ -136,7 +136,7 @@ parse M1 internals."
 
 ### F7 - Sidecar Persistence Could Become A Clinical Timeline
 
-**Severity:** REVISE  
+**Severity:** REVISE
 **Owner:** observability
 
 The sidecar writes timestamped JSONL samples. If it persists S4 counter values,
@@ -150,7 +150,7 @@ delta comparisons are in-memory only for same-PID reset detection.
 
 ### F8 - Template Variant State Must Not Persist
 
-**Severity:** REVISE  
+**Severity:** REVISE
 **Owner:** composer / privacy
 
 The spec allowed "operator-local process state or content-free persisted state"
@@ -163,7 +163,7 @@ written to private thoughts. Restart reset is acceptable.
 
 ### F9 - Forbidden Phrase Tests Need Exact Scanners
 
-**Severity:** REVISE  
+**Severity:** REVISE
 **Owner:** templates / tests
 
 Approved templates include boundary phrases such as "I cannot tell you what
@@ -176,7 +176,7 @@ pass unchanged.
 
 ### F10 - Crisis Phrase Catalog Is Too Broad Without Context
 
-**Severity:** REVISE  
+**Severity:** REVISE
 **Owner:** classifier / crisis precedence
 
 Phrases like "can't breathe," "can't take it," and "can't cope" can be literal

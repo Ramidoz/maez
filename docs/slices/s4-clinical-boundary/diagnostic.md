@@ -1,9 +1,9 @@
 # S4 Clinical Boundary Diagnostic
 
-**Status:** DIAGNOSTIC ONLY  
-**Date:** 2026-05-15  
-**Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S4; invariant #10 Clinical Boundary  
-**Runtime impact:** none  
+**Status:** DIAGNOSTIC ONLY
+**Date:** 2026-05-15
+**Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S4; invariant #10 Clinical Boundary
+**Runtime impact:** none
 
 ## Purpose
 
