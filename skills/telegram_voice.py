@@ -24,16 +24,21 @@ from telegram.ext import (
 )
 
 import sys
+
 sys.path.insert(0, str(Path("/home/rohit/maez")))
 from core.infra.secrets import sanitize_env
 from core.health.shared_executor import get_shared_executor
 from core.perception import snapshot as perception_snapshot, format_snapshot
 from core.conversation_controller import ConversationController
 from core.body.camera_presence_voice import answer_camera_presence_question
+from core.safety.clinical_boundary import PrivateThoughtsCrisisSignalWriter, guard_owner_text
 from memory.memory_manager import MemoryManager
 from skills.web_search import (
-    search as web_search, format_for_context as web_format,
-    needs_web_search, search_rss, is_news_query,
+    search as web_search,
+    format_for_context as web_format,
+    needs_web_search,
+    search_rss,
+    is_news_query,
 )
 
 logger = logging.getLogger("maez")
@@ -74,8 +79,11 @@ def _audit_telegram_reply_with_status(
         return text, False, False
     try:
         from core.self_claim_audit import audit as _sc_audit
+
         r = _sc_audit(
-            text, surface=surface, evidence_envelope=evidence_envelope,
+            text,
+            surface=surface,
+            evidence_envelope=evidence_envelope,
         )
         audited_text = r.text if r.rewritten else text
         return audited_text, True, bool(r.rewritten)
@@ -87,6 +95,7 @@ def _audit_telegram_reply_with_status(
 def _get_circadian_context() -> str:
     """Return circadian awareness context block."""
     from datetime import datetime as _dt
+
     hour = _dt.now().hour
     if 5 <= hour < 9:
         phase, energy, tone = "early morning", "waking up", "gentle and brief"
@@ -102,10 +111,12 @@ def _get_circadian_context() -> str:
         phase, energy, tone = "late evening", "tired", "brief and warm"
     else:
         phase, energy, tone = "night", "should be sleeping", "very brief, check if okay"
-    return (f"[CIRCADIAN]\n"
-            f"  Time: {phase} ({hour:02d}:00)\n"
-            f"  Expected energy: {energy}\n"
-            f"  Suggested tone: {tone}")
+    return (
+        f"[CIRCADIAN]\n"
+        f"  Time: {phase} ({hour:02d}:00)\n"
+        f"  Expected energy: {energy}\n"
+        f"  Suggested tone: {tone}"
+    )
 
 
 def _get_public_context_for_telegram() -> str:
@@ -116,6 +127,7 @@ def _get_public_context_for_telegram() -> str:
         import time as _time
         from datetime import datetime as _dt
         from chromadb.config import Settings
+
         client = chromadb.PersistentClient(
             path="/home/rohit/maez/memory/db/public_users",
             settings=Settings(anonymized_telemetry=False),
@@ -125,10 +137,14 @@ def _get_public_context_for_telegram() -> str:
             return ""
         # Fetch all and filter in Python (timestamps are ISO strings)
         from datetime import timezone as _tz
-        cutoff_iso = _dt.fromtimestamp(_time.time() - 86400, tz=_tz.utc).strftime('%Y-%m-%dT%H:%M:%S')
+
+        cutoff_iso = _dt.fromtimestamp(_time.time() - 86400, tz=_tz.utc).strftime(
+            "%Y-%m-%dT%H:%M:%S"
+        )
         results = col.get(include=["documents", "metadatas"])
         filtered = [
-            (doc, meta) for doc, meta in zip(results["documents"], results["metadatas"], strict=False)
+            (doc, meta)
+            for doc, meta in zip(results["documents"], results["metadatas"], strict=False)
             if meta.get("timestamp", "") >= cutoff_iso
         ]
         if not filtered:
@@ -162,6 +178,7 @@ def _get_public_context_for_telegram() -> str:
             except Exception:
                 pass
 
+
 SOUL_PATH = Path("/home/rohit/maez/config/soul.md")
 from core.model_config import PRIMARY_MODEL as MODEL  # /etc/maez/model.env — single source of truth
 
@@ -184,18 +201,18 @@ def split_long_message(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> list[
         # Try sentence boundaries first
         chunk = remaining[:max_length]
         split_at = -1
-        for sep in ['. ', '? ', '! ']:
+        for sep in [". ", "? ", "! "]:
             idx = chunk.rfind(sep)
             if idx > max_length // 2:
                 split_at = max(split_at, idx + len(sep))
         if split_at < 0:
             # Fall back to newline boundary
-            idx = chunk.rfind('\n')
+            idx = chunk.rfind("\n")
             if idx > max_length // 2:
                 split_at = idx + 1
         if split_at < 0:
             # Fall back to space boundary
-            idx = chunk.rfind(' ')
+            idx = chunk.rfind(" ")
             if idx > max_length // 2:
                 split_at = idx + 1
         if split_at < 0:
@@ -207,21 +224,31 @@ def split_long_message(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> list[
         parts.append(remaining)
     return parts
 
+
 # --- Natural language intent detection ---
 MACHINE_INTENTS = {
-    'status':       ['how is everything', 'system status', "what's running", 'all good', 'services ok'],
+    "status": ["how is everything", "system status", "what's running", "all good", "services ok"],
     # 'logs' — must require an explicit mention of logs/errors/journal so
     # generic follow-up questions like "what happened?" don't short-circuit
     # the chat flow. Removed 'what happened' (too generic — it caught
     # conversational follow-ups after the Fix 6 terminal summary was
     # already delivered and routed them to a canned "Logs are clean"
     # response, defeating the point of the summary).
-    'logs':         ['show logs', 'recent logs', 'any errors', 'check logs', 'tail logs', 'journal errors', 'systemd logs', 'what errors'],
-    'restart_maez': ['restart yourself', 'restart maez', 'reboot yourself'],
-    'claude_status':['claude code', "what's claude doing", 'is claude running', 'build status'],
-    'reboot':       ['reboot the machine', 'restart the computer', 'reboot system'],
-    'disk':         ['disk space', 'storage', 'partition', 'how much space'],
-    'memory':       ['how many memories', 'memory count', 'what do you remember'],
+    "logs": [
+        "show logs",
+        "recent logs",
+        "any errors",
+        "check logs",
+        "tail logs",
+        "journal errors",
+        "systemd logs",
+        "what errors",
+    ],
+    "restart_maez": ["restart yourself", "restart maez", "reboot yourself"],
+    "claude_status": ["claude code", "what's claude doing", "is claude running", "build status"],
+    "reboot": ["reboot the machine", "restart the computer", "reboot system"],
+    "disk": ["disk space", "storage", "partition", "how much space"],
+    "memory": ["how many memories", "memory count", "what do you remember"],
 }
 
 
@@ -267,14 +294,14 @@ import re as _jarvis_re
 # inputs that aren't pure greetings) goes through the loop and lets
 # the planning LLM decide whether it needs tools or can answer DONE.
 _CONVERSATIONAL_RE = _jarvis_re.compile(
-    r'^\s*('
-    r'hi|hello|hey|yo|sup|good (?:morning|afternoon|evening|night)|'
-    r'thanks?|thank\s+you|thx|ty|cheers|'
-    r'ok(?:ay)?|alright|got\s+it|sure|cool|nice|nope?|yes|yeah|yep|yup|'
-    r'lol|haha|hmm+|hm+|wow|oh|ah|uh|huh|'
-    r'love\s+(?:you|u|you\s+maez|u\s+maez)|miss\s+you|gn|gm|brb|bye|goodbye|see\s+you|later|'
-    r'maez|hi\s+maez|hey\s+maez|good\s+(?:job|work|night)\s+maez'
-    r')[\s.!?,]*$',
+    r"^\s*("
+    r"hi|hello|hey|yo|sup|good (?:morning|afternoon|evening|night)|"
+    r"thanks?|thank\s+you|thx|ty|cheers|"
+    r"ok(?:ay)?|alright|got\s+it|sure|cool|nice|nope?|yes|yeah|yep|yup|"
+    r"lol|haha|hmm+|hm+|wow|oh|ah|uh|huh|"
+    r"love\s+(?:you|u|you\s+maez|u\s+maez)|miss\s+you|gn|gm|brb|bye|goodbye|see\s+you|later|"
+    r"maez|hi\s+maez|hey\s+maez|good\s+(?:job|work|night)\s+maez"
+    r")[\s.!?,]*$",
     _jarvis_re.IGNORECASE,
 )
 
@@ -309,7 +336,7 @@ def _summarize_shell_error(err: str) -> str:
             exit_line = line[:40]
         elif line.startswith("stderr:") and not stderr_first:
             # First non-empty stderr content
-            stderr_content = line[len("stderr:"):].strip()
+            stderr_content = line[len("stderr:") :].strip()
             stderr_first = stderr_content.split("\n", 1)[0][:180]
     if exit_line and stderr_first:
         return f"{exit_line}: {stderr_first}"
@@ -342,33 +369,37 @@ def _should_run_jarvis_loop(text: str) -> bool:
 def _parse_tool_call(text: str) -> dict | None:
     import json as _json
     import re as _re
+
     if not text:
         return None
     s = text.strip()
 
     # Form 1: TOOL_CALL: {"action": "...", "params": {...}}
-    m = _re.search(r'TOOL_CALL\s*[:=]?\s*(\{.*\})', s, _re.DOTALL)
+    m = _re.search(r"TOOL_CALL\s*[:=]?\s*(\{.*\})", s, _re.DOTALL)
     if m:
         blob = _extract_balanced_json(m.group(1))
         if blob:
             try:
                 obj = _json.loads(blob)
                 if isinstance(obj, dict) and obj.get("action"):
-                    return {"action": obj["action"],
-                            "params": obj.get("params") or obj.get("arguments") or {}}
+                    return {
+                        "action": obj["action"],
+                        "params": obj.get("params") or obj.get("arguments") or {},
+                    }
             except Exception:
                 pass
 
     # Form 2: <|tool_call>call:[maez.]NAME{...}<tool_call|>  (gemma native)
     # Also tolerates <tool_call>...</tool_call>, [TOOL_CALL]...[/TOOL_CALL], etc.
     m = _re.search(
-        r'(?:<\|?tool_call\|?>|<tool_call>|\[tool_call\]|\[TOOL_CALL\])\s*'
-        r'(?:call\s*:\s*)?'
-        r'(?:[a-zA-Z_][\w]*\.)?'         # optional namespace like "maez."
-        r'([a-zA-Z_]\w*)'                # function name
-        r'\s*(\{.*?\})'                  # params
-        r'\s*(?:<\|?/?tool_call\|?>|</tool_call>|\[/tool_call\]|\[/TOOL_CALL\])?',
-        s, _re.DOTALL,
+        r"(?:<\|?tool_call\|?>|<tool_call>|\[tool_call\]|\[TOOL_CALL\])\s*"
+        r"(?:call\s*:\s*)?"
+        r"(?:[a-zA-Z_][\w]*\.)?"  # optional namespace like "maez."
+        r"([a-zA-Z_]\w*)"  # function name
+        r"\s*(\{.*?\})"  # params
+        r"\s*(?:<\|?/?tool_call\|?>|</tool_call>|\[/tool_call\]|\[/TOOL_CALL\])?",
+        s,
+        _re.DOTALL,
     )
     if m:
         name = m.group(1)
@@ -380,7 +411,7 @@ def _parse_tool_call(text: str) -> dict | None:
             return {"action": name, "params": params}
 
     # Form 3: function-call style e.g.  query_system({"cmd":"..."})
-    m = _re.search(r'\b([a-z_][a-z0-9_]+)\s*\(\s*(\{.*?\})\s*\)', s, _re.DOTALL)
+    m = _re.search(r"\b([a-z_][a-z0-9_]+)\s*\(\s*(\{.*?\})\s*\)", s, _re.DOTALL)
     if m:
         name = m.group(1)
         try:
@@ -394,15 +425,17 @@ def _parse_tool_call(text: str) -> dict | None:
     idx = s.find('"action"')
     if idx > 0:
         # Walk left to find the enclosing '{'
-        brace = s.rfind('{', 0, idx)
+        brace = s.rfind("{", 0, idx)
         if brace >= 0:
             blob = _extract_balanced_json(s[brace:])
             if blob:
                 try:
                     obj = _json.loads(blob)
                     if isinstance(obj, dict) and obj.get("action"):
-                        return {"action": obj["action"],
-                                "params": obj.get("params") or obj.get("arguments") or {}}
+                        return {
+                            "action": obj["action"],
+                            "params": obj.get("params") or obj.get("arguments") or {},
+                        }
                 except Exception:
                     pass
 
@@ -414,7 +447,7 @@ def _extract_balanced_json(s: str) -> str | None:
     balanced JSON object. None if no balance found."""
     if not s:
         return None
-    start = s.find('{')
+    start = s.find("{")
     if start < 0:
         return None
     depth = 0
@@ -425,7 +458,7 @@ def _extract_balanced_json(s: str) -> str | None:
         if esc:
             esc = False
             continue
-        if c == '\\' and in_str:
+        if c == "\\" and in_str:
             esc = True
             continue
         if c == '"':
@@ -433,13 +466,14 @@ def _extract_balanced_json(s: str) -> str | None:
             continue
         if in_str:
             continue
-        if c == '{':
+        if c == "{":
             depth += 1
-        elif c == '}':
+        elif c == "}":
             depth -= 1
             if depth == 0:
-                return s[start:i + 1]
+                return s[start : i + 1]
     return None
+
 
 _TOOL_MANIFEST = """\
 TOOLS YOU CAN USE (your body, your hands — these run on the owner's machine):
@@ -817,14 +851,13 @@ class TelegramVoice:
         dialog_reply_text = getattr(result, "dialog_reply_text", None)
         if dialog_reply_text:
             dialog_reply_text = _audit_telegram_reply(
-                dialog_reply_text, surface="telegram_dialog",
+                dialog_reply_text,
+                surface="telegram_dialog",
             )
             try:
                 await update.message.reply_text(dialog_reply_text)
             except Exception as e:
-                logger.warning(
-                    "failed to send self-mod dialog reply: %s", e
-                )
+                logger.warning("failed to send self-mod dialog reply: %s", e)
 
         # Pipeline already sent the resolution notice via the renderer.
         # Nothing else to do here; the normal chat flow is short-circuited.
@@ -843,6 +876,7 @@ class TelegramVoice:
         # + store_telegram path, so we write a grounded record here.
         try:
             from core.decision_pipeline import PipelineStatus as _PS
+
             card = result.card
             if card is not None:
                 cmd = ""
@@ -905,6 +939,7 @@ class TelegramVoice:
         # build-from-source sequences without hitting the terminal wall.
         try:
             from core.decision_pipeline import PipelineStatus as _PS
+
             card = result.card
             if (
                 card is not None
@@ -929,7 +964,8 @@ class TelegramVoice:
                     # the exit header.
                     logger.info(
                         "recovery cap hit: depth %d exceeded for chat %s, sending terminal summary",
-                        depth, chat_key,
+                        depth,
+                        chat_key,
                     )
                     # Collect the full chain of failed attempts
                     prior_attempts = self._collect_prior_attempts(
@@ -939,20 +975,24 @@ class TelegramVoice:
                     # Build current attempt entry
                     current_cmd = ""
                     if isinstance(card.params, dict):
-                        current_cmd = str(card.params.get("cmd") or card.params.get("path") or "")[:280]
+                        current_cmd = str(card.params.get("cmd") or card.params.get("path") or "")[
+                            :280
+                        ]
                     current_err_raw = str(result.execution_error or result.message or "")
                     current_err = _summarize_shell_error(current_err_raw)
                     current_reason = (card.reason or "").strip()
                     if current_reason.startswith("chat: "):
-                        current_reason = current_reason[len("chat: "):]
+                        current_reason = current_reason[len("chat: ") :]
                     # Number the attempts in chronological order (oldest-first)
                     # prior_attempts is newest-first from the store; reverse for readable chronology
                     chain = list(reversed(prior_attempts))
-                    chain.append({
-                        "cmd": current_cmd,
-                        "error": current_err,
-                        "reason": current_reason,
-                    })
+                    chain.append(
+                        {
+                            "cmd": current_cmd,
+                            "error": current_err,
+                            "reason": current_reason,
+                        }
+                    )
                     # Walk chain oldest-first to find the original user intent.
                     # When the current card is a recovery-created card (its
                     # reason is 'chat: ' with empty text), the real original
@@ -978,20 +1018,23 @@ class TelegramVoice:
                         lines.append(f"  {i}. `{cmd[:200]}`")
                         if err:
                             lines.append(f"      → {err[:240]}")
-                    lines.extend([
-                        "",
-                        "All three recovery attempts have failed. I'm not "
-                        "going to propose a fourth one automatically — that "
-                        "would just be more noise. If you want me to try a "
-                        "genuinely different approach (source build, "
-                        "alternative PPA, community package), tell me which "
-                        "direction and I'll propose a new card. Or if you'd "
-                        "rather abandon this and come back to it later, "
-                        "that's fine too.",
-                    ])
+                    lines.extend(
+                        [
+                            "",
+                            "All three recovery attempts have failed. I'm not "
+                            "going to propose a fourth one automatically — that "
+                            "would just be more noise. If you want me to try a "
+                            "genuinely different approach (source build, "
+                            "alternative PPA, community package), tell me which "
+                            "direction and I'll propose a new card. Or if you'd "
+                            "rather abandon this and come back to it later, "
+                            "that's fine too.",
+                        ]
+                    )
                     terminal_reply = "\n".join(lines)
                     terminal_reply = _audit_telegram_reply(
-                        terminal_reply, surface="telegram",
+                        terminal_reply,
+                        surface="telegram",
                     )
                     try:
                         await update.message.reply_text(terminal_reply)
@@ -1059,11 +1102,13 @@ class TelegramVoice:
                         if pipe_for_expiry is not None:
                             import sqlite3
                             import time as _time
+
                             cutoff = _time.time() - 1800
                             store = pipe_for_expiry.card_store
                             conn = sqlite3.connect(store.db_path)
                             orphan_ids = [
-                                row[0] for row in conn.execute(
+                                row[0]
+                                for row in conn.execute(
                                     "SELECT request_id FROM pending_cards "
                                     "WHERE chat_id = ? AND created_at >= ? "
                                     "AND status IN ('open', 'deferred')",
@@ -1084,7 +1129,8 @@ class TelegramVoice:
                                 except Exception as e:
                                     logger.debug(
                                         "Fix 6: failed to expire orphan %s: %s",
-                                        req_id[:8], e,
+                                        req_id[:8],
+                                        e,
                                     )
                     except Exception as e:
                         logger.debug("Fix 6 orphan expiration pass failed: %s", e)
@@ -1092,9 +1138,10 @@ class TelegramVoice:
                     self._recovery_depth[chat_key] = depth
                     original_intent = card.reason or "an earlier request"
                     if isinstance(original_intent, str) and original_intent.startswith("chat: "):
-                        original_intent = original_intent[len("chat: "):]
+                        original_intent = original_intent[len("chat: ") :]
                     prior_attempts = self._collect_prior_attempts(
-                        card, current_card_error=result.execution_error or result.message or "",
+                        card,
+                        current_card_error=result.execution_error or result.message or "",
                     )
                     recovery_seed = {
                         "failed_action": card.action,
@@ -1106,9 +1153,11 @@ class TelegramVoice:
                     }
                     logger.info(
                         "triggering recovery pass depth=%d for failed card %s",
-                        depth, card.request_id[:8] if card.request_id else "?",
+                        depth,
+                        card.request_id[:8] if card.request_id else "?",
                     )
                     import time as _time_mod
+
                     recovery_started_at = _time_mod.time()
                     loop = asyncio.get_event_loop()
                     from core.cognition.moment_assembly_diagnostic import (
@@ -1132,19 +1181,19 @@ class TelegramVoice:
                             # the LLM can't hallucinate a generic "PPA / snap"
                             # alternative when the real queued card is
                             # something different.
-                            new_card_cmd = self._find_recovery_new_card_cmd(
-                                recovery_started_at
-                            )
+                            new_card_cmd = self._find_recovery_new_card_cmd(recovery_started_at)
                             reply_text = await loop.run_in_executor(
                                 get_shared_executor(),
                                 lambda: self._synthesize_recovery_reply(
-                                    recovery_seed, recovery_transcript,
+                                    recovery_seed,
+                                    recovery_transcript,
                                     new_card_cmd=new_card_cmd,
                                 ),
                             )
                             if reply_text:
                                 reply_text = _audit_telegram_reply(
-                                    reply_text, surface="telegram_recovery",
+                                    reply_text,
+                                    surface="telegram_recovery",
                                 )
                                 try:
                                     await update.message.reply_text(reply_text)
@@ -1197,6 +1246,7 @@ class TelegramVoice:
         try:
             import sqlite3
             import time as _time
+
             chat_id = str(self.authorized_user)
             cutoff = _time.time() - self._REPLY_BINDING_WINDOW_SECONDS
             store = pipe.card_store
@@ -1237,6 +1287,7 @@ class TelegramVoice:
         try:
             import sqlite3
             import time as _time
+
             chat_id = str(self.authorized_user)
             cutoff = _time.time() - self._STARTUP_STALE_CARD_SECONDS
             store = pipe.card_store
@@ -1292,6 +1343,7 @@ class TelegramVoice:
                 return attempts
             store = pipe.card_store
             import time as _time
+
             now = _time.time()
             cutoff = now - window_seconds
             chat_id = str(self.authorized_user)
@@ -1300,6 +1352,7 @@ class TelegramVoice:
             # query by status. Instead: iterate the store's sqlite
             # directly for failed cards in the window.
             import sqlite3
+
             conn = sqlite3.connect(store.db_path)
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
@@ -1317,29 +1370,32 @@ class TelegramVoice:
             ).fetchall()
             conn.close()
             import json as _json
+
             for r in rows:
                 # Skip the current card itself — its failure is already
                 # in the recovery seed's `error` field.
-                if current_card is not None and r['request_id'] == current_card.request_id:
+                if current_card is not None and r["request_id"] == current_card.request_id:
                     continue
                 try:
-                    params = _json.loads(r['params_json'] or '{}')
+                    params = _json.loads(r["params_json"] or "{}")
                 except Exception:
                     params = {}
-                cmd = params.get('cmd') or params.get('path') or ''
+                cmd = params.get("cmd") or params.get("path") or ""
                 if not cmd:
                     continue
-                err = (r['execution_error'] or '').strip()
+                err = (r["execution_error"] or "").strip()
                 err_summary = _summarize_shell_error(err)
-                reason = (r['reason'] or '').strip()
-                if reason.startswith('chat: '):
-                    reason = reason[len('chat: '):]
-                attempts.append({
-                    'cmd': str(cmd)[:280],
-                    'error': err_summary,
-                    'reason': reason,
-                    'created_at': r['created_at'],
-                })
+                reason = (r["reason"] or "").strip()
+                if reason.startswith("chat: "):
+                    reason = reason[len("chat: ") :]
+                attempts.append(
+                    {
+                        "cmd": str(cmd)[:280],
+                        "error": err_summary,
+                        "reason": reason,
+                        "created_at": r["created_at"],
+                    }
+                )
         except Exception as e:
             logger.debug("prior-attempts lookup failed: %s", e)
         return attempts
@@ -1377,6 +1433,7 @@ class TelegramVoice:
                 store = getattr(self, "_card_store", None)
                 if store is not None:
                     from core.pending_cards import AWAITING_STATUSES
+
                     cards = store.get_open_for_channel(
                         channel="telegram_text",
                         chat_id=str(self.authorized_user),
@@ -1405,7 +1462,8 @@ class TelegramVoice:
 
             # Pending offer
             offer = self._controller.get_offer(
-                "telegram_text", str(self.authorized_user),
+                "telegram_text",
+                str(self.authorized_user),
             )
             if offer:
                 age = int(now - float(offer.get("set_at", now)))
@@ -1480,8 +1538,7 @@ class TelegramVoice:
     def _propose_next_step_from_probe(self, user_text: str) -> dict | None:
         """Thin delegation to ConversationController.propose_next_step_from_probe."""
         audit_db_path = str(
-            getattr(getattr(self, "_audit_log", None), "db_path", None)
-            or "memory/audit_log.db"
+            getattr(getattr(self, "_audit_log", None), "db_path", None) or "memory/audit_log.db"
         )
         return self._controller.propose_next_step_from_probe(
             user_text,
@@ -1554,13 +1611,13 @@ class TelegramVoice:
         def _fmt_status(card) -> str:
             s = (card.status or "").lower()
             mapping = {
-                "open":     "PENDING APPROVAL ⏳",
+                "open": "PENDING APPROVAL ⏳",
                 "deferred": "DEFERRED ⏸",
-                "done":     "EXECUTED ✓",
-                "failed":   "FAILED ✗",
-                "denied":   "DENIED ✗",
-                "expired":  "EXPIRED ⌛",
-                "running":  "RUNNING ⏳",
+                "done": "EXECUTED ✓",
+                "failed": "FAILED ✗",
+                "denied": "DENIED ✗",
+                "expired": "EXPIRED ⌛",
+                "running": "RUNNING ⏳",
             }
             return mapping.get(s, s.upper())
 
@@ -1571,9 +1628,7 @@ class TelegramVoice:
                 if not out:
                     return "(no output)"
                 # Compact the output — one line, bounded length.
-                out = " ⏎ ".join(
-                    line.strip() for line in out.splitlines() if line.strip()
-                )
+                out = " ⏎ ".join(line.strip() for line in out.splitlines() if line.strip())
                 return out[:240]
             if s == "failed":
                 err = (card.execution_error or "").strip()
@@ -1605,7 +1660,7 @@ class TelegramVoice:
                 lines.append(f"      → {result}")
 
         header = (
-            f"BODY ACTIVITY (last {int(since_seconds/60)} min) — "
+            f"BODY ACTIVITY (last {int(since_seconds / 60)} min) — "
             "the authoritative record of what your body just did in this "
             "chat. This is ground truth. If it conflicts with your memory "
             "recall or your intuition, trust this block. If a card shows "
@@ -1664,36 +1719,32 @@ class TelegramVoice:
 
     _NL_APPROVE_PATTERNS = [
         # Bare affirmatives (no id — resolves to last-discussed candidate)
-        r'^(yes|yep|yeah|yup|yuh|ok|okay|sure|alright|alright then|sounds good)'
-            + _TAIL + _END,
-        r'^(approve[d]?|approved|do it|go ahead|ship it|try it|let it try|'
-            r'let it run|let\'?s do it|let\'?s try it|'
-            # 2026-04-22: added proceed / continue / apply / commit /
-            # send it — the owner naturally reached for these and they
-            # fell through to chat, hallucinating about a different id.
-            r'proceed|proceed\s+with\s+it|continue|apply|apply\s+it|'
-            r'commit|commit\s+it|send\s+it|make\s+it\s+happen)'
-            + _TAIL + _END,
-        r'^(absolutely|please do|go for it|green light|you\'?re\s+good)'
-            + _TAIL + _END,
+        r"^(yes|yep|yeah|yup|yuh|ok|okay|sure|alright|alright then|sounds good)" + _TAIL + _END,
+        r"^(approve[d]?|approved|do it|go ahead|ship it|try it|let it try|"
+        r"let it run|let\'?s do it|let\'?s try it|"
+        # 2026-04-22: added proceed / continue / apply / commit /
+        # send it — the owner naturally reached for these and they
+        # fell through to chat, hallucinating about a different id.
+        r"proceed|proceed\s+with\s+it|continue|apply|apply\s+it|"
+        r"commit|commit\s+it|send\s+it|make\s+it\s+happen)" + _TAIL + _END,
+        r"^(absolutely|please do|go for it|green light|you\'?re\s+good)" + _TAIL + _END,
         # Affirmative + explicit id
-        r'^(approve|yes|yeah|do|proceed|apply|commit)\s+(?:with\s+|on\s+)?#?(\d+)'
-            + _TAIL + _END,
-        r'^yes\s+to\s+#?(\d+)' + _TAIL + _END,
+        r"^(approve|yes|yeah|do|proceed|apply|commit)\s+(?:with\s+|on\s+)?#?(\d+)" + _TAIL + _END,
+        r"^yes\s+to\s+#?(\d+)" + _TAIL + _END,
     ]
 
     _NL_REJECT_PATTERNS = [
-        r'^(no|nope|nah|naw|nuh)' + _TAIL + _END,
-        r'^(reject[ed]?|decline[d]?|skip|cancel|pass|abort)' + _TAIL + _END,
-        r'^(don\'?t|do not)\s*(do it|apply|bother)?' + _TAIL + _END,
-        r'^not\s+(that|this)(\s+one)?' + _TAIL + _END,
-        r'^not\s+(now|it|right now)' + _TAIL + _END,
-        r'^(never ?mind|forget it|leave it|hold off|stand down)' + _TAIL + _END,
-        r'^(reject|no|nope|skip|cancel|abort)\s+#?(\d+)' + _TAIL + _END,
-        r'^no\s+to\s+#?(\d+)' + _TAIL + _END,
+        r"^(no|nope|nah|naw|nuh)" + _TAIL + _END,
+        r"^(reject[ed]?|decline[d]?|skip|cancel|pass|abort)" + _TAIL + _END,
+        r"^(don\'?t|do not)\s*(do it|apply|bother)?" + _TAIL + _END,
+        r"^not\s+(that|this)(\s+one)?" + _TAIL + _END,
+        r"^not\s+(now|it|right now)" + _TAIL + _END,
+        r"^(never ?mind|forget it|leave it|hold off|stand down)" + _TAIL + _END,
+        r"^(reject|no|nope|skip|cancel|abort)\s+#?(\d+)" + _TAIL + _END,
+        r"^no\s+to\s+#?(\d+)" + _TAIL + _END,
     ]
 
-    _NL_SHOW_PATTERN = r'^(tell me more|show me|details?|more info|explain|what(\'?s)? (in|that)|show)\s*(about\s+)?#?(\d+)?[\s!.?]*$'
+    _NL_SHOW_PATTERN = r"^(tell me more|show me|details?|more info|explain|what(\'?s)? (in|that)|show)\s*(about\s+)?#?(\d+)?[\s!.?]*$"
 
     # ═════════════════════════════════════════════════════════════════════
     #  Honesty guard (2026-04-15 fake-action-loop bug)
@@ -1779,14 +1830,17 @@ class TelegramVoice:
         """Return validated-but-not-yet-applied candidates, newest first."""
         try:
             from skills.evolution_engine import _rail_conn
+
             with _rail_conn() as conn:
                 rows = conn.execute(
                     "SELECT id, target_file, weakness_description, created_at "
                     "FROM candidates WHERE state='validated' "
                     "ORDER BY id DESC LIMIT 10"
                 ).fetchall()
-            return [{'id': r[0], 'target_file': r[1], 'weakness': r[2],
-                     'created_at': r[3]} for r in rows]
+            return [
+                {"id": r[0], "target_file": r[1], "weakness": r[2], "created_at": r[3]}
+                for r in rows
+            ]
         except Exception as e:
             logger.debug("pending candidates query failed: %s", e)
             return []
@@ -1796,7 +1850,8 @@ class TelegramVoice:
         action is one of: 'approve', 'reject', 'show', or None.
         candidate_id is the explicit id from the message if present, else None."""
         import re as _re
-        stripped = (text or '').strip().lower()
+
+        stripped = (text or "").strip().lower()
         if not stripped or len(stripped) > 80:
             return None, None
 
@@ -1805,20 +1860,20 @@ class TelegramVoice:
             if m:
                 groups = [g for g in m.groups() if g and g.isdigit()]
                 cid = int(groups[0]) if groups else None
-                return 'approve', cid
+                return "approve", cid
 
         for pat in self._NL_REJECT_PATTERNS:
             m = _re.match(pat, stripped)
             if m:
                 groups = [g for g in m.groups() if g and g.isdigit()]
                 cid = int(groups[0]) if groups else None
-                return 'reject', cid
+                return "reject", cid
 
         m = _re.match(self._NL_SHOW_PATTERN, stripped)
         if m:
             groups = [g for g in m.groups() if g and g.isdigit()]
             cid = int(groups[0]) if groups else None
-            return 'show', cid
+            return "show", cid
 
         return None, None
 
@@ -1858,10 +1913,17 @@ class TelegramVoice:
             # 2026-04-18: last-shown binding — if the owner just saw a dream
             # proposal, bare "yes" should bind to it.
             try:
-                chat_id = str(update.effective_chat.id) if update and update.effective_chat else str(self.authorized_user)
+                chat_id = (
+                    str(update.effective_chat.id)
+                    if update and update.effective_chat
+                    else str(self.authorized_user)
+                )
                 last = self._last_shown_proposal.get(chat_id)
-                if (last and last.get("source") == "dream"
-                        and (time.time() - last.get("shown_at", 0)) < self._LAST_SHOWN_FRESHNESS_SEC):
+                if (
+                    last
+                    and last.get("source") == "dream"
+                    and (time.time() - last.get("shown_at", 0)) < self._LAST_SHOWN_FRESHNESS_SEC
+                ):
                     candidate_id = int(last["id"])
                     if candidate_id in pending_ids:
                         target_id = candidate_id
@@ -1871,17 +1933,20 @@ class TelegramVoice:
                         )
             except Exception:
                 pass
-            if target_id is None and action == 'approve':
+            if target_id is None and action == "approve":
                 lc = (text or "").lower()
-                if '#' not in lc and 'proposal' not in lc and 'dream' not in lc:
+                if "#" not in lc and "proposal" not in lc and "dream" not in lc:
                     return False  # bare "yes" without context — let other paths try
             if target_id is None and len(pending_ids) == 1:
                 target_id = next(iter(pending_ids))
             elif target_id is None:
                 # Multiple — disambiguate only if the user clearly asked about proposals.
                 lc2 = (text or "").lower()
-                if 'proposal' in lc2 or 'dream' in lc2:
-                    lines = [f"I have {len(pending_ids)} pending dream/edit proposals — which one?", ""]
+                if "proposal" in lc2 or "dream" in lc2:
+                    lines = [
+                        f"I have {len(pending_ids)} pending dream/edit proposals — which one?",
+                        "",
+                    ]
                     for row in pending_rows[:5]:
                         pid, _created, insight = row
                         snippet = (insight or "")[:80].replace("\n", " ")
@@ -1891,7 +1956,8 @@ class TelegramVoice:
                     # T1.13: dream-proposal insights are LLM-generated;
                     # route through the audit gate before sending.
                     _msg = _audit_telegram_reply(
-                        "\n".join(lines), surface="telegram_dream_list",
+                        "\n".join(lines),
+                        surface="telegram_dream_list",
                     )
                     await update.message.reply_text(_msg)
                     return True
@@ -1920,7 +1986,7 @@ class TelegramVoice:
         ptype = prop.get("proposal_type") or "append"
         loop = asyncio.get_event_loop()
         try:
-            if action == 'approve':
+            if action == "approve":
                 if ptype == "section_replace":
                     ok, msg = await loop.run_in_executor(
                         get_shared_executor(),
@@ -1931,19 +1997,16 @@ class TelegramVoice:
                         get_shared_executor(),
                         lambda: dream.apply_proposal(target_id),
                     )
-            elif action == 'reject':
+            elif action == "reject":
                 ok, msg = await loop.run_in_executor(
-                    get_shared_executor(),
-                    lambda: dream.reject_proposal(target_id)
+                    get_shared_executor(), lambda: dream.reject_proposal(target_id)
                 )
             else:
                 # 'show' action — defer to existing path if applicable
                 return False
         except Exception as e:
             logger.exception("dream proposal dispatch failed")
-            await update.message.reply_text(
-                f"Couldn't process #{target_id}: {e}"
-            )
+            await update.message.reply_text(f"Couldn't process #{target_id}: {e}")
             return True
 
         prefix = "✓" if ok else "✗"
@@ -1977,14 +2040,21 @@ class TelegramVoice:
         # "tell me about #N" on an evolution candidate, a bare "yes"
         # that closely follows that show SHOULD bind to it — that's
         # natural conversation, not a blind queue grab.
-        if action == 'approve' and explicit_id is None:
+        if action == "approve" and explicit_id is None:
             _lc = (text or "").lower()
             bound_from_last_shown = False
             try:
-                chat_id = str(update.effective_chat.id) if update and update.effective_chat else str(self.authorized_user)
+                chat_id = (
+                    str(update.effective_chat.id)
+                    if update and update.effective_chat
+                    else str(self.authorized_user)
+                )
                 last = self._last_shown_proposal.get(chat_id)
-                if (last and last.get("source") == "evolution"
-                        and (time.time() - last.get("shown_at", 0)) < self._LAST_SHOWN_FRESHNESS_SEC):
+                if (
+                    last
+                    and last.get("source") == "evolution"
+                    and (time.time() - last.get("shown_at", 0)) < self._LAST_SHOWN_FRESHNESS_SEC
+                ):
                     explicit_id = int(last["id"])
                     bound_from_last_shown = True
                     logger.info(
@@ -1994,11 +2064,11 @@ class TelegramVoice:
             except Exception:
                 pass
             if not bound_from_last_shown:
-                if '#' not in _lc and 'proposal' not in _lc and 'candidate' not in _lc:
+                if "#" not in _lc and "proposal" not in _lc and "candidate" not in _lc:
                     logger.info(
-                        "proposal intent: bare-approve fell through to chat "
-                        "(pending=%d, text=%r)",
-                        len(pending), (text or "")[:40],
+                        "proposal intent: bare-approve fell through to chat (pending=%d, text=%r)",
+                        len(pending),
+                        (text or "")[:40],
                     )
                     return False
 
@@ -2011,14 +2081,16 @@ class TelegramVoice:
             prev = (preview or "")[:80].replace("\n", " ")
             logger.info(
                 "Telegram reply (proposal intent): branch=%s %s | %s",
-                branch, meta_str, prev,
+                branch,
+                meta_str,
+                prev,
             )
 
         # Resolve which candidate the message refers to
         target_id = explicit_id
         if target_id is None:
             if len(pending) == 1:
-                target_id = pending[0]['id']
+                target_id = pending[0]["id"]
             elif len(pending) > 1:
                 lines = [
                     f"I have {len(pending)} proposals pending — which one do you mean?",
@@ -2027,24 +2099,25 @@ class TelegramVoice:
                 for p in pending[:5]:
                     lines.append(f"  #{p['id']}: {(p['weakness'] or '')[:80]}")
                 lines.append("")
-                lines.append("Reply with the number — e.g. \"yes to 22\" or \"reject #23\".")
+                lines.append('Reply with the number — e.g. "yes to 22" or "reject #23".')
                 # T1.13: proposal weaknesses are LLM-generated;
                 # route through the audit gate before sending.
                 # The presence-of-audit also satisfies the
                 # function-level regression guard for the other
                 # control-flow reply_text sites in this function.
                 msg = _audit_telegram_reply(
-                    "\n".join(lines), surface="telegram_proposal_disambig",
+                    "\n".join(lines),
+                    surface="telegram_proposal_disambig",
                 )
                 _log_out("disambiguation", msg, pending_count=len(pending))
                 await update.message.reply_text(msg)
                 return True
 
         # Verify the candidate exists and is still pending
-        if not any(p['id'] == target_id for p in pending) and target_id is not None:
+        if not any(p["id"] == target_id for p in pending) and target_id is not None:
             msg = (
                 f"I don't see a pending proposal #{target_id}. It may have "
-                f"already been applied or rejected. Say \"status\" to see "
+                f'already been applied or rejected. Say "status" to see '
                 f"what's currently pending."
             )
             _log_out("unknown_candidate", msg, target_id=target_id)
@@ -2053,21 +2126,26 @@ class TelegramVoice:
 
         # Execute the action
         try:
-            if action == 'approve':
+            if action == "approve":
                 from skills.evolution_engine import apply_candidate
+
                 msg = f"OK, applying proposal #{target_id}…"
                 _log_out("approve_start", msg, target_id=target_id)
                 await update.message.reply_text(msg)
                 result = apply_candidate(target_id)
-                if 'error' in result:
+                if "error" in result:
                     msg = (
                         f"Something went wrong applying #{target_id}: "
                         f"{result['error']}\n"
                         f"{'Rolled back. ' if result.get('rolled_back') else ''}"
                         f"Let me know if you want me to try a different proposal."
                     )
-                    _log_out("approve_error", msg, target_id=target_id,
-                             rolled_back=bool(result.get('rolled_back')))
+                    _log_out(
+                        "approve_error",
+                        msg,
+                        target_id=target_id,
+                        rolled_back=bool(result.get("rolled_back")),
+                    )
                     await update.message.reply_text(msg)
                 else:
                     msg = (
@@ -2079,18 +2157,26 @@ class TelegramVoice:
                     await update.message.reply_text(msg)
                 return True
 
-            if action == 'reject':
+            if action == "reject":
                 from skills.evolution_engine import (
-                    _set_candidate_state, _log_evolution, V1_ALLOWED_TARGET,
+                    _set_candidate_state,
+                    _log_evolution,
+                    V1_ALLOWED_TARGET,
                 )
+
                 _set_candidate_state(
-                    target_id, 'rejected',
-                    rejection_reason='manual rejection via natural-language chat',
+                    target_id,
+                    "rejected",
+                    rejection_reason="manual rejection via natural-language chat",
                 )
-                _log_evolution({
-                    'action': 'MANUAL_REJECTION', 'target': V1_ALLOWED_TARGET,
-                    'result': f'candidate {target_id}', 'detail': 'natural_language',
-                })
+                _log_evolution(
+                    {
+                        "action": "MANUAL_REJECTION",
+                        "target": V1_ALLOWED_TARGET,
+                        "result": f"candidate {target_id}",
+                        "detail": "natural_language",
+                    }
+                )
                 msg = (
                     f"Got it — proposal #{target_id} is rejected. I'll leave "
                     f"that one alone and keep an eye out for other things "
@@ -2100,16 +2186,17 @@ class TelegramVoice:
                 await update.message.reply_text(msg)
                 return True
 
-            if action == 'show':
+            if action == "show":
                 from skills.evolution_engine import load_candidate_for_display
+
                 disp = load_candidate_for_display(target_id)
                 if not disp:
                     msg = f"I can't find proposal #{target_id}."
                     _log_out("show_not_found", msg, target_id=target_id)
                     await update.message.reply_text(msg)
                     return True
-                i = disp.get('intent') or {}
-                u = disp.get('usefulness') or {}
+                i = disp.get("intent") or {}
+                u = disp.get("usefulness") or {}
                 lines = [
                     f"\U0001f331 Proposal #{target_id}",
                     "",
@@ -2125,11 +2212,15 @@ class TelegramVoice:
                     f"My confidence: {u.get('overall', 'unknown')}",
                     f"  ({u.get('reasoning', '')[:200]})",
                     "",
-                    f"Reply \"yes\" to apply, \"no\" to reject (or explicit \"yes to #{target_id}\" / \"reject #{target_id}\").",
+                    f'Reply "yes" to apply, "no" to reject (or explicit "yes to #{target_id}" / "reject #{target_id}").',
                 ]
                 # 2026-04-18: record so a later bare "yes" can bind to this.
                 try:
-                    chat_id = str(update.effective_chat.id) if update and update.effective_chat else str(self.authorized_user)
+                    chat_id = (
+                        str(update.effective_chat.id)
+                        if update and update.effective_chat
+                        else str(self.authorized_user)
+                    )
                     self._last_shown_proposal[chat_id] = {
                         "id": int(target_id),
                         "source": "evolution",
@@ -2162,31 +2253,45 @@ class TelegramVoice:
     # today.
 
     _WEB_SEARCH_IMPERATIVE = [
-        r'^\s*(search|google)\s+(the\s+(web|internet|net)\s+for\s+|for\s+|on\s+|)(.{2,200}?)[\s!.?]*$',
-        r'^\s*look\s+up\s+(.{2,200}?)[\s!.?]*$',
-        r'^\s*(find|check)\s+(online|on\s+the\s+internet|on\s+the\s+web)\s+(for\s+|)(.{2,200}?)[\s!.?]*$',
-        r'^\s*check\s+(online|the\s+internet|the\s+web)\s+(for\s+|)(.{2,200}?)[\s!.?]*$',
-        r'^\s*go\s+(search|look\s+up)\s+(.{2,200}?)[\s!.?]*$',
-        r'^\s*can\s+you\s+(search|look\s+up|google|find\s+out\s+about)\s+(.{2,200}?)[\s!.?]*$',
-        r'^\s*please\s+(search|look\s+up|google)\s+(for\s+)?(.{2,200}?)[\s!.?]*$',
+        r"^\s*(search|google)\s+(the\s+(web|internet|net)\s+for\s+|for\s+|on\s+|)(.{2,200}?)[\s!.?]*$",
+        r"^\s*look\s+up\s+(.{2,200}?)[\s!.?]*$",
+        r"^\s*(find|check)\s+(online|on\s+the\s+internet|on\s+the\s+web)\s+(for\s+|)(.{2,200}?)[\s!.?]*$",
+        r"^\s*check\s+(online|the\s+internet|the\s+web)\s+(for\s+|)(.{2,200}?)[\s!.?]*$",
+        r"^\s*go\s+(search|look\s+up)\s+(.{2,200}?)[\s!.?]*$",
+        r"^\s*can\s+you\s+(search|look\s+up|google|find\s+out\s+about)\s+(.{2,200}?)[\s!.?]*$",
+        r"^\s*please\s+(search|look\s+up|google)\s+(for\s+)?(.{2,200}?)[\s!.?]*$",
     ]
 
     # Extract the QUERY from whichever group captured the free text
     def _extract_search_query(self, text: str) -> str | None:
         import re as _re
+
         for pat in self._WEB_SEARCH_IMPERATIVE:
             m = _re.match(pat, text, _re.IGNORECASE)
             if m:
                 # pick the longest captured group that looks like a query
-                candidates = [g for g in m.groups()
-                              if g and len(g.strip()) >= 2 and
-                              g.strip().lower() not in (
-                                  'the', 'a', 'for', 'on', 'web', 'internet',
-                                  'net', 'online', 'the web', 'the internet',
-                                  'the net',
-                              )]
+                candidates = [
+                    g
+                    for g in m.groups()
+                    if g
+                    and len(g.strip()) >= 2
+                    and g.strip().lower()
+                    not in (
+                        "the",
+                        "a",
+                        "for",
+                        "on",
+                        "web",
+                        "internet",
+                        "net",
+                        "online",
+                        "the web",
+                        "the internet",
+                        "the net",
+                    )
+                ]
                 if candidates:
-                    return max(candidates, key=len).strip().rstrip('?.!')
+                    return max(candidates, key=len).strip().rstrip("?.!")
         return None
 
     # 2026-04-16 query derivation (N+2): cache of the machine-context
@@ -2294,6 +2399,7 @@ class TelegramVoice:
         This method owns the Telegram-specific IO: rendering the fire
         message, running web_search, formatting the result card."""
         import time as _time
+
         channel, chat_id = "telegram_text", str(self.authorized_user)
 
         # Grab set_at BEFORE consuming so we can log age on fire
@@ -2301,7 +2407,9 @@ class TelegramVoice:
         set_at = float(pre.get("set_at", 0)) if pre else 0.0
 
         status, offer = self._controller.consume_offer_approval(
-            channel, chat_id, text,
+            channel,
+            chat_id,
+            text,
         )
         if status != "fire" or offer is None:
             return False
@@ -2310,11 +2418,13 @@ class TelegramVoice:
         age = _time.time() - set_at
         logger.info(
             "offer binding: firing pending web_search | query=%r age=%.1fs",
-            query[:80], age,
+            query[:80],
+            age,
         )
 
         try:
             from skills.web_search import search as _web_search
+
             # T1.13: route status text through audit gate so query
             # echoed back is canary-scrubbed and command-guard-checked.
             _status = _audit_telegram_reply(
@@ -2333,20 +2443,23 @@ class TelegramVoice:
 
         if not result.get("success") or not result.get("results"):
             await update.message.reply_text(
-                f"I searched for \"{query}\" but didn't get useful results back. "
+                f'I searched for "{query}" but didn\'t get useful results back. '
                 f"Want to try different phrasing?"
             )
             return True
 
         import re as _re
-        lines = [f"Here's what I found for \"{query}\":", ""]
+
+        lines = [f'Here\'s what I found for "{query}":', ""]
         for i, r in enumerate(result["results"][:5], 1):
             title = _re.sub(r"\s+", " ", (r.get("title") or "").strip())[:90]
-            url   = _re.sub(r"\s+", "",  (r.get("url")   or "").strip())[:120]
-            snip  = _re.sub(r"\s+", " ", (r.get("snippet") or "").strip())[:220]
+            url = _re.sub(r"\s+", "", (r.get("url") or "").strip())[:120]
+            snip = _re.sub(r"\s+", " ", (r.get("snippet") or "").strip())[:220]
             lines.append(f"{i}. {title}")
-            if snip: lines.append(f"   {snip}")
-            if url:  lines.append(f"   {url}")
+            if snip:
+                lines.append(f"   {snip}")
+            if url:
+                lines.append(f"   {url}")
             lines.append("")
         reply = "\n".join(lines).rstrip()
         if len(reply) > 3500:
@@ -2365,6 +2478,7 @@ class TelegramVoice:
 
         try:
             from skills.web_search import search as _web_search
+
             # T1.13: route the query echo through audit so a
             # potential prompt-injection in the query string can't
             # bypass command-guard / canary scrub.
@@ -2377,14 +2491,14 @@ class TelegramVoice:
         except Exception as e:
             logger.error("web_search call failed: %s", e)
             await update.message.reply_text(
-                f"I tried to search the web for \"{query}\" but the search "
+                f'I tried to search the web for "{query}" but the search '
                 f"skill failed ({e}). I'm not going to make up an answer."
             )
             return True
 
-        if not result.get('success') or not result.get('results'):
+        if not result.get("success") or not result.get("results"):
             await update.message.reply_text(
-                f"I searched the web for \"{query}\" but didn't get any "
+                f'I searched the web for "{query}" but didn\'t get any '
                 f"useful results back — either nothing matched, or the "
                 f"search service wasn't reachable. I'm not going to "
                 f"fabricate anything. Want to try a different phrasing?"
@@ -2392,16 +2506,17 @@ class TelegramVoice:
             return True
 
         # Compose a compact human-readable reply
-        lines = [f"Here's what I found for \"{query}\":", ""]
-        for i, r in enumerate(result['results'][:5], 1):
-            title = (r.get('title') or '').strip()
-            url = (r.get('url') or '').strip()
-            snippet = (r.get('snippet') or '').strip()
+        lines = [f'Here\'s what I found for "{query}":', ""]
+        for i, r in enumerate(result["results"][:5], 1):
+            title = (r.get("title") or "").strip()
+            url = (r.get("url") or "").strip()
+            snippet = (r.get("snippet") or "").strip()
             # Clean up whitespace artifacts from the HTML regex fallback
             import re as _re
-            snippet = _re.sub(r'\s+', ' ', snippet)[:220]
-            title = _re.sub(r'\s+', ' ', title)[:90]
-            url = _re.sub(r'\s+', '', url)[:120]
+
+            snippet = _re.sub(r"\s+", " ", snippet)[:220]
+            title = _re.sub(r"\s+", " ", title)[:90]
+            url = _re.sub(r"\s+", "", url)[:120]
             lines.append(f"{i}. {title}")
             if snippet:
                 lines.append(f"   {snippet}")
@@ -2431,6 +2546,25 @@ class TelegramVoice:
         if not user_text:
             return
 
+        _s4_result = guard_owner_text(
+            user_text,
+            surface="telegram_legacy_owner",
+            crisis_signal_writer=PrivateThoughtsCrisisSignalWriter(
+                getattr(getattr(self, "daemon", None), "private_thoughts", None)
+            ),
+        )
+        if _s4_result.matched:
+            mark = getattr(getattr(self, "daemon", None), "_mark_m1_s4_policy", None)
+            if callable(mark):
+                mark(_s4_result.promotion_policy)
+            await update.message.reply_text(
+                _audit_telegram_reply(
+                    _s4_result.answer_text or "",
+                    surface="telegram_clinical_boundary",
+                )
+            )
+            return
+
         camera_answer = self._camera_presence_direct_answer(user_text)
         if camera_answer is not None:
             await update.message.reply_text(
@@ -2450,16 +2584,19 @@ class TelegramVoice:
             from core.infra.capability_gap_detector import (
                 maybe_fire_capability_proposal,
             )
-            asyncio.create_task(asyncio.to_thread(
-                maybe_fire_capability_proposal,
-                user_text,
-                chat_id=str(self.authorized_user),
-                user_id=str(user_id),
-            ))
+
+            asyncio.create_task(
+                asyncio.to_thread(
+                    maybe_fire_capability_proposal,
+                    user_text,
+                    chat_id=str(self.authorized_user),
+                    user_id=str(user_id),
+                )
+            )
         except Exception as _gap_e:
             logger.debug(
-                "gap_detector hook (early, pre-interceptors) "
-                "failed: %s", _gap_e,
+                "gap_detector hook (early, pre-interceptors) failed: %s",
+                _gap_e,
             )
 
         # Interrupt detection — if currently generating, queue and return
@@ -2590,12 +2727,15 @@ class TelegramVoice:
                 from core.infra.capability_gap_detector import (
                     maybe_fire_capability_proposal,
                 )
-                asyncio.create_task(asyncio.to_thread(
-                    maybe_fire_capability_proposal,
-                    user_text,
-                    chat_id=str(self.authorized_user),
-                    user_id=str(user_id),
-                ))
+
+                asyncio.create_task(
+                    asyncio.to_thread(
+                        maybe_fire_capability_proposal,
+                        user_text,
+                        chat_id=str(self.authorized_user),
+                        user_id=str(user_id),
+                    )
+                )
             except Exception as _gap_e:
                 logger.debug(
                     "gap_detector hook (post-message) failed: %s",
@@ -2620,16 +2760,19 @@ class TelegramVoice:
                     from core.infra.capability_gap_detector import (
                         maybe_fire_capability_proposal,
                     )
-                    asyncio.create_task(asyncio.to_thread(
-                        maybe_fire_capability_proposal,
-                        new_text,
-                        chat_id=str(self.authorized_user),
-                        user_id=str(user_id),
-                    ))
+
+                    asyncio.create_task(
+                        asyncio.to_thread(
+                            maybe_fire_capability_proposal,
+                            new_text,
+                            chat_id=str(self.authorized_user),
+                            user_id=str(user_id),
+                        )
+                    )
                 except Exception as _gap_e:
                     logger.debug(
-                        "gap_detector hook (interrupt path) "
-                        "failed: %s", _gap_e,
+                        "gap_detector hook (interrupt path) failed: %s",
+                        _gap_e,
                     )
 
     async def _execute_intent(self, intent: str, update, context) -> str | None:
@@ -2637,15 +2780,21 @@ class TelegramVoice:
         import subprocess as _sp
 
         try:
-            if intent == 'status':
+            if intent == "status":
                 snap = perception_snapshot()
                 gpu = snap.get("gpu") or {}
-                services = _sp.run(
-                    ["systemctl", "is-active", "maez", "maez-web", "nginx", "ollama"],
-                    capture_output=True, text=True, timeout=5,
-                    env=sanitize_env(),
-                ).stdout.strip().split('\n')
-                svc_names = ['maez', 'maez-web', 'nginx', 'ollama']
+                services = (
+                    _sp.run(
+                        ["systemctl", "is-active", "maez", "maez-web", "nginx", "ollama"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        env=sanitize_env(),
+                    )
+                    .stdout.strip()
+                    .split("\n")
+                )
+                svc_names = ["maez", "maez-web", "nginx", "ollama"]
                 svc_str = " | ".join(f"{n}: {s}" for n, s in zip(svc_names, services, strict=False))
                 msg = (
                     f"All systems nominal.\n"
@@ -2658,42 +2807,55 @@ class TelegramVoice:
                 )
                 return msg
 
-            elif intent == 'logs':
+            elif intent == "logs":
                 result = _sp.run(
                     ["tail", "-20", "/home/rohit/maez/logs/maez.log"],
-                    capture_output=True, text=True, timeout=5, env=sanitize_env(),
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    env=sanitize_env(),
                 )
-                errors = [l for l in result.stdout.split('\n') if 'ERROR' in l or 'WARNING' in l]
+                errors = [l for l in result.stdout.split("\n") if "ERROR" in l or "WARNING" in l]
                 if errors:
                     return f"Recent issues ({len(errors)}):\n" + "\n".join(errors[-5:])
                 return "Logs are clean. No errors or warnings in the last 20 lines."
 
-            elif intent == 'restart_maez':
-                return ("I can't restart myself — that would interrupt this conversation. "
-                        "Run `sudo systemctl restart maez` from terminal if needed.")
+            elif intent == "restart_maez":
+                return (
+                    "I can't restart myself — that would interrupt this conversation. "
+                    "Run `sudo systemctl restart maez` from terminal if needed."
+                )
 
-            elif intent == 'claude_status':
+            elif intent == "claude_status":
                 result = _sp.run(
                     ["pgrep", "-a", "claude"],
-                    capture_output=True, text=True, timeout=5, env=sanitize_env(),
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    env=sanitize_env(),
                 )
                 if result.stdout.strip():
-                    lines = result.stdout.strip().split('\n')
+                    lines = result.stdout.strip().split("\n")
                     return f"Claude Code is running ({len(lines)} process{'es' if len(lines) > 1 else ''})."
                 return "Claude Code is not currently running."
 
-            elif intent == 'reboot':
-                return ("System reboot requires explicit approval. "
-                        "Say 'approve reboot' or run `sudo reboot` from terminal.")
+            elif intent == "reboot":
+                return (
+                    "System reboot requires explicit approval. "
+                    "Say 'approve reboot' or run `sudo reboot` from terminal."
+                )
 
-            elif intent == 'disk':
+            elif intent == "disk":
                 result = _sp.run(
                     ["df", "-h", "/", "/home"],
-                    capture_output=True, text=True, timeout=5, env=sanitize_env(),
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    env=sanitize_env(),
                 )
                 return f"Disk usage:\n{result.stdout.strip()}"
 
-            elif intent == 'memory':
+            elif intent == "memory":
                 stats = self.memory.memory_stats()
                 return (
                     f"Memory banks:\n"
@@ -2745,7 +2907,8 @@ class TelegramVoice:
                 )
             except Exception as e:
                 logger.warning(
-                    "failed to surface brain_loop intermediate message: %s", e,
+                    "failed to surface brain_loop intermediate message: %s",
+                    e,
                 )
 
         return _brain_loop.run_brain_loop(
@@ -2771,14 +2934,15 @@ class TelegramVoice:
             if store is None:
                 return None
             from core.pending_cards import AWAITING_STATUSES
+
             cards = store.get_open_for_channel(
                 channel="telegram_text",
                 chat_id=str(self.authorized_user),
             )
             new_awaiting = [
-                c for c in cards
-                if c.status in AWAITING_STATUSES
-                and (c.created_at or 0) >= since_ts
+                c
+                for c in cards
+                if c.status in AWAITING_STATUSES and (c.created_at or 0) >= since_ts
             ]
             if not new_awaiting:
                 return None
@@ -2786,12 +2950,7 @@ class TelegramVoice:
             new_awaiting.sort(key=lambda c: c.created_at or 0, reverse=True)
             c = new_awaiting[0]
             params = getattr(c, "params", None) or {}
-            return (
-                params.get("cmd")
-                or params.get("path")
-                or params.get("query")
-                or None
-            )
+            return params.get("cmd") or params.get("path") or params.get("query") or None
         except Exception as e:
             logger.debug("recovery new-card lookup failed: %s", e)
             return None
@@ -2817,17 +2976,19 @@ class TelegramVoice:
         except Exception as e:
             logger.debug("recovery synthesis llm_client unavailable: %s", e)
             return ""
-        fa = recovery_seed.get('failed_action', '?')
-        fp_str = str(recovery_seed.get('failed_params', {}))[:200]
-        err = str(recovery_seed.get('error', ''))[:400]
-        intent = recovery_seed.get('original_intent', '')
-        depth = int(recovery_seed.get('recovery_depth', 1))
+        fa = recovery_seed.get("failed_action", "?")
+        fp_str = str(recovery_seed.get("failed_params", {}))[:200]
+        err = str(recovery_seed.get("error", ""))[:400]
+        intent = recovery_seed.get("original_intent", "")
+        depth = int(recovery_seed.get("recovery_depth", 1))
         # Deterministic state detection on the recovery transcript. The
         # terminal-state discipline in the recovery seed prompt forces the
         # transcript into exactly one of three recognizable shapes. We tell
         # the synthesis LLM which shape matched so it can't get creative.
         has_pending_card = "⏳" in recovery_transcript
-        has_dead_end = "NO_RECOVERY_FOUND" in recovery_transcript or "recovery_dead_end" in recovery_transcript
+        has_dead_end = (
+            "NO_RECOVERY_FOUND" in recovery_transcript or "recovery_dead_end" in recovery_transcript
+        )
         has_success = "✓" in recovery_transcript and not has_pending_card
 
         # 2026-04-16 fix: only claim a pending card if a real one was
@@ -2914,11 +3075,14 @@ class TelegramVoice:
             resp = _llm_client.chat(
                 model=MODEL,
                 messages=[
-                    {"role": "system",
-                     "content": "You are Maez. Your replies are honest, grounded, and short."},
+                    {
+                        "role": "system",
+                        "content": "You are Maez. Your replies are honest, grounded, and short.",
+                    },
                     {"role": "user", "content": prompt},
                 ],
-                stream=False, think=False,
+                stream=False,
+                think=False,
                 options={"temperature": 0.3, "num_predict": 220},
             )
             return (resp.message.content or "").strip()
@@ -2930,6 +3094,22 @@ class TelegramVoice:
         """Build context, stream response, handle post-processing."""
         import re as _re
         import time as _time
+
+        _s4_result = guard_owner_text(
+            user_text,
+            surface="telegram_legacy_owner",
+            crisis_signal_writer=PrivateThoughtsCrisisSignalWriter(
+                getattr(getattr(self, "daemon", None), "private_thoughts", None)
+            ),
+        )
+        if _s4_result.matched:
+            mark = getattr(getattr(self, "daemon", None), "_mark_m1_s4_policy", None)
+            if callable(mark):
+                mark(_s4_result.promotion_policy)
+            return _audit_telegram_reply(
+                _s4_result.answer_text or "",
+                surface="telegram_clinical_boundary",
+            )
 
         # Tolerant command dispatch. Telegram MarkdownV2 renders `_` as
         # italic, so when Maez emits `/apply_dream 49` the user's copy/
@@ -3009,8 +3189,10 @@ class TelegramVoice:
         from core.cognition.envelope_builder import (
             resolve_recall_cap_chars as _resolve_recall_cap,
         )
+
         memory_block = self.memory.format_for_prompt(
-            recalled, max_chars=_resolve_recall_cap(),
+            recalled,
+            max_chars=_resolve_recall_cap(),
         )
 
         web_context = ""
@@ -3020,7 +3202,7 @@ class TelegramVoice:
                 sr = search_rss(user_text, max_results=5)
             else:
                 sr = web_search(user_text, max_results=3)
-            if sr.get('success'):
+            if sr.get("success"):
                 web_context = web_format(sr)
 
         # Session 11y: Jarvis tool-use loop. Lets the LLM emit TOOL_CALL
@@ -3034,7 +3216,8 @@ class TelegramVoice:
             loop = asyncio.get_running_loop()
             jarvis_block = await loop.run_in_executor(
                 get_shared_executor(),
-                self._run_jarvis_loop, user_text,
+                self._run_jarvis_loop,
+                user_text,
             )
         except Exception as e:
             logger.warning("jarvis loop failed: %s", e)
@@ -3049,7 +3232,8 @@ class TelegramVoice:
             loop = asyncio.get_running_loop()
             next_step = await loop.run_in_executor(
                 get_shared_executor(),
-                self._propose_next_step_from_probe, user_text,
+                self._propose_next_step_from_probe,
+                user_text,
             )
             if next_step:
                 logger.info(
@@ -3112,13 +3296,14 @@ class TelegramVoice:
         if len(self._conversation_thread) > 12:
             try:
                 from core.context_compressor import compress as _compress
+
                 self._conversation_thread = _compress(
-                    self._conversation_thread, keep_tail_n=12,
+                    self._conversation_thread,
+                    keep_tail_n=12,
                 )
             except Exception as _ce:
                 # Fail-safe: behave exactly as before on any unexpected error.
-                logger.debug("context_compressor failed, falling back to "
-                             "plain truncation: %s", _ce)
+                logger.debug("context_compressor failed, falling back to plain truncation: %s", _ce)
                 self._conversation_thread = self._conversation_thread[-12:]
 
         # Build the final user message. The Jarvis transcript MUST be
@@ -3355,6 +3540,7 @@ class TelegramVoice:
         _jarvis_system_prompt = self.system_prompt
         try:
             from core.capability_registry import prompt_snippet as _cap_snippet
+
             _jarvis_system_prompt += "\n\n" + _cap_snippet()
         except Exception:
             pass
@@ -3373,6 +3559,7 @@ class TelegramVoice:
             from core.safety.audit_signal_manifest import (
                 default_audit_signals as _default_signals,
             )
+
             _sp, _sa = _default_signals("telegram_text")
             _evidence_envelope = _build_envelope(
                 ledger_db_path=_default_ledger_db(),
@@ -3384,7 +3571,8 @@ class TelegramVoice:
         except Exception as _env_exc:
             logger.warning(
                 "evidence_envelope build failed for telegram_text "
-                "(continuing without envelope): %s", _env_exc,
+                "(continuing without envelope): %s",
+                _env_exc,
             )
             _evidence_envelope = None
             _envelope_block = ""
@@ -3411,9 +3599,7 @@ class TelegramVoice:
         _telegram_audit_ran = False
         _telegram_audit_changed = False
         try:
-            await context.bot.send_chat_action(
-                chat_id=update.effective_chat.id, action="typing"
-            )
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
             full_reply = ""
 
@@ -3424,21 +3610,33 @@ class TelegramVoice:
                     pass
 
             from core import llm_client as _llm_client
+
             resp = _llm_client.chat(
-                model=MODEL, messages=messages,
-                stream=False, think=False,
+                model=MODEL,
+                messages=messages,
+                stream=False,
+                think=False,
                 options={"temperature": 0.5, "num_predict": 600},
             )
             full_reply = (resp.message.content or "").strip()
             # Strip grounding block echoes if model reflected them back
             full_reply = _re.sub(
-                r'\[WHAT HAPPENED THIS TURN.*?\]\s*', '', full_reply, flags=_re.DOTALL,
+                r"\[WHAT HAPPENED THIS TURN.*?\]\s*",
+                "",
+                full_reply,
+                flags=_re.DOTALL,
             ).strip()
             full_reply = _re.sub(
-                r'\[JARVIS TRANSCRIPT.*?\]\s*', '', full_reply, flags=_re.DOTALL,
+                r"\[JARVIS TRANSCRIPT.*?\]\s*",
+                "",
+                full_reply,
+                flags=_re.DOTALL,
             ).strip()
             full_reply = _re.sub(
-                r'\[\d{4}-\d{2}-\d{2}.*?##.*?\n.*?\n.*?\n', '', full_reply, flags=_re.DOTALL,
+                r"\[\d{4}-\d{2}-\d{2}.*?##.*?\n.*?\n.*?\n",
+                "",
+                full_reply,
+                flags=_re.DOTALL,
             ).strip()
             full_reply = full_reply or "(no response)"
             # Structural self-claim audit — catches the Maelstrom-class
@@ -3446,17 +3644,16 @@ class TelegramVoice:
             # missing audit (only dialog/terminal/fallback replies were
             # audited), which is why the 2026-04-19 "Maelstrom merge"
             # turns escaped on this surface. Silent on audit failure.
-            reply, _telegram_audit_ran, _telegram_audit_changed = (
-                _audit_telegram_reply_with_status(
-                    full_reply,
-                    surface="telegram_text",
-                    evidence_envelope=_evidence_envelope,
-                )
+            reply, _telegram_audit_ran, _telegram_audit_changed = _audit_telegram_reply_with_status(
+                full_reply,
+                surface="telegram_text",
+                evidence_envelope=_evidence_envelope,
             )
 
             for part in split_long_message(reply):
                 await context.bot.send_message(
-                    chat_id=update.effective_chat.id, text=part,
+                    chat_id=update.effective_chat.id,
+                    text=part,
                 )
                 if len(split_long_message(reply)) > 1:
                     await asyncio.sleep(0.3)
@@ -3473,7 +3670,8 @@ class TelegramVoice:
             # success path. Mirror of the b672a2d (T1.13)
             # audit-routing pattern.
             reply = _audit_telegram_reply(
-                full_reply, surface="telegram_text",
+                full_reply,
+                surface="telegram_text",
                 evidence_envelope=_evidence_envelope,
             )
             await update.message.reply_text(reply)
@@ -3488,13 +3686,15 @@ class TelegramVoice:
         _channel, _chat_id = "telegram_text", str(self.authorized_user)
         _raw = (self._last_actionable_user_text or user_text or "").strip()
         self._controller.maybe_store_offer(
-            _channel, _chat_id,
+            _channel,
+            _chat_id,
             reply=full_reply or "",
             raw_user_text=_raw,
             query_deriver=self._derive_search_query,
         )
         self._controller.maybe_store_probe_bridge_offer(
-            _channel, _chat_id,
+            _channel,
+            _chat_id,
             reply=full_reply or "",
             raw_user_text=_raw,
             query_deriver=self._derive_search_query,
@@ -3523,6 +3723,7 @@ class TelegramVoice:
         from core.ledger.model_reply_persistence_warning import (
             warn_model_reply_persistence_skip,
         )
+
         try:
             from core.ledger.model_reply_persistence import (
                 build_model_reply_audit_verdict,
@@ -3589,18 +3790,24 @@ class TelegramVoice:
         user_lower = user_text.lower()
 
         intent_phrases = [
-            'i am proceeding', 'i will proceed', 'proceeding now',
-            'executing now', 'i will now', 'i will run',
-            'let me execute', 'i will execute', 'running now',
-            'i am moving', 'i will move',
+            "i am proceeding",
+            "i will proceed",
+            "proceeding now",
+            "executing now",
+            "i will now",
+            "i will run",
+            "let me execute",
+            "i will execute",
+            "running now",
+            "i am moving",
+            "i will move",
         ]
         has_intent = any(p in reply_lower for p in intent_phrases)
         if not has_intent:
             return
 
         # Ollama model move
-        if ('ollama' in user_lower and
-                any(w in user_lower for w in ['move', 'symlink', 'relocate'])):
+        if "ollama" in user_lower and any(w in user_lower for w in ["move", "symlink", "relocate"]):
             logger.info("Queueing Ollama model move action")
             self.actions.queue_action(
                 "run_readonly_command",
@@ -3611,20 +3818,22 @@ class TelegramVoice:
             return
 
         # Disk cleanup
-        if any(w in user_lower for w in ['clean', 'cleanup', 'free space', 'clear']):
+        if any(w in user_lower for w in ["clean", "cleanup", "free space", "clear"]):
             logger.info("Queueing disk cleanup action")
             from skills.disk_cleanup import scan
+
             report = scan()
-            if report['total_bytes'] > 0:
+            if report["total_bytes"] > 0:
                 self.actions.queue_action(
-                    "clean_temp_files", {},
-                    f"Disk cleanup requested by the owner — {report['total_bytes'] / (1024*1024):.0f} MB to free",
+                    "clean_temp_files",
+                    {},
+                    f"Disk cleanup requested by the owner — {report['total_bytes'] / (1024 * 1024):.0f} MB to free",
                     tier=1,
                 )
             return
 
         # Generic command execution
-        if any(w in user_lower for w in ['run', 'execute', 'check']):
+        if any(w in user_lower for w in ["run", "execute", "check"]):
             logger.info("Action intent detected but no specific handler matched")
             return
 
@@ -3705,6 +3914,7 @@ class TelegramVoice:
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         from skills.git_awareness import get_summary_for_telegram
+
         msg = get_summary_for_telegram()
         await update.message.reply_text(msg)
 
@@ -3712,6 +3922,7 @@ class TelegramVoice:
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         from skills.disk_cleanup import scan, format_telegram_message
+
         report = scan()
         self._pending_cleanup = report
         await update.message.reply_text(format_telegram_message(report))
@@ -3720,19 +3931,20 @@ class TelegramVoice:
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         from skills.self_analysis import analyze, format_for_telegram
+
         result = analyze(self.memory, self.actions)
         await update.message.reply_text(format_for_telegram(result))
 
     async def _handle_approve_cleanup(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
-        if hasattr(self, '_pending_cleanup') and self._pending_cleanup:
+        if hasattr(self, "_pending_cleanup") and self._pending_cleanup:
             from skills.disk_cleanup import execute_cleanup
+
             result = execute_cleanup(self._pending_cleanup)
             self._pending_cleanup = None
             await update.message.reply_text(
-                f"Cleanup done. Freed {result['freed_mb']:.0f} MB.\n" +
-                "\n".join(result['results'])
+                f"Cleanup done. Freed {result['freed_mb']:.0f} MB.\n" + "\n".join(result["results"])
             )
         else:
             await update.message.reply_text("No pending cleanup.")
@@ -3752,13 +3964,14 @@ class TelegramVoice:
             await update.message.reply_text("Tier must be 0-3")
             return
         from skills.user_accounts import UserAccounts, _default_share_config
+
         accts = UserAccounts()
         user = accts.get_by_username(username) or accts.get_by_display_name(username)
         if not user:
             await update.message.reply_text(f"No user found: '{username}'")
             return
         share_config = _default_share_config(tier, relationship)
-        accts.confirm_user(user['uuid'], relationship, tier, share_config)
+        accts.confirm_user(user["uuid"], relationship, tier, share_config)
         await update.message.reply_text(
             f"Got it. {user['display_name']} is your {relationship}. "
             f"Trust tier {tier}. I'll adjust what I share with them."
@@ -3771,11 +3984,11 @@ class TelegramVoice:
         args = context.args
         if not args or len(args) != 2:
             await update.message.reply_text(
-                "Usage: /login <username> <password>\n"
-                "Register first at http://64.85.211.140:11437"
+                "Usage: /login <username> <password>\nRegister first at http://64.85.211.140:11437"
             )
             return
         from skills.user_accounts import UserAccounts
+
         accts = UserAccounts()
         result = accts.login(args[0], args[1])
         if not result:
@@ -3783,11 +3996,13 @@ class TelegramVoice:
             return
         telegram_id = str(update.effective_user.id)
         if update.effective_user.id == self.authorized_user:
-            accts.link_private_owner(result['uuid'])
+            accts.link_private_owner(result["uuid"])
         else:
-            accts.link_telegram(result['uuid'], telegram_id)
-        display = result.get('display_name') or args[0]
-        await update.message.reply_text(f"Linked. I know you as {display} now, across all channels.")
+            accts.link_telegram(result["uuid"], telegram_id)
+        display = result.get("display_name") or args[0]
+        await update.message.reply_text(
+            f"Linked. I know you as {display} now, across all channels."
+        )
 
     async def _handle_promote(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /promote <action_type> — lower tier for trusted action type."""
@@ -3798,6 +4013,7 @@ class TelegramVoice:
             return
         action_type = context.args[0]
         from core.action_engine import ACTION_TIERS
+
         if action_type not in ACTION_TIERS:
             await update.message.reply_text(f"Unknown action type: {action_type}")
             return
@@ -3814,12 +4030,14 @@ class TelegramVoice:
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         import json as _json
-        pending_path = '/home/rohit/maez/evolution/pending_evolution.json'
+
+        pending_path = "/home/rohit/maez/evolution/pending_evolution.json"
         if os.path.exists(pending_path):
             with open(pending_path) as f:
                 pending = _json.load(f)
             from skills.evolution_engine import deploy_improvement
-            ok = deploy_improvement(pending['staging_file'], pending['target_file'])
+
+            ok = deploy_improvement(pending["staging_file"], pending["target_file"])
             os.remove(pending_path)
             await update.message.reply_text("Evolution deployed." if ok else "Deployment failed.")
         else:
@@ -3828,7 +4046,7 @@ class TelegramVoice:
     async def _handle_reject_evolution(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
-        pending_path = '/home/rohit/maez/evolution/pending_evolution.json'
+        pending_path = "/home/rohit/maez/evolution/pending_evolution.json"
         if os.path.exists(pending_path):
             os.remove(pending_path)
             await update.message.reply_text("Evolution discarded.")
@@ -3838,11 +4056,11 @@ class TelegramVoice:
     async def _handle_evolution_log(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
-        log_path = '/home/rohit/maez/logs/evolution.log'
+        log_path = "/home/rohit/maez/logs/evolution.log"
         try:
             with open(log_path) as f:
                 lines = f.readlines()
-            last = ''.join(lines[-10:]) if lines else "Empty"
+            last = "".join(lines[-10:]) if lines else "Empty"
             await update.message.reply_text(f"Evolution log:\n{last}")
         except Exception:
             await update.message.reply_text("No evolution log yet.")
@@ -3873,9 +4091,7 @@ class TelegramVoice:
             lines.append(f"  `/apply_dream {pid}`  ·  `/reject_dream {pid}`")
             lines.append("")
         body = "\n".join(lines)
-        await update.message.reply_text(
-            _audit_telegram_reply(body, surface="telegram/dreams")
-        )
+        await update.message.reply_text(_audit_telegram_reply(body, surface="telegram/dreams"))
 
     async def _handle_apply_dream(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Apply a dream proposal: append to soul.md via action_engine."""
@@ -3924,9 +4140,7 @@ class TelegramVoice:
         await update.message.reply_text(f"{prefix} {msg}")
 
     # ── Session 11s: soul section-edit command handlers ───────────
-    async def _handle_edit_proposals(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ):
+    async def _handle_edit_proposals(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show pending soul.md section-edit proposals."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
@@ -3934,9 +4148,7 @@ class TelegramVoice:
             await update.message.reply_text("Dream state not available.")
             return
         try:
-            pending = self.daemon.dream.list_pending(
-                proposal_type="section_replace"
-            )
+            pending = self.daemon.dream.list_pending(proposal_type="section_replace")
         except Exception as e:
             await update.message.reply_text(f"list_pending failed: {e}")
             return
@@ -3950,18 +4162,14 @@ class TelegramVoice:
             target = prop.get("target_section") or "?"
             lines.append(f"#{pid} ({created_iso}) → ## {target}")
             lines.append(f"  {snippet}")
-            lines.append(
-                f"  /show_edit {pid}  ·  /apply_edit {pid}  ·  /reject_edit {pid}"
-            )
+            lines.append(f"  /show_edit {pid}  ·  /apply_edit {pid}  ·  /reject_edit {pid}")
             lines.append("")
         body = "\n".join(lines)
         await update.message.reply_text(
             _audit_telegram_reply(body, surface="telegram/edit_proposals")
         )
 
-    async def _handle_show_edit(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ):
+    async def _handle_show_edit(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show the unified diff for a pending section-edit proposal."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
@@ -3982,8 +4190,7 @@ class TelegramVoice:
             return
         if prop.get("proposal_type") != "section_replace":
             await update.message.reply_text(
-                f"#{prop_id} is type {prop.get('proposal_type')!r}, "
-                f"not section_replace."
+                f"#{prop_id} is type {prop.get('proposal_type')!r}, not section_replace."
             )
             return
         target = prop.get("target_section") or "?"
@@ -3998,13 +4205,9 @@ class TelegramVoice:
             f"```\n{diff}\n```\n\n"
             f"/apply_edit {prop_id}  ·  /reject_edit {prop_id}"
         )
-        await update.message.reply_text(
-            _audit_telegram_reply(body, surface="telegram/show_edit")
-        )
+        await update.message.reply_text(_audit_telegram_reply(body, surface="telegram/show_edit"))
 
-    async def _handle_apply_edit(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ):
+    async def _handle_apply_edit(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Apply a soul.md section-edit proposal."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
@@ -4027,9 +4230,7 @@ class TelegramVoice:
         prefix = "✓" if ok else "✗"
         await update.message.reply_text(f"{prefix} {msg}")
 
-    async def _handle_reject_edit(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ):
+    async def _handle_reject_edit(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Reject a soul.md section-edit proposal (soul.md unchanged)."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
@@ -4053,9 +4254,7 @@ class TelegramVoice:
         await update.message.reply_text(f"{prefix} {msg}")
 
     # ── Session 11u: training proposal + adapter management commands ──
-    async def _handle_train_proposals(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ):
+    async def _handle_train_proposals(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show pending training-run proposals."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
@@ -4063,9 +4262,7 @@ class TelegramVoice:
             await update.message.reply_text("Dream state not available.")
             return
         try:
-            pending = self.daemon.dream.list_pending(
-                proposal_type="training_run"
-            )
+            pending = self.daemon.dream.list_pending(proposal_type="training_run")
         except Exception as e:
             await update.message.reply_text(f"list_pending failed: {e}")
             return
@@ -4080,18 +4277,14 @@ class TelegramVoice:
             lines.append(f"#{pid} ({created_iso})")
             lines.append(f"  {snippet}")
             lines.append(f"  Corpus: {corpus}")
-            lines.append(
-                f"  /show_train {pid}  ·  /approve_train {pid}  ·  /reject_train {pid}"
-            )
+            lines.append(f"  /show_train {pid}  ·  /approve_train {pid}  ·  /reject_train {pid}")
             lines.append("")
         body = "\n".join(lines)
         await update.message.reply_text(
             _audit_telegram_reply(body, surface="telegram/train_proposals")
         )
 
-    async def _handle_show_train(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ):
+    async def _handle_show_train(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show details of a training proposal."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
@@ -4123,13 +4316,9 @@ class TelegramVoice:
             f"Status: {prop.get('status', '?')}\n\n"
             f"/approve_train {prop_id}  ·  /reject_train {prop_id}"
         )
-        await update.message.reply_text(
-            _audit_telegram_reply(body, surface="telegram/show_train")
-        )
+        await update.message.reply_text(_audit_telegram_reply(body, surface="telegram/show_train"))
 
-    async def _handle_approve_train(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ):
+    async def _handle_approve_train(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Mark a training proposal as approved."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
@@ -4153,19 +4342,15 @@ class TelegramVoice:
             return
         with self.daemon.dream._lock, self.daemon.dream._conn() as c:
             c.execute(
-                "UPDATE dream_proposals SET status = 'applied', "
-                "applied_at = ? WHERE id = ?",
+                "UPDATE dream_proposals SET status = 'applied', applied_at = ? WHERE id = ?",
                 (time.time(), prop_id),
             )
             c.commit()
         await update.message.reply_text(
-            f"✓ Training #{prop_id} approved. Run the training pipeline "
-            f"manually to execute."
+            f"✓ Training #{prop_id} approved. Run the training pipeline manually to execute."
         )
 
-    async def _handle_reject_train(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ):
+    async def _handle_reject_train(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Reject a training proposal."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
@@ -4188,13 +4373,12 @@ class TelegramVoice:
         prefix = "✓" if ok else "✗"
         await update.message.reply_text(f"{prefix} {msg}")
 
-    async def _handle_adapter_status(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ):
+    async def _handle_adapter_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show current adapter info."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         import json as _json
+
         adapter_link = Path("/home/rohit/maez/training/runs/current")
         if not adapter_link.exists():
             await update.message.reply_text("No adapter promoted (no 'current' symlink).")
@@ -4218,9 +4402,7 @@ class TelegramVoice:
             body = f"📊 Current adapter: {target.name} (no summary.json)"
         await update.message.reply_text(body)
 
-    async def _handle_rollback_adapter(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ):
+    async def _handle_rollback_adapter(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Roll back to the previous adapter version."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
@@ -4231,13 +4413,22 @@ class TelegramVoice:
             return
         current_target = current_link.resolve().name
         run_dirs = sorted(
-            [d for d in runs_dir.iterdir() if d.is_dir() and d.name != "current"
-             and d.name != "sanity" and d.name != "sanity-31b" and d.name != "sanity-26b"
-             and (d / "adapter.gguf").exists()],
+            [
+                d
+                for d in runs_dir.iterdir()
+                if d.is_dir()
+                and d.name != "current"
+                and d.name != "sanity"
+                and d.name != "sanity-31b"
+                and d.name != "sanity-26b"
+                and (d / "adapter.gguf").exists()
+            ],
             key=lambda d: d.name,
         )
         if len(run_dirs) < 2:
-            await update.message.reply_text("Only one adapter version exists — nothing to roll back to.")
+            await update.message.reply_text(
+                "Only one adapter version exists — nothing to roll back to."
+            )
             return
         current_idx = next((i for i, d in enumerate(run_dirs) if d.name == current_target), -1)
         if current_idx <= 0:
@@ -4260,6 +4451,7 @@ class TelegramVoice:
         try:
             from skills.evolution_engine import _rail_conn
             import json as _json
+
             with _rail_conn() as conn:
                 rows = conn.execute(
                     "SELECT id, state, weakness_description, cognition_evidence "
@@ -4272,15 +4464,19 @@ class TelegramVoice:
             for r in rows:
                 ev = {}
                 try:
-                    ev = _json.loads(r[3] or '{}')
+                    ev = _json.loads(r[3] or "{}")
                 except Exception:
                     pass
-                u = ev.get('usefulness', {}).get('overall', '?')
-                emoji = {'strong': '\u2705', 'acceptable': '\u26a0\ufe0f',
-                         'weak': '\u274c', 'unknown': '\u26aa'}.get(u, '')
-                w = (r[2] or '')[:60]
+                u = ev.get("usefulness", {}).get("overall", "?")
+                emoji = {
+                    "strong": "\u2705",
+                    "acceptable": "\u26a0\ufe0f",
+                    "weak": "\u274c",
+                    "unknown": "\u26aa",
+                }.get(u, "")
+                w = (r[2] or "")[:60]
                 lines.append(f"  [{r[0]}] {r[1]:11s} {emoji} {u:10s} {w}")
-            body = '\n'.join(lines)
+            body = "\n".join(lines)
             await update.message.reply_text(
                 _audit_telegram_reply(body, surface="telegram/proposals")
             )
@@ -4297,13 +4493,14 @@ class TelegramVoice:
         try:
             cid = int(context.args[0])
             from skills.evolution_engine import load_candidate_for_display
+
             disp = load_candidate_for_display(cid)
             if not disp:
                 await update.message.reply_text(f"Candidate {cid} not found")
                 return
-            u = disp['usefulness']
-            intent = disp.get('intent') or {}
-            ev = disp.get('evidence') or {}
+            u = disp["usefulness"]
+            intent = disp.get("intent") or {}
+            ev = disp.get("evidence") or {}
             lines = [
                 f"Candidate {cid} \u2014 {disp['state']} \u2014 {u.get('overall')}",
                 f"Weakness: {disp['weakness'][:200]}",
@@ -4317,10 +4514,8 @@ class TelegramVoice:
                 f"Direction sane:  {u.get('direction_sane')}",
                 f"Change minimal:  {u.get('change_minimal')}",
             ]
-            body = '\n'.join(lines)
-            await update.message.reply_text(
-                _audit_telegram_reply(body, surface="telegram/show")
-            )
+            body = "\n".join(lines)
+            await update.message.reply_text(_audit_telegram_reply(body, surface="telegram/show"))
         except Exception as e:
             await update.message.reply_text(f"Error: {e}")
 
@@ -4334,9 +4529,10 @@ class TelegramVoice:
         try:
             cid = int(context.args[0])
             from skills.evolution_engine import apply_candidate
+
             await update.message.reply_text(f"Applying candidate {cid}...")
             result = apply_candidate(cid)
-            if 'error' in result:
+            if "error" in result:
                 await update.message.reply_text(
                     f"Apply failed: {result['error']}\n"
                     f"Rolled back: {result.get('rolled_back', False)} "
@@ -4360,15 +4556,26 @@ class TelegramVoice:
             return
         try:
             cid = int(context.args[0])
-            from skills.evolution_engine import _rail_conn, _set_candidate_state, _log_evolution, V1_ALLOWED_TARGET
+            from skills.evolution_engine import (
+                _rail_conn,
+                _set_candidate_state,
+                _log_evolution,
+                V1_ALLOWED_TARGET,
+            )
+
             with _rail_conn() as conn:
                 row = conn.execute("SELECT state FROM candidates WHERE id=?", (cid,)).fetchone()
             if not row:
                 await update.message.reply_text(f"Candidate {cid} not found")
                 return
-            _set_candidate_state(cid, 'rejected', rejection_reason='manual rejection via Telegram')
-            _log_evolution({'action': 'MANUAL_REJECTION', 'target': V1_ALLOWED_TARGET,
-                            'result': f'candidate {cid}'})
+            _set_candidate_state(cid, "rejected", rejection_reason="manual rejection via Telegram")
+            _log_evolution(
+                {
+                    "action": "MANUAL_REJECTION",
+                    "target": V1_ALLOWED_TARGET,
+                    "result": f"candidate {cid}",
+                }
+            )
             await update.message.reply_text(f"Candidate {cid} rejected (was: {row[0]})")
         except Exception as e:
             await update.message.reply_text(f"Error: {e}")
@@ -4379,9 +4586,13 @@ class TelegramVoice:
             return
         try:
             from core.cognition_quality import (
-                _recent_scores, _recent_topics, _recent_labels, get_behavior_policy,
+                _recent_scores,
+                _recent_topics,
+                _recent_labels,
+                get_behavior_policy,
             )
             import collections as _cc
+
             window = min(len(_recent_scores), 10)
             if window == 0:
                 await update.message.reply_text("No cognition data yet.")
@@ -4393,9 +4604,12 @@ class TelegramVoice:
             tc = _cc.Counter(topics)
             dominant_topic, dom_count = tc.most_common(1)[0]
             flat = [l for ll in labels_window for l in ll]
-            neg = {k: v for k, v in _cc.Counter(flat).items()
-                   if k in ('fixation', 'vague', 'baseline', 'repetition')}
-            failure = max(neg, key=neg.get) if neg else 'none'
+            neg = {
+                k: v
+                for k, v in _cc.Counter(flat).items()
+                if k in ("fixation", "vague", "baseline", "repetition")
+            }
+            failure = max(neg, key=neg.get) if neg else "none"
             streak = 0
             for t in reversed(topics):
                 if t == dominant_topic:
@@ -4403,7 +4617,7 @@ class TelegramVoice:
                 else:
                     break
             policy = get_behavior_policy()
-            mode = policy.get('reflection_mode', 'normal')
+            mode = policy.get("reflection_mode", "normal")
             lines = [
                 "Cognition snapshot:",
                 f"  Last 10 scores: {scores}",
@@ -4413,7 +4627,7 @@ class TelegramVoice:
                 f"  Fixation streak: {streak}",
                 f"  Policy mode:    {mode}",
             ]
-            await update.message.reply_text('\n'.join(lines))
+            await update.message.reply_text("\n".join(lines))
         except Exception as e:
             await update.message.reply_text(f"Error: {e}")
 
@@ -4508,11 +4722,7 @@ class TelegramVoice:
         """Write the shared state file. Matches the CLI format exactly."""
         state_file = self._builder_state_file()
         state_file.parent.mkdir(parents=True, exist_ok=True)
-        content = (
-            f"{session_id}\n"
-            f"reason={reason}\n"
-            f"opened_at={opened_at}\n"
-        )
+        content = f"{session_id}\nreason={reason}\nopened_at={opened_at}\n"
         state_file.write_text(content)
 
     def _builder_clear_state(self) -> None:
@@ -4522,9 +4732,7 @@ class TelegramVoice:
         except FileNotFoundError:
             pass
 
-    async def _handle_builder_enter(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ):
+    async def _handle_builder_enter(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Enter builder mode from Telegram. Usage: /builder_enter <reason>"""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
@@ -4534,9 +4742,7 @@ class TelegramVoice:
         reason = " ".join(reason_parts).strip()
         if not reason:
             await update.message.reply_text(
-                "Usage: /builder_enter <reason>\n"
-                "\n"
-                "Example: /builder_enter rewriting sudo handling"
+                "Usage: /builder_enter <reason>\n\nExample: /builder_enter rewriting sudo handling"
             )
             return
 
@@ -4565,6 +4771,7 @@ class TelegramVoice:
         # Open the session via the existing AuditLog API
         try:
             from core.audit_log import AuditLog, DIRECT_EDIT_SOURCE_TELEGRAM
+
             audit = AuditLog()
             session_id = audit.start_direct_edit_session(
                 reason=reason,
@@ -4588,9 +4795,7 @@ class TelegramVoice:
             "reasoning cycle."
         )
 
-    async def _handle_builder_exit(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ):
+    async def _handle_builder_exit(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Exit builder mode from Telegram. Usage: /builder_exit"""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
@@ -4626,6 +4831,7 @@ class TelegramVoice:
         try:
             from core.audit_log import AuditLog
             from core.builder_mode_capture import capture_session_end_diff
+
             audit = AuditLog()
             repo_root = Path("/home/rohit/maez")
             diff_logged = capture_session_end_diff(
@@ -4656,32 +4862,32 @@ class TelegramVoice:
         """Register bot commands and menu button for the private chat."""
         try:
             commands = [
-                BotCommand("status",    "System and cognition summary"),
-                BotCommand("git",       "Git repo state"),
-                BotCommand("disk",      "Disk usage summary"),
-                BotCommand("analyze",   "Cognition snapshot"),
+                BotCommand("status", "System and cognition summary"),
+                BotCommand("git", "Git repo state"),
+                BotCommand("disk", "Disk usage summary"),
+                BotCommand("analyze", "Cognition snapshot"),
                 BotCommand("proposals", "Last 5 proposal candidates"),
-                BotCommand("show",      "Show candidate by id"),
-                BotCommand("apply",     "Apply candidate by id"),
-                BotCommand("reject",    "Reject candidate by id"),
-                BotCommand("dreams",       "Pending dream insights"),
-                BotCommand("apply_dream",  "Apply dream insight by id"),
+                BotCommand("show", "Show candidate by id"),
+                BotCommand("apply", "Apply candidate by id"),
+                BotCommand("reject", "Reject candidate by id"),
+                BotCommand("dreams", "Pending dream insights"),
+                BotCommand("apply_dream", "Apply dream insight by id"),
                 BotCommand("reject_dream", "Reject dream insight by id"),
                 BotCommand("edit_proposals", "Pending soul section edits"),
-                BotCommand("show_edit",    "Show soul edit diff by id"),
-                BotCommand("apply_edit",   "Apply soul section edit by id"),
-                BotCommand("reject_edit",  "Reject soul section edit by id"),
+                BotCommand("show_edit", "Show soul edit diff by id"),
+                BotCommand("apply_edit", "Apply soul section edit by id"),
+                BotCommand("reject_edit", "Reject soul section edit by id"),
                 BotCommand("train_proposals", "Pending training proposals"),
                 BotCommand("approve_train", "Approve training proposal"),
                 BotCommand("reject_train", "Reject training proposal"),
                 BotCommand("adapter_status", "Current adapter info"),
                 BotCommand("rollback_adapter", "Roll back to previous adapter"),
-                BotCommand("pending",   "Pending actions"),
-                BotCommand("trust",     "Trust user"),
-                BotCommand("promote",   "Promote action type"),
+                BotCommand("pending", "Pending actions"),
+                BotCommand("trust", "Trust user"),
+                BotCommand("promote", "Promote action type"),
                 BotCommand("builder_enter", "Enter builder mode (reason required)"),
-                BotCommand("builder_exit",  "Exit the active builder-mode session"),
-                BotCommand("help",      "Grouped command list"),
+                BotCommand("builder_exit", "Exit the active builder-mode session"),
+                BotCommand("help", "Grouped command list"),
             ]
             await self._app.bot.set_my_commands(
                 commands,
@@ -4738,7 +4944,7 @@ class TelegramVoice:
         self._app.add_handler(CommandHandler("rollback_adapter", self._handle_rollback_adapter))
         # A-core #3 Step 4: builder-mode commands
         self._app.add_handler(CommandHandler("builder_enter", self._handle_builder_enter))
-        self._app.add_handler(CommandHandler("builder_exit",  self._handle_builder_exit))
+        self._app.add_handler(CommandHandler("builder_exit", self._handle_builder_exit))
         self._app.add_handler(CommandHandler("help", self._handle_help))
         self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
 
@@ -4754,6 +4960,7 @@ class TelegramVoice:
         # reverts to the pre-migration behavior where this class
         # owns polling and handles all inbound.
         import os as _os
+
         _v2_disabled = _os.environ.get("MAEZ_DISABLE_SURFACE_V2") == "1"
 
         if not _v2_disabled:
@@ -4764,16 +4971,12 @@ class TelegramVoice:
             self._loop.run_forever()
             return
 
-        logger.warning(
-            "MAEZ_DISABLE_SURFACE_V2=1 — falling back to legacy polling"
-        )
+        logger.warning("MAEZ_DISABLE_SURFACE_V2=1 — falling back to legacy polling")
         self._loop.run_until_complete(self._app.initialize())
         self._loop.run_until_complete(self._app.start())
         # Register bot command menu before polling starts
         self._loop.run_until_complete(self._configure_bot_commands())
-        self._loop.run_until_complete(
-            self._app.updater.start_polling(drop_pending_updates=True)
-        )
+        self._loop.run_until_complete(self._app.updater.start_polling(drop_pending_updates=True))
         self._loop.run_forever()
 
     def start(self):
@@ -4837,6 +5040,7 @@ class TelegramVoice:
 
         async def _send_all():
             import asyncio as _a
+
             bot = Bot(token=self.token)
             for i, part in enumerate(parts):
                 await bot.send_message(chat_id=self.authorized_user, text=part)

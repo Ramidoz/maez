@@ -83,6 +83,11 @@ from core.body.camera_presence_voice import (
     answer_camera_presence_question,
     camera_presence_voice_health,
 )
+from core.safety.clinical_boundary import (
+    PrivateThoughtsCrisisSignalWriter,
+    clinical_boundary_health,
+    guard_owner_text,
+)
 from core.time.temporal_spine import temporal_spine_health
 from skills.telegram_voice import TelegramVoice
 from skills.telegram_public import MaezPublicBot
@@ -861,6 +866,18 @@ class MaezDaemon:
                 "staleness_status": "unavailable",
                 "error": str(exc)[:120],
             }
+
+    def _mark_m1_s4_policy(self, policy: str) -> None:
+        if policy == "ordinary":
+            return
+        promoter = getattr(self, "m1_promoter", None)
+        if promoter is None:
+            return
+        try:
+            with self._m1_lock:
+                promoter.mark_current_window_s4_policy(policy)
+        except Exception as exc:
+            logger.debug("S4 M1 promotion-policy mark skipped: %s", exc)
 
     def _m1_status_health(self) -> dict:
         """Content-free M1 state for observation."""
@@ -2112,6 +2129,17 @@ class MaezDaemon:
                 keyword overlap (incident: meta-harness at 04:42,
                 "it" at 04:53 lost the referent).
         """
+        _s4_result = guard_owner_text(
+            text,
+            surface=source,
+            crisis_signal_writer=PrivateThoughtsCrisisSignalWriter(
+                getattr(self, "private_thoughts", None)
+            ),
+        )
+        if _s4_result.matched:
+            self._mark_m1_s4_policy(_s4_result.promotion_policy)
+            return _s4_result.answer_text or ""
+
         try:
             self._camera_presence_state = self._camera_presence_state.with_freshness()
             camera_answer = answer_camera_presence_question(text, self._camera_presence_state)
@@ -5483,6 +5511,7 @@ class MaezDaemon:
                     "camera_presence": self._camera_presence_health(),
                     "credentials": _credential_health(),
                     "temporal_spine": temporal_spine_health(),
+                    "clinical_boundary": clinical_boundary_health(),
                     "system": {
                         "cpu_percent": snap["cpu"]["percent"],
                         "ram_percent": snap["ram"]["percent"],

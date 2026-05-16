@@ -209,12 +209,15 @@ class PromotionBehaviorTests(M1PromotionTestCase):
 
         self.assertTrue(outcome.promoted)
         ep = self.episodes.get(outcome.episode_id or "")
-        self.assertEqual(ep["source_memory_ids"], [
-            "raw-affect-0",
-            "raw-affect-1",
-            "raw-affect-2",
-            "raw-affect-3",
-        ])
+        self.assertEqual(
+            ep["source_memory_ids"],
+            [
+                "raw-affect-0",
+                "raw-affect-1",
+                "raw-affect-2",
+                "raw-affect-3",
+            ],
+        )
         self.assertNotIn("much better", ep["summary"])
 
     def test_pending_window_survives_restart_with_ids_only(self):
@@ -429,6 +432,50 @@ class PromotionBehaviorTests(M1PromotionTestCase):
             ["raw-silence"],
         )
 
+    def test_s4_marker_skips_entire_pending_window(self):
+        self.promoter.consider_audited_exchange(
+            owner_text="plain setup turn",
+            maez_reply="I am here.",
+            raw_memory_id="raw-before-s4",
+            occurred_at="2026-05-14T18:00:00+00:00",
+        )
+
+        outcome = self.promoter.mark_current_window_s4_policy("m1_ineligible_clinical_boundary")
+        self.assertFalse(outcome.promoted)
+        self.assertEqual(outcome.skipped_reason, "s4_clinical_boundary")
+
+        self.promoter.consider_audited_exchange(
+            owner_text="I promise we will come back to the ordinary part.",
+            maez_reply="I hear the commitment.",
+            raw_memory_id="raw-after-s4",
+            occurred_at="2026-05-14T18:01:00+00:00",
+        )
+        self.now = self.now + timedelta(seconds=901)
+
+        outcomes = self.promoter.flush_due_windows()
+
+        self.assertEqual(outcomes[0].skipped_reason, "s4_clinical_boundary")
+        self.assertEqual(self.episodes.list_active(), [])
+
+    def test_s4_marker_uses_closed_policy_values_and_content_free_skip_reason(self):
+        outcome = self.promoter.mark_current_window_s4_policy("m1_ineligible_crisis_candidate")
+
+        self.assertFalse(outcome.promoted)
+        self.assertEqual(outcome.skipped_reason, "s4_crisis_candidate")
+        window = self.sidecar.load_pending_window()
+        self.assertEqual(window.s4_skip_reasons, ["s4_crisis_candidate"])
+        self.assertNotIn("crisis", repr(window.source_memory_ids))
+        self.assertNotIn("symptom", repr(window))
+
+    def test_m1_rejects_invalid_s4_policy_with_content_free_counter(self):
+        with self.assertRaises(ValueError):
+            self.promoter.mark_current_window_s4_policy("symptom_fear")  # type: ignore[arg-type]
+
+        self.assertEqual(
+            self.promoter.status_health()["invalid_s4_skip_reason_rejected_count"],
+            1,
+        )
+
 
 class StalenessHealthTests(unittest.TestCase):
     def setUp(self):
@@ -478,9 +525,7 @@ class StalenessHealthTests(unittest.TestCase):
 
 class BackupManifestTests(unittest.TestCase):
     def test_m1_sidecar_is_in_decision_22_backup_manifest(self):
-        manifest = json.loads(
-            Path("scripts/backup/backup_state_manifest.json").read_text()
-        )
+        manifest = json.loads(Path("scripts/backup/backup_state_manifest.json").read_text())
         paths = {entry["path"] for entry in manifest["entries"]}
 
         self.assertIn("memory/m1_lived_episode_promotion.db", paths)

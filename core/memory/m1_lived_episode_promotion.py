@@ -63,11 +63,27 @@ VALID_PROMOTION_TRIGGERS = frozenset(
     }
 )
 
+VALID_S4_PROMOTION_POLICIES = frozenset(
+    {
+        "ordinary",
+        "m1_ineligible_clinical_boundary",
+        "m1_ineligible_crisis_candidate",
+    }
+)
+
+VALID_S4_SKIP_REASONS = frozenset(
+    {
+        "s4_clinical_boundary",
+        "s4_crisis_candidate",
+    }
+)
+
 _OBSERVABILITY_LOCK = threading.Lock()
 _OBSERVABILITY_COUNTERS = {
     "identity_fallback_count": 0,
     "invalid_eligibility_reason_rejected_count": 0,
     "invalid_promotion_trigger_rejected_count": 0,
+    "invalid_s4_skip_reason_rejected_count": 0,
 }
 
 _THIRD_PARTY_MARKER_REPORT = re.compile(
@@ -102,9 +118,11 @@ class PendingWindow:
     promotion_state: str = "pending"
     last_flush_checked_at: str | None = None
     eligibility_reasons: list[str] = field(default_factory=list)
+    s4_skip_reasons: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         _validate_eligibility_reasons(self.eligibility_reasons)
+        _validate_s4_skip_reasons(self.s4_skip_reasons)
 
     def __repr__(self) -> str:
         return (
@@ -117,7 +135,8 @@ class PendingWindow:
             f"explicit_marker_seen={self.explicit_marker_seen!r}, "
             f"promotion_state={self.promotion_state!r}, "
             f"last_flush_checked_at={self.last_flush_checked_at!r}, "
-            f"eligibility_reasons={self.eligibility_reasons!r})"
+            f"eligibility_reasons={self.eligibility_reasons!r}, "
+            f"s4_skip_reasons={self.s4_skip_reasons!r})"
         )
 
 
@@ -220,6 +239,30 @@ def _validate_promotion_trigger(trigger: str) -> str:
     return normalized
 
 
+def _validate_s4_skip_reason(reason: str) -> str:
+    normalized = (reason or "").strip()
+    if normalized not in VALID_S4_SKIP_REASONS:
+        _increment_observability_counter("invalid_s4_skip_reason_rejected_count")
+        raise ValueError(f"invalid M1 S4 skip reason: {reason!r}")
+    return normalized
+
+
+def _validate_s4_skip_reasons(reasons: Sequence[str]) -> list[str]:
+    return [_validate_s4_skip_reason(str(reason)) for reason in reasons]
+
+
+def _s4_skip_reason_for_policy(policy: str) -> str | None:
+    normalized = (policy or "").strip()
+    if normalized not in VALID_S4_PROMOTION_POLICIES:
+        _increment_observability_counter("invalid_s4_skip_reason_rejected_count")
+        raise ValueError(f"invalid S4 promotion policy: {policy!r}")
+    if normalized == "m1_ineligible_clinical_boundary":
+        return "s4_clinical_boundary"
+    if normalized == "m1_ineligible_crisis_candidate":
+        return "s4_crisis_candidate"
+    return None
+
+
 def marker_is_owner_authored(text: str) -> bool:
     """Return true for direct owner-authored marker phrases only."""
 
@@ -314,6 +357,7 @@ class M1PromotionStore:
             promotion_state=str(data.get("promotion_state") or "pending"),
             last_flush_checked_at=data.get("last_flush_checked_at"),
             eligibility_reasons=list(data.get("eligibility_reasons") or []),
+            s4_skip_reasons=list(data.get("s4_skip_reasons") or []),
         )
 
     def save_pending_window(self, window: PendingWindow) -> None:
@@ -327,6 +371,7 @@ class M1PromotionStore:
             "promotion_state": window.promotion_state,
             "last_flush_checked_at": window.last_flush_checked_at,
             "eligibility_reasons": list(window.eligibility_reasons),
+            "s4_skip_reasons": list(window.s4_skip_reasons),
         }
         with closing(self._connect()) as conn:
             with conn:
@@ -372,9 +417,7 @@ class M1PromotionStore:
                     episode_id = str(ep.get("id") or "")
                     if not episode_id:
                         continue
-                    promoted_at = str(
-                        ep.get("created_at") or ep.get("occurred_at") or _now_iso()
-                    )
+                    promoted_at = str(ep.get("created_at") or ep.get("occurred_at") or _now_iso())
                     for sid in ep.get("source_memory_ids") or []:
                         if not sid:
                             continue
@@ -462,7 +505,16 @@ class M1LivedEpisodePromoter:
         if not raw_memory_id:
             return PromotionOutcome(False, skipped_reason="no_source_id")
 
+        current = self.promotion_store.load_pending_window()
         if marker_is_owner_authored(owner_text):
+            if current.s4_skip_reasons:
+                window = self._append_to_window(
+                    raw_memory_id=raw_memory_id,
+                    occurred_at=occurred_at,
+                    explicit_marker=True,
+                    eligibility_reasons=["explicit_marker"],
+                )
+                return self._clear_s4_ineligible_window(window)
             outcome = self.promote_window(
                 source_memory_ids=[raw_memory_id],
                 first_owner_at=occurred_at,
@@ -482,6 +534,7 @@ class M1LivedEpisodePromoter:
                         explicit_marker_seen=True,
                         promotion_state="deferred_rate_limited",
                         eligibility_reasons=["explicit_marker"],
+                        s4_skip_reasons=[],
                     )
                 )
                 return outcome
@@ -497,6 +550,8 @@ class M1LivedEpisodePromoter:
         )
 
         if window.pair_count >= self.config.max_turn_pairs:
+            if window.s4_skip_reasons:
+                return self._clear_s4_ineligible_window(window)
             if window.eligibility_reasons:
                 reason = window.eligibility_reasons[0]
                 outcome = self.promote_window(
@@ -519,6 +574,7 @@ class M1LivedEpisodePromoter:
                             explicit_marker_seen=window.explicit_marker_seen,
                             promotion_state="deferred_rate_limited",
                             eligibility_reasons=window.eligibility_reasons,
+                            s4_skip_reasons=window.s4_skip_reasons,
                         )
                     )
                     return outcome
@@ -528,6 +584,38 @@ class M1LivedEpisodePromoter:
             return PromotionOutcome(False, skipped_reason="not_eligible")
 
         return PromotionOutcome(False, skipped_reason="pending")
+
+    def mark_current_window_s4_policy(self, policy: str) -> PromotionOutcome:
+        if not self.config.enabled:
+            return PromotionOutcome(False, skipped_reason="disabled")
+        skip_reason = _s4_skip_reason_for_policy(policy)
+        if skip_reason is None:
+            return PromotionOutcome(False, skipped_reason="ordinary")
+        current = self.promotion_store.load_pending_window()
+        reasons = list(dict.fromkeys([*current.s4_skip_reasons, skip_reason]))
+        marked = PendingWindow(
+            window_id=current.window_id or "m1-window-1",
+            source_memory_ids=current.source_memory_ids,
+            first_owner_at=current.first_owner_at,
+            last_owner_at=current.last_owner_at,
+            pair_count=current.pair_count,
+            explicit_marker_seen=current.explicit_marker_seen,
+            promotion_state="s4_ineligible",
+            last_flush_checked_at=current.last_flush_checked_at,
+            eligibility_reasons=current.eligibility_reasons,
+            s4_skip_reasons=reasons,
+        )
+        self.promotion_store.save_pending_window(marked)
+        return PromotionOutcome(False, skipped_reason=skip_reason)
+
+    def _clear_s4_ineligible_window(self, window: PendingWindow) -> PromotionOutcome:
+        self.promotion_store.clear_pending_window()
+        reason = (window.s4_skip_reasons or ["s4_clinical_boundary"])[0]
+        return PromotionOutcome(
+            False,
+            skipped_reason=reason,
+            source_id_count=len(window.source_memory_ids),
+        )
 
     def _append_to_window(
         self,
@@ -553,6 +641,7 @@ class M1LivedEpisodePromoter:
             promotion_state="pending",
             last_flush_checked_at=current.last_flush_checked_at,
             eligibility_reasons=reasons,
+            s4_skip_reasons=current.s4_skip_reasons,
         )
         self.promotion_store.save_pending_window(next_window)
         return next_window
@@ -572,6 +661,7 @@ class M1LivedEpisodePromoter:
             promotion_state=window.promotion_state,
             last_flush_checked_at=now.isoformat(),
             eligibility_reasons=window.eligibility_reasons,
+            s4_skip_reasons=window.s4_skip_reasons,
         )
         self.promotion_store.save_pending_window(checked)
         if not window.source_memory_ids or not window.last_owner_at:
@@ -582,6 +672,8 @@ class M1LivedEpisodePromoter:
             return [PromotionOutcome(False, skipped_reason="invalid_pending_timestamp")]
         if elapsed < self.config.silence_boundary_seconds:
             return []
+        if window.s4_skip_reasons:
+            return [self._clear_s4_ineligible_window(window)]
         if not window.eligibility_reasons:
             self.promotion_store.clear_pending_window()
             return [PromotionOutcome(False, skipped_reason="not_eligible")]
@@ -606,6 +698,7 @@ class M1LivedEpisodePromoter:
                     promotion_state="deferred_rate_limited",
                     last_flush_checked_at=now.isoformat(),
                     eligibility_reasons=window.eligibility_reasons,
+                    s4_skip_reasons=window.s4_skip_reasons,
                 )
             )
             return [outcome]

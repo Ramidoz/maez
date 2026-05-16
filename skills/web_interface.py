@@ -45,6 +45,10 @@ from core.infra.http_security import (
     apply_local_cors_headers,
     reject_untrusted_browser_write,
 )
+from core.safety.clinical_boundary import (
+    PrivateThoughtsCrisisSignalWriter,
+    guard_owner_text,
+)
 
 logger = logging.getLogger("maez.web")
 logging.basicConfig(level=logging.INFO)
@@ -5557,6 +5561,14 @@ def chat():
     uid = user.get("uuid", "")
     user_full = accounts.get_user_record(uid) or {}
     owner_bridge = _is_private_owner_bridge(user_full)
+    if owner_bridge:
+        _s4_result = guard_owner_text(
+            message,
+            surface="web_owner",
+            crisis_signal_writer=PrivateThoughtsCrisisSignalWriter(),
+        )
+        if _s4_result.matched:
+            return jsonify({"reply": _s4_result.answer_text, "display_name": display})
     history = data.get("history", [])
     logger.info("Web chat from %s: %s", display, message[:80])
     messages_list = []
@@ -6366,6 +6378,7 @@ def api_maez_state():
     daemon_health.pop("credentials", None)
     daemon_health.pop("camera_presence", None)
     daemon_health.pop("temporal_spine", None)
+    daemon_health.pop("clinical_boundary", None)
     return jsonify(
         {
             "daemon": daemon_health,
@@ -8976,6 +8989,7 @@ def api_debug_services():
         services[svc] = _service_state_cached(svc)
     daemon_health = dict(_daemon_health())
     daemon_health.pop("temporal_spine", None)
+    daemon_health.pop("clinical_boundary", None)
     return jsonify(
         {
             "services": services,

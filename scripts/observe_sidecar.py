@@ -47,6 +47,7 @@ def project_health(
     m1_staleness = lived_episodes.get("staleness") or {}
     credentials = health.get("credentials") or {}
     temporal_spine = health.get("temporal_spine")
+    clinical_boundary = health.get("clinical_boundary")
     heartbeat = _pick(health, ("cycle_count",))
     heartbeat.update(
         _pick(
@@ -138,6 +139,8 @@ def project_health(
             ),
         ),
         "temporal_spine_present": isinstance(temporal_spine, dict),
+        "clinical_boundary_present": isinstance(clinical_boundary, dict),
+        "clinical_boundary_red_gates": _clinical_boundary_red_gates(clinical_boundary or {}),
     }
 
 
@@ -192,7 +195,19 @@ def red_gates(
         gates.append("temporal_spine_malformed_timestamp_rejected")
     if _temporal_spine_counter_reset(sample, previous_sample):
         gates.append("temporal_spine_counter_reset")
+    gates.extend(str(gate) for gate in sample.get("clinical_boundary_red_gates") or [])
 
+    return gates
+
+
+def _clinical_boundary_red_gates(clinical_boundary: dict[str, Any]) -> list[str]:
+    gates: list[str] = []
+    if _sample_int(clinical_boundary, "clinical_boundary_guard_rejected_count") > 0:
+        gates.append("clinical_boundary_guard_rejected")
+    if _sample_int(clinical_boundary, "invalid_trigger_class_rejected_count") > 0:
+        gates.append("clinical_boundary_invalid_trigger_class_rejected")
+    if _sample_int(clinical_boundary, "crisis_candidate_hold_failed_count") > 0:
+        gates.append("clinical_boundary_crisis_hold_failed")
     return gates
 
 

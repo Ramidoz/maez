@@ -21,6 +21,7 @@ audit path.
 Bootstrap entry point is `build_telegram_adapter(...)`. Caller is
 responsible for scheduling `adapter.connect()` on an event loop.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -29,6 +30,7 @@ import re
 from typing import Any, Optional
 
 from core.health.shared_executor import get_shared_executor
+from core.safety.clinical_boundary import PrivateThoughtsCrisisSignalWriter, guard_owner_text
 from skills.surface.platform_base import MessageEvent
 from skills.surface.platform_config import PlatformConfig
 from skills.surface.telegram_adapter import TelegramAdapter
@@ -102,7 +104,7 @@ def _clean_exchange(doc: str) -> str:
             pos = doc.find(_ASSISTANT_MARKER_DAEMON)
         if pos < 0:
             return doc
-        reply = doc[pos + len(_ASSISTANT_MARKER_DAEMON):].strip()
+        reply = doc[pos + len(_ASSISTANT_MARKER_DAEMON) :].strip()
     # Then the web/voice form — single-line user, `\nMaez replied:`
     # marker, no envelope between.
     elif _ASKED_PREFIX_RE.match(first_line):
@@ -110,7 +112,7 @@ def _clean_exchange(doc: str) -> str:
         pos = doc.find(_ASSISTANT_MARKER_WEB_VOICE)
         if pos < 0:
             return doc
-        reply = doc[pos + len(_ASSISTANT_MARKER_WEB_VOICE):].strip()
+        reply = doc[pos + len(_ASSISTANT_MARKER_WEB_VOICE) :].strip()
     else:
         return doc
 
@@ -118,10 +120,12 @@ def _clean_exchange(doc: str) -> str:
         return doc
     try:
         from core.memory.identity import display_name as _display_name
+
         owner_prefix = _display_name() or "Owner"
     except Exception:
         owner_prefix = "Owner"
     return f"{owner_prefix}: {user_msg}\nMaez: {reply}".strip()
+
 
 logger = logging.getLogger(__name__)
 
@@ -166,11 +170,25 @@ class MaezMessageHandler:
         if not text:
             return None
 
+        _s4_result = guard_owner_text(
+            text,
+            surface=SURFACE_NAME,
+            crisis_signal_writer=PrivateThoughtsCrisisSignalWriter(
+                getattr(self.daemon, "private_thoughts", None)
+            ),
+        )
+        if _s4_result.matched:
+            mark = getattr(self.daemon, "_mark_m1_s4_policy", None)
+            if callable(mark):
+                mark(_s4_result.promotion_policy)
+            return _s4_result.answer_text
+
         # Pre-processing — same signals the daemon's own
         # handle_message path picks up. Safe to run here too because
         # both detections are idempotent for a single turn.
         try:
             from core import inner_residue as _residue
+
             if _residue.detect_user_rejection(text):
                 _residue.record(
                     kind="user_rejection",
@@ -181,6 +199,7 @@ class MaezMessageHandler:
 
         try:
             from core import approval_sessions as _approvals
+
             _approvals.detect_and_grant(text)
         except Exception:
             pass
@@ -193,10 +212,7 @@ class MaezMessageHandler:
         # shared card rendering during the parallel-run period.
         action_engine = getattr(self.daemon, "actions", None)
         legacy_tg = getattr(self.daemon, "telegram", None)
-        get_pipeline = (
-            getattr(legacy_tg, "_get_pipeline", None)
-            if legacy_tg is not None else None
-        )
+        get_pipeline = getattr(legacy_tg, "_get_pipeline", None) if legacy_tg is not None else None
 
         chat_id = ""
         try:
@@ -220,7 +236,8 @@ class MaezMessageHandler:
             if pipe is not None:
                 try:
                     open_cards = pipe.card_store.get_open_for_channel(
-                        "telegram_text", chat_id=chat_id,
+                        "telegram_text",
+                        chat_id=chat_id,
                     )
                 except Exception:
                     open_cards = []
@@ -239,7 +256,8 @@ class MaezMessageHandler:
                     except Exception as e:
                         logger.warning(
                             "pipe.handle_reply failed on %s: %s",
-                            SURFACE_NAME, e,
+                            SURFACE_NAME,
+                            e,
                         )
                         result = None
                     if result is not None:
@@ -248,7 +266,9 @@ class MaezMessageHandler:
                         # continuation text so the adapter sends it
                         # as the reply to this message.
                         dialog_reply = getattr(
-                            result, "dialog_reply_text", None,
+                            result,
+                            "dialog_reply_text",
+                            None,
                         )
                         if dialog_reply:
                             # Strip tool-call JSON leaks (e.g. the
@@ -258,6 +278,7 @@ class MaezMessageHandler:
                                 from core.brain_loop import (
                                     strip_tool_call_leaks,
                                 )
+
                                 dialog_reply = strip_tool_call_leaks(
                                     dialog_reply,
                                 )
@@ -267,6 +288,7 @@ class MaezMessageHandler:
                                 from core.self_claim_audit import (
                                     audit as _sc_audit,
                                 )
+
                                 r = _sc_audit(
                                     dialog_reply,
                                     surface=f"{SURFACE_NAME}_dialog",
@@ -294,7 +316,8 @@ class MaezMessageHandler:
             except Exception as e:
                 logger.warning(
                     "send_intermediate failed on %s: %s",
-                    SURFACE_NAME, e,
+                    SURFACE_NAME,
+                    e,
                 )
 
         # Fetch the last few telegram exchanges so the brain-loop's
@@ -328,7 +351,7 @@ class MaezMessageHandler:
                 # downstream contracts stay intact; only `content` is
                 # rewritten, and only when the envelope prefix matches.
                 chat_history = []
-                for _ex in (_raw_exchanges or []):
+                for _ex in _raw_exchanges or []:
                     if not _ex:
                         continue
                     _new = dict(_ex)
@@ -338,8 +361,7 @@ class MaezMessageHandler:
                     _new["content"] = _cleaned
                     chat_history.append(_new)
         except Exception as e:
-            logger.debug("chat_history fetch failed on %s: %s",
-                         SURFACE_NAME, e)
+            logger.debug("chat_history fetch failed on %s: %s", SURFACE_NAME, e)
             chat_history = None
 
         # Observability: wrap the whole turn in a Langfuse trace so
@@ -347,6 +369,7 @@ class MaezMessageHandler:
         # LANGFUSE_PUBLIC_KEY isn't set (default). See
         # core.observability for the abstraction.
         from core.observability import observe_turn
+
         with observe_turn(
             "telegram_turn",
             input={"text": text, "chat_id": chat_id},
@@ -358,6 +381,7 @@ class MaezMessageHandler:
             jarvis_tool_calls: list[dict] = []
             try:
                 from core import brain_loop as _brain_loop
+
                 if action_engine is not None and get_pipeline is not None:
                     # Slice 3 of trace work: ask for the structured
                     # result so we can pass tool_calls into
@@ -381,9 +405,7 @@ class MaezMessageHandler:
                     )
                     if hasattr(_result, "transcript"):
                         jarvis_transcript = _result.transcript or ""
-                        jarvis_tool_calls = list(
-                            getattr(_result, "tool_calls", []) or []
-                        )
+                        jarvis_tool_calls = list(getattr(_result, "tool_calls", []) or [])
                     else:  # legacy str fallback
                         jarvis_transcript = _result or ""
             except Exception as e:
@@ -411,8 +433,7 @@ class MaezMessageHandler:
                     ),
                 )
             except Exception as e:
-                logger.warning("daemon dispatch failed on %s: %s",
-                               SURFACE_NAME, e)
+                logger.warning("daemon dispatch failed on %s: %s", SURFACE_NAME, e)
                 turn.update(output=f"(internal error: {e})")
                 return f"(internal error: {e})"
 
