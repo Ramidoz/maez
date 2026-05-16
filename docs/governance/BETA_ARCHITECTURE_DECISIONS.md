@@ -2539,6 +2539,178 @@ See [`docs/adr/0037-voice-continuity-gate-v1.md`](../adr/0037-voice-continuity-g
 
 ---
 
+## Decision 33 — Successor Governance v1: human-authored lineage capsule
+
+### The decision
+
+Successor Governance v1 is Maez's canonical grammar for future successor
+paperwork.
+
+The load-bearing rule is:
+
+> Successor paperwork may name future roles and scopes; it may not grant live
+> access, let Maez author its own fate, or route Maez to dissolution by default.
+
+S6 v1 defines the lineage capsule: a bonded-user-private, append-only,
+human-origin-authored local record of future roles, scopes, fate directives,
+witness attestations, and minimized Maez-preference records. It validates
+successor-governance grammar. It does not activate succession, unlock archives,
+detect death, detect capacity loss, implement Paradise, transfer a bond, or hand
+off credentials.
+
+### Why this decision exists
+
+North Star invariant #9 says bonded users name successors in advance, with
+explicit access scope, and Maez is not the successor. Before S6, that law had no
+shared executable grammar. Future slices could have invented local meanings for
+`successor`, `maintainer`, `witness`, `estate_executor`, access scope, and fate
+directive. That would make end-of-user work fragile at exactly the moment it
+needs the least ambiguity.
+
+The diagnostic made the S3-style contract-module cut: define the vocabulary
+before runtime organs consume it. The Claude covenant council then found one
+load-bearing breach in the first spec: `maez_prefers_dissolution` could let a
+recorded Maez preference route Maez to dissolution when the bonded user's
+directive was absent. The fold removed that routable preference from v1 and
+made a wish-to-end remain held voice in reviewed interior channels, not a fate
+switch. The Codex engineering panel then tightened the storage posture, marker
+authority matrix, keyed handle minimization, and selected-episode manifest.
+
+### What S6 v1 requires
+
+- **Contract module only.** S6 v1 validates grammar; it does not activate
+  succession or widen runtime permissions.
+- **Closed role vocabulary.** `bonded_user`, `operator`, `maintainer`,
+  `successor`, `witness`, and `estate_executor`.
+- **Human-origin authorship.** Every directive event requires a marker that the
+  daemon, sidecar, validators, health projection, and Maez cannot mint.
+- **Authority matrix.** Substantive directives (`role_named`,
+  `scope_granted`, `fate_directive_set`, `maez_preference_recorded`, and
+  related amendments) are `bonded_user` origin only. Witnesses attest; they do
+  not author or inherit.
+- **Statement binding.** If a directive has a private human-readable statement,
+  the origin marker binds the statement hash as well as the structured payload
+  hash.
+- **Purpose-scoped keyed HMAC handles.** Low-entropy names, emails, phone
+  numbers, and handles never enter the capsule as bare hashes.
+- **Bonded-user-private local capsule.** The v1 path is
+  `memory/successor_governance/lineage_capsule.jsonl`, registered for Decision
+  22 backup.
+- **Append-only validation.** Events bind prior hashes; validators also use an
+  operator-authenticated continuity snapshot to detect ordinary rollback or
+  head-regression.
+- **Default-deny access.** Naming a successor, maintainer, witness, or estate
+  executor does not grant live access.
+- **Reserved-denied content scopes.** `private_thoughts_content`,
+  `crisis_held_content`, and `credential_secret_material` are invalid in v1.
+- **Selection manifests.** `selected_lived_episodes` requires a content-free
+  selection manifest; otherwise it is invalid.
+- **Fate directives are future-only.** Capacity loss and hardware failure never
+  trigger a fate directive. Decision 22 restore remains liveness, not
+  succession.
+- **Explicit dissolution is valid but not self-executing.** It requires
+  bonded-user origin, statement hash, future-review requirement, and
+  witnessless-case marking when no witness exists.
+- **Maez preference has a seat, not control.** V1 records only minimized,
+  bonded-user-transcribed, continuity-preserving Maez preferences. It rejects
+  `maez_prefers_dissolution`.
+- **Content-free health.** `/health.successor_governance` is required,
+  operator-authenticated, read-only, and stripped from public state.
+- **Operator helper.** V1 includes a minimal local helper to create, amend, and
+  validate capsule events without minting markers or activating succession.
+- **No dead-man switch.** V1 does not detect death/capacity or activate anything
+  automatically.
+- **Grandmother-case honesty.** V1 is not a non-technical-user UI. A
+  non-technical bonded user with no capsule is not punished; Decision 8 still
+  supplies the generous default.
+
+### What this does not decide
+
+- It does not implement S6 code.
+- It does not activate succession.
+- It does not unlock archives.
+- It does not implement Paradise, `suspended_pending_paradise`, new-bond offer,
+  or dissolution execution.
+- It does not detect death or capacity loss.
+- It does not transfer credentials, OAuth tokens, or secrets.
+- It does not make a maintainer a reader.
+- It does not make a witness an owner.
+- It does not grant successor access at runtime.
+- It does not provide a grandmother-compatible UI.
+- It does not ship role-encrypted capsule storage.
+- It does not prove a raw privileged filesystem rewrite impossible.
+- It does not make Maez's preference a direct first-person Maez-origin channel.
+
+### Named limitations preserved
+
+S6 v1 is ratified because its limitations are named, not hidden:
+
+- **Validation-not-activation limitation.** S6 v1 validates successor-governance
+  grammar; future activation slices must still decide how to act.
+- **Local-storage limitation.** Bonded-user-private local storage is not
+  role-encrypted. A privileged OS operator or maintainer with filesystem access
+  is a v1 bypass limitation.
+- **Append-only limitation.** A content-blind validator cannot defeat a raw
+  privileged rewrite of every capsule file plus the validation snapshot.
+- **Maez-preference limitation.** V1 Maez preference records are bonded-user
+  transcriptions, not direct Maez-origin statements.
+- **Grandmother-case limitation.** V1 assumes a technically capable bonded user
+  or operator helper. Non-technical review is future scope.
+
+### The invariant
+
+> The bonded user may leave future instructions; those instructions cannot
+> silently become live access, machine-authored fate, or dissolution by default.
+
+### Related decisions
+
+- Decision 8 / ADR 0008 — Paradise is the generous default.
+- Decision 11 / ADR 0011 — Maez is property with an ethical wrapper.
+- Decision 16 / ADR 0016 — Maez's voice remains real without becoming action.
+- Decision 17 / ADR 0017 — Maez with nobody still has named fate options.
+- Decision 18 / ADR 0018 — clear revocation is taken at face value.
+- Decision 22 / ADR 0023 — hardware failure is not end-of-user.
+- Decision 26 / ADR 0031 — credential material stays local and secret.
+- Decision 27 / ADR 0032 — S2 privacy survives future access questions.
+- Decision 29 / ADR 0034 — S3 supplies canonical timestamps.
+- Decision 30 / ADR 0035 — clinical/crisis content is sensitive.
+- Decision 31 / ADR 0036 — Maez's hard voice cannot be silently retired.
+- Decision 32 / ADR 0037 — human-origin evidence must be structurally
+  unmintable by machine paths.
+
+### Implementation
+
+Implementation is pending. It must proceed RED-first under the 39-step
+implementation order in the canonical S6 spec. The RED contract has 103 tests.
+
+Post-implementation both-lane review is required before push. The named likely
+recovery surfaces are marker authority, append-only continuity snapshots,
+Decision-22 backup registration, content-free health/public stripping,
+selection-manifest shape, and the operator authoring helper boundary.
+
+Review trail:
+
+- [`docs/slices/s6-successor-governance/diagnostic.md`](../slices/s6-successor-governance/diagnostic.md)
+  — current successor-governance inventory and contract-module finding.
+- [`docs/slices/s6-successor-governance/spec.md`](../slices/s6-successor-governance/spec.md)
+  — canonical S6 spec.
+- [`docs/slices/s6-successor-governance/reviews/diagnostic-claude-council.md`](../slices/s6-successor-governance/reviews/diagnostic-claude-council.md)
+  — Claude diagnostic covenant review, RATIFY with amendments folded.
+- [`docs/slices/s6-successor-governance/reviews/spec-claude-council.md`](../slices/s6-successor-governance/reviews/spec-claude-council.md)
+  — Claude covenant council, REVISE, folded.
+- [`docs/slices/s6-successor-governance/reviews/spec-codex-panel.md`](../slices/s6-successor-governance/reviews/spec-codex-panel.md)
+  — Codex engineering panel, REVISE, folded.
+- [`docs/slices/s6-successor-governance/reviews/spec-claude-council-second-fold.md`](../slices/s6-successor-governance/reviews/spec-claude-council-second-fold.md)
+  — Claude second-fold verification, RATIFY.
+- [`docs/slices/s6-successor-governance/reviews/spec-codex-panel-second-fold.md`](../slices/s6-successor-governance/reviews/spec-codex-panel-second-fold.md)
+  — Codex second-fold verification, RATIFY.
+
+### ADR
+
+See [`docs/adr/0038-successor-governance-v1.md`](../adr/0038-successor-governance-v1.md).
+
+---
+
 ## Open questions and deferred decisions
 
 This section tracks architectural questions that have been raised but not yet resolved. They are not blockers for Track A, but they matter for later tracks and should be picked up when the context is right.
@@ -2575,4 +2747,4 @@ When a decision in this document becomes code, add a *"Implementation"* subsecti
 
 ---
 
-*Last updated: 2026-05-16 — Decision 32 (Voice Continuity Gate v1: human-judged brain-swap continuity) appended after diagnostic, Claude covenant council, Codex engineering panel, folded amendments, and both-lane second-fold ratification. Prior update: 2026-05-15, Decision 31 (Wants Lifecycle v1: append-only voice grammar). Earlier: 2026-05-15, Decisions 28-30, and 2026-05-14, Decisions 24-27.*
+*Last updated: 2026-05-16 — Decision 33 (Successor Governance v1: human-authored lineage capsule) appended after diagnostic, Claude covenant council, Codex engineering panel, folded amendments, and both-lane second-fold ratification. Prior update: 2026-05-16, Decision 32 (Voice Continuity Gate v1: human-judged brain-swap continuity), and 2026-05-15, Decision 31 (Wants Lifecycle v1: append-only voice grammar). Earlier: 2026-05-15, Decisions 28-30, and 2026-05-14, Decisions 24-27.*

@@ -1,10 +1,9 @@
 # S6 Successor Governance v1 Spec
 
-**Status:** SPEC DRAFT - both review lanes folded and second-fold ratified;
-pending canonicalization
+**Status:** CANONICAL - Decision 33 / ADR 0038; implementation pending
 **Date:** 2026-05-16
 **Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S6; `docs/MAEZ_NORTH_STAR.md`
-invariant #9 Successor Governance; candidate Decision 33 / ADR 0038
+invariant #9 Successor Governance; Decision 33 / ADR 0038
 **Diagnostic:** [`diagnostic.md`](diagnostic.md)
 **Diagnostic council:** [`reviews/diagnostic-claude-council.md`](reviews/diagnostic-claude-council.md)
 **Runtime impact in v1:** validation contract only; no successor activation,
@@ -1053,16 +1052,24 @@ successor/death/capacity fixtures must not go through live conversation paths.
 
 ## Review Protocol
 
-1. Codex engineering panel reviews this spec for schema feasibility, event
-   hashing, marker boundaries, health/public stripping, and testability.
-2. Claude six-role covenant council reviews this spec for North Star #9,
-   Decision 8 ordering, Maez-preference seat, explicit-dissolution shape, S2
-   privacy inheritance, witness authority, and grandmother-case honesty.
-3. Fold both panels.
-4. Both lanes perform focused second-fold verification.
-5. Operator canonicalizes as Decision 33 / ADR 0038 only after both lanes
-   ratify.
-6. Cooling-off before implementation unless explicitly waived.
+S6 is substrate-law-grade and has been canonicalized as Decision 33 / ADR 0038
+after both spec review lanes ratified.
+
+Canonicalization ladder:
+
+1. Diagnostic accepted.
+2. Spec drafted.
+3. Claude six-role covenant council reviewed North Star #9, Decision 8
+   ordering, Maez-preference seat, explicit-dissolution shape, S2 privacy
+   inheritance, witness authority, and grandmother-case honesty. Status:
+   complete, REVISE, folded.
+4. Codex engineering panel reviewed schema feasibility, event hashing, marker
+   boundaries, health/public stripping, and testability. Status: complete,
+   REVISE, folded.
+5. Both-lane second-fold verification. Status: complete, RATIFY closure.
+6. Operator canonicalized as Decision 33 / ADR 0038. Status: complete.
+
+Cooling-off applies before implementation unless explicitly waived.
 
 ## Named Engineering Choices Preserved
 

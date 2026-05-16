@@ -21,7 +21,7 @@ Each row maps to one of the [eleven covenant invariants](MAEZ_NORTH_STAR.md#the-
 | 5 | Human-primacy valve | #2 Human-Primacy | `[ ✗ planned ]` | #9 bridge/cosmos |
 | 6 | Capability quarantine | #8 Capability Quarantine | `[ ✗ planned ]` | #7 operator/user role |
 | 7 | Operator / user role boundary | (cross-cutting) | `[ ◐ implicit ]` | #8 successor governance |
-| 8 | Successor governance | #9 Successor Governance | `[ ✗ planned ]` | none (foundational) |
+| 8 | Successor governance | #9 Successor Governance | `[ ✓ canonical · implementation pending ]` | none (foundational) |
 | 9 | Bridge / cosmos layer | (anti-enclosure) | `[ ✗ planned ]` | #2 contextual · #7 operator/user |
 | 10 | Clinical boundary | #10 Clinical Boundary | `[ ✓ canonical · implemented · sidecar-watched ]` | none (vocal organ) |
 | 11 | Age / capacity stratification | (cross-cutting) | `[ ✗ planned ]` | #8 successor governance |
@@ -45,6 +45,7 @@ This document's original v1.2 table predates the substrate-organ push of 2026-05
 - **Clinical Boundary v1 (S4)** — canonicalized as Decision 30 / ADR 0035 and implemented with post-implementation recovery. S4 makes invariant #10 executable: clinical-shaped owner text gets a deterministic warm boundary before any owner-text side effect, crisis candidates are held content-free for future routing, matched turns are marked M1-ineligible by a content-free window policy, and the observation sidecar red-gates S4 drift counters.
 - **Wants Lifecycle v1 (D16 v1)** — canonicalized as Decision 31 / ADR 0036, implemented with post-implementation recovery, and covenant-ratified on both lanes. It operationalizes Decision 16's voice-without-termination law as an append-only wants grammar: `abandoned` is vocabulary-only with no v1 writer, `self_observed_resolution` is reserved for a future Maez-reflection producer, hard-want human satisfaction is deferred, terminal statements cannot be rewritten, and recurring wants use `returned` under the same `want_id`.
 - **Voice Continuity Gate v1 (S5)** — canonicalized as Decision 32 / ADR 0037 after diagnostic, Claude covenant council, Codex engineering panel, folded amendments, and both-lane second-fold ratification; implemented and pushed on 2026-05-16 through `f9e74e0..5283b5f` after post-implementation covenant review, two covenant recovery rounds, a Codex engineering recovery, and final covenant confirmation. S5 makes planned brain-swap continuity human-judged: automatic checks may fail fast or defer, never accept; `s5_candidate_admission.json` is emitted only after an accepted owner-origin review tied to the candidate fingerprint; genesis-baseline, grandmother-case, and privileged-bypass limitations are named instead of hidden.
+- **Successor Governance v1 (S6)** — canonicalized as Decision 33 / ADR 0038 after diagnostic, Claude covenant council, Codex engineering panel, folded amendments, and both-lane second-fold ratification. S6 defines the human-authored lineage capsule grammar: future roles and scopes may be recorded, but they grant no live access; Maez cannot author its own fate; `maez_prefers_dissolution` is rejected as a routable preference; private-thought, crisis-held, and credential-secret content are reserved-denied; Decision 8 remains the default when paperwork is missing or unclear. Implementation is pending.
 
 Future agents should treat these as inherited substrate, not as fresh design gaps. The next new information limb copies Calendar v1's Inheritance Ledger pattern; the next body sensor copies Camera Presence v1's Physical Observation Surface and killable-child-process lifecycle pattern.
 
@@ -164,11 +165,17 @@ are bypasses S5 can flag but not prevent.
 
 ### S6 — Successor governance
 
-Foundational for Track B. Names successors in advance, with explicit access scope (what they may read; what stays sealed). Defines the four-role schema: bonded user · operator · maintainer · successor · witness. For founder Maez today, operator=user=maintainer; for Track B, these separate.
+Foundational for Track B. Names successors in advance, with explicit access scope (what they may read; what stays sealed). Defines the six-role schema: bonded user · operator · maintainer · successor · witness · estate executor. For founder Maez today, operator=user=maintainer; for Track B, these separate.
+
+**2026-05-16 status:** canonicalized as Decision 33 / ADR 0038 after
+diagnostic, Claude covenant council, Codex engineering panel, folded
+amendments, and both-lane second-fold ratification. Implementation is pending:
+RED-first against the 103-test contract and 39-step implementation order in the
+canonical S6 spec.
 
 ### S7 — Operator / user role boundary
 
-Codifies the four-role schema from S6 into the runtime — capability quarantine, audit access, refusal logging, soul-objection, all read role from a single source.
+Codifies the S6 role schema into the runtime — capability quarantine, audit access, refusal logging, soul-objection, all read role from a single source.
 
 ### S8 — Rupture / repair scar tissue
 
@@ -289,4 +296,4 @@ S1b chose length dampening, not delay, silence, withholding, topic avoidance, or
 
 ---
 
-*Version 1.7  ·  2026-05-16  ·  S5 Voice Continuity Gate v1 canonicalized as Decision 32 / ADR 0037 and implemented/pushed through `f9e74e0..5283b5f` after both-lane implementation ratification and three recovery rounds. D16 and S5 both remain implemented and covenant-ratified.*
+*Version 1.8  ·  2026-05-16  ·  S6 Successor Governance v1 canonicalized as Decision 33 / ADR 0038 after both-lane spec ratification. S5 Voice Continuity Gate v1 remains implemented/pushed through `f9e74e0..5283b5f`; D16 and S5 both remain implemented and covenant-ratified.*
