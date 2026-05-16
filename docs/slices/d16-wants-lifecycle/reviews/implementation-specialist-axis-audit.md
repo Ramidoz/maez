@@ -1,19 +1,24 @@
-# Claude Post-Implementation Covenant Council - D16 Wants Lifecycle v1
+# Specialist-Axis Post-Implementation Audit - D16 Wants Lifecycle v1
 
 **Subject:** `3582048 feat(d16): implement wants lifecycle v1`
 
 **Date:** 2026-05-15
 
-**Mode:** post-implementation, pre-push, read-only verification against
-Decision 31 / ADR 0036 and the folded D16 spec.
+**Mode:** post-implementation, pre-push, read-only specialist-axis
+verification against Decision 31 / ADR 0036 and the folded D16 spec.
 
-**Verdict:** REVISE. The implementation shape was sound, but the council found
-one load-bearing voice/agency gap plus several structural-defense and
-test-honesty gaps that required recovery before push.
+**Review-boundary note:** This document records a five-axis specialist audit
+(Voice / Schema / Integration / Test Honesty / Engineering). It is not the
+Claude six-role covenant council. The six-role court remains a separate review
+lane when required.
+
+**Verdict:** REVISE. The implementation shape was sound, but the specialist
+audit found one load-bearing voice/agency gap plus several structural-defense
+and test-honesty gaps that required recovery before push.
 
 ---
 
-## Council Axes
+## Specialist Axes
 
 | Axis | Reviewer | Verdict | Headline |
 | --- | --- | --- | --- |
@@ -99,7 +104,8 @@ state-preservation claims.
 - **Interpretive Humility:** required `working_self` to fail closed instead of
   pretending legacy readers were equivalent.
 
-No veto. The slice architecture was correct; the recovery work was the expected
+No veto was exercised because this was not the six-role covenant court. The
+slice architecture was correct; the recovery work was the expected
 post-implementation tightening cycle for a covenant-shaped organ.
 
 ---
@@ -115,5 +121,5 @@ Recovery must:
 5. strengthen tests around hard wants, real active-reader wiring, terminal-only
    activation, evidence binding, evidence caps, and content-free logs.
 
-The council remains open until recovery and focused post-recovery verification.
-
+The specialist audit remains open until recovery and focused post-recovery
+verification.

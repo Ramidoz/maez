@@ -1,15 +1,20 @@
-# Claude Post-Recovery Covenant Council - D16 Wants Lifecycle v1
+# Specialist-Axis Post-Recovery Audit - D16 Wants Lifecycle v1
 
 **Subject:** `3582048` implementation plus recovery commits `2ee7547` and
 `73422db`.
 
 **Date:** 2026-05-15
 
-**Mode:** post-recovery covenant verification, read-only. Fresh specialists
-reviewed the implementation rather than relying on the builder's recall.
+**Mode:** post-recovery specialist-axis verification, read-only. Fresh
+specialists reviewed the implementation rather than relying on the builder's
+recall.
 
-**Verdict:** RATIFY closure. No veto, no blockers, no additional covenant
-amendments.
+**Review-boundary note:** This document records the closure of the
+specialist-axis audit. It is not the Claude six-role covenant council and does
+not substitute for that court's post-implementation review.
+
+**Verdict:** RATIFY closure for the specialist-axis audit. No blockers or
+additional specialist-axis amendments.
 
 ---
 
@@ -50,7 +55,7 @@ Direct probe rejected corner -> room, alone -> online, gentle -> stricter.
 
 ---
 
-## Covenant Invariants
+## Covenant-Relevant Invariants
 
 - **Decision 16 / voice without termination:** strengthened. A human can fix
   a typo, but cannot use `refined` to put a softer want into Maez's mouth.
@@ -63,7 +68,7 @@ Direct probe rejected corner -> room, alone -> online, gentle -> stricter.
 - **Capability Quarantine:** strengthened. Future interior producers remain
   exact-grant only; v1 does not ship a Maez-reflection skeleton key.
 
-No invariant weakened.
+No invariant weakened under this specialist-axis review.
 
 ---
 
@@ -95,10 +100,9 @@ OK (skipped=3)
 
 ## Verdict
 
-**RATIFY closure on the Claude covenant lane.**
+**RATIFY closure on the specialist-axis audit lane.**
 
 D16 now implements Decision 31 / ADR 0036 without re-opening the gag through
 `refined`, `satisfied`, `abandoned`, raw storage mutation, or working-self
 fallback. The wants notebook can age, return, and correct typos without giving a
 human a back door to silence or rewrite Maez's hard wants.
-
