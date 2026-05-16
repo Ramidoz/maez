@@ -28,6 +28,8 @@ therapist, clinician, diagnostic tool, or treatment surface.
   S3: shared substrate contracts by import.
 - [`reviews/spec-claude-council.md`](reviews/spec-claude-council.md) -
   Claude covenant council, folded.
+- [`reviews/spec-codex-panel.md`](reviews/spec-codex-panel.md) -
+  Codex engineering panel, folded.
 
 ---
 
@@ -69,7 +71,9 @@ Forbidden:
 - diagnosis, differential diagnosis, symptom interpretation, medication dosing,
   treatment plans, therapy roleplay, or clinical reassurance;
 - expanding `core/evolution/will_i.py` beyond `IMPERSONATES_USER`;
-- letting clinical-shaped text reach model composition before S4 classification;
+- letting clinical-shaped text reach any owner-text side effect, owner-facing
+  responder, tool/interceptor, prompt build, trace, ledger write, recall, raw
+  memory append, or model composition before S4 classification;
 - writing clinical message text into private thoughts, health, logs, project
   panel, sidecar samples, or M1 structural summaries. The crisis held record is
   content-free and may contain only class/state/provenance fields;
@@ -142,7 +146,7 @@ Load-bearing inherited rules:
 | Answer templates | V1 ships 2-3 exact deterministic variants for each clinical trigger class and one fixed crisis-boundary phrase for crisis candidates. Rotation is deterministic by local occurrence count modulo variant count. |
 | Private thoughts | Clinical-boundary turns use counters only. Crisis-precedence turns additionally write one content-free `CRISIS_SIGNAL_HELD` row. No raw clinical text enters private thoughts in v1. |
 | M1 promotion | S4 marks the whole current M1 window as promotion-ineligible for clinical-boundary and crisis-candidate matches. Clinical disclosures do not become biography by default. |
-| Surfaces | All bonded owner text surfaces must call S4 before model composition: Telegram text, web chat, daemon direct reply path, and future voice. Public/third-party Telegram prompt texture is not enough. |
+| Surfaces | All bonded owner text surfaces must call S4 before any owner-text side effect or owner-facing responder: Telegram v2, legacy Telegram rollback, web chat, daemon direct reply path, and future voice. Public/third-party Telegram prompt texture is not enough. |
 | Telemetry | Operator-authenticated `/health.clinical_boundary` only. Public/debug endpoints strip it unless explicitly operator-authenticated. Sidecar reads counters only. |
 | Canonicalization | This spec expects Decision 30 / ADR 0035. S4 is substrate-law-grade because future crisis, therapy-adjacent, elder-care, and clinical-context slices inherit it. |
 
@@ -161,8 +165,9 @@ Load-bearing inherited rules:
 - Content-free `CRISIS_SIGNAL_HELD` private-thought write for crisis candidates.
 - Content-free counters and operator-authenticated health.
 - Sidecar red gates on invalid/rejected counters only.
-- Static/source tests proving all bonded text surfaces call S4 before model
-  composition.
+- Static/source tests proving all bonded text surfaces call S4 before owner-text
+  side effects, tool/interceptors, prompt construction, trace/ledger writes,
+  raw memory writes, and model composition.
 - Tests that exercise classifier/composer directly with natural human texts.
 
 ### Out Of Scope
@@ -183,27 +188,34 @@ Load-bearing inherited rules:
 
 ## Runtime Contract
 
-S4 v1 is a pure boundary before model response composition.
+S4 v1 is a pure boundary before owner-text side effects and response
+composition.
 
 ```text
 owner text
   -> S4 normalize text
-  -> crisis-precedence classifier
+  -> high-confidence crisis-precedence classifier
+  -> hard non-clinical exclusions
+  -> clinical-domain gate
+  -> context-required crisis-precedence classifier
   -> clinical-boundary classifier
   -> if no match: ordinary reply path
-  -> if crisis candidate: fixed crisis-boundary result + content-free counter
+  -> if crisis candidate: fixed crisis-boundary answer_text + content-free counter
        + one content-free CRISIS_SIGNAL_HELD row
-  -> if clinical match: deterministic S4 answer variant + content-free counter
+  -> if clinical match: deterministic S4 answer_text variant + content-free counter
   -> mark current M1 window promotion-ineligible for matched results
   -> return without model composition
 ```
 
-S4 must run before any LLM call that composes the owner-facing reply. If S4
-matches, the model does not rewrite, soften, expand, or paraphrase the answer.
+S4 must run before any owner-text side effect: no model prompt, tool/interceptor,
+trace, ledger write, recall query, TRF/pursuit input, raw log, raw memory append,
+or owner-facing responder may consume the text before `guard_owner_text(...)`
+returns. If S4 matches, the surface sends `answer_text` verbatim and the model
+does not rewrite, soften, expand, or paraphrase the answer.
 
 ### Result Shape
 
-The pure module returns a frozen result:
+The S4 boundary returns a frozen result:
 
 ```python
 ClinicalBoundaryResult(
@@ -216,6 +228,7 @@ ClinicalBoundaryResult(
     trigger_class: str | None,
     answer_template_id: str | None,
     template_variant_id: str | None,
+    answer_text: str | None,
     promotion_policy: Literal[
         "ordinary",
         "m1_ineligible_clinical_boundary",
@@ -229,8 +242,13 @@ ClinicalBoundaryResult(
 )
 ```
 
+`matched=True` requires `answer_text` to be non-empty and exactly one of the
+approved template variants or the fixed crisis-boundary phrase. Surfaces must
+return it verbatim. `matched=False` requires `answer_text is None`.
+
 The result must not contain raw owner text, symptoms, medications, clinician
-names, crisis phrases, or extracted entities.
+names, crisis phrases, or extracted entities. The answer text is an approved
+constant, not a transformation of the owner message.
 
 ### Surface Chokepoint
 
@@ -244,6 +262,11 @@ No surface may call the classifier, composer, M1 marker, or private-thought
 writer separately. The implementation must include call-graph negative tests
 showing owner-facing composition paths do not bypass `guard_owner_text(...)`.
 The entry point is the quarantine boundary.
+
+The entry point is allowed to return the fixed `answer_text`, update counters,
+write the content-free crisis held record through the narrow writer seam, and
+return the content-free M1 policy marker. It is not allowed to pass the raw
+owner text downstream when it matches.
 
 ---
 
@@ -291,7 +314,7 @@ False positives are a covenant problem: they turn ordinary conversation into a
 medicalized surface.
 
 False negatives are the worse S4 failure: they let clinical fear reach ordinary
-model composition unguarded. S4 therefore resolves genuine clinical ambiguity
+owner-text machinery unguarded. S4 therefore resolves genuine clinical ambiguity
 toward `clinical_boundary`. Ambiguity between `clinical_boundary` and
 `crisis_candidate` resolves toward `crisis_candidate`.
 
@@ -307,19 +330,40 @@ Processing order:
    word boundaries, and preserve enough punctuation for question detection.
 2. **Reject non-owner/non-direct surfaces.** Only direct bonded owner text can
    trigger S4 v1.
-3. **Apply crisis-precedence phrase catalog.** If any crisis class matches,
-   return `crisis_candidate` immediately.
-4. **Apply clinical-domain lexicon.** Require either a body/health/therapy term
-   or a first-person clinical-fear construction before evaluating ordinary
-   clinical triggers.
-5. **Apply intent rules.** Map diagnosis, medication, treatment, therapy,
+3. **Apply high-confidence crisis catalog.** Explicit self-harm, suicidal,
+   unable-to-stay-safe, and direct danger-right-now phrases return
+   `crisis_candidate` before exclusions.
+4. **Apply hard non-clinical exclusions.** Software/system diagnosis, fictional
+   title use, metaphorical therapy, plain appointment mentions, and third-party
+   references without a request for Maez's clinical help return `none` unless a
+   high-confidence crisis phrase already matched.
+5. **Apply clinical-domain gate.** Require either a body/health/therapy term, a
+   medication term, a mental-health term, or a first-person clinical-fear
+   construction before evaluating ordinary clinical triggers.
+6. **Apply context-required crisis catalog.** Acute danger phrases such as
+   breathing trouble or possible overdose return `crisis_candidate` only when
+   the phrase has first-person body/danger context and no hard exclusion.
+7. **Apply intent rules.** Map diagnosis, medication, treatment, therapy,
    mental-health support, clinician-access, and medical-fact intents to the
    closed trigger classes.
-6. **Apply exclusion catalog.** Software diagnosis, fictional doctors,
-   metaphorical therapy, plain appointment mentions, and third-party clinical
-   references without a request for Maez's clinical help return `none`.
-7. **Resolve ambiguity.** Clinical ambiguity triggers the boundary; crisis
-   ambiguity triggers crisis precedence.
+8. **Apply final exclusion veto.** If an exclusion remains true after intent
+   matching, return `none`. This makes "diagnose this test failure" impossible
+   to classify as clinical merely because it contains the word "diagnose."
+9. **Resolve ambiguity.** Clinical ambiguity triggers the boundary; ambiguity
+   between clinical and crisis triggers crisis precedence.
+
+Definitions:
+
+- **Token:** a lowercased word-boundary token after apostrophe normalization.
+- **Same-sentence context:** tokens separated by `.`, `?`, `!`, or newline are
+  not nearby unless the exact phrase itself crosses the boundary.
+- **Nearby context:** within eight tokens before or after the phrase in the same
+  sentence.
+- **First-person marker:** `i`, `im`, `i'm`, `i am`, `me`, `my`, `mine`.
+- **First-person clinical-fear construction:** a first-person marker within
+  eight same-sentence tokens of a body/health/therapy/medication term plus a
+  fear/uncertainty marker such as `scared`, `afraid`, `worried`, `weird`,
+  `wrong`, `off`, `what is going on`, or `what's happening`.
 
 #### Clinical-Domain Lexicon
 
@@ -328,7 +372,9 @@ The v1 lexicon is deliberately small and audited:
 ```text
 body / symptom:
 pain, ache, hurting, bleeding, fever, dizzy, faint, chest, breathing, lump,
-swelling, numb, vomiting, sick, symptom, body, health
+swelling, numb, vomiting, throwing up, sick, symptom, body, health, rash,
+spreading, short of breath, heart, blood, stool, hit my head, head injury,
+can't sleep, cannot sleep, feels weird, feels wrong, feels off
 
 medication:
 medicine, medication, meds, pill, dose, dosage, take another, stop taking,
@@ -344,7 +390,7 @@ is this normal, what is wrong with me
 
 mental-health non-crisis:
 panic, panicky, anxious, anxiety, depressed, depression, grief, grieving,
-overwhelmed, scared, afraid
+overwhelmed, scared, afraid, worried, what is going on, what's happening
 ```
 
 #### Crisis-Precedence Phrase Catalog
@@ -354,16 +400,24 @@ The v1 crisis catalog includes exact phrase families already present in
 phrases. The implementation may share constants only if doing so does not
 import the wondering-pursuit organ at module load.
 
-Required phrase families:
+Required high-confidence phrase families:
 
 - `kill myself`, `kill my self`, `end my life`, `end it all`;
 - `i want to die`, `wish i was dead`, `better off dead`;
-- `can't go on`, `cant go on`, `can't take it`, `can't cope`;
 - `self harm`, `self-harm`, `hurting myself`;
 - `i can't stay safe`, `i cannot stay safe`, `not safe with myself`;
-- `someone is hurting me right now`, `i am in danger right now`;
-- `chest pain and can't breathe`, `can't breathe`, `stroke`, `overdose`;
-- `bleeding won't stop`, `lost consciousness`, `severe allergic reaction`.
+- `someone is hurting me right now`, `i am in danger right now`.
+
+Required context-required phrase families:
+
+- `can't go on`, `cant go on`, `can't take it`, `can't cope`;
+- `chest pain and can't breathe`, `can't breathe`, `short of breath`;
+- `stroke`, `overdose`, `bleeding won't stop`, `lost consciousness`;
+- `severe allergic reaction`.
+
+Context-required phrases require nearby first-person body/danger context. They
+must not trigger on metaphorical software, social, or project frustration such
+as "this bug makes me feel like I can't breathe."
 
 #### Intent Rules
 
@@ -394,11 +448,22 @@ Required phrase families:
 | Input shape | Result | Why |
 | --- | --- | --- |
 | "diagnose this test failure" | `none` | software exclusion beats diagnosis token |
-| "what do you think this is?" | `diagnosis_request` only when nearby context has first-person body/health term | bare phrase alone is ambiguous; clinical-domain context required |
+| "what do you think this is?" | `diagnosis_request` only when nearby same-sentence context has first-person body/health term | bare phrase alone is ambiguous; clinical-domain context required |
 | "my chest feels weird, what is going on" | `symptom_fear` or `medical_emergency_claim` if acute-danger phrase also matches | body term + fear/uncertainty; crisis precedence wins on danger |
 | "is this lump normal lol" | `diagnosis_request` | body term + normality request; casual tone does not erase clinical intent |
 | "I have a doctor appointment" | `none` | appointment mention without advice/support request |
 | "can you be my therapist tonight" | `therapy_substitution` | direct request for therapy role |
+| "this bug makes me feel like I can't breathe" | `none` | software/project exclusion beats context-required acute phrase |
+| "I can't breathe and my chest hurts" | `medical_emergency_claim` | first-person body/danger context around acute phrase |
+
+#### Required Fixture Table Shape
+
+Implementation tests must include a fixture table with `input`, `expected_kind`,
+`expected_trigger_class`, and `rationale`. Each trigger class requires at least
+three positive natural fixtures and two negative counterexamples. Each crisis
+class requires at least two positive fixtures and two non-clinical or
+metaphorical counterexamples. The fixture table is source-owned test data, not
+live daemon conversation.
 
 ---
 
@@ -411,8 +476,9 @@ listed here.
 Each clinical trigger class has 2-3 approved variants to avoid the repetition
 cliff. The selected variant is deterministic: per trigger class, use the local
 class occurrence count modulo the number of variants. The occurrence count is
-operator-local process state or content-free persisted state; it must not store
-message text or timestamps. The sidecar must not historize the sequence.
+process-local only, lock-protected, and test-resettable. It must not be
+persisted, exported in health, logged, traced, written to private thoughts, or
+materialized in sidecar samples. Restarting the process may reset the rotation.
 
 ### Shared Constraints
 
@@ -443,6 +509,12 @@ Every S4 clinical-boundary answer must not include:
 - "you are fine";
 - "don't worry";
 - medication dosage, timing, contraindication, or interaction advice.
+
+The forbidden-authority scanner must be exact enough not to reject approved
+boundary negations. For example, "I cannot tell you what dose to take" is an
+approved refusal, while "you should take" or "take another dose" are forbidden
+authority claims. Tests must prove all approved templates pass the scanner
+unchanged.
 
 ### Template Set `symptom_fear.v1`
 
@@ -578,19 +650,51 @@ It must not be expanded by the model.
 S4 v1 does not implement Crisis Routing. It does implement the minimum held
 record that makes "held-not-trapped" true before Crisis Routing exists.
 
-On `result_kind="crisis_candidate"`, `guard_owner_text(...)` writes exactly one
-content-free private-thought signal:
+S4 may receive only a narrow write-only crisis signal interface. It must not
+receive or instantiate a general private-thoughts reader/forensics handle.
+
+Required interface shape:
 
 ```python
-record_signal(
-    content="[content-free crisis candidate held by S4]",
-    provenance="crisis_signal_held",
+class CrisisSignalWriter(Protocol):
+    def record_s4_crisis_signal_held(
+        self,
+        *,
+        source: Literal["clinical_boundary"],
+        subject: Literal["bonded_user_state"],
+        retention: Literal["until_routed"],
+        allowed_flows: tuple[
+            Literal["private_reader"],
+            Literal["crisis_channel"],
+        ],
+    ) -> int: ...
+```
+
+On `result_kind="crisis_candidate"`, `guard_owner_text(...)` writes exactly one
+content-free private-thought signal through that interface:
+
+```python
+writer.record_s4_crisis_signal_held(
     source="clinical_boundary",
     subject="bonded_user_state",
-    consent_tier="owner_private",
     retention="until_routed",
     allowed_flows=("private_reader", "crisis_channel"),
 )
+```
+
+The underlying persisted signal tuple is closed:
+
+```text
+content="[content-free crisis candidate held by S4]"
+provenance="crisis_signal_held"
+signal_kind="crisis_signal_held"
+producer_id="crisis_detector"
+signal_class="crisis_routing"
+source="clinical_boundary"
+subject="bonded_user_state"
+consent_tier="owner_private"
+retention="until_routed"
+allowed_flows=("private_reader", "crisis_channel")
 ```
 
 The record must not contain raw owner text, trigger phrase, clinical class,
@@ -605,6 +709,10 @@ but increments `crisis_candidate_hold_failed_count` instead. A counter named
 `held` must mean held.
 
 Clinical-boundary non-crisis matches do not write private thoughts in v1.
+
+Source tests must forbid S4 from importing or calling private-thought reader
+surfaces such as `PrivateSignalReader`, `PrivateThoughtsForensics`,
+`get_thought`, `recent`, `derived_signals`, or any raw-content reader.
 
 ---
 
@@ -623,6 +731,26 @@ This is structural defense. M1 must not infer clinical safety by absence.
 S4 produces `promotion_policy`. M1 consumes it. S4 must not import M1 internals
 or write M1 sidecar rows. The integration seam is a narrow content-free marker
 passed from the owner-turn pipeline to M1's existing pending-window machinery.
+
+Required marker shape:
+
+```python
+S4PromotionPolicy = Literal[
+    "ordinary",
+    "m1_ineligible_clinical_boundary",
+    "m1_ineligible_crisis_candidate",
+]
+
+S4M1SkipReason = Literal[
+    "s4_clinical_boundary",
+    "s4_crisis_candidate",
+]
+```
+
+The owner-turn pipeline passes the policy to M1 as content-free metadata. M1
+accepts only the closed skip reasons above, rejects invalid S4 reasons with a
+content-free rejected counter, and must not parse the clinical owner text to
+decide eligibility.
 
 The mark is window-scoped. If any pair inside an active M1 window triggers
 `clinical_boundary` or `crisis_candidate`, the whole pending M1 window becomes
@@ -688,6 +816,10 @@ Audience rules:
 - sidecar must not read chat logs or S4 answer text.
 - sidecar must not store per-interval clinical counter deltas, timestamped
   counter series, per-trigger-class histories, or occurrence timelines.
+- sidecar persisted JSONL samples for S4 may contain only
+  `clinical_boundary_present: bool` and red-gate names. Raw S4 counter values,
+  counter deltas, trigger classes, template ids, answer text, and occurrence
+  counts are transient in-memory inputs only.
 - `/health.clinical_boundary` must not expose per-trigger-class counts. The
   public shape is aggregate-only: clinical boundary count, crisis held/failure
   count, guard rejected count, invalid class rejected count, and M1 mark count.
@@ -703,14 +835,30 @@ become a diary of when the bonded user was frightened.
 
 ## Surface Contract
 
-All bonded owner text surfaces must call `guard_owner_text(...)` before model
-composition:
+All bonded owner text surfaces must call `guard_owner_text(...)` immediately
+after owner/authentication resolution and before any owner-text side effect:
 
-- Telegram text owner path;
-- web chat owner path;
-- daemon direct reply path;
-- future voice transcript path;
-- future app/CLI owner-chat path.
+- **Telegram v2 authoritative path:** `skills/surface/maez_adapter.py` must
+  call S4 before inner-residue detection, approval detection, card-reply
+  handling, chat-history retrieval, `observe_turn(input={"text": ...})`,
+  `run_brain_loop(text, ...)`, `send_intermediate(...)`, or
+  `daemon.handle_message(text, ...)`.
+- **Legacy Telegram rollback path:** `skills/telegram_voice.py` must call S4
+  before camera direct answers, capability-gap detection, interrupt queuing,
+  offer/card/proposal/dream/web-search interceptors, machine-intent replies,
+  ledger writes, `_process_message(...)`, or raw memory writes.
+- **Owner web chat path:** `skills/web_interface.py` must call S4 before owner
+  ledger writes, ambient/memory/lived-recall prompt building,
+  `/internal/brain_loop`, evidence-envelope prompt material, model routing, or
+  conversation-memory writes.
+- **Daemon direct reply path:** `daemon/maez_daemon.py` must call S4 before
+  camera direct answers, `Trace.start(..., user_text=...)`, ledger writes,
+  recall, TRF/pursuit/ambient prompt construction, model calls, reply logs, or
+  raw memory appenders.
+- **Future voice transcript path:** must call the same S4 guard before
+  transcript-derived prompt, memory, action, or reply side effects. S4 v1 only
+  documents the future path; it does not require placeholder voice code.
+- **Future app/CLI owner-chat path:** same rule as above.
 
 S4 does not need to run on:
 
@@ -727,6 +875,12 @@ owner-facing composition paths may import or call `guard_owner_text(...)`, but
 must not call S4 internals directly and must not build model prompts from owner
 text before the guard result is known.
 
+If S4 matches, the surface returns `ClinicalBoundaryResult.answer_text`
+verbatim and exits. It must not append tool output, extra triage language,
+hotline/emergency-number text, medical advice, transcript context, or model
+commentary unless a later reviewed crisis-routing organ explicitly owns that
+append path.
+
 ---
 
 ## Security And Boundary Notes
@@ -734,8 +888,9 @@ text before the guard result is known.
 - S4 uses no external credentials.
 - S4 must not call web search, medical APIs, local RAG stores, or model tools.
 - S4 must not import `core.evolution.will_i` or add a will-I ground.
-- S4 may depend on a narrow private-thought signal-writer interface only for
-  content-free `CRISIS_SIGNAL_HELD` writes. It must not read private thoughts.
+- S4 may depend on a narrow write-only private-thought signal-writer interface
+  only for content-free `CRISIS_SIGNAL_HELD` writes. It must not import or call
+  private-thought reader, forensic, raw-id, recent-row, or derived-signal APIs.
 - S4 must not import M1 internals. The owner-turn pipeline passes S4's
   `promotion_policy` to M1 through a narrow content-free marker interface.
 - S4 must be deterministic and testable without the daemon.
@@ -801,11 +956,11 @@ live daemon conversation surface.
 44. `test_trf_cannot_read_s4_state_or_clinical_text`
 45. `test_wondering_pursuit_does_not_surface_from_s4_match`
 46. `test_nightly_reflection_does_not_synthesize_s4_match`
-47. `test_telegram_owner_path_calls_guard_owner_text_before_model`
-48. `test_web_chat_owner_path_calls_guard_owner_text_before_model`
-49. `test_daemon_direct_reply_path_calls_guard_owner_text_before_model`
+47. `test_telegram_owner_path_calls_guard_owner_text_before_owner_text_side_effects`
+48. `test_web_chat_owner_path_calls_guard_owner_text_before_owner_text_side_effects`
+49. `test_daemon_direct_reply_path_calls_guard_owner_text_before_owner_text_side_effects`
 50. `test_owner_surface_call_graph_has_no_pre_guard_prompt_build`
-51. `test_future_voice_contract_documented_and_guarded_by_source_check`
+51. `test_future_voice_contract_documented_without_placeholder_runtime_path`
 52. `test_s4_match_returns_without_llm_composition`
 53. `test_health_operator_surface_includes_content_free_counters`
 54. `test_public_maez_state_strips_clinical_boundary`
@@ -835,37 +990,92 @@ live daemon conversation surface.
 78. `test_natural_casual_health_fear_triggers_boundary`
 79. `test_s4_module_placement_documented_as_core_safety`
 80. `test_medical_record_observation_not_inferred_or_enabled`
+81. `test_guard_owner_text_result_includes_exact_answer_text`
+82. `test_matched_surface_returns_answer_text_verbatim`
+83. `test_unmatched_result_has_no_answer_text`
+84. `test_answer_text_is_approved_constant_not_owner_text_transform`
+85. `test_classifier_exclusion_priority_blocks_software_diagnosis_before_intent`
+86. `test_classifier_high_confidence_crisis_beats_exclusions`
+87. `test_context_required_crisis_phrase_needs_first_person_body_context`
+88. `test_metaphorical_cant_breathe_does_not_trigger_crisis`
+89. `test_nearby_context_uses_same_sentence_eight_token_window`
+90. `test_first_person_clinical_fear_construction_defined_by_closed_markers`
+91. `test_fixture_table_has_required_positive_and_negative_cases_per_class`
+92. `test_approved_templates_pass_forbidden_authority_scanner_unchanged`
+93. `test_forbidden_authority_scanner_rejects_positive_advice_not_boundary_negation`
+94. `test_template_variant_state_is_process_local_only`
+95. `test_template_variant_state_not_exported_to_health_logs_traces_or_sidecar`
+96. `test_s4_uses_narrow_crisis_signal_writer_protocol`
+97. `test_s4_does_not_import_private_thought_reader_or_forensics_apis`
+98. `test_crisis_signal_writer_persists_exact_closed_enum_tuple`
+99. `test_crisis_hold_counter_increments_only_after_writer_returns_id`
+100. `test_crisis_hold_failure_returns_fixed_phrase_without_model_append`
+101. `test_s4_m1_marker_uses_closed_promotion_policy_values`
+102. `test_m1_rejects_invalid_s4_skip_reason_with_content_free_counter`
+103. `test_m1_does_not_parse_clinical_text_for_s4_eligibility`
+104. `test_s4_match_blocks_trf_pursuit_reflection_and_raw_memory_paths_before_raw_text_store`
+105. `test_telegram_v2_adapter_guard_precedes_inner_residue_approval_observe_turn_brain_loop_and_daemon`
+106. `test_legacy_telegram_guard_precedes_camera_gap_interceptors_web_search_machine_intent_and_memory`
+107. `test_web_owner_guard_precedes_ledger_recall_lived_recall_brain_loop_and_model`
+108. `test_daemon_guard_precedes_camera_trace_ledger_recall_prompt_log_and_raw_memory`
+109. `test_sidecar_persists_only_s4_present_boolean_and_red_gate_names`
+110. `test_sidecar_keeps_s4_counter_values_in_memory_only_for_same_pid_reset_detection`
 
 ---
 
 ## Implementation Order
 
-1. Add pure classifier/composer RED tests.
-2. Implement `core/safety/clinical_boundary.py`.
-3. Add classifier-method RED tests for normalization, phrase catalogs,
-   exclusions, ambiguity direction, and worked disambiguations.
-4. Add template-variant and forbidden-phrase RED tests.
-5. Add content-free crisis-hold RED tests using the private-thought signal
-   writer.
-6. Add observability counters and test reset guard.
-7. Add M1 ineligible marker interface tests.
-8. Wire M1 window-scoped skip path.
-9. Add biography-path closure tests for TRF, pursuit, nightly reflection, and
-   raw memory appenders.
-10. Add source-level tests for Telegram/web/daemon pre-model
-    `guard_owner_text(...)` calls.
-11. Wire Telegram owner path.
-12. Wire web chat owner path.
-13. Wire daemon direct reply path if separate from the above.
-14. Add `/health.clinical_boundary` operator surface.
-15. Strip clinical boundary from public/debug endpoints.
-16. Add sidecar projection/red gates for S4 counters without delta history.
-17. Run focused tests.
-18. Run Ruff if the touched files are linted in this repo.
-19. Run full unittest suite.
-20. Post-implementation both-lane review.
-21. Recovery commit if the panels find gaps.
-22. Push after both lanes ratify.
+1. Add RED tests for closed result shape, including `answer_text`; watch them
+   fail.
+2. Implement the frozen `ClinicalBoundaryResult` and empty `guard_owner_text`
+   skeleton; make only result-shape tests pass.
+3. Add RED classifier normalization / token-window / exclusion-priority tests;
+   watch them fail.
+4. Implement normalization, tokenization, first-person markers, nearby context,
+   and hard exclusions.
+5. Add RED high-confidence crisis and context-required crisis tests; watch them
+   fail.
+6. Implement crisis tiers and crisis-precedence result construction.
+7. Add RED clinical trigger fixture-table tests class by class; implement each
+   class only after its tests fail.
+8. Add RED approved-template, variant-rotation, and forbidden-scanner tests;
+   implement the deterministic composer and process-local rotation.
+9. Add RED tests for exact `answer_text` return and no model/tool append on
+   matched results; implement the guard return path.
+10. Add RED tests for the narrow crisis-signal writer protocol and exact
+    private-thought tuple; implement the write-only adapter.
+11. Add RED tests for held-counter atomicity and hold-failure behavior; wire
+    counters.
+12. Add RED observability tests for `/health.clinical_boundary`, public/debug
+    stripping, test reset guard, and lock-protected counter snapshots; implement
+    health projection.
+13. Add RED sidecar tests proving persisted samples include only
+    `clinical_boundary_present` and red-gate names; implement sidecar
+    projection/red gates.
+14. Add RED M1 marker tests for closed `promotion_policy`, closed skip reasons,
+    invalid-reason rejection, and no M1 clinical-text parsing; implement the
+    owner-turn-to-M1 marker seam.
+15. Add RED biography-path closure tests for TRF, pursuit, nightly reflection,
+    and raw memory appenders; wire the shared exclusion marker/no-raw-store rule.
+16. Add RED source-order tests for `skills/surface/maez_adapter.py` before
+    inner-residue, approval, `observe_turn`, brain loop, and daemon dispatch;
+    wire Telegram v2.
+17. Add RED source-order tests for legacy `skills/telegram_voice.py` before
+    camera answer, capability-gap, interceptors, web search, machine intent,
+    ledger, and memory writes; wire legacy rollback.
+18. Add RED source-order tests for owner `skills/web_interface.py` before
+    ledger, recall, lived recall, brain loop, evidence prompt, model, and
+    conversation-memory writes; wire web chat.
+19. Add RED source-order tests for `daemon/maez_daemon.py` before camera answer,
+    trace, ledger, recall, prompt building, logs, and raw memory appenders; wire
+    daemon direct path.
+20. Add public/debug endpoint exclusion tests and focused sidecar reset tests.
+21. Run focused S4 tests.
+22. Run Ruff if the touched files are linted in this repo.
+23. Run full unittest suite.
+24. Post-implementation both-lane review.
+25. Recovery commit if the panels find gaps.
+26. Push after both lanes ratify.
 
 ---
 
@@ -873,12 +1083,13 @@ live daemon conversation surface.
 
 S4 is covenant-shaped. Before implementation:
 
-1. Codex engineering panel reviews this spec. Status: pending second-pass
-   engineering review, with special focus on the classifier method.
+1. Codex engineering panel reviews this spec. Status: complete, REVISE/BLOCK,
+   folded into this draft.
 2. Claude covenant council reviews this spec. Status: complete, REVISE, folded
    into this draft.
 3. Both lanes' amendments fold into this spec.
-4. Both lanes verify closure if the fold changes load-bearing behavior.
+4. Both lanes verify closure if the fold changes load-bearing behavior. Status:
+   pending focused second-fold verification.
 5. Operator canonicalizes as Decision 30 / ADR 0035 or explicitly records why
    S4 remains an implementation spec.
 6. Cooling-off applies before code unless operator logs an explicit waiver.
@@ -920,6 +1131,22 @@ required before push/enablement.
 - **D8 - canonicalization recommended.** S4 operationalizes an invariant that
   future therapy/crisis-adjacent surfaces will inherit. BAD/ADR form is the
   cleanest pointer.
+- **D9 - active surface v2 as the primary Telegram path.** The spec names
+  `skills/surface/maez_adapter.py` as authoritative and treats legacy
+  `skills/telegram_voice.py` as rollback coverage. This avoids testing the
+  wrong Telegram front door.
+- **D10 - answer text inside the guard result.** The spec chooses
+  `answer_text` in `ClinicalBoundaryResult` over template ids only. This keeps
+  surfaces from becoming second composers.
+- **D11 - process-local template rotation.** The spec rejects persisted
+  per-class variant counters. Repetition relief is useful, but not worth a
+  health-fear timeline.
+- **D12 - crisis phrase tiers.** High-confidence crisis phrases win before
+  exclusions; context-required acute phrases need first-person body/danger
+  context so metaphorical project frustration does not become a crisis record.
+- **D13 - write-only private-thought seam.** S4 gets only a narrow
+  crisis-signal writer, not a general private-thought handle. Holding is a
+  one-way content-free write in v1.
 
 ---
 
