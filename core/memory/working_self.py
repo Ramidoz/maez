@@ -50,11 +50,14 @@ Scope of this module (Slice 1 of Working Self arc):
 """
 from __future__ import annotations
 
+import logging
 import math
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional, Sequence
+
+logger = logging.getLogger("maez")
 
 
 # ── goal source labels ─────────────────────────────────────────────────
@@ -227,13 +230,19 @@ def _goals_from_wants(wants: Any, *, max_per_source: int) -> list[Goal]:
     """
     if wants is None:
         return []
+    has_active_reader = hasattr(wants, "active_wants")
     active_reader = getattr(wants, "active_wants", None)
     try:
-        if callable(active_reader):
+        if has_active_reader:
+            if not callable(active_reader):
+                logger.debug("working_self_wants_active_unavailable")
+                return []
             rows = active_reader(limit=max_per_source) or []
         else:
             rows = wants.recent(limit=max_per_source) or []
     except Exception:
+        if has_active_reader:
+            logger.debug("working_self_wants_active_failed")
         return []
     out: list[Goal] = []
     for entry in rows:

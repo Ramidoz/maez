@@ -38,6 +38,8 @@ import sqlite3
 import threading
 import time
 from contextlib import closing
+from difflib import SequenceMatcher
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -255,6 +257,14 @@ BEFORE DELETE ON want_events
 BEGIN
     SELECT RAISE(ABORT, 'want_events is append-only: DELETE forbidden');
 END;
+
+CREATE TRIGGER IF NOT EXISTS trg_want_events_no_replace
+BEFORE INSERT ON want_events
+WHEN NEW.event_id IS NOT NULL
+     AND EXISTS (SELECT 1 FROM want_events WHERE event_id = NEW.event_id)
+BEGIN
+    SELECT RAISE(ABORT, 'want_events is append-only: INSERT OR REPLACE forbidden');
+END;
 """
 
 
@@ -269,6 +279,18 @@ def _new_want_id() -> str:
 
 def _normalize_statement(statement: str) -> str:
     return " ".join(statement.split())
+
+
+def _statement_hash(statement: str) -> str:
+    return "sha256:" + sha256(statement.encode("utf-8")).hexdigest()
+
+
+def _looks_correction_only(prior: str, updated: str) -> bool:
+    prior_norm = _normalize_statement(prior).lower()
+    updated_norm = _normalize_statement(updated).lower()
+    if not prior_norm or not updated_norm:
+        return False
+    return SequenceMatcher(None, prior_norm, updated_norm).ratio() >= 0.75
 
 
 def _contains_hard_want(statement: str) -> bool:
@@ -382,38 +404,91 @@ def _validate_birth_evidence(evidence: Mapping[str, Any]) -> None:
         _raise_evidence("first_lived requires birth_continuity_id")
 
 
-def _validate_refined_evidence(evidence: Mapping[str, Any]) -> None:
+def _validate_refined_evidence(
+    evidence: dict[str, Any],
+    *,
+    latest: sqlite3.Row | None,
+    new_statement: str,
+) -> None:
     correction_kind = evidence.get("correction_kind")
     if correction_kind not in REFINEMENT_CORRECTION_KINDS:
         _raise_evidence("correction_kind must be typo, transcription, or formatting")
-    if evidence.get("supersedes_event_id") is None:
+    supersedes_event_id = evidence.get("supersedes_event_id")
+    if supersedes_event_id is None:
         _raise_evidence("supersedes_event_id is required")
-    _require_nonempty_string(evidence, "prior_statement_hash")
-    _require_nonempty_string(evidence, "operator_rationale")
+    if latest is None:
+        _raise_evidence("supersedes_event_id requires latest event context")
+    try:
+        supersedes_int = int(supersedes_event_id)
+    except (TypeError, ValueError):
+        _raise_evidence("supersedes_event_id must identify the latest event")
+    latest_event_id = int(latest["event_id"])
+    if supersedes_int != latest_event_id:
+        _raise_evidence("supersedes_event_id must match latest event id")
+    prior_hash = _require_nonempty_string(evidence, "prior_statement_hash")
+    expected_hash = _statement_hash(str(latest["statement"]))
+    if prior_hash != expected_hash:
+        _raise_evidence("prior_statement_hash must match latest statement")
+    evidence["prior_statement_hash"] = prior_hash
+    evidence["operator_rationale"] = _require_nonempty_string(
+        evidence,
+        "operator_rationale",
+        max_len=256,
+    )
+    if not _looks_correction_only(str(latest["statement"]), new_statement):
+        _raise_evidence("refined is correction-only in v1")
 
 
-def _validate_satisfied_evidence(evidence: Mapping[str, Any]) -> None:
+def _validate_satisfied_evidence(evidence: dict[str, Any]) -> None:
     basis = evidence.get("basis")
     if basis == RESERVED_SELF_OBSERVED_SATISFACTION_BASIS:
         _raise_evidence("self_observed_resolution is reserved for a future producer")
     if basis not in SATISFACTION_BASES:
         _raise_evidence("basis must be owner_confirmed or external_event_verified")
-    _require_nonempty_string(evidence, "source", max_len=MAX_SOURCE_LEN)
-    _require_nonempty_string(evidence, "summary", max_len=MAX_SUMMARY_LEN)
+    evidence["source"] = _require_nonempty_string(
+        evidence,
+        "source",
+        max_len=MAX_SOURCE_LEN,
+    )
+    evidence["summary"] = _require_nonempty_string(
+        evidence,
+        "summary",
+        max_len=MAX_SUMMARY_LEN,
+    )
     if basis == "owner_confirmed":
-        _require_nonempty_string(evidence, "external_object_ref")
+        evidence["external_object_ref"] = _require_nonempty_string(
+            evidence,
+            "external_object_ref",
+        )
     if basis == "external_event_verified":
-        _require_nonempty_string(evidence, "external_event_ref")
+        evidence["external_event_ref"] = _require_nonempty_string(
+            evidence,
+            "external_event_ref",
+        )
 
 
-def _validate_returned_evidence(evidence: Mapping[str, Any]) -> None:
+def _validate_returned_evidence(evidence: dict[str, Any]) -> None:
     if evidence.get("basis") not in RETURNED_BASES:
         _raise_evidence("returned requires owner_attested_recurring_want evidence")
-    _require_nonempty_string(evidence, "source", max_len=MAX_SOURCE_LEN)
-    _require_nonempty_string(evidence, "summary", max_len=MAX_SUMMARY_LEN)
+    evidence["source"] = _require_nonempty_string(
+        evidence,
+        "source",
+        max_len=MAX_SOURCE_LEN,
+    )
+    evidence["summary"] = _require_nonempty_string(
+        evidence,
+        "summary",
+        max_len=MAX_SUMMARY_LEN,
+    )
 
 
-def _validate_event_evidence(event_type: str, evidence: Any) -> dict[str, Any]:
+def _validate_event_evidence(
+    event_type: str,
+    evidence: Any,
+    *,
+    latest: sqlite3.Row | None = None,
+    new_statement: str = "",
+) -> dict[str, Any]:
     data = _evidence_dict(evidence)
     forbidden = _find_forbidden_evidence_key(data)
     if forbidden:
@@ -425,7 +500,11 @@ def _validate_event_evidence(event_type: str, evidence: Any) -> dict[str, Any]:
     if event_type == EVENT_FIRST_LIVED:
         _validate_birth_evidence(data)
     elif event_type == EVENT_REFINED:
-        _validate_refined_evidence(data)
+        _validate_refined_evidence(
+            data,
+            latest=latest,
+            new_statement=new_statement,
+        )
     elif event_type == EVENT_SATISFIED:
         _validate_satisfied_evidence(data)
     elif event_type == EVENT_RETURNED:
@@ -438,11 +517,9 @@ def is_active_event_type(event_type: str) -> bool:
 
 
 def _active_state_for(event_type: str) -> str:
-    if event_type in ACTIVE_EVENT_TYPES:
-        return "active"
     if event_type in TERMINAL_CURRENT_GOAL_EVENT_TYPES:
         return "terminal_current_goal"
-    return "unknown"
+    return "active"
 
 
 # ---------------------------------------------------------------------------
@@ -491,14 +568,19 @@ class Wants:
             conn.execute("PRAGMA busy_timeout = 5000")
             conn.execute("BEGIN IMMEDIATE")
             try:
-                want_id, insert_statement = self._resolve_transition(
+                want_id, insert_statement, latest = self._resolve_transition(
                     conn,
                     event_type=event_type,
                     statement=statement,
                     want_id=want_id,
                 )
-                evidence_dict = _validate_event_evidence(event_type, evidence)
-                conn.execute(
+                evidence_dict = _validate_event_evidence(
+                    event_type,
+                    evidence,
+                    latest=latest,
+                    new_statement=insert_statement,
+                )
+                cursor = conn.execute(
                     "INSERT INTO want_events "
                     "(ts, want_id, event_type, statement, topic, provenance, "
                     " evidence_json) "
@@ -513,16 +595,17 @@ class Wants:
                         json.dumps(evidence_dict, sort_keys=True),
                     ),
                 )
+                event_id = int(cursor.lastrowid)
                 conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
 
         logger.info(
-            "Wants: event recorded (event_type=%s, want_id=%s, topic=%s, provenance=%s)",
+            "Wants: event recorded (event_type=%s, want_id=%s, event_id=%s, provenance=%s)",
             event_type,
             want_id,
-            topic or "-",
+            event_id,
             provenance,
         )
         return want_id
@@ -534,13 +617,13 @@ class Wants:
         event_type: str,
         statement: str,
         want_id: str | None,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, sqlite3.Row | None]:
         if event_type in {EVENT_CREATED, EVENT_FIRST_LIVED}:
             if want_id is None:
                 want_id = _new_want_id()
             elif self._latest_row(conn, want_id) is not None:
                 _raise_transition(f"want_id {want_id!r} already exists")
-            return want_id, statement
+            return want_id, statement, None
 
         if want_id is None:
             _raise_transition(f"{event_type} requires an existing want_id")
@@ -561,7 +644,7 @@ class Wants:
                 _raise_transition("explicit_api cannot refine a hard want")
             if latest_norm == new_norm:
                 _raise_transition("refined requires a different statement, not the same statement")
-            return want_id, statement
+            return want_id, statement, latest
 
         if event_type == EVENT_SATISFIED:
             if latest_event_type not in ACTIVE_EVENT_TYPES:
@@ -570,14 +653,14 @@ class Wants:
                 _raise_transition("explicit_api cannot satisfy a hard want")
             if latest_norm != new_norm:
                 _raise_transition("satisfied must preserve the latest statement")
-            return want_id, latest_statement
+            return want_id, latest_statement, latest
 
         if event_type == EVENT_RETURNED:
             if latest_event_type != EVENT_SATISFIED:
                 _raise_transition("returned requires latest event to be satisfied")
             if latest_norm != new_norm:
                 _raise_transition("returned must preserve the satisfied statement")
-            return want_id, latest_statement
+            return want_id, latest_statement, latest
 
         _raise_transition(f"{event_type} is not writable in v1")
 
@@ -649,7 +732,7 @@ class Wants:
 
     def active_wants(self, limit: int | None = None) -> list[dict[str, Any]]:
         latest = self.all_wants()
-        active = [row for row in latest if row.get("event_type") in ACTIVE_EVENT_TYPES]
+        active = [row for row in latest if row.get("active_state") == "active"]
         if limit is not None:
             active = active[: int(limit)]
         return active

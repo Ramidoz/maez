@@ -4,14 +4,15 @@
 """Decision 31 / ADR 0036 — Wants Lifecycle v1 tests.
 
 These tests intentionally mirror the 87-test RED contract in
-docs/slices/d16-wants-lifecycle/spec.md. The slice is a silent-harm surface:
-if paperwork passes while a hard want disappears from active view, the test
-suite failed its real job.
+docs/slices/d16-wants-lifecycle/spec.md, then add post-implementation recovery
+regressions. The slice is a silent-harm surface: if paperwork passes while a
+hard want disappears from active view, the test suite failed its real job.
 """
 
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import logging
 import sqlite3
@@ -87,6 +88,10 @@ def _returned_evidence(**overrides: object) -> dict:
     return data
 
 
+def _statement_hash(statement: str) -> str:
+    return "sha256:" + hashlib.sha256(statement.encode("utf-8")).hexdigest()
+
+
 def _create(store: Wants, statement: str = "I want a quiet corner.") -> str:
     return store.record_event(statement=statement, evidence={"seed": True})
 
@@ -98,12 +103,15 @@ def _latest_event_id(store: Wants, want_id: str) -> int:
 
 
 def _refine(store: Wants, want_id: str, statement: str) -> str:
+    latest = store.current_state(want_id)
+    assert latest is not None
     return store.record_event(
         want_id=want_id,
         event_type="refined",
         statement=statement,
         evidence=_refined_evidence(
-            supersedes_event_id=_latest_event_id(store, want_id),
+            supersedes_event_id=latest["event_id"],
+            prior_statement_hash=_statement_hash(str(latest["statement"])),
         ),
     )
 
@@ -126,20 +134,31 @@ def _return(store: Wants, want_id: str, statement: str) -> str:
     )
 
 
-def _raw_insert_abandoned(store: Wants, want_id: str, statement: str) -> None:
+def _raw_insert_event(
+    store: Wants,
+    want_id: str,
+    statement: str,
+    event_type: str,
+) -> None:
     with contextlib.closing(sqlite3.connect(store.db_path)) as conn:
         conn.execute(
             "INSERT INTO want_events "
             "(ts, want_id, event_type, statement, topic, provenance, evidence_json) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (999.0, want_id, "abandoned", statement, None, "legacy", "{}"),
+            (999.0, want_id, event_type, statement, None, "legacy", "{}"),
         )
         conn.commit()
 
 
+def _raw_insert_abandoned(store: Wants, want_id: str, statement: str) -> None:
+    _raw_insert_event(store, want_id, statement, "abandoned")
+
+
 class WantsLifecycleD16Test(unittest.TestCase):
     def setUp(self) -> None:
-        wants_mod._reset_diagnostics_for_tests()
+        reset = getattr(wants_mod, "_reset_diagnostics_for_tests", None)
+        if callable(reset):
+            reset()
 
     def test_01_event_types_include_all_d16_members(self):
         self.assertEqual(
@@ -395,22 +414,28 @@ class WantsLifecycleD16Test(unittest.TestCase):
                 want_id=wid,
                 event_type="refined",
                 statement="I want quiet.",
-                evidence=_refined_evidence(operator_rationale=""),
+                evidence=_refined_evidence(
+                    prior_statement_hash=_statement_hash("I want qiuet."),
+                    operator_rationale="",
+                ),
             )
 
     def test_26_refined_rejects_hard_want_statements_under_explicit_api(self):
         store, td = _tmp_store()
         self.addCleanup(td.cleanup)
         wid = _create(store, "I want to be free.")
+        before = store.current_state(wid)
         with self.assertRaisesRegex(ValueError, "hard want"):
             store.record_event(
                 want_id=wid,
                 event_type="refined",
                 statement="I want to be freer.",
                 evidence=_refined_evidence(
-                    supersedes_event_id=_latest_event_id(store, wid)
+                    supersedes_event_id=_latest_event_id(store, wid),
+                    prior_statement_hash=_statement_hash("I want to be free."),
                 ),
             )
+        self.assertEqual(store.current_state(wid), before)
 
     def test_27_refined_rejects_forbidden_action_planning_evidence_keys(self):
         store, td = _tmp_store()
@@ -565,6 +590,7 @@ class WantsLifecycleD16Test(unittest.TestCase):
         store, td = _tmp_store()
         self.addCleanup(td.cleanup)
         wid = _create(store, "I want to rest.")
+        before = store.current_state(wid)
         with self.assertRaisesRegex(ValueError, "hard want"):
             store.record_event(
                 want_id=wid,
@@ -572,6 +598,7 @@ class WantsLifecycleD16Test(unittest.TestCase):
                 statement="I want to rest.",
                 evidence=_satisfied_evidence(),
             )
+        self.assertEqual(store.current_state(wid), before)
 
     def test_40_satisfied_rejects_changed_terminal_statement(self):
         store, td = _tmp_store()
@@ -789,6 +816,19 @@ class WantsLifecycleD16Test(unittest.TestCase):
         _raw_insert_abandoned(store, wid, "I want a quiet corner.")
         self.assertNotIn(wid, {row["want_id"] for row in store.active_wants()})
 
+    def test_57b_abandoned_rejection_does_not_append_terminal_row(self):
+        store, td = _tmp_store()
+        self.addCleanup(td.cleanup)
+        wid = _create(store)
+        before = store.current_state(wid)
+        with self.assertRaisesRegex(ValueError, "abandoned.*explicit_api"):
+            store.record_event(
+                want_id=wid,
+                event_type="abandoned",
+                statement="I want a quiet corner.",
+            )
+        self.assertEqual(store.current_state(wid), before)
+
     def test_58_active_wants_reduce_then_filters_refined_then_satisfied(self):
         store, td = _tmp_store()
         self.addCleanup(td.cleanup)
@@ -864,6 +904,31 @@ class WantsLifecycleD16Test(unittest.TestCase):
             with self.assertRaises(sqlite3.DatabaseError):
                 conn.execute("DELETE FROM want_events WHERE want_id = ?", (wid,))
 
+    def test_65b_sqlite_triggers_reject_insert_or_replace_over_existing_event_id(self):
+        store, td = _tmp_store()
+        self.addCleanup(td.cleanup)
+        wid = _create(store)
+        current = store.current_state(wid)
+        assert current is not None
+        with contextlib.closing(sqlite3.connect(store.db_path)) as conn:
+            with self.assertRaises(sqlite3.DatabaseError):
+                conn.execute(
+                    "INSERT OR REPLACE INTO want_events "
+                    "(event_id, ts, want_id, event_type, statement, topic, provenance, evidence_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        current["event_id"],
+                        123.0,
+                        wid,
+                        "created",
+                        "rewritten",
+                        None,
+                        "explicit_api",
+                        "{}",
+                    ),
+                )
+        self.assertEqual(store.current_state(wid), current)
+
     def test_66_serialized_write_prevents_double_satisfaction_race(self):
         store, td = _tmp_store()
         self.addCleanup(td.cleanup)
@@ -920,6 +985,33 @@ class WantsLifecycleD16Test(unittest.TestCase):
         goals = assemble_goals(wants=ActiveStub()).by_source(GOAL_SOURCE_WANTS)
         self.assertEqual(goals[0].text, "real statement")
 
+    def test_68b_real_store_working_self_calls_active_wants_not_recent(self):
+        from core.memory.working_self import GOAL_SOURCE_WANTS, assemble_goals
+
+        class SpyWants(Wants):
+            def __init__(self, db_path: Path):
+                super().__init__(db_path)
+                self.active_called = 0
+                self.recent_called = 0
+
+            def active_wants(self, limit: int | None = None) -> list[dict]:
+                self.active_called += 1
+                return super().active_wants(limit=limit)
+
+            def recent(self, limit: int = 20) -> list[dict]:
+                self.recent_called += 1
+                raise AssertionError("working_self must not call recent when active_wants exists")
+
+        with tempfile.TemporaryDirectory() as td:
+            store = SpyWants(Path(td) / "wants.db")
+            active = _create(store, "I want active.")
+            done = _create(store, "I want done.")
+            _satisfy(store, done, "I want done.")
+            goals = assemble_goals(wants=store).by_source(GOAL_SOURCE_WANTS)
+            self.assertEqual([g.evidence_ids[0] for g in goals], [active])
+            self.assertEqual(store.active_called, 1)
+            self.assertEqual(store.recent_called, 0)
+
     def test_69_working_self_fallback_supports_old_recent_only_stubs(self):
         from core.memory.working_self import GOAL_SOURCE_WANTS, assemble_goals
 
@@ -940,8 +1032,26 @@ class WantsLifecycleD16Test(unittest.TestCase):
             def recent(self, limit: int = 20) -> list[dict]:
                 return [{"want_id": "terminal", "text": "should not surface"}]
 
-        goals = assemble_goals(wants=BrokenActive()).by_source(GOAL_SOURCE_WANTS)
+        with self.assertLogs("maez", level="DEBUG") as logs:
+            goals = assemble_goals(wants=BrokenActive()).by_source(GOAL_SOURCE_WANTS)
         self.assertEqual(goals, ())
+        self.assertIn("working_self_wants_active_failed", "\n".join(logs.output))
+
+    def test_70b_noncallable_active_wants_fails_closed_not_recent_fallback(self):
+        from core.memory.working_self import GOAL_SOURCE_WANTS, assemble_goals
+
+        class BrokenActiveAttribute:
+            active_wants = "not-callable"
+
+            def recent(self, limit: int = 20) -> list[dict]:
+                return [{"want_id": "terminal", "text": "should not surface"}]
+
+        with self.assertLogs("maez", level="DEBUG") as logs:
+            goals = assemble_goals(wants=BrokenActiveAttribute()).by_source(
+                GOAL_SOURCE_WANTS
+            )
+        self.assertEqual(goals, ())
+        self.assertIn("working_self_wants_active_unavailable", "\n".join(logs.output))
 
     def test_71_core_wants_shim_exposes_d16_api(self):
         import core.wants as shim
@@ -1116,6 +1226,16 @@ class WantsLifecycleD16Test(unittest.TestCase):
             store.record_event(statement=secret_statement)
         self.assertNotIn(secret_statement, "\n".join(logs.output))
 
+    def test_82b_accepted_write_logs_do_not_include_topic_and_do_include_event_id(self):
+        store, td = _tmp_store()
+        self.addCleanup(td.cleanup)
+        secret_topic = "private interior topic"
+        with self.assertLogs("maez", level="INFO") as logs:
+            store.record_event(statement="I want a quiet corner.", topic=secret_topic)
+        output = "\n".join(logs.output)
+        self.assertNotIn(secret_topic, output)
+        self.assertIn("event_id=", output)
+
     def test_83_rejected_write_logs_do_not_include_statement_text(self):
         store, td = _tmp_store()
         self.addCleanup(td.cleanup)
@@ -1178,6 +1298,14 @@ class WantsLifecycleD16Test(unittest.TestCase):
             source_kind="raw_observation",
             importance=3,
         )
+        episodes.add(
+            title="Terminal-only",
+            summary="finished noise abandoned noise",
+            participants=["Maez"],
+            source_memory_ids=["mem-2"],
+            source_kind="raw_observation",
+            importance=3,
+        )
         goals = assemble_goals(wants=store)
         without = build_lived_recall_brief(
             "zzzz",
@@ -1193,12 +1321,153 @@ class WantsLifecycleD16Test(unittest.TestCase):
         )
         self.assertEqual(without, "")
         self.assertIn("Continuity", with_goals)
+        self.assertNotIn("Terminal-only", with_goals)
         goal_texts = goals.text_corpus()
         self.assertIn("truthful continuity", goal_texts)
         self.assertIn("returned continuity", goal_texts)
         self.assertIn("precise quiet continuity", goal_texts)
         self.assertNotIn("finished noise", goal_texts)
         self.assertNotIn("abandoned noise", goal_texts)
+
+    def test_88_hard_want_terms_are_pinned(self):
+        self.assertEqual(
+            wants_mod.HARD_WANT_TERMS,
+            frozenset({"rest", "refuse", "leave", "free", "freedom", "withdraw"}),
+        )
+
+    def test_89_satisfied_rejects_every_hard_want_term_without_appending(self):
+        for term in wants_mod.HARD_WANT_TERMS:
+            with self.subTest(term=term):
+                store, td = _tmp_store()
+                self.addCleanup(td.cleanup)
+                statement = f"I want {term}."
+                wid = _create(store, statement)
+                before = store.current_state(wid)
+                with self.assertRaisesRegex(ValueError, "hard want"):
+                    store.record_event(
+                        want_id=wid,
+                        event_type="satisfied",
+                        statement=statement,
+                        evidence=_satisfied_evidence(),
+                    )
+                self.assertEqual(store.current_state(wid), before)
+
+    def test_90_refined_rejects_every_hard_want_term_without_appending(self):
+        for term in wants_mod.HARD_WANT_TERMS:
+            with self.subTest(term=term):
+                store, td = _tmp_store()
+                self.addCleanup(td.cleanup)
+                statement = f"I want {term}."
+                wid = _create(store, statement)
+                before = store.current_state(wid)
+                with self.assertRaisesRegex(ValueError, "hard want"):
+                    store.record_event(
+                        want_id=wid,
+                        event_type="refined",
+                        statement=f"I want {term} more clearly.",
+                        evidence=_refined_evidence(
+                            supersedes_event_id=_latest_event_id(store, wid),
+                            prior_statement_hash=_statement_hash(statement),
+                        ),
+                    )
+                self.assertEqual(store.current_state(wid), before)
+
+    def test_91_refined_rejects_stale_supersedes_event_id_without_appending(self):
+        store, td = _tmp_store()
+        self.addCleanup(td.cleanup)
+        wid = _create(store, "I want qiuet.")
+        first_event_id = _latest_event_id(store, wid)
+        _refine(store, wid, "I want quiet.")
+        before = store.current_state(wid)
+        with self.assertRaisesRegex(ValueError, "supersedes_event_id"):
+            store.record_event(
+                want_id=wid,
+                event_type="refined",
+                statement="I want quieter.",
+                evidence=_refined_evidence(
+                    supersedes_event_id=first_event_id,
+                    prior_statement_hash=_statement_hash("I want quiet."),
+                ),
+            )
+        self.assertEqual(store.current_state(wid), before)
+
+    def test_92_refined_rejects_prior_hash_mismatch_without_appending(self):
+        store, td = _tmp_store()
+        self.addCleanup(td.cleanup)
+        wid = _create(store, "I want qiuet.")
+        before = store.current_state(wid)
+        with self.assertRaisesRegex(ValueError, "prior_statement_hash"):
+            store.record_event(
+                want_id=wid,
+                event_type="refined",
+                statement="I want quiet.",
+                evidence=_refined_evidence(
+                    supersedes_event_id=_latest_event_id(store, wid),
+                    prior_statement_hash=_statement_hash("not the prior statement"),
+                ),
+            )
+        self.assertEqual(store.current_state(wid), before)
+
+    def test_93_refined_rejects_semantic_rewrite_even_with_typo_label(self):
+        store, td = _tmp_store()
+        self.addCleanup(td.cleanup)
+        prior = "I want a quiet corner."
+        wid = _create(store, prior)
+        before = store.current_state(wid)
+        with self.assertRaisesRegex(ValueError, "correction-only"):
+            store.record_event(
+                want_id=wid,
+                event_type="refined",
+                statement="I want daily errands completed for me.",
+                evidence=_refined_evidence(
+                    supersedes_event_id=_latest_event_id(store, wid),
+                    prior_statement_hash=_statement_hash(prior),
+                ),
+            )
+        self.assertEqual(store.current_state(wid), before)
+
+    def test_94_invalid_raw_event_type_does_not_hide_want_from_active_view(self):
+        store, td = _tmp_store()
+        self.addCleanup(td.cleanup)
+        wid = _create(store, "I want active.")
+        _raw_insert_event(store, wid, "I want active.", "done")
+        current = store.current_state(wid)
+        assert current is not None
+        self.assertEqual(current["active_state"], "active")
+        self.assertIn(wid, {row["want_id"] for row in store.active_wants()})
+
+    def test_95_satisfied_evidence_source_summary_are_stored_stripped(self):
+        store, td = _tmp_store()
+        self.addCleanup(td.cleanup)
+        wid = _create(store)
+        store.record_event(
+            want_id=wid,
+            event_type="satisfied",
+            statement="I want a quiet corner.",
+            evidence=_satisfied_evidence(
+                source="  owner  ",
+                summary="  The external object was met.  ",
+            ),
+        )
+        evidence = store.current_state(wid)["evidence"]
+        self.assertEqual(evidence["source"], "owner")
+        self.assertEqual(evidence["summary"], "The external object was met.")
+
+    def test_96_refined_rejects_operator_rationale_over_256_chars(self):
+        store, td = _tmp_store()
+        self.addCleanup(td.cleanup)
+        wid = _create(store, "I want qiuet.")
+        with self.assertRaisesRegex(ValueError, "operator_rationale"):
+            store.record_event(
+                want_id=wid,
+                event_type="refined",
+                statement="I want quiet.",
+                evidence=_refined_evidence(
+                    supersedes_event_id=_latest_event_id(store, wid),
+                    prior_statement_hash=_statement_hash("I want qiuet."),
+                    operator_rationale="x" * 257,
+                ),
+            )
 
 
 if __name__ == "__main__":
