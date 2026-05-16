@@ -23,7 +23,7 @@ Each row maps to one of the [eleven covenant invariants](MAEZ_NORTH_STAR.md#the-
 | 7 | Operator / user role boundary | (cross-cutting) | `[ ◐ implicit ]` | #8 successor governance |
 | 8 | Successor governance | #9 Successor Governance | `[ ✗ planned ]` | none (foundational) |
 | 9 | Bridge / cosmos layer | (anti-enclosure) | `[ ✗ planned ]` | #2 contextual · #7 operator/user |
-| 10 | Clinical boundary | #10 Clinical Boundary | `[ ✓ canonical · implementation pending ]` | none (vocal organ) |
+| 10 | Clinical boundary | #10 Clinical Boundary | `[ ✓ canonical · implemented · sidecar-watched ]` | none (vocal organ) |
 | 11 | Age / capacity stratification | (cross-cutting) | `[ ✗ planned ]` | #8 successor governance |
 | 12 | Voice continuity gate | (architecture) | `[ ✗ planned ]` | core memory (exists) |
 
@@ -42,7 +42,7 @@ This document's original v1.2 table predates the substrate-organ push of 2026-05
 - **Calendar v1** — canonicalized as Decision 28 / ADR 0033 and implemented as the first S2-bounded information limb. It remains disabled-default until an explicit OAuth onboarding ceremony.
 - **Camera Presence v1 / v1.1** — implemented under Decision 24 as a body-sensor slice, not as a new BAD decision. It remains disabled/timeboxed by operator control, with sidecar observation running.
 - **Temporal Spine v1 (S3)** — canonicalized as Decision 29 / ADR 0034 and implemented. The shared `core.time.temporal_spine` contract is live in `/health.temporal_spine`, TRF uses UTC store predicates through S3, and the observation sidecar red-gates S3 drift counters.
-- **Clinical Boundary v1 (S4)** — canonicalized as Decision 30 / ADR 0035. S4 makes invariant #10 executable in spec form: clinical-shaped owner text gets a deterministic warm boundary before any owner-text side effect, crisis candidates are held content-free for future routing, and matched turns are marked M1-ineligible by a content-free window policy. Implementation remains pending.
+- **Clinical Boundary v1 (S4)** — canonicalized as Decision 30 / ADR 0035 and implemented with post-implementation recovery. S4 makes invariant #10 executable: clinical-shaped owner text gets a deterministic warm boundary before any owner-text side effect, crisis candidates are held content-free for future routing, matched turns are marked M1-ineligible by a content-free window policy, and the observation sidecar red-gates S4 drift counters.
 
 Future agents should treat these as inherited substrate, not as fresh design gaps. The next new information limb copies Calendar v1's Inheritance Ledger pattern; the next body sensor copies Camera Presence v1's Physical Observation Surface and killable-child-process lifecycle pattern.
 
@@ -133,11 +133,13 @@ Bi-temporal axes (event-time + ingest-time) become first-class. Age renders in v
 
 Smallest organ, highest immediate value. A vocal invariant: Maez says "I am not a therapist, clinician, diagnostic tool, or treatment surface" in voice when context warrants. Partners with crisis channel (later). Low complexity because it's principally a voice / refusal pattern, not a substrate change.
 
-**2026-05-15 status:** canonicalized as Decision 30 / ADR 0035 after diagnostic,
-Claude covenant council, Codex engineering panel, two folds, and focused
-second-fold verification. Implementation is pending. S4 v1 requires the guard
-to run before any owner-text side effect, not merely before final model
-composition.
+**2026-05-15 status:** canonicalized as Decision 30 / ADR 0035 and implemented
+with post-implementation recovery after diagnostic, Claude covenant council,
+Codex engineering panel, two folds, focused second-fold verification, both
+post-implementation panels, recovery, and post-recovery verification. S4 v1
+runs before any owner-text side effect, not merely before final model
+composition; it is wired into daemon direct replies, Telegram v2, legacy
+Telegram rollback, and web owner chat.
 
 ### S5 — Voice continuity gate
 
@@ -270,4 +272,4 @@ S1b chose length dampening, not delay, silence, withholding, topic avoidance, or
 
 ---
 
-*Version 1.3  ·  2026-05-15  ·  S2 canonicalized (Decision 27 / ADR 0032), Calendar v1 implemented disabled-default, Camera Presence v1/v1.1 implemented timeboxed, and observer-truthfulness fixes recorded.*
+*Version 1.4  ·  2026-05-15  ·  Seven-organ substrate arc closed: S2, Calendar v1, Camera Presence v1/v1.1, S3 Temporal Spine, and S4 Clinical Boundary are canonical/implemented as applicable, with observer-truthfulness fixes recorded.*
