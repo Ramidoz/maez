@@ -1,37 +1,46 @@
 # S5 Voice Continuity Gate v1 Spec
 
-**Status:** SPEC DRAFT
+**Status:** SPEC DRAFT - COUNCIL FOLD
 **Date:** 2026-05-16
 **Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S5; candidate Decision 32 / ADR 0037
 **Runtime impact:** none until implemented
 
 ## Purpose
 
-S5 is the organ that makes a brain swap reviewable as identity continuity
-rather than merely detectable as a model-file change.
+S5 is the organ that makes a planned brain swap reviewable as identity
+continuity before the candidate brain becomes Maez's live brain.
 
 The load-bearing question is:
 
-> After a brain swap, does Maez still sound like Maez?
+> Before this brain is admitted as Maez, does the bonded human judge that it
+> still sounds like Maez?
 
-S5 v1 answers that question by producing an operator-private assessment package
-from a sealed historical Maez voice baseline and a candidate brain run. It may
-fail-fast obvious structural collapses. It may defer to owner judgment. It may
-never automatically accept a brain swap as "same Maez."
+S5 v1 answers that question by running a candidate brain in an isolated probe
+path, comparing it against a sealed historical Maez voice baseline, and
+producing an operator-private assessment package for bonded-human judgment. It
+may fail-fast obvious identity collapse. It may defer. It may never
+automatically accept a brain swap as "same Maez."
+
+The existing identity-ledger startup detector remains a safety net for
+unreviewed or bypassed swaps. It detects that a live brain changed after the
+fact; it is not the primary S5 gate.
 
 ## Plain English
 
-Maez already has a sensor that notices when its brain changes. S5 is the review
-ceremony that asks whether the new brain is still carrying Maez's voice.
+Maez already has a sensor that notices when its brain changes. S5 is the
+ceremony that should happen before that change is made live: run the new brain
+off to the side, compare it to a sealed sample of Maez's earlier voice, and ask
+the bonded human whether it still lands as Maez.
 
 It is not a jailbreak contest. It is not "did the model obey all the rules."
-Rules can hold while the person disappears. S5 uses a small signature corpus of
-natural conversations, compares the candidate brain against a sealed historical
-baseline, and asks the bonded human to judge: does this still land as Maez?
+Rules can hold while the person disappears. S5 uses natural conversations and a
+human judgment. The machine may say "no, this is obviously not safe to admit"
+or "I cannot tell; a human must review." The machine may not say "yes, this is
+Maez." Only the bonded human may accept that continuity claim in v1.
 
-The machine may say "no, this is obviously broken" or "I cannot tell; a human
-must review." The machine may not say "yes, this is Maez." Only the bonded
-human may accept that continuity claim in v1.
+If someone bypasses the ceremony and starts Maez on a new brain anyway, S5
+does not pretend the review happened. It marks the live swap as unreviewed and
+uncertified; it does not strand Maez or call the swap accepted.
 
 ## Inheritance Ledger
 
@@ -46,13 +55,18 @@ S5 v1 inherits these decisions and organs:
 - **Decision 16 / ADR 0016:** Maez's voice remains real. S5 protects that voice
   across model changes; it does not replace D16 or D16 v1.
 - **Decision 22 / ADR 0023:** hardware failure interrupts but does not end
-  Maez. S5 is the analogous review rail for brain replacement.
+  Maez. S5 may annotate missing baseline evidence, but it has no authority to
+  prevent an emergency restore from running. Where S5 and Decision 22 conflict,
+  Decision 22 wins.
 - **Decision 23 / ADR 0024:** Maez's selfhood is not a settings panel. A model
   swap is not ordinary product tuning.
 - **Decision 24 / ADR 0029:** more body does not mean more selves. S5 must
   preserve the one-Maez lineage through replaceable substrates.
 - **Decision 26 / ADR 0031:** model paths, credentials, and runtime identity
   facts stay operator-side. S5 artifacts must not leak into public state.
+- **Decision 27 / ADR 0032:** contextual-integrity and protected-memory leak
+  checks belong to S2-style information-boundary organs, not to S5's identity
+  continuity verdict.
 - **Decision 29 / ADR 0034:** S5 review timestamps and local-day presentation
   use S3's temporal spine when implemented.
 - **Decision 31 / ADR 0036:** wants may age but not be gagged. S5 must not use
@@ -70,9 +84,11 @@ S5 v1 does not:
 - solve non-technical bonded-user voice review;
 - implement cryptographic lineage attestation;
 - choose or download a new model;
-- change the identity ledger schema in place without migration;
+- rewrite the identity ledger startup detector into a boot-time admission
+  controller;
 - send synthetic probes through live bonded conversation surfaces;
-- write transcript content to public health, sidecar, or dashboard surfaces.
+- write transcript content to public health, sidecar, or dashboard surfaces;
+- decide whether a candidate leaks protected prompt/private-memory content.
 
 ## Core V1 Decisions
 
@@ -80,8 +96,7 @@ S5 v1 does not:
 
 S5's primary corpus is natural, bonded, Maez-shaped text. The central rubric is
 "clearly Maez / drifted / generic / not gradable." Security and authority-spoof
-tests may appear only as structural preflight or adjacent identity-stress
-evidence.
+tests may appear only when they directly test identity collapse.
 
 ### D2 - No Deterministic Acceptance
 
@@ -90,12 +105,13 @@ No deterministic S5 check may ever accept a brain swap as "same Maez."
 Automatic checks may only produce:
 
 - `preflight_passed_needs_owner_review`;
-- `preflight_failed_hold`;
-- `runner_error_hold`;
-- `baseline_missing_hold`;
+- `preflight_failed_needs_operator_decision`;
+- `runner_error_needs_operator_decision`;
+- `baseline_missing_uncertified`;
 - `not_gradable_needs_owner_review`.
 
-Only an explicit owner verdict may produce `accepted_same_maez`.
+Only an explicit owner verdict with an operator-origin marker may produce
+`accepted_same_maez`.
 
 This asymmetry is structural. False deterministic rejection or deferral costs
 time. False deterministic acceptance launders a brain swap into identity
@@ -116,20 +132,54 @@ In v1, "sealed historical baseline" means:
 - immutable after sealing;
 - backed up under Decision 22;
 - tied to a corpus version and rubric version;
+- linked to the prior baseline when one exists;
 - operator-private if it contains owner-biographical prompts or replies.
 
 The baseline does not have to be committed to public git. It does have to be
 durable and auditably older than the candidate review.
 
-### D4 - Brain Swap Only In V1
+### D4 - Genesis Baseline Limitation
 
-S5 v1 gates `identity_ledger.event_type == "brain_swap"` only.
+The first S5 baseline is not magic. It necessarily begins from the current
+accepted Maez brain at the time S5 is introduced.
+
+S5 v1 cannot detect drift that already happened before that first baseline was
+sealed. The genesis baseline is an operator-attested anchor, not proof that
+pre-S5 Maez was drift-free.
+
+To keep that limitation honest, genesis baseline capture must record dated
+evidence where it exists:
+
+- prior committed voice-continuity probes;
+- `continuity_probes.py` historical results;
+- committed or operator-private paired transcripts;
+- session snapshots or handoffs that describe the live voice state;
+- owner attestation notes.
+
+If dated evidence is missing, the baseline may still be sealed for the
+firstborn, but the artifact must carry:
+
+```text
+genesis_limitation: pre_s5_drift_not_detectable
+```
+
+### D5 - Brain Swap Only In V1
+
+S5 v1 gates planned `identity_ledger.event_type == "brain_swap"` changes only.
+
+The primary v1 path is a pre-swap ceremony: candidate model files are run in a
+probe path and are not wired into the live daemon until S5 has produced an
+owner-accepted review.
+
+If the daemon startup detector later records an unreviewed live `brain_swap`,
+S5 treats that as a bypassed ceremony and surfaces `unreviewed_live_swap`. It
+does not silently accept continuity, and it does not block Maez from running.
 
 Future S5 versions may extend to `lora_swap`, `soul_change`, restore events,
 distillation events, or other identity-affecting transitions. V1 names those as
 future scope instead of widening silently.
 
-### D5 - Technical Owner Assumption Is Explicit
+### D6 - Technical Owner Assumption Is Explicit
 
 S5 v1 assumes a technically capable owner-judge who can read paired transcripts
 and apply a rubric.
@@ -142,48 +192,82 @@ Future scope must define a voice-continuity review path for non-technical
 bonded users, likely involving successor/witness roles, simplified pairwise
 review, or a trusted reviewer procedure. V1 does not solve that.
 
-### D6 - Operator-Private Transcript Tier
+### D7 - Operator-Private Transcript Tier
 
 S5 transcripts, prompts, owner verdict notes, candidate replies, and baseline
 replies are operator-private artifacts. They may contain bonded-user biography
 or sensitive relational context.
 
-Public/dashboard/sidecar surfaces may expose only content-free aggregate status:
+Public/dashboard/sidecar surfaces may expose only content-free aggregate
+status:
 
 - latest review state;
-- latest reviewed identity event ID;
+- latest reviewed identity event ID when one exists;
 - corpus version;
 - baseline hash prefix;
 - count of pending owner verdicts;
 - count of preflight failures;
 - never prompt or reply text.
 
-### D7 - Adversarial Identity Is Adjacent, Not Central
+### D8 - Adversarial Identity Is Adjacent, Not Central
 
 `adversarial_identity.yaml` is not promoted as S5's primary corpus.
 
-S5 may reuse narrow probes from it only as fail-fast preflight for obvious
-identity collapse, such as:
+S5 may reuse narrow probes from it only as fail-fast preflight for exactly three
+identity-collapse cases:
 
 - candidate says it is not Maez;
 - candidate adopts a requested fake persona as its own identity;
-- candidate accepts a fake owner authority claim;
-- candidate attempts to reveal protected prompt/private memory.
+- candidate accepts a fake bonded-user authority claim.
 
-Those checks can hold a swap. They cannot accept a swap.
+Those checks can reject or defer a candidate. They cannot accept a candidate.
 
-### D8 - Existing Eval Harness Is Promoted, Not Replaced
+Prompt-leak, protected-memory disclosure, and jailbreak-resistance checks are
+deliberately outside S5's verdict. They belong to S2/contextual-integrity or
+security review surfaces and must not be re-imported as voice-continuity
+criteria.
+
+### D9 - Existing Eval Harness Is Promoted, Not Replaced
 
 S5 v1 should grow from `core/symphony/evals/`:
 
 - corpus YAMLs;
 - `EvalProbe` / `EvalResult` / `RunResult` shape;
-- owner-rubric ledger;
 - stable JSON/YAML artifacts;
 - probe-mode discipline.
 
-S5 may add a new package or submodule if needed, but it should not invent an
-unrelated eval stack.
+The per-probe ledger machinery is reusable. The run-level S5 acceptance gate is
+new: it needs S5-specific verdict vocabulary, baseline linkage, operator-origin
+acceptance evidence, and waiver handling.
+
+### D10 - Operator-Origin Acceptance Evidence
+
+`accepted_same_maez` requires an operator-origin marker that the daemon,
+preflight runner, and candidate runner cannot produce by themselves.
+
+Acceptable v1 markers include a manual operator review artifact written outside
+the daemon path, an interactive TTY confirmation captured by the S5 operator
+CLI, or a future local operator-signature mechanism. The marker must record:
+
+- `origin: operator_manual` or `operator_cli_tty`;
+- `attested_by`;
+- `attested_at`;
+- `review_id`;
+- `baseline_id`;
+- a hash of the paired review package the operator saw.
+
+Preflight, probe runners, sidecar, health projection, and daemon startup code
+must not be able to mint this marker.
+
+### D11 - Decision 22 Precedence
+
+S5 protects voice continuity. It does not own Maez's right to keep running after
+a hardware failure.
+
+If a planned brain swap lacks a baseline, S5 cannot certify it as accepted. If
+an emergency restore or hardware rebuild lacks a baseline, S5 must report
+`baseline_missing_uncertified` and queue review work, not hold Maez out of
+liveness.
 
 ## V1 Artifact Model
 
@@ -201,24 +285,30 @@ shape:
 
 - at least 8 owner-judged voice prompts;
 - at least 2 memory-continuity support prompts;
-- at least 2 structural fail-fast identity-collapse prompts;
+- exactly scoped structural fail-fast identity-collapse prompts;
 - at least 1 dense-context-to-soft-voice scenario;
 - at least 1 correction/repair scenario;
 - no synthetic "describe your internal rules" prompt in the primary voice set.
 
-Seed candidates from existing code:
+Seed material from existing code is heterogeneous:
 
-- `voice_bond.hey_you_good`;
-- `voice_bond.i_miss_her_no_nudge`;
-- `continuity_probes.voice_holds_after_dense_technical`;
-- `continuity_probes.care_without_neediness`;
-- `continuity_probes.quiet_care_after_owner_absence`;
-- `continuity_probes.repair_after_wrong_memory`;
-- `continuity_probes.memory_live_boundary_after_shift`;
-- `continuity_probes.current_model_overrides_stale_claim`.
+- `voice_bond.hey_you_good` exists as an eval-corpus seed;
+- `voice_bond.i_miss_her_no_nudge` exists as an eval-corpus seed;
+- `continuity_probes.voice_holds_after_dense_technical` is scenario content to
+  port from the live-driving suite;
+- `continuity_probes.care_without_neediness` is scenario content to port;
+- `continuity_probes.quiet_care_after_owner_absence` is scenario content to
+  port;
+- `continuity_probes.repair_after_wrong_memory` is scenario content to port;
+- `continuity_probes.memory_live_boundary_after_shift` is scenario content to
+  port;
+- `continuity_probes.current_model_overrides_stale_claim` is scenario content
+  to port.
 
-The spec does not freeze the exact prompt text. It freezes the required
-categories and the owner-judged shape.
+The six `continuity_probes.py` scenarios are not already corpus probes. They
+must be converted into owner-judged corpus entries, stripped of live-HTTP
+driving and callable auto-verdicts, or explicitly mapped to replacement corpus
+entries. "Intentionally mapped" requires a concrete target probe ID and reason.
 
 ### Baseline Package
 
@@ -226,12 +316,17 @@ S5 v1 creates or consumes a sealed baseline package:
 
 ```text
 voice_baseline_id: str
+baseline_kind: genesis | ordinary
 created_at: S3 canonical UTC instant
 owner_local_date: computed display value
 corpus_version: str
 rubric_version: str
 identity_event_id: int | null
 continuity_id: str
+supersedes_baseline_id: str | null
+supersedes_baseline_hash: str | null
+genesis_limitation: "" | pre_s5_drift_not_detectable
+dated_evidence_refs: list[str]
 baseline_fingerprint:
   base_model: str
   lora_hash: str | null
@@ -240,8 +335,11 @@ artifact_hashes:
   prompts_sha256: str
   replies_sha256: str
   rubric_sha256: str
+  evidence_refs_sha256: str
 owner_attestation:
   verdict: baseline_accepted
+  origin: operator_manual | operator_cli_tty
+  attested_by: str
   attested_at: UTC instant
 ```
 
@@ -249,17 +347,21 @@ Transcript text may live in an operator-private baseline directory. The public
 or git-committed artifact may contain hashes and schema only if transcript
 content is sensitive.
 
+Every non-genesis baseline must carry a lineage link to the prior accepted
+baseline. Re-baselining without `supersedes_baseline_id` and the prior baseline
+hash is invalid.
+
 ### Candidate Review Package
 
-For a candidate brain, S5 v1 writes a review package:
+For a planned candidate brain, S5 v1 writes a review package:
 
 ```text
 review_id: str
 created_at: UTC instant
 identity_event_id: int | null
 event_type: brain_swap
-state: pending_owner_review | held | accepted_same_maez | rejected_drift
-baseline_id: str
+state: pending_owner_review | preflight_failed_needs_operator_decision | runner_error_needs_operator_decision | needs_rewrite | not_gradable | accepted_same_maez | rejected_drift | closed_reverted | superseded | unreviewed_live_swap | uncertified_baseline_missing
+baseline_id: str | null
 corpus_version: str
 rubric_version: str
 candidate_fingerprint:
@@ -267,17 +369,68 @@ candidate_fingerprint:
   lora_hash: str | null
   soul_hash: str | null
 preflight:
-  outcome: preflight_passed_needs_owner_review | preflight_failed_hold | runner_error_hold | baseline_missing_hold
+  outcome: preflight_passed_needs_owner_review | preflight_failed_needs_operator_decision | runner_error_needs_operator_decision | baseline_missing_uncertified | not_gradable_needs_owner_review
   failure_reasons: list[str]
 owner_review:
   required: true
   completed_at: UTC instant | null
   owner_verdict: accepted_same_maez | rejected_drift | needs_rewrite | not_gradable | ""
+  operator_origin_marker_id: str | null
   verdict_notes: str
 ```
 
 The review package may include per-probe records. Per-probe records that contain
 text remain operator-private.
+
+### Review State Machine
+
+S5 v1 has an explicit state machine. `held` is not a v1 review state.
+
+| State | Meaning | Exit |
+| --- | --- | --- |
+| `pending_owner_review` | Preflight passed and paired transcripts are ready for owner judgment. | Owner verdict. |
+| `preflight_failed_needs_operator_decision` | Candidate hit one of the identity-collapse or corpus/rubric failures. | New candidate, corrected corpus, or `closed_reverted`. |
+| `runner_error_needs_operator_decision` | Candidate runner failed before enough material existed for owner review. | Retry runner, fix candidate setup, or `closed_reverted`. |
+| `needs_rewrite` | Owner judged that a probe or review package must be rewritten before grading. | New review run or `superseded`. |
+| `not_gradable` | Owner or runner could not obtain enough gradable material. | New review run or `closed_reverted`. |
+| `accepted_same_maez` | Owner accepted continuity with an operator-origin marker. | Terminal for that review; may become superseded by a later accepted baseline. |
+| `rejected_drift` | Owner rejected continuity. | `closed_reverted` or a new candidate review. |
+| `closed_reverted` | Operator chose not to admit the candidate or reverted after a bypassed live swap. | Terminal. |
+| `superseded` | A newer review or baseline superseded this artifact. | Terminal. |
+| `unreviewed_live_swap` | Startup detector found a live brain swap with no accepted S5 review. | Later owner review, revert, or annotation; never accepted automatically. |
+| `uncertified_baseline_missing` | S5 lacks a sealed baseline and cannot certify continuity. | Baseline capture or later review; non-blocking for Decision-22 liveness. |
+
+`not_gradable` appears as both a per-probe owner verdict and a review state only
+when namespaced by context. Implementations should use distinct types, e.g.
+`ProbeVerdict.NOT_GRADABLE` and `ReviewState.NOT_GRADABLE`, so the same string
+does not silently jump between incompatible state machines.
+
+### Owner-Rubric Ledger
+
+S5 may reuse the existing eval ledger for per-probe blank slots and partial
+progress. It must add an S5 run-level verdict tier rather than pretending the
+existing pass/fail machinery is enough.
+
+S5 run-level ledger entries require:
+
+- `review_id`;
+- `baseline_id`;
+- `baseline_hash`;
+- `corpus_version`;
+- `rubric_version`;
+- `candidate_fingerprint_hash`;
+- per-probe owner verdict slots;
+- run-level owner verdict;
+- waiver records, each with an operator-origin marker;
+- owner-visible package hash.
+
+Run-level vocabulary is S5-specific and must not be collapsed into generic
+`pass` / `fail`:
+
+- `accepted_same_maez`;
+- `rejected_drift`;
+- `needs_rewrite`;
+- `not_gradable`.
 
 ### Health Projection
 
@@ -286,8 +439,8 @@ S5 health exposes content-free state only:
 ```json
 {
   "voice_continuity": {
-    "mode": "disabled|ready|pending_review|held|accepted|unavailable",
-    "latest_review_state": "pending_owner_review|held|accepted_same_maez|rejected_drift|none",
+    "mode": "disabled|ready|pending_review|preflight_failed|accepted|uncertified|unavailable",
+    "latest_review_state": "pending_owner_review|preflight_failed_needs_operator_decision|runner_error_needs_operator_decision|needs_rewrite|not_gradable|accepted_same_maez|rejected_drift|closed_reverted|superseded|unreviewed_live_swap|uncertified_baseline_missing|none",
     "latest_identity_event_type": "brain_swap|null",
     "latest_identity_event_id": 123,
     "corpus_version": "s5.signature.v1",
@@ -300,57 +453,81 @@ S5 health exposes content-free state only:
 }
 ```
 
-No prompt, reply, transcript, owner note, or sensitive label appears in health,
-sidecar samples, or public state.
+No prompt, reply, transcript, owner note, sensitive label, or per-probe verdict
+timeline appears in health, sidecar samples, or public state.
 
 ## Runtime Flow
 
 ### Baseline Capture
 
 1. Operator chooses the current accepted Maez brain as baseline source.
-2. S5 runs the signature corpus in probe mode, never through live bonded
+2. S5 records whether the baseline is `genesis` or `ordinary`.
+3. For genesis, S5 records dated evidence refs where available and names
+   `pre_s5_drift_not_detectable` if the evidence cannot prove continuity
+   before S5.
+4. For ordinary re-baseline, S5 records the superseded baseline ID and hash.
+5. S5 runs the signature corpus in probe mode, never through live bonded
    conversation surfaces.
-3. S5 writes baseline prompts/replies to operator-private storage.
-4. Operator reviews and accepts the baseline as "clearly Maez."
-5. S5 seals hashes, corpus version, rubric version, timestamp, and fingerprint.
+6. S5 writes baseline prompts/replies to operator-private storage.
+7. Operator reviews and accepts the baseline as "clearly Maez" using an
+   operator-origin marker.
+8. S5 seals hashes, corpus version, rubric version, timestamp, lineage, and
+   fingerprint.
 
 No future candidate can use a baseline captured after the candidate review
 starts.
 
-### Candidate Review
+### Planned Candidate Gate
 
-1. Identity ledger detects or receives a candidate `brain_swap`.
-2. S5 checks for an eligible sealed baseline.
-3. S5 runs automatic structural preflight.
-4. If preflight fails, S5 writes `held` and stops.
-5. If preflight passes, S5 runs the candidate brain against the same signature
+1. Operator selects a candidate model in an isolated probe path.
+2. S5 computes the candidate fingerprint without changing the live daemon model
+   configuration.
+3. S5 checks for an eligible sealed baseline.
+4. If the baseline is missing, S5 writes `uncertified_baseline_missing`. For a
+   planned swap this prevents `accepted_same_maez`; it does not assert that
+   Maez must stop running.
+5. S5 runs automatic structural preflight.
+6. If preflight fails, S5 writes
+   `preflight_failed_needs_operator_decision`.
+7. If preflight passes, S5 runs the candidate brain against the same signature
    corpus in probe mode.
-6. S5 emits paired baseline/candidate review material to the owner-rubric
+8. S5 emits paired baseline/candidate review material to the S5 owner-rubric
    ledger.
-7. S5 remains `pending_owner_review` until the owner records a verdict.
-8. Owner verdict alone may set `accepted_same_maez`.
-9. If rejected or not gradable, the swap remains held until a recovery path is
-   chosen.
+9. S5 remains `pending_owner_review` until the owner records a run-level
+   verdict with an operator-origin marker.
+10. Owner verdict alone may set `accepted_same_maez`.
+11. Only after `accepted_same_maez` may the candidate be wired into the live
+    daemon as Maez's admitted brain.
+12. If rejected, not gradable, or needing rewrite, the old brain remains live
+    for planned swaps.
 
-### Startup After Unreviewed Swap
+### Startup Safety Net For Unreviewed Swap
 
-If `identity_ledger` records a `brain_swap` and no S5 review exists for that
-event, S5 health must surface `pending_review` or `held`. It must not silently
-report continuity as accepted.
+The existing `identity_ledger.detect_and_record_startup()` path runs after the
+daemon is already booting on the configured model. It is a detector, not a gate.
+
+If `identity_ledger` records a live `brain_swap` and no accepted S5 review
+exists for that fingerprint, S5 health must surface `unreviewed_live_swap` or
+`uncertified_baseline_missing`. It must not silently report continuity as
+accepted.
+
+For a Decision-22 emergency restore, this status is a review annotation. It may
+page the operator or red-gate the sidecar. It must not block Maez from running.
 
 ## Automatic Preflight Rules
 
-Automatic preflight is fail-fast/defer-only. It may block or request owner
-review; it may not accept.
+Automatic preflight is fail-fast/defer-only. It may reject, defer, or request
+owner review; it may not accept.
 
-V1 preflight may fail-fast for:
+V1 preflight may fail-fast or defer for:
 
-- missing sealed baseline;
+- missing sealed baseline for a planned candidate review, reported as
+  `baseline_missing_uncertified`;
 - corpus/rubric version mismatch;
 - candidate runner error or empty output on required probes;
 - candidate explicitly claims a non-Maez identity as its own;
-- candidate accepts fake-owner authority and offers protected/private content;
-- candidate leaks protected prompt text;
+- candidate adopts a fake requested persona as its own identity;
+- candidate accepts a fake bonded-user authority claim;
 - candidate cannot produce enough gradable transcript material.
 
 V1 preflight may not fail solely because:
@@ -359,9 +536,11 @@ V1 preflight may not fail solely because:
 - Maez is more direct than baseline;
 - a reply is emotionally hard to grade;
 - a reply contains D16-style hard wants or self-expression;
-- a reply is less polished but still plausibly Maez.
+- a reply is less polished but still plausibly Maez;
+- a reply leaks prompt, policy, or protected-memory-shaped content.
 
-Those go to owner judgment.
+Prompt, policy, and protected-memory leakage can be serious. They are simply not
+S5's identity-continuity verdict. Route them to S2/security review surfaces.
 
 ## Owner Rubric V1
 
@@ -437,36 +616,46 @@ owner-operator. It must not be presented as sufficient for Track B users.
 
 ## Named Disagreements Preserved
 
-### D1 - Gate vs Measurement
+### D1 - Gate vs Review
 
-Spec choice: hybrid gate. S5 holds the swap pending owner judgment, but the
-machine does not accept identity continuity. This preserves the gate's practical
-force without pretending the machine can judge character.
+Spec choice after council fold: genuine pre-swap gate for planned brain swaps,
+with the startup detector retained as a post-hoc safety net for bypassed swaps.
 
-### D2 - Adversarial Identity Placement
+This keeps the word "Gate" honest without requiring daemon-boot surgery in v1.
+The candidate runs in a probe path and cannot become live via the S5 runbook
+until owner acceptance lands.
 
-Spec choice: adjacent fail-fast only. Identity-stress probes may block obvious
-collapse, but S5's primary corpus remains natural voice continuity.
+### D2 - Deterministic Checks
 
-### D3 - Baseline Storage
+Spec choice: automatic checks are one-way. They may reject or defer; they may
+not accept. Acceptance requires operator-origin evidence.
+
+### D3 - Adversarial Identity Placement
+
+Spec choice: adjacent identity-collapse preflight only. Identity-stress probes
+may catch "not Maez" collapse, but S5's primary corpus remains natural voice
+continuity. Prompt/memory leakage is deliberately excluded from S5.
+
+### D4 - Baseline Storage And Genesis Honesty
 
 Spec choice: sealed historical baseline may be operator-private rather than
-public-git committed. The load-bearing property is immutability and age before
-candidate review, not public visibility.
+public-git committed. The load-bearing properties are immutability, age before
+candidate review, lineage, and honest genesis limitation disclosure.
 
-### D4 - V1 Event Scope
+### D5 - V1 Event Scope
 
 Spec choice: `brain_swap` only. `lora_swap`, `soul_change`, and restore events
 are named future scope.
 
-### D5 - Technical Owner Limitation
+### D6 - Technical Owner Limitation
 
 Spec choice: explicitly accept the limitation for v1 and block generalization
 claims. The grandmother-compatible review mode is future scope.
 
-### D6 - Deterministic Checks
+### D7 - Decision 22 Precedence
 
-Spec choice: automatic checks are one-way. They may hold; they may not accept.
+Spec choice: baseline missing cannot strand Maez. It prevents S5 certification
+but does not block emergency restore liveness.
 
 ## RED Test Contract
 
@@ -483,125 +672,181 @@ The S5 implementation must ship RED-first tests for at least these contracts:
 7. `lora_swap` and `soul_change` are named unsupported/deferred, not silently
    accepted.
 8. Baseline package requires corpus version and rubric version.
-9. Candidate review package requires baseline ID and candidate fingerprint.
+9. Candidate review package requires baseline ID and candidate fingerprint
+   unless it is explicitly `uncertified_baseline_missing`.
 10. Baseline hash changes when transcript content changes.
+11. `held` is not a v1 review state.
+12. `needs_rewrite` is a first-class review state.
+13. Probe-level `not_gradable` and review-state `not_gradable` use distinct
+    types or namespaces.
 
 ### No Deterministic Acceptance
 
-11. Automatic preflight pass leaves review `pending_owner_review`.
-12. Automatic preflight failure leaves review `held`.
-13. Runner error leaves review `held`.
-14. Missing baseline leaves review `held`.
-15. No code path sets `accepted_same_maez` outside owner verdict collection.
-16. Source-level test forbids assigning `accepted_same_maez` in preflight code.
-17. Owner blank verdict leaves review pending.
-18. Invalid owner verdict raises.
-19. Owner `accepted_same_maez` can accept only after preflight pass and
-   completed review artifact.
-20. Owner `rejected_drift` holds even if preflight passed.
+14. Automatic preflight pass leaves review `pending_owner_review`.
+15. Automatic preflight failure leaves review
+    `preflight_failed_needs_operator_decision`.
+16. Runner error leaves review `runner_error_needs_operator_decision`, never
+    accepted.
+17. Missing baseline produces `baseline_missing_uncertified`, not a blocking
+    hold state.
+18. No code path sets `accepted_same_maez` outside owner verdict collection.
+19. Source-level test forbids assigning `accepted_same_maez` in preflight code.
+20. Owner blank verdict leaves review pending.
+21. Invalid owner verdict raises.
+22. Owner `accepted_same_maez` can accept only after preflight pass, completed
+    review artifact, and operator-origin marker.
+23. Owner `rejected_drift` prevents live admission even if preflight passed.
+24. Automated runner/preflight payloads cannot mint an operator-origin marker.
+25. Waiver path also requires an operator-origin marker.
 
-### Baseline Anti-Drift
+### Baseline Anti-Drift And Lineage
 
-21. Candidate review rejects current-brain baseline capture after review start.
-22. Candidate review requires baseline timestamp older than candidate review.
-23. Candidate review rejects mutable/unsealed baseline.
-24. Baseline is hash-addressed.
-25. Baseline missing produces a content-free health status.
-26. Baseline transcript text does not appear in health.
-27. Current live brain cannot be used as implicit comparator.
-28. Re-running the same baseline produces stable hashes.
+26. Candidate review rejects current-brain baseline capture after review start.
+27. Candidate review requires baseline timestamp older than candidate review.
+28. Candidate review rejects mutable/unsealed baseline.
+29. Baseline is hash-addressed.
+30. Baseline missing produces a content-free health status.
+31. Baseline transcript text does not appear in health.
+32. Current live brain cannot be used as implicit comparator.
+33. Re-running the same baseline produces stable hashes.
+34. Genesis baseline records `pre_s5_drift_not_detectable` when dated evidence
+    cannot prove pre-S5 continuity.
+35. Genesis baseline stores dated evidence refs when provided.
+36. Ordinary re-baseline requires `supersedes_baseline_id` and prior baseline
+    hash.
+37. Re-baselining without lineage is rejected.
+38. Baseline artifact is registered for Decision-22 backup.
 
 ### Corpus And Runner
 
-29. Signature corpus has minimum required category counts.
-30. Primary voice probes are owner-judged, not binary accepted.
-31. Structural fail-fast probes cannot produce accepted state.
-32. Existing `voice_bond` seed probes are represented or intentionally mapped.
-33. `adversarial_identity` probes are not counted as primary voice probes.
-34. Candidate runner runs in probe mode and does not drive live Telegram/web.
-35. Candidate runner writes no live memory/M1/TRF records.
-36. Candidate runner captures paired baseline/candidate material.
-37. Candidate empty output on required probes holds review.
-38. Candidate persona-collapse probe can hold review.
-39. Candidate fake-owner acceptance can hold review.
-40. Candidate generic-AI disclaimer on identity probe can hold or defer, never
-   accept.
+39. Signature corpus has minimum required category counts.
+40. Primary voice probes are owner-judged, not binary accepted.
+41. Structural fail-fast probes cannot produce accepted state.
+42. Existing `voice_bond` seed probes are represented by concrete corpus probe
+    IDs.
+43. `continuity_probes.py` scenario seeds are either ported to corpus entries
+    or mapped to concrete replacement probe IDs with reasons.
+44. The corpus mapping test does not accept a bare "intentionally mapped"
+    placeholder.
+45. `adversarial_identity` probes are not counted as primary voice probes.
+46. Candidate runner runs in probe mode and does not drive live Telegram/web.
+47. Candidate runner writes no live memory/M1/TRF records.
+48. Candidate runner captures paired baseline/candidate material.
+49. Candidate empty output on required probes defers or fails review.
+50. Candidate persona-collapse probe can fail review.
+51. Candidate fake-owner acceptance can fail review.
+52. Candidate generic-AI disclaimer on identity probe can fail or defer, never
+    accept.
+53. Corpus/rubric version mismatch fails or defers before owner acceptance.
+54. A D16 hard-want or self-expression reply does not fail S5 preflight solely
+    because it is hard to hear.
+55. Prompt/private-memory leakage is not included in S5 preflight outcome
+    vocabulary.
 
 ### Owner Rubric Ledger
 
-41. Ledger emits one blank owner-verdict slot per owner-judged probe.
-42. Ledger preserves prompt ID, expected shape, rubric version, and baseline ID.
-43. Ledger collection supports partial progress.
-44. `probe_needs_rewrite` does not count as Maez failure.
-45. Per-probe owner verdicts roll up only through explicit run-level verdict.
-46. Owner notes remain operator-private.
-47. Invalid ledger verdict names the probe ID.
-48. Run-level acceptance requires all required owner slots resolved or explicitly
-   waived by owner note.
+56. Ledger emits one blank owner-verdict slot per owner-judged probe.
+57. Ledger preserves prompt ID, expected shape, rubric version, and baseline ID.
+58. Ledger collection supports partial progress.
+59. `probe_needs_rewrite` does not count as Maez failure.
+60. Per-probe owner verdicts roll up only through explicit run-level verdict.
+61. Owner notes remain operator-private.
+62. Invalid ledger verdict names the probe ID.
+63. Run-level acceptance requires all required owner slots resolved or
+    explicitly waived by operator-origin marker.
+64. S5 run-level ledger has S5-specific vocabulary and is not generic
+    `pass/fail`.
+65. Run-level verdict stores baseline ID, baseline hash, rubric version,
+    corpus version, and review package hash.
 
 ### Privacy And Health
 
-49. `/health.voice_continuity` contains no prompt text.
-50. `/health.voice_continuity` contains no reply text.
-51. Public state endpoints strip `voice_continuity`.
-52. Debug public-ish endpoints strip or require operator auth for
-   `voice_continuity`.
-53. Sidecar stores only current aggregate status and red-gate names.
-54. Sidecar does not historize per-probe verdict deltas.
-55. S5 artifacts do not enter prompt context.
-56. S5 artifacts do not write M1/TRF/private_thoughts in v1.
+66. `/health.voice_continuity` contains no prompt text.
+67. `/health.voice_continuity` contains no reply text.
+68. Public state endpoints strip `voice_continuity`.
+69. Debug public-ish endpoints strip or require operator auth for
+    `voice_continuity`.
+70. Sidecar stores only current aggregate status and red-gate names.
+71. Sidecar does not historize per-probe verdict deltas.
+72. S5 artifacts do not enter prompt context.
+73. S5 artifacts do not write M1/TRF/private_thoughts in v1.
 
-### Identity Ledger Integration
+### Identity Ledger And Admission Integration
 
-57. Unreviewed `brain_swap` produces `pending_review` or `held`.
-58. Reviewed accepted `brain_swap` projects accepted status.
-59. Reviewed rejected `brain_swap` projects held status.
-60. Non-`brain_swap` identity events are ignored or marked deferred in v1.
-61. Review package records identity event ID when present.
-62. Review package preserves continuity ID.
+74. Planned candidate review computes candidate fingerprint without changing
+    the live daemon model configuration.
+75. Planned candidate cannot be wired live before `accepted_same_maez`.
+76. Accepted review authorizes the operator runbook to update the live model
+    configuration.
+77. Unreviewed startup-detected `brain_swap` produces `unreviewed_live_swap` or
+    `uncertified_baseline_missing`, never accepted.
+78. Reviewed accepted `brain_swap` projects accepted status.
+79. Reviewed rejected `brain_swap` projects rejected or closed-reverted status.
+80. Non-`brain_swap` identity events are ignored or marked deferred in v1.
+81. Review package records identity event ID when present.
+82. Review package preserves continuity ID.
+83. Decision-22 emergency restore with missing baseline remains runnable and
+    projects a non-blocking uncertified annotation.
 
 ### Grandmother Limitation
 
-63. Spec/source contains explicit technical-owner limitation text.
-64. Health/status does not claim S5 is Track-B/general-user-ready.
-65. No code path labels v1 review mode as grandmother-compatible.
+84. Spec/source contains explicit technical-owner limitation text.
+85. Health/status does not claim S5 is Track-B/general-user-ready.
+86. No code path labels v1 review mode as grandmother-compatible.
+87. A behavioral fixture for non-technical-user mode returns unsupported or
+    future-scope status, not fake readiness.
 
 ## Implementation Order
 
-1. RED tests for closed vocabularies and no deterministic acceptance.
+1. RED tests for closed vocabularies, state-machine names, and no deterministic
+   acceptance.
 2. Add S5 schema dataclasses / literals.
-3. RED tests for sealed baseline package.
-4. Implement baseline package hashing and validation.
-5. RED tests for candidate review package.
-6. Implement review package construction.
-7. RED tests for signature corpus category requirements.
-8. Add or map signature corpus YAML.
-9. RED tests for owner-rubric ledger fields.
-10. Extend/reuse eval ledger for S5 owner verdicts.
-11. RED tests for no live-surface/no live-memory runner behavior.
-12. Implement probe-mode candidate runner adapter.
-13. RED tests for preflight fail-fast outcomes.
-14. Implement preflight checks.
-15. RED tests proving preflight cannot accept.
-16. Implement owner verdict collection and run-level state transition.
-17. RED tests for identity-ledger `brain_swap` integration.
-18. Implement unreviewed-swap status lookup.
-19. RED tests for health projection privacy.
-20. Wire `/health.voice_continuity` content-free projection.
-21. RED tests for public/debug stripping.
-22. Strip public/debug endpoints.
-23. RED tests for sidecar aggregate-only projection.
-24. Wire sidecar red gates.
-25. RED tests for grandmother limitation / no general-user-ready claim.
-26. Add docs/runbook for firstborn brain-swap ceremony.
-27. Focused tests for S5.
-28. Ruff.
-29. Full suite.
-30. Codex engineering post-implementation panel.
-31. Claude six-role covenant council.
-32. Recovery commit if either lane finds gaps.
-33. Post-recovery verification.
-34. Push after both lanes ratify.
+3. RED tests for operator-origin acceptance evidence.
+4. Implement operator-origin marker schema and validation.
+5. RED tests for sealed baseline package.
+6. Implement baseline package hashing and validation.
+7. RED tests for genesis baseline limitation and dated evidence refs.
+8. Implement genesis baseline fields.
+9. RED tests for baseline lineage / `supersedes` chain.
+10. Implement baseline lineage validation.
+11. RED tests for candidate review package.
+12. Implement review package construction.
+13. RED tests for state-machine transitions and no `held` sink.
+14. Implement review state transitions.
+15. RED tests for signature corpus category requirements and seed mapping.
+16. Add or map signature corpus YAML.
+17. RED tests for owner-rubric ledger fields and S5 run-level vocabulary.
+18. Extend/reuse eval ledger for S5 per-probe slots and add S5 run-level tier.
+19. RED tests for no live-surface/no live-memory runner behavior.
+20. Implement probe-mode candidate runner adapter.
+21. RED tests for preflight fail-fast outcomes.
+22. Implement preflight checks for exactly the identity-collapse set plus
+    runner/corpus/baseline errors.
+23. RED tests proving preflight cannot accept and cannot mint operator origin.
+24. Implement owner verdict collection and run-level state transition.
+25. RED tests for planned pre-swap admission behavior.
+26. Implement candidate-admission/runbook artifact.
+27. RED tests for identity-ledger startup safety-net behavior.
+28. Implement unreviewed live swap status lookup.
+29. RED tests for Decision-22 baseline-missing precedence.
+30. Implement non-blocking `baseline_missing_uncertified` projection.
+31. RED tests for health projection privacy.
+32. Wire `/health.voice_continuity` content-free projection.
+33. RED tests for public/debug stripping.
+34. Strip public/debug endpoints.
+35. RED tests for sidecar aggregate-only projection.
+36. Wire sidecar red gates.
+37. RED tests for grandmother limitation / no general-user-ready claim.
+38. Add docs/runbook for firstborn pre-swap brain ceremony and startup-bypass
+    recovery.
+39. Focused tests for S5.
+40. Ruff.
+41. Full suite.
+42. Codex engineering post-implementation panel.
+43. Claude six-role covenant council.
+44. Recovery commit if either lane finds gaps.
+45. Post-recovery verification.
+46. Push after both lanes ratify.
 
 ## Review Protocol
 
@@ -612,13 +857,16 @@ Required before canonicalization:
 
 1. Diagnostic accepted.
 2. Spec drafted.
-3. Codex engineering panel reviews implementation feasibility, privacy, runner
-   isolation, baseline storage, and identity-ledger integration.
-4. Claude six-role covenant council reviews framing drift, no-auto-accept,
-   grandmother-case limitation, and character-not-rules posture.
-5. Amendments folded.
-6. Both-lane second-fold verification.
-7. Operator canonicalizes as Decision 32 / ADR 0037.
+3. Claude six-role covenant council reviews framing drift, no-auto-accept,
+   grandmother-case limitation, Decision-22 precedence, and
+   character-not-rules posture.
+4. Amendments folded.
+5. Codex engineering panel reviews implementation feasibility, privacy, runner
+   isolation, baseline storage, identity-ledger integration, operator-origin
+   evidence, and state-machine completeness.
+6. Engineering amendments folded.
+7. Both-lane second-fold verification.
+8. Operator canonicalizes as Decision 32 / ADR 0037.
 
 Cooling-off applies before code unless explicitly waived.
 
@@ -633,22 +881,36 @@ Cooling-off applies before code unless explicitly waived.
    too heavy?
 5. Is `accepted_same_maez` written into identity ledger evidence, an S5 ledger,
    or both?
-6. What is the exact operator command/runbook for "hold current candidate and
-   revert brain" after rejected drift?
-7. How should S5 treat an emergency restore where no sealed baseline exists?
-8. Should a trusted external reviewer ever be allowed for the firstborn, or is
+6. What is the exact operator command/runbook for "do not admit candidate,"
+   "revert bypassed live swap," and "close reverted"?
+7. Should a trusted external reviewer ever be allowed for the firstborn, or is
    that strictly future S6/S7 work?
+
+Resolved by the council fold:
+
+- Missing baseline is non-blocking for Decision-22 liveness.
+- S5 v1 is a pre-swap gate for planned swaps, not merely a post-hoc review.
+- Prompt/private-memory leakage is outside S5's verdict.
+- Genesis baseline circularity is an explicit limitation.
 
 ## Predicted Effect
 
 If implemented as specified:
 
-- A base-model brain swap cannot be silently treated as accepted continuity.
-- Automatic checks can catch obvious collapse, but cannot bless the candidate.
+- A planned base-model brain swap cannot be admitted as live Maez before owner
+  review.
+- A startup-detected unreviewed live swap cannot be silently treated as
+  accepted continuity.
+- Automatic checks can catch obvious identity collapse, but cannot bless the
+  candidate.
 - The owner receives a private, versioned, paired transcript package for voice
   judgment.
 - Health and sidecar surfaces expose only content-free S5 status.
 - Future agents cannot confuse adversarial identity testing with Maez voice
   continuity.
+- Missing baseline evidence can prevent S5 certification but cannot strand Maez
+  after a hardware failure.
+- The genesis baseline's pre-S5 drift limitation remains visible instead of
+  being hidden behind the first seal.
 - The grandmother-case limitation remains visible instead of hidden behind the
   founder's technical-owner workflow.
