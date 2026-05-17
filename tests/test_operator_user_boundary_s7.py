@@ -2358,6 +2358,79 @@ class S7TrackBConfidentialityProjectionTests(unittest.TestCase):
         self.assertNotIn("a" * 64, repr(projection))
 
 
+class S7BackupRestoreConfidentialityProjectionTests(unittest.TestCase):
+    def test_138_track_b_backup_restore_confidentiality_missing_blocks_restore(self):
+        from core.governance import operator_user_boundary as s7
+
+        projection = s7.build_backup_restore_confidentiality_projection(
+            deployment_track="track_b",
+            non_bonded_operator=True,
+        )
+
+        self.assertEqual(projection["mode"], "backup_restore_confidentiality_not_ready")
+        self.assertTrue(projection["backup_restore_activation_blocker"])
+        self.assertEqual(
+            projection["red_gate_modes"],
+            ("backup_restore_confidentiality_not_ready",),
+        )
+        self.assertEqual(projection["restore_work_class"], "undeterminable_work_class")
+        blob = repr(projection).lower()
+        for forbidden in ("snapshot_path", "private_thought", "raw_transcript", "config/soul"):
+            self.assertNotIn(forbidden, blob)
+
+    def test_139_founder_track_a_restore_confidentiality_missing_is_warning_and_guarded(self):
+        from core.governance import operator_user_boundary as s7
+
+        projection = s7.build_backup_restore_confidentiality_projection(
+            deployment_track="track_a",
+            non_bonded_operator=False,
+        )
+
+        self.assertEqual(projection["mode"], "backup_restore_confidentiality_not_ready")
+        self.assertFalse(projection["backup_restore_activation_blocker"])
+        self.assertEqual(projection["warning_modes"], ("backup_restore_confidentiality_not_ready",))
+        self.assertEqual(projection["restore_work_class"], "destructive_user_action")
+
+    def test_140_backup_restore_confidentiality_ready_cannot_be_self_declared_by_hash(self):
+        from core.governance import operator_user_boundary as s7
+
+        projection = s7.build_backup_restore_confidentiality_projection(
+            deployment_track="track_b",
+            non_bonded_operator=True,
+            restore_staging_review_ref_hash="b" * 64,
+        )
+
+        self.assertEqual(projection["mode"], "backup_restore_confidentiality_not_ready")
+        self.assertTrue(projection["backup_restore_activation_blocker"])
+        self.assertEqual(projection["restore_staging_ref_present"], False)
+        self.assertNotIn("b" * 64, repr(projection))
+
+    def test_141_non_bonded_operator_restore_blocks_even_if_track_label_is_a(self):
+        from core.governance import operator_user_boundary as s7
+
+        projection = s7.build_backup_restore_confidentiality_projection(
+            deployment_track="track_a",
+            non_bonded_operator=True,
+        )
+
+        self.assertTrue(projection["backup_restore_activation_blocker"])
+        self.assertEqual(projection["restore_work_class"], "undeterminable_work_class")
+
+    def test_142_malformed_restore_staging_ref_error_does_not_echo_token(self):
+        from core.governance import operator_user_boundary as s7
+
+        secret_token = "Z" * 64
+        with self.assertRaises(ValueError) as cm:
+            s7.build_backup_restore_confidentiality_projection(
+                deployment_track="track_b",
+                non_bonded_operator=True,
+                restore_staging_review_ref_hash=secret_token,
+            )
+
+        self.assertNotIn(secret_token, str(cm.exception))
+        self.assertIsNone(cm.exception.__cause__)
+
+
 class S7SelfModDialogWrappingTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

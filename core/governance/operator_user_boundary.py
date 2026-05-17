@@ -261,6 +261,11 @@ BACKUP_RESTORE_MODES = frozenset({
     "track_b_confidentiality_ready",
 })
 
+BACKUP_RESTORE_CONFIDENTIALITY_MODES = frozenset({
+    "ready",
+    "backup_restore_confidentiality_not_ready",
+})
+
 DEPLOYMENT_TRACKS = frozenset({
     "track_a",
     "track_b",
@@ -476,6 +481,14 @@ def validate_backup_restore_mode(mode: str) -> str:
     return _validate_closed_value(mode, BACKUP_RESTORE_MODES, "backup restore mode")
 
 
+def validate_backup_restore_confidentiality_mode(mode: str) -> str:
+    return _validate_closed_value(
+        mode,
+        BACKUP_RESTORE_CONFIDENTIALITY_MODES,
+        "backup restore confidentiality mode",
+    )
+
+
 def validate_deployment_track(track: str) -> str:
     return _validate_closed_value(track, DEPLOYMENT_TRACKS, "deployment track")
 
@@ -513,7 +526,10 @@ def validate_service_maintenance_request_id(request_id: str) -> str:
 def _validate_hash64(value: str, *, field: str) -> str:
     if not isinstance(value, str) or len(value) != 64:
         raise ValueError(f"{field} must be a 64-character hash")
-    int(value, 16)
+    try:
+        int(value, 16)
+    except ValueError:
+        raise ValueError(f"{field} must be a 64-character hash") from None
     return value
 
 
@@ -1280,6 +1296,47 @@ def build_track_b_confidentiality_projection(
         "non_bonded_operator": non_bonded_operator,
         "storage_hardening_ref_present": ref_present,
         "track_b_activation_blocker": blocker,
+        "warning_modes": warning_modes,
+        "red_gate_modes": tuple(validate_operator_red_gate_mode(gate) for gate in red_gates),
+        "content_authority": validate_mixed_store_content_authority("not_granted"),
+    }
+
+
+def build_backup_restore_confidentiality_projection(
+    *,
+    deployment_track: str,
+    non_bonded_operator: bool,
+    restore_staging_review_ref_hash: str | None = None,
+) -> dict[str, object]:
+    """Project whether backup restore has reviewed confidentiality-safe staging."""
+    validate_deployment_track(deployment_track)
+    if non_bonded_operator is not True and non_bonded_operator is not False:
+        raise ValueError("non_bonded_operator must be bool")
+    if restore_staging_review_ref_hash:
+        _validate_hash64(restore_staging_review_ref_hash, field="restore_staging_review_ref_hash")
+    ref_present = False
+    mode = "backup_restore_confidentiality_not_ready"
+    blocker = deployment_track == "track_b" or non_bonded_operator
+    warning_modes = () if blocker else ("backup_restore_confidentiality_not_ready",)
+    red_gates = ("backup_restore_confidentiality_not_ready",) if blocker else ()
+    track_b_confidentiality_mode = "track_b_confidentiality_not_ready" if blocker else "ready"
+    restore_work_class = (
+        "undeterminable_work_class"
+        if blocker
+        else classify_backup_operation(
+            "backup_restore",
+            deployment_track=deployment_track,
+            track_b_confidentiality_mode=track_b_confidentiality_mode,
+        )
+    )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "mode": validate_backup_restore_confidentiality_mode(mode),
+        "deployment_track": deployment_track,
+        "non_bonded_operator": non_bonded_operator,
+        "restore_staging_ref_present": ref_present,
+        "backup_restore_activation_blocker": blocker,
+        "restore_work_class": restore_work_class,
         "warning_modes": warning_modes,
         "red_gate_modes": tuple(validate_operator_red_gate_mode(gate) for gate in red_gates),
         "content_authority": validate_mixed_store_content_authority("not_granted"),
