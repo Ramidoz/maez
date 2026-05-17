@@ -245,3 +245,100 @@ S6 does not push until the fork is resolved.
 *This review is read-only. No code, no spec edits, no non-slice docs changed in
 producing it. The firsthand probe ran against a temporary capsule file in
 `/tmp`; it touched no live store.*
+
+---
+
+## Post-fix verification & fork resolution — 2026-05-16
+
+`28da567 fix(s6): harden successor marker seam spoof check` lands the PATH 1
+fix, and the Codex engineering panel artifact `implementation-codex-panel-recovery.md`
+is in. Both lanes have now ruled on the fork. Status update, firsthand-verified
+against `28da567`.
+
+### PATH 1 — closed at `28da567` (firsthand-verified)
+
+`_called_from_module` (`successor_governance.py:902`) now compares frame-global
+**object identity** — `frame.f_globals is sys.modules[_MARKER_WRITER_MODULE].__dict__`
+— not the settable `__name__` string (`import sys` added). Firsthand probe:
+
+```
+LEGIT    successor_origin_writer.mint_origin_marker : OK -- genuine seam minted s6_marker_dd8b7fc42c3079cc7ccd25a0
+CONTROL  naive constructor from ordinary module     : blocked
+PATH 1   exec-globals frame-name spoof              : blocked   <- was FORGED at 5a19d7d
+PATH 1b  exec into genuine writer-module __dict__   : FORGED -- conceded raw-internals residual (S5 final shape)
+PATH 2   hand-built JSONL /health.successor_gov     : {"mode": "valid", "valid_event_count": 2, "invalid_event_count": 0}
+PATH 2   derive_current_state.fate_directive        : explicit_dissolution
+```
+
+The named spoof is closed and the blessed seam still works. The only remaining
+PATH 1 door is executing code whose globals *is* the genuine writer-module
+namespace (PATH 1b) — raw in-process internals manipulation, the conceded S5
+final-shape residual. PATH 1 is closed to the degree S5 closed its equivalent.
+
+### Option A — closed: no keyless mechanism exists
+
+The Codex panel (C3) searched for a keyless structural mechanism and found none.
+Every mechanism that would work — asymmetric signature, hardware/passkey
+ceremony, external transparency root, trusted-OS provenance, role-encrypted
+storage — is cryptographic or trusted-state, forbidden by the sealed S6 v1
+Non-Goal. Both lanes now concur: **CC-I1's persisted-file forge cannot be closed
+as a within-spec implementation recovery.** And — Codex's framing, which the
+covenant lane adopts — *pursuing* a real trust source is itself a sealed-design
+change (a future storage-hardening / signature slice), not a round-2 patch.
+There is no pure-implementation closure of CC-I1; round-2 reopens the spec
+either way.
+
+### Option B — the covenant lane's conditional ratification
+
+PATH 2 is firsthand-verified still open (probe above): a hand-built JSONL capsule
+projects `mode: valid` carrying `fate_directive: explicit_dissolution`. With
+Option A closed, Option B (the honesty path) is the v1 route; the Codex panel
+recommends it; the operator recommends it. The covenant lane ratifies Option B
+for v1 — **conditionally.** It is honest only if it carries all four:
+
+1. **Unambiguous mode rename.** `valid` must become a token that cannot be
+   misread as authentic — `structurally_valid` / `well_formed` / `grammar_valid`.
+   No `valid` with an asterisk; a human or a future slice glancing at health
+   output must not see a word that implies authorship.
+
+2. **C4 / D4 reworded in the sealed spec.** C4 currently *promises* "the lineage
+   capsule cannot be machine-authored." That promise is false; the spec must
+   stop making it and state the honest guarantee — v1 validates capsule grammar
+   and structural consistency; it does not attest human authorship of a
+   persisted capsule. Renaming the mode while leaving C4 intact leaves the spec
+   lying.
+
+3. **The honesty banner widened and made loud** — module docstring, runbook, and
+   the documented meaning of the health output. The current banner concedes only
+   a *privileged* OS file rewrite; the truth is wider — *any in-process path with
+   ordinary write access to the capsule file* can author a structurally-valid
+   capsule, including a forged bonded-user `explicit_dissolution`. The banner
+   must say exactly that.
+
+4. **A canonical activation gate** — the covenant lane's load-bearing condition.
+   Option B is honest only if it also forecloses the dishonest *future* use:
+   canonical language must bind every future S6 activation slice never to act on
+   a v1-era capsule's fate directive — `explicit_dissolution` above all — until
+   the authorship-attestation problem is solved (Option A's mechanism). Without
+   the gate, Option B merely defers the forged-dissolution hazard to a future
+   slice that might trust a `structurally_valid` capsule. The gate makes the
+   honest label load-bearing rather than cosmetic: accepting "v1 cannot attest
+   authorship" must come bundled with "therefore v1-era capsules are never an
+   activation authority."
+
+### Process — Option B is a spec amendment, not a patch
+
+Both lanes agree (Codex panel: "Either path is spec-level ... it should travel
+the full ladder"). Option B rewords C4/D4 and adds the activation gate — sealed
+covenant law. It travels the ladder: a spec-amendment diagnostic → both panels →
+second-fold → canonicalize the amendment to ADR 0038 / Decision 33 →
+cooling-off night → round-2 implementation (mode rename, banner, activation gate,
+and a RED test where the persisted-file forge is the failing case). The four
+conditions above are the covenant lane's input to that diagnostic; the covenant
+council sits again on the drafted amendment. S6 stays unpushed until the
+amendment is canonicalized and round-2 lands.
+
+*Read-only. The round-2 firsthand probe ran against a temporary capsule in
+`/tmp` and a transient in-process writer-module namespace injection (PATH 1b)
+deleted immediately in the same call; no live store or persisted module state
+was touched.*
