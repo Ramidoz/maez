@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import re
+import sqlite3
+from pathlib import Path
 from typing import Any
 
 from core.governance import successor_governance as s6
@@ -257,6 +259,8 @@ def _valid_actor_handle(value: str) -> bool:
 
 
 def _canonical_timestamp(value: str) -> datetime | None:
+    if not isinstance(value, str):
+        raise ValueError("S7 timestamp must be a string")
     if not value:
         return None
     try:
@@ -266,6 +270,13 @@ def _canonical_timestamp(value: str) -> datetime | None:
     if dt.tzinfo is None:
         raise ValueError("S7 timestamp must be timezone-aware")
     return dt.astimezone(timezone.utc)
+
+
+def _timestamp_text(value: str, *, field: str) -> str:
+    dt = _canonical_timestamp(value)
+    if dt is None:
+        raise ValueError(f"{field} is required")
+    return dt.isoformat()
 
 
 def _context_active(ctx: "AuthorityContext", *, now: str | None) -> bool:
@@ -278,6 +289,42 @@ def _context_active(ctx: "AuthorityContext", *, now: str | None) -> bool:
     if now_dt is None or expires_dt is None:
         return False
     return expires_dt > now_dt
+
+
+def _authority_context_active_for_artifact(ctx: object, *, now: str) -> bool:
+    if not isinstance(ctx, AuthorityContext):
+        return False
+    try:
+        validate_grant_source(ctx.grant_source)
+        validate_auth_method(ctx.auth_method)
+    except ValueError:
+        return False
+    if ctx.verified is not True:
+        return False
+    if not ctx.actor_id or not ctx.role_names:
+        return False
+    if ctx.grant_source in {"none", "manual_recovery_required"}:
+        return False
+    if ctx.auth_method == "none":
+        return False
+    if not _valid_actor_handle(ctx.actor_handle_hmac):
+        return False
+    return _context_active(ctx, now=now)
+
+
+def _authority_context_roles_allow_work(ctx: AuthorityContext, work_class: str) -> bool:
+    roles = frozenset(ctx.role_names)
+    if work_class == "routine_custody":
+        return bool(roles & _CUSTODIAN_ROLES)
+    if work_class in {
+        "destructive_user_action",
+        "self_modification",
+        "covenant_touching_change",
+        "capability_acquisition",
+        "autonomy_lowering_or_protection_reducing",
+    }:
+        return "bonded_user" in roles
+    return False
 
 
 def _path_material(action: str, params: dict[str, Any]) -> str:
@@ -761,6 +808,247 @@ def voice_consultation_health_projection(consultation: MaezVoiceConsultation) ->
         "maez_voice_ref_hash": consultation.source_ref_hash,
         "unavailable_reason_code": consultation.unavailable_reason_code or "none",
     }
+
+
+@dataclass(frozen=True)
+class S7AuthorizationArtifact:
+    artifact_id: str
+    request_id: str
+    request_envelope_hash: str
+    rendered_text_hash: str
+    action_params_hash: str
+    precondition_hash: str
+    authority_context_hash: str
+    derived_work_class: str
+    derived_aggregation_group: str
+    nonce: str
+    credential_ref: str
+    auth_method: str
+    grant_source: str
+    user_presence: bool
+    user_verification: bool
+    created_at: str
+    expires_at: str
+    consumed_at: str | None
+
+    def __post_init__(self) -> None:
+        if not self.artifact_id:
+            raise ValueError("S7 artifact_id is required")
+        if not self.request_id:
+            raise ValueError("S7 artifact request_id is required")
+        _validate_hash64(self.request_envelope_hash, field="request_envelope_hash")
+        _validate_hash64(self.rendered_text_hash, field="rendered_text_hash")
+        _validate_hash64(self.action_params_hash, field="action_params_hash")
+        _validate_hash64(self.precondition_hash, field="precondition_hash")
+        _validate_hash64(self.authority_context_hash, field="authority_context_hash")
+        validate_work_class(self.derived_work_class)
+        if not self.derived_aggregation_group:
+            raise ValueError("S7 artifact derived_aggregation_group is required")
+        if not self.nonce:
+            raise ValueError("S7 artifact nonce is required")
+        if not self.credential_ref:
+            raise ValueError("S7 artifact credential_ref is required")
+        validate_auth_method(self.auth_method)
+        validate_grant_source(self.grant_source)
+        if self.user_presence is not True and self.user_presence is not False:
+            raise ValueError("S7 artifact user_presence must be bool")
+        if self.user_verification is not True and self.user_verification is not False:
+            raise ValueError("S7 artifact user_verification must be bool")
+        _canonical_timestamp(self.created_at)
+        if not self.expires_at:
+            raise ValueError("S7 artifact expires_at is required")
+        _canonical_timestamp(self.expires_at)
+        if self.consumed_at is not None:
+            if not self.consumed_at:
+                raise ValueError("S7 artifact consumed_at must be a timestamp or None")
+            _canonical_timestamp(self.consumed_at)
+
+
+def authorization_artifact_matches(
+    artifact: S7AuthorizationArtifact,
+    *,
+    rendered: RenderedRequestStatement,
+    action_params_hash: str,
+    authority_context_hash: str,
+    precondition_hash: str,
+    derived_work_class: str,
+    derived_aggregation_group: str,
+    now: str,
+    superseded_request_ids: set[str] | None = None,
+) -> bool:
+    if superseded_request_ids and rendered.request_id in superseded_request_ids:
+        return False
+    if artifact.consumed_at is not None:
+        return False
+    now_dt = _canonical_timestamp(now)
+    expires_dt = _canonical_timestamp(artifact.expires_at)
+    if now_dt is None or expires_dt is None or expires_dt <= now_dt:
+        return False
+    expected = {
+        "request_id": rendered.request_id,
+        "request_envelope_hash": rendered.request_envelope_hash,
+        "rendered_text_hash": rendered.rendered_text_hash,
+        "action_params_hash": action_params_hash,
+        "precondition_hash": precondition_hash,
+        "authority_context_hash": authority_context_hash,
+        "derived_work_class": derived_work_class,
+        "derived_aggregation_group": derived_aggregation_group,
+        "nonce": rendered.nonce,
+    }
+    for field, value in expected.items():
+        if getattr(artifact, field) != value:
+            return False
+    return True
+
+
+_AUTH_SCHEMA = """
+CREATE TABLE IF NOT EXISTS s7_authorization_artifacts (
+    artifact_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    request_envelope_hash TEXT NOT NULL,
+    rendered_text_hash TEXT NOT NULL,
+    action_params_hash TEXT NOT NULL,
+    precondition_hash TEXT NOT NULL,
+    authority_context_hash TEXT NOT NULL,
+    derived_work_class TEXT NOT NULL,
+    derived_aggregation_group TEXT NOT NULL,
+    nonce TEXT NOT NULL UNIQUE,
+    credential_ref TEXT NOT NULL,
+    auth_method TEXT NOT NULL,
+    grant_source TEXT NOT NULL,
+    user_presence INTEGER NOT NULL,
+    user_verification INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT,
+    consumed_by_request_id TEXT
+);
+"""
+
+
+class S7AuthorizationStore:
+    def __init__(self, db_path: str | Path):
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.executescript(_AUTH_SCHEMA)
+
+    def put(self, artifact: S7AuthorizationArtifact) -> None:
+        created_at = _timestamp_text(artifact.created_at, field="created_at")
+        expires_at = _timestamp_text(artifact.expires_at, field="expires_at")
+        consumed_at = (
+            _timestamp_text(artifact.consumed_at, field="consumed_at")
+            if artifact.consumed_at is not None
+            else None
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO s7_authorization_artifacts (
+                    artifact_id, request_id, request_envelope_hash,
+                    rendered_text_hash, action_params_hash, precondition_hash,
+                    authority_context_hash, derived_work_class,
+                    derived_aggregation_group, nonce, credential_ref, auth_method,
+                    grant_source, user_presence, user_verification, created_at,
+                    expires_at, consumed_at, consumed_by_request_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                """,
+                (
+                    artifact.artifact_id,
+                    artifact.request_id,
+                    artifact.request_envelope_hash,
+                    artifact.rendered_text_hash,
+                    artifact.action_params_hash,
+                    artifact.precondition_hash,
+                    artifact.authority_context_hash,
+                    artifact.derived_work_class,
+                    artifact.derived_aggregation_group,
+                    artifact.nonce,
+                    artifact.credential_ref,
+                    artifact.auth_method,
+                    artifact.grant_source,
+                    1 if artifact.user_presence else 0,
+                    1 if artifact.user_verification else 0,
+                    created_at,
+                    expires_at,
+                    consumed_at,
+                ),
+            )
+
+    def consume(self, artifact_id: str, *, request_id: str, now: str) -> bool:
+        del artifact_id, request_id, now
+        raise RuntimeError("S7 authorization consumption requires consume_verified")
+
+    def consume_verified(
+        self,
+        artifact_id: str,
+        *,
+        rendered: RenderedRequestStatement,
+        action_params_hash: str,
+        authority_context: AuthorityContext,
+        precondition_hash: str,
+        derived_work_class: str,
+        derived_aggregation_group: str,
+        now: str,
+        superseded_request_ids: set[str] | None = None,
+    ) -> bool:
+        if superseded_request_ids and rendered.request_id in superseded_request_ids:
+            return False
+        _validate_hash64(action_params_hash, field="action_params_hash")
+        _validate_hash64(precondition_hash, field="precondition_hash")
+        validate_work_class(derived_work_class)
+        if not derived_aggregation_group:
+            return False
+        if not _authority_context_active_for_artifact(authority_context, now=now):
+            return False
+        if not _authority_context_roles_allow_work(authority_context, derived_work_class):
+            return False
+        auth_hash = authority_context_hash(authority_context)
+        if rendered.authority_context_hash != auth_hash:
+            return False
+        now_text = _timestamp_text(now, field="now")
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                """
+                UPDATE s7_authorization_artifacts
+                SET consumed_at = ?,
+                    consumed_by_request_id = ?
+                WHERE artifact_id = ?
+                  AND request_id = ?
+                  AND request_envelope_hash = ?
+                  AND rendered_text_hash = ?
+                  AND action_params_hash = ?
+                  AND precondition_hash = ?
+                  AND authority_context_hash = ?
+                  AND derived_work_class = ?
+                  AND derived_aggregation_group = ?
+                  AND nonce = ?
+                  AND auth_method = ?
+                  AND grant_source = ?
+                  AND user_presence = 1
+                  AND user_verification = 1
+                  AND consumed_at IS NULL
+                  AND expires_at > ?
+                """,
+                (
+                    now_text,
+                    rendered.request_id,
+                    artifact_id,
+                    rendered.request_id,
+                    rendered.request_envelope_hash,
+                    rendered.rendered_text_hash,
+                    action_params_hash,
+                    precondition_hash,
+                    auth_hash,
+                    derived_work_class,
+                    derived_aggregation_group,
+                    rendered.nonce,
+                    authority_context.auth_method,
+                    authority_context.grant_source,
+                    now_text,
+                ),
+            )
+            return cur.rowcount == 1
 
 
 @dataclass(frozen=True)

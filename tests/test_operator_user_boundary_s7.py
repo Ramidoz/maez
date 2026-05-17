@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+import tempfile
+import threading
 
 
 NOW = "2026-05-17T16:00:00+00:00"
@@ -1065,6 +1068,548 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
 
         self.assertIn("Maez consulted: yes", rendered.rendered_text)
         self.assertIn("Maez objection present: yes", rendered.rendered_text)
+
+
+class S7AuthorizationArtifactStoreTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _path(self) -> Path:
+        return Path(self._tmp.name) / "s7_authorization.db"
+
+    def _routine_bundle(self):
+        from core.governance import operator_user_boundary as s7
+
+        env = s7.build_work_request_envelope(
+            request_id="req-artifact-1",
+            action="run_shell",
+            params={"cmd": "systemctl restart maez.service"},
+            claimed_work_class="routine_custody",
+            requesting_subsystem="unit",
+            closed_symptom_code="service_unhealthy",
+            proposed_change_class="service_restart",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("service:maez.service",),
+            content_exposure_risk="content_free",
+            precondition_hash="a" * 64,
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="liveness_restore",
+            rollback_path_class="restart_service",
+        )
+        authority = s7.AuthorityContext(
+            actor_id="founder",
+            actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+            role_names=("operator",),
+            grant_source="founder_webauthn",
+            allowed_scopes=("operator_health",),
+            auth_method="founder_webauthn",
+            surface="cockpit",
+            credential_ref="cred-1",
+            created_at=NOW,
+            expires_at=FUTURE,
+            verified=True,
+        )
+        params_hash = s7.canonical_hash({"cmd": "systemctl restart maez.service"})
+        rendered = s7.render_request_statement(
+            envelope=env,
+            surface="cockpit",
+            origin="http://localhost:11437",
+            action_params_hash=params_hash,
+            authority_context=authority,
+            maez_voice_consultation=None,
+            nonce="nonce-1",
+            expires_at=FUTURE,
+            rendered_at=NOW,
+        )
+        artifact = s7.S7AuthorizationArtifact(
+            artifact_id="artifact-1",
+            request_id=env.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            rendered_text_hash=rendered.rendered_text_hash,
+            action_params_hash=params_hash,
+            precondition_hash=env.precondition_hash,
+            authority_context_hash=s7.authority_context_hash(authority),
+            derived_work_class=env.derived_work_class,
+            derived_aggregation_group=env.derived_aggregation_group,
+            nonce="nonce-1",
+            credential_ref="cred-1",
+            auth_method="founder_webauthn",
+            grant_source="founder_webauthn",
+            user_presence=True,
+            user_verification=True,
+            created_at=NOW,
+            expires_at=FUTURE,
+            consumed_at=None,
+        )
+        return env, authority, params_hash, rendered, artifact
+
+    def _self_mod_bundle(self, *, role_names: tuple[str, ...]):
+        from core.governance import operator_user_boundary as s7
+
+        env = s7.build_work_request_envelope(
+            request_id="req-selfmod-artifact-1",
+            action="write_any_file",
+            params={"path": "/home/rohit/maez/config/soul.md", "content_hash": "d" * 64},
+            claimed_work_class="self_modification",
+            requesting_subsystem="unit",
+            closed_symptom_code="self_mod_requested",
+            proposed_change_class="soul_change",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("file:config/soul.md",),
+            content_exposure_risk="bonded_content_ref",
+            precondition_hash="a" * 64,
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="behavior_change",
+            rollback_path_class="revert_patch",
+            maez_voice_consultation_id="voice-selfmod-artifact-1",
+            free_text_ref_hash="b" * 64,
+        )
+        consultation = s7.MaezVoiceConsultation(
+            consultation_id="voice-selfmod-artifact-1",
+            request_id=env.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            producer="self_mod_dialog_terminal_state",
+            source_ref_kind="self_mod_dialog_exchange",
+            source_ref_hash="c" * 64,
+            maez_voice_consulted=True,
+            maez_objection_present=False,
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=NOW,
+        )
+        authority = s7.AuthorityContext(
+            actor_id="founder",
+            actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+            role_names=role_names,
+            grant_source="founder_webauthn",
+            allowed_scopes=("operator_health",),
+            auth_method="founder_webauthn",
+            surface="cockpit",
+            credential_ref="cred-1",
+            created_at=NOW,
+            expires_at=FUTURE,
+            verified=True,
+        )
+        params_hash = s7.canonical_hash({"path": "config/soul.md", "content_hash": "d" * 64})
+        rendered = s7.render_request_statement(
+            envelope=env,
+            surface="cockpit",
+            origin="http://localhost:11437",
+            action_params_hash=params_hash,
+            authority_context=authority,
+            maez_voice_consultation=consultation,
+            nonce="nonce-selfmod-1",
+            expires_at=FUTURE,
+            rendered_at=NOW,
+        )
+        artifact = s7.S7AuthorizationArtifact(
+            artifact_id="artifact-selfmod-1",
+            request_id=env.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            rendered_text_hash=rendered.rendered_text_hash,
+            action_params_hash=params_hash,
+            precondition_hash=env.precondition_hash,
+            authority_context_hash=s7.authority_context_hash(authority),
+            derived_work_class=env.derived_work_class,
+            derived_aggregation_group=env.derived_aggregation_group,
+            nonce=rendered.nonce,
+            credential_ref="cred-1",
+            auth_method="founder_webauthn",
+            grant_source="founder_webauthn",
+            user_presence=True,
+            user_verification=True,
+            created_at=NOW,
+            expires_at=FUTURE,
+            consumed_at=None,
+        )
+        return env, authority, params_hash, rendered, artifact
+
+    def test_053_artifact_expires_after_expiry(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, _authority, params_hash, rendered, artifact = self._routine_bundle()
+        expired = s7.S7AuthorizationArtifact(
+            **{**artifact.__dict__, "expires_at": PAST},
+        )
+
+        self.assertFalse(
+            s7.authorization_artifact_matches(
+                expired,
+                rendered=rendered,
+                action_params_hash=params_hash,
+                authority_context_hash=artifact.authority_context_hash,
+                precondition_hash=artifact.precondition_hash,
+                derived_work_class=artifact.derived_work_class,
+                derived_aggregation_group=artifact.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
+
+    def test_054_consumed_artifact_cannot_be_reused(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, _authority, params_hash, rendered, artifact = self._routine_bundle()
+        consumed = s7.S7AuthorizationArtifact(
+            **{**artifact.__dict__, "consumed_at": NOW},
+        )
+
+        self.assertFalse(
+            s7.authorization_artifact_matches(
+                consumed,
+                rendered=rendered,
+                action_params_hash=params_hash,
+                authority_context_hash=artifact.authority_context_hash,
+                precondition_hash=artifact.precondition_hash,
+                derived_work_class=artifact.derived_work_class,
+                derived_aggregation_group=artifact.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
+
+    def test_055_artifact_rejects_mismatched_request_id_and_hashes(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, _authority, params_hash, rendered, artifact = self._routine_bundle()
+        mismatches = {
+            "request_id": s7.S7AuthorizationArtifact(**{**artifact.__dict__, "request_id": "other"}),
+            "rendered_text_hash": s7.S7AuthorizationArtifact(**{**artifact.__dict__, "rendered_text_hash": "f" * 64}),
+            "action_params_hash": s7.S7AuthorizationArtifact(**{**artifact.__dict__, "action_params_hash": "f" * 64}),
+            "precondition_hash": s7.S7AuthorizationArtifact(**{**artifact.__dict__, "precondition_hash": "f" * 64}),
+            "authority_context_hash": s7.S7AuthorizationArtifact(**{**artifact.__dict__, "authority_context_hash": "f" * 64}),
+            "derived_work_class": s7.S7AuthorizationArtifact(**{**artifact.__dict__, "derived_work_class": "self_modification"}),
+            "derived_aggregation_group": s7.S7AuthorizationArtifact(**{**artifact.__dict__, "derived_aggregation_group": "s7agg_other"}),
+            "nonce": s7.S7AuthorizationArtifact(**{**artifact.__dict__, "nonce": "different-nonce"}),
+        }
+
+        for name, bad in mismatches.items():
+            with self.subTest(name=name):
+                self.assertFalse(
+                    s7.authorization_artifact_matches(
+                        bad,
+                        rendered=rendered,
+                        action_params_hash=params_hash,
+                        authority_context_hash=artifact.authority_context_hash,
+                        precondition_hash=artifact.precondition_hash,
+                        derived_work_class=artifact.derived_work_class,
+                        derived_aggregation_group=artifact.derived_aggregation_group,
+                        now=NOW,
+                    ),
+                )
+
+    def test_056_truthy_non_bool_verifier_result_rejected(self):
+        from core.governance import operator_user_boundary as s7
+
+        for field in ("user_presence", "user_verification"):
+            with self.subTest(field=field):
+                kwargs = {
+                    "artifact_id": "artifact-1",
+                    "request_id": "req-1",
+                    "request_envelope_hash": "a" * 64,
+                    "rendered_text_hash": "b" * 64,
+                    "action_params_hash": "c" * 64,
+                    "precondition_hash": "d" * 64,
+                    "authority_context_hash": "e" * 64,
+                    "derived_work_class": "routine_custody",
+                    "derived_aggregation_group": "s7agg_test",
+                    "nonce": "nonce-1",
+                    "credential_ref": "cred-1",
+                    "auth_method": "founder_webauthn",
+                    "grant_source": "founder_webauthn",
+                    "user_presence": True,
+                    "user_verification": True,
+                    "created_at": NOW,
+                    "expires_at": FUTURE,
+                    "consumed_at": None,
+                }
+                kwargs[field] = 1
+                with self.assertRaises(ValueError):
+                    s7.S7AuthorizationArtifact(**kwargs)
+
+        with self.assertRaises(ValueError):
+            s7.S7AuthorizationArtifact(
+                artifact_id="artifact-2",
+                request_id="req-2",
+                request_envelope_hash="a" * 64,
+                rendered_text_hash="b" * 64,
+                action_params_hash="c" * 64,
+                precondition_hash="d" * 64,
+                authority_context_hash="e" * 64,
+                derived_work_class="routine_custody",
+                derived_aggregation_group="s7agg_test",
+                nonce="nonce-2",
+                credential_ref="cred-1",
+                auth_method="founder_webauthn",
+                grant_source="founder_webauthn",
+                user_presence=True,
+                user_verification=True,
+                created_at=NOW,
+                expires_at=FUTURE,
+                consumed_at=["truthy"],  # type: ignore[arg-type]
+            )
+
+    def test_057_artifact_store_consumes_once(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, _authority, params_hash, rendered, artifact = self._routine_bundle()
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(artifact)
+
+        first = store.consume_verified(
+            artifact.artifact_id,
+            rendered=rendered,
+            action_params_hash=params_hash,
+            authority_context=_authority,
+            precondition_hash=artifact.precondition_hash,
+            derived_work_class=artifact.derived_work_class,
+            derived_aggregation_group=artifact.derived_aggregation_group,
+            now=NOW,
+        )
+        second = store.consume_verified(
+            artifact.artifact_id,
+            rendered=rendered,
+            action_params_hash=params_hash,
+            authority_context=_authority,
+            precondition_hash=artifact.precondition_hash,
+            derived_work_class=artifact.derived_work_class,
+            derived_aggregation_group=artifact.derived_aggregation_group,
+            now=NOW,
+        )
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+
+    def test_058_artifact_store_replay_across_request_ids_rejected(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, _authority, params_hash, rendered, artifact = self._routine_bundle()
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(artifact)
+
+        tampered_rendered = s7.RenderedRequestStatement(
+            **{**rendered.__dict__, "request_id": "other"},
+        )
+
+        self.assertFalse(
+            store.consume_verified(
+                artifact.artifact_id,
+                rendered=tampered_rendered,
+                action_params_hash=params_hash,
+                authority_context=_authority,
+                precondition_hash=artifact.precondition_hash,
+                derived_work_class=artifact.derived_work_class,
+                derived_aggregation_group=artifact.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
+        self.assertTrue(
+            store.consume_verified(
+                artifact.artifact_id,
+                rendered=rendered,
+                action_params_hash=params_hash,
+                authority_context=_authority,
+                precondition_hash=artifact.precondition_hash,
+                derived_work_class=artifact.derived_work_class,
+                derived_aggregation_group=artifact.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
+
+    def test_059_timezone_expired_artifact_does_not_consume(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, _authority, params_hash, rendered, artifact = self._routine_bundle()
+        expired = s7.S7AuthorizationArtifact(
+            **{**artifact.__dict__, "expires_at": "2026-05-17T23:30:00+14:00"},
+        )
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(expired)
+
+        self.assertFalse(
+            store.consume_verified(
+                expired.artifact_id,
+                rendered=rendered,
+                action_params_hash=params_hash,
+                authority_context=_authority,
+                precondition_hash=expired.precondition_hash,
+                derived_work_class=expired.derived_work_class,
+                derived_aggregation_group=expired.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
+
+    def test_060_store_consume_rechecks_hashes_atomically(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, _authority, params_hash, rendered, artifact = self._routine_bundle()
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(artifact)
+
+        self.assertFalse(
+            store.consume_verified(
+                artifact.artifact_id,
+                rendered=rendered,
+                action_params_hash="f" * 64,
+                authority_context=_authority,
+                precondition_hash=artifact.precondition_hash,
+                derived_work_class=artifact.derived_work_class,
+                derived_aggregation_group=artifact.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
+        self.assertTrue(
+            store.consume_verified(
+                artifact.artifact_id,
+                rendered=rendered,
+                action_params_hash=params_hash,
+                authority_context=_authority,
+                precondition_hash=artifact.precondition_hash,
+                derived_work_class=artifact.derived_work_class,
+                derived_aggregation_group=artifact.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
+
+    def test_061_superseded_request_rejects_old_artifact(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, _authority, params_hash, rendered, artifact = self._routine_bundle()
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(artifact)
+
+        self.assertFalse(
+            store.consume_verified(
+                artifact.artifact_id,
+                rendered=rendered,
+                action_params_hash=params_hash,
+                authority_context=_authority,
+                precondition_hash=artifact.precondition_hash,
+                derived_work_class=artifact.derived_work_class,
+                derived_aggregation_group=artifact.derived_aggregation_group,
+                now=NOW,
+                superseded_request_ids={rendered.request_id},
+            ),
+        )
+        self.assertTrue(
+            store.consume_verified(
+                artifact.artifact_id,
+                rendered=rendered,
+                action_params_hash=params_hash,
+                authority_context=_authority,
+                precondition_hash=artifact.precondition_hash,
+                derived_work_class=artifact.derived_work_class,
+                derived_aggregation_group=artifact.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
+
+    def test_062_concurrent_double_consume_executes_once(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, _authority, params_hash, rendered, artifact = self._routine_bundle()
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(artifact)
+        results: list[bool] = []
+
+        def consume() -> None:
+            results.append(
+                store.consume_verified(
+                    artifact.artifact_id,
+                    rendered=rendered,
+                    action_params_hash=params_hash,
+                    authority_context=_authority,
+                    precondition_hash=artifact.precondition_hash,
+                    derived_work_class=artifact.derived_work_class,
+                    derived_aggregation_group=artifact.derived_aggregation_group,
+                    now=NOW,
+                ),
+            )
+
+        threads = [threading.Thread(target=consume) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(results.count(True), 1)
+        self.assertEqual(results.count(False), 1)
+
+    def test_063_consume_rejects_expired_authority_context_even_when_hash_matches(self):
+        from dataclasses import replace
+        from core.governance import operator_user_boundary as s7
+
+        _env, authority, params_hash, rendered, artifact = self._routine_bundle()
+        expired_authority = replace(authority, expires_at=PAST)
+        expired_authority_hash = s7.authority_context_hash(expired_authority)
+        rendered_for_expired_authority = s7.RenderedRequestStatement(
+            **{**rendered.__dict__, "authority_context_hash": expired_authority_hash},
+        )
+        artifact_for_expired_authority = s7.S7AuthorizationArtifact(
+            **{**artifact.__dict__, "authority_context_hash": expired_authority_hash},
+        )
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(artifact_for_expired_authority)
+
+        self.assertFalse(
+            store.consume_verified(
+                artifact_for_expired_authority.artifact_id,
+                rendered=rendered_for_expired_authority,
+                action_params_hash=params_hash,
+                authority_context=expired_authority,
+                precondition_hash=artifact_for_expired_authority.precondition_hash,
+                derived_work_class=artifact_for_expired_authority.derived_work_class,
+                derived_aggregation_group=artifact_for_expired_authority.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
+
+    def test_064_operator_only_context_cannot_consume_self_modification_artifact(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, authority, params_hash, rendered, artifact = self._self_mod_bundle(
+            role_names=("operator",),
+        )
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(artifact)
+
+        self.assertFalse(
+            store.consume_verified(
+                artifact.artifact_id,
+                rendered=rendered,
+                action_params_hash=params_hash,
+                authority_context=authority,
+                precondition_hash=artifact.precondition_hash,
+                derived_work_class=artifact.derived_work_class,
+                derived_aggregation_group=artifact.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
+
+    def test_065_bonded_user_context_can_consume_self_modification_artifact(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, authority, params_hash, rendered, artifact = self._self_mod_bundle(
+            role_names=("bonded_user", "operator"),
+        )
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(artifact)
+
+        self.assertTrue(
+            store.consume_verified(
+                artifact.artifact_id,
+                rendered=rendered,
+                action_params_hash=params_hash,
+                authority_context=authority,
+                precondition_hash=artifact.precondition_hash,
+                derived_work_class=artifact.derived_work_class,
+                derived_aggregation_group=artifact.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
 
 
 if __name__ == "__main__":
