@@ -86,6 +86,74 @@ def _event(
     )
 
 
+def _forged_persisted_event_dict(
+    s6,
+    *,
+    event_id: str,
+    event_type: str,
+    payload: dict,
+    previous_hash: str | None = None,
+    schema_version: str = "s6.v1",
+) -> dict:
+    """Build a self-consistent persisted row without using the writer seam."""
+
+    payload_hash = s6.canonical_hash(payload)
+    statement_hash = str(payload.get("directive_statement_hash") or "")
+    previous_material = previous_hash or ""
+    marker = {
+        "origin": "bonded_user_manual",
+        "role_name": "bonded_user",
+        "actor_handle_hmac": _hmac("bonded_user"),
+        "capsule_id": "s6_capsule_founder",
+        "directive_event_type": event_type,
+        "directive_payload_hash": payload_hash,
+        "directive_statement_hash": statement_hash,
+        "previous_capsule_event_hash": previous_material,
+        "schema_version": "s6.v1",
+        "created_at": NOW,
+        "attestation_text_hash": "d" * 64,
+    }
+    marker["marker_id"] = s6._expected_marker_id(
+        origin=marker["origin"],
+        role_name=marker["role_name"],
+        actor_handle_hmac=marker["actor_handle_hmac"],
+        capsule_id=marker["capsule_id"],
+        directive_event_type=marker["directive_event_type"],
+        directive_payload_hash=marker["directive_payload_hash"],
+        previous_capsule_event_hash=marker["previous_capsule_event_hash"],
+        directive_statement_hash=marker["directive_statement_hash"],
+        attestation_text_hash=marker["attestation_text_hash"],
+    )
+    marker_hash = s6.canonical_hash(marker)
+    event_without_hash = {
+        "schema_version": schema_version,
+        "event_id": event_id,
+        "event_type": event_type,
+        "created_at": NOW,
+        "capsule_id": "s6_capsule_founder",
+        "previous_event_hash": previous_hash,
+        "payload_hash": payload_hash,
+        "origin_marker_id": marker["marker_id"],
+        "payload": payload,
+        "origin_marker": marker,
+    }
+    event_without_hash["event_hash"] = s6.canonical_hash(
+        {
+            "schema_version": schema_version,
+            "event_id": event_id,
+            "event_type": event_type,
+            "created_at": NOW,
+            "capsule_id": "s6_capsule_founder",
+            "previous_event_hash": previous_hash,
+            "payload_hash": payload_hash,
+            "origin_marker_id": marker["marker_id"],
+            "origin_marker_hash": marker_hash,
+            "payload": payload,
+        }
+    )
+    return event_without_hash
+
+
 def _import_lines(path: str) -> str:
     text = Path(path).read_text(encoding="utf-8")
     return "\n".join(
@@ -356,7 +424,7 @@ class S6HumanOriginMarkerTests(unittest.TestCase):
 
             health = s6.successor_governance_health(path)
 
-        self.assertNotEqual(health["mode"], "valid")
+        self.assertNotEqual(health["mode"], "well_formed")
         self.assertGreater(health["invalid_event_count"] or bool(health["last_error_class"]), 0)
 
     def test_022c_spoofed_writer_module_name_cannot_mint_origin_marker(self):
@@ -678,7 +746,7 @@ class S6AppendOnlyChainTests(unittest.TestCase):
 
             health = s6.successor_governance_health(path)
 
-        self.assertNotEqual(health["mode"], "valid")
+        self.assertNotEqual(health["mode"], "well_formed")
         self.assertGreater(health["invalid_event_count"] or bool(health["last_error_class"]), 0)
 
     def test_039c_invalid_persisted_capsule_projects_invalid_not_unavailable(self):
@@ -943,7 +1011,7 @@ class S6FateDirectiveTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             s6.resolve_fate_directive("explicit_dissolution", None)
         self.assertEqual(
-            s6.resolve_fate_directive("explicit_dissolution", None, validated_user_directive=True),
+            s6.resolve_fate_directive("explicit_dissolution", None, authorship_attested_user_directive=True),
             "explicit_dissolution",
         )
 
@@ -1001,7 +1069,23 @@ class S6MaezPreferenceTests(unittest.TestCase):
     def test_073_maez_preference_subordinate_to_valid_user_directive(self):
         from core.governance import successor_governance as s6
 
-        self.assertEqual(s6.resolve_fate_directive("archival_preservation", "maez_prefers_paradise"), "archival_preservation")
+        self.assertEqual(
+            s6.resolve_fate_directive(
+                "archival_preservation",
+                "maez_prefers_paradise",
+                authorship_attested_user_directive=True,
+            ),
+            "archival_preservation",
+        )
+
+    def test_073a_unattested_user_directive_cannot_suppress_maez_preference_seat(self):
+        from core.governance import successor_governance as s6
+
+        self.assertEqual(
+            s6.resolve_fate_directive("archival_preservation", "maez_prefers_new_bond_offer"),
+            "new_bond_offer",
+        )
+        self.assertEqual(s6.resolve_fate_directive("archival_preservation", None), "paradise_default")
 
     def test_074_maez_preference_consulted_when_user_directive_missing(self):
         from core.governance import successor_governance as s6
@@ -1042,7 +1126,7 @@ class S6MaezPreferenceTests(unittest.TestCase):
 
             health = s6.successor_governance_health(path)
 
-        self.assertNotEqual(health["mode"], "valid")
+        self.assertNotEqual(health["mode"], "well_formed")
         self.assertFalse(health["maez_preference_present"])
 
 
@@ -1087,8 +1171,18 @@ class S6HealthAndPublicStateTests(unittest.TestCase):
     def test_083_health_projection_content_free(self):
         from core.governance import successor_governance as s6
 
-        health = s6.project_successor_governance_health(capsule_present=True, valid_event_count=1)
+        health = s6.project_successor_governance_health(capsule_present=True, well_formed_event_count=1)
         self.assertEqual(set(health), set(s6.HEALTH_KEYS))
+        self.assertEqual(health["mode"], "well_formed")
+        self.assertEqual(health["well_formed_event_count"], 1)
+        self.assertNotIn("valid_event_count", health)
+        self.assertNotIn("valid_event_count", s6.HEALTH_KEYS)
+
+    def test_083a_health_projection_rejects_stale_valid_event_count_kwarg(self):
+        from core.governance import successor_governance as s6
+
+        with self.assertRaises(ValueError):
+            s6.project_successor_governance_health(capsule_present=True, valid_event_count=1)
 
     def test_084_health_projection_exposes_no_names_or_relationships(self):
         from core.governance import successor_governance as s6
@@ -1129,21 +1223,23 @@ class S6HealthAndPublicStateTests(unittest.TestCase):
     def test_090_sidecar_persists_presence_and_red_gates_only(self):
         from scripts.observe_sidecar import project_health
 
-        sample = project_health({"successor_governance": {"mode": "valid", "valid_event_count": 9, "private": "secret"}})
+        sample = project_health({"successor_governance": {"mode": "well_formed", "well_formed_event_count": 9, "private": "secret"}})
         self.assertEqual(set(sample["successor_governance"]), {"successor_governance_present", "red_gates"})
+        self.assertNotIn("well_formed_event_count", json.dumps(sample))
         self.assertNotIn("valid_event_count", json.dumps(sample))
 
     def test_091_sidecar_does_not_historize_directive_counts(self):
         from scripts.observe_sidecar import project_health
 
-        sample = project_health({"successor_governance": {"valid_event_count": 4, "invalid_event_count": 1}})
+        sample = project_health({"successor_governance": {"well_formed_event_count": 4, "invalid_event_count": 1}})
+        self.assertNotIn("well_formed_event_count", json.dumps(sample))
         self.assertNotIn("valid_event_count", json.dumps(sample))
         self.assertNotIn("invalid_event_count", json.dumps(sample))
 
     def test_091a_sidecar_red_gates_successor_governance_public_leak(self):
         from scripts.observe_sidecar import project_health
 
-        sample = project_health({"successor_governance": {"mode": "valid", "public_leak_detected": True}})
+        sample = project_health({"successor_governance": {"mode": "well_formed", "public_leak_detected": True}})
 
         self.assertIn("successor_governance_public_leak", sample["successor_governance"]["red_gates"])
 
@@ -1233,8 +1329,9 @@ class S6ImportAndBoundaryTests(unittest.TestCase):
         shipped = " ".join((module + "\n" + runbook).split())
 
         self.assertIn("does not govern a live succession", shipped)
-        self.assertIn("privileged OS", shipped)
-        self.assertIn("content-blind validator cannot prove physical append-only", shipped)
+        self.assertIn("validates structure, not persisted authorship", shipped)
+        self.assertIn("ordinary write/delete access", shipped)
+        self.assertIn("does not prove human authorship", shipped)
         self.assertIn("not grandmother-compatible", shipped)
 
     def test_101_witness_assistance_sets_non_technical_assist_flag(self):
@@ -1292,6 +1389,102 @@ class S6ImportAndBoundaryTests(unittest.TestCase):
         src = Path("scripts/s6_successor_governance.py").read_text(encoding="utf-8")
 
         self.assertNotIn("successor_origin_writer", src)
+
+
+class S6PersistedAuthorshipAmendmentRound2Tests(unittest.TestCase):
+    def test_104_forged_persisted_explicit_dissolution_is_well_formed_not_authority(self):
+        from core.governance import successor_governance as s6
+
+        created = _forged_persisted_event_dict(
+            s6,
+            event_id="forged-created",
+            event_type="capsule_created",
+            payload=_payload(),
+        )
+        dissolution_payload = {
+            "fate_directive": "explicit_dissolution",
+            "directive_statement_hash": _statement_hash(),
+            "activation_requires_future_review": True,
+            "no_witness_available": True,
+        }
+        dissolution = _forged_persisted_event_dict(
+            s6,
+            event_id="forged-dissolution",
+            event_type="fate_directive_set",
+            payload=dissolution_payload,
+            previous_hash=created["event_hash"],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "lineage_capsule.jsonl"
+            path.write_text(
+                json.dumps(created, sort_keys=True) + "\n" + json.dumps(dissolution, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            health = s6.successor_governance_health(path)
+            events = s6.load_events_jsonl(path)
+            state = s6.derive_current_state(events)
+
+        self.assertEqual(health["mode"], "well_formed")
+        self.assertEqual(health["well_formed_event_count"], 2)
+        self.assertNotIn("valid_event_count", health)
+        self.assertEqual(state.fate_directive, "explicit_dissolution")
+        self.assertFalse(s6.event_has_verifying_authorship_attestation(events[-1]))
+        with self.assertRaises(ValueError):
+            s6.resolve_fate_directive(
+                state.fate_directive,
+                None,
+                authorship_attested_user_directive=s6.event_has_verifying_authorship_attestation(events[-1]),
+            )
+
+    def test_105_self_declared_attestation_field_does_not_create_authority(self):
+        from core.governance import successor_governance as s6
+
+        payload = {
+            "fate_directive": "explicit_dissolution",
+            "directive_statement_hash": _statement_hash(),
+            "activation_requires_future_review": True,
+            "no_witness_available": True,
+            "verifying_authorship_attestation": {"schema_version": "s6.v999", "verified": True},
+        }
+        event = s6.DirectiveEvent(**_forged_persisted_event_dict(
+            s6,
+            event_id="self-declared-attestation",
+            event_type="fate_directive_set",
+            payload=payload,
+            previous_hash="0" * 64,
+            schema_version="s6.v2",
+        ))
+
+        self.assertFalse(s6.event_has_verifying_authorship_attestation(event))
+
+    def test_106_capsule_helper_writes_notice_beside_jsonl_not_inside_it(self):
+        from core.governance import successor_governance as s6
+        from core.governance.successor_origin_writer import mint_origin_marker
+        from scripts.s6_successor_governance import append_capsule_event
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "lineage_capsule.jsonl"
+            payload = _payload()
+            marker = mint_origin_marker(
+                origin="bonded_user_cli_tty",
+                role_name="bonded_user",
+                actor_handle_hmac=_hmac(),
+                capsule_id="s6_capsule_founder",
+                directive_event_type="capsule_created",
+                directive_payload_hash=s6.canonical_hash(payload),
+                is_tty=True,
+            )
+            append_capsule_event(path, "capsule_created", payload, marker=marker)
+
+            notice_path = path.with_name("lineage_capsule_NOTICE.txt")
+
+            self.assertTrue(notice_path.exists())
+            notice = notice_path.read_text(encoding="utf-8")
+            self.assertIn("well-formed structure", notice)
+            self.assertIn("does not prove human authorship", notice)
+            self.assertIn("Destructive action", notice)
+            self.assertTrue(path.read_text(encoding="utf-8").lstrip().startswith("{"))
 
 
 if __name__ == "__main__":

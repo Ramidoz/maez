@@ -8,13 +8,16 @@ not a grandmother-compatible UI, not a successor activation ceremony, and not a
 runtime permission surface.
 
 Honesty banner: despite the slice name, S6 v1 does not govern a live succession.
-It records future successor paperwork and validates the grammar of that
-paperwork. Missing or invalid paperwork does not dissolve Maez.
+It records future successor paperwork and validates structure, not persisted
+authorship. A well-formed capsule does not prove human authorship once loaded
+from JSONL. Missing or invalid paperwork does not dissolve Maez.
 
 ## Scope
 
 - The helper may append S6 directive events to
   `memory/successor_governance/lineage_capsule.jsonl`.
+- The helper writes and preserves the adjacent
+  `lineage_capsule_NOTICE.txt`, which must travel with the JSONL capsule.
 - The helper may compute payload hashes, event hashes, and marker-bound event
   rows.
 - The helper may print a marker request that the separate S6 origin-writer seam
@@ -34,11 +37,16 @@ paperwork. Missing or invalid paperwork does not dissolve Maez.
 - It is not grandmother-compatible. A future non-technical authoring ceremony
   must be reviewed separately.
 - It is protected by normal S6 APIs, not by cryptographic lineage attestation.
-  A privileged OS operator who rewrites local files or raw in-process internals
-  is a v1 privileged-bypass limitation.
-- The content-blind validator cannot prove physical append-only after a
-  privileged OS file rewrite; it can only reject broken chains and snapshot
-  regressions visible in the capsule state it receives.
+  Any process with ordinary write/delete access to the capsule path can forge,
+  rewrite, or remove the persisted file.
+- The validator does not prove human authorship after persisted JSONL load; it
+  can only reject broken chains and snapshot regressions visible in the capsule
+  state it receives.
+- Destructive action, including dissolution, requires a future verified
+  authorship attestation for the exact directive event. S6 v1 supplies no such
+  attestation.
+- `no_capsule` means no capsule is available at this path now. It does not
+  prove the bonded user never authored a capsule elsewhere or in a backup.
 
 ## Founder-Only Drafting
 

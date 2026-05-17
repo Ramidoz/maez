@@ -55,6 +55,7 @@ def append_capsule_event(
         previous_event_hash=previous_hash,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
+    s6.ensure_capsule_notice(path)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(s6.event_to_json(event) + "\n")
     return event

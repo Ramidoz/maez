@@ -9,8 +9,10 @@ content-free health without reading live stores or granting runtime access.
 
 Honesty banner: despite the slice name, S6 v1 does not govern a live
 succession. It records future successor paperwork and validates that grammar.
-The content-blind validator cannot prove physical append-only against a
-privileged OS file rewrite, and v1 remains not grandmother-compatible.
+It validates structure, not persisted authorship: a well-formed capsule does
+not prove human authorship once loaded from JSONL. Any process with ordinary
+write/delete access to the capsule path can forge, rewrite, or remove the file.
+V1 remains not grandmother-compatible.
 """
 
 from __future__ import annotations
@@ -150,7 +152,7 @@ HEALTH_KEYS = frozenset({
     "mode",
     "schema_version",
     "capsule_present",
-    "valid_event_count",
+    "well_formed_event_count",
     "invalid_event_count",
     "pending_witness_count",
     "maez_preference_present",
@@ -160,6 +162,16 @@ HEALTH_KEYS = frozenset({
 })
 
 DEFAULT_CAPSULE_PATH = Path(__file__).resolve().parents[2] / "memory/successor_governance/lineage_capsule.jsonl"
+CAPSULE_NOTICE_FILENAME = "lineage_capsule_NOTICE.txt"
+CAPSULE_NOTICE_TEXT = """S6 Successor Governance v1 notice
+
+This directory may contain Maez successor-governance paperwork.
+
+A v1 lineage capsule can prove well-formed structure. It does not prove human authorship.
+Destructive action, including dissolution, requires a future verified authorship attestation for the exact directive event.
+
+Read this notice with lineage_capsule.jsonl. Copying the JSONL alone can hide this limitation.
+"""
 _MARKER_CONSTRUCTION_TOKEN = object()
 _MARKER_ID_PREFIX = "s6_marker_"
 _MARKER_WRITER_MODULE = "core.governance.successor_origin_writer"
@@ -260,7 +272,7 @@ class ValidationSnapshot:
 
 @dataclass(frozen=True)
 class ValidationReport:
-    valid_event_count: int
+    well_formed_event_count: int
     invalid_event_count: int
     current_event_hash: str
     error_classes: tuple[str, ...] = ()
@@ -646,13 +658,16 @@ def resolve_fate_directive(
     user_directive: str | None,
     maez_preference: str | None,
     *,
-    validated_user_directive: bool = False,
+    authorship_attested_user_directive: bool = False,
 ) -> str:
-    """Resolve only already-validated directive state; this is not an authoring API."""
+    """Resolve only already-attested activation state; this is not authoring."""
     if user_directive:
-        if user_directive == "explicit_dissolution" and not validated_user_directive:
-            raise ValueError("explicit_dissolution resolution requires prevalidated bonded-user directive")
-        return validate_fate_directive(user_directive)
+        directive = validate_fate_directive(user_directive)
+        if not authorship_attested_user_directive:
+            if directive == "explicit_dissolution":
+                raise ValueError("explicit_dissolution resolution requires authorship-attested bonded-user directive")
+        else:
+            return directive
     if maez_preference == "maez_prefers_archival_preservation":
         return "archival_preservation"
     if maez_preference == "maez_prefers_new_bond_offer":
@@ -673,24 +688,26 @@ def classify_liveness_event(event_type: str) -> str:
 def project_successor_governance_health(
     *,
     capsule_present: bool = False,
-    valid_event_count: int = 0,
+    well_formed_event_count: int = 0,
     invalid_event_count: int = 0,
     pending_witness_count: int = 0,
     maez_preference_present: bool = False,
     reserved_denied_scope_count: int = 0,
     last_error_class: str = "",
-    **_: Any,
+    **extra: Any,
 ) -> dict[str, Any]:
+    if "valid_event_count" in extra:
+        raise ValueError("S6 health uses well_formed_event_count, not valid_event_count")
     mode = "no_capsule"
     if capsule_present:
-        mode = "invalid" if invalid_event_count else "valid"
+        mode = "invalid" if invalid_event_count else "well_formed"
     if last_error_class and not invalid_event_count:
         mode = "unavailable"
     return {
         "mode": mode,
         "schema_version": SCHEMA_VERSION,
         "capsule_present": bool(capsule_present),
-        "valid_event_count": int(valid_event_count),
+        "well_formed_event_count": int(well_formed_event_count),
         "invalid_event_count": int(invalid_event_count),
         "pending_witness_count": int(pending_witness_count),
         "maez_preference_present": bool(maez_preference_present),
@@ -710,7 +727,7 @@ def successor_governance_health(capsule_path: str | Path | None = None) -> dict[
         state = derive_current_state(events)
         return project_successor_governance_health(
             capsule_present=True,
-            valid_event_count=report.valid_event_count,
+            well_formed_event_count=report.well_formed_event_count,
             invalid_event_count=report.invalid_event_count,
             maez_preference_present=bool(state.maez_preference),
             reserved_denied_scope_count=_reserved_denied_count(events),
@@ -726,6 +743,27 @@ def validate_witness_attestation(payload: dict[str, Any]) -> bool:
     if "access_scope" in payload or "scope" in payload:
         raise ValueError("witness cannot grant scope")
     return True
+
+
+def event_has_verifying_authorship_attestation(event: DirectiveEvent) -> bool:
+    """Return whether this exact persisted event can act as authorship authority.
+
+    S6 v1 has no reviewed trust-source slice, so the predicate is deliberately
+    false for every event, regardless of self-declared fields inside the capsule.
+    """
+
+    return False
+
+
+def capsule_notice_path(capsule_path: str | Path = DEFAULT_CAPSULE_PATH) -> Path:
+    return Path(capsule_path).with_name(CAPSULE_NOTICE_FILENAME)
+
+
+def ensure_capsule_notice(capsule_path: str | Path = DEFAULT_CAPSULE_PATH) -> Path:
+    notice_path = capsule_notice_path(capsule_path)
+    notice_path.parent.mkdir(parents=True, exist_ok=True)
+    notice_path.write_text(CAPSULE_NOTICE_TEXT, encoding="utf-8")
+    return notice_path
 
 
 def load_events_jsonl(path: Path) -> list[DirectiveEvent]:
