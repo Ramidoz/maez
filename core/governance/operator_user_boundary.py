@@ -225,6 +225,38 @@ MIXED_STORE_CONTENT_AUTHORITIES = frozenset({
 
 _EXPECTED_COVENANT_LOG_SUFFIX = ("logs", "covenant.log")
 _EXPECTED_AUDIT_LOG_DB_SUFFIX = ("memory", "audit_log.db")
+_EXPECTED_LAST_BACKUP_SUFFIX = ("logs", "last_backup.json")
+
+BACKUP_OPERATIONS = frozenset({
+    "backup_run",
+    "backup_verify",
+    "backup_rotate",
+    "backup_restore",
+})
+
+_ROUTINE_BACKUP_OPERATIONS = frozenset({
+    "backup_run",
+    "backup_verify",
+    "backup_rotate",
+})
+
+BACKUP_STATUS_MODES = frozenset({
+    "success",
+    "failure",
+    "unknown",
+    "unavailable",
+})
+
+BACKUP_RESTORE_MODES = frozenset({
+    "track_a_guarded",
+    "track_b_blocked_confidentiality_not_ready",
+    "track_b_confidentiality_ready",
+})
+
+DEPLOYMENT_TRACKS = frozenset({
+    "track_a",
+    "track_b",
+})
 
 VOICE_SEAT_WORK_CLASSES = frozenset({
     "self_modification",
@@ -384,6 +416,22 @@ def validate_mixed_store_content_authority(authority: str) -> str:
     )
 
 
+def validate_backup_operation(operation: str) -> str:
+    return _validate_closed_value(operation, BACKUP_OPERATIONS, "backup operation")
+
+
+def validate_backup_status_mode(mode: str) -> str:
+    return _validate_closed_value(mode, BACKUP_STATUS_MODES, "backup status mode")
+
+
+def validate_backup_restore_mode(mode: str) -> str:
+    return _validate_closed_value(mode, BACKUP_RESTORE_MODES, "backup restore mode")
+
+
+def validate_deployment_track(track: str) -> str:
+    return _validate_closed_value(track, DEPLOYMENT_TRACKS, "deployment track")
+
+
 def _validate_hash64(value: str, *, field: str) -> str:
     if not isinstance(value, str) or len(value) != 64:
         raise ValueError(f"{field} must be a 64-character hash")
@@ -531,6 +579,8 @@ def derive_work_class(
     material = _path_material(action, params)
     lowered = material.lower()
 
+    if action in BACKUP_OPERATIONS:
+        return classify_backup_operation(action)
     if action == "capability.acquire" or _INSTALL_RE.search(lowered):
         return "capability_acquisition"
     if "backup_restore" in action or "restore_backup" in action:
@@ -1208,6 +1258,68 @@ def build_audit_log_projection(db_path: str | Path) -> dict[str, object]:
         mode="content_free_counts",
         row_count=int(row_count),
     )
+
+
+def classify_backup_operation(
+    operation: str,
+    *,
+    deployment_track: str = "track_a",
+    track_b_confidentiality_mode: str = "track_b_confidentiality_not_ready",
+) -> str:
+    """Map a Decision-22 backup operation into the S7 work-class lattice."""
+    validate_backup_operation(operation)
+    validate_deployment_track(deployment_track)
+    validate_operator_health_mode(track_b_confidentiality_mode)
+    if operation in _ROUTINE_BACKUP_OPERATIONS:
+        return "routine_custody"
+    if deployment_track == "track_b" and track_b_confidentiality_mode != "ready":
+        return "undeterminable_work_class"
+    return "destructive_user_action"
+
+
+def _backup_restore_mode(track_b_confidentiality_mode: str) -> str:
+    validate_operator_health_mode(track_b_confidentiality_mode)
+    if track_b_confidentiality_mode == "ready":
+        return "track_b_confidentiality_ready"
+    return "track_b_blocked_confidentiality_not_ready"
+
+
+def build_backup_status_projection(
+    status_path: str | Path,
+    *,
+    backup_freshness_class: str,
+    track_b_confidentiality_mode: str = "track_b_confidentiality_not_ready",
+) -> dict[str, object]:
+    """Return a content-free Decision-22 backup status projection.
+
+    The source file carries snapshot paths, timestamps, byte counts, commits,
+    and error details. S7 exposes only a closed status mode and freshness class.
+    """
+    validate_operator_freshness_class(backup_freshness_class)
+    restore_mode = _backup_restore_mode(track_b_confidentiality_mode)
+    mode = "unavailable"
+    path = Path(status_path)
+    if _path_has_suffix(path, _EXPECTED_LAST_BACKUP_SUFFIX) and path.is_file():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            candidate = str(payload.get("status") or "unknown")
+            mode = candidate if candidate in BACKUP_STATUS_MODES else "unknown"
+        except (OSError, json.JSONDecodeError, TypeError, AttributeError):
+            mode = "unavailable"
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "store_kind": validate_mixed_store_kind("decision22_backup_artifact"),
+        "mode": validate_backup_status_mode(mode),
+        "backup_freshness_class": backup_freshness_class,
+        "raw_backup_contents_visible_by_default": False,
+        "restore_work_class": classify_backup_operation(
+            "backup_restore",
+            deployment_track="track_a",
+            track_b_confidentiality_mode=track_b_confidentiality_mode,
+        ),
+        "track_b_restore_mode": validate_backup_restore_mode(restore_mode),
+        "content_authority": validate_mixed_store_content_authority("not_granted"),
+    }
 
 
 @dataclass(frozen=True)

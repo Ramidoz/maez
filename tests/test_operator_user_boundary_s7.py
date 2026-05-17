@@ -2705,5 +2705,119 @@ class S7LogAuditProjectionTests(unittest.TestCase):
         self.assertEqual(projection["row_count"], 0)
 
 
+class S7BackupCustodyProjectionTests(unittest.TestCase):
+    def test_112_backup_run_verify_and_rotate_are_routine_custody(self):
+        from core.governance import operator_user_boundary as s7
+
+        for operation in ("backup_run", "backup_verify", "backup_rotate"):
+            with self.subTest(operation=operation):
+                self.assertEqual(
+                    s7.classify_backup_operation(operation),
+                    "routine_custody",
+                )
+
+    def test_113_backup_restore_is_guarded_not_routine_custody(self):
+        from core.governance import operator_user_boundary as s7
+
+        work_class = s7.classify_backup_operation(
+            "backup_restore",
+            deployment_track="track_a",
+            track_b_confidentiality_mode="track_b_confidentiality_not_ready",
+        )
+        ctx = s7.AuthorityContext(
+            actor_id="operator-1",
+            actor_handle_hmac="hmac:s7:operator:" + ("a" * 64),
+            role_names=("operator",),
+            grant_source="service_local",
+            allowed_scopes=("operator_health",),
+            auth_method="service_local",
+            created_at=NOW,
+            expires_at=FUTURE,
+            verified=True,
+        )
+
+        self.assertEqual(work_class, "destructive_user_action")
+        self.assertFalse(s7.authorizes_work(ctx, work_class, now=NOW))
+
+    def test_114_backup_status_projection_is_content_free(self):
+        import json
+        from core.governance import operator_user_boundary as s7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            status_path = Path(tmp) / "logs" / "last_backup.json"
+            status_path.parent.mkdir(parents=True)
+            status_path.write_text(
+                json.dumps({
+                    "status": "success",
+                    "timestamp": "2026-05-17T10-00-00",
+                    "snapshot_path": "/home/rohit/maez-backups/private-snapshot",
+                    "duration_seconds": 1.23,
+                    "byte_count": 987654,
+                    "error": "secret failure detail",
+                    "git_commit": "abc123",
+                }),
+                encoding="utf-8",
+            )
+
+            projection = s7.build_backup_status_projection(
+                status_path,
+                backup_freshness_class="fresh",
+            )
+
+        self.assertEqual(
+            set(projection),
+            {
+                "schema_version",
+                "store_kind",
+                "mode",
+                "backup_freshness_class",
+                "raw_backup_contents_visible_by_default",
+                "restore_work_class",
+                "track_b_restore_mode",
+                "content_authority",
+            },
+        )
+        self.assertEqual(projection["mode"], "success")
+        self.assertEqual(projection["backup_freshness_class"], "fresh")
+        self.assertEqual(projection["restore_work_class"], "destructive_user_action")
+        blob = repr(projection).lower()
+        for forbidden in (
+            "private-snapshot",
+            "2026-05-17t10",
+            "987654",
+            "secret failure detail",
+            "abc123",
+        ):
+            self.assertNotIn(forbidden, blob)
+
+    def test_115_track_b_backup_restore_blocks_without_confidentiality_staging(self):
+        from core.governance import operator_user_boundary as s7
+
+        self.assertEqual(
+            s7.classify_backup_operation(
+                "backup_restore",
+                deployment_track="track_b",
+                track_b_confidentiality_mode="track_b_confidentiality_not_ready",
+            ),
+            "undeterminable_work_class",
+        )
+
+    def test_116_backup_operations_flow_through_derive_work_class(self):
+        from core.governance import operator_user_boundary as s7
+
+        cases = {
+            "backup_run": "routine_custody",
+            "backup_verify": "routine_custody",
+            "backup_rotate": "routine_custody",
+            "backup_restore": "destructive_user_action",
+        }
+        for action, expected in cases.items():
+            with self.subTest(action=action):
+                self.assertEqual(
+                    s7.derive_work_class(action=action, params={}),
+                    expected,
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
