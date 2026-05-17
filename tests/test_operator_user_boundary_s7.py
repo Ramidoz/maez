@@ -2431,6 +2431,339 @@ class S7BackupRestoreConfidentialityProjectionTests(unittest.TestCase):
         self.assertIsNone(cm.exception.__cause__)
 
 
+class S7BrainSwapDoubleGateTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        from core.voice_continuity import storage as s5_storage
+
+        self._s5_storage = s5_storage
+        self._old_s5_root = s5_storage.VOICE_CONTINUITY_ROOT
+        self._canonical_s5_root = Path(self._tmp.name) / "trusted-s5-root"
+        s5_storage.VOICE_CONTINUITY_ROOT = self._canonical_s5_root
+
+    def tearDown(self):
+        self._s5_storage.VOICE_CONTINUITY_ROOT = self._old_s5_root
+        self._tmp.cleanup()
+
+    def _s5_admission_artifact(self, suffix: str = "a"):
+        from datetime import datetime
+        from core.voice_continuity.admission import emit_admission_artifact
+        from core.voice_continuity.review import apply_owner_verdict, create_candidate_review
+        from core.voice_continuity.schema import OwnerOriginMarker
+
+        review = create_candidate_review(
+            review_id=f"s5-review-{suffix}",
+            created_at=datetime.fromisoformat(NOW),
+            event_type="brain_swap",
+            state="pending_owner_review",
+            baseline_id=f"s5-baseline-{suffix}",
+            corpus_version="s5.signature.v1",
+            rubric_version="s5.rubric.v1",
+            candidate_fingerprint={
+                "base_model": f"candidate-{suffix}",
+                "model_path_hash": suffix * 64,
+                "soul_hash": "c" * 64,
+            },
+            candidate_endpoint={"kind": "local_candidate_subprocess"},
+            preflight_outcome="preflight_passed_needs_owner_review",
+        )
+        marker = OwnerOriginMarker(
+            origin="operator_manual",
+            attested_by="operator",
+            attested_at=NOW,
+            review_id=review.review_id,
+            baseline_id=review.baseline_id or "",
+            review_package_hash=review.review_package_hash,
+        )
+        accepted = apply_owner_verdict(
+            review,
+            "accepted_same_maez",
+            operator_origin_marker=marker,
+            required_slots_resolved=True,
+        )
+        return emit_admission_artifact(
+            accepted,
+            candidate_fingerprint_hash=accepted.candidate_fingerprint_hash,
+        )
+
+    def _s5_admission_root(self, artifact):
+        import json
+
+        root = self._canonical_s5_root
+        admissions = root / "admissions"
+        admissions.mkdir(parents=True, exist_ok=True)
+        (admissions / f"{artifact['review_id']}.json").write_text(
+            json.dumps(artifact, sort_keys=True),
+            encoding="utf-8",
+        )
+        return root
+
+    def _brain_swap_envelope(
+        self,
+        artifact,
+        *,
+        request_id: str = "req-brain-swap-a",
+    ):
+        from core.governance import operator_user_boundary as s7
+
+        self._s5_admission_root(artifact)
+        return s7.build_brain_swap_work_request_envelope(
+            request_id=request_id,
+            s5_admission_artifact=artifact,
+            candidate_fingerprint_hash=artifact["admitted_fingerprint_hash"],
+            action="model_routing.swap_primary",
+            requesting_subsystem="voice_continuity",
+            closed_symptom_code="verification_needed",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("model_routing:primary",),
+            content_exposure_risk="content_free",
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="behavior_change",
+            rollback_path_class="manual_review",
+            maez_voice_consultation_id=f"voice-{request_id}",
+        )
+
+    def _execution_authorization(self, envelope, *, artifact_id: str = "artifact-brain-swap-a"):
+        from core.governance import operator_user_boundary as s7
+
+        authority = s7.AuthorityContext(
+            actor_id="founder",
+            actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+            role_names=("bonded_user", "operator"),
+            grant_source="founder_webauthn",
+            allowed_scopes=("operator_health",),
+            auth_method="founder_webauthn",
+            surface="cockpit",
+            credential_ref="cred-founder-primary",
+            created_at=NOW,
+            expires_at=FUTURE,
+            verified=True,
+        )
+        consultation = s7.MaezVoiceConsultation(
+            consultation_id=envelope.maez_voice_consultation_id or "",
+            request_id=envelope.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(envelope),
+            producer="s7_voice_consultation_turn",
+            source_ref_kind="s7_voice_turn",
+            source_ref_hash="d" * 64,
+            maez_voice_consulted=True,
+            maez_objection_present=False,
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=NOW,
+        )
+        action_params_hash = s7.canonical_hash({
+            "request_id": envelope.request_id,
+            "precondition_hash": envelope.precondition_hash,
+        })
+        rendered = s7.render_request_statement(
+            envelope=envelope,
+            surface="cockpit",
+            origin="http://localhost:11437",
+            action_params_hash=action_params_hash,
+            authority_context=authority,
+            maez_voice_consultation=consultation,
+            nonce=f"nonce-{artifact_id}",
+            expires_at=FUTURE,
+            rendered_at=NOW,
+        )
+        artifact = s7.S7AuthorizationArtifact(
+            artifact_id=artifact_id,
+            request_id=envelope.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(envelope),
+            rendered_text_hash=rendered.rendered_text_hash,
+            action_params_hash=action_params_hash,
+            precondition_hash=envelope.precondition_hash,
+            authority_context_hash=s7.authority_context_hash(authority),
+            derived_work_class=envelope.derived_work_class,
+            derived_aggregation_group=envelope.derived_aggregation_group,
+            nonce=rendered.nonce,
+            credential_ref="cred-founder-primary",
+            auth_method="founder_webauthn",
+            grant_source="founder_webauthn",
+            user_presence=True,
+            user_verification=True,
+            created_at=NOW,
+            expires_at=FUTURE,
+            consumed_at=None,
+        )
+        store = s7.S7AuthorizationStore(Path(self._tmp.name) / f"{artifact_id}.db")
+        store.put(artifact)
+        return s7.S7ExecutionAuthorization(
+            store=store,
+            artifact_id=artifact_id,
+            rendered=rendered,
+            action_params_hash=action_params_hash,
+            authority_context=authority,
+            precondition_hash=envelope.precondition_hash,
+            derived_work_class=envelope.derived_work_class,
+            derived_aggregation_group=envelope.derived_aggregation_group,
+            now=NOW,
+        )
+
+    def test_143_brain_swap_without_s5_accepted_artifact_blocks(self):
+        from core.governance import operator_user_boundary as s7
+
+        accepted = self._s5_admission_artifact("a")
+        envelope = self._brain_swap_envelope(accepted)
+        authorization = self._execution_authorization(envelope)
+
+        self.assertFalse(
+            s7.brain_swap_execution_authorized(
+                envelope=envelope,
+                s5_admission_artifact=None,
+                candidate_fingerprint_hash=accepted["admitted_fingerprint_hash"],
+                execution_authorization=authorization,
+            )
+        )
+        self.assertTrue(
+            s7.brain_swap_execution_authorized(
+                envelope=envelope,
+                s5_admission_artifact=accepted,
+                candidate_fingerprint_hash=accepted["admitted_fingerprint_hash"],
+                execution_authorization=authorization,
+            )
+        )
+
+    def test_144_brain_swap_without_s7_execution_authorization_blocks(self):
+        from core.governance import operator_user_boundary as s7
+
+        accepted = self._s5_admission_artifact("a")
+        envelope = self._brain_swap_envelope(accepted)
+
+        self.assertFalse(
+            s7.brain_swap_execution_authorized(
+                envelope=envelope,
+                s5_admission_artifact=accepted,
+                candidate_fingerprint_hash=accepted["admitted_fingerprint_hash"],
+                execution_authorization=None,
+            )
+        )
+
+    def test_145_s5_acceptance_cannot_substitute_for_s7_authorization(self):
+        from core.governance import operator_user_boundary as s7
+
+        accepted = self._s5_admission_artifact("a")
+        self._s5_admission_root(accepted)
+        precondition = s7.build_brain_swap_precondition(
+            s5_admission_artifact=accepted,
+            candidate_fingerprint_hash=accepted["admitted_fingerprint_hash"],
+        )
+        envelope = self._brain_swap_envelope(accepted)
+
+        self.assertEqual(precondition.s5_admission_artifact_hash, accepted["artifact_hash"])
+        self.assertEqual(envelope.precondition_hash, s7.brain_swap_precondition_hash(precondition))
+        self.assertFalse(
+            s7.brain_swap_execution_authorized(
+                envelope=envelope,
+                s5_admission_artifact=accepted,
+                candidate_fingerprint_hash=accepted["admitted_fingerprint_hash"],
+                execution_authorization=None,
+            )
+        )
+
+    def test_146_s7_authorization_cannot_substitute_for_s5_acceptance(self):
+        from core.governance import operator_user_boundary as s7
+
+        accepted = self._s5_admission_artifact("a")
+        envelope = self._brain_swap_envelope(accepted)
+        authorization = self._execution_authorization(envelope)
+        malformed = dict(accepted)
+        malformed["artifact_name"] = "not_s5_candidate_admission.json"
+
+        self.assertFalse(
+            s7.brain_swap_execution_authorized(
+                envelope=envelope,
+                s5_admission_artifact=malformed,
+                candidate_fingerprint_hash=accepted["admitted_fingerprint_hash"],
+                execution_authorization=authorization,
+            )
+        )
+        self.assertTrue(
+            s7.brain_swap_execution_authorized(
+                envelope=envelope,
+                s5_admission_artifact=accepted,
+                candidate_fingerprint_hash=accepted["admitted_fingerprint_hash"],
+                execution_authorization=authorization,
+            )
+        )
+
+    def test_147_brain_swap_rejects_s5_artifact_substitution(self):
+        from core.governance import operator_user_boundary as s7
+
+        accepted_a = self._s5_admission_artifact("a")
+        accepted_b = self._s5_admission_artifact("b")
+        envelope = self._brain_swap_envelope(accepted_a)
+        authorization = self._execution_authorization(envelope)
+
+        self.assertFalse(
+            s7.brain_swap_execution_authorized(
+                envelope=envelope,
+                s5_admission_artifact=accepted_b,
+                candidate_fingerprint_hash=accepted_b["admitted_fingerprint_hash"],
+                execution_authorization=authorization,
+            )
+        )
+        self.assertTrue(
+            s7.brain_swap_execution_authorized(
+                envelope=envelope,
+                s5_admission_artifact=accepted_a,
+                candidate_fingerprint_hash=accepted_a["admitted_fingerprint_hash"],
+                execution_authorization=authorization,
+            )
+        )
+
+    def test_148_brain_swap_rejects_actual_candidate_fingerprint_substitution(self):
+        from core.governance import operator_user_boundary as s7
+
+        accepted_a = self._s5_admission_artifact("a")
+        accepted_b = self._s5_admission_artifact("b")
+        envelope = self._brain_swap_envelope(accepted_a)
+        authorization = self._execution_authorization(envelope)
+
+        self.assertFalse(
+            s7.brain_swap_execution_authorized(
+                envelope=envelope,
+                s5_admission_artifact=accepted_a,
+                candidate_fingerprint_hash=accepted_b["admitted_fingerprint_hash"],
+                execution_authorization=authorization,
+            )
+        )
+        self.assertTrue(
+            s7.brain_swap_execution_authorized(
+                envelope=envelope,
+                s5_admission_artifact=accepted_a,
+                candidate_fingerprint_hash=accepted_a["admitted_fingerprint_hash"],
+                execution_authorization=authorization,
+            )
+        )
+
+    def test_149_self_declared_s5_admission_artifact_without_store_record_rejected(self):
+        from core.governance import operator_user_boundary as s7
+        from core.voice_continuity.schema import hash_json
+
+        accepted = self._s5_admission_artifact("a")
+        forged = dict(accepted)
+        forged["review_id"] = "forged-review"
+        payload = dict(forged)
+        payload.pop("artifact_hash")
+        forged["artifact_hash"] = hash_json(payload)
+        fake_root = Path(self._tmp.name) / "caller-controlled-s5-root"
+        fake_admissions = fake_root / "admissions"
+        fake_admissions.mkdir(parents=True)
+        (fake_admissions / "s5_candidate_admission.json").write_text(
+            __import__("json").dumps(forged, sort_keys=True),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(ValueError):
+            s7.build_brain_swap_precondition(
+                s5_admission_artifact=forged,
+                candidate_fingerprint_hash=forged["admitted_fingerprint_hash"],
+            )
+
+
 class S7SelfModDialogWrappingTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

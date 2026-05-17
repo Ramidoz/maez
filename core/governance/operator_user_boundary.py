@@ -1898,6 +1898,223 @@ class S7ExecutionAuthorization:
         _timestamp_text(self.now, field="now")
 
 
+_S5_ADMISSION_ARTIFACT_KEYS = frozenset({
+    "artifact_name",
+    "review_id",
+    "baseline_id",
+    "admitted_fingerprint_hash",
+    "operator_origin_marker_hash",
+    "review_package_hash",
+    "artifact_hash",
+})
+
+
+@dataclass(frozen=True)
+class BrainSwapPrecondition:
+    schema_version: str
+    precondition_kind: str
+    s5_admission_artifact_hash: str
+    admitted_fingerprint_hash: str
+    s5_review_id: str
+    s5_baseline_id: str
+
+    def __post_init__(self) -> None:
+        if self.schema_version != SCHEMA_VERSION:
+            raise ValueError("invalid S7 brain-swap precondition schema_version")
+        if self.precondition_kind != "s5_accepted_same_maez_admission":
+            raise ValueError("unknown S7 brain-swap precondition kind")
+        _validate_hash64(
+            self.s5_admission_artifact_hash,
+            field="s5_admission_artifact_hash",
+        )
+        _validate_hash64(self.admitted_fingerprint_hash, field="admitted_fingerprint_hash")
+        if not self.s5_review_id:
+            raise ValueError("S7 brain-swap precondition requires S5 review id")
+        if not self.s5_baseline_id:
+            raise ValueError("S7 brain-swap precondition requires S5 baseline id")
+
+
+def _validated_s5_admission_artifact(artifact: object) -> dict[str, str]:
+    if not isinstance(artifact, dict):
+        raise ValueError("S7 brain swap requires an S5 admission artifact")
+    if set(artifact) != _S5_ADMISSION_ARTIFACT_KEYS:
+        raise ValueError("S5 admission artifact is not closed-shape")
+    sealed = {key: str(artifact[key]) for key in _S5_ADMISSION_ARTIFACT_KEYS}
+    if sealed["artifact_name"] != "s5_candidate_admission.json":
+        raise ValueError("S5 admission artifact name mismatch")
+    if not sealed["review_id"]:
+        raise ValueError("S5 admission artifact review_id is required")
+    if not sealed["baseline_id"]:
+        raise ValueError("S5 admission artifact baseline_id is required")
+    for field in (
+        "admitted_fingerprint_hash",
+        "operator_origin_marker_hash",
+        "review_package_hash",
+        "artifact_hash",
+    ):
+        _validate_hash64(sealed[field], field=field)
+    from core.voice_continuity.schema import hash_json
+
+    expected_payload = dict(sealed)
+    artifact_hash = expected_payload.pop("artifact_hash")
+    if hash_json(expected_payload) != artifact_hash:
+        raise ValueError("S5 admission artifact_hash mismatch")
+    return sealed
+
+
+def _s5_admission_artifact_present_in_root(
+    sealed_artifact: dict[str, str],
+) -> bool:
+    from core.voice_continuity import storage as s5_storage
+
+    admissions_dir = Path(s5_storage.VOICE_CONTINUITY_ROOT) / "admissions"
+    if not admissions_dir.is_dir():
+        return False
+    try:
+        paths = sorted(admissions_dir.glob("*.json"))
+    except OSError:
+        return False
+    for path in paths:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            candidate = _validated_s5_admission_artifact(raw)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            continue
+        if (
+            candidate["artifact_hash"] == sealed_artifact["artifact_hash"]
+            and candidate["admitted_fingerprint_hash"] == sealed_artifact["admitted_fingerprint_hash"]
+            and candidate["review_id"] == sealed_artifact["review_id"]
+        ):
+            return True
+    return False
+
+
+def build_brain_swap_precondition(
+    *,
+    s5_admission_artifact: object,
+    candidate_fingerprint_hash: str,
+) -> BrainSwapPrecondition:
+    sealed = _validated_s5_admission_artifact(s5_admission_artifact)
+    if not _s5_admission_artifact_present_in_root(sealed):
+        raise ValueError("S5 admission artifact is not present in the trusted S5 admission root")
+    _validate_hash64(candidate_fingerprint_hash, field="candidate_fingerprint_hash")
+    if candidate_fingerprint_hash != sealed["admitted_fingerprint_hash"]:
+        raise ValueError("candidate fingerprint does not match S5 admission artifact")
+    return BrainSwapPrecondition(
+        schema_version=SCHEMA_VERSION,
+        precondition_kind="s5_accepted_same_maez_admission",
+        s5_admission_artifact_hash=sealed["artifact_hash"],
+        admitted_fingerprint_hash=sealed["admitted_fingerprint_hash"],
+        s5_review_id=sealed["review_id"],
+        s5_baseline_id=sealed["baseline_id"],
+    )
+
+
+def brain_swap_precondition_hash(precondition: BrainSwapPrecondition) -> str:
+    if not isinstance(precondition, BrainSwapPrecondition):
+        raise ValueError("S7 brain-swap precondition is required")
+    return s6.canonical_hash(asdict(precondition))
+
+
+def build_brain_swap_work_request_envelope(
+    *,
+    request_id: str,
+    s5_admission_artifact: object,
+    candidate_fingerprint_hash: str,
+    action: str,
+    requesting_subsystem: str,
+    closed_symptom_code: str,
+    why_self_fix_failed_class: str,
+    affected_refs: tuple[str, ...],
+    content_exposure_risk: str,
+    created_at: str,
+    expires_at: str,
+    predicted_effect_class: str,
+    rollback_path_class: str,
+    maez_voice_consultation_id: str | None,
+    free_text_ref_hash: str | None = None,
+) -> WorkRequestEnvelope:
+    lowered_action = str(action or "").lower()
+    if "brain_swap" not in lowered_action and "model_routing" not in lowered_action:
+        raise ValueError("S7 brain-swap request must target model routing or brain swap")
+    sealed = _validated_s5_admission_artifact(s5_admission_artifact)
+    precondition = build_brain_swap_precondition(
+        s5_admission_artifact=sealed,
+        candidate_fingerprint_hash=candidate_fingerprint_hash,
+    )
+    precondition_hash = brain_swap_precondition_hash(precondition)
+    return build_work_request_envelope(
+        request_id=request_id,
+        action=action,
+        params={
+            "operation": "brain_swap",
+            "s5_admission_artifact_hash": precondition.s5_admission_artifact_hash,
+        },
+        claimed_work_class="self_modification",
+        requesting_subsystem=requesting_subsystem,
+        closed_symptom_code=closed_symptom_code,
+        proposed_change_class="model_routing_change",
+        why_self_fix_failed_class=why_self_fix_failed_class,
+        affected_refs=tuple(affected_refs),
+        content_exposure_risk=content_exposure_risk,
+        precondition_hash=precondition_hash,
+        created_at=created_at,
+        expires_at=expires_at,
+        predicted_effect_class=predicted_effect_class,
+        rollback_path_class=rollback_path_class,
+        maez_voice_consultation_id=maez_voice_consultation_id,
+        free_text_ref_hash=free_text_ref_hash,
+    )
+
+
+def brain_swap_execution_authorized(
+    *,
+    envelope: WorkRequestEnvelope,
+    s5_admission_artifact: object,
+    candidate_fingerprint_hash: str,
+    execution_authorization: S7ExecutionAuthorization | None,
+) -> bool:
+    if not isinstance(envelope, WorkRequestEnvelope):
+        return False
+    if envelope.derived_work_class != "self_modification":
+        return False
+    if envelope.proposed_change_class != "model_routing_change":
+        return False
+    try:
+        sealed = _validated_s5_admission_artifact(s5_admission_artifact)
+        precondition = build_brain_swap_precondition(
+            s5_admission_artifact=sealed,
+            candidate_fingerprint_hash=candidate_fingerprint_hash,
+        )
+    except (TypeError, ValueError):
+        return False
+    if envelope.precondition_hash != brain_swap_precondition_hash(precondition):
+        return False
+    if not isinstance(execution_authorization, S7ExecutionAuthorization):
+        return False
+    if execution_authorization.precondition_hash != envelope.precondition_hash:
+        return False
+    if execution_authorization.derived_work_class != envelope.derived_work_class:
+        return False
+    if execution_authorization.derived_aggregation_group != envelope.derived_aggregation_group:
+        return False
+    rendered = execution_authorization.rendered
+    if rendered.request_id != envelope.request_id:
+        return False
+    if rendered.request_envelope_hash != work_request_envelope_hash(envelope):
+        return False
+    return execution_authorization.store.consume_verified(
+        execution_authorization.artifact_id,
+        rendered=rendered,
+        action_params_hash=execution_authorization.action_params_hash,
+        authority_context=execution_authorization.authority_context,
+        precondition_hash=execution_authorization.precondition_hash,
+        derived_work_class=execution_authorization.derived_work_class,
+        derived_aggregation_group=execution_authorization.derived_aggregation_group,
+        now=execution_authorization.now,
+    )
+
+
 @dataclass(frozen=True)
 class WebAuthnCredentialRecord:
     credential_ref: str
