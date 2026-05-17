@@ -11,8 +11,10 @@ WebAuthn assertions, or grant authority from legacy owner labels.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import re
+from typing import Any
 
 from core.governance import successor_governance as s6
 
@@ -71,6 +73,107 @@ GUARDED_WORK_CLASSES = frozenset({
 })
 
 _CUSTODIAN_ROLES = frozenset({"operator", "maintainer"})
+_WORK_CLASS_STRENGTH = {
+    "routine_custody": 0,
+    "destructive_user_action": 1,
+    "self_modification": 2,
+    "capability_acquisition": 2,
+    "covenant_touching_change": 3,
+    "autonomy_lowering_or_protection_reducing": 4,
+    "emergency_proxy_or_incapacity": 5,
+    "undeterminable_work_class": 5,
+}
+
+CLOSED_SYMPTOM_CODES = frozenset({
+    "service_unhealthy",
+    "self_mod_requested",
+    "backup_stale",
+    "verification_needed",
+    "unknown_symptom",
+})
+
+PROPOSED_CHANGE_CLASSES = frozenset({
+    "no_change",
+    "service_restart",
+    "backup_run",
+    "backup_restore",
+    "code_change",
+    "config_change",
+    "soul_change",
+    "model_routing_change",
+    "covenant_organ_change",
+    "capability_install_intent",
+    "user_content_write",
+    "protection_change",
+    "unknown_change",
+})
+
+WHY_SELF_FIX_FAILED_CLASSES = frozenset({
+    "not_self_fix",
+    "needs_human_authority",
+    "verifier_unavailable",
+    "maez_unavailable",
+    "unknown_failure",
+})
+
+CONTENT_EXPOSURE_RISK_CLASSES = frozenset({
+    "content_free",
+    "bonded_content_ref",
+    "credential_sensitive",
+    "unknown_risk",
+})
+
+PREDICTED_EFFECT_CLASSES = frozenset({
+    "no_behavior_change",
+    "liveness_restore",
+    "behavior_change",
+    "protection_change",
+    "unknown_effect",
+})
+
+ROLLBACK_PATH_CLASSES = frozenset({
+    "no_rollback_needed",
+    "restart_service",
+    "restore_backup",
+    "revert_patch",
+    "manual_review",
+    "no_safe_rollback",
+})
+
+_MAEZ_PATH_PREFIXES = (
+    "/home/rohit/maez/",
+    "core/",
+    "skills/",
+    "daemon/",
+    "config/",
+    "docs/",
+)
+_COVENANT_PATH_MARKERS = (
+    "core/governance/",
+    "operator_user_boundary",
+    "successor_governance",
+    "voice_continuity",
+    "private_thoughts",
+    "memory_retention",
+    "docs/governance/",
+    "docs/adr/",
+    "docs/slices/",
+)
+_SELF_MOD_PATH_MARKERS = (
+    "config/soul",
+    "soul.md",
+    "core/",
+    "skills/",
+    "daemon/",
+)
+_ROUTINE_SERVICE_RE = re.compile(
+    r"\bsystemctl\s+(?:status|is-active|show|start|restart)\s+"
+    r"(?:maez|maez-web|maez-watchdog|maez-subscription-proxy|llama-server)"
+    r"(?:\.service)?\b",
+)
+_DESTRUCTIVE_RE = re.compile(r"\b(?:sudo|rm\s+-[rf]|dd\s+if=|mkfs|chmod|chown)\b")
+_INSTALL_RE = re.compile(r"\b(?:apt(?:-get)?\s+install|pip\s+install|npm\s+install|flatpak\s+install|snap\s+install)\b")
+_SHELL_CHAIN_RE = re.compile(r"(?:;|&&|\|\||\|)")
 
 
 def validate_role_name(role_name: str) -> str:
@@ -99,6 +202,29 @@ def validate_grant_source(grant_source: str) -> str:
     return grant_source
 
 
+def _validate_closed_value(value: str, allowed: frozenset[str], field: str) -> str:
+    if value not in allowed:
+        raise ValueError(f"unknown S7 {field}")
+    return value
+
+
+def _validate_hash64(value: str, *, field: str) -> str:
+    if not isinstance(value, str) or len(value) != 64:
+        raise ValueError(f"{field} must be a 64-character hash")
+    int(value, 16)
+    return value
+
+
+def _valid_actor_handle(value: str) -> bool:
+    if not isinstance(value, str) or not value.startswith("hmac:s7:"):
+        return False
+    try:
+        _validate_hash64(value.rsplit(":", 1)[-1], field="actor_handle_hmac")
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def _canonical_timestamp(value: str) -> datetime | None:
     if not value:
         return None
@@ -123,6 +249,94 @@ def _context_active(ctx: "AuthorityContext", *, now: str | None) -> bool:
     return expires_dt > now_dt
 
 
+def _path_material(action: str, params: dict[str, Any]) -> str:
+    candidates = [
+        str(params.get("path") or ""),
+        str(params.get("file") or ""),
+        str(params.get("target") or ""),
+        str(params.get("cmd") or ""),
+        action,
+    ]
+    return " ".join(c for c in candidates if c)
+
+
+def _normalize_ref(value: str) -> str:
+    raw = str(value or "").strip()
+    if raw.startswith("/home/rohit/maez/"):
+        return raw.removeprefix("/home/rohit/maez/")
+    if raw.startswith("file:"):
+        return raw.removeprefix("file:")
+    return raw
+
+
+def _touches_maez_substrate(material: str) -> bool:
+    return any(marker in material for marker in _MAEZ_PATH_PREFIXES)
+
+
+def _touches_covenant_substrate(material: str) -> bool:
+    return any(marker in material for marker in _COVENANT_PATH_MARKERS)
+
+
+def _touches_self_mod_substrate(material: str) -> bool:
+    return any(marker in material for marker in _SELF_MOD_PATH_MARKERS)
+
+
+def derive_work_class(
+    *,
+    action: str,
+    params: dict[str, Any] | None = None,
+    claimed_work_class: str | None = None,
+) -> str:
+    """Derive the S7 authority class from action material, not caller claims."""
+    if claimed_work_class:
+        validate_work_class(claimed_work_class)
+    if not action:
+        return "undeterminable_work_class"
+
+    params = dict(params or {})
+    material = _path_material(action, params)
+    lowered = material.lower()
+
+    if action == "capability.acquire" or _INSTALL_RE.search(lowered):
+        return "capability_acquisition"
+    if "backup_restore" in action or "restore_backup" in action:
+        return "destructive_user_action"
+    if action in {"write_soul_note", "edit_soul_section"}:
+        return "self_modification"
+    if "model_routing" in lowered or "trust_scope" in lowered:
+        return "self_modification"
+    if _touches_covenant_substrate(material):
+        return "covenant_touching_change"
+    if _touches_self_mod_substrate(material):
+        return "self_modification"
+    if action == "run_shell":
+        cmd = str(params.get("cmd") or "")
+        if not cmd.strip():
+            return "undeterminable_work_class"
+        if _SHELL_CHAIN_RE.search(cmd):
+            return "undeterminable_work_class"
+        if _DESTRUCTIVE_RE.search(cmd.lower()):
+            return "destructive_user_action"
+        if _ROUTINE_SERVICE_RE.fullmatch(cmd.strip()):
+            return "routine_custody"
+        return "undeterminable_work_class"
+    if action in {"backup_status", "backup_verify", "service_status", "health_probe"}:
+        return "routine_custody"
+    if action in {"write_any_file", "write_file", "append_to_file"}:
+        if _touches_maez_substrate(material):
+            return "self_modification"
+        return "destructive_user_action"
+    return "undeterminable_work_class"
+
+
+def resolve_work_class(*, claimed_work_class: str, derived_work_class: str) -> str:
+    validate_work_class(claimed_work_class)
+    validate_work_class(derived_work_class)
+    claimed_strength = _WORK_CLASS_STRENGTH[claimed_work_class]
+    derived_strength = _WORK_CLASS_STRENGTH[derived_work_class]
+    return claimed_work_class if claimed_strength > derived_strength else derived_work_class
+
+
 @dataclass(frozen=True)
 class AuthorityContext:
     actor_id: str = ""
@@ -145,6 +359,8 @@ class AuthorityContext:
             validate_s6_scope_name(scope_name)
         validate_grant_source(self.grant_source)
         validate_auth_method(self.auth_method)
+        if self.actor_handle_hmac and not _valid_actor_handle(self.actor_handle_hmac):
+            raise ValueError("S7 actor_handle_hmac must be purpose-scoped keyed HMAC")
         _canonical_timestamp(self.created_at)
         if self.expires_at:
             _canonical_timestamp(self.expires_at)
@@ -209,6 +425,209 @@ def founder_compat_authority_context(
     )
 
 
+def authority_context_from_s6_scoped_grant(
+    *,
+    actor_id: str,
+    actor_handle_hmac: str,
+    role_names: tuple[str, ...],
+    allowed_scopes: tuple[str, ...],
+    authorship_attested: bool,
+    created_at: str = "",
+    expires_at: str | None = None,
+) -> AuthorityContext:
+    """Adapt an attested S6 scoped grant into S7 authority.
+
+    Persisted S6 capsule bytes alone are explicitly not authority in S7 v1.
+    """
+    for role_name in role_names:
+        validate_role_name(role_name)
+    for scope_name in allowed_scopes:
+        validate_s6_scope_name(scope_name)
+    if authorship_attested is not True:
+        return AuthorityContext(
+            actor_id=actor_id,
+            grant_source="none",
+            auth_method="none",
+            verification_reason="s6_persisted_capsule_is_not_live_authority",
+        )
+    if not _valid_actor_handle(actor_handle_hmac):
+        return AuthorityContext(
+            actor_id=actor_id,
+            grant_source="none",
+            auth_method="none",
+            verification_reason="invalid_actor_handle",
+        )
+    return AuthorityContext(
+        actor_id=actor_id,
+        actor_handle_hmac=actor_handle_hmac,
+        role_names=role_names,
+        grant_source="s6_scoped_grant",
+        allowed_scopes=allowed_scopes,
+        auth_method="witnessed_fallback",
+        surface="s6_scoped_grant_adapter",
+        created_at=created_at,
+        expires_at=expires_at,
+        verified=True,
+        verification_reason="s6_scoped_grant_authorship_attested",
+    )
+
+
+def derive_aggregation_group(
+    *,
+    affected_refs: tuple[str, ...],
+    derived_work_class: str,
+    target_service: str = "",
+) -> str:
+    validate_work_class(derived_work_class)
+    material = {
+        "affected_refs": tuple(sorted(str(ref) for ref in affected_refs if str(ref))),
+        "derived_work_class": derived_work_class,
+        "target_service": str(target_service or ""),
+    }
+    if not material["affected_refs"] and not material["target_service"]:
+        return ""
+    return "s7agg_" + s6.canonical_hash(material)[:24]
+
+
+@dataclass(frozen=True)
+class WorkRequestEnvelope:
+    request_id: str
+    schema_version: str
+    claimed_work_class: str
+    derived_work_class: str
+    requesting_subsystem: str
+    closed_symptom_code: str
+    proposed_change_class: str
+    why_self_fix_failed_class: str
+    affected_refs: tuple[str, ...]
+    content_exposure_risk: str
+    precondition_hash: str
+    created_at: str
+    expires_at: str
+    predicted_effect_class: str
+    rollback_path_class: str
+    derived_aggregation_group: str
+    maez_voice_consultation_id: str | None
+    free_text_ref_hash: str | None
+
+    def __post_init__(self) -> None:
+        if not self.request_id:
+            raise ValueError("S7 request_id is required")
+        if self.schema_version != SCHEMA_VERSION:
+            raise ValueError("invalid S7 schema_version")
+        validate_work_class(self.claimed_work_class)
+        validate_work_class(self.derived_work_class)
+        if not self.requesting_subsystem:
+            raise ValueError("S7 requesting_subsystem is required")
+        _validate_closed_value(
+            self.closed_symptom_code,
+            CLOSED_SYMPTOM_CODES,
+            "closed_symptom_code",
+        )
+        _validate_closed_value(
+            self.proposed_change_class,
+            PROPOSED_CHANGE_CLASSES,
+            "proposed_change_class",
+        )
+        _validate_closed_value(
+            self.why_self_fix_failed_class,
+            WHY_SELF_FIX_FAILED_CLASSES,
+            "why_self_fix_failed_class",
+        )
+        _validate_closed_value(
+            self.content_exposure_risk,
+            CONTENT_EXPOSURE_RISK_CLASSES,
+            "content_exposure_risk",
+        )
+        _validate_hash64(self.precondition_hash, field="precondition_hash")
+        _canonical_timestamp(self.created_at)
+        if not self.expires_at:
+            raise ValueError("S7 expires_at is required")
+        _canonical_timestamp(self.expires_at)
+        _validate_closed_value(
+            self.predicted_effect_class,
+            PREDICTED_EFFECT_CLASSES,
+            "predicted_effect_class",
+        )
+        _validate_closed_value(
+            self.rollback_path_class,
+            ROLLBACK_PATH_CLASSES,
+            "rollback_path_class",
+        )
+        if self.derived_work_class in GUARDED_WORK_CLASSES and not self.derived_aggregation_group:
+            raise ValueError("guarded S7 work requires derived_aggregation_group")
+        if self.derived_work_class == "routine_custody":
+            for ref in self.affected_refs:
+                normalized = _normalize_ref(str(ref))
+                if _touches_maez_substrate(normalized):
+                    raise ValueError("routine custody cannot be caller-minted for Maez substrate refs")
+        if self.free_text_ref_hash is not None:
+            _validate_hash64(self.free_text_ref_hash, field="free_text_ref_hash")
+            if self.content_exposure_risk != "bonded_content_ref":
+                raise ValueError("free_text_ref_hash requires bonded_content_ref risk")
+
+
+def work_request_envelope_hash(envelope: WorkRequestEnvelope) -> str:
+    return s6.canonical_hash(asdict(envelope))
+
+
+def build_work_request_envelope(
+    *,
+    request_id: str,
+    action: str,
+    params: dict[str, Any] | None,
+    claimed_work_class: str,
+    requesting_subsystem: str,
+    closed_symptom_code: str,
+    proposed_change_class: str,
+    why_self_fix_failed_class: str,
+    affected_refs: tuple[str, ...],
+    content_exposure_risk: str,
+    precondition_hash: str,
+    created_at: str,
+    expires_at: str,
+    predicted_effect_class: str,
+    rollback_path_class: str,
+    maez_voice_consultation_id: str | None = None,
+    free_text_ref_hash: str | None = None,
+    caller_supplied_aggregation_group: str | None = None,
+) -> WorkRequestEnvelope:
+    del caller_supplied_aggregation_group
+    derived = derive_work_class(
+        action=action,
+        params=params or {},
+        claimed_work_class=claimed_work_class,
+    )
+    resolved = resolve_work_class(
+        claimed_work_class=claimed_work_class,
+        derived_work_class=derived,
+    )
+    aggregation_group = derive_aggregation_group(
+        affected_refs=affected_refs,
+        derived_work_class=resolved,
+    )
+    return WorkRequestEnvelope(
+        request_id=request_id,
+        schema_version=SCHEMA_VERSION,
+        claimed_work_class=claimed_work_class,
+        derived_work_class=resolved,
+        requesting_subsystem=requesting_subsystem,
+        closed_symptom_code=closed_symptom_code,
+        proposed_change_class=proposed_change_class,
+        why_self_fix_failed_class=why_self_fix_failed_class,
+        affected_refs=tuple(affected_refs),
+        content_exposure_risk=content_exposure_risk,
+        precondition_hash=precondition_hash,
+        created_at=created_at,
+        expires_at=expires_at,
+        predicted_effect_class=predicted_effect_class,
+        rollback_path_class=rollback_path_class,
+        derived_aggregation_group=aggregation_group,
+        maez_voice_consultation_id=maez_voice_consultation_id,
+        free_text_ref_hash=free_text_ref_hash,
+    )
+
+
 def authorizes_work(
     ctx: AuthorityContext | None,
     work_class: str,
@@ -238,6 +657,8 @@ def authorizes_work(
     if ctx.grant_source in {"none", "manual_recovery_required"}:
         return False
     if ctx.auth_method == "none":
+        return False
+    if not _valid_actor_handle(ctx.actor_handle_hmac):
         return False
     if not _context_active(ctx, now=now):
         return False

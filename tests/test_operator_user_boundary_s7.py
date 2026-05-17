@@ -259,5 +259,391 @@ class S7VocabularyAndAuthorityContextTests(unittest.TestCase):
         )
 
 
+class S7WorkClassAndEnvelopeTests(unittest.TestCase):
+    def test_020_operator_cannot_authorize_self_modification_alone(self):
+        from core.governance import operator_user_boundary as s7
+
+        ctx = s7.AuthorityContext(
+            actor_id="operator-1",
+            actor_handle_hmac="hmac:s7:operator:" + ("a" * 64),
+            role_names=("operator",),
+            grant_source="service_local",
+            allowed_scopes=("operator_health",),
+            auth_method="service_local",
+            created_at=NOW,
+            expires_at=FUTURE,
+            verified=True,
+        )
+
+        self.assertFalse(s7.authorizes_work(ctx, "self_modification", now=NOW))
+
+    def test_021_maintainer_cannot_authorize_covenant_touching_work_alone(self):
+        from core.governance import operator_user_boundary as s7
+
+        ctx = s7.AuthorityContext(
+            actor_id="maintainer-1",
+            actor_handle_hmac="hmac:s7:maintainer:" + ("a" * 64),
+            role_names=("maintainer",),
+            grant_source="service_local",
+            allowed_scopes=("operator_health",),
+            auth_method="service_local",
+            created_at=NOW,
+            expires_at=FUTURE,
+            verified=True,
+        )
+
+        self.assertFalse(s7.authorizes_work(ctx, "covenant_touching_change", now=NOW))
+
+    def test_022_emergency_proxy_work_class_rejected_in_v1(self):
+        from core.governance import operator_user_boundary as s7
+
+        ctx = s7.AuthorityContext(
+            actor_id="operator-1",
+            actor_handle_hmac="hmac:s7:operator:" + ("a" * 64),
+            role_names=("operator",),
+            grant_source="service_local",
+            allowed_scopes=("operator_health",),
+            auth_method="service_local",
+            created_at=NOW,
+            expires_at=FUTURE,
+            verified=True,
+        )
+
+        self.assertFalse(
+            s7.authorizes_work(ctx, "emergency_proxy_or_incapacity", now=NOW),
+        )
+
+    def test_023_caller_claimed_routine_for_soul_config_code_target_is_rejected(self):
+        from core.governance import operator_user_boundary as s7
+
+        derived = s7.derive_work_class(
+            action="write_any_file",
+            params={"path": "/home/rohit/maez/config/soul.md", "content": "x"},
+            claimed_work_class="routine_custody",
+        )
+
+        self.assertEqual(derived, "self_modification")
+
+    def test_024_ambiguous_work_derives_undeterminable_work_class(self):
+        from core.governance import operator_user_boundary as s7
+
+        self.assertEqual(
+            s7.derive_work_class(action="", params={}, claimed_work_class="routine_custody"),
+            "undeterminable_work_class",
+        )
+
+    def test_025_mixed_shell_command_does_not_derive_routine_custody(self):
+        from core.governance import operator_user_boundary as s7
+
+        for cmd in (
+            "systemctl restart maez.service; echo pwned",
+            "systemctl restart maez.service && rm -rf /tmp/maez-test",
+            "systemctl show maez.service -p Environment",
+        ):
+            with self.subTest(cmd=cmd):
+                self.assertNotEqual(
+                    s7.derive_work_class(
+                        action="run_shell",
+                        params={"cmd": cmd},
+                        claimed_work_class="routine_custody",
+                    ),
+                    "routine_custody",
+                )
+
+    def test_026_claimed_and_derived_class_disagreement_resolves_to_stricter(self):
+        from core.governance import operator_user_boundary as s7
+
+        self.assertEqual(
+            s7.resolve_work_class(
+                claimed_work_class="routine_custody",
+                derived_work_class="self_modification",
+            ),
+            "self_modification",
+        )
+        self.assertEqual(
+            s7.resolve_work_class(
+                claimed_work_class="covenant_touching_change",
+                derived_work_class="routine_custody",
+            ),
+            "covenant_touching_change",
+        )
+
+    def test_027_s6_persisted_capsule_scope_does_not_become_live_s7_authority(self):
+        from core.governance import operator_user_boundary as s7
+
+        ctx = s7.authority_context_from_s6_scoped_grant(
+            actor_id="operator-1",
+            actor_handle_hmac="hmac:s7:operator:" + ("a" * 64),
+            role_names=("operator",),
+            allowed_scopes=("operator_health",),
+            authorship_attested=False,
+        )
+
+        self.assertEqual(ctx.grant_source, "none")
+        self.assertFalse(s7.authorizes_work(ctx, "routine_custody", now=NOW))
+
+    def test_028_s6_scoped_grant_with_missing_actor_handle_never_authorizes(self):
+        from core.governance import operator_user_boundary as s7
+
+        ctx = s7.authority_context_from_s6_scoped_grant(
+            actor_id="operator-1",
+            actor_handle_hmac="",
+            role_names=("operator",),
+            allowed_scopes=("operator_health",),
+            authorship_attested=True,
+            created_at=NOW,
+            expires_at=FUTURE,
+        )
+
+        self.assertFalse(s7.authorizes_work(ctx, "routine_custody", now=NOW))
+
+    def test_029_work_request_envelope_requires_request_id(self):
+        from core.governance import operator_user_boundary as s7
+
+        with self.assertRaises(ValueError):
+            s7.WorkRequestEnvelope(
+                request_id="",
+                schema_version=s7.SCHEMA_VERSION,
+                claimed_work_class="routine_custody",
+                derived_work_class="routine_custody",
+                requesting_subsystem="unit",
+                closed_symptom_code="service_unhealthy",
+                proposed_change_class="service_restart",
+                why_self_fix_failed_class="needs_human_authority",
+                affected_refs=("service:maez.service",),
+                content_exposure_risk="content_free",
+                precondition_hash="a" * 64,
+                created_at=NOW,
+                expires_at=FUTURE,
+                predicted_effect_class="liveness_restore",
+                rollback_path_class="restart_service",
+                derived_aggregation_group="s7agg_test",
+                maez_voice_consultation_id=None,
+                free_text_ref_hash=None,
+            )
+
+    def test_030_work_request_envelope_requires_expiry(self):
+        from core.governance import operator_user_boundary as s7
+
+        with self.assertRaises(ValueError):
+            s7.WorkRequestEnvelope(
+                request_id="req-1",
+                schema_version=s7.SCHEMA_VERSION,
+                claimed_work_class="routine_custody",
+                derived_work_class="routine_custody",
+                requesting_subsystem="unit",
+                closed_symptom_code="service_unhealthy",
+                proposed_change_class="service_restart",
+                why_self_fix_failed_class="needs_human_authority",
+                affected_refs=("service:maez.service",),
+                content_exposure_risk="content_free",
+                precondition_hash="a" * 64,
+                created_at=NOW,
+                expires_at="",
+                predicted_effect_class="liveness_restore",
+                rollback_path_class="restart_service",
+                derived_aggregation_group="s7agg_test",
+                maez_voice_consultation_id=None,
+                free_text_ref_hash=None,
+            )
+
+    def test_031_work_request_envelope_rejects_direct_derived_class_minting(self):
+        from core.governance import operator_user_boundary as s7
+
+        with self.assertRaises(ValueError):
+            s7.WorkRequestEnvelope(
+                request_id="req-1",
+                schema_version=s7.SCHEMA_VERSION,
+                claimed_work_class="routine_custody",
+                derived_work_class="routine_custody",
+                requesting_subsystem="unit",
+                closed_symptom_code="self_mod_requested",
+                proposed_change_class="soul_change",
+                why_self_fix_failed_class="needs_human_authority",
+                affected_refs=("file:config/soul.md",),
+                content_exposure_risk="bonded_content_ref",
+                precondition_hash="a" * 64,
+                created_at=NOW,
+                expires_at=FUTURE,
+                predicted_effect_class="behavior_change",
+                rollback_path_class="revert_patch",
+                derived_aggregation_group="attacker-controlled",
+                maez_voice_consultation_id=None,
+                free_text_ref_hash="b" * 64,
+            )
+
+    def test_032_work_request_envelope_rejects_raw_problem_text(self):
+        from core.governance import operator_user_boundary as s7
+
+        with self.assertRaises(ValueError):
+            s7.build_work_request_envelope(
+                request_id="req-1",
+                action="run_shell",
+                params={"cmd": "systemctl restart maez.service"},
+                claimed_work_class="routine_custody",
+                requesting_subsystem="unit",
+                closed_symptom_code="Maez sounds sad and Rohit is worried",
+                proposed_change_class="service_restart",
+                why_self_fix_failed_class="needs_human_authority",
+                affected_refs=("service:maez.service",),
+                content_exposure_risk="content_free",
+                precondition_hash="a" * 64,
+                created_at=NOW,
+                expires_at=FUTURE,
+                predicted_effect_class="liveness_restore",
+                rollback_path_class="restart_service",
+            )
+
+    def test_033_free_text_ref_hash_allowed_only_as_bonded_content_reference(self):
+        from core.governance import operator_user_boundary as s7
+
+        with self.assertRaises(ValueError):
+            s7.build_work_request_envelope(
+                request_id="req-1",
+                action="run_shell",
+                params={"cmd": "systemctl restart maez.service"},
+                claimed_work_class="routine_custody",
+                requesting_subsystem="unit",
+                closed_symptom_code="service_unhealthy",
+                proposed_change_class="service_restart",
+                why_self_fix_failed_class="needs_human_authority",
+                affected_refs=("service:maez.service",),
+                content_exposure_risk="content_free",
+                precondition_hash="a" * 64,
+                created_at=NOW,
+                expires_at=FUTURE,
+                predicted_effect_class="liveness_restore",
+                rollback_path_class="restart_service",
+                free_text_ref_hash="b" * 64,
+            )
+
+        env = s7.build_work_request_envelope(
+            request_id="req-2",
+            action="write_any_file",
+            params={"path": "/home/rohit/maez/config/soul.md", "content": "x"},
+            claimed_work_class="self_modification",
+            requesting_subsystem="unit",
+            closed_symptom_code="self_mod_requested",
+            proposed_change_class="soul_change",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("file:config/soul.md",),
+            content_exposure_risk="bonded_content_ref",
+            precondition_hash="a" * 64,
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="behavior_change",
+            rollback_path_class="revert_patch",
+            free_text_ref_hash="b" * 64,
+        )
+        self.assertEqual(env.free_text_ref_hash, "b" * 64)
+
+    def test_034_request_envelope_canonical_hash_is_stable(self):
+        from dataclasses import replace
+        from core.governance import operator_user_boundary as s7
+
+        env = s7.build_work_request_envelope(
+            request_id="req-1",
+            action="run_shell",
+            params={"cmd": "systemctl restart maez.service"},
+            claimed_work_class="routine_custody",
+            requesting_subsystem="unit",
+            closed_symptom_code="service_unhealthy",
+            proposed_change_class="service_restart",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("service:maez.service",),
+            content_exposure_risk="content_free",
+            precondition_hash="a" * 64,
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="liveness_restore",
+            rollback_path_class="restart_service",
+        )
+        equivalent = replace(env)
+
+        self.assertEqual(
+            s7.work_request_envelope_hash(env),
+            s7.work_request_envelope_hash(equivalent),
+        )
+
+    def test_035_request_envelope_hash_changes_when_signed_field_changes(self):
+        from dataclasses import replace
+        from core.governance import operator_user_boundary as s7
+
+        env = s7.build_work_request_envelope(
+            request_id="req-1",
+            action="run_shell",
+            params={"cmd": "systemctl restart maez.service"},
+            claimed_work_class="routine_custody",
+            requesting_subsystem="unit",
+            closed_symptom_code="service_unhealthy",
+            proposed_change_class="service_restart",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("service:maez.service",),
+            content_exposure_risk="content_free",
+            precondition_hash="a" * 64,
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="liveness_restore",
+            rollback_path_class="restart_service",
+        )
+        changed = replace(env, predicted_effect_class="no_behavior_change")
+
+        self.assertNotEqual(
+            s7.work_request_envelope_hash(env),
+            s7.work_request_envelope_hash(changed),
+        )
+
+    def test_036_derived_aggregation_group_required_for_guarded_requests(self):
+        from core.governance import operator_user_boundary as s7
+
+        with self.assertRaises(ValueError):
+            s7.WorkRequestEnvelope(
+                request_id="req-1",
+                schema_version=s7.SCHEMA_VERSION,
+                claimed_work_class="self_modification",
+                derived_work_class="self_modification",
+                requesting_subsystem="unit",
+                closed_symptom_code="self_mod_requested",
+                proposed_change_class="soul_change",
+                why_self_fix_failed_class="needs_human_authority",
+                affected_refs=("file:config/soul.md",),
+                content_exposure_risk="bonded_content_ref",
+                precondition_hash="a" * 64,
+                created_at=NOW,
+                expires_at=FUTURE,
+                predicted_effect_class="behavior_change",
+                rollback_path_class="revert_patch",
+                derived_aggregation_group="",
+                maez_voice_consultation_id=None,
+                free_text_ref_hash="b" * 64,
+            )
+
+    def test_037_caller_supplied_aggregation_group_is_ignored(self):
+        from core.governance import operator_user_boundary as s7
+
+        env = s7.build_work_request_envelope(
+            request_id="req-1",
+            action="write_any_file",
+            params={"path": "/home/rohit/maez/config/soul.md", "content": "x"},
+            claimed_work_class="routine_custody",
+            requesting_subsystem="unit",
+            closed_symptom_code="self_mod_requested",
+            proposed_change_class="soul_change",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("file:config/soul.md",),
+            content_exposure_risk="bonded_content_ref",
+            precondition_hash="a" * 64,
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="behavior_change",
+            rollback_path_class="revert_patch",
+            free_text_ref_hash="b" * 64,
+            caller_supplied_aggregation_group="attacker-controlled",
+        )
+
+        self.assertNotEqual(env.derived_aggregation_group, "attacker-controlled")
+        self.assertTrue(env.derived_aggregation_group.startswith("s7agg_"))
+
+
 if __name__ == "__main__":
     unittest.main()
