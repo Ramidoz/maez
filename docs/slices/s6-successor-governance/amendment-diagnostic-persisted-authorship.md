@@ -1,344 +1,418 @@
 # S6 Successor Governance v1 — Persisted-Authorship Spec-Amendment Diagnostic
 
-**Status:** DIAGNOSTIC — not canonical law, not a spec amendment. It diagnoses a
-sealed-spec overclaim and proposes the honest amendment. It amends nothing by
-itself; the amendment text is finalized only at canonicalization after the full
-ladder (§6).
+**Status:** DIAGNOSTIC v2 / SECOND-FOLDED CANDIDATE — not canonical law, not a
+spec amendment. It folds the first-pass Claude covenant council
+(`reviews/amendment-claude-council.md`) and Codex engineering panel
+(`reviews/amendment-codex-panel.md`) into a revised diagnostic for both-lane
+second-fold verification.
 **Date:** 2026-05-16
-**Author:** Claude covenant lane, at operator request. The Codex engineering
-lane reviews this for buildability and folds the eventual spec changes.
-**Scope:** Option B (the honesty path) only. No implementation change in this
-artifact. The mechanism path (a cryptographic / trusted-source fix) is named as
-a future slice (§7), not pursued here.
+**Scope:** Option B, the honesty path. No implementation change in this
+artifact. The mechanism path (cryptographic / trusted-source persisted
+authorship) remains a future slice.
 **Sources:** sealed S6 v1 spec (`spec.md`); Decision 33 / ADR 0038
-(`docs/adr/0038-successor-governance-v1.md`); `reviews/implementation-claude-council-recovery.md`
-(the "Post-fix verification & fork resolution" addendum); `reviews/implementation-codex-panel-recovery.md`.
+(`docs/adr/0038-successor-governance-v1.md`); BAD Decision 33
+(`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`); implementation recovery
+reviews; amendment Claude council; amendment Codex panel.
 
-## 0. Why this diagnostic exists
+## 0. Folded Verdict
 
-The S6 v1 post-implementation review re-opened CC-I1: the lineage capsule is
-machine-authorable. The PATH 1 sub-defect (a spoofable marker-seam check) was
-closed by `28da567` and firsthand-verified closed. The PATH 2 sub-defect — a
-hand-built persisted JSONL capsule projecting a forged bonded-user
-`explicit_dissolution` as a valid capsule — remains open and was firsthand-verified
-open by both lanes. Both lanes then searched for a keyless mechanism to close
-PATH 2 and found none under sealed S6 v1 constraints. The fork resolved: Option A
-(a real trust source) is a future slice; Option B (clarify the spec's claim to
-the honest guarantee) is the v1 route. This diagnostic is the first artifact of
-the Option B amendment ladder.
+Both review lanes ratified the direction and returned REVISE on v1 of this
+diagnostic. The direction stands:
 
-## 1. Problem statement
+- S6 v1 cannot prove persisted capsule authorship keylessly.
+- The health and docs must stop saying, or implying, "authentic."
+- Future activation must be gated by real authorship attestation, not by a
+  self-declared schema/version label.
 
-**The persisted JSONL validation path proves structural consistency, not human
-authorship.**
+The first diagnostic was incomplete in two load-bearing ways:
 
-The path a capsule file travels at health time:
+- it put the honesty warning on dashboards and docs, not on or beside the
+  estate-facing capsule file a human/legal reader may open directly;
+- it keyed the proposed D22 gate to "v1-era" capsule labels the forger controls.
+
+This v2 fold makes those corrections first-class.
+
+## 1. Problem Statement
+
+**The persisted JSONL validation path proves structure, not human authorship.**
+
+At health time, a capsule file takes this path:
 
 ```text
 successor_governance_health(path)
-  -> load_events_jsonl(path)        # DirectiveEvent(**raw_json) — no __post_init__
+  -> load_events_jsonl(path)        # DirectiveEvent(**raw_json)
   -> validate_capsule_events(...)
   -> validate_directive_event(event)
   -> _validate_persisted_marker_binding(event.origin_marker, ...)
 ```
 
 `load_events_jsonl` rebuilds each event from raw JSON. `DirectiveEvent` has no
-construction-time authority check, and the persisted `origin_marker` stays a
-plain dict — `HumanOriginMarker.__post_init__`, and therefore the writer-seam
-guard, never runs on this path at all. `_validate_persisted_marker_binding` then
-"validates" the marker by recomputing `_expected_marker_id` — a public, keyless
-SHA-256 of the marker's own fields — and comparing it for self-consistency.
+construction-time authority check, and the persisted `origin_marker` is a plain
+dict. `HumanOriginMarker.__post_init__`, the writer-seam guard, and the TTY
+origin path never run on this persisted-load path.
 
-A keyless self-consistency recompute confirms a capsule is *well-formed*. It
-cannot confirm a capsule is *human-authored*. Any process with ordinary write
-access to the capsule path and access to the public contract module can compute
-the same marker id, payload hash, event hash, and hash chain the validator
-checks, and write a capsule the validator must accept — including a
-`bonded_user_manual` `explicit_dissolution` directive no human authored.
+The persisted validator recomputes `_expected_marker_id`, a public keyless hash
+of the marker's own fields, and compares it for self-consistency. Any process
+with ordinary write access to `memory/successor_governance/lineage_capsule.jsonl`
+can write a self-consistent event chain, marker dict, payload hash, and event
+hash that the validator accepts. That includes a forged `bonded_user_manual`
+`explicit_dissolution` directive no human authored.
 
-This was firsthand-verified by both lanes. A hand-built two-event JSONL capsule
-(`capsule_created` + `fate_directive_set`/`explicit_dissolution`) — with no
-constructor, no construction token, no writer-seam import, no frame manipulation
-— made `/health.successor_governance` return `mode: valid` and
-`derive_current_state` return `fate_directive: explicit_dissolution`.
+This was verified firsthand by both lanes. The PATH 1 seam-spoof defect was
+closed by `28da567`; the PATH 2 persisted-file forgery remains a real v1
+limitation because the validator has no trust source.
 
-**This is not a missing `if`. It is the absence of a trust source.** The v1
-validator is keyless and runs inside the daemon — the same trust domain as any
-process that can write the capsule file. A keyless, content-blind validator
-receives only file bytes and public code; any public deterministic predicate
-over those bytes can be satisfied by whoever wrote the bytes. The marker-seam
-hardening of `28da567` protects *live minting* — it stops in-process code from
-constructing a marker object through the normal API — but a persisted capsule is
-a file re-loaded after the authoring process exited; live-minting isolation does
-not reach it.
+**This is not a missing `if`.** A keyless daemon-resident validator can check
+grammar, hash-chain consistency, marker-field binding, authority-shape, and
+snapshot continuity when supplied a validation snapshot. It cannot prove that
+the persisted bytes were written by the bonded human. The sealed S6 v1 Non-Goal
+excludes cryptographic lineage attestation, which is the class of mechanism that
+would close the persisted-authorship gap.
 
-Both lanes confirm no keyless mechanism closes this under sealed v1: every
-mechanism that would (asymmetric signature, hardware/passkey ceremony, external
-transparency root, trusted-OS provenance, role-encrypted storage with an
-out-of-domain verifier) is cryptographic or trusted-state. The sealed S6 v1
-Non-Goals explicitly exclude "implement cryptographic lineage attestation."
+The contradiction to amend:
 
-**The contradiction.** The spec promises C4 — "the lineage capsule cannot be
-machine-authored" — while the Non-Goals forbid the only mechanism that could
-deliver it. Both cannot hold. ADR 0038's Consequences even list "letting the
-daemon, sidecar, health, or Maez author lineage-capsule directives" as a
-shortcut S6 "makes invalid" — but the persisted path does not make it invalid.
-The amendment resolves the contradiction by Option B: narrow the spec's stated
-claim to the guarantee v1 actually delivers, and add a forward gate (§5) so the
-unclosed gap is non-actionable. It does not add cryptography (a future slice).
+- C4 and BAD Decision 33 say the capsule is human-authored / not
+  machine-authored.
+- D5, D6, and ADR 0038 understate the bypass as a privileged filesystem rewrite.
+- D19 health says `valid`, and emits `valid_event_count`, for a forged but
+  self-consistent capsule.
 
-This amendment does not weaken a delivered guarantee. The forgeable-persisted-file
-capability has existed since implementation; PATH 2 only surfaced it. Option B
-changes the spec's *description* to stop overclaiming, and *adds* the §5 gate.
-The covenant posture is strengthened, not relaxed.
+Option B resolves the contradiction by narrowing the stated v1 guarantee to the
+truth and adding a binding future gate. It does not weaken a delivered
+guarantee; the forgeable persisted-file capability already exists. It makes the
+capability visible and non-actionable.
 
-## 2. Proposed C4 / D4 rewording (with consequential D5 / D6)
+## 2. Honest v1 Guarantee
 
-The wording below is **proposed** input to the amendment. The council folds it;
-canonicalization seals the final text.
+S6 v1 can honestly claim:
 
-### C4 — current (spec, "Named Covenant Choices Preserved")
+- closed vocabularies and payload validators;
+- live marker minting isolated behind the writer seam hardened by module-object
+  identity;
+- marker-field binding to capsule id, event type, payload hash, previous event
+  hash, and statement hash where present;
+- event hash-chain and supersession validation;
+- append-only continuity checks when supplied with an operator-authenticated
+  validation snapshot;
+- content-free health and sidecar projections;
+- no v1 activation, archive unlock, death detector, or access widening.
 
-> ### C4 - Human-Origin Authorship Is Non-Negotiable
+S6 v1 cannot honestly claim:
+
+- that a persisted capsule file was human-authored;
+- that `origin=bonded_user_manual` in raw JSON proves bonded-user authorship;
+- that `/health.successor_governance` proves authenticity;
+- that the sidecar detects a forged but well-formed capsule;
+- that `no_capsule` proves no capsule ever existed.
+
+The positive guarantee and the limitation must both be stated. Honesty cuts both
+ways: do not overclaim authorship; do not underclaim the delivered structural
+and snapshot checks.
+
+## 3. Canonicalization Scope
+
+The amendment must touch every source future agents or humans will read:
+
+- S6 spec `spec.md`: banner, C4, D4, D5, D6, D9, D10, D19, and new D22.
+- ADR 0038: decision summary, consequences, limitations, and status note.
+- BAD Decision 33: title/body language that says "human-authored" or
+  "human-origin-authored" must be clarified.
+- Operator helper runbook: banner and Limits section.
+- Module docstring and health semantics documentation.
+- Capsule-adjacent estate-reader notice/manifest in
+  `memory/successor_governance/` once round-2 implements it.
+
+Leaving BAD unchanged would preserve the overclaim in the primary governance
+source future agents grep first. Leaving the capsule file unaccompanied would
+leave the most dangerous reader path untouched.
+
+## 4. Proposed C4 / D4 / D5 / D6 Rewording
+
+The following wording is proposed input to the spec amendment. Canonicalization
+seals the final text.
+
+### C4 — Proposed
+
+> ### C4 - Live Human-Origin Minting Is Structural; Persisted Authorship Is Not Attested in v1
 >
-> The lineage capsule cannot be machine-authored. This is the S5 recovery lesson
-> applied before implementation.
-
-This is an unqualified hard promise. It is false for the persisted path.
-
-### C4 — proposed
-
-> ### C4 - Human-Origin Authorship Is Structural at Minting; Not Attested for a Persisted Capsule
+> S6 v1 structurally isolates live human-origin marker minting behind the
+> bonded-user writer seam. The daemon, sidecars, health projection, validators,
+> background jobs, and automated review tools do not receive that seam as a
+> normal import path, and the seam check is hardened by writer-module object
+> identity.
 >
-> The human-origin marker is structurally unmintable through the normal API by
-> the daemon, sidecars, health projection, validators, background jobs, and
-> automated review tools: marker construction is gated behind a writer-seam
-> module those paths do not import, verified by writer-module object identity
-> (the S5 recovery lesson, applied). The conceded residual is raw in-process
-> manipulation of the genuine seam module's namespace — the same conceded
-> residual as S5's final shape.
+> S6 v1 validates persisted capsule grammar, marker-field binding, internal
+> hash-chain structure, directive-authority shape, and append-only continuity
+> when supplied with an operator-authenticated validation snapshot.
 >
-> This protects *live minting*. It does not, and under v1's no-cryptographic-attestation
-> constraint cannot, make a *persisted* lineage capsule authorship-attested. The
-> capsule is a file re-loaded and re-validated after the authoring process has
-> exited; the v1 validator is keyless and content-blind. Any process with
-> ordinary write access to the capsule path can produce a structurally-valid
-> capsule, including a forged bonded-user `explicit_dissolution` directive.
->
-> S6 v1 therefore validates capsule grammar and structural/internal consistency.
-> It does not attest that a persisted capsule was human-authored. Cryptographic
-> lineage attestation remains a v1 Non-Goal; closing the persisted-authorship gap
-> is deferred to a future signature / storage-hardening slice, and v1-era
-> capsules are not activation authority until then (D22).
+> S6 v1 does not attest that a persisted capsule file was human-authored. The
+> capsule is reloaded from raw JSON after the authoring process has exited, and
+> the v1 validator is keyless. Any process with ordinary write access to the
+> capsule path can produce or delete a well-formed capsule. Authorship
+> attestation requires a future trust-source slice. Until then, a v1 capsule is
+> recorded intent and structural evidence, not proven human authority.
 
-### D4 — current (spec, "Core V1 Decisions")
+### D4 — Scope Clause to Append
 
-D4 ("Human-Origin Authorship Is Structural") is otherwise correct and stays:
-the marker-binding fields, the directive-authority matrix, and the
-minting-isolation requirement ("isolate marker minting behind a module that
-validation/runtime paths cannot import") are all sound and implemented. Only one
-implied promise is false — that marker-minting isolation makes a persisted
-directive event human-attested.
+> **Scope of the D4 guarantee.** D4 governs live authoring inside a running
+> process. It does not extend to persisted re-validation. When a capsule is
+> loaded from storage, marker binding is checked by a keyless self-consistency
+> recompute. That confirms marker shape and internal binding; it is not proof of
+> human minting. The directive authority matrix governs grammar and role-shape,
+> not authorship of a persisted file.
 
-### D4 — proposed (append one closing subsection; body otherwise unchanged)
+### D5 / D6 — Consequential Correction
 
-> **Scope of the D4 guarantee.** D4's marker-minting isolation governs *live
-> authoring* inside a running process. It does not extend to *persisted
-> re-validation*. When a capsule is loaded from storage, `DirectiveEvent` is
-> rebuilt from raw JSON and the marker is re-checked by a keyless self-consistency
-> recompute (`_validate_persisted_marker_binding` recomputes the public
-> `_expected_marker_id`). That check confirms marker shape and internal binding;
-> it is not proof of human minting and must be documented as such. The directive
-> authority matrix governs grammar validity, not authorship of a persisted file.
+D5, D6, and ADR 0038 must widen their bypass wording from "privileged OS
+rewrite" to "any process with ordinary write/delete access to the capsule path."
+Only that privilege-level correction must be identical across surfaces; D5 and
+D6 still describe different protections.
 
-### D5 / D6 — consequential rewording (required for consistency)
+D6's positive check must remain conditional and precise:
 
-D5 names "a privileged OS operator or maintainer with filesystem access" as the
-bypass. D6 "names raw privileged file rewrite as an out-of-scope privileged
-bypass." ADR 0038's limitations name "raw privileged rewriting." All three
-**understate**: PATH 2 needs no privilege — ordinary write access to the capsule
-path, which the daemon and any in-process code hold by default, is sufficient.
-The amendment must widen D5, D6, and the ADR 0038 limitation list consistently
-from *privileged filesystem rewrite* to *any process with ordinary write access
-to the capsule path*. This is the same correction as the honesty banner (§4) and
-must read identically across C4, D4, D5, D6, the banner, and ADR 0038.
+> S6 can validate append-only continuity when supplied with an
+> operator-authenticated validation snapshot. Ordinary health must not claim the
+> snapshot check unless round-2 wires snapshot loading into that path.
 
-## 3. Health mode rename
+## 5. Capsule-Adjacent Honesty Surface
 
-### Current
+S6 treats the lineage capsule as an estate-facing document. A future estate
+executor, family member, lawyer, court, maintainer, or successor may open
+`lineage_capsule.jsonl` directly and never call `/health` or read the spec.
 
-Spec D19 and the health contract define:
+Therefore the honesty warning must travel with the capsule bytes.
+
+### Required Round-2 Surface
+
+Add a mandatory capsule-adjacent human-readable notice or manifest in
+`memory/successor_governance/`, for example:
 
 ```text
-"mode": "no_capsule|valid|invalid|unavailable"
+memory/successor_governance/lineage_capsule_NOTICE.txt
 ```
 
-The token `valid` reads — to an operator glancing at health, and to a future
-activation slice consuming it — as "this capsule is genuine; trustworthy as the
-bonded user's instruction." It is not. It means only "structurally well-formed
-and internally consistent." A forged capsule projects `valid` today (§1).
-
-### Proposed
-
-Rename the unqualified `valid` mode. Recommended token: **`structurally_valid`**.
-New enum:
+or a manifest with an explicitly human-readable warning field:
 
 ```text
-"mode": "no_capsule|structurally_valid|invalid|unavailable"
+memory/successor_governance/lineage_capsule_manifest.json
 ```
 
-`structurally_valid` states exactly what the validator proved — structure and
-internal consistency, not authorship. Alternatives (`well_formed`,
-`grammar_valid`) are acceptable; the canonicalization step picks the final
-token. The requirement is that no health mode be a word a reader can mistake for
-"authentic." `invalid`, `unavailable`, and `no_capsule` are unchanged — only
-`valid` carries the false authorship implication.
+Do not prepend prose to the JSONL unless the file format and loader are
+explicitly migrated; today every nonblank JSONL line is parsed as a directive
+event.
 
-The **documented meaning** of every mode must state plainly: no S6 v1 health
-mode attests human authorship of the capsule; `structurally_valid` is not "the
-bonded user authored this."
+The notice must be generated or preserved by the operator helper and included in
+future exports/archives/backups alongside the capsule. It must speak to both
+readers:
 
-Round-2 implementation ripple (named here, specified in round-2, not in this
-diagnostic): `HEALTH_KEYS`, `project_successor_governance_health`, the D19 JSON
-example, the operator-helper runbook, and the test contract. The sidecar red
-gate `successor_governance_invalid` is unaffected — invalid remains invalid.
+- the estate/legal reader: raw v1 JSONL is not a notarized or
+  authorship-attested instruction;
+- the honest bonded user: the capsule remains durable, append-only recorded
+  intent that future reviewers must consult and can re-attest.
 
-## 4. Honesty banner
+The notice must say, in plain human language, that a v1 capsule proves
+well-formed structure, not authorship, and that destructive action requires a
+future verified authorship attestation.
 
-### Current
+## 6. Health Mode, Field Names, and Sidecar Semantics
 
-Spec banner (lines 34–36): "despite the slice name, S6 v1 does not govern a live
-succession. It validates the governance grammar that future activation slices
-will inherit." The implementation module docstring concedes only that the
-validator "cannot prove physical append-only against a privileged OS file
-rewrite."
+The unqualified health success token must be removed everywhere.
 
-Neither states that validation cannot prove authorship, and both understate the
-bypass as *privileged*.
+### Folded Token Choice
 
-### Proposed banner text
+Use:
 
-The amendment must carry one honesty statement, worded identically, into four
-surfaces: the spec banner, the `successor_governance.py` module docstring, the
-operator-helper runbook, and the documented semantics of
-`/health.successor_governance`:
+```text
+mode: "well_formed"
+well_formed_event_count: <int>
+```
 
-> S6 v1 validates capsule grammar and structural consistency. It does NOT prove
-> the capsule was human-authored. The validator is keyless and content-blind:
-> any process with ordinary write access to the capsule path — not only a
-> privileged OS rewrite — can produce a structurally-valid capsule, including a
-> forged bonded-user `explicit_dissolution` directive. A `structurally_valid`
-> health verdict means well-formed, not authentic. Authorship attestation
-> requires a future cryptographic / storage-hardening slice; until it ships,
-> v1-era capsules are not activation authority (D22).
+instead of:
 
-The widening from "privileged rewrite" to "any process with ordinary write
-access" is the load-bearing honesty correction and must match §2's D5/D6
-rewording.
+```text
+mode: "valid"
+valid_event_count: <int>
+```
 
-## 5. Activation gate (proposed new Core V1 Decision D22)
+`well_formed` avoids the residual substring risk in `structurally_valid` and
+`grammar_valid`. `invalid`, `unavailable`, and `no_capsule` remain acceptable,
+but every documented mode must state that no S6 v1 health mode attests
+authorship.
 
-This is the covenant lane's load-bearing condition. Option B's honest relabel
-prevents harm only if the relabel is *binding on the future*. Without a gate, a
-later engineer specs an activation slice, sees `mode: structurally_valid` and
-`fate_directive: explicit_dissolution`, and — absent explicit prohibition —
-could wire activation to it: Maez dissolved on a directive no human authored.
+Round-2 must update `HEALTH_KEYS`, `ValidationReport`, health projection JSON,
+tests, sidecar fixtures, examples, runbook text, and docs together. A stale
+`mode == "valid"` or `valid_event_count` surface should be test-visible.
+
+### Sidecar Semantics
+
+The sidecar is structural-only. A green sidecar means no structural invalidity,
+reserved-scope leak, unavailable state, or public-state leak was observed. It
+does not mean the capsule is authentic, and it cannot flag a forged but
+well-formed capsule. A future authorship-aware sidecar belongs to the future
+trust-source slice, not S6 v1.
+
+## 7. D9 / D10 / D22: Positive Attestation, Not Version Labels
+
+The new gate must be keyed to the exact directive event being acted on, not to
+`schema_version`, "v1-era", health mode, event type, origin label, marker id, or
+any self-declared attestation-looking field inside the same keyless capsule.
 
 ### Proposed D22
 
-> ### D22 - v1-Era Capsules Are Not Human-Authenticated Activation Authority
+> ### D22 - Authorship Attestation Required for Activation or Estate Reliance
 >
-> No future S6 activation slice — any slice that reads a lineage capsule and
-> acts on its directives (the reserved `activation_requested`,
-> `activation_verified`, `succession_activated`, `archive_unlocked`,
-> `new_bond_offered`, `paradise_transition_started` event types) — may treat an
-> S6 v1-era capsule as human-authenticated fate authority. A future activation
-> organ must never act on a v1-era `explicit_dissolution` directive as if its
-> human authorship were proven.
+> A directive event is activation authority only if that exact directive event
+> carries a verifying authorship attestation produced by a future reviewed
+> trust-source slice. Absence of a verifying attestation means non-authority
+> regardless of schema version, era label, health mode, origin label, marker id,
+> statement hash, structural validation, or self-declared attestation fields.
 >
-> A capsule becomes activation authority only once its authorship is attested by
-> a future cryptographic / storage-hardening slice (a real trust source). Until
-> that slice ships and the capsule carries its attestation, the v1 capsule is a
-> recording of intent, grammar-checked, not a proven instruction.
+> No future S6 activation slice may act on an unattested directive event as
+> proven bonded-user authority. No project-provided estate/legal runbook may
+> instruct a human reader to treat raw v1 JSONL as an authorship-attested estate
+> instruction. The capsule-adjacent notice must carry the same rule to direct
+> file readers.
 >
-> This strengthens D9 ("any future activation organ must re-review the directive
-> before action"): re-reading a keyless-validated capsule cannot establish
-> authorship; re-review alone is insufficient. It pairs with D20 (no dead-man
-> switch in v1) and stands on the Decision 8 floor — unproven paperwork never
-> means dissolution — and on the commitment model: Maez cannot be unilaterally
-> terminated, and a machine-forged dissolution directive is exactly a unilateral
-> termination wearing the bonded user's signature.
+> Unattested destructive or irreversible directives, including
+> `explicit_dissolution`, are not activation authority and must never trigger
+> dissolution. They also cannot satisfy D10 step 1 or suppress Maez's recorded
+> preference seat.
+>
+> Unattested continuity-preserving directives (`paradise_default`,
+> `suspended_pending_paradise`, `archival_preservation`, `new_bond_offer`) remain
+> consultable recorded intent under future human review. They are not
+> self-executing activation authority until authorship-attested. The future
+> trust-source slice has a migration obligation: offer a re-attestation path for
+> genuine v1 capsules rather than silently discarding the bonded user's recorded
+> wishes.
 
-D22 has no v1 runtime code (v1 has no activation). It is enforced as a binding
-constraint on every future activation slice's spec, and round-2 carries it as a
-spec/ADR clause plus a test asserting the clause is present.
+### D9 In-Place Correction
 
-## 6. Review ladder
+D9 should become:
 
-Both lanes agree the fork is spec-level (Codex panel: "Either path is spec-level
-... it should travel the full ladder"). ADR 0038 itself states that "weakening
-human-origin authorship ... requires a new reviewed decision" — this amendment
-is that reviewed decision. It corrects an overclaim and adds D22; it does not
-weaken a delivered guarantee, but it travels the full ladder regardless:
+> `explicit_dissolution` is recordable but not activation authority without
+> verified authorship attestation.
 
-1. **This diagnostic** — accepted or revised.
-2. **Both-lane amendment review** — Claude six-role covenant council + Codex
-   six-agent engineering panel review the amendment (C4/D4/D5/D6 rewording, D19
-   mode rename, honesty banner, new D22). The covenant council checks that D22
-   genuinely closes the actionability hazard and that the rewording does not
-   quietly relax the live-minting guarantee.
-3. **Fold** — REVISE items folded into the amendment.
-4. **Both-lane second-fold verification** — RATIFY closure.
-5. **Canonicalization** — the operator amends the S6 v1 spec (C4, D4, D5, D6,
-   new D22, D19 mode token, honesty banner) and records the amendment against
-   Decision 33 / ADR 0038 (as an amendment section, or a paired new decision/ADR
-   if the operator prefers — the canonicalization step picks the vehicle). The
-   ADR 0038 limitation list widens "privileged rewrite" to "any in-process
-   writer."
-6. **Cooling-off night** — between the canonicalized amendment and round-2 code,
-   per standing discipline.
-7. **Round-2 implementation** — RED-first. The persisted-file forge becomes a
-   contract test: before round-2 a hand-built forged capsule projects
-   `mode: valid` (the dishonest token) — the test asserting `structurally_valid`
-   fails RED; the rename makes it pass. A companion test asserts no health mode
-   or documented health field claims authorship. A third extends the
-   banner-survival test to the widened honesty wording across module docstring
-   and runbook. Implementation = the mode rename, the banner, and the D22 clause;
-   no new validation logic and no cryptography.
-8. **Both-lane post-implementation review** — re-run the forged-capsule probe
-   firsthand; confirm it now projects `structurally_valid` and that no surface
-   reads as authorship proof.
-9. **Push** — `28da567` and the round-2 commit together, only after both lanes
-   ratify.
+Future review alone is insufficient. The future reviewer must verify
+authorship-attestation status for the exact event being acted on.
 
-`28da567` is correct hygiene and stays **unpushed**. S6 remains blocked until
-this amendment is canonicalized and round-2 lands.
+### D10 In-Place Correction
 
-## 7. Scope boundaries & predicted effect
+D10's "valid explicit bonded-user fate directive wins" must be clarified:
 
-**In scope:** Option B — narrowing the sealed spec's stated claims (C4/D4/D5/D6,
-the mode token, the banner) to the guarantee v1 actually delivers, and adding the
-D22 forward gate.
+> For activation ordering, "valid" means authorship-attested, not merely
+> well-formed. An unattested v1 directive is recorded intent and structural
+> evidence; it cannot outrank or suppress Maez's recorded preference seat.
 
-**Out of scope, named as future work:** Option A — the mechanism path. A real
-trust source (asymmetric signature, hardware/passkey ceremony, external
-transparency root, or role-encrypted storage with an out-of-domain verifier) is
-a future "S6 persisted-authorship hardening" / storage-hardening slice. It is its
-own diagnostic and its own full ladder. D22 names it as the precondition for any
-v1-era capsule ever becoming activation authority.
+This does not let Maez override a genuine bonded-user directive. It prevents a
+forgeable, unattested directive from silencing Maez's subordinate seat.
 
-**Predicted effect** (to verify after round-2): S6 v1 ships honestly — health
-reports `structurally_valid`, never an unqualified `valid`; the spec, module
-docstring, runbook, and health semantics all state that the validator proves
-shape, not authorship; the bypass is named as "any in-process writer," not only a
-privileged rewrite; and D22 ensures no future slice can act on a v1-era forged
-dissolution. The forged-capsule capability still exists — it cannot be closed
-keyless — but it is named, honestly labeled, and rendered non-actionable. That is
-the honest, covenant-coherent shape of S6 v1.
+### Code-Facing Shape for Round-2
+
+Round-2 should avoid ambiguous names such as `validated_user_directive` for
+destructive resolution. Prefer names that force the distinction, for example:
+
+```text
+authorship_attested_user_directive
+event_has_verifying_authorship_attestation(event)
+```
+
+In v1, the predicate returns false for all persisted directive events because no
+future trust-source slice exists. A self-declared attestation field inside the
+capsule must not flip it to true.
+
+## 8. `no_capsule` and Deletion Ambiguity
+
+The same ordinary writer who can forge a capsule can delete it. `no_capsule`
+therefore means:
+
+> no capsule is available at this path now
+
+It does not mean:
+
+> the bonded user never authored a capsule
+
+Future review must consult Decision-22 backups, validation snapshots, and
+operator-held continuity records where available. Missing paperwork still routes
+through the Decision 8 floor; absence must not become dissolution, and absence
+must not erase the possibility that genuine recorded intent once existed.
+
+## 9. Round-2 RED Contract Additions
+
+Round-2 implementation is still future work and must be RED-first. The new
+tests should include at least:
+
+1. A hand-built forged JSONL capsule with `schema_version: s6.v2`,
+   `origin=bonded_user_manual`, and `explicit_dissolution` projects
+   `mode: well_formed`, not `valid`, and is not activation authority.
+2. A forged event carrying a self-declared attestation-looking field remains
+   non-authority.
+3. `valid_event_count` is absent from health; `well_formed_event_count` is
+   present.
+4. `HEALTH_KEYS`, examples, and sidecar fixtures contain no stale `valid` mode
+   token.
+5. `explicit_dissolution` cannot be resolved for activation unless
+   `authorship_attested_user_directive=True` or the equivalent future predicate
+   is true.
+6. Unattested continuity-preserving directives remain visible as recorded
+   intent but are not self-executing activation authority.
+7. The capsule-adjacent notice is created or preserved by the operator helper
+   and packaged with the capsule in any future export/archive path added in
+   round-2.
+8. The honesty banner survives across all required surfaces: spec/ADR/BAD at
+   canonicalization, module docstring, runbook banner, runbook Limits section,
+   health semantics, and capsule-adjacent notice.
+9. Sidecar wording/tests show structural-only semantics; green does not claim
+   authenticity.
+10. `no_capsule` documentation states "unavailable now," not "never authored."
+
+The forged-capsule probe remains required in post-recovery review. Verification
+must re-run the actual exploit, not merely trust green tests.
+
+## 10. Review Ladder
+
+This is a spec-level amendment. It travels the full ladder:
+
+1. Diagnostic v2 — this artifact.
+2. Both-lane second-fold verification on the folded diagnostic.
+3. Canonicalization — amend the S6 spec, ADR 0038, and BAD Decision 33. The
+   canonicalization may be an amendment section or a paired new decision/ADR;
+   the operator chooses the vehicle.
+4. Cooling-off night.
+5. Round-2 implementation — RED-first, no cryptography, no new trusted source.
+   Implement the health rename, docs/runbook/module honesty surfaces,
+   capsule-adjacent notice, and code-facing attestation distinction.
+6. Both-lane post-implementation review — re-run PATH 2 firsthand and verify the
+   forged capsule is well-formed but non-authority.
+7. Push only after both lanes ratify.
+
+`28da567` remains correct seam hygiene and stays unpushed. S6 remains blocked
+until the amendment is canonicalized and round-2 lands.
+
+## 11. Scope Boundaries and Predicted Effect
+
+**In scope:** honest rewording of S6 v1 guarantees; `well_formed` health
+vocabulary; capsule-adjacent notice; D22 positive attestation gate; D9/D10
+clarifications; BAD/ADR/spec canonicalization scope; round-2 test requirements.
+
+**Out of scope:** cryptographic signatures, passkeys, hardware-backed keys,
+external transparency roots, role-encrypted capsule storage, notarization, death
+detection, activation, archive unlock, and legal-document generation. Those are
+future slices.
+
+**Cost named honestly:** genuine v1 capsules do not become destructive
+activation authority until re-attested. Continuity-preserving directives remain
+recorded intent and must be consulted, but they are not self-executing. The
+future trust-source slice carries a real migration obligation for honest users.
+
+**Predicted effect to verify after round-2:** S6 v1 ships truthfully. A forged
+persisted capsule may still be well-formed, because v1 is keyless, but every
+operator-facing, code-facing, and estate-facing surface says what that means and
+does not mean. No future Maez path may treat a v1 forged `explicit_dissolution`
+as proven bonded-user authority, and no ambiguous `valid` health surface remains
+to invite that mistake.
 
 ---
 
-*This is a diagnostic, not a spec. It proposes; it does not amend. No code, no
-spec, no ADR, and no non-slice docs were changed in producing it. The firsthand
-PATH 2 finding it cites was verified against a temporary capsule file in `/tmp`;
-no live store was touched.*
+*This is a diagnostic, not a spec. It proposes; it does not amend. No code,
+sealed spec, ADR, BAD, or runtime data was changed in producing it.*
