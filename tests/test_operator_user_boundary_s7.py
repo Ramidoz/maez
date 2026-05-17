@@ -2313,6 +2313,51 @@ class S7AbsentOperatorRecoveryProjectionTests(unittest.TestCase):
         self.assertTrue(projection["track_b_activation_blocker"])
 
 
+class S7TrackBConfidentialityProjectionTests(unittest.TestCase):
+    def test_135_track_b_confidentiality_missing_surfaces_not_ready_blocker(self):
+        from core.governance import operator_user_boundary as s7
+
+        projection = s7.build_track_b_confidentiality_projection(
+            deployment_track="track_b",
+            non_bonded_operator=True,
+        )
+
+        self.assertEqual(projection["mode"], "track_b_confidentiality_not_ready")
+        self.assertTrue(projection["track_b_activation_blocker"])
+        self.assertEqual(projection["red_gate_modes"], ("track_b_confidentiality_not_ready",))
+        self.assertEqual(projection["storage_hardening_ref_present"], False)
+        blob = repr(projection).lower()
+        for forbidden in ("private_thought", "raw_transcript", "config/soul", "successor capsule"):
+            self.assertNotIn(forbidden, blob)
+
+    def test_136_founder_track_a_confidentiality_missing_is_warning_not_blocker(self):
+        from core.governance import operator_user_boundary as s7
+
+        projection = s7.build_track_b_confidentiality_projection(
+            deployment_track="track_a",
+            non_bonded_operator=False,
+        )
+
+        self.assertEqual(projection["mode"], "track_b_confidentiality_not_ready")
+        self.assertFalse(projection["track_b_activation_blocker"])
+        self.assertEqual(projection["warning_modes"], ("track_b_confidentiality_not_ready",))
+        self.assertEqual(projection["red_gate_modes"], ())
+
+    def test_137_track_b_confidentiality_ready_cannot_be_self_declared_by_hash(self):
+        from core.governance import operator_user_boundary as s7
+
+        projection = s7.build_track_b_confidentiality_projection(
+            deployment_track="track_b",
+            non_bonded_operator=True,
+            storage_hardening_review_ref_hash="a" * 64,
+        )
+
+        self.assertEqual(projection["mode"], "track_b_confidentiality_not_ready")
+        self.assertTrue(projection["track_b_activation_blocker"])
+        self.assertEqual(projection["storage_hardening_ref_present"], False)
+        self.assertNotIn("a" * 64, repr(projection))
+
+
 class S7SelfModDialogWrappingTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

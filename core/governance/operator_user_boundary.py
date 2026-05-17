@@ -1256,6 +1256,36 @@ def build_operator_unavailable_recovery_projection(
     }
 
 
+def build_track_b_confidentiality_projection(
+    *,
+    deployment_track: str,
+    non_bonded_operator: bool,
+    storage_hardening_review_ref_hash: str | None = None,
+) -> dict[str, object]:
+    """Project whether Track-B role separation has reviewed storage hardening."""
+    validate_deployment_track(deployment_track)
+    if non_bonded_operator is not True and non_bonded_operator is not False:
+        raise ValueError("non_bonded_operator must be bool")
+    if storage_hardening_review_ref_hash:
+        _validate_hash64(storage_hardening_review_ref_hash, field="storage_hardening_review_ref_hash")
+    ref_present = False
+    mode = "track_b_confidentiality_not_ready"
+    blocker = mode != "ready" and (deployment_track == "track_b" or non_bonded_operator)
+    warning_modes = () if mode == "ready" or blocker else ("track_b_confidentiality_not_ready",)
+    red_gates = ("track_b_confidentiality_not_ready",) if blocker else ()
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "mode": validate_operator_health_mode(mode),
+        "deployment_track": deployment_track,
+        "non_bonded_operator": non_bonded_operator,
+        "storage_hardening_ref_present": ref_present,
+        "track_b_activation_blocker": blocker,
+        "warning_modes": warning_modes,
+        "red_gate_modes": tuple(validate_operator_red_gate_mode(gate) for gate in red_gates),
+        "content_authority": validate_mixed_store_content_authority("not_granted"),
+    }
+
+
 def _build_mixed_store_projection(
     *,
     store_kind: str,
