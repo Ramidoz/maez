@@ -307,13 +307,26 @@ def _authority_context_active_for_artifact(ctx: object, *, now: str) -> bool:
         return False
     if not ctx.actor_id or not ctx.role_names:
         return False
+    if not ctx.allowed_scopes:
+        return False
+    if not ctx.surface or not ctx.credential_ref:
+        return False
+    if not ctx.created_at:
+        return False
     if ctx.grant_source in {"none", "manual_recovery_required"}:
         return False
     if ctx.auth_method == "none":
         return False
     if not _valid_actor_handle(ctx.actor_handle_hmac):
         return False
+    if not ctx.expires_at:
+        return False
     return _context_active(ctx, now=now)
+
+
+def authority_context_active_for_artifact(ctx: object, *, now: str) -> bool:
+    """Public fail-closed AuthorityContext validity check for S7 artifact gates."""
+    return _authority_context_active_for_artifact(ctx, now=now)
 
 
 def _authority_context_roles_allow_work(ctx: AuthorityContext, work_class: str) -> bool:

@@ -717,13 +717,13 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
             free_text_ref_hash=None,
         )
 
-    def _authority_context(self):
+    def _authority_context(self, *, role_names: tuple[str, ...] = ("bonded_user", "operator")):
         from core.governance import operator_user_boundary as s7
 
         return s7.AuthorityContext(
             actor_id="founder",
             actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
-            role_names=("bonded_user", "operator"),
+            role_names=role_names,
             grant_source="founder_webauthn",
             allowed_scopes=("operator_health",),
             auth_method="founder_webauthn",
@@ -2076,6 +2076,222 @@ class S7WebAuthnMechanismTests(unittest.TestCase):
                 now=NOW,
             ),
         )
+
+
+class S7SelfModDialogWrappingTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _store(self):
+        from skills.self_mod_dialog import SelfModDialogStore
+
+        return SelfModDialogStore(Path(self._tmp.name) / "self_mod_dialogs.db")
+
+    def _authority_context(self, *, role_names: tuple[str, ...] = ("bonded_user", "operator")):
+        from core.governance import operator_user_boundary as s7
+
+        return s7.AuthorityContext(
+            actor_id="founder",
+            actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+            role_names=role_names,
+            grant_source="founder_webauthn",
+            allowed_scopes=("operator_health",),
+            auth_method="founder_webauthn",
+            surface="cockpit",
+            credential_ref="cred-1",
+            created_at=NOW,
+            expires_at=FUTURE,
+            verified=True,
+        )
+
+    def _open_dialog(self, *, require_s7_linkage: bool = True, request_hash: str | None = "a" * 64):
+        from skills.self_mod_dialog import open_dialog_for_card
+
+        store = self._store()
+        dialog, _opening = open_dialog_for_card(
+            store=store,
+            card_action="write_any_file",
+            card_params={"path": "config/soul.md", "content": "# edited"},
+            card_request_id="card-selfmod-1",
+            audit_reasoning="modifies soul",
+            concerns=["self modification"],
+            opener_llm_fn=lambda _ctx: "I want to change config/soul.md.",
+            require_s7_linkage=require_s7_linkage,
+            s7_request_envelope_hash=request_hash,
+        )
+        return store, dialog
+
+    def test_084_self_mod_dialog_records_authority_role_not_literal_rohit(self):
+        from skills.self_mod_dialog import handle_dialog_reply
+
+        store, dialog = self._open_dialog()
+        result = handle_dialog_reply(
+            store=store,
+            dialog=dialog,
+            user_text="yes, but explain the rollback first",
+            authority_context=self._authority_context(),
+            classifier_llm_fn=lambda _prompt: '{"engagement":"genuine","progress":"new_understanding"}',
+            response_llm_fn=lambda _prompt: "Rollback is revert_patch.",
+        )
+
+        self.assertEqual(result.kind, "clarified")
+        fresh = store.get(dialog.dialog_id)
+        self.assertIsNotNone(fresh)
+        assert fresh is not None
+        roles = [exchange.role for exchange in fresh.history]
+        self.assertIn("bonded_user", roles)
+        self.assertNotIn("rohit", roles)
+
+    def test_085_s7_required_dialog_blocks_ratification_without_artifact(self):
+        from skills.self_mod_dialog import DialogStage, handle_dialog_reply
+
+        store, dialog = self._open_dialog()
+        result = handle_dialog_reply(
+            store=store,
+            dialog=dialog,
+            user_text="yes",
+            authority_context=self._authority_context(),
+        )
+
+        self.assertEqual(result.kind, "blocked")
+        self.assertEqual(result.dialog.stage, DialogStage.BLOCKED.value)
+        self.assertIn("S7", result.reply_text or "")
+
+    def test_086_s7_required_dialog_ratifies_with_authority_and_artifact(self):
+        from core.governance import operator_user_boundary as s7
+        from skills.self_mod_dialog import DialogStage, handle_dialog_reply
+
+        authority = self._authority_context()
+        store, dialog = self._open_dialog()
+        result = handle_dialog_reply(
+            store=store,
+            dialog=dialog,
+            user_text="yes",
+            authority_context=authority,
+            s7_artifact_id="artifact-selfmod-1",
+        )
+
+        self.assertEqual(result.kind, "ratified")
+        self.assertEqual(result.dialog.stage, DialogStage.RATIFIED.value)
+        self.assertEqual(result.dialog.s7_artifact_id, "artifact-selfmod-1")
+        self.assertEqual(result.dialog.s7_authority_context_hash, s7.authority_context_hash(authority))
+
+    def test_087_operator_only_context_cannot_ratify_s7_self_mod_dialog(self):
+        from skills.self_mod_dialog import DialogStage, handle_dialog_reply
+
+        store, dialog = self._open_dialog()
+        result = handle_dialog_reply(
+            store=store,
+            dialog=dialog,
+            user_text="yes",
+            authority_context=self._authority_context(role_names=("operator",)),
+            s7_artifact_id="artifact-selfmod-operator-only",
+        )
+
+        self.assertEqual(result.kind, "blocked")
+        self.assertEqual(result.dialog.stage, DialogStage.BLOCKED.value)
+        self.assertEqual(result.dialog.s7_block_reason, "missing_s7_authorization_artifact")
+
+    def test_088_expired_bonded_user_context_cannot_ratify_s7_self_mod_dialog(self):
+        from dataclasses import replace
+        from skills.self_mod_dialog import DialogStage, handle_dialog_reply
+
+        store, dialog = self._open_dialog()
+        expired = replace(self._authority_context(), expires_at=PAST)
+        result = handle_dialog_reply(
+            store=store,
+            dialog=dialog,
+            user_text="yes",
+            authority_context=expired,
+            s7_artifact_id="artifact-selfmod-expired",
+            s7_now=NOW,
+        )
+
+        self.assertEqual(result.kind, "blocked")
+        self.assertEqual(result.dialog.stage, DialogStage.BLOCKED.value)
+        self.assertEqual(result.dialog.s7_block_reason, "missing_s7_authorization_artifact")
+
+    def test_089_missing_expiry_context_cannot_ratify_s7_self_mod_dialog(self):
+        from dataclasses import replace
+        from skills.self_mod_dialog import DialogStage, handle_dialog_reply
+
+        store, dialog = self._open_dialog()
+        no_expiry = replace(self._authority_context(), expires_at=None)
+        result = handle_dialog_reply(
+            store=store,
+            dialog=dialog,
+            user_text="yes",
+            authority_context=no_expiry,
+            s7_artifact_id="artifact-selfmod-no-expiry",
+            s7_now=NOW,
+        )
+
+        self.assertEqual(result.kind, "blocked")
+        self.assertEqual(result.dialog.stage, DialogStage.BLOCKED.value)
+        self.assertEqual(result.dialog.s7_block_reason, "missing_s7_authorization_artifact")
+
+    def test_090_malformed_authority_context_cannot_ratify_s7_self_mod_dialog(self):
+        from dataclasses import replace
+        from skills.self_mod_dialog import DialogStage, handle_dialog_reply
+
+        cases = {
+            "missing_actor": replace(self._authority_context(), actor_id=""),
+            "missing_handle": replace(self._authority_context(), actor_handle_hmac=""),
+            "no_grant": replace(self._authority_context(), grant_source="none"),
+            "no_auth_method": replace(self._authority_context(), auth_method="none"),
+        }
+        for name, context in cases.items():
+            with self.subTest(name=name):
+                store, dialog = self._open_dialog()
+                result = handle_dialog_reply(
+                    store=store,
+                    dialog=dialog,
+                    user_text="yes",
+                    authority_context=context,
+                    s7_artifact_id=f"artifact-selfmod-{name}",
+                    s7_now=NOW,
+                )
+
+                self.assertEqual(result.kind, "blocked")
+                self.assertEqual(result.dialog.stage, DialogStage.BLOCKED.value)
+                self.assertEqual(result.dialog.s7_block_reason, "missing_s7_authorization_artifact")
+
+    def test_091_minimum_authority_fields_required_for_s7_self_mod_ratification(self):
+        from dataclasses import replace
+        from skills.self_mod_dialog import DialogStage, handle_dialog_reply
+
+        cases = {
+            "missing_created_at": replace(self._authority_context(), created_at=""),
+            "missing_surface": replace(self._authority_context(), surface=""),
+            "missing_credential_ref": replace(self._authority_context(), credential_ref=None),
+            "missing_scopes": replace(self._authority_context(), allowed_scopes=()),
+        }
+        for name, context in cases.items():
+            with self.subTest(name=name):
+                store, dialog = self._open_dialog()
+                result = handle_dialog_reply(
+                    store=store,
+                    dialog=dialog,
+                    user_text="yes",
+                    authority_context=context,
+                    s7_artifact_id=f"artifact-selfmod-{name}",
+                    s7_now=NOW,
+                )
+
+                self.assertEqual(result.kind, "blocked")
+                self.assertEqual(result.dialog.stage, DialogStage.BLOCKED.value)
+                self.assertEqual(result.dialog.s7_block_reason, "missing_s7_authorization_artifact")
+
+    def test_092_dialog_creation_missing_s7_linkage_blocks_guarded_work(self):
+        from skills.self_mod_dialog import DialogStage
+
+        _store, dialog = self._open_dialog(request_hash=None)
+
+        self.assertEqual(dialog.stage, DialogStage.BLOCKED.value)
+        self.assertEqual(dialog.s7_block_reason, "missing_s7_request_envelope_hash")
 
 
 if __name__ == "__main__":
