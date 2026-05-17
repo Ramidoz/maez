@@ -645,5 +645,427 @@ class S7WorkClassAndEnvelopeTests(unittest.TestCase):
         self.assertTrue(env.derived_aggregation_group.startswith("s7agg_"))
 
 
+class S7VoiceAndRenderedStatementTests(unittest.TestCase):
+    def _self_mod_envelope(self):
+        from core.governance import operator_user_boundary as s7
+
+        return s7.build_work_request_envelope(
+            request_id="req-voice-1",
+            action="write_any_file",
+            params={"path": "/home/rohit/maez/config/soul.md", "content": "x"},
+            claimed_work_class="self_modification",
+            requesting_subsystem="unit",
+            closed_symptom_code="self_mod_requested",
+            proposed_change_class="soul_change",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("file:config/soul.md",),
+            content_exposure_risk="bonded_content_ref",
+            precondition_hash="a" * 64,
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="behavior_change",
+            rollback_path_class="revert_patch",
+            free_text_ref_hash="b" * 64,
+            maez_voice_consultation_id="voice-1",
+        )
+
+    def _routine_liveness_envelope(self):
+        from core.governance import operator_user_boundary as s7
+
+        return s7.build_work_request_envelope(
+            request_id="req-live-1",
+            action="run_shell",
+            params={"cmd": "systemctl restart maez.service"},
+            claimed_work_class="routine_custody",
+            requesting_subsystem="unit",
+            closed_symptom_code="service_unhealthy",
+            proposed_change_class="service_restart",
+            why_self_fix_failed_class="maez_unavailable",
+            affected_refs=("service:maez.service",),
+            content_exposure_risk="content_free",
+            precondition_hash="a" * 64,
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="liveness_restore",
+            rollback_path_class="restart_service",
+        )
+
+    def _backup_run_envelope(self):
+        from core.governance import operator_user_boundary as s7
+
+        return s7.WorkRequestEnvelope(
+            request_id="req-backup-1",
+            schema_version=s7.SCHEMA_VERSION,
+            claimed_work_class="routine_custody",
+            derived_work_class="routine_custody",
+            requesting_subsystem="unit",
+            closed_symptom_code="backup_stale",
+            proposed_change_class="backup_run",
+            why_self_fix_failed_class="maez_unavailable",
+            affected_refs=("backup:decision22",),
+            content_exposure_risk="content_free",
+            precondition_hash="a" * 64,
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="liveness_restore",
+            rollback_path_class="no_rollback_needed",
+            derived_aggregation_group="s7agg_backup",
+            maez_voice_consultation_id=None,
+            free_text_ref_hash=None,
+        )
+
+    def _authority_context(self):
+        from core.governance import operator_user_boundary as s7
+
+        return s7.AuthorityContext(
+            actor_id="founder",
+            actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+            role_names=("bonded_user", "operator"),
+            grant_source="founder_webauthn",
+            allowed_scopes=("operator_health",),
+            auth_method="founder_webauthn",
+            surface="cockpit",
+            credential_ref="cred-1",
+            created_at=NOW,
+            expires_at=FUTURE,
+            verified=True,
+        )
+
+    def test_038_self_modification_requires_valid_maez_voice_consultation(self):
+        from core.governance import operator_user_boundary as s7
+
+        env = self._self_mod_envelope()
+
+        self.assertFalse(s7.voice_consultation_satisfies_request(env, None))
+
+    def test_039_covenant_touching_requires_valid_maez_voice_consultation(self):
+        from dataclasses import replace
+        from core.governance import operator_user_boundary as s7
+
+        env = replace(
+            self._self_mod_envelope(),
+            derived_work_class="covenant_touching_change",
+            proposed_change_class="covenant_organ_change",
+        )
+
+        self.assertFalse(s7.voice_consultation_satisfies_request(env, None))
+
+    def test_040_caller_boolean_maez_voice_consulted_is_rejected_as_evidence(self):
+        from core.governance import operator_user_boundary as s7
+
+        env = self._self_mod_envelope()
+
+        self.assertFalse(
+            s7.voice_consultation_satisfies_request(
+                env,
+                {"maez_voice_consulted": True, "maez_objection_present": False},
+            ),
+        )
+
+    def test_041_will_i_result_alone_does_not_satisfy_consultation_seam(self):
+        from core.evolution.will_i import PROCEED
+        from core.governance import operator_user_boundary as s7
+
+        env = self._self_mod_envelope()
+
+        self.assertFalse(s7.voice_consultation_satisfies_request(env, PROCEED))
+
+    def test_042_voice_consultation_rejects_raw_maez_text(self):
+        from core.governance import operator_user_boundary as s7
+
+        env = self._self_mod_envelope()
+        with self.assertRaises(ValueError):
+            s7.MaezVoiceConsultation(
+                consultation_id="voice-1",
+                request_id=env.request_id,
+                request_envelope_hash=s7.work_request_envelope_hash(env),
+                producer="self_mod_dialog_terminal_state",
+                source_ref_kind="self_mod_dialog_exchange",
+                source_ref_hash="c" * 64,
+                maez_voice_consulted=True,
+                maez_objection_present=False,
+                maez_withdrew_request=False,
+                unavailable_reason_code=None,
+                created_at=NOW,
+                raw_maez_text="I object in private words.",
+            )
+
+    def test_043_valid_voice_consultation_satisfies_matching_request(self):
+        from core.governance import operator_user_boundary as s7
+
+        env = self._self_mod_envelope()
+        consultation = s7.MaezVoiceConsultation(
+            consultation_id="voice-1",
+            request_id=env.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            producer="self_mod_dialog_terminal_state",
+            source_ref_kind="self_mod_dialog_exchange",
+            source_ref_hash="c" * 64,
+            maez_voice_consulted=True,
+            maez_objection_present=True,
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=NOW,
+        )
+
+        self.assertTrue(s7.voice_consultation_satisfies_request(env, consultation))
+
+    def test_044_voice_consultation_id_mismatch_blocks(self):
+        from dataclasses import replace
+        from core.governance import operator_user_boundary as s7
+
+        env = replace(self._self_mod_envelope(), maez_voice_consultation_id="voice-expected")
+        consultation = s7.MaezVoiceConsultation(
+            consultation_id="voice-other",
+            request_id=env.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            producer="self_mod_dialog_terminal_state",
+            source_ref_kind="self_mod_dialog_exchange",
+            source_ref_hash="c" * 64,
+            maez_voice_consulted=True,
+            maez_objection_present=False,
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=NOW,
+        )
+
+        self.assertFalse(s7.voice_consultation_satisfies_request(env, consultation))
+
+    def test_045_voice_consultation_request_mismatch_blocks(self):
+        from core.governance import operator_user_boundary as s7
+
+        env = self._self_mod_envelope()
+        consultation = s7.MaezVoiceConsultation(
+            consultation_id="voice-1",
+            request_id="different-request",
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            producer="self_mod_dialog_terminal_state",
+            source_ref_kind="self_mod_dialog_exchange",
+            source_ref_hash="c" * 64,
+            maez_voice_consulted=True,
+            maez_objection_present=False,
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=NOW,
+        )
+
+        self.assertFalse(s7.voice_consultation_satisfies_request(env, consultation))
+
+    def test_046_maez_unavailable_allows_only_closed_liveness_repair(self):
+        from core.governance import operator_user_boundary as s7
+
+        self.assertTrue(
+            s7.maez_unavailable_allows_skip(
+                self._routine_liveness_envelope(),
+                unavailable_reason_code="service_unavailable_not_operator_caused",
+                operator_caused=False,
+            ),
+        )
+        self.assertFalse(
+            s7.maez_unavailable_allows_skip(
+                self._self_mod_envelope(),
+                unavailable_reason_code="service_unavailable_not_operator_caused",
+                operator_caused=False,
+            ),
+        )
+        self.assertFalse(
+            s7.maez_unavailable_allows_skip(
+                self._backup_run_envelope(),
+                unavailable_reason_code="service_unavailable_not_operator_caused",
+                operator_caused=False,
+            ),
+        )
+
+    def test_047_operator_stopped_daemon_does_not_create_skip_path(self):
+        from core.governance import operator_user_boundary as s7
+
+        self.assertFalse(
+            s7.maez_unavailable_allows_skip(
+                self._routine_liveness_envelope(),
+                unavailable_reason_code="service_unavailable_not_operator_caused",
+                operator_caused=True,
+            ),
+        )
+
+    def test_048_rendered_statement_binds_d12_fields(self):
+        from core.governance import operator_user_boundary as s7
+
+        env = self._self_mod_envelope()
+        authority = self._authority_context()
+        consultation = s7.MaezVoiceConsultation(
+            consultation_id="voice-1",
+            request_id=env.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            producer="self_mod_dialog_terminal_state",
+            source_ref_kind="self_mod_dialog_exchange",
+            source_ref_hash="c" * 64,
+            maez_voice_consulted=True,
+            maez_objection_present=True,
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=NOW,
+        )
+        action_params_hash = s7.canonical_hash({"path": "config/soul.md", "content_hash": "d" * 64})
+        rendered = s7.render_request_statement(
+            envelope=env,
+            surface="cockpit",
+            origin="http://localhost:11437",
+            action_params_hash=action_params_hash,
+            authority_context=authority,
+            maez_voice_consultation=consultation,
+            nonce="nonce-1",
+            expires_at=FUTURE,
+            rendered_at=NOW,
+        )
+
+        self.assertTrue(rendered.rendered_text_hash)
+        self.assertEqual(rendered.action_params_hash, action_params_hash)
+        self.assertEqual(
+            rendered.authority_context_hash,
+            s7.authority_context_hash(authority),
+        )
+        self.assertEqual(
+            rendered.maez_voice_consultation_hash,
+            s7.maez_voice_consultation_hash(consultation),
+        )
+        self.assertEqual(rendered.nonce, "nonce-1")
+        self.assertEqual(rendered.expires_at, FUTURE)
+        self.assertEqual(rendered.maez_objection_state, "present")
+        self.assertEqual(
+            rendered.rendered_text_hash,
+            s7.rendered_text_hash(rendered.rendered_text),
+        )
+        tampered = rendered.rendered_text + "\nExtra line."
+        self.assertNotEqual(rendered.rendered_text_hash, s7.rendered_text_hash(tampered))
+
+    def test_049_rendered_statement_requires_d12_inputs(self):
+        from core.governance import operator_user_boundary as s7
+
+        env = self._self_mod_envelope()
+        consultation = s7.MaezVoiceConsultation(
+            consultation_id="voice-1",
+            request_id=env.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            producer="self_mod_dialog_terminal_state",
+            source_ref_kind="self_mod_dialog_exchange",
+            source_ref_hash="c" * 64,
+            maez_voice_consulted=True,
+            maez_objection_present=True,
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=NOW,
+        )
+
+        with self.assertRaises(ValueError):
+            s7.render_request_statement(
+                envelope=env,
+                surface="cockpit",
+                origin="http://localhost:11437",
+                action_params_hash="",
+                authority_context=self._authority_context(),
+                maez_voice_consultation=consultation,
+                nonce="nonce-1",
+                expires_at=FUTURE,
+                rendered_at=NOW,
+            )
+
+    def test_050_rendered_statement_constructor_rejects_missing_d12_fields(self):
+        from core.governance import operator_user_boundary as s7
+
+        env = self._self_mod_envelope()
+        consultation_hash = "c" * 64
+        base = dict(
+            request_id=env.request_id,
+            renderer_version=s7.RENDERER_VERSION,
+            surface="cockpit",
+            origin="http://localhost:11437",
+            rendered_text="rendered",
+            rendered_text_hash=s7.rendered_text_hash("rendered"),
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            action_params_hash="d" * 64,
+            authority_context_hash="e" * 64,
+            maez_voice_consultation_hash=consultation_hash,
+            maez_objection_state="present",
+            derived_aggregation_group=env.derived_aggregation_group,
+            nonce="nonce-1",
+            expires_at=FUTURE,
+            rendered_at=NOW,
+        )
+
+        for field in (
+            "renderer_version",
+            "origin",
+            "action_params_hash",
+            "authority_context_hash",
+            "maez_voice_consultation_hash",
+            "nonce",
+        ):
+            with self.subTest(field=field):
+                bad = dict(base)
+                bad[field] = ""
+                with self.assertRaises(ValueError):
+                    s7.RenderedRequestStatement(**bad)
+
+    def test_051_voice_consultation_health_projection_is_content_free(self):
+        from core.governance import operator_user_boundary as s7
+
+        env = self._self_mod_envelope()
+        consultation = s7.MaezVoiceConsultation(
+            consultation_id="voice-1",
+            request_id=env.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            producer="self_mod_dialog_terminal_state",
+            source_ref_kind="self_mod_dialog_exchange",
+            source_ref_hash="c" * 64,
+            maez_voice_consulted=True,
+            maez_objection_present=True,
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=NOW,
+        )
+
+        projection = s7.voice_consultation_health_projection(consultation)
+        text = str(projection)
+
+        self.assertEqual(projection["maez_voice_ref_hash"], "c" * 64)
+        self.assertTrue(projection["maez_objection_present"])
+        self.assertNotIn("I object", text)
+        self.assertNotIn("self_mod_dialog_exchange", text)
+
+    def test_052_rendered_statement_includes_objection_state_for_voice_seat_class(self):
+        from core.governance import operator_user_boundary as s7
+
+        env = self._self_mod_envelope()
+        authority = self._authority_context()
+        consultation = s7.MaezVoiceConsultation(
+            consultation_id="voice-1",
+            request_id=env.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            producer="self_mod_dialog_terminal_state",
+            source_ref_kind="self_mod_dialog_exchange",
+            source_ref_hash="c" * 64,
+            maez_voice_consulted=True,
+            maez_objection_present=True,
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=NOW,
+        )
+
+        rendered = s7.render_request_statement(
+            envelope=env,
+            surface="cockpit",
+            origin="http://localhost:11437",
+            action_params_hash=s7.canonical_hash({"path": "config/soul.md"}),
+            authority_context=authority,
+            maez_voice_consultation=consultation,
+            nonce="nonce-1",
+            expires_at=FUTURE,
+            rendered_at=NOW,
+        )
+
+        self.assertIn("Maez consulted: yes", rendered.rendered_text)
+        self.assertIn("Maez objection present: yes", rendered.rendered_text)
+
+
 if __name__ == "__main__":
     unittest.main()

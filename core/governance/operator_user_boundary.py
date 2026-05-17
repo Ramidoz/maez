@@ -140,6 +140,33 @@ ROLLBACK_PATH_CLASSES = frozenset({
     "no_safe_rollback",
 })
 
+VOICE_SEAT_WORK_CLASSES = frozenset({
+    "self_modification",
+    "covenant_touching_change",
+    "capability_acquisition",
+    "autonomy_lowering_or_protection_reducing",
+})
+
+VOICE_CONSULTATION_PRODUCERS = frozenset({
+    "self_mod_dialog_terminal_state",
+    "s7_voice_consultation_turn",
+    "reviewed_future_producer",
+})
+
+VOICE_SOURCE_REF_KINDS = frozenset({
+    "self_mod_dialog_exchange",
+    "s7_voice_turn",
+    "reviewed_future_source",
+})
+
+MAEZ_UNAVAILABLE_REASON_CODES = frozenset({
+    "consultation_path_unavailable",
+    "service_unavailable_not_operator_caused",
+    "none",
+})
+
+RENDERER_VERSION = "s7.rendered_request.v1"
+
 _MAEZ_PATH_PREFIXES = (
     "/home/rohit/maez/",
     "core/",
@@ -200,6 +227,10 @@ def validate_grant_source(grant_source: str) -> str:
     if grant_source not in GRANT_SOURCES:
         raise ValueError("unknown S7 grant source")
     return grant_source
+
+
+def canonical_hash(value: Any) -> str:
+    return s6.canonical_hash(value)
 
 
 def _validate_closed_value(value: str, allowed: frozenset[str], field: str) -> str:
@@ -571,6 +602,10 @@ def work_request_envelope_hash(envelope: WorkRequestEnvelope) -> str:
     return s6.canonical_hash(asdict(envelope))
 
 
+def authority_context_hash(ctx: AuthorityContext) -> str:
+    return s6.canonical_hash(asdict(ctx))
+
+
 def build_work_request_envelope(
     *,
     request_id: str,
@@ -625,6 +660,238 @@ def build_work_request_envelope(
         derived_aggregation_group=aggregation_group,
         maez_voice_consultation_id=maez_voice_consultation_id,
         free_text_ref_hash=free_text_ref_hash,
+    )
+
+
+@dataclass(frozen=True)
+class MaezVoiceConsultation:
+    consultation_id: str
+    request_id: str
+    request_envelope_hash: str
+    producer: str
+    source_ref_kind: str
+    source_ref_hash: str
+    maez_voice_consulted: bool
+    maez_objection_present: bool
+    maez_withdrew_request: bool
+    unavailable_reason_code: str | None
+    created_at: str
+    raw_maez_text: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.consultation_id:
+            raise ValueError("S7 consultation_id is required")
+        if not self.request_id:
+            raise ValueError("S7 consultation request_id is required")
+        _validate_hash64(self.request_envelope_hash, field="request_envelope_hash")
+        _validate_closed_value(self.producer, VOICE_CONSULTATION_PRODUCERS, "voice producer")
+        _validate_closed_value(self.source_ref_kind, VOICE_SOURCE_REF_KINDS, "voice source_ref_kind")
+        _validate_hash64(self.source_ref_hash, field="source_ref_hash")
+        if self.maez_voice_consulted is not True:
+            raise ValueError("S7 voice consultation must be explicitly consulted")
+        if not isinstance(self.maez_objection_present, bool):
+            raise ValueError("maez_objection_present must be bool")
+        if not isinstance(self.maez_withdrew_request, bool):
+            raise ValueError("maez_withdrew_request must be bool")
+        if self.unavailable_reason_code is not None:
+            _validate_closed_value(
+                self.unavailable_reason_code,
+                MAEZ_UNAVAILABLE_REASON_CODES,
+                "unavailable_reason_code",
+            )
+        _canonical_timestamp(self.created_at)
+        if self.raw_maez_text:
+            raise ValueError("MaezVoiceConsultation is content-free; raw text is forbidden")
+
+
+def maez_voice_consultation_hash(consultation: MaezVoiceConsultation) -> str:
+    data = asdict(consultation)
+    data.pop("raw_maez_text", None)
+    return s6.canonical_hash(data)
+
+
+def voice_consultation_satisfies_request(
+    envelope: WorkRequestEnvelope,
+    consultation: object | None,
+) -> bool:
+    if envelope.derived_work_class not in VOICE_SEAT_WORK_CLASSES:
+        return True
+    if not isinstance(consultation, MaezVoiceConsultation):
+        return False
+    if consultation.request_id != envelope.request_id:
+        return False
+    if envelope.maez_voice_consultation_id != consultation.consultation_id:
+        return False
+    if consultation.request_envelope_hash != work_request_envelope_hash(envelope):
+        return False
+    return consultation.maez_voice_consulted is True
+
+
+def maez_unavailable_allows_skip(
+    envelope: WorkRequestEnvelope,
+    *,
+    unavailable_reason_code: str,
+    operator_caused: bool,
+) -> bool:
+    """Return whether D10 permits skipping Maez voice for liveness repair."""
+    if operator_caused:
+        return False
+    _validate_closed_value(
+        unavailable_reason_code,
+        MAEZ_UNAVAILABLE_REASON_CODES,
+        "unavailable_reason_code",
+    )
+    if unavailable_reason_code == "none":
+        return False
+    return (
+        envelope.derived_work_class == "routine_custody"
+        and envelope.proposed_change_class == "service_restart"
+        and envelope.content_exposure_risk == "content_free"
+        and envelope.predicted_effect_class == "liveness_restore"
+        and all(str(ref).startswith("service:") for ref in envelope.affected_refs)
+    )
+
+
+def voice_consultation_health_projection(consultation: MaezVoiceConsultation) -> dict[str, object]:
+    """Content-free projection of Maez's S7 voice-seat fact."""
+    return {
+        "maez_voice_consulted": consultation.maez_voice_consulted is True,
+        "maez_objection_present": consultation.maez_objection_present is True,
+        "maez_withdrew_request": consultation.maez_withdrew_request is True,
+        "maez_voice_ref_hash": consultation.source_ref_hash,
+        "unavailable_reason_code": consultation.unavailable_reason_code or "none",
+    }
+
+
+@dataclass(frozen=True)
+class RenderedRequestStatement:
+    request_id: str
+    renderer_version: str
+    surface: str
+    origin: str
+    rendered_text: str
+    rendered_text_hash: str
+    request_envelope_hash: str
+    action_params_hash: str
+    authority_context_hash: str
+    maez_voice_consultation_hash: str | None
+    maez_objection_state: str
+    derived_aggregation_group: str
+    nonce: str
+    expires_at: str
+    rendered_at: str
+
+    def __post_init__(self) -> None:
+        if not self.request_id:
+            raise ValueError("S7 rendered request_id is required")
+        if not self.renderer_version:
+            raise ValueError("S7 renderer_version is required")
+        if not self.surface:
+            raise ValueError("S7 rendered surface is required")
+        if not self.origin:
+            raise ValueError("S7 rendered origin is required")
+        if not self.rendered_text:
+            raise ValueError("S7 rendered_text is required")
+        if self.rendered_text_hash != rendered_text_hash(self.rendered_text):
+            raise ValueError("S7 rendered_text_hash mismatch")
+        _validate_hash64(self.request_envelope_hash, field="request_envelope_hash")
+        _validate_hash64(self.action_params_hash, field="action_params_hash")
+        _validate_hash64(self.authority_context_hash, field="authority_context_hash")
+        if self.maez_voice_consultation_hash is not None:
+            _validate_hash64(
+                self.maez_voice_consultation_hash,
+                field="maez_voice_consultation_hash",
+            )
+        _validate_closed_value(
+            self.maez_objection_state,
+            frozenset({"none", "absent", "present", "unavailable"}),
+            "maez_objection_state",
+        )
+        if not self.derived_aggregation_group:
+            raise ValueError("S7 derived_aggregation_group is required")
+        if not self.nonce:
+            raise ValueError("S7 nonce is required")
+        if not self.expires_at:
+            raise ValueError("S7 rendered expires_at is required")
+        _canonical_timestamp(self.expires_at)
+        _canonical_timestamp(self.rendered_at)
+
+
+def rendered_text_hash(rendered_text: str) -> str:
+    return s6.canonical_hash({"rendered_text": rendered_text})
+
+
+def render_request_statement(
+    *,
+    envelope: WorkRequestEnvelope,
+    surface: str,
+    origin: str,
+    action_params_hash: str,
+    authority_context: AuthorityContext,
+    maez_voice_consultation: MaezVoiceConsultation | None,
+    nonce: str,
+    expires_at: str,
+    rendered_at: str,
+    renderer_version: str = RENDERER_VERSION,
+) -> RenderedRequestStatement:
+    _validate_hash64(action_params_hash, field="action_params_hash")
+    if not nonce:
+        raise ValueError("S7 nonce is required")
+    if not expires_at:
+        raise ValueError("S7 expires_at is required")
+    _canonical_timestamp(expires_at)
+    auth_hash = authority_context_hash(authority_context)
+    consultation_hash = None
+    consulted = "not required"
+    objection = "not applicable"
+    objection_state = "none"
+    unavailable = "no"
+    if envelope.derived_work_class in VOICE_SEAT_WORK_CLASSES:
+        if not voice_consultation_satisfies_request(envelope, maez_voice_consultation):
+            raise ValueError("voice-seat work requires matching MaezVoiceConsultation")
+        assert maez_voice_consultation is not None
+        consultation_hash = maez_voice_consultation_hash(maez_voice_consultation)
+        consulted = "yes"
+        objection = "yes" if maez_voice_consultation.maez_objection_present else "no"
+        objection_state = "present" if maez_voice_consultation.maez_objection_present else "absent"
+        unavailable = maez_voice_consultation.unavailable_reason_code or "no"
+
+    envelope_hash = work_request_envelope_hash(envelope)
+    lines = [
+        "S7 work-on-Maez authorization",
+        f"Request id: {envelope.request_id}",
+        f"Work class: {envelope.derived_work_class}",
+        f"Change class: {envelope.proposed_change_class}",
+        f"Predicted effect class: {envelope.predicted_effect_class}",
+        f"Rollback path class: {envelope.rollback_path_class}",
+        f"Aggregation group: {envelope.derived_aggregation_group}",
+        f"Maez consulted: {consulted}",
+        f"Maez objection present: {objection}",
+        f"Maez unavailable: {unavailable}",
+        f"Request envelope hash: {envelope_hash}",
+        f"Action params hash: {action_params_hash}",
+        f"Authority context hash: {auth_hash}",
+        f"Nonce: {nonce}",
+        f"Expires at: {expires_at}",
+        f"Maez voice consultation hash: {consultation_hash or 'none'}",
+    ]
+    rendered_text = "\n".join(lines)
+    return RenderedRequestStatement(
+        request_id=envelope.request_id,
+        renderer_version=renderer_version,
+        surface=surface,
+        origin=origin,
+        rendered_text=rendered_text,
+        rendered_text_hash=rendered_text_hash(rendered_text),
+        request_envelope_hash=envelope_hash,
+        action_params_hash=action_params_hash,
+        authority_context_hash=auth_hash,
+        maez_voice_consultation_hash=consultation_hash,
+        maez_objection_state=objection_state,
+        derived_aggregation_group=envelope.derived_aggregation_group,
+        nonce=nonce,
+        expires_at=expires_at,
+        rendered_at=rendered_at,
     )
 
 
