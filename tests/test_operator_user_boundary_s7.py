@@ -2819,5 +2819,192 @@ class S7BackupCustodyProjectionTests(unittest.TestCase):
                 )
 
 
+class S7DaemonDownMaintenanceHelperTests(unittest.TestCase):
+    def test_117_service_maintenance_allows_only_closed_liveness_verbs(self):
+        from core.governance import operator_user_boundary as s7
+
+        for verb in (
+            "service_status",
+            "service_start",
+            "service_restart",
+            "health_probe",
+            "bounded_log_tail",
+            "disk_resource_check",
+            "backup_status",
+        ):
+            with self.subTest(verb=verb):
+                request = s7.build_service_maintenance_request(
+                    request_id=f"s7maint_{'a' * 31}{len(verb) % 10}",
+                    verb=verb,
+                    service_name="maez.service" if verb != "disk_resource_check" else None,
+                    created_at=NOW,
+                    log_line_limit=25 if verb == "bounded_log_tail" else 0,
+                )
+                self.assertEqual(request.verb, verb)
+
+    def test_118_service_maintenance_rejects_unsafe_verbs_and_services(self):
+        from core.governance import operator_user_boundary as s7
+
+        for verb in ("service_stop", "service_disable", "daemon_reload", "write_config", "backup_restore"):
+            with self.subTest(verb=verb):
+                with self.assertRaises(ValueError):
+                    s7.build_service_maintenance_request(
+                        request_id=f"s7maint_{'b' * 31}{len(verb) % 10}",
+                        verb=verb,
+                        service_name="maez.service",
+                        created_at=NOW,
+                    )
+
+        for service in ("nginx.service", "llama-server-vision.service", "maez-evil.service"):
+            with self.subTest(service=service):
+                with self.assertRaises(ValueError):
+                    s7.build_service_maintenance_request(
+                        request_id=f"s7maint_{'c' * 31}{len(service) % 10}",
+                        verb="service_restart",
+                        service_name=service,
+                        created_at=NOW,
+                    )
+
+    def test_119_bounded_log_tail_requires_reviewed_service_and_line_cap(self):
+        from core.governance import operator_user_boundary as s7
+
+        with self.assertRaises(ValueError):
+            s7.build_service_maintenance_request(
+                request_id="s7maint_" + ("2" * 32),
+                verb="bounded_log_tail",
+                service_name=None,
+                created_at=NOW,
+                log_line_limit=25,
+            )
+        with self.assertRaises(ValueError):
+            s7.build_service_maintenance_request(
+                request_id="s7maint_" + ("3" * 32),
+                verb="bounded_log_tail",
+                service_name="maez.service",
+                created_at=NOW,
+                log_line_limit=1000,
+            )
+
+    def test_120_service_maintenance_audit_spool_is_content_free(self):
+        import json
+        from core.governance import operator_user_boundary as s7
+
+        request = s7.build_service_maintenance_request(
+            request_id="s7maint_" + ("d" * 32),
+            verb="service_restart",
+            service_name="maez.service",
+            created_at=NOW,
+        )
+        with self.assertRaises(ValueError):
+            s7.build_service_maintenance_audit_record(
+                request=request,
+                result_mode="executed",
+                created_at=NOW,
+                raw_output="secret stack trace from Rohit's machine",
+            )
+        record = s7.build_service_maintenance_audit_record(
+            request=request,
+            result_mode="executed",
+            created_at=NOW,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            spool_path = Path(tmp) / "logs" / "service_maintenance_audit.jsonl"
+            s7.append_service_maintenance_audit_spool(spool_path, record, repo_root=Path(tmp))
+            payload = json.loads(spool_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["request_id"], "s7maint_" + ("d" * 32))
+        self.assertEqual(payload["verb"], "service_restart")
+        self.assertEqual(payload["service_name"], "maez.service")
+        blob = repr(payload).lower()
+        for forbidden in ("secret stack trace", "journalctl output", "raw_output", "command"):
+            self.assertNotIn(forbidden, blob)
+
+    def test_121_service_maintenance_audit_spool_rejects_wrong_path(self):
+        from core.governance import operator_user_boundary as s7
+
+        request = s7.build_service_maintenance_request(
+            request_id="s7maint_" + ("e" * 32),
+            verb="service_status",
+            service_name="maez.service",
+            created_at=NOW,
+        )
+        record = s7.build_service_maintenance_audit_record(
+            request=request,
+            result_mode="executed",
+            created_at=NOW,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                s7.append_service_maintenance_audit_spool(
+                    Path(tmp) / "service_maintenance_audit.jsonl",
+                    record,
+                    repo_root=Path(tmp),
+                )
+
+    def test_122_service_maintenance_request_id_must_be_opaque(self):
+        from core.governance import operator_user_boundary as s7
+
+        with self.assertRaises(ValueError):
+            s7.build_service_maintenance_request(
+                request_id="secret-stack-trace-/home/rohit/private",
+                verb="service_status",
+                service_name="maez.service",
+                created_at=NOW,
+            )
+
+    def test_123_service_maintenance_spool_revalidates_closed_fields(self):
+        from core.governance import operator_user_boundary as s7
+
+        valid = {
+            "schema_version": s7.SCHEMA_VERSION,
+            "request_id": "s7maint_" + ("f" * 32),
+            "verb": "service_status",
+            "service_name": "maez.service",
+            "result_mode": "executed",
+            "created_at": NOW,
+            "log_line_limit": 0,
+            "content_authority": "not_granted",
+        }
+        cases = (
+            {"request_id": "secret-/home/rohit/private"},
+            {"created_at": "secret timestamp /home/rohit/private"},
+            {"log_line_limit": "secret output line"},
+            {"schema_version": "secret schema"},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            for override in cases:
+                with self.subTest(override=override):
+                    with self.assertRaises(ValueError):
+                        s7.append_service_maintenance_audit_spool(
+                            Path(tmp) / "logs" / "service_maintenance_audit.jsonl",
+                            {**valid, **override},
+                            repo_root=Path(tmp),
+                        )
+
+    def test_124_service_maintenance_spool_requires_trusted_root_path(self):
+        from core.governance import operator_user_boundary as s7
+
+        request = s7.build_service_maintenance_request(
+            request_id="s7maint_" + ("1" * 32),
+            verb="service_status",
+            service_name="maez.service",
+            created_at=NOW,
+        )
+        record = s7.build_service_maintenance_audit_record(
+            request=request,
+            result_mode="executed",
+            created_at=NOW,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            wrong_root = Path(tmp) / "other"
+            wrong_path = wrong_root / "logs" / "service_maintenance_audit.jsonl"
+            with self.assertRaises(ValueError):
+                s7.append_service_maintenance_audit_spool(
+                    wrong_path,
+                    record,
+                    repo_root=Path(tmp),
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

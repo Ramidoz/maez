@@ -226,6 +226,7 @@ MIXED_STORE_CONTENT_AUTHORITIES = frozenset({
 _EXPECTED_COVENANT_LOG_SUFFIX = ("logs", "covenant.log")
 _EXPECTED_AUDIT_LOG_DB_SUFFIX = ("memory", "audit_log.db")
 _EXPECTED_LAST_BACKUP_SUFFIX = ("logs", "last_backup.json")
+_EXPECTED_SERVICE_MAINTENANCE_AUDIT_SUFFIX = ("logs", "service_maintenance_audit.jsonl")
 
 BACKUP_OPERATIONS = frozenset({
     "backup_run",
@@ -257,6 +258,42 @@ DEPLOYMENT_TRACKS = frozenset({
     "track_a",
     "track_b",
 })
+
+SERVICE_MAINTENANCE_VERBS = frozenset({
+    "service_status",
+    "service_start",
+    "service_restart",
+    "health_probe",
+    "bounded_log_tail",
+    "disk_resource_check",
+    "backup_status",
+})
+
+_SERVICE_MAINTENANCE_SERVICE_VERBS = frozenset({
+    "service_status",
+    "service_start",
+    "service_restart",
+    "bounded_log_tail",
+})
+
+REVIEWED_MAEZ_SERVICES = frozenset({
+    "maez.service",
+    "maez-web.service",
+    "maez-watchdog.service",
+    "maez-subscription-proxy.service",
+    "llama-server.service",
+})
+
+SERVICE_MAINTENANCE_RESULT_MODES = frozenset({
+    "allowed",
+    "blocked",
+    "executed",
+    "failed",
+    "unavailable",
+})
+
+MAX_SERVICE_MAINTENANCE_LOG_LINES = 200
+_SERVICE_MAINTENANCE_REQUEST_ID_RE = re.compile(r"^s7maint_[0-9a-f]{32,64}$")
 
 VOICE_SEAT_WORK_CLASSES = frozenset({
     "self_modification",
@@ -430,6 +467,36 @@ def validate_backup_restore_mode(mode: str) -> str:
 
 def validate_deployment_track(track: str) -> str:
     return _validate_closed_value(track, DEPLOYMENT_TRACKS, "deployment track")
+
+
+def validate_service_maintenance_verb(verb: str) -> str:
+    return _validate_closed_value(
+        verb,
+        SERVICE_MAINTENANCE_VERBS,
+        "service maintenance verb",
+    )
+
+
+def validate_reviewed_maez_service(service_name: str) -> str:
+    return _validate_closed_value(
+        service_name,
+        REVIEWED_MAEZ_SERVICES,
+        "reviewed Maez service",
+    )
+
+
+def validate_service_maintenance_result_mode(mode: str) -> str:
+    return _validate_closed_value(
+        mode,
+        SERVICE_MAINTENANCE_RESULT_MODES,
+        "service maintenance result mode",
+    )
+
+
+def validate_service_maintenance_request_id(request_id: str) -> str:
+    if not isinstance(request_id, str) or not _SERVICE_MAINTENANCE_REQUEST_ID_RE.fullmatch(request_id):
+        raise ValueError("service maintenance request_id must be opaque")
+    return request_id
 
 
 def _validate_hash64(value: str, *, field: str) -> str:
@@ -1320,6 +1387,123 @@ def build_backup_status_projection(
         "track_b_restore_mode": validate_backup_restore_mode(restore_mode),
         "content_authority": validate_mixed_store_content_authority("not_granted"),
     }
+
+
+@dataclass(frozen=True)
+class ServiceMaintenanceRequest:
+    request_id: str
+    schema_version: str
+    verb: str
+    service_name: str | None
+    created_at: str
+    log_line_limit: int
+
+    def __post_init__(self) -> None:
+        validate_service_maintenance_request_id(self.request_id)
+        if self.schema_version != SCHEMA_VERSION:
+            raise ValueError("unknown service maintenance schema_version")
+        validate_service_maintenance_verb(self.verb)
+        _timestamp_text(self.created_at, field="created_at")
+        _non_negative_int(self.log_line_limit, field="log_line_limit")
+        if self.verb in _SERVICE_MAINTENANCE_SERVICE_VERBS and not self.service_name:
+            raise ValueError("service maintenance verb requires reviewed service")
+        if self.service_name is not None:
+            validate_reviewed_maez_service(self.service_name)
+        if self.verb == "bounded_log_tail":
+            if self.log_line_limit < 1 or self.log_line_limit > MAX_SERVICE_MAINTENANCE_LOG_LINES:
+                raise ValueError("bounded_log_tail requires line limit within reviewed cap")
+        elif self.log_line_limit != 0:
+            raise ValueError("log_line_limit is only valid for bounded_log_tail")
+
+
+def build_service_maintenance_request(
+    *,
+    request_id: str,
+    verb: str,
+    service_name: str | None,
+    created_at: str,
+    log_line_limit: int = 0,
+) -> ServiceMaintenanceRequest:
+    return ServiceMaintenanceRequest(
+        request_id=request_id,
+        schema_version=SCHEMA_VERSION,
+        verb=verb,
+        service_name=service_name,
+        created_at=created_at,
+        log_line_limit=log_line_limit,
+    )
+
+
+def build_service_maintenance_audit_record(
+    *,
+    request: ServiceMaintenanceRequest,
+    result_mode: str,
+    created_at: str,
+    raw_output: str | None = None,
+    command: str | None = None,
+) -> dict[str, object]:
+    """Build the daemon-down helper's content-free audit spool record."""
+    if not isinstance(request, ServiceMaintenanceRequest):
+        raise ValueError("service maintenance audit requires reviewed request")
+    validate_service_maintenance_result_mode(result_mode)
+    created_at = _timestamp_text(created_at, field="created_at")
+    if raw_output is not None or command is not None:
+        raise ValueError("service maintenance audit records cannot carry raw output or commands")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "request_id": request.request_id,
+        "verb": request.verb,
+        "service_name": request.service_name or "none",
+        "result_mode": result_mode,
+        "created_at": created_at,
+        "log_line_limit": request.log_line_limit,
+        "content_authority": validate_mixed_store_content_authority("not_granted"),
+    }
+
+
+def append_service_maintenance_audit_spool(
+    spool_path: str | Path,
+    record: dict[str, object],
+    *,
+    repo_root: str | Path | None = None,
+) -> None:
+    """Append a content-free daemon-down maintenance audit record as JSONL."""
+    path = Path(spool_path)
+    root = Path(repo_root).resolve() if repo_root is not None else Path.cwd().resolve()
+    expected_path = root / "logs" / "service_maintenance_audit.jsonl"
+    if path.resolve() != expected_path:
+        raise ValueError("service maintenance audit spool must be under the trusted repo root")
+    expected_keys = {
+        "schema_version",
+        "request_id",
+        "verb",
+        "service_name",
+        "result_mode",
+        "created_at",
+        "log_line_limit",
+        "content_authority",
+    }
+    if set(record) != expected_keys:
+        raise ValueError("service maintenance audit record is not closed-shape")
+    if record["schema_version"] != SCHEMA_VERSION:
+        raise ValueError("unknown service maintenance audit schema_version")
+    validate_service_maintenance_request_id(str(record["request_id"]))
+    verb = validate_service_maintenance_verb(str(record["verb"]))
+    service_name = str(record["service_name"])
+    if service_name != "none":
+        validate_reviewed_maez_service(service_name)
+    validate_service_maintenance_result_mode(str(record["result_mode"]))
+    _timestamp_text(str(record["created_at"]), field="created_at")
+    log_line_limit = _non_negative_int(record["log_line_limit"], field="log_line_limit")
+    if verb == "bounded_log_tail":
+        if log_line_limit < 1 or log_line_limit > MAX_SERVICE_MAINTENANCE_LOG_LINES:
+            raise ValueError("bounded_log_tail audit record exceeds reviewed line cap")
+    elif log_line_limit != 0:
+        raise ValueError("log_line_limit is only valid for bounded_log_tail")
+    validate_mixed_store_content_authority(str(record["content_authority"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
 @dataclass(frozen=True)
