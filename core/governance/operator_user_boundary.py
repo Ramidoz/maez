@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import json
 import re
 import sqlite3
 from pathlib import Path
@@ -168,6 +169,9 @@ MAEZ_UNAVAILABLE_REASON_CODES = frozenset({
 })
 
 RENDERER_VERSION = "s7.rendered_request.v1"
+FOUNDER_WEBAUTHN_RP_ID = "localhost"
+FOUNDER_WEBAUTHN_ORIGIN = "http://localhost:11437"
+FOUNDER_WEBAUTHN_HOST = "localhost:11437"
 
 _MAEZ_PATH_PREFIXES = (
     "/home/rohit/maez/",
@@ -1026,7 +1030,7 @@ class S7AuthorizationStore:
                   AND auth_method = ?
                   AND grant_source = ?
                   AND user_presence = 1
-                  AND user_verification = 1
+                  AND (? = 0 OR user_verification = 1)
                   AND consumed_at IS NULL
                   AND expires_at > ?
                 """,
@@ -1045,10 +1049,490 @@ class S7AuthorizationStore:
                     rendered.nonce,
                     authority_context.auth_method,
                     authority_context.grant_source,
+                    1 if _webauthn_requires_user_verification(derived_work_class) else 0,
                     now_text,
                 ),
             )
             return cur.rowcount == 1
+
+
+@dataclass(frozen=True)
+class WebAuthnCredentialRecord:
+    credential_ref: str
+    actor_handle_hmac: str
+    role_names: tuple[str, ...]
+    public_key: str
+    sign_count: int
+    rp_id: str
+    origin: str
+    created_at: str
+    backup_credential: bool
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        if not self.credential_ref:
+            raise ValueError("S7 WebAuthn credential_ref is required")
+        if not _valid_actor_handle(self.actor_handle_hmac):
+            raise ValueError("S7 WebAuthn actor_handle_hmac must be purpose-scoped keyed HMAC")
+        for role_name in self.role_names:
+            validate_role_name(role_name)
+        if not self.public_key:
+            raise ValueError("S7 WebAuthn public_key is required")
+        if not isinstance(self.sign_count, int) or self.sign_count < 0:
+            raise ValueError("S7 WebAuthn sign_count must be a non-negative integer")
+        if not self.rp_id:
+            raise ValueError("S7 WebAuthn rp_id is required")
+        if not self.origin:
+            raise ValueError("S7 WebAuthn origin is required")
+        _canonical_timestamp(self.created_at)
+        if self.backup_credential is not True and self.backup_credential is not False:
+            raise ValueError("S7 WebAuthn backup_credential must be bool")
+        if self.enabled is not True and self.enabled is not False:
+            raise ValueError("S7 WebAuthn enabled must be bool")
+
+
+@dataclass(frozen=True)
+class WebAuthnChallenge:
+    challenge_id: str
+    request_id: str
+    request_envelope_hash: str
+    rendered_text_hash: str
+    action_params_hash: str
+    precondition_hash: str
+    authority_context_hash: str
+    nonce: str
+    work_class: str
+    rp_id: str
+    origin: str
+    host: str
+    created_at: str
+    expires_at: str
+
+    def __post_init__(self) -> None:
+        if not self.challenge_id:
+            raise ValueError("S7 WebAuthn challenge_id is required")
+        if not self.request_id:
+            raise ValueError("S7 WebAuthn challenge request_id is required")
+        _validate_hash64(self.request_envelope_hash, field="request_envelope_hash")
+        _validate_hash64(self.rendered_text_hash, field="rendered_text_hash")
+        _validate_hash64(self.action_params_hash, field="action_params_hash")
+        _validate_hash64(self.precondition_hash, field="precondition_hash")
+        _validate_hash64(self.authority_context_hash, field="authority_context_hash")
+        if not self.nonce:
+            raise ValueError("S7 WebAuthn nonce is required")
+        validate_work_class(self.work_class)
+        _validate_founder_webauthn_origin(self.rp_id, self.origin, self.host)
+        _canonical_timestamp(self.created_at)
+        if not self.expires_at:
+            raise ValueError("S7 WebAuthn challenge expires_at is required")
+        _canonical_timestamp(self.expires_at)
+
+
+@dataclass(frozen=True)
+class WebAuthnAssertion:
+    credential_ref: str
+    challenge_id: str
+    challenge_hash: str
+    rp_id: str
+    origin: str
+    host: str
+    user_presence: bool
+    user_verification: bool
+    sign_count: int
+    source: str
+
+    def __post_init__(self) -> None:
+        if not self.credential_ref:
+            raise ValueError("S7 WebAuthn assertion credential_ref is required")
+        if not self.challenge_id:
+            raise ValueError("S7 WebAuthn assertion challenge_id is required")
+        _validate_hash64(self.challenge_hash, field="challenge_hash")
+        if self.user_presence is not True and self.user_presence is not False:
+            raise ValueError("S7 WebAuthn assertion user_presence must be bool")
+        if self.user_verification is not True and self.user_verification is not False:
+            raise ValueError("S7 WebAuthn assertion user_verification must be bool")
+        if not isinstance(self.sign_count, int) or self.sign_count < 0:
+            raise ValueError("S7 WebAuthn assertion sign_count must be a non-negative integer")
+        if not self.source:
+            raise ValueError("S7 WebAuthn assertion source is required")
+
+
+@dataclass(frozen=True)
+class WebAuthnVerificationResult:
+    verified: bool
+    blocked: bool
+    credential_ref: str | None
+    actor_handle_hmac: str | None
+    role_names: tuple[str, ...]
+    auth_method: str
+    grant_source: str
+    user_presence: bool
+    user_verification: bool
+    sign_count: int | None
+    reason_code: str
+    created_at: str
+
+    def __post_init__(self) -> None:
+        if self.verified is not True and self.verified is not False:
+            raise ValueError("S7 WebAuthn result verified must be bool")
+        if self.blocked is not True and self.blocked is not False:
+            raise ValueError("S7 WebAuthn result blocked must be bool")
+        validate_auth_method(self.auth_method)
+        validate_grant_source(self.grant_source)
+        for role_name in self.role_names:
+            validate_role_name(role_name)
+        _canonical_timestamp(self.created_at)
+
+
+class FakeWebAuthnVerifier:
+    """Deterministic verifier seam for S7 CI tests; not a production verifier."""
+
+    def __init__(
+        self,
+        *,
+        available: bool = True,
+        authenticator_supports_user_verification: bool = True,
+    ) -> None:
+        self.available = available
+        self.authenticator_supports_user_verification = authenticator_supports_user_verification
+
+    def assertion_for(
+        self,
+        record: WebAuthnCredentialRecord,
+        challenge: WebAuthnChallenge,
+        *,
+        user_presence: bool,
+        user_verification: bool,
+        sign_count: int | None = None,
+        source: str = "browser_webauthn",
+    ) -> WebAuthnAssertion:
+        return WebAuthnAssertion(
+            credential_ref=record.credential_ref,
+            challenge_id=challenge.challenge_id,
+            challenge_hash=webauthn_challenge_hash(challenge),
+            rp_id=challenge.rp_id,
+            origin=challenge.origin,
+            host=challenge.host,
+            user_presence=user_presence,
+            user_verification=user_verification,
+            sign_count=record.sign_count + 1 if sign_count is None else sign_count,
+            source=source,
+        )
+
+    def verify(
+        self,
+        *,
+        record: WebAuthnCredentialRecord,
+        challenge: WebAuthnChallenge,
+        assertion: WebAuthnAssertion,
+        require_user_verification: bool,
+        now: str,
+    ) -> WebAuthnVerificationResult:
+        if not self.available:
+            return _webauthn_failure("verifier_unavailable", now=now, blocked=True)
+        if assertion.source != "browser_webauthn":
+            return _webauthn_failure("browser_webauthn_required", now=now)
+        if not record.enabled:
+            return _webauthn_failure("credential_disabled", now=now)
+        if assertion.credential_ref != record.credential_ref:
+            return _webauthn_failure("credential_mismatch", now=now)
+        if assertion.challenge_id != challenge.challenge_id:
+            return _webauthn_failure("challenge_mismatch", now=now)
+        if assertion.challenge_hash != webauthn_challenge_hash(challenge):
+            return _webauthn_failure("challenge_hash_mismatch", now=now)
+        if assertion.rp_id != challenge.rp_id or assertion.rp_id != record.rp_id:
+            return _webauthn_failure("rp_id_mismatch", now=now)
+        if assertion.origin != challenge.origin or assertion.origin != record.origin:
+            return _webauthn_failure("origin_mismatch", now=now)
+        if assertion.host != challenge.host or assertion.host != FOUNDER_WEBAUTHN_HOST:
+            return _webauthn_failure("host_mismatch", now=now)
+        if assertion.sign_count <= record.sign_count:
+            return _webauthn_failure("sign_count_not_advanced", now=now)
+        if assertion.user_presence is not True:
+            return _webauthn_failure("user_presence_required", now=now)
+        if (
+            require_user_verification
+            and self.authenticator_supports_user_verification
+            and assertion.user_verification is not True
+        ):
+            return _webauthn_failure("user_verification_required", now=now)
+        return WebAuthnVerificationResult(
+            verified=True,
+            blocked=False,
+            credential_ref=record.credential_ref,
+            actor_handle_hmac=record.actor_handle_hmac,
+            role_names=record.role_names,
+            auth_method="founder_webauthn",
+            grant_source="founder_webauthn",
+            user_presence=assertion.user_presence,
+            user_verification=assertion.user_verification,
+            sign_count=assertion.sign_count,
+            reason_code="verified",
+            created_at=now,
+        )
+
+
+def webauthn_challenge_hash(challenge: WebAuthnChallenge) -> str:
+    return s6.canonical_hash(asdict(challenge))
+
+
+_WEBAUTHN_CHALLENGE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS s7_webauthn_challenges (
+    challenge_id TEXT PRIMARY KEY,
+    challenge_hash TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT
+);
+"""
+
+
+class WebAuthnChallengeStore:
+    def __init__(self, db_path: str | Path):
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.executescript(_WEBAUTHN_CHALLENGE_SCHEMA)
+
+    def put(self, challenge: WebAuthnChallenge) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO s7_webauthn_challenges (
+                    challenge_id, challenge_hash, expires_at, consumed_at
+                ) VALUES (?, ?, ?, NULL)
+                """,
+                (
+                    challenge.challenge_id,
+                    webauthn_challenge_hash(challenge),
+                    _timestamp_text(challenge.expires_at, field="expires_at"),
+                ),
+            )
+
+    def consume(self, challenge: WebAuthnChallenge, *, now: str) -> bool:
+        now_text = _timestamp_text(now, field="now")
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                """
+                UPDATE s7_webauthn_challenges
+                SET consumed_at = ?
+                WHERE challenge_id = ?
+                  AND challenge_hash = ?
+                  AND consumed_at IS NULL
+                  AND expires_at > ?
+                """,
+                (
+                    now_text,
+                    challenge.challenge_id,
+                    webauthn_challenge_hash(challenge),
+                    now_text,
+                ),
+            )
+            return cur.rowcount == 1
+
+
+_WEBAUTHN_CREDENTIAL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS s7_webauthn_credentials (
+    credential_ref TEXT PRIMARY KEY,
+    actor_handle_hmac TEXT NOT NULL,
+    role_names_json TEXT NOT NULL,
+    public_key TEXT NOT NULL,
+    sign_count INTEGER NOT NULL,
+    rp_id TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    backup_credential INTEGER NOT NULL,
+    enabled INTEGER NOT NULL
+);
+"""
+
+
+class WebAuthnCredentialRegistry:
+    def __init__(self, db_path: str | Path):
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.executescript(_WEBAUTHN_CREDENTIAL_SCHEMA)
+
+    def put(self, record: WebAuthnCredentialRecord) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO s7_webauthn_credentials (
+                    credential_ref, actor_handle_hmac, role_names_json,
+                    public_key, sign_count, rp_id, origin, created_at,
+                    backup_credential, enabled
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.credential_ref,
+                    record.actor_handle_hmac,
+                    json.dumps(list(record.role_names), separators=(",", ":")),
+                    record.public_key,
+                    record.sign_count,
+                    record.rp_id,
+                    record.origin,
+                    _timestamp_text(record.created_at, field="created_at"),
+                    1 if record.backup_credential else 0,
+                    1 if record.enabled else 0,
+                ),
+            )
+
+    def get(self, credential_ref: str) -> WebAuthnCredentialRecord | None:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT credential_ref, actor_handle_hmac, role_names_json,
+                       public_key, sign_count, rp_id, origin, created_at,
+                       backup_credential, enabled
+                FROM s7_webauthn_credentials
+                WHERE credential_ref = ?
+                """,
+                (credential_ref,),
+            ).fetchone()
+        if row is None:
+            return None
+        return WebAuthnCredentialRecord(
+            credential_ref=row[0],
+            actor_handle_hmac=row[1],
+            role_names=tuple(json.loads(row[2])),
+            public_key=row[3],
+            sign_count=int(row[4]),
+            rp_id=row[5],
+            origin=row[6],
+            created_at=row[7],
+            backup_credential=bool(row[8]),
+            enabled=bool(row[9]),
+        )
+
+    def advance_sign_count(self, credential_ref: str, *, new_sign_count: int) -> bool:
+        if not isinstance(new_sign_count, int) or new_sign_count < 0:
+            return False
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                """
+                UPDATE s7_webauthn_credentials
+                SET sign_count = ?
+                WHERE credential_ref = ?
+                  AND sign_count < ?
+                """,
+                (new_sign_count, credential_ref, new_sign_count),
+            )
+            return cur.rowcount == 1
+
+
+def _validate_founder_webauthn_origin(rp_id: str, origin: str, host: str) -> None:
+    if rp_id != FOUNDER_WEBAUTHN_RP_ID:
+        raise ValueError("S7 founder WebAuthn rp_id must be localhost")
+    if origin != FOUNDER_WEBAUTHN_ORIGIN:
+        raise ValueError("S7 founder WebAuthn origin must be canonical localhost")
+    if host != FOUNDER_WEBAUTHN_HOST:
+        raise ValueError("S7 founder WebAuthn host must be canonical localhost")
+
+
+def register_founder_webauthn_credential(
+    *,
+    credential_ref: str,
+    actor_handle_hmac: str,
+    role_names: tuple[str, ...],
+    public_key: str,
+    sign_count: int,
+    rp_id: str,
+    origin: str,
+    host: str,
+    created_at: str,
+    backup_credential: bool = False,
+    enabled: bool = True,
+) -> WebAuthnCredentialRecord:
+    _validate_founder_webauthn_origin(rp_id, origin, host)
+    return WebAuthnCredentialRecord(
+        credential_ref=credential_ref,
+        actor_handle_hmac=actor_handle_hmac,
+        role_names=role_names,
+        public_key=public_key,
+        sign_count=sign_count,
+        rp_id=rp_id,
+        origin=origin,
+        created_at=created_at,
+        backup_credential=backup_credential,
+        enabled=enabled,
+    )
+
+
+def _webauthn_requires_user_verification(work_class: str) -> bool:
+    validate_work_class(work_class)
+    return work_class in {
+        "self_modification",
+        "covenant_touching_change",
+        "capability_acquisition",
+        "autonomy_lowering_or_protection_reducing",
+    }
+
+
+def _webauthn_failure(
+    reason_code: str,
+    *,
+    now: str,
+    blocked: bool = False,
+) -> WebAuthnVerificationResult:
+    return WebAuthnVerificationResult(
+        verified=False,
+        blocked=blocked,
+        credential_ref=None,
+        actor_handle_hmac=None,
+        role_names=(),
+        auth_method="manual_recovery_required" if blocked else "none",
+        grant_source="manual_recovery_required" if blocked else "none",
+        user_presence=False,
+        user_verification=False,
+        sign_count=None,
+        reason_code=reason_code,
+        created_at=now,
+    )
+
+
+def verify_founder_webauthn_assertion(
+    *,
+    record: WebAuthnCredentialRecord,
+    challenge: WebAuthnChallenge,
+    assertion: WebAuthnAssertion,
+    verifier: FakeWebAuthnVerifier | None,
+    challenge_store: WebAuthnChallengeStore | None = None,
+    credential_registry: WebAuthnCredentialRegistry | None = None,
+    now: str,
+) -> WebAuthnVerificationResult:
+    now_dt = _canonical_timestamp(now)
+    expires_dt = _canonical_timestamp(challenge.expires_at)
+    if now_dt is None or expires_dt is None or expires_dt <= now_dt:
+        return _webauthn_failure("challenge_expired", now=now, blocked=True)
+    if verifier is None:
+        return _webauthn_failure("missing_verifier", now=now, blocked=True)
+    active_record = record
+    if credential_registry is not None:
+        loaded = credential_registry.get(record.credential_ref)
+        if loaded is None:
+            return _webauthn_failure("credential_not_registered", now=now, blocked=True)
+        active_record = loaded
+    result = verifier.verify(
+        record=active_record,
+        challenge=challenge,
+        assertion=assertion,
+        require_user_verification=_webauthn_requires_user_verification(challenge.work_class),
+        now=now,
+    )
+    if not result.verified:
+        return result
+    if challenge_store is None:
+        return _webauthn_failure("missing_challenge_store", now=now, blocked=True)
+    if credential_registry is None:
+        return _webauthn_failure("missing_credential_registry", now=now, blocked=True)
+    if not challenge_store.consume(challenge, now=now):
+        return _webauthn_failure("challenge_replayed", now=now)
+    if not credential_registry.advance_sign_count(
+        active_record.credential_ref,
+        new_sign_count=result.sign_count or -1,
+    ):
+        return _webauthn_failure("sign_count_replayed", now=now)
+    return result
 
 
 @dataclass(frozen=True)

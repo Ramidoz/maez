@@ -1612,5 +1612,471 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         )
 
 
+class S7WebAuthnMechanismTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _record(self):
+        from core.governance import operator_user_boundary as s7
+
+        return s7.register_founder_webauthn_credential(
+            credential_ref="cred-founder-primary",
+            actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+            role_names=("bonded_user", "operator"),
+            public_key="public-key-test",
+            sign_count=7,
+            rp_id="localhost",
+            origin="http://localhost:11437",
+            host="localhost:11437",
+            created_at=NOW,
+            backup_credential=False,
+        )
+
+    def _challenge(self, *, work_class: str = "self_modification"):
+        from core.governance import operator_user_boundary as s7
+
+        return s7.WebAuthnChallenge(
+            challenge_id="challenge-1",
+            request_id="req-webauthn-1",
+            request_envelope_hash="a" * 64,
+            rendered_text_hash="b" * 64,
+            action_params_hash="c" * 64,
+            precondition_hash="d" * 64,
+            authority_context_hash="e" * 64,
+            nonce="nonce-webauthn-1",
+            work_class=work_class,
+            rp_id="localhost",
+            origin="http://localhost:11437",
+            host="localhost:11437",
+            created_at=NOW,
+            expires_at=FUTURE,
+        )
+
+    def _challenge_store(self, challenge):
+        from core.governance import operator_user_boundary as s7
+
+        store = s7.WebAuthnChallengeStore(Path(self._tmp.name) / "webauthn_challenges.db")
+        store.put(challenge)
+        return store
+
+    def _credential_registry(self, record):
+        from core.governance import operator_user_boundary as s7
+
+        registry = s7.WebAuthnCredentialRegistry(Path(self._tmp.name) / "webauthn_credentials.db")
+        registry.put(record)
+        return registry
+
+    def test_066_webauthn_credential_record_requires_rp_id(self):
+        from core.governance import operator_user_boundary as s7
+
+        with self.assertRaises(ValueError):
+            s7.WebAuthnCredentialRecord(
+                credential_ref="cred-1",
+                actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+                role_names=("bonded_user",),
+                public_key="public-key",
+                sign_count=0,
+                rp_id="",
+                origin="http://localhost:11437",
+                created_at=NOW,
+                backup_credential=False,
+                enabled=True,
+            )
+
+    def test_067_webauthn_credential_record_requires_origin(self):
+        from core.governance import operator_user_boundary as s7
+
+        with self.assertRaises(ValueError):
+            s7.WebAuthnCredentialRecord(
+                credential_ref="cred-1",
+                actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+                role_names=("bonded_user",),
+                public_key="public-key",
+                sign_count=0,
+                rp_id="localhost",
+                origin="",
+                created_at=NOW,
+                backup_credential=False,
+                enabled=True,
+            )
+
+    def test_068_founder_registration_uses_localhost_rp_id(self):
+        record = self._record()
+
+        self.assertEqual(record.rp_id, "localhost")
+        self.assertEqual(record.origin, "http://localhost:11437")
+
+    def test_069_registration_rejects_mismatched_rp_id(self):
+        from core.governance import operator_user_boundary as s7
+
+        with self.assertRaises(ValueError):
+            s7.register_founder_webauthn_credential(
+                credential_ref="cred-1",
+                actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+                role_names=("bonded_user",),
+                public_key="public-key",
+                sign_count=0,
+                rp_id="maez.local",
+                origin="http://localhost:11437",
+                host="localhost:11437",
+                created_at=NOW,
+            )
+
+    def test_070_authentication_rejects_mismatched_origin(self):
+        from dataclasses import replace
+        from core.governance import operator_user_boundary as s7
+
+        record = self._record()
+        challenge = self._challenge()
+        assertion = s7.FakeWebAuthnVerifier().assertion_for(
+            record,
+            challenge,
+            user_presence=True,
+            user_verification=True,
+        )
+        assertion = replace(assertion, origin="http://evil.localhost:11437")
+
+        result = s7.verify_founder_webauthn_assertion(
+            record=record,
+            challenge=challenge,
+            assertion=assertion,
+            verifier=s7.FakeWebAuthnVerifier(),
+            now=NOW,
+        )
+
+        self.assertFalse(result.verified)
+
+    def test_071_registration_rejects_loopback_alias_origin(self):
+        from core.governance import operator_user_boundary as s7
+
+        for origin, host in (
+            ("http://127.0.0.1:11437", "127.0.0.1:11437"),
+            ("http://[::1]:11437", "[::1]:11437"),
+        ):
+            with self.subTest(origin=origin):
+                with self.assertRaises(ValueError):
+                    s7.register_founder_webauthn_credential(
+                        credential_ref="cred-1",
+                        actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+                        role_names=("bonded_user",),
+                        public_key="public-key",
+                        sign_count=0,
+                        rp_id="localhost",
+                        origin=origin,
+                        host=host,
+                        created_at=NOW,
+                    )
+
+    def test_072_authentication_rejects_noncanonical_host(self):
+        from dataclasses import replace
+        from core.governance import operator_user_boundary as s7
+
+        record = self._record()
+        challenge = self._challenge()
+        assertion = s7.FakeWebAuthnVerifier().assertion_for(
+            record,
+            challenge,
+            user_presence=True,
+            user_verification=True,
+        )
+        assertion = replace(assertion, host="127.0.0.1:11437")
+
+        result = s7.verify_founder_webauthn_assertion(
+            record=record,
+            challenge=challenge,
+            assertion=assertion,
+            verifier=s7.FakeWebAuthnVerifier(),
+            now=NOW,
+        )
+
+        self.assertFalse(result.verified)
+
+    def test_073_user_presence_is_required(self):
+        from core.governance import operator_user_boundary as s7
+
+        record = self._record()
+        challenge = self._challenge()
+        assertion = s7.FakeWebAuthnVerifier().assertion_for(
+            record,
+            challenge,
+            user_presence=False,
+            user_verification=True,
+        )
+
+        result = s7.verify_founder_webauthn_assertion(
+            record=record,
+            challenge=challenge,
+            assertion=assertion,
+            verifier=s7.FakeWebAuthnVerifier(),
+            now=NOW,
+        )
+
+        self.assertFalse(result.verified)
+        self.assertEqual(result.reason_code, "user_presence_required")
+
+    def test_074_user_verification_is_required_for_self_modification_when_supported(self):
+        from core.governance import operator_user_boundary as s7
+
+        record = self._record()
+        challenge = self._challenge(work_class="self_modification")
+        assertion = s7.FakeWebAuthnVerifier().assertion_for(
+            record,
+            challenge,
+            user_presence=True,
+            user_verification=False,
+        )
+
+        result = s7.verify_founder_webauthn_assertion(
+            record=record,
+            challenge=challenge,
+            assertion=assertion,
+            verifier=s7.FakeWebAuthnVerifier(authenticator_supports_user_verification=True),
+            now=NOW,
+        )
+
+        self.assertFalse(result.verified)
+        self.assertEqual(result.reason_code, "user_verification_required")
+
+    def test_075_user_verification_is_required_for_covenant_touching_when_supported(self):
+        from core.governance import operator_user_boundary as s7
+
+        record = self._record()
+        challenge = self._challenge(work_class="covenant_touching_change")
+        assertion = s7.FakeWebAuthnVerifier().assertion_for(
+            record,
+            challenge,
+            user_presence=True,
+            user_verification=False,
+        )
+
+        result = s7.verify_founder_webauthn_assertion(
+            record=record,
+            challenge=challenge,
+            assertion=assertion,
+            verifier=s7.FakeWebAuthnVerifier(authenticator_supports_user_verification=True),
+            now=NOW,
+        )
+
+        self.assertFalse(result.verified)
+        self.assertEqual(result.reason_code, "user_verification_required")
+
+    def test_076_fake_verifier_can_produce_valid_test_assertion(self):
+        from core.governance import operator_user_boundary as s7
+
+        record = self._record()
+        challenge = self._challenge()
+        verifier = s7.FakeWebAuthnVerifier()
+        assertion = verifier.assertion_for(
+            record,
+            challenge,
+            user_presence=True,
+            user_verification=True,
+        )
+
+        result = s7.verify_founder_webauthn_assertion(
+            record=record,
+            challenge=challenge,
+            assertion=assertion,
+            verifier=verifier,
+            challenge_store=self._challenge_store(challenge),
+            credential_registry=self._credential_registry(record),
+            now=NOW,
+        )
+
+        self.assertTrue(result.verified)
+        self.assertEqual(result.auth_method, "founder_webauthn")
+        self.assertEqual(result.grant_source, "founder_webauthn")
+
+    def test_077_daemon_path_cannot_mint_verifier_success(self):
+        from core.governance import operator_user_boundary as s7
+
+        record = self._record()
+        challenge = self._challenge()
+        assertion = s7.FakeWebAuthnVerifier().assertion_for(
+            record,
+            challenge,
+            user_presence=True,
+            user_verification=True,
+            source="daemon_internal",
+        )
+
+        result = s7.verify_founder_webauthn_assertion(
+            record=record,
+            challenge=challenge,
+            assertion=assertion,
+            verifier=s7.FakeWebAuthnVerifier(),
+            now=NOW,
+        )
+
+        self.assertFalse(result.verified)
+        self.assertEqual(result.reason_code, "browser_webauthn_required")
+
+    def test_078_missing_verifier_blocks_guarded_work(self):
+        from core.governance import operator_user_boundary as s7
+
+        record = self._record()
+        challenge = self._challenge()
+        assertion = s7.FakeWebAuthnVerifier().assertion_for(
+            record,
+            challenge,
+            user_presence=True,
+            user_verification=True,
+        )
+
+        result = s7.verify_founder_webauthn_assertion(
+            record=record,
+            challenge=challenge,
+            assertion=assertion,
+            verifier=None,
+            now=NOW,
+        )
+
+        self.assertFalse(result.verified)
+        self.assertTrue(result.blocked)
+        self.assertEqual(result.grant_source, "manual_recovery_required")
+
+    def test_079_verifier_unavailable_enters_blocked_fallback_state(self):
+        from core.governance import operator_user_boundary as s7
+
+        record = self._record()
+        challenge = self._challenge()
+        assertion = s7.FakeWebAuthnVerifier().assertion_for(
+            record,
+            challenge,
+            user_presence=True,
+            user_verification=True,
+        )
+
+        result = s7.verify_founder_webauthn_assertion(
+            record=record,
+            challenge=challenge,
+            assertion=assertion,
+            verifier=s7.FakeWebAuthnVerifier(available=False),
+            now=NOW,
+        )
+
+        self.assertFalse(result.verified)
+        self.assertTrue(result.blocked)
+        self.assertEqual(result.reason_code, "verifier_unavailable")
+
+    def test_080_user_verification_not_required_for_routine_custody(self):
+        from core.governance import operator_user_boundary as s7
+
+        record = self._record()
+        challenge = self._challenge(work_class="routine_custody")
+        assertion = s7.FakeWebAuthnVerifier().assertion_for(
+            record,
+            challenge,
+            user_presence=True,
+            user_verification=False,
+        )
+
+        result = s7.verify_founder_webauthn_assertion(
+            record=record,
+            challenge=challenge,
+            assertion=assertion,
+            verifier=s7.FakeWebAuthnVerifier(authenticator_supports_user_verification=True),
+            challenge_store=self._challenge_store(challenge),
+            credential_registry=self._credential_registry(record),
+            now=NOW,
+        )
+
+        self.assertTrue(result.verified)
+
+    def test_081_same_webauthn_assertion_cannot_verify_twice(self):
+        from core.governance import operator_user_boundary as s7
+
+        record = self._record()
+        challenge = self._challenge()
+        verifier = s7.FakeWebAuthnVerifier()
+        assertion = verifier.assertion_for(
+            record,
+            challenge,
+            user_presence=True,
+            user_verification=True,
+        )
+        challenge_store = self._challenge_store(challenge)
+        credential_registry = self._credential_registry(record)
+
+        first = s7.verify_founder_webauthn_assertion(
+            record=record,
+            challenge=challenge,
+            assertion=assertion,
+            verifier=verifier,
+            challenge_store=challenge_store,
+            credential_registry=credential_registry,
+            now=NOW,
+        )
+        second = s7.verify_founder_webauthn_assertion(
+            record=record,
+            challenge=challenge,
+            assertion=assertion,
+            verifier=verifier,
+            challenge_store=challenge_store,
+            credential_registry=credential_registry,
+            now=NOW,
+        )
+
+        self.assertTrue(first.verified)
+        self.assertFalse(second.verified)
+
+    def test_082_assertion_binds_full_challenge_material(self):
+        from dataclasses import replace
+        from core.governance import operator_user_boundary as s7
+
+        record = self._record()
+        challenge = self._challenge()
+        verifier = s7.FakeWebAuthnVerifier()
+        assertion = verifier.assertion_for(
+            record,
+            challenge,
+            user_presence=True,
+            user_verification=True,
+        )
+        tampered_challenge = replace(challenge, nonce="nonce-webauthn-tampered")
+
+        result = s7.verify_founder_webauthn_assertion(
+            record=record,
+            challenge=tampered_challenge,
+            assertion=assertion,
+            verifier=verifier,
+            challenge_store=self._challenge_store(tampered_challenge),
+            credential_registry=self._credential_registry(record),
+            now=NOW,
+        )
+
+        self.assertFalse(result.verified)
+        self.assertEqual(result.reason_code, "challenge_hash_mismatch")
+
+    def test_083_routine_artifact_accepts_presence_without_user_verification(self):
+        from core.governance import operator_user_boundary as s7
+
+        artifact_tests = S7AuthorizationArtifactStoreTests()
+        artifact_tests.setUp()
+        self.addCleanup(artifact_tests.tearDown)
+        _env, authority, params_hash, rendered, artifact = artifact_tests._routine_bundle()
+        presence_only = s7.S7AuthorizationArtifact(
+            **{**artifact.__dict__, "user_verification": False},
+        )
+        store = s7.S7AuthorizationStore(artifact_tests._path())
+        store.put(presence_only)
+
+        self.assertTrue(
+            store.consume_verified(
+                presence_only.artifact_id,
+                rendered=rendered,
+                action_params_hash=params_hash,
+                authority_context=authority,
+                precondition_hash=presence_only.precondition_hash,
+                derived_work_class=presence_only.derived_work_class,
+                derived_aggregation_group=presence_only.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
