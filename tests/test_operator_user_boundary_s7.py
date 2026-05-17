@@ -2764,6 +2764,113 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
             )
 
 
+class S7OwnSubstrateBypassTaxonomyTests(unittest.TestCase):
+    def test_150_d22_bypass_inventory_sorts_every_listed_path(self):
+        from core.governance import operator_user_boundary as s7
+
+        inventory = s7.build_own_substrate_bypass_inventory()
+        by_path = {entry["path"]: entry for entry in inventory}
+
+        self.assertEqual(
+            set(by_path),
+            {
+                "SELF_MODIFICATION classifier path",
+                "pending-card approvals",
+                "self-mod dialog terminal states",
+                "cockpit approve endpoints",
+                "Telegram approval paths",
+                "direct Maez-runtime ActionEngine calls",
+                "dream-state soul writes/proposals",
+                "write_soul_note",
+                "edit_soul_section",
+                "model-routing trust-scope edits",
+                "covenant-organ writes",
+                "refusal-policy writes",
+                "role-boundary writes",
+                "successor-governance writes",
+                "memory-retention/deletion writes",
+                "protection-setting writes",
+                "CLI/operator helper writes",
+                "backup run/verify/rotate",
+                "backup restore",
+                "manual filesystem/database edits outside Maez runtime",
+                "manual service edits outside Maez runtime",
+            },
+        )
+        for entry in inventory:
+            self.assertIn(entry["sort"], s7.OWN_SUBSTRATE_BYPASS_SORTS)
+            self.assertTrue(entry["required_handling"])
+
+    def test_151_runtime_soul_config_code_and_model_routing_writes_are_never_accepted_limitations(self):
+        from core.governance import operator_user_boundary as s7
+
+        inventory = s7.build_own_substrate_bypass_inventory()
+        forbidden_markers = ("soul", "config", "code", "model-routing", "model routing")
+
+        for entry in inventory:
+            path_text = entry["path"].lower()
+            handling_text = entry["required_handling"].lower()
+            if entry["maez_runtime_or_helper"] and (
+                any(marker in path_text for marker in forbidden_markers)
+                or any(marker in handling_text for marker in forbidden_markers)
+            ):
+                self.assertNotEqual(entry["sort"], "accepted_limitation", entry)
+
+    def test_152_only_raw_outside_runtime_paths_are_accepted_limitations(self):
+        from core.governance import operator_user_boundary as s7
+
+        accepted = {
+            entry["path"]
+            for entry in s7.build_own_substrate_bypass_inventory()
+            if entry["sort"] == "accepted_limitation"
+        }
+
+        self.assertEqual(
+            accepted,
+            {
+                "manual filesystem/database edits outside Maez runtime",
+                "manual service edits outside Maez runtime",
+            },
+        )
+
+    def test_153_d22_protected_write_categories_are_explicit_and_gated(self):
+        from core.governance import operator_user_boundary as s7
+
+        by_path = {
+            entry["path"]: entry
+            for entry in s7.build_own_substrate_bypass_inventory()
+        }
+
+        for path in (
+            "covenant-organ writes",
+            "refusal-policy writes",
+            "role-boundary writes",
+            "successor-governance writes",
+            "memory-retention/deletion writes",
+            "protection-setting writes",
+        ):
+            with self.subTest(path=path):
+                self.assertIn(path, by_path)
+                self.assertEqual(by_path[path]["sort"], "gated")
+                self.assertTrue(by_path[path]["maez_runtime_or_helper"])
+
+    def test_154_operator_runbook_names_accepted_limitations_and_helper_boundary(self):
+        from core.governance import operator_user_boundary as s7
+
+        banner = s7.operator_boundary_honesty_banner()
+        runbook = Path("docs/slices/s7-operator-user-role-boundary/operator-runbook.md")
+
+        self.assertTrue(runbook.exists())
+        text = runbook.read_text(encoding="utf-8")
+        for surface in (banner, text):
+            lowered = surface.lower()
+            self.assertIn("raw os", lowered)
+            self.assertIn("cannot stop raw local write access", lowered)
+            self.assertIn("maez-controlled runtime or helper", lowered)
+            self.assertIn("not role-encrypted", lowered)
+            self.assertIn("soul/config/model-routing", lowered)
+
+
 class S7SelfModDialogWrappingTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

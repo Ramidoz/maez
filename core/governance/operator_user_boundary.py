@@ -304,6 +304,13 @@ SERVICE_MAINTENANCE_RESULT_MODES = frozenset({
     "unavailable",
 })
 
+OWN_SUBSTRATE_BYPASS_SORTS = frozenset({
+    "gated",
+    "detected",
+    "accepted_limitation",
+    "future_slice",
+})
+
 MAX_SERVICE_MAINTENANCE_LOG_LINES = 200
 _SERVICE_MAINTENANCE_REQUEST_ID_RE = re.compile(r"^s7maint_[0-9a-f]{32,64}$")
 
@@ -515,6 +522,10 @@ def validate_service_maintenance_result_mode(mode: str) -> str:
         SERVICE_MAINTENANCE_RESULT_MODES,
         "service maintenance result mode",
     )
+
+
+def validate_own_substrate_bypass_sort(sort: str) -> str:
+    return _validate_closed_value(sort, OWN_SUBSTRATE_BYPASS_SORTS, "own-substrate bypass sort")
 
 
 def validate_service_maintenance_request_id(request_id: str) -> str:
@@ -2112,6 +2123,191 @@ def brain_swap_execution_authorized(
         derived_work_class=execution_authorization.derived_work_class,
         derived_aggregation_group=execution_authorization.derived_aggregation_group,
         now=execution_authorization.now,
+    )
+
+
+def _bypass_entry(
+    *,
+    path: str,
+    sort: str,
+    required_handling: str,
+    maez_runtime_or_helper: bool,
+) -> dict[str, object]:
+    if not path:
+        raise ValueError("S7 bypass inventory path is required")
+    if not required_handling:
+        raise ValueError("S7 bypass inventory required_handling is required")
+    if maez_runtime_or_helper is not True and maez_runtime_or_helper is not False:
+        raise ValueError("S7 bypass inventory maez_runtime_or_helper must be bool")
+    safe_sort = validate_own_substrate_bypass_sort(sort)
+    joined = f"{path} {required_handling}".lower()
+    protected_markers = (
+        "code",
+        "config",
+        "soul",
+        "model-routing",
+        "model routing",
+        "covenant-organ",
+        "refusal",
+        "role-boundary",
+        "successor-governance",
+        "memory-retention",
+        "memory retention",
+        "deletion",
+        "protection-setting",
+        "protection setting",
+    )
+    if maez_runtime_or_helper and safe_sort == "accepted_limitation":
+        if any(marker in joined for marker in protected_markers):
+            raise ValueError("Maez-runtime protected write paths cannot be accepted limitations")
+    return {
+        "path": path,
+        "sort": safe_sort,
+        "required_handling": required_handling,
+        "maez_runtime_or_helper": maez_runtime_or_helper,
+    }
+
+
+def build_own_substrate_bypass_inventory() -> tuple[dict[str, object], ...]:
+    """Return the closed D22 inventory of own-substrate bypass surfaces."""
+    return (
+        _bypass_entry(
+            path="SELF_MODIFICATION classifier path",
+            sort="gated",
+            required_handling="trusted S7 classifier; no caller class authority",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="pending-card approvals",
+            sort="gated",
+            required_handling="store-level S7 approval and artifact consume for guarded work",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="self-mod dialog terminal states",
+            sort="gated",
+            required_handling="RATIFIED cannot execute without S7; dialog stage updated after execution",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="cockpit approve endpoints",
+            sort="gated",
+            required_handling="no literal founder approval; consumes S7 artifact",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="Telegram approval paths",
+            sort="gated",
+            required_handling="no literal founder approval; consumes S7 artifact",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="direct Maez-runtime ActionEngine calls",
+            sort="gated",
+            required_handling="guarded actions require S7 gate before action invocation",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="dream-state soul writes/proposals",
+            sort="gated",
+            required_handling="soul-writing is self-modification/covenant-touching",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="write_soul_note",
+            sort="gated",
+            required_handling="self-modification/covenant-touching classifier result",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="edit_soul_section",
+            sort="gated",
+            required_handling="self-modification/covenant-touching classifier result",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="model-routing trust-scope edits",
+            sort="gated",
+            required_handling="trust scope is not authority; model-routing edits require S7",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="covenant-organ writes",
+            sort="gated",
+            required_handling="S1-S13 covenant-organ changes require covenant_touching_change ceremony",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="refusal-policy writes",
+            sort="gated",
+            required_handling="refusal policy changes require covenant_touching_change ceremony",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="role-boundary writes",
+            sort="gated",
+            required_handling="operator/user role-boundary changes require covenant_touching_change ceremony",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="successor-governance writes",
+            sort="gated",
+            required_handling="successor-governance changes require covenant_touching_change ceremony",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="memory-retention/deletion writes",
+            sort="gated",
+            required_handling="memory-retention/deletion changes require covenant_touching_change ceremony",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="protection-setting writes",
+            sort="gated",
+            required_handling="protection-setting changes require covenant_touching_change ceremony",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="CLI/operator helper writes",
+            sort="detected",
+            required_handling="reviewed helper contract; non-reviewed helpers cannot mutate guarded targets",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="backup run/verify/rotate",
+            sort="gated",
+            required_handling="routine custody only when content-free",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="backup restore",
+            sort="future_slice",
+            required_handling="Track B restore is future scope; founder Track A restore is gated",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="manual filesystem/database edits outside Maez runtime",
+            sort="accepted_limitation",
+            required_handling="named raw OS bypass; S7 cannot stop raw local write access",
+            maez_runtime_or_helper=False,
+        ),
+        _bypass_entry(
+            path="manual service edits outside Maez runtime",
+            sort="accepted_limitation",
+            required_handling="named raw OS bypass; Maez-controlled runtime or helper service edits are gated",
+            maez_runtime_or_helper=False,
+        ),
+    )
+
+
+def operator_boundary_honesty_banner() -> str:
+    """Plain-language D22 warning for operators."""
+    return (
+        "S7 is not role-encrypted on the founder box. It governs Maez-controlled "
+        "runtime or helper paths, including soul/config/model-routing changes, "
+        "but it cannot stop raw local write access through raw OS filesystem, "
+        "database, or service edits outside Maez's runtime. Those raw OS paths "
+        "are accepted limitations, not permission to bypass S7."
     )
 
 
