@@ -25,7 +25,9 @@ from telegram.ext import (
 
 import sys
 
-sys.path.insert(0, str(Path("/home/rohit/maez")))
+_MAEZ_HOME_PATH = Path(__file__).resolve().parent.parent
+if str(_MAEZ_HOME_PATH) not in sys.path:
+    sys.path.insert(0, str(_MAEZ_HOME_PATH))
 from core.infra.secrets import sanitize_env
 from core.health.shared_executor import get_shared_executor
 from core.perception import snapshot as perception_snapshot, format_snapshot

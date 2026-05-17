@@ -14,6 +14,16 @@ class WorktreeAirlockImportTests(unittest.TestCase):
             source.read_text(encoding="utf-8"),
         )
 
+    def test_skills_do_not_prepend_founder_checkout_to_sys_path(self):
+        repo = Path(__file__).resolve().parent.parent
+        offenders = []
+        for source in (repo / "skills").glob("*.py"):
+            text = source.read_text(encoding="utf-8")
+            if 'sys.path.insert(0, str(Path("/home/rohit/maez")))' in text:
+                offenders.append(source.relative_to(repo).as_posix())
+
+        self.assertEqual([], offenders)
+
 
 if __name__ == "__main__":
     unittest.main()
