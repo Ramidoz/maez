@@ -2079,6 +2079,185 @@ class S7WebAuthnMechanismTests(unittest.TestCase):
         )
 
 
+class S7CredentialRecoveryStateTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _record(self, credential_ref: str, *, backup_credential: bool, enabled: bool = True):
+        from core.governance import operator_user_boundary as s7
+
+        return s7.register_founder_webauthn_credential(
+            credential_ref=credential_ref,
+            actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+            role_names=("bonded_user", "operator"),
+            public_key=f"public-key-{credential_ref}",
+            sign_count=0,
+            rp_id="localhost",
+            origin="http://localhost:11437",
+            host="localhost:11437",
+            created_at=NOW,
+            backup_credential=backup_credential,
+            enabled=enabled,
+        )
+
+    def _registry(self, *records):
+        from core.governance import operator_user_boundary as s7
+
+        registry = s7.WebAuthnCredentialRegistry(Path(self._tmp.name) / "webauthn_credentials.db")
+        for record in records:
+            registry.put(record)
+        return registry
+
+    def test_125_lost_primary_key_does_not_erase_backup_credential(self):
+        from core.governance import operator_user_boundary as s7
+
+        primary = self._record("cred-founder-primary", backup_credential=False)
+        backup = self._record("cred-founder-backup", backup_credential=True)
+        registry = self._registry(primary, backup)
+
+        self.assertTrue(registry.disable_credential("cred-founder-primary", disabled_at=NOW))
+        state = s7.build_credential_recovery_state(registry=registry)
+
+        self.assertEqual(state.mode, "degraded")
+        self.assertEqual(state.primary_credential_count, 0)
+        self.assertEqual(state.backup_credential_count, 1)
+        self.assertFalse(state.manual_recovery_required)
+        self.assertIsNotNone(registry.get("cred-founder-backup"))
+
+    def test_126_no_enabled_credential_enters_manual_recovery_required_state(self):
+        from core.governance import operator_user_boundary as s7
+
+        disabled_primary = self._record(
+            "cred-founder-primary",
+            backup_credential=False,
+            enabled=False,
+        )
+        registry = self._registry(disabled_primary)
+
+        state = s7.build_credential_recovery_state(registry=registry)
+
+        self.assertEqual(state.mode, "manual_recovery_required")
+        self.assertTrue(state.manual_recovery_required)
+        self.assertEqual(state.active_credential_count, 0)
+        self.assertFalse(hasattr(state, "credential_ref"))
+
+    def test_127_witnessed_fallback_does_not_grant_witness_read_authority(self):
+        from dataclasses import asdict
+        from core.governance import operator_user_boundary as s7
+
+        record = s7.build_witnessed_fallback_record(
+            fallback_id="s7fallback_" + ("a" * 32),
+            bonded_user_actor_handle_hmac="hmac:s7:bonded:" + ("b" * 64),
+            witness_actor_handle_hmac="hmac:s7:witness:" + ("c" * 64),
+            witness_role_names=("witness",),
+            new_credential_ref="cred-founder-recovered",
+            ceremony_ref_hash="d" * 64,
+            created_at=NOW,
+        )
+
+        self.assertEqual(record.auth_method, "witnessed_fallback")
+        self.assertEqual(record.grant_source, "witnessed_fallback")
+        self.assertEqual(record.witness_role_names, ("witness",))
+        self.assertFalse(record.witness_read_authority)
+        self.assertEqual(record.witness_allowed_scopes, ())
+        self.assertNotIn("private_thoughts_content", repr(asdict(record)))
+
+        with self.assertRaises(ValueError):
+            s7.build_witnessed_fallback_record(
+                fallback_id="s7fallback_" + ("e" * 32),
+                bonded_user_actor_handle_hmac="hmac:s7:bonded:" + ("b" * 64),
+                witness_actor_handle_hmac="hmac:s7:witness:" + ("c" * 64),
+                witness_role_names=("witness",),
+                new_credential_ref="cred-founder-recovered",
+                ceremony_ref_hash="d" * 64,
+                created_at=NOW,
+                witness_read_authority=True,
+            )
+
+    def test_128_witnessed_fallback_rejects_witness_substitution(self):
+        from core.governance import operator_user_boundary as s7
+
+        with self.assertRaises(ValueError):
+            s7.build_witnessed_fallback_record(
+                fallback_id="s7fallback_" + ("f" * 32),
+                bonded_user_actor_handle_hmac="hmac:s7:bonded:" + ("b" * 64),
+                witness_actor_handle_hmac="hmac:s7:bonded:" + ("b" * 64),
+                witness_role_names=("witness",),
+                new_credential_ref="cred-founder-recovered",
+                ceremony_ref_hash="d" * 64,
+                created_at=NOW,
+            )
+
+        with self.assertRaises(ValueError):
+            s7.build_witnessed_fallback_record(
+                fallback_id="s7fallback_" + ("1" * 32),
+                bonded_user_actor_handle_hmac="hmac:s7:bonded:" + ("b" * 64),
+                witness_actor_handle_hmac="hmac:s7:witness:" + ("c" * 64),
+                witness_role_names=("witness", "bonded_user"),
+                new_credential_ref="cred-founder-recovered",
+                ceremony_ref_hash="d" * 64,
+                created_at=NOW,
+            )
+
+    def test_129_witness_only_credential_does_not_satisfy_bonded_user_recovery(self):
+        from core.governance import operator_user_boundary as s7
+
+        witness_record = s7.register_founder_webauthn_credential(
+            credential_ref="cred-witness-only",
+            actor_handle_hmac="hmac:s7:witness:" + ("c" * 64),
+            role_names=("witness",),
+            public_key="public-key-witness",
+            sign_count=0,
+            rp_id="localhost",
+            origin="http://localhost:11437",
+            host="localhost:11437",
+            created_at=NOW,
+            backup_credential=True,
+            enabled=True,
+        )
+        registry = self._registry(witness_record)
+
+        state = s7.build_credential_recovery_state(registry=registry)
+
+        self.assertEqual(state.mode, "manual_recovery_required")
+        self.assertTrue(state.manual_recovery_required)
+        self.assertEqual(state.active_credential_count, 0)
+
+    def test_130_credential_recovery_state_rejects_contradictory_mode_counts(self):
+        from core.governance import operator_user_boundary as s7
+
+        contradictory_states = (
+            {
+                "mode": "ready",
+                "active_credential_count": 1,
+                "primary_credential_count": 1,
+                "backup_credential_count": 0,
+                "manual_recovery_required": False,
+            },
+            {
+                "mode": "ready",
+                "active_credential_count": 1,
+                "primary_credential_count": 0,
+                "backup_credential_count": 1,
+                "manual_recovery_required": False,
+            },
+            {
+                "mode": "degraded",
+                "active_credential_count": 0,
+                "primary_credential_count": 0,
+                "backup_credential_count": 0,
+                "manual_recovery_required": True,
+            },
+        )
+        for state_kwargs in contradictory_states:
+            with self.subTest(state_kwargs=state_kwargs):
+                with self.assertRaises(ValueError):
+                    s7.CredentialRecoveryState(**state_kwargs)
+
+
 class S7SelfModDialogWrappingTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

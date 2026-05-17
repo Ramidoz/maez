@@ -205,6 +205,12 @@ OPERATOR_QUEUE_COUNT_KEYS = frozenset({
     "expired",
 })
 
+CREDENTIAL_RECOVERY_MODES = frozenset({
+    "ready",
+    "degraded",
+    "manual_recovery_required",
+})
+
 MIXED_STORE_KINDS = frozenset({
     "actions_log",
     "covenant_log",
@@ -227,6 +233,7 @@ _EXPECTED_COVENANT_LOG_SUFFIX = ("logs", "covenant.log")
 _EXPECTED_AUDIT_LOG_DB_SUFFIX = ("memory", "audit_log.db")
 _EXPECTED_LAST_BACKUP_SUFFIX = ("logs", "last_backup.json")
 _EXPECTED_SERVICE_MAINTENANCE_AUDIT_SUFFIX = ("logs", "service_maintenance_audit.jsonl")
+_WITNESSED_FALLBACK_ID_RE = re.compile(r"^s7fallback_[0-9a-f]{32,64}$")
 
 BACKUP_OPERATIONS = frozenset({
     "backup_run",
@@ -431,6 +438,10 @@ def validate_operator_red_gate_mode(mode: str) -> str:
 
 def validate_operator_queue_count_key(key: str) -> str:
     return _validate_closed_value(key, OPERATOR_QUEUE_COUNT_KEYS, "operator queue count key")
+
+
+def validate_credential_recovery_mode(mode: str) -> str:
+    return _validate_closed_value(mode, CREDENTIAL_RECOVERY_MODES, "credential recovery mode")
 
 
 def validate_mixed_store_kind(kind: str) -> str:
@@ -1811,6 +1822,96 @@ class WebAuthnCredentialRecord:
 
 
 @dataclass(frozen=True)
+class CredentialRecoveryState:
+    mode: str
+    active_credential_count: int
+    primary_credential_count: int
+    backup_credential_count: int
+    manual_recovery_required: bool
+    witnessed_fallback_available: bool = False
+    schema_version: str = SCHEMA_VERSION
+    content_authority: str = "not_granted"
+
+    def __post_init__(self) -> None:
+        if self.schema_version != SCHEMA_VERSION:
+            raise ValueError("S7 credential recovery state schema_version mismatch")
+        validate_credential_recovery_mode(self.mode)
+        _non_negative_int(self.active_credential_count, field="active_credential_count")
+        _non_negative_int(self.primary_credential_count, field="primary_credential_count")
+        _non_negative_int(self.backup_credential_count, field="backup_credential_count")
+        if self.manual_recovery_required is not True and self.manual_recovery_required is not False:
+            raise ValueError("S7 manual_recovery_required must be bool")
+        if self.witnessed_fallback_available is not True and self.witnessed_fallback_available is not False:
+            raise ValueError("S7 witnessed_fallback_available must be bool")
+        validate_mixed_store_content_authority(self.content_authority)
+        if self.active_credential_count != self.primary_credential_count + self.backup_credential_count:
+            raise ValueError("S7 credential recovery counts must add up")
+        if self.mode == "manual_recovery_required" and self.manual_recovery_required is not True:
+            raise ValueError("S7 manual recovery mode requires manual_recovery_required=True")
+        if self.active_credential_count == 0 and self.manual_recovery_required is not True:
+            raise ValueError("S7 no-credential state must require manual recovery")
+        if self.active_credential_count == 0 and self.mode != "manual_recovery_required":
+            raise ValueError("S7 no-credential state must use manual_recovery_required mode")
+        if self.active_credential_count > 0 and self.manual_recovery_required is True:
+            raise ValueError("S7 active credential state cannot require manual recovery")
+        if self.mode == "ready" and (self.primary_credential_count == 0 or self.backup_credential_count == 0):
+            raise ValueError("S7 ready credential state requires primary and backup credentials")
+        if self.mode == "degraded" and (
+            self.active_credential_count == 0
+            or (self.primary_credential_count > 0 and self.backup_credential_count > 0)
+        ):
+            raise ValueError("S7 degraded credential state requires partial active credential coverage")
+
+
+@dataclass(frozen=True)
+class WitnessedFallbackRecord:
+    fallback_id: str
+    bonded_user_actor_handle_hmac: str
+    witness_actor_handle_hmac: str
+    witness_role_names: tuple[str, ...]
+    new_credential_ref: str
+    ceremony_ref_hash: str
+    created_at: str
+    auth_method: str = "witnessed_fallback"
+    grant_source: str = "witnessed_fallback"
+    witness_read_authority: bool = False
+    witness_allowed_scopes: tuple[str, ...] = ()
+    schema_version: str = SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if self.schema_version != SCHEMA_VERSION:
+            raise ValueError("S7 witnessed fallback schema_version mismatch")
+        if not _WITNESSED_FALLBACK_ID_RE.fullmatch(self.fallback_id):
+            raise ValueError("S7 witnessed fallback id must be opaque")
+        if not _valid_actor_handle(self.bonded_user_actor_handle_hmac):
+            raise ValueError("S7 witnessed fallback bonded_user handle must be purpose-scoped HMAC")
+        if not _valid_actor_handle(self.witness_actor_handle_hmac):
+            raise ValueError("S7 witnessed fallback witness handle must be purpose-scoped HMAC")
+        if self.bonded_user_actor_handle_hmac == self.witness_actor_handle_hmac:
+            raise ValueError("S7 witnessed fallback witness cannot substitute for bonded_user")
+        if "witness" not in self.witness_role_names:
+            raise ValueError("S7 witnessed fallback requires witness role")
+        if "bonded_user" in self.witness_role_names:
+            raise ValueError("S7 witnessed fallback witness cannot claim bonded_user role")
+        for role_name in self.witness_role_names:
+            validate_role_name(role_name)
+        if not self.new_credential_ref or any(
+            marker in self.new_credential_ref for marker in ("/", "\\", " ", "\n", "\t", "@")
+        ):
+            raise ValueError("S7 witnessed fallback new_credential_ref must be an opaque reference")
+        _validate_hash64(self.ceremony_ref_hash, field="ceremony_ref_hash")
+        _timestamp_text(self.created_at, field="created_at")
+        if self.auth_method != "witnessed_fallback":
+            raise ValueError("S7 witnessed fallback auth_method mismatch")
+        if self.grant_source != "witnessed_fallback":
+            raise ValueError("S7 witnessed fallback grant_source mismatch")
+        if self.witness_read_authority is not False:
+            raise ValueError("S7 witnessed fallback cannot grant witness read authority")
+        if self.witness_allowed_scopes:
+            raise ValueError("S7 witnessed fallback cannot grant witness scopes")
+
+
+@dataclass(frozen=True)
 class WebAuthnChallenge:
     challenge_id: str
     request_id: str
@@ -2065,6 +2166,21 @@ CREATE TABLE IF NOT EXISTS s7_webauthn_credentials (
 """
 
 
+def _credential_record_from_row(row: tuple[Any, ...]) -> WebAuthnCredentialRecord:
+    return WebAuthnCredentialRecord(
+        credential_ref=row[0],
+        actor_handle_hmac=row[1],
+        role_names=tuple(json.loads(row[2])),
+        public_key=row[3],
+        sign_count=int(row[4]),
+        rp_id=row[5],
+        origin=row[6],
+        created_at=row[7],
+        backup_credential=bool(row[8]),
+        enabled=bool(row[9]),
+    )
+
+
 class WebAuthnCredentialRegistry:
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
@@ -2110,18 +2226,39 @@ class WebAuthnCredentialRegistry:
             ).fetchone()
         if row is None:
             return None
-        return WebAuthnCredentialRecord(
-            credential_ref=row[0],
-            actor_handle_hmac=row[1],
-            role_names=tuple(json.loads(row[2])),
-            public_key=row[3],
-            sign_count=int(row[4]),
-            rp_id=row[5],
-            origin=row[6],
-            created_at=row[7],
-            backup_credential=bool(row[8]),
-            enabled=bool(row[9]),
-        )
+        return _credential_record_from_row(row)
+
+    def all_records(self) -> tuple[WebAuthnCredentialRecord, ...]:
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT credential_ref, actor_handle_hmac, role_names_json,
+                       public_key, sign_count, rp_id, origin, created_at,
+                       backup_credential, enabled
+                FROM s7_webauthn_credentials
+                ORDER BY credential_ref
+                """,
+            ).fetchall()
+        return tuple(_credential_record_from_row(row) for row in rows)
+
+    def active_records(self) -> tuple[WebAuthnCredentialRecord, ...]:
+        return tuple(record for record in self.all_records() if record.enabled)
+
+    def disable_credential(self, credential_ref: str, *, disabled_at: str) -> bool:
+        if not credential_ref:
+            return False
+        _timestamp_text(disabled_at, field="disabled_at")
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                """
+                UPDATE s7_webauthn_credentials
+                SET enabled = 0
+                WHERE credential_ref = ?
+                  AND enabled = 1
+                """,
+                (credential_ref,),
+            )
+            return cur.rowcount == 1
 
     def advance_sign_count(self, credential_ref: str, *, new_sign_count: int) -> bool:
         if not isinstance(new_sign_count, int) or new_sign_count < 0:
@@ -2137,6 +2274,62 @@ class WebAuthnCredentialRegistry:
                 (new_sign_count, credential_ref, new_sign_count),
             )
             return cur.rowcount == 1
+
+
+def build_credential_recovery_state(
+    *,
+    registry: WebAuthnCredentialRegistry | None = None,
+    records: tuple[WebAuthnCredentialRecord, ...] | None = None,
+    witnessed_fallback_available: bool = False,
+) -> CredentialRecoveryState:
+    if registry is not None and records is not None:
+        raise ValueError("S7 credential recovery state accepts registry or records, not both")
+    source_records = registry.active_records() if registry is not None else tuple(records or ())
+    active_records = tuple(
+        record for record in source_records if record.enabled and "bonded_user" in record.role_names
+    )
+    primary_count = sum(1 for record in active_records if not record.backup_credential)
+    backup_count = sum(1 for record in active_records if record.backup_credential)
+    active_count = primary_count + backup_count
+    if active_count == 0:
+        mode = "manual_recovery_required"
+    elif primary_count == 0 or backup_count == 0:
+        mode = "degraded"
+    else:
+        mode = "ready"
+    return CredentialRecoveryState(
+        mode=mode,
+        active_credential_count=active_count,
+        primary_credential_count=primary_count,
+        backup_credential_count=backup_count,
+        manual_recovery_required=active_count == 0,
+        witnessed_fallback_available=witnessed_fallback_available,
+    )
+
+
+def build_witnessed_fallback_record(
+    *,
+    fallback_id: str,
+    bonded_user_actor_handle_hmac: str,
+    witness_actor_handle_hmac: str,
+    witness_role_names: tuple[str, ...],
+    new_credential_ref: str,
+    ceremony_ref_hash: str,
+    created_at: str,
+    witness_read_authority: bool = False,
+    witness_allowed_scopes: tuple[str, ...] = (),
+) -> WitnessedFallbackRecord:
+    return WitnessedFallbackRecord(
+        fallback_id=fallback_id,
+        bonded_user_actor_handle_hmac=bonded_user_actor_handle_hmac,
+        witness_actor_handle_hmac=witness_actor_handle_hmac,
+        witness_role_names=tuple(witness_role_names),
+        new_credential_ref=new_credential_ref,
+        ceremony_ref_hash=ceremony_ref_hash,
+        created_at=created_at,
+        witness_read_authority=witness_read_authority,
+        witness_allowed_scopes=tuple(witness_allowed_scopes),
+    )
 
 
 def _validate_founder_webauthn_origin(rp_id: str, origin: str, host: str) -> None:
