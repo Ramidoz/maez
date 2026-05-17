@@ -344,6 +344,17 @@ def _validate_proposed_action_summary(summary: Optional[str]) -> None:
         )
 
 
+def _s7_guarded_work_class(action: str, params: dict | None) -> bool:
+    """Return True when S7 says a card needs artifact-backed approval."""
+    try:
+        from core.governance import operator_user_boundary as s7
+
+        work_class = s7.derive_work_class(action=action, params=params or {})
+        return work_class in s7.GUARDED_WORK_CLASSES
+    except Exception:
+        return True
+
+
 class PendingCardStore:
     """SQLite-backed store of outstanding approval cards."""
 
@@ -722,6 +733,8 @@ class PendingCardStore:
         via: str,
         notes: Optional[str] = None,
         current_state_fields: Optional[dict] = None,
+        s7_authorized: bool = False,
+        s7_artifact_id: Optional[str] = None,
     ) -> CardRecord:
         """Approve a card. If current_state_fields is provided and its
         hash differs from the card's original state_hash, the card is
@@ -740,6 +753,12 @@ class PendingCardStore:
         card = self.get(request_id)
         if card is None:
             raise CardStoreError(f"no such card: {request_id}")
+
+        if _s7_guarded_work_class(card.action, card.params):
+            del s7_authorized, s7_artifact_id
+            raise CardStoreError(
+                "S7 guarded card cannot be approved without consumed S7 execution grant",
+            )
 
         if current_state_fields is not None and card.state_hash != "empty":
             now_hash = compute_state_hash(current_state_fields)
@@ -765,6 +784,71 @@ class PendingCardStore:
                 "resolved_by_user_id": user_id,
                 "resolved_via": via,
                 "resolution_notes": notes,
+            },
+        )
+
+    def approve_and_mark_running(
+        self,
+        request_id: str,
+        *,
+        user_id: Optional[str],
+        via: str,
+        notes: Optional[str] = None,
+        current_state_fields: Optional[dict] = None,
+        s7_artifact_id: Optional[str] = None,
+        s7_verified_for_transition: bool = False,
+        s7_execution_grant: object = None,
+        s7_execution_params: Optional[dict] = None,
+    ) -> CardRecord:
+        """Approve a guarded S7 card and enter RUNNING in one store transition."""
+        card = self.get(request_id)
+        if card is None:
+            raise CardStoreError(f"no such card: {request_id}")
+        if not _s7_guarded_work_class(card.action, card.params):
+            raise CardStoreError("approve_and_mark_running is only for S7 guarded cards")
+        del s7_verified_for_transition
+        try:
+            from core.governance import operator_user_boundary as s7
+
+            authorized = s7.execution_grant_authorizes_card_transition(
+                s7_execution_grant,
+                request_id=request_id,
+                action=card.action,
+                params=s7_execution_params if s7_execution_params is not None else card.params,
+                artifact_id=s7_artifact_id,
+            )
+        except Exception:
+            authorized = False
+        if not authorized:
+            raise CardStoreError("S7 guarded card cannot run without consumed S7 execution grant")
+
+        if current_state_fields is not None and card.state_hash != "empty":
+            now_hash = compute_state_hash(current_state_fields)
+            if now_hash != card.state_hash:
+                return self._transition(
+                    request_id,
+                    CardStatus.EXPIRED.value,
+                    allow_from={CardStatus.OPEN.value, CardStatus.DEFERRED.value},
+                    extras={
+                        "resolved_at": time.time(),
+                        "resolved_by_user_id": user_id,
+                        "resolved_via": via,
+                        "resolution_notes": f"state hash changed: was {card.state_hash}, now {now_hash}",
+                    },
+                )
+
+        now = time.time()
+        return self._transition(
+            request_id,
+            CardStatus.RUNNING.value,
+            allow_from={CardStatus.OPEN.value, CardStatus.DEFERRED.value},
+            extras={
+                "updated_at": now,
+                "resolved_at": now,
+                "resolved_by_user_id": user_id,
+                "resolved_via": via,
+                "resolution_notes": notes,
+                "executed_at": now,
             },
         )
 

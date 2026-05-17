@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import unittest
 from pathlib import Path
 import tempfile
@@ -12,6 +13,43 @@ from types import SimpleNamespace
 NOW = "2026-05-17T16:00:00+00:00"
 FUTURE = "2026-05-17T17:00:00+00:00"
 PAST = "2026-05-17T15:00:00+00:00"
+
+
+def _with_rendered_statement_fields(rendered, **updates):
+    from core.governance import operator_user_boundary as s7
+
+    line_prefix_by_field = {
+        "request_id": "Request id: ",
+        "derived_work_class": "Work class: ",
+        "proposed_change_class": "Change class: ",
+        "predicted_effect_class": "Predicted effect class: ",
+        "rollback_path_class": "Rollback path class: ",
+        "derived_aggregation_group": "Aggregation group: ",
+        "maez_consulted_state": "Maez consulted: ",
+        "request_envelope_hash": "Request envelope hash: ",
+        "action_params_hash": "Action params hash: ",
+        "authority_context_hash": "Authority context hash: ",
+        "maez_unavailable_state": "Maez unavailable: ",
+        "nonce": "Nonce: ",
+        "expires_at": "Expires at: ",
+    }
+    rendered_text = rendered.rendered_text
+    for field, value in updates.items():
+        prefix = line_prefix_by_field.get(field)
+        if prefix is None:
+            continue
+        rendered_text = "\n".join(
+            f"{prefix}{value}" if line.startswith(prefix) else line
+            for line in rendered_text.splitlines()
+        )
+    return s7.RenderedRequestStatement(
+        **{
+            **rendered.__dict__,
+            **updates,
+            "rendered_text": rendered_text,
+            "rendered_text_hash": s7.rendered_text_hash(rendered_text),
+        },
+    )
 
 
 class S7VocabularyAndAuthorityContextTests(unittest.TestCase):
@@ -98,6 +136,8 @@ class S7VocabularyAndAuthorityContextTests(unittest.TestCase):
             grant_source="service_local",
             allowed_scopes=("operator_health",),
             auth_method="service_local",
+            surface="service_maintenance_helper",
+            credential_ref="service-local-ref",
             created_at=NOW,
             expires_at=FUTURE,
             verified=True,
@@ -191,6 +231,8 @@ class S7VocabularyAndAuthorityContextTests(unittest.TestCase):
             grant_source="service_local",
             allowed_scopes=("operator_health",),
             auth_method="service_local",
+            surface="service_maintenance_helper",
+            credential_ref="service-local-ref",
             created_at=NOW,
             expires_at=FUTURE,
             verified=True,
@@ -208,12 +250,43 @@ class S7VocabularyAndAuthorityContextTests(unittest.TestCase):
             grant_source="service_local",
             allowed_scopes=("operator_health",),
             auth_method="service_local",
+            surface="service_maintenance_helper",
+            credential_ref="service-local-ref",
             created_at=NOW,
             expires_at=FUTURE,
             verified=True,
         )
 
         self.assertTrue(s7.authorizes_work(ctx, "routine_custody", now=NOW))
+
+    def test_017a_routine_custody_requires_minimum_authority_facts(self):
+        from dataclasses import replace
+        from core.governance import operator_user_boundary as s7
+
+        ctx = s7.AuthorityContext(
+            actor_id="operator-1",
+            actor_handle_hmac="hmac:s7:operator:" + ("a" * 64),
+            role_names=("operator",),
+            grant_source="service_local",
+            allowed_scopes=("operator_health",),
+            auth_method="service_local",
+            surface="service_maintenance_helper",
+            credential_ref="service-local-ref",
+            created_at=NOW,
+            expires_at=FUTURE,
+            verified=True,
+        )
+
+        cases = {
+            "missing_scope": replace(ctx, allowed_scopes=()),
+            "missing_surface": replace(ctx, surface=""),
+            "missing_credential_ref": replace(ctx, credential_ref=None),
+            "missing_created_at": replace(ctx, created_at=""),
+            "missing_expires_at": replace(ctx, expires_at=None),
+        }
+        for name, candidate in cases.items():
+            with self.subTest(name=name):
+                self.assertFalse(s7.authorizes_work(candidate, "routine_custody", now=NOW))
 
     def test_018_plain_bonded_user_context_does_not_authorize_guarded_work(self):
         from core.governance import operator_user_boundary as s7
@@ -935,12 +1008,29 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
         self.assertEqual(rendered.nonce, "nonce-1")
         self.assertEqual(rendered.expires_at, FUTURE)
         self.assertEqual(rendered.maez_objection_state, "present")
+        self.assertIn(f"Renderer version: {s7.RENDERER_VERSION}", rendered.rendered_text)
+        self.assertIn("Surface: cockpit", rendered.rendered_text)
+        self.assertIn("Origin: http://localhost:11437", rendered.rendered_text)
+        self.assertIn("Presence limits:", rendered.rendered_text)
+        self.assertIn("does not prove uncoerced", rendered.rendered_text)
+        self.assertIn("display was not spoofed", rendered.rendered_text)
         self.assertEqual(
             rendered.rendered_text_hash,
             s7.rendered_text_hash(rendered.rendered_text),
         )
         tampered = rendered.rendered_text + "\nExtra line."
         self.assertNotEqual(rendered.rendered_text_hash, s7.rendered_text_hash(tampered))
+        for field, value in (
+            ("renderer_version", "s7.render.v0"),
+            ("surface", "other-surface"),
+            ("origin", "http://evil.localhost"),
+            ("action_params_hash", "f" * 64),
+            ("authority_context_hash", "e" * 64),
+            ("request_envelope_hash", "d" * 64),
+        ):
+            with self.subTest(field=field):
+                with self.assertRaises(ValueError):
+                    s7.RenderedRequestStatement(**{**rendered.__dict__, field: value})
 
     def test_049_rendered_statement_requires_d12_inputs(self):
         from core.governance import operator_user_boundary as s7
@@ -988,8 +1078,14 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
             request_envelope_hash=s7.work_request_envelope_hash(env),
             action_params_hash="d" * 64,
             authority_context_hash="e" * 64,
+            derived_work_class=env.derived_work_class,
+            proposed_change_class=env.proposed_change_class,
+            predicted_effect_class=env.predicted_effect_class,
+            rollback_path_class=env.rollback_path_class,
+            maez_consulted_state="yes",
             maez_voice_consultation_hash=consultation_hash,
             maez_objection_state="present",
+            maez_unavailable_state="no",
             derived_aggregation_group=env.derived_aggregation_group,
             nonce="nonce-1",
             expires_at=FUTURE,
@@ -1230,6 +1326,94 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         )
         return env, authority, params_hash, rendered, artifact
 
+    def _covenant_touching_bundle(self):
+        from core.governance import operator_user_boundary as s7
+
+        env = s7.build_work_request_envelope(
+            request_id="req-covenant-artifact-1",
+            action="write_any_file",
+            params={
+                "path": "/home/rohit/maez/docs/governance/BETA_ARCHITECTURE_DECISIONS.md",
+                "content_hash": "d" * 64,
+            },
+            claimed_work_class="covenant_touching_change",
+            requesting_subsystem="unit",
+            closed_symptom_code="self_mod_requested",
+            proposed_change_class="covenant_organ_change",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("file:docs/governance/BETA_ARCHITECTURE_DECISIONS.md",),
+            content_exposure_risk="bonded_content_ref",
+            precondition_hash="a" * 64,
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="behavior_change",
+            rollback_path_class="manual_review",
+            maez_voice_consultation_id="voice-covenant-artifact-1",
+            free_text_ref_hash="b" * 64,
+        )
+        consultation = s7.MaezVoiceConsultation(
+            consultation_id="voice-covenant-artifact-1",
+            request_id=env.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            producer="self_mod_dialog_terminal_state",
+            source_ref_kind="self_mod_dialog_exchange",
+            source_ref_hash="c" * 64,
+            maez_voice_consulted=True,
+            maez_objection_present=False,
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=NOW,
+        )
+        authority = s7.AuthorityContext(
+            actor_id="founder",
+            actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+            role_names=("bonded_user", "operator"),
+            grant_source="founder_webauthn",
+            allowed_scopes=("operator_health",),
+            auth_method="founder_webauthn",
+            surface="cockpit",
+            credential_ref="cred-1",
+            created_at=NOW,
+            expires_at=FUTURE,
+            verified=True,
+        )
+        params_hash = s7.canonical_hash({
+            "path": "/home/rohit/maez/docs/governance/BETA_ARCHITECTURE_DECISIONS.md",
+            "content_hash": "d" * 64,
+        })
+        rendered = s7.render_request_statement(
+            envelope=env,
+            surface="cockpit",
+            origin="http://localhost:11437",
+            action_params_hash=params_hash,
+            authority_context=authority,
+            maez_voice_consultation=consultation,
+            nonce="nonce-covenant-1",
+            expires_at=FUTURE,
+            rendered_at=NOW,
+        )
+        artifact = s7.S7AuthorizationArtifact(
+            artifact_id="artifact-covenant-1",
+            request_id=env.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            rendered_text_hash=rendered.rendered_text_hash,
+            action_params_hash=params_hash,
+            precondition_hash=env.precondition_hash,
+            authority_context_hash=s7.authority_context_hash(authority),
+            derived_work_class=env.derived_work_class,
+            derived_aggregation_group=env.derived_aggregation_group,
+            nonce=rendered.nonce,
+            credential_ref="cred-1",
+            auth_method="founder_webauthn",
+            grant_source="founder_webauthn",
+            user_presence=True,
+            user_verification=True,
+            created_at=NOW,
+            expires_at=FUTURE,
+            consumed_at=None,
+        )
+        return env, authority, params_hash, rendered, artifact
+
     def test_053_artifact_expires_after_expiry(self):
         from core.governance import operator_user_boundary as s7
 
@@ -1384,6 +1568,95 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         self.assertTrue(first)
         self.assertFalse(second)
 
+    def test_057a_artifact_store_rejects_duck_typed_rendered_statement(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, _authority, params_hash, rendered, artifact = self._routine_bundle()
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(artifact)
+        fake_rendered = SimpleNamespace(**rendered.__dict__)
+
+        self.assertFalse(
+            store.consume_verified(
+                artifact.artifact_id,
+                rendered=fake_rendered,  # type: ignore[arg-type]
+                action_params_hash=params_hash,
+                authority_context=_authority,
+                precondition_hash=artifact.precondition_hash,
+                derived_work_class=artifact.derived_work_class,
+                derived_aggregation_group=artifact.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
+
+    def test_057b_rendered_statement_rejects_visible_work_class_mismatch(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, _authority, _params_hash, rendered, _artifact = self._routine_bundle()
+        tampered_text = rendered.rendered_text.replace(
+            "Work class: routine_custody",
+            "Work class: self_modification",
+        )
+
+        with self.assertRaises(ValueError):
+            s7.RenderedRequestStatement(
+                **{
+                    **rendered.__dict__,
+                    "rendered_text": tampered_text,
+                    "rendered_text_hash": s7.rendered_text_hash(tampered_text),
+                },
+            )
+
+    def test_057c_rendered_statement_rejects_duplicate_metadata_key(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, _authority, _params_hash, rendered, _artifact = self._routine_bundle()
+        tampered_text = rendered.rendered_text.replace(
+            "Action params hash: ",
+            "Action params hash: " + ("f" * 64) + "\nAction params hash: ",
+            1,
+        )
+
+        with self.assertRaises(ValueError):
+            s7.RenderedRequestStatement(
+                **{
+                    **rendered.__dict__,
+                    "rendered_text": tampered_text,
+                    "rendered_text_hash": s7.rendered_text_hash(tampered_text),
+                },
+            )
+
+    def test_057d_consume_rejects_rendered_action_hash_split_from_artifact(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, authority, params_hash, rendered, artifact = self._routine_bundle()
+        split_params_hash = "f" * 64
+        split_rendered = _with_rendered_statement_fields(
+            rendered,
+            action_params_hash=split_params_hash,
+        )
+        forged_artifact = s7.S7AuthorizationArtifact(
+            **{
+                **artifact.__dict__,
+                "rendered_text_hash": split_rendered.rendered_text_hash,
+            },
+        )
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(forged_artifact)
+
+        self.assertFalse(
+            store.consume_verified(
+                forged_artifact.artifact_id,
+                rendered=split_rendered,
+                action_params_hash=params_hash,
+                authority_context=authority,
+                precondition_hash=forged_artifact.precondition_hash,
+                derived_work_class=forged_artifact.derived_work_class,
+                derived_aggregation_group=forged_artifact.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
+
     def test_058_artifact_store_replay_across_request_ids_rejected(self):
         from core.governance import operator_user_boundary as s7
 
@@ -1391,8 +1664,9 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         store = s7.S7AuthorizationStore(self._path())
         store.put(artifact)
 
-        tampered_rendered = s7.RenderedRequestStatement(
-            **{**rendered.__dict__, "request_id": "other"},
+        tampered_rendered = _with_rendered_statement_fields(
+            rendered,
+            request_id="other",
         )
 
         self.assertFalse(
@@ -1475,6 +1749,54 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
             ),
         )
 
+    def test_060a_store_consume_binds_credential_ref(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, authority, params_hash, rendered, artifact = self._routine_bundle()
+        swapped_credential = s7.S7AuthorizationArtifact(
+            **{**artifact.__dict__, "credential_ref": "cred-other"},
+        )
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(swapped_credential)
+
+        self.assertFalse(
+            store.consume_verified(
+                swapped_credential.artifact_id,
+                rendered=rendered,
+                action_params_hash=params_hash,
+                authority_context=authority,
+                precondition_hash=swapped_credential.precondition_hash,
+                derived_work_class=swapped_credential.derived_work_class,
+                derived_aggregation_group=swapped_credential.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
+
+    def test_060b_store_consume_rejects_non_bool_persisted_user_verification(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, authority, params_hash, rendered, artifact = self._routine_bundle()
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(artifact)
+        with sqlite3.connect(store.db_path) as conn:
+            conn.execute(
+                "UPDATE s7_authorization_artifacts SET user_verification = 2 WHERE artifact_id = ?",
+                (artifact.artifact_id,),
+            )
+
+        self.assertFalse(
+            store.consume_verified(
+                artifact.artifact_id,
+                rendered=rendered,
+                action_params_hash=params_hash,
+                authority_context=authority,
+                precondition_hash=artifact.precondition_hash,
+                derived_work_class=artifact.derived_work_class,
+                derived_aggregation_group=artifact.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
+
     def test_061_superseded_request_rejects_old_artifact(self):
         from core.governance import operator_user_boundary as s7
 
@@ -1546,8 +1868,9 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
         _env, authority, params_hash, rendered, artifact = self._routine_bundle()
         expired_authority = replace(authority, expires_at=PAST)
         expired_authority_hash = s7.authority_context_hash(expired_authority)
-        rendered_for_expired_authority = s7.RenderedRequestStatement(
-            **{**rendered.__dict__, "authority_context_hash": expired_authority_hash},
+        rendered_for_expired_authority = _with_rendered_statement_fields(
+            rendered,
+            authority_context_hash=expired_authority_hash,
         )
         artifact_for_expired_authority = s7.S7AuthorizationArtifact(
             **{**artifact.__dict__, "authority_context_hash": expired_authority_hash},
@@ -1609,6 +1932,128 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
                 derived_work_class=artifact.derived_work_class,
                 derived_aggregation_group=artifact.derived_aggregation_group,
                 now=NOW,
+            ),
+        )
+
+    def test_065a_service_local_context_cannot_consume_guarded_artifact(self):
+        from dataclasses import replace
+        from core.governance import operator_user_boundary as s7
+
+        _env, authority, params_hash, rendered, artifact = self._self_mod_bundle(
+            role_names=("bonded_user", "operator"),
+        )
+        service_authority = replace(
+            authority,
+            grant_source="service_local",
+            auth_method="service_local",
+            credential_ref="service-local-ref",
+        )
+        rendered_for_service = _with_rendered_statement_fields(
+            rendered,
+            authority_context_hash=s7.authority_context_hash(service_authority),
+        )
+        service_artifact = s7.S7AuthorizationArtifact(
+            **{
+                **artifact.__dict__,
+                "authority_context_hash": s7.authority_context_hash(service_authority),
+                "credential_ref": "service-local-ref",
+                "auth_method": "service_local",
+                "grant_source": "service_local",
+            },
+        )
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(service_artifact)
+
+        self.assertFalse(
+            store.consume_verified(
+                service_artifact.artifact_id,
+                rendered=rendered_for_service,
+                action_params_hash=params_hash,
+                authority_context=service_authority,
+                precondition_hash=service_artifact.precondition_hash,
+                derived_work_class=service_artifact.derived_work_class,
+                derived_aggregation_group=service_artifact.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
+
+    def test_065b_covenant_touching_artifact_requires_distinct_ceremony(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, authority, params_hash, rendered, artifact = self._covenant_touching_bundle()
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(artifact)
+
+        self.assertFalse(
+            store.consume_verified(
+                artifact.artifact_id,
+                rendered=rendered,
+                action_params_hash=params_hash,
+                authority_context=authority,
+                precondition_hash=artifact.precondition_hash,
+                derived_work_class=artifact.derived_work_class,
+                derived_aggregation_group=artifact.derived_aggregation_group,
+                now=NOW,
+            ),
+        )
+
+    def test_065c_covenant_touching_artifact_consumes_with_distinct_ceremony(self):
+        from core.governance import operator_user_boundary as s7
+
+        env, authority, params_hash, rendered, artifact = self._covenant_touching_bundle()
+        ceremony = s7.CovenantCeremonyEvidence(
+            request_id=env.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            ceremony_kind="cooling_off_second_confirmation",
+            first_authorized_at=PAST,
+            second_confirmed_at=NOW,
+            second_confirmation_ref_hash="e" * 64,
+            reviewed_equivalent_ref_hash=None,
+        )
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(artifact)
+
+        self.assertTrue(
+            store.consume_verified(
+                artifact.artifact_id,
+                rendered=rendered,
+                action_params_hash=params_hash,
+                authority_context=authority,
+                precondition_hash=artifact.precondition_hash,
+                derived_work_class=artifact.derived_work_class,
+                derived_aggregation_group=artifact.derived_aggregation_group,
+                now=NOW,
+                covenant_ceremony_evidence=ceremony,
+            ),
+        )
+
+    def test_065d_future_dated_second_confirmation_does_not_consume(self):
+        from core.governance import operator_user_boundary as s7
+
+        env, authority, params_hash, rendered, artifact = self._covenant_touching_bundle()
+        ceremony = s7.CovenantCeremonyEvidence(
+            request_id=env.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            ceremony_kind="cooling_off_second_confirmation",
+            first_authorized_at=PAST,
+            second_confirmed_at=FUTURE,
+            second_confirmation_ref_hash="e" * 64,
+            reviewed_equivalent_ref_hash=None,
+        )
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(artifact)
+
+        self.assertFalse(
+            store.consume_verified(
+                artifact.artifact_id,
+                rendered=rendered,
+                action_params_hash=params_hash,
+                authority_context=authority,
+                precondition_hash=artifact.precondition_hash,
+                derived_work_class=artifact.derived_work_class,
+                derived_aggregation_group=artifact.derived_aggregation_group,
+                now=NOW,
+                covenant_ceremony_evidence=ceremony,
             ),
         )
 
@@ -2078,6 +2523,23 @@ class S7WebAuthnMechanismTests(unittest.TestCase):
             ),
         )
 
+    def test_083a_persisted_credential_booleans_are_strict(self):
+        record = self._record()
+        registry = self._credential_registry(record)
+        with sqlite3.connect(registry.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE s7_webauthn_credentials
+                SET backup_credential = 2,
+                    enabled = 2
+                WHERE credential_ref = ?
+                """,
+                (record.credential_ref,),
+            )
+
+        with self.assertRaises(ValueError):
+            registry.get(record.credential_ref)
+
 
 class S7CredentialRecoveryStateTests(unittest.TestCase):
     def setUp(self):
@@ -2498,6 +2960,14 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
         )
         return root
 
+    def _brain_swap_payload(self, artifact):
+        return {
+            "operation": "brain_swap",
+            "target_route": "primary",
+            "candidate_fingerprint_hash": artifact["admitted_fingerprint_hash"],
+            "s5_admission_artifact_hash": artifact["artifact_hash"],
+        }
+
     def _brain_swap_envelope(
         self,
         artifact,
@@ -2511,6 +2981,7 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
             request_id=request_id,
             s5_admission_artifact=artifact,
             candidate_fingerprint_hash=artifact["admitted_fingerprint_hash"],
+            execution_payload=self._brain_swap_payload(artifact),
             action="model_routing.swap_primary",
             requesting_subsystem="voice_continuity",
             closed_symptom_code="verification_needed",
@@ -2524,7 +2995,13 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
             maez_voice_consultation_id=f"voice-{request_id}",
         )
 
-    def _execution_authorization(self, envelope, *, artifact_id: str = "artifact-brain-swap-a"):
+    def _execution_authorization(
+        self,
+        envelope,
+        *,
+        action_payload: dict,
+        artifact_id: str = "artifact-brain-swap-a",
+    ):
         from core.governance import operator_user_boundary as s7
 
         authority = s7.AuthorityContext(
@@ -2553,10 +3030,7 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
             unavailable_reason_code=None,
             created_at=NOW,
         )
-        action_params_hash = s7.canonical_hash({
-            "request_id": envelope.request_id,
-            "precondition_hash": envelope.precondition_hash,
-        })
+        action_params_hash = s7.canonical_hash(action_payload)
         rendered = s7.render_request_statement(
             envelope=envelope,
             surface="cockpit",
@@ -2607,13 +3081,15 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
 
         accepted = self._s5_admission_artifact("a")
         envelope = self._brain_swap_envelope(accepted)
-        authorization = self._execution_authorization(envelope)
+        payload = self._brain_swap_payload(accepted)
+        authorization = self._execution_authorization(envelope, action_payload=payload)
 
         self.assertFalse(
             s7.brain_swap_execution_authorized(
                 envelope=envelope,
                 s5_admission_artifact=None,
                 candidate_fingerprint_hash=accepted["admitted_fingerprint_hash"],
+                actual_execution_payload=payload,
                 execution_authorization=authorization,
             )
         )
@@ -2622,6 +3098,7 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
                 envelope=envelope,
                 s5_admission_artifact=accepted,
                 candidate_fingerprint_hash=accepted["admitted_fingerprint_hash"],
+                actual_execution_payload=payload,
                 execution_authorization=authorization,
             )
         )
@@ -2631,12 +3108,14 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
 
         accepted = self._s5_admission_artifact("a")
         envelope = self._brain_swap_envelope(accepted)
+        payload = self._brain_swap_payload(accepted)
 
         self.assertFalse(
             s7.brain_swap_execution_authorized(
                 envelope=envelope,
                 s5_admission_artifact=accepted,
                 candidate_fingerprint_hash=accepted["admitted_fingerprint_hash"],
+                actual_execution_payload=payload,
                 execution_authorization=None,
             )
         )
@@ -2651,14 +3130,22 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
             candidate_fingerprint_hash=accepted["admitted_fingerprint_hash"],
         )
         envelope = self._brain_swap_envelope(accepted)
+        payload = self._brain_swap_payload(accepted)
 
         self.assertEqual(precondition.s5_admission_artifact_hash, accepted["artifact_hash"])
-        self.assertEqual(envelope.precondition_hash, s7.brain_swap_precondition_hash(precondition))
+        self.assertEqual(
+            envelope.precondition_hash,
+            s7.brain_swap_execution_precondition_hash(
+                precondition,
+                execution_payload=payload,
+            ),
+        )
         self.assertFalse(
             s7.brain_swap_execution_authorized(
                 envelope=envelope,
                 s5_admission_artifact=accepted,
                 candidate_fingerprint_hash=accepted["admitted_fingerprint_hash"],
+                actual_execution_payload=payload,
                 execution_authorization=None,
             )
         )
@@ -2668,7 +3155,8 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
 
         accepted = self._s5_admission_artifact("a")
         envelope = self._brain_swap_envelope(accepted)
-        authorization = self._execution_authorization(envelope)
+        payload = self._brain_swap_payload(accepted)
+        authorization = self._execution_authorization(envelope, action_payload=payload)
         malformed = dict(accepted)
         malformed["artifact_name"] = "not_s5_candidate_admission.json"
 
@@ -2677,6 +3165,7 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
                 envelope=envelope,
                 s5_admission_artifact=malformed,
                 candidate_fingerprint_hash=accepted["admitted_fingerprint_hash"],
+                actual_execution_payload=payload,
                 execution_authorization=authorization,
             )
         )
@@ -2685,6 +3174,7 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
                 envelope=envelope,
                 s5_admission_artifact=accepted,
                 candidate_fingerprint_hash=accepted["admitted_fingerprint_hash"],
+                actual_execution_payload=payload,
                 execution_authorization=authorization,
             )
         )
@@ -2695,13 +3185,15 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
         accepted_a = self._s5_admission_artifact("a")
         accepted_b = self._s5_admission_artifact("b")
         envelope = self._brain_swap_envelope(accepted_a)
-        authorization = self._execution_authorization(envelope)
+        payload_a = self._brain_swap_payload(accepted_a)
+        authorization = self._execution_authorization(envelope, action_payload=payload_a)
 
         self.assertFalse(
             s7.brain_swap_execution_authorized(
                 envelope=envelope,
                 s5_admission_artifact=accepted_b,
                 candidate_fingerprint_hash=accepted_b["admitted_fingerprint_hash"],
+                actual_execution_payload=payload_a,
                 execution_authorization=authorization,
             )
         )
@@ -2710,6 +3202,7 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
                 envelope=envelope,
                 s5_admission_artifact=accepted_a,
                 candidate_fingerprint_hash=accepted_a["admitted_fingerprint_hash"],
+                actual_execution_payload=payload_a,
                 execution_authorization=authorization,
             )
         )
@@ -2720,13 +3213,15 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
         accepted_a = self._s5_admission_artifact("a")
         accepted_b = self._s5_admission_artifact("b")
         envelope = self._brain_swap_envelope(accepted_a)
-        authorization = self._execution_authorization(envelope)
+        payload_a = self._brain_swap_payload(accepted_a)
+        authorization = self._execution_authorization(envelope, action_payload=payload_a)
 
         self.assertFalse(
             s7.brain_swap_execution_authorized(
                 envelope=envelope,
                 s5_admission_artifact=accepted_a,
                 candidate_fingerprint_hash=accepted_b["admitted_fingerprint_hash"],
+                actual_execution_payload=payload_a,
                 execution_authorization=authorization,
             )
         )
@@ -2735,6 +3230,72 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
                 envelope=envelope,
                 s5_admission_artifact=accepted_a,
                 candidate_fingerprint_hash=accepted_a["admitted_fingerprint_hash"],
+                actual_execution_payload=payload_a,
+                execution_authorization=authorization,
+            )
+        )
+
+    def test_148a_brain_swap_rejects_actual_model_routing_payload_substitution(self):
+        from core.governance import operator_user_boundary as s7
+
+        accepted = self._s5_admission_artifact("a")
+        envelope = self._brain_swap_envelope(accepted)
+        payload = self._brain_swap_payload(accepted)
+        authorization = self._execution_authorization(envelope, action_payload=payload)
+        substituted_payload = {
+            **payload,
+            "target_route": "shadow-primary",
+        }
+
+        self.assertFalse(
+            s7.brain_swap_execution_authorized(
+                envelope=envelope,
+                s5_admission_artifact=accepted,
+                candidate_fingerprint_hash=accepted["admitted_fingerprint_hash"],
+                actual_execution_payload=substituted_payload,
+                execution_authorization=authorization,
+            )
+        )
+
+    def test_148b_brain_swap_rejects_envelope_execution_payload_split(self):
+        from core.governance import operator_user_boundary as s7
+
+        accepted = self._s5_admission_artifact("a")
+        self._s5_admission_root(accepted)
+        envelope_payload = self._brain_swap_payload(accepted)
+        actual_payload = {
+            **envelope_payload,
+            "target_route": "shadow-primary",
+        }
+        envelope = s7.build_brain_swap_work_request_envelope(
+            request_id="req-brain-swap-split",
+            s5_admission_artifact=accepted,
+            candidate_fingerprint_hash=accepted["admitted_fingerprint_hash"],
+            execution_payload=envelope_payload,
+            action="model_routing.swap_primary",
+            requesting_subsystem="voice_continuity",
+            closed_symptom_code="verification_needed",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("model_routing:primary",),
+            content_exposure_risk="content_free",
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="behavior_change",
+            rollback_path_class="manual_review",
+            maez_voice_consultation_id="voice-req-brain-swap-split",
+        )
+        authorization = self._execution_authorization(
+            envelope,
+            action_payload=actual_payload,
+            artifact_id="artifact-brain-swap-split",
+        )
+
+        self.assertFalse(
+            s7.brain_swap_execution_authorized(
+                envelope=envelope,
+                s5_admission_artifact=accepted,
+                candidate_fingerprint_hash=accepted["admitted_fingerprint_hash"],
+                actual_execution_payload=actual_payload,
                 execution_authorization=authorization,
             )
         )
@@ -2784,6 +3345,8 @@ class S7OwnSubstrateBypassTaxonomyTests(unittest.TestCase):
                 "write_soul_note",
                 "edit_soul_section",
                 "model-routing trust-scope edits",
+                "prompt writes",
+                "prompt-template writes",
                 "covenant-organ writes",
                 "refusal-policy writes",
                 "role-boundary writes",
@@ -2848,6 +3411,8 @@ class S7OwnSubstrateBypassTaxonomyTests(unittest.TestCase):
             "successor-governance writes",
             "memory-retention/deletion writes",
             "protection-setting writes",
+            "prompt writes",
+            "prompt-template writes",
         ):
             with self.subTest(path=path):
                 self.assertIn(path, by_path)
@@ -2863,12 +3428,16 @@ class S7OwnSubstrateBypassTaxonomyTests(unittest.TestCase):
         self.assertTrue(runbook.exists())
         text = runbook.read_text(encoding="utf-8")
         for surface in (banner, text):
-            lowered = surface.lower()
+            lowered = " ".join(surface.lower().split())
             self.assertIn("raw os", lowered)
             self.assertIn("cannot stop raw local write access", lowered)
             self.assertIn("maez-controlled runtime or helper", lowered)
             self.assertIn("not role-encrypted", lowered)
             self.assertIn("soul/config/model-routing", lowered)
+            self.assertIn("does not prove the human was uncoerced", lowered)
+            self.assertIn("does not prove the human understood", lowered)
+            self.assertIn("display was not spoofed", lowered)
+            self.assertIn("os/browser was uncompromised", lowered)
 
 
 class S7AggregationHabitTests(unittest.TestCase):
@@ -3086,6 +3655,74 @@ class S7AggregationHabitTests(unittest.TestCase):
 
         self.assertIn(assessment.decision, {"escalate", "block"})
         self.assertIn("cumulative_protection_lowering", assessment.signals)
+        self.assertFalse(assessment.dashboard_counter_sufficient)
+
+    def test_161_claimed_stronger_class_cannot_hide_refused_same_target_reask(self):
+        from core.governance import operator_user_boundary as s7
+
+        prior = self._soul_envelope("req-soul-1")
+        current = s7.build_work_request_envelope(
+            request_id="req-soul-2",
+            action="write_any_file",
+            params={"path": "/home/rohit/maez/config/soul.md", "content": "change voice"},
+            claimed_work_class="covenant_touching_change",
+            requesting_subsystem="unit",
+            closed_symptom_code="self_mod_requested",
+            proposed_change_class="soul_change",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("file:config/soul.md",),
+            content_exposure_risk="bonded_content_ref",
+            precondition_hash="b" * 64,
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="behavior_change",
+            rollback_path_class="revert_patch",
+            free_text_ref_hash="c" * 64,
+        )
+        history = (
+            s7.build_request_history_record(
+                envelope=prior,
+                outcome="refused",
+                created_at=PAST,
+            ),
+        )
+
+        assessment = s7.assess_aggregation_risk(
+            current_envelope=current,
+            history=history,
+        )
+
+        self.assertEqual(prior.affected_refs, current.affected_refs)
+        self.assertEqual(prior.derived_aggregation_group, current.derived_aggregation_group)
+        self.assertIn(assessment.decision, {"escalate", "block"})
+        self.assertIn("repeated_reask_after_refusal", assessment.signals)
+
+    def test_162_repeated_key_touch_on_same_guarded_target_flags_autopilot_risk(self):
+        from core.governance import operator_user_boundary as s7
+
+        prior_1 = self._soul_envelope("req-soul-1")
+        prior_2 = self._soul_envelope("req-soul-2")
+        current = self._soul_envelope("req-soul-3")
+        history = (
+            s7.build_request_history_record(
+                envelope=prior_1,
+                outcome="authorized",
+                created_at=PAST,
+            ),
+            s7.build_request_history_record(
+                envelope=prior_2,
+                outcome="authorized",
+                created_at=PAST,
+            ),
+        )
+
+        assessment = s7.assess_aggregation_risk(
+            current_envelope=current,
+            history=history,
+        )
+
+        self.assertIn("key_touch_autopilot_risk", assessment.signals)
+        self.assertIn(assessment.decision, {"escalate", "block"})
         self.assertFalse(assessment.dashboard_counter_sufficient)
 
 
@@ -3480,6 +4117,15 @@ class S7OperatorHealthProjectionTests(unittest.TestCase):
 
         self.assertIn('@app.route("/operator/health")', source)
         self.assertIn("build_operator_health_projection", source)
+        operator_health_start = source.index("    def _operator_health(self) -> dict:")
+        operator_health_end = source.index("    def _mark_cycle_stage", operator_health_start)
+        operator_health = source[operator_health_start:operator_health_end]
+        for blocker in (
+            "track_b_confidentiality_not_ready",
+            "operator_unavailable_recovery_not_implemented",
+            "backup_restore_confidentiality_not_ready",
+        ):
+            self.assertIn(blocker, operator_health)
 
     def test_102_operator_health_rejects_sensitive_queue_count_names(self):
         from core.governance import operator_user_boundary as s7
@@ -3554,7 +4200,7 @@ class S7LogAuditProjectionTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            projection = s7.build_covenant_log_projection(log_path)
+            projection = s7.build_covenant_log_projection(log_path, repo_root=tmp)
 
         self.assertEqual(projection["store_kind"], "covenant_log")
         self.assertEqual(projection["row_count"], 1)
@@ -3602,7 +4248,7 @@ class S7LogAuditProjectionTests(unittest.TestCase):
                 ),
             )
 
-            projection = s7.build_audit_log_projection(db_path)
+            projection = s7.build_audit_log_projection(db_path, repo_root=tmp)
 
         self.assertEqual(projection["store_kind"], "audit_log_db")
         self.assertEqual(projection["row_count"], 1)
@@ -3635,7 +4281,7 @@ class S7LogAuditProjectionTests(unittest.TestCase):
                     verdict=None,
                 )
 
-            projection = s7.build_audit_log_projection(db_path)
+            projection = s7.build_audit_log_projection(db_path, repo_root=tmp)
 
         self.assertEqual(
             set(projection),
@@ -3651,6 +4297,31 @@ class S7LogAuditProjectionTests(unittest.TestCase):
         self.assertEqual(projection["row_count"], 3)
         self.assertEqual(projection["content_authority"], "not_granted")
         self.assertNotIn("secret-", repr(projection))
+
+    def test_107a_mixed_store_projection_rejects_suffix_match_outside_trusted_root(self):
+        from core.governance import operator_user_boundary as s7
+
+        with tempfile.TemporaryDirectory() as trusted, tempfile.TemporaryDirectory() as attacker:
+            log_path = Path(attacker) / "logs" / "covenant.log"
+            log_path.parent.mkdir(parents=True)
+            log_path.write_text("secret row\n", encoding="utf-8")
+            db_path = Path(attacker) / "memory" / "audit_log.db"
+            db_path.parent.mkdir(parents=True)
+            db_path.write_text("not a sqlite db but existence is the leak\n", encoding="utf-8")
+
+            covenant_projection = s7.build_covenant_log_projection(
+                log_path,
+                repo_root=trusted,
+            )
+            audit_projection = s7.build_audit_log_projection(
+                db_path,
+                repo_root=trusted,
+            )
+
+        self.assertEqual(covenant_projection["mode"], "unavailable")
+        self.assertEqual(covenant_projection["row_count"], 0)
+        self.assertEqual(audit_projection["mode"], "unavailable")
+        self.assertEqual(audit_projection["row_count"], 0)
 
     def test_108_covenant_log_projection_rejects_wrong_store_path(self):
         from core.governance import operator_user_boundary as s7
@@ -3709,6 +4380,45 @@ class S7LogAuditProjectionTests(unittest.TestCase):
                 conn.execute("INSERT INTO audit_log (secret) VALUES ('private row')")
 
             projection = s7.build_audit_log_projection(wrong_path)
+
+        self.assertEqual(projection["store_kind"], "audit_log_db")
+        self.assertEqual(projection["mode"], "unavailable")
+        self.assertEqual(projection["row_count"], 0)
+
+    def test_111a_covenant_log_projection_rejects_symlink_at_trusted_path(self):
+        from core.governance import operator_user_boundary as s7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            outside = Path(tmp) / "outside-secret.log"
+            outside.write_text("secret line\nsecond secret\n", encoding="utf-8")
+            trusted = root / "logs" / "covenant.log"
+            trusted.parent.mkdir(parents=True)
+            trusted.symlink_to(outside)
+
+            projection = s7.build_covenant_log_projection(trusted, repo_root=root)
+
+        self.assertEqual(projection["store_kind"], "covenant_log")
+        self.assertEqual(projection["mode"], "unavailable")
+        self.assertEqual(projection["row_count"], 0)
+
+    def test_111b_audit_log_projection_rejects_symlink_at_trusted_path(self):
+        import sqlite3
+        from core.governance import operator_user_boundary as s7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            outside = Path(tmp) / "outside-secret.db"
+            with sqlite3.connect(outside) as conn:
+                conn.execute("CREATE TABLE audit_log (secret TEXT)")
+                conn.execute("INSERT INTO audit_log (secret) VALUES ('private row')")
+            trusted = root / "memory" / "audit_log.db"
+            trusted.parent.mkdir(parents=True)
+            trusted.symlink_to(outside)
+
+            projection = s7.build_audit_log_projection(trusted, repo_root=root)
 
         self.assertEqual(projection["store_kind"], "audit_log_db")
         self.assertEqual(projection["mode"], "unavailable")

@@ -8,7 +8,9 @@ S7 is not role-encrypted on the founder box. It governs Maez-controlled runtime
 or helper paths, including soul/config/model-routing changes, but it cannot stop
 raw local write access through raw OS filesystem, database, or service edits
 outside Maez's runtime. Those raw OS paths are accepted limitations, not
-permission to bypass S7.
+permission to bypass S7. A hardware-key touch does not prove the human was
+uncoerced, does not prove the human understood the request, does not prove the
+display was not spoofed, and does not prove the OS/browser was uncompromised.
 
 ## D22 Bypass Boundary
 

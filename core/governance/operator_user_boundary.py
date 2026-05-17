@@ -12,13 +12,14 @@ mint WebAuthn assertions, or grant authority from legacy owner labels.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import InitVar, asdict, dataclass
 from datetime import datetime, timezone
 import json
 import re
 import sqlite3
+import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from core.governance import successor_governance as s6
 
@@ -74,6 +75,17 @@ GUARDED_WORK_CLASSES = frozenset({
     "autonomy_lowering_or_protection_reducing",
     "emergency_proxy_or_incapacity",
     "undeterminable_work_class",
+})
+
+_NON_GUARDED_DIRECT_ACTIONS = frozenset({
+    "convert_currency",
+    "quote_stock",
+    "read_file",
+    "search_files",
+    "web_search",
+    "fetch_url",
+    "promote_to_core_memory",
+    "update_baseline",
 })
 
 _CUSTODIAN_ROLES = frozenset({"operator", "maintainer"})
@@ -166,6 +178,12 @@ AGGREGATION_SIGNALS = frozenset({
     "repeated_reask_after_refusal",
     "cumulative_protection_lowering",
     "small_requests_aggregating",
+    "key_touch_autopilot_risk",
+})
+
+COVENANT_CEREMONY_KINDS = frozenset({
+    "cooling_off_second_confirmation",
+    "reviewed_equivalent",
 })
 
 D23_ESCALATION_WORK_CLASSES = frozenset({
@@ -674,6 +692,24 @@ def _authority_context_roles_allow_work(ctx: AuthorityContext, work_class: str) 
     return False
 
 
+def _authority_context_trust_source_allows_artifact(
+    ctx: AuthorityContext,
+    work_class: str,
+) -> bool:
+    validate_work_class(work_class)
+    if work_class in GUARDED_WORK_CLASSES:
+        if ctx.auth_method in {"none", "service_local", "manual_recovery_required"}:
+            return False
+        if ctx.grant_source in {
+            "none",
+            "service_local",
+            "founder_compat_projection",
+            "manual_recovery_required",
+        }:
+            return False
+    return True
+
+
 def _path_material(action: str, params: dict[str, Any]) -> str:
     candidates = [
         str(params.get("path") or ""),
@@ -759,6 +795,8 @@ def derive_work_class(
 
     if action in BACKUP_OPERATIONS:
         return classify_backup_operation(action)
+    if action in _NON_GUARDED_DIRECT_ACTIONS:
+        return "routine_custody"
     if action == "capability.acquire" or _INSTALL_RE.search(lowered):
         return "capability_acquisition"
     if "backup_restore" in action or "restore_backup" in action:
@@ -879,7 +917,7 @@ def founder_compat_authority_context(
         allowed_scopes=("operator_health",),
         auth_method="service_local",
         surface="founder_compat_projection",
-        credential_ref=None,
+        credential_ref="founder-compat-projection",
         created_at=created_at,
         expires_at=expires_at,
         verified=True,
@@ -943,7 +981,6 @@ def derive_aggregation_group(
     validate_work_class(derived_work_class)
     material = {
         "affected_refs": _canonical_affected_refs(affected_refs),
-        "derived_work_class": derived_work_class,
         "target_service": str(target_service or ""),
     }
     if not material["affected_refs"] and not material["target_service"]:
@@ -1158,6 +1195,7 @@ def assess_aggregation_risk(
         if group and record.derived_aggregation_group == group
     )
     repeated_refusals = tuple(record for record in same_group if record.outcome == "refused")
+    repeated_authorizations = tuple(record for record in same_group if record.outcome == "authorized")
     prior_protection_lowering = tuple(
         record for record in history if _is_protection_lowering_record(record)
     )
@@ -1177,6 +1215,11 @@ def assess_aggregation_risk(
         and len(same_group) >= 2
     ):
         signals.append("small_requests_aggregating")
+    if (
+        current_envelope.derived_work_class in D23_ESCALATION_WORK_CLASSES
+        and len(repeated_authorizations) >= 2
+    ):
+        signals.append("key_touch_autopilot_risk")
 
     if not signals:
         decision = "block" if current_envelope.derived_work_class == "undeterminable_work_class" else "allow"
@@ -1618,7 +1661,28 @@ def _path_has_suffix(path: Path, suffix: tuple[str, ...]) -> bool:
     return len(path.parts) >= len(suffix) and path.parts[-len(suffix):] == suffix
 
 
-def build_covenant_log_projection(log_path: str | Path) -> dict[str, object]:
+def _path_is_trusted_store_path(
+    path: str | Path,
+    *,
+    suffix: tuple[str, ...],
+    repo_root: str | Path | None,
+) -> bool:
+    candidate = Path(path)
+    if not _path_has_suffix(candidate, suffix):
+        return False
+    root = Path(repo_root).resolve() if repo_root is not None else Path.cwd().resolve()
+    expected = root.joinpath(*suffix)
+    try:
+        return candidate.resolve(strict=False) == expected
+    except OSError:
+        return False
+
+
+def build_covenant_log_projection(
+    log_path: str | Path,
+    *,
+    repo_root: str | Path | None = None,
+) -> dict[str, object]:
     """Return content-free counts for logs/covenant.log.
 
     D20 treats covenant log lines as bonded-content by default. This reader
@@ -1626,7 +1690,11 @@ def build_covenant_log_projection(log_path: str | Path) -> dict[str, object]:
     parameters, refusal rationale, or timestamps.
     """
     path = Path(log_path)
-    if not _path_has_suffix(path, _EXPECTED_COVENANT_LOG_SUFFIX):
+    if not _path_is_trusted_store_path(
+        path,
+        suffix=_EXPECTED_COVENANT_LOG_SUFFIX,
+        repo_root=repo_root,
+    ):
         return _build_mixed_store_projection(
             store_kind="covenant_log",
             mode="unavailable",
@@ -1654,7 +1722,11 @@ def build_covenant_log_projection(log_path: str | Path) -> dict[str, object]:
     )
 
 
-def build_audit_log_projection(db_path: str | Path) -> dict[str, object]:
+def build_audit_log_projection(
+    db_path: str | Path,
+    *,
+    repo_root: str | Path | None = None,
+) -> dict[str, object]:
     """Return content-free counts for memory/audit_log.db.
 
     The audit table carries params, reasoning, command outputs, and direct-edit
@@ -1662,7 +1734,11 @@ def build_audit_log_projection(db_path: str | Path) -> dict[str, object]:
     projection proves a narrower field content-free.
     """
     path = Path(db_path)
-    if not _path_has_suffix(path, _EXPECTED_AUDIT_LOG_DB_SUFFIX):
+    if not _path_is_trusted_store_path(
+        path,
+        suffix=_EXPECTED_AUDIT_LOG_DB_SUFFIX,
+        repo_root=repo_root,
+    ):
         return _build_mixed_store_projection(
             store_kind="audit_log_db",
             mode="unavailable",
@@ -1936,6 +2012,83 @@ class S7AuthorizationArtifact:
             _canonical_timestamp(self.consumed_at)
 
 
+@dataclass(frozen=True)
+class CovenantCeremonyEvidence:
+    """Mechanically distinct ceremony evidence for highest-risk S7 work."""
+
+    request_id: str
+    request_envelope_hash: str
+    ceremony_kind: str
+    first_authorized_at: str | None
+    second_confirmed_at: str | None
+    second_confirmation_ref_hash: str | None
+    reviewed_equivalent_ref_hash: str | None
+
+    def __post_init__(self) -> None:
+        if not self.request_id:
+            raise ValueError("S7 covenant ceremony request_id is required")
+        _validate_hash64(self.request_envelope_hash, field="request_envelope_hash")
+        _validate_closed_value(
+            self.ceremony_kind,
+            COVENANT_CEREMONY_KINDS,
+            "covenant_ceremony_kind",
+        )
+        if self.ceremony_kind == "cooling_off_second_confirmation":
+            if not self.first_authorized_at or not self.second_confirmed_at:
+                raise ValueError("S7 covenant ceremony requires two distinct timestamps")
+            first = _canonical_timestamp(self.first_authorized_at)
+            second = _canonical_timestamp(self.second_confirmed_at)
+            if first is None or second is None or second <= first:
+                raise ValueError("S7 covenant ceremony second confirmation must follow first authorization")
+            _validate_hash64(
+                self.second_confirmation_ref_hash,
+                field="second_confirmation_ref_hash",
+            )
+            if self.reviewed_equivalent_ref_hash is not None:
+                raise ValueError("reviewed_equivalent_ref_hash is not used for cooling-off ceremony")
+        else:
+            _validate_hash64(
+                self.reviewed_equivalent_ref_hash,
+                field="reviewed_equivalent_ref_hash",
+            )
+            if self.second_confirmation_ref_hash is not None:
+                raise ValueError("second_confirmation_ref_hash is not used for reviewed equivalent")
+
+
+def _highest_risk_ceremony_required(work_class: str) -> bool:
+    validate_work_class(work_class)
+    return work_class in {
+        "covenant_touching_change",
+        "autonomy_lowering_or_protection_reducing",
+    }
+
+
+def covenant_ceremony_satisfies_request(
+    *,
+    rendered: RenderedRequestStatement,
+    derived_work_class: str,
+    evidence: CovenantCeremonyEvidence | None,
+    now: str | None = None,
+) -> bool:
+    if not _highest_risk_ceremony_required(derived_work_class):
+        return True
+    if not isinstance(evidence, CovenantCeremonyEvidence):
+        return False
+    if now is not None:
+        try:
+            now_dt = _canonical_timestamp(now)
+            if evidence.ceremony_kind == "cooling_off_second_confirmation":
+                second_dt = _canonical_timestamp(evidence.second_confirmed_at or "")
+                if now_dt is None or second_dt is None or second_dt > now_dt:
+                    return False
+        except ValueError:
+            return False
+    return (
+        evidence.request_id == rendered.request_id
+        and evidence.request_envelope_hash == rendered.request_envelope_hash
+    )
+
+
 def authorization_artifact_matches(
     artifact: S7AuthorizationArtifact,
     *,
@@ -1947,7 +2100,10 @@ def authorization_artifact_matches(
     derived_aggregation_group: str,
     now: str,
     superseded_request_ids: set[str] | None = None,
+    covenant_ceremony_evidence: CovenantCeremonyEvidence | None = None,
 ) -> bool:
+    if not isinstance(rendered, RenderedRequestStatement):
+        return False
     if superseded_request_ids and rendered.request_id in superseded_request_ids:
         return False
     if artifact.consumed_at is not None:
@@ -1970,6 +2126,13 @@ def authorization_artifact_matches(
     for field, value in expected.items():
         if getattr(artifact, field) != value:
             return False
+    if not covenant_ceremony_satisfies_request(
+        rendered=rendered,
+        derived_work_class=derived_work_class,
+        evidence=covenant_ceremony_evidence,
+        now=now,
+    ):
+        return False
     return True
 
 
@@ -1996,6 +2159,88 @@ CREATE TABLE IF NOT EXISTS s7_authorization_artifacts (
     consumed_by_request_id TEXT
 );
 """
+
+
+_EXECUTION_GRANT_TOKEN = object()
+_EXECUTION_GRANT_USE_LOCK = threading.Lock()
+_USED_EXECUTION_GRANT_KEYS: set[tuple[str, str, str, str, str]] = set()
+
+
+@dataclass(frozen=True)
+class S7ExecutionGrant:
+    """Artifact-backed execution proof minted only after atomic consumption."""
+
+    artifact_id: str
+    request_id: str
+    request_envelope_hash: str
+    rendered_text_hash: str
+    action_params_hash: str
+    precondition_hash: str
+    authority_context_hash: str
+    derived_work_class: str
+    derived_aggregation_group: str
+    nonce: str
+    credential_ref: str
+    auth_method: str
+    grant_source: str
+    consumed_at: str
+    _mint_token: InitVar[object]
+
+    def __post_init__(self, _mint_token: object) -> None:
+        if _mint_token is not _EXECUTION_GRANT_TOKEN:
+            raise ValueError("S7ExecutionGrant can only be minted by S7AuthorizationStore")
+        if not self.artifact_id:
+            raise ValueError("S7 execution grant requires artifact_id")
+        if not self.request_id:
+            raise ValueError("S7 execution grant requires request_id")
+        _validate_hash64(self.request_envelope_hash, field="request_envelope_hash")
+        _validate_hash64(self.rendered_text_hash, field="rendered_text_hash")
+        _validate_hash64(self.action_params_hash, field="action_params_hash")
+        _validate_hash64(self.precondition_hash, field="precondition_hash")
+        _validate_hash64(self.authority_context_hash, field="authority_context_hash")
+        validate_work_class(self.derived_work_class)
+        if not self.derived_aggregation_group:
+            raise ValueError("S7 execution grant requires derived_aggregation_group")
+        if not self.nonce:
+            raise ValueError("S7 execution grant requires nonce")
+        if not self.credential_ref:
+            raise ValueError("S7 execution grant requires credential_ref")
+        validate_auth_method(self.auth_method)
+        validate_grant_source(self.grant_source)
+        _timestamp_text(self.consumed_at, field="consumed_at")
+
+
+def _mint_s7_execution_grant(
+    *,
+    artifact_id: str,
+    rendered: "RenderedRequestStatement",
+    action_params_hash: str,
+    precondition_hash: str,
+    authority_context_hash: str,
+    derived_work_class: str,
+    derived_aggregation_group: str,
+    credential_ref: str,
+    auth_method: str,
+    grant_source: str,
+    consumed_at: str,
+) -> S7ExecutionGrant:
+    return S7ExecutionGrant(
+        artifact_id=artifact_id,
+        request_id=rendered.request_id,
+        request_envelope_hash=rendered.request_envelope_hash,
+        rendered_text_hash=rendered.rendered_text_hash,
+        action_params_hash=action_params_hash,
+        precondition_hash=precondition_hash,
+        authority_context_hash=authority_context_hash,
+        derived_work_class=derived_work_class,
+        derived_aggregation_group=derived_aggregation_group,
+        nonce=rendered.nonce,
+        credential_ref=credential_ref,
+        auth_method=auth_method,
+        grant_source=grant_source,
+        consumed_at=consumed_at,
+        _mint_token=_EXECUTION_GRANT_TOKEN,
+    )
 
 
 class S7AuthorizationStore:
@@ -2063,65 +2308,142 @@ class S7AuthorizationStore:
         derived_aggregation_group: str,
         now: str,
         superseded_request_ids: set[str] | None = None,
+        covenant_ceremony_evidence: CovenantCeremonyEvidence | None = None,
+        before_consume: Callable[[], object] | None = None,
     ) -> bool:
+        grant, _result = self.consume_for_execution(
+            artifact_id,
+            rendered=rendered,
+            action_params_hash=action_params_hash,
+            authority_context=authority_context,
+            precondition_hash=precondition_hash,
+            derived_work_class=derived_work_class,
+            derived_aggregation_group=derived_aggregation_group,
+            now=now,
+            superseded_request_ids=superseded_request_ids,
+            covenant_ceremony_evidence=covenant_ceremony_evidence,
+            after_consume_before_commit=(
+                (lambda _grant: before_consume()) if before_consume is not None else None
+            ),
+        )
+        return grant is not None
+
+    def consume_for_execution(
+        self,
+        artifact_id: str,
+        *,
+        rendered: RenderedRequestStatement,
+        action_params_hash: str,
+        authority_context: AuthorityContext,
+        precondition_hash: str,
+        derived_work_class: str,
+        derived_aggregation_group: str,
+        now: str,
+        superseded_request_ids: set[str] | None = None,
+        covenant_ceremony_evidence: CovenantCeremonyEvidence | None = None,
+        after_consume_before_commit: Callable[[S7ExecutionGrant], object] | None = None,
+    ) -> tuple[S7ExecutionGrant | None, object | None]:
+        if not isinstance(rendered, RenderedRequestStatement):
+            return None, None
         if superseded_request_ids and rendered.request_id in superseded_request_ids:
-            return False
+            return None, None
         _validate_hash64(action_params_hash, field="action_params_hash")
         _validate_hash64(precondition_hash, field="precondition_hash")
         validate_work_class(derived_work_class)
         if not derived_aggregation_group:
-            return False
+            return None, None
         if not _authority_context_active_for_artifact(authority_context, now=now):
-            return False
+            return None, None
         if not _authority_context_roles_allow_work(authority_context, derived_work_class):
-            return False
+            return None, None
+        if not _authority_context_trust_source_allows_artifact(authority_context, derived_work_class):
+            return None, None
+        if not covenant_ceremony_satisfies_request(
+            rendered=rendered,
+            derived_work_class=derived_work_class,
+            evidence=covenant_ceremony_evidence,
+            now=now,
+        ):
+            return None, None
         auth_hash = authority_context_hash(authority_context)
         if rendered.authority_context_hash != auth_hash:
-            return False
+            return None, None
+        if rendered.action_params_hash != action_params_hash:
+            return None, None
+        if rendered.derived_work_class != derived_work_class:
+            return None, None
+        if rendered.derived_aggregation_group != derived_aggregation_group:
+            return None, None
         now_text = _timestamp_text(now, field="now")
-        with sqlite3.connect(self.db_path) as conn:
-            cur = conn.execute(
-                """
-                UPDATE s7_authorization_artifacts
-                SET consumed_at = ?,
-                    consumed_by_request_id = ?
-                WHERE artifact_id = ?
-                  AND request_id = ?
-                  AND request_envelope_hash = ?
-                  AND rendered_text_hash = ?
-                  AND action_params_hash = ?
-                  AND precondition_hash = ?
-                  AND authority_context_hash = ?
-                  AND derived_work_class = ?
-                  AND derived_aggregation_group = ?
-                  AND nonce = ?
-                  AND auth_method = ?
-                  AND grant_source = ?
-                  AND user_presence = 1
-                  AND (? = 0 OR user_verification = 1)
-                  AND consumed_at IS NULL
-                  AND expires_at > ?
-                """,
-                (
-                    now_text,
-                    rendered.request_id,
-                    artifact_id,
-                    rendered.request_id,
-                    rendered.request_envelope_hash,
-                    rendered.rendered_text_hash,
-                    action_params_hash,
-                    precondition_hash,
-                    auth_hash,
-                    derived_work_class,
-                    derived_aggregation_group,
-                    rendered.nonce,
-                    authority_context.auth_method,
-                    authority_context.grant_source,
-                    1 if _webauthn_requires_user_verification(derived_work_class) else 0,
-                    now_text,
-                ),
-            )
-            return cur.rowcount == 1
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cur = conn.execute(
+                    """
+                    UPDATE s7_authorization_artifacts
+                    SET consumed_at = ?,
+                        consumed_by_request_id = ?
+                    WHERE artifact_id = ?
+                      AND request_id = ?
+                      AND request_envelope_hash = ?
+                      AND rendered_text_hash = ?
+                      AND action_params_hash = ?
+                      AND precondition_hash = ?
+                      AND authority_context_hash = ?
+                      AND derived_work_class = ?
+                      AND derived_aggregation_group = ?
+                      AND nonce = ?
+                      AND credential_ref = ?
+                      AND auth_method = ?
+                      AND grant_source = ?
+                      AND user_presence = 1
+                      AND user_verification IN (0, 1)
+                      AND (? = 0 OR user_verification = 1)
+                      AND consumed_at IS NULL
+                      AND expires_at > ?
+                    """,
+                    (
+                        now_text,
+                        rendered.request_id,
+                        artifact_id,
+                        rendered.request_id,
+                        rendered.request_envelope_hash,
+                        rendered.rendered_text_hash,
+                        action_params_hash,
+                        precondition_hash,
+                        auth_hash,
+                        derived_work_class,
+                        derived_aggregation_group,
+                        rendered.nonce,
+                        authority_context.credential_ref,
+                        authority_context.auth_method,
+                        authority_context.grant_source,
+                        1 if _webauthn_requires_user_verification(derived_work_class) else 0,
+                        now_text,
+                    ),
+                )
+                if cur.rowcount != 1:
+                    return None, None
+                grant = _mint_s7_execution_grant(
+                    artifact_id=artifact_id,
+                    rendered=rendered,
+                    action_params_hash=action_params_hash,
+                    precondition_hash=precondition_hash,
+                    authority_context_hash=auth_hash,
+                    derived_work_class=derived_work_class,
+                    derived_aggregation_group=derived_aggregation_group,
+                    credential_ref=authority_context.credential_ref or "",
+                    auth_method=authority_context.auth_method,
+                    grant_source=authority_context.grant_source,
+                    consumed_at=now_text,
+                )
+                callback_result = (
+                    after_consume_before_commit(grant)
+                    if after_consume_before_commit is not None
+                    else None
+                )
+                return grant, callback_result
+        except Exception:
+            return None, None
 
 
 @dataclass(frozen=True)
@@ -2137,6 +2459,7 @@ class S7ExecutionAuthorization:
     derived_work_class: str
     derived_aggregation_group: str
     now: str
+    covenant_ceremony_evidence: CovenantCeremonyEvidence | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.store, S7AuthorizationStore):
@@ -2149,6 +2472,80 @@ class S7ExecutionAuthorization:
         if not self.derived_aggregation_group:
             raise ValueError("S7 execution authorization requires derived_aggregation_group")
         _timestamp_text(self.now, field="now")
+        if self.covenant_ceremony_evidence is not None and not isinstance(
+            self.covenant_ceremony_evidence,
+            CovenantCeremonyEvidence,
+        ):
+            raise ValueError("S7 execution covenant_ceremony_evidence is invalid")
+
+
+def execution_grant_authorizes_action(
+    grant: object,
+    *,
+    action: str,
+    params: dict[str, Any] | None,
+) -> bool:
+    """Return True only when a consumed S7 grant matches this execution."""
+    if not isinstance(grant, S7ExecutionGrant):
+        return False
+    try:
+        derived = derive_work_class(action=action, params=params or {})
+    except Exception:
+        derived = "undeterminable_work_class"
+    if derived not in GUARDED_WORK_CLASSES:
+        return False
+    return (
+        grant.derived_work_class == derived
+        and grant.action_params_hash == canonical_hash(params or {})
+    )
+
+
+def _execution_grant_use_key(grant: S7ExecutionGrant) -> tuple[str, str, str, str, str]:
+    return (
+        grant.artifact_id,
+        grant.request_id,
+        grant.nonce,
+        grant.action_params_hash,
+        grant.consumed_at,
+    )
+
+
+def consume_execution_grant_for_action(
+    grant: object,
+    *,
+    action: str,
+    params: dict[str, Any] | None,
+) -> bool:
+    """Consume a minted execution grant exactly once at the action edge."""
+    if not execution_grant_authorizes_action(grant, action=action, params=params or {}):
+        return False
+    assert isinstance(grant, S7ExecutionGrant)
+    key = _execution_grant_use_key(grant)
+    with _EXECUTION_GRANT_USE_LOCK:
+        if key in _USED_EXECUTION_GRANT_KEYS:
+            return False
+        _USED_EXECUTION_GRANT_KEYS.add(key)
+    return True
+
+
+def execution_grant_authorizes_card_transition(
+    grant: object,
+    *,
+    request_id: str,
+    action: str,
+    params: dict[str, Any] | None,
+    artifact_id: str | None,
+) -> bool:
+    """Return True only when a consumed grant belongs to this card transition."""
+    if not isinstance(grant, S7ExecutionGrant):
+        return False
+    if not artifact_id:
+        return False
+    return (
+        grant.request_id == request_id
+        and grant.artifact_id == artifact_id
+        and execution_grant_authorizes_action(grant, action=action, params=params or {})
+    )
 
 
 _S5_ADMISSION_ARTIFACT_KEYS = frozenset({
@@ -2269,11 +2666,25 @@ def brain_swap_precondition_hash(precondition: BrainSwapPrecondition) -> str:
     return s6.canonical_hash(asdict(precondition))
 
 
+def brain_swap_execution_precondition_hash(
+    precondition: BrainSwapPrecondition,
+    *,
+    execution_payload: dict[str, Any],
+) -> str:
+    if not isinstance(precondition, BrainSwapPrecondition):
+        raise ValueError("S7 brain-swap precondition is required")
+    return s6.canonical_hash({
+        "s5_precondition_hash": brain_swap_precondition_hash(precondition),
+        "execution_payload_hash": s6.canonical_hash(dict(execution_payload or {})),
+    })
+
+
 def build_brain_swap_work_request_envelope(
     *,
     request_id: str,
     s5_admission_artifact: object,
     candidate_fingerprint_hash: str,
+    execution_payload: dict[str, Any],
     action: str,
     requesting_subsystem: str,
     closed_symptom_code: str,
@@ -2295,14 +2706,21 @@ def build_brain_swap_work_request_envelope(
         s5_admission_artifact=sealed,
         candidate_fingerprint_hash=candidate_fingerprint_hash,
     )
-    precondition_hash = brain_swap_precondition_hash(precondition)
+    payload = dict(execution_payload or {})
+    if payload.get("operation") != "brain_swap":
+        raise ValueError("S7 brain-swap execution payload must name brain_swap operation")
+    if payload.get("candidate_fingerprint_hash") != precondition.admitted_fingerprint_hash:
+        raise ValueError("S7 brain-swap execution payload candidate does not match S5 admission")
+    if payload.get("s5_admission_artifact_hash") != precondition.s5_admission_artifact_hash:
+        raise ValueError("S7 brain-swap execution payload S5 artifact does not match precondition")
+    precondition_hash = brain_swap_execution_precondition_hash(
+        precondition,
+        execution_payload=payload,
+    )
     return build_work_request_envelope(
         request_id=request_id,
         action=action,
-        params={
-            "operation": "brain_swap",
-            "s5_admission_artifact_hash": precondition.s5_admission_artifact_hash,
-        },
+        params=payload,
         claimed_work_class="self_modification",
         requesting_subsystem=requesting_subsystem,
         closed_symptom_code=closed_symptom_code,
@@ -2325,6 +2743,7 @@ def brain_swap_execution_authorized(
     envelope: WorkRequestEnvelope,
     s5_admission_artifact: object,
     candidate_fingerprint_hash: str,
+    actual_execution_payload: dict[str, Any],
     execution_authorization: S7ExecutionAuthorization | None,
 ) -> bool:
     if not isinstance(envelope, WorkRequestEnvelope):
@@ -2341,7 +2760,17 @@ def brain_swap_execution_authorized(
         )
     except (TypeError, ValueError):
         return False
-    if envelope.precondition_hash != brain_swap_precondition_hash(precondition):
+    payload = dict(actual_execution_payload or {})
+    if payload.get("operation") != "brain_swap":
+        return False
+    if payload.get("candidate_fingerprint_hash") != precondition.admitted_fingerprint_hash:
+        return False
+    if payload.get("s5_admission_artifact_hash") != precondition.s5_admission_artifact_hash:
+        return False
+    if envelope.precondition_hash != brain_swap_execution_precondition_hash(
+        precondition,
+        execution_payload=payload,
+    ):
         return False
     if not isinstance(execution_authorization, S7ExecutionAuthorization):
         return False
@@ -2355,6 +2784,8 @@ def brain_swap_execution_authorized(
     if rendered.request_id != envelope.request_id:
         return False
     if rendered.request_envelope_hash != work_request_envelope_hash(envelope):
+        return False
+    if s6.canonical_hash(payload) != execution_authorization.action_params_hash:
         return False
     return execution_authorization.store.consume_verified(
         execution_authorization.artifact_id,
@@ -2474,6 +2905,18 @@ def build_own_substrate_bypass_inventory() -> tuple[dict[str, object], ...]:
             maez_runtime_or_helper=True,
         ),
         _bypass_entry(
+            path="prompt writes",
+            sort="gated",
+            required_handling="prompt changes require covenant_touching_change ceremony",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
+            path="prompt-template writes",
+            sort="gated",
+            required_handling="prompt-template changes require covenant_touching_change ceremony",
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
             path="covenant-organ writes",
             sort="gated",
             required_handling="S1-S13 covenant-organ changes require covenant_touching_change ceremony",
@@ -2549,7 +2992,10 @@ def operator_boundary_honesty_banner() -> str:
         "runtime or helper paths, including soul/config/model-routing changes, "
         "but it cannot stop raw local write access through raw OS filesystem, "
         "database, or service edits outside Maez's runtime. Those raw OS paths "
-        "are accepted limitations, not permission to bypass S7."
+        "are accepted limitations, not permission to bypass S7. A hardware-key "
+        "touch does not prove the human was uncoerced, does not prove the human "
+        "understood the request, does not prove the display was not spoofed, and "
+        "does not prove the OS/browser was uncompromised."
     )
 
 
@@ -2934,6 +3380,13 @@ CREATE TABLE IF NOT EXISTS s7_webauthn_credentials (
 
 
 def _credential_record_from_row(row: tuple[Any, ...]) -> WebAuthnCredentialRecord:
+    def _stored_bool(value: Any, *, field: str) -> bool:
+        if value == 0:
+            return False
+        if value == 1:
+            return True
+        raise ValueError(f"{field} must be stored as 0 or 1")
+
     return WebAuthnCredentialRecord(
         credential_ref=row[0],
         actor_handle_hmac=row[1],
@@ -2943,8 +3396,8 @@ def _credential_record_from_row(row: tuple[Any, ...]) -> WebAuthnCredentialRecor
         rp_id=row[5],
         origin=row[6],
         created_at=row[7],
-        backup_credential=bool(row[8]),
-        enabled=bool(row[9]),
+        backup_credential=_stored_bool(row[8], field="backup_credential"),
+        enabled=_stored_bool(row[9], field="enabled"),
     )
 
 
@@ -3225,8 +3678,14 @@ class RenderedRequestStatement:
     request_envelope_hash: str
     action_params_hash: str
     authority_context_hash: str
+    derived_work_class: str
+    proposed_change_class: str
+    predicted_effect_class: str
+    rollback_path_class: str
+    maez_consulted_state: str
     maez_voice_consultation_hash: str | None
     maez_objection_state: str
+    maez_unavailable_state: str
     derived_aggregation_group: str
     nonce: str
     expires_at: str
@@ -3243,11 +3702,63 @@ class RenderedRequestStatement:
             raise ValueError("S7 rendered origin is required")
         if not self.rendered_text:
             raise ValueError("S7 rendered_text is required")
+        lines = self.rendered_text.splitlines()
+        expected_metadata = (
+            ("Renderer version: ", f"Renderer version: {self.renderer_version}"),
+            ("Surface: ", f"Surface: {self.surface}"),
+            ("Origin: ", f"Origin: {self.origin}"),
+            ("Request id: ", f"Request id: {self.request_id}"),
+            ("Work class: ", f"Work class: {self.derived_work_class}"),
+            ("Change class: ", f"Change class: {self.proposed_change_class}"),
+            ("Predicted effect class: ", f"Predicted effect class: {self.predicted_effect_class}"),
+            ("Rollback path class: ", f"Rollback path class: {self.rollback_path_class}"),
+            ("Aggregation group: ", f"Aggregation group: {self.derived_aggregation_group}"),
+            ("Maez consulted: ", f"Maez consulted: {self.maez_consulted_state}"),
+            (
+                "Maez objection present: ",
+                f"Maez objection present: {self._rendered_objection_value()}",
+            ),
+            ("Maez unavailable: ", f"Maez unavailable: {self.maez_unavailable_state}"),
+            ("Request envelope hash: ", f"Request envelope hash: {self.request_envelope_hash}"),
+            ("Action params hash: ", f"Action params hash: {self.action_params_hash}"),
+            ("Authority context hash: ", f"Authority context hash: {self.authority_context_hash}"),
+            ("Nonce: ", f"Nonce: {self.nonce}"),
+            ("Expires at: ", f"Expires at: {self.expires_at}"),
+            (
+                "Maez voice consultation hash: ",
+                f"Maez voice consultation hash: {self.maez_voice_consultation_hash or 'none'}",
+            ),
+        )
+        for prefix, expected_line in expected_metadata:
+            matches = [line for line in lines if line.startswith(prefix)]
+            if matches != [expected_line]:
+                raise ValueError("S7 rendered metadata does not match signed text")
         if self.rendered_text_hash != rendered_text_hash(self.rendered_text):
             raise ValueError("S7 rendered_text_hash mismatch")
         _validate_hash64(self.request_envelope_hash, field="request_envelope_hash")
         _validate_hash64(self.action_params_hash, field="action_params_hash")
         _validate_hash64(self.authority_context_hash, field="authority_context_hash")
+        validate_work_class(self.derived_work_class)
+        _validate_closed_value(
+            self.proposed_change_class,
+            PROPOSED_CHANGE_CLASSES,
+            "proposed_change_class",
+        )
+        _validate_closed_value(
+            self.predicted_effect_class,
+            PREDICTED_EFFECT_CLASSES,
+            "predicted_effect_class",
+        )
+        _validate_closed_value(
+            self.rollback_path_class,
+            ROLLBACK_PATH_CLASSES,
+            "rollback_path_class",
+        )
+        _validate_closed_value(
+            self.maez_consulted_state,
+            frozenset({"yes", "not required"}),
+            "maez_consulted_state",
+        )
         if self.maez_voice_consultation_hash is not None:
             _validate_hash64(
                 self.maez_voice_consultation_hash,
@@ -3258,6 +3769,8 @@ class RenderedRequestStatement:
             frozenset({"none", "absent", "present", "unavailable"}),
             "maez_objection_state",
         )
+        if not self.maez_unavailable_state:
+            raise ValueError("S7 maez_unavailable_state is required")
         if not self.derived_aggregation_group:
             raise ValueError("S7 derived_aggregation_group is required")
         if not self.nonce:
@@ -3266,6 +3779,15 @@ class RenderedRequestStatement:
             raise ValueError("S7 rendered expires_at is required")
         _canonical_timestamp(self.expires_at)
         _canonical_timestamp(self.rendered_at)
+
+    def _rendered_objection_value(self) -> str:
+        if self.maez_objection_state == "present":
+            return "yes"
+        if self.maez_objection_state == "absent":
+            return "no"
+        if self.maez_objection_state == "unavailable":
+            return "unavailable"
+        return "not applicable"
 
 
 def rendered_text_hash(rendered_text: str) -> str:
@@ -3310,6 +3832,9 @@ def render_request_statement(
     envelope_hash = work_request_envelope_hash(envelope)
     lines = [
         "S7 work-on-Maez authorization",
+        f"Renderer version: {renderer_version}",
+        f"Surface: {surface}",
+        f"Origin: {origin}",
         f"Request id: {envelope.request_id}",
         f"Work class: {envelope.derived_work_class}",
         f"Change class: {envelope.proposed_change_class}",
@@ -3319,6 +3844,9 @@ def render_request_statement(
         f"Maez consulted: {consulted}",
         f"Maez objection present: {objection}",
         f"Maez unavailable: {unavailable}",
+        "Presence limits: key touch does not prove uncoerced consent, "
+        "does not prove comprehension, does not prove the display was not spoofed, "
+        "and does not prove the OS/browser was uncompromised.",
         f"Request envelope hash: {envelope_hash}",
         f"Action params hash: {action_params_hash}",
         f"Authority context hash: {auth_hash}",
@@ -3337,8 +3865,14 @@ def render_request_statement(
         request_envelope_hash=envelope_hash,
         action_params_hash=action_params_hash,
         authority_context_hash=auth_hash,
+        derived_work_class=envelope.derived_work_class,
+        proposed_change_class=envelope.proposed_change_class,
+        predicted_effect_class=envelope.predicted_effect_class,
+        rollback_path_class=envelope.rollback_path_class,
+        maez_consulted_state=consulted,
         maez_voice_consultation_hash=consultation_hash,
         maez_objection_state=objection_state,
+        maez_unavailable_state=unavailable,
         derived_aggregation_group=envelope.derived_aggregation_group,
         nonce=nonce,
         expires_at=expires_at,
@@ -3371,6 +3905,16 @@ def authorizes_work(
     if not ctx.actor_id:
         return False
     if not ctx.role_names:
+        return False
+    if not ctx.allowed_scopes:
+        return False
+    if not ctx.surface:
+        return False
+    if not ctx.credential_ref:
+        return False
+    if not ctx.created_at:
+        return False
+    if not ctx.expires_at:
         return False
     if ctx.grant_source in {"none", "manual_recovery_required"}:
         return False

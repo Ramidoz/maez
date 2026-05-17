@@ -974,12 +974,16 @@ class MaezDaemon:
             logger.warning("S7 operator health degraded: %s", exc)
             data_freshness_class = "unavailable"
         return build_operator_health_projection(
-            mode="track_b_confidentiality_not_ready",
+            mode="degraded",
             service_mode="running",
             uptime_class="fresh",
             backup_freshness_class="unavailable",
             queue_counts=queue_counts,
-            red_gate_modes=("track_b_confidentiality_not_ready",),
+            red_gate_modes=(
+                "track_b_confidentiality_not_ready",
+                "operator_unavailable_recovery_not_implemented",
+                "backup_restore_confidentiality_not_ready",
+            ),
             manual_recovery_required=False,
             track_b_confidentiality_mode="track_b_confidentiality_not_ready",
             data_freshness_class=data_freshness_class,
@@ -5703,12 +5707,28 @@ class MaezDaemon:
                             "error": f"card status is {card.status!r}, not approvable",
                         }
                     ), 409
+                if (
+                    pipe._is_pending_dialog_card(card)
+                    or pipe._card_requires_s7_authorization(card)
+                ):
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": "s7_authorization_required",
+                            "status": "blocked",
+                            "message": (
+                                "This card changes Maez's guarded substrate "
+                                "and cannot be approved by the cockpit legacy "
+                                "endpoint."
+                            ),
+                        }
+                    ), 403
 
                 class _CockpitCls:
                     source = "cockpit"
                     reasoning = "approved from cockpit UI"
 
-                result = pipe._on_approve(card, _CockpitCls(), "rohit")
+                result = pipe._on_approve(card, _CockpitCls(), card.user_id or "owner")
                 # PipelineResult may be the executed card result or a
                 # refusal (e.g., covenant / will-I / stale state).
                 ok = bool(getattr(result, "execution_success", None))
