@@ -167,6 +167,43 @@ SELF_REMAKING_SOURCE_REF_KINDS = frozenset({
     "s7_maintenance_ceremony",
 })
 
+OPERATOR_HEALTH_MODES = frozenset({
+    "ready",
+    "degraded",
+    "manual_recovery_required",
+    "track_b_confidentiality_not_ready",
+    "operator_unavailable_recovery_not_implemented",
+    "unavailable",
+})
+
+OPERATOR_SERVICE_MODES = frozenset({
+    "running",
+    "degraded",
+    "stopped",
+    "unavailable",
+})
+
+OPERATOR_FRESHNESS_CLASSES = frozenset({
+    "fresh",
+    "stale",
+    "unavailable",
+    "manual_recovery_required",
+})
+
+OPERATOR_RED_GATE_MODES = frozenset({
+    "track_b_confidentiality_not_ready",
+    "operator_unavailable_recovery_not_implemented",
+    "backup_restore_confidentiality_not_ready",
+    "manual_recovery_required",
+})
+
+OPERATOR_QUEUE_COUNT_KEYS = frozenset({
+    "total",
+    "open",
+    "blocked",
+    "expired",
+})
+
 VOICE_SEAT_WORK_CLASSES = frozenset({
     "self_modification",
     "covenant_touching_change",
@@ -279,6 +316,30 @@ def validate_maintenance_record_class(record_class: str) -> str:
 
 def validate_maintenance_corpus(corpus: str) -> str:
     return _validate_closed_value(corpus, MAINTENANCE_CORPORA, "maintenance corpus")
+
+
+def validate_operator_health_mode(mode: str) -> str:
+    return _validate_closed_value(mode, OPERATOR_HEALTH_MODES, "operator health mode")
+
+
+def validate_operator_service_mode(mode: str) -> str:
+    return _validate_closed_value(mode, OPERATOR_SERVICE_MODES, "operator service mode")
+
+
+def validate_operator_freshness_class(freshness_class: str) -> str:
+    return _validate_closed_value(
+        freshness_class,
+        OPERATOR_FRESHNESS_CLASSES,
+        "operator freshness class",
+    )
+
+
+def validate_operator_red_gate_mode(mode: str) -> str:
+    return _validate_closed_value(mode, OPERATOR_RED_GATE_MODES, "operator red-gate mode")
+
+
+def validate_operator_queue_count_key(key: str) -> str:
+    return _validate_closed_value(key, OPERATOR_QUEUE_COUNT_KEYS, "operator queue count key")
 
 
 def _validate_hash64(value: str, *, field: str) -> str:
@@ -932,6 +993,72 @@ def build_self_remaking_history_record(
         work_request_envelope_hash=work_request_envelope_hash,
         created_at=created_at,
     )
+
+
+def _non_negative_int(value: object, *, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field} must be a non-negative integer")
+    return value
+
+
+def build_operator_health_projection(
+    *,
+    mode: str,
+    service_mode: str,
+    uptime_class: str,
+    backup_freshness_class: str,
+    queue_counts: dict[str, int],
+    red_gate_modes: tuple[str, ...],
+    manual_recovery_required: bool,
+    track_b_confidentiality_mode: str,
+    data_freshness_class: str,
+    extra_fields: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Build the closed, content-free S7 operator-health projection."""
+    if extra_fields:
+        raise ValueError("operator health projection is closed; extra fields are forbidden")
+    validate_operator_health_mode(mode)
+    validate_operator_service_mode(service_mode)
+    validate_operator_freshness_class(uptime_class)
+    validate_operator_freshness_class(backup_freshness_class)
+    validate_operator_health_mode(track_b_confidentiality_mode)
+    validate_operator_freshness_class(data_freshness_class)
+    if manual_recovery_required is not True and manual_recovery_required is not False:
+        raise ValueError("manual_recovery_required must be bool")
+    safe_counts = {
+        validate_operator_queue_count_key(str(key)): _non_negative_int(
+            value,
+            field=f"queue_counts.{key}",
+        )
+        for key, value in dict(queue_counts or {}).items()
+    }
+    safe_red_gates = tuple(sorted(validate_operator_red_gate_mode(mode) for mode in red_gate_modes))
+    if mode == "ready" and (
+        safe_red_gates
+        or manual_recovery_required is True
+        or track_b_confidentiality_mode != "ready"
+        or service_mode != "running"
+        or uptime_class != "fresh"
+        or backup_freshness_class != "fresh"
+        or data_freshness_class != "fresh"
+    ):
+        raise ValueError("operator health ready mode requires fresh running inputs")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "route": "/operator/health",
+        "mode": mode,
+        "service_mode": service_mode,
+        "uptime_class": uptime_class,
+        "backup_freshness_class": backup_freshness_class,
+        "queue_counts": safe_counts,
+        "pending_guarded_request_count": safe_counts.get("open", 0),
+        "blocked_request_count": safe_counts.get("blocked", 0),
+        "expired_request_count": safe_counts.get("expired", 0),
+        "red_gate_modes": safe_red_gates,
+        "manual_recovery_required": manual_recovery_required,
+        "track_b_confidentiality_mode": track_b_confidentiality_mode,
+        "data_freshness_class": data_freshness_class,
+    }
 
 
 @dataclass(frozen=True)

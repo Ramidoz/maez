@@ -91,6 +91,7 @@ from core.safety.clinical_boundary import (
 from core.time.temporal_spine import temporal_spine_health
 from core.voice_continuity import voice_continuity_health
 from core.governance.successor_governance import successor_governance_health
+from core.governance.operator_user_boundary import build_operator_health_projection
 from skills.telegram_voice import TelegramVoice
 from skills.telegram_public import MaezPublicBot
 from core.action_engine import ActionEngine
@@ -951,6 +952,38 @@ class MaezDaemon:
         """Content-free S5 state joined to the live identity-ledger fingerprint."""
 
         return voice_continuity_health(getattr(self, "_identity_ledger", None))
+
+    def _operator_health(self) -> dict:
+        """Closed S7 operator-health projection; counts and modes only."""
+        queue_counts = {"open": 0, "blocked": 0, "expired": 0}
+        data_freshness_class = "unavailable"
+        try:
+            telegram = getattr(self, "telegram", None)
+            pipe = telegram._get_pipeline() if telegram else None
+            card_store = getattr(pipe, "card_store", None) if pipe else None
+            if card_store is not None:
+                stats = card_store.stats()
+                by_status = dict(stats.get("by_status") or {})
+                queue_counts = {
+                    "open": int(stats.get("open") or 0),
+                    "blocked": int(by_status.get("blocked") or 0),
+                    "expired": int(by_status.get("expired") or 0),
+                }
+                data_freshness_class = "fresh"
+        except Exception as exc:
+            logger.warning("S7 operator health degraded: %s", exc)
+            data_freshness_class = "unavailable"
+        return build_operator_health_projection(
+            mode="track_b_confidentiality_not_ready",
+            service_mode="running",
+            uptime_class="fresh",
+            backup_freshness_class="unavailable",
+            queue_counts=queue_counts,
+            red_gate_modes=("track_b_confidentiality_not_ready",),
+            manual_recovery_required=False,
+            track_b_confidentiality_mode="track_b_confidentiality_not_ready",
+            data_freshness_class=data_freshness_class,
+        )
 
     def _mark_cycle_stage(self, stage: str) -> None:
         """Record the current daemon-cycle stage for hang diagnosis."""
@@ -5537,6 +5570,10 @@ class MaezDaemon:
                     },
                 }
             )
+
+        @app.route("/operator/health")
+        def operator_health():
+            return jsonify(self._operator_health())
 
         @app.route("/message", methods=["POST"])
         def message():

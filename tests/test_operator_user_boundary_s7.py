@@ -2379,5 +2379,156 @@ class S7SelfRemakingHistoryLaneTests(unittest.TestCase):
             )
 
 
+class S7OperatorHealthProjectionTests(unittest.TestCase):
+    def test_097_operator_health_projection_contains_only_closed_content_free_fields(self):
+        from core.governance import operator_user_boundary as s7
+
+        projection = s7.build_operator_health_projection(
+            mode="track_b_confidentiality_not_ready",
+            service_mode="running",
+            uptime_class="fresh",
+            backup_freshness_class="stale",
+            queue_counts={"open": 2, "blocked": 1, "expired": 0},
+            red_gate_modes=("track_b_confidentiality_not_ready",),
+            manual_recovery_required=False,
+            track_b_confidentiality_mode="track_b_confidentiality_not_ready",
+            data_freshness_class="fresh",
+        )
+
+        self.assertEqual(projection["route"], "/operator/health")
+        self.assertEqual(projection["schema_version"], "s7.v1")
+        blob = repr(projection).lower()
+        for forbidden in (
+            "raw transcript",
+            "self-mod dialog text",
+            "private_thought",
+            "successor capsule",
+            "credential_secret",
+            "rohit@example.com",
+            "config/soul.md",
+        ):
+            self.assertNotIn(forbidden, blob)
+
+    def test_098_operator_health_rejects_unknown_or_raw_fields(self):
+        from core.governance import operator_user_boundary as s7
+
+        with self.assertRaises(ValueError):
+            s7.build_operator_health_projection(
+                mode="ready",
+                service_mode="running",
+                uptime_class="fresh",
+                backup_freshness_class="fresh",
+                queue_counts={"open": 0},
+                red_gate_modes=(),
+                manual_recovery_required=False,
+                track_b_confidentiality_mode="track_b_confidentiality_not_ready",
+                data_freshness_class="fresh",
+                extra_fields={"raw_transcript_text": "hello Rohit"},
+            )
+
+    def test_099_operator_health_exposes_freshness_classes_and_counts(self):
+        from core.governance import operator_user_boundary as s7
+
+        projection = s7.build_operator_health_projection(
+            mode="degraded",
+            service_mode="degraded",
+            uptime_class="stale",
+            backup_freshness_class="unavailable",
+            queue_counts={"open": 4, "blocked": 2, "expired": 1},
+            red_gate_modes=("operator_unavailable_recovery_not_implemented",),
+            manual_recovery_required=True,
+            track_b_confidentiality_mode="track_b_confidentiality_not_ready",
+            data_freshness_class="manual_recovery_required",
+        )
+
+        self.assertEqual(projection["mode"], "degraded")
+        self.assertEqual(projection["data_freshness_class"], "manual_recovery_required")
+        self.assertEqual(projection["pending_guarded_request_count"], 4)
+        self.assertEqual(projection["blocked_request_count"], 2)
+        self.assertEqual(projection["expired_request_count"], 1)
+        self.assertTrue(projection["manual_recovery_required"])
+
+    def test_100_sensitive_red_gate_names_are_rejected(self):
+        from core.governance import operator_user_boundary as s7
+
+        with self.assertRaises(ValueError):
+            s7.build_operator_health_projection(
+                mode="degraded",
+                service_mode="degraded",
+                uptime_class="fresh",
+                backup_freshness_class="fresh",
+                queue_counts={"open": 0},
+                red_gate_modes=("private_thoughts_content_present",),
+                manual_recovery_required=False,
+                track_b_confidentiality_mode="track_b_confidentiality_not_ready",
+                data_freshness_class="fresh",
+            )
+
+    def test_101_daemon_registers_operator_health_as_separate_route(self):
+        source = Path("daemon/maez_daemon.py").read_text(encoding="utf-8")
+
+        self.assertIn('@app.route("/operator/health")', source)
+        self.assertIn("build_operator_health_projection", source)
+
+    def test_102_operator_health_rejects_sensitive_queue_count_names(self):
+        from core.governance import operator_user_boundary as s7
+
+        with self.assertRaises(ValueError):
+            s7.build_operator_health_projection(
+                mode="ready",
+                service_mode="running",
+                uptime_class="fresh",
+                backup_freshness_class="fresh",
+                queue_counts={"private_thought_rows": 1},
+                red_gate_modes=(),
+                manual_recovery_required=False,
+                track_b_confidentiality_mode="track_b_confidentiality_not_ready",
+                data_freshness_class="fresh",
+            )
+
+    def test_103_operator_health_cannot_claim_ready_with_red_gates(self):
+        from core.governance import operator_user_boundary as s7
+
+        with self.assertRaises(ValueError):
+            s7.build_operator_health_projection(
+                mode="ready",
+                service_mode="running",
+                uptime_class="fresh",
+                backup_freshness_class="fresh",
+                queue_counts={"open": 0},
+                red_gate_modes=("track_b_confidentiality_not_ready",),
+                manual_recovery_required=False,
+                track_b_confidentiality_mode="track_b_confidentiality_not_ready",
+                data_freshness_class="fresh",
+            )
+
+    def test_104_operator_health_ready_requires_fresh_running_inputs(self):
+        from core.governance import operator_user_boundary as s7
+
+        base = {
+            "mode": "ready",
+            "service_mode": "running",
+            "uptime_class": "fresh",
+            "backup_freshness_class": "fresh",
+            "queue_counts": {"open": 0},
+            "red_gate_modes": (),
+            "manual_recovery_required": False,
+            "track_b_confidentiality_mode": "ready",
+            "data_freshness_class": "fresh",
+        }
+        cases = {
+            "service_stopped": {"service_mode": "stopped"},
+            "service_degraded": {"service_mode": "degraded"},
+            "uptime_stale": {"uptime_class": "stale"},
+            "backup_stale": {"backup_freshness_class": "stale"},
+            "data_unavailable": {"data_freshness_class": "unavailable"},
+            "data_manual_recovery": {"data_freshness_class": "manual_recovery_required"},
+        }
+        for name, override in cases.items():
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    s7.build_operator_health_projection(**{**base, **override})
+
+
 if __name__ == "__main__":
     unittest.main()
