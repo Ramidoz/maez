@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 import tempfile
 import threading
+from types import SimpleNamespace
 
 
 NOW = "2026-05-17T16:00:00+00:00"
@@ -2528,6 +2529,180 @@ class S7OperatorHealthProjectionTests(unittest.TestCase):
             with self.subTest(name=name):
                 with self.assertRaises(ValueError):
                     s7.build_operator_health_projection(**{**base, **override})
+
+
+class S7LogAuditProjectionTests(unittest.TestCase):
+    def test_105_covenant_log_raw_rows_are_not_custodian_visible_by_default(self):
+        from core.governance import operator_user_boundary as s7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "logs" / "covenant.log"
+            log_path.parent.mkdir(parents=True)
+            log_path.write_text(
+                "2026-05-17 10:00:00 | REFUSED | run_shell | private rationale "
+                "| {\"cmd\":\"cat /home/rohit/private-journal.txt\"} | secret\n",
+                encoding="utf-8",
+            )
+
+            projection = s7.build_covenant_log_projection(log_path)
+
+        self.assertEqual(projection["store_kind"], "covenant_log")
+        self.assertEqual(projection["row_count"], 1)
+        self.assertFalse(projection["raw_rows_visible_by_default"])
+        self.assertNotIn("rows", projection)
+        blob = repr(projection).lower()
+        for forbidden in (
+            "private rationale",
+            "private-journal",
+            "cat /home/rohit",
+            "secret",
+        ):
+            self.assertNotIn(forbidden, blob)
+
+    def test_106_audit_log_raw_rows_are_not_custodian_visible_by_default(self):
+        from core.audit_log import AuditLog
+        from core.governance import operator_user_boundary as s7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "memory" / "audit_log.db"
+            db_path.parent.mkdir(parents=True)
+            log = AuditLog(db_path)
+            log.record(
+                action="run_shell",
+                params={
+                    "cmd": "cat /home/rohit/private-journal.txt",
+                    "reason": "read secret memory",
+                },
+                classification={
+                    "intent_category": "SYSTEM_MODIFICATION",
+                    "lane": "lane_secret",
+                },
+                injection_matches=None,
+                verdict=SimpleNamespace(
+                    decision=SimpleNamespace(value="ESCALATE"),
+                    confidence=0.9,
+                    reasoning="private LLM rationale about Rohit",
+                    concerns=["contains private command output"],
+                    mitigations=[],
+                    summary="sensitive summary",
+                    judge_raw="raw judge chain",
+                    parse_error=None,
+                    latency_ms=12,
+                    nonce="nonce-secret",
+                ),
+            )
+
+            projection = s7.build_audit_log_projection(db_path)
+
+        self.assertEqual(projection["store_kind"], "audit_log_db")
+        self.assertEqual(projection["row_count"], 1)
+        self.assertFalse(projection["raw_rows_visible_by_default"])
+        self.assertNotIn("rows", projection)
+        blob = repr(projection).lower()
+        for forbidden in (
+            "private-journal",
+            "read secret memory",
+            "private llm rationale",
+            "raw judge chain",
+            "lane_secret",
+        ):
+            self.assertNotIn(forbidden, blob)
+
+    def test_107_audit_aggregate_count_may_be_custodian_visible(self):
+        from core.audit_log import AuditLog
+        from core.governance import operator_user_boundary as s7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "memory" / "audit_log.db"
+            db_path.parent.mkdir(parents=True)
+            log = AuditLog(db_path)
+            for idx in range(3):
+                log.record(
+                    action="run_shell",
+                    params={"cmd": f"echo secret-{idx}"},
+                    classification=None,
+                    injection_matches=None,
+                    verdict=None,
+                )
+
+            projection = s7.build_audit_log_projection(db_path)
+
+        self.assertEqual(
+            set(projection),
+            {
+                "schema_version",
+                "store_kind",
+                "mode",
+                "row_count",
+                "raw_rows_visible_by_default",
+                "content_authority",
+            },
+        )
+        self.assertEqual(projection["row_count"], 3)
+        self.assertEqual(projection["content_authority"], "not_granted")
+        self.assertNotIn("secret-", repr(projection))
+
+    def test_108_covenant_log_projection_rejects_wrong_store_path(self):
+        from core.governance import operator_user_boundary as s7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            wrong_path = Path(tmp) / "private-journal.txt"
+            wrong_path.write_text("secret line\nanother secret line\n", encoding="utf-8")
+
+            projection = s7.build_covenant_log_projection(wrong_path)
+
+        self.assertEqual(projection["store_kind"], "covenant_log")
+        self.assertEqual(projection["mode"], "unavailable")
+        self.assertEqual(projection["row_count"], 0)
+        self.assertNotIn("secret", repr(projection).lower())
+
+    def test_109_audit_log_projection_rejects_wrong_store_path(self):
+        import sqlite3
+        from core.governance import operator_user_boundary as s7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            wrong_path = Path(tmp) / "private.sqlite"
+            with sqlite3.connect(wrong_path) as conn:
+                conn.execute("CREATE TABLE audit_log (secret TEXT)")
+                conn.execute("INSERT INTO audit_log (secret) VALUES ('private row')")
+
+            projection = s7.build_audit_log_projection(wrong_path)
+
+        self.assertEqual(projection["store_kind"], "audit_log_db")
+        self.assertEqual(projection["mode"], "unavailable")
+        self.assertEqual(projection["row_count"], 0)
+        self.assertNotIn("private row", repr(projection).lower())
+
+    def test_110_covenant_log_projection_rejects_same_basename_wrong_directory(self):
+        from core.governance import operator_user_boundary as s7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            wrong_path = Path(tmp) / "not-logs" / "covenant.log"
+            wrong_path.parent.mkdir(parents=True)
+            wrong_path.write_text("secret line\nanother secret line\n", encoding="utf-8")
+
+            projection = s7.build_covenant_log_projection(wrong_path)
+
+        self.assertEqual(projection["store_kind"], "covenant_log")
+        self.assertEqual(projection["mode"], "unavailable")
+        self.assertEqual(projection["row_count"], 0)
+
+    def test_111_audit_log_projection_rejects_same_basename_wrong_directory(self):
+        import sqlite3
+        from core.governance import operator_user_boundary as s7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            wrong_path = Path(tmp) / "not-memory" / "audit_log.db"
+            wrong_path.parent.mkdir(parents=True)
+            with sqlite3.connect(wrong_path) as conn:
+                conn.execute("CREATE TABLE audit_log (secret TEXT)")
+                conn.execute("INSERT INTO audit_log (secret) VALUES ('private row')")
+
+            projection = s7.build_audit_log_projection(wrong_path)
+
+        self.assertEqual(projection["store_kind"], "audit_log_db")
+        self.assertEqual(projection["mode"], "unavailable")
+        self.assertEqual(projection["row_count"], 0)
 
 
 if __name__ == "__main__":

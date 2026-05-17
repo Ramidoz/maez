@@ -5,8 +5,9 @@
 
 Decision 34 / ADR 0039. This module is intentionally pure: it defines the
 closed role/authority vocabulary and fail-closed AuthorityContext mechanics
-that runtime approval paths consume. It does not read live stores, mint
-WebAuthn assertions, or grant authority from legacy owner labels.
+that runtime approval paths consume. Its D20 helpers read only closed
+content-free projections from named mixed stores; they do not expose raw rows,
+mint WebAuthn assertions, or grant authority from legacy owner labels.
 """
 
 from __future__ import annotations
@@ -204,6 +205,27 @@ OPERATOR_QUEUE_COUNT_KEYS = frozenset({
     "expired",
 })
 
+MIXED_STORE_KINDS = frozenset({
+    "actions_log",
+    "covenant_log",
+    "audit_log_db",
+    "pending_cards_db",
+    "self_mod_dialogs_db",
+    "decision22_backup_artifact",
+})
+
+MIXED_STORE_PROJECTION_MODES = frozenset({
+    "content_free_counts",
+    "unavailable",
+})
+
+MIXED_STORE_CONTENT_AUTHORITIES = frozenset({
+    "not_granted",
+})
+
+_EXPECTED_COVENANT_LOG_SUFFIX = ("logs", "covenant.log")
+_EXPECTED_AUDIT_LOG_DB_SUFFIX = ("memory", "audit_log.db")
+
 VOICE_SEAT_WORK_CLASSES = frozenset({
     "self_modification",
     "covenant_touching_change",
@@ -340,6 +362,26 @@ def validate_operator_red_gate_mode(mode: str) -> str:
 
 def validate_operator_queue_count_key(key: str) -> str:
     return _validate_closed_value(key, OPERATOR_QUEUE_COUNT_KEYS, "operator queue count key")
+
+
+def validate_mixed_store_kind(kind: str) -> str:
+    return _validate_closed_value(kind, MIXED_STORE_KINDS, "mixed store kind")
+
+
+def validate_mixed_store_projection_mode(mode: str) -> str:
+    return _validate_closed_value(
+        mode,
+        MIXED_STORE_PROJECTION_MODES,
+        "mixed store projection mode",
+    )
+
+
+def validate_mixed_store_content_authority(authority: str) -> str:
+    return _validate_closed_value(
+        authority,
+        MIXED_STORE_CONTENT_AUTHORITIES,
+        "mixed store content authority",
+    )
 
 
 def _validate_hash64(value: str, *, field: str) -> str:
@@ -1059,6 +1101,113 @@ def build_operator_health_projection(
         "track_b_confidentiality_mode": track_b_confidentiality_mode,
         "data_freshness_class": data_freshness_class,
     }
+
+
+def _build_mixed_store_projection(
+    *,
+    store_kind: str,
+    mode: str,
+    row_count: int,
+    content_authority: str = "not_granted",
+) -> dict[str, object]:
+    """Build a closed content-free projection over a mixed content store."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "store_kind": validate_mixed_store_kind(store_kind),
+        "mode": validate_mixed_store_projection_mode(mode),
+        "row_count": _non_negative_int(row_count, field="row_count"),
+        "raw_rows_visible_by_default": False,
+        "content_authority": validate_mixed_store_content_authority(content_authority),
+    }
+
+
+def _path_has_suffix(path: Path, suffix: tuple[str, ...]) -> bool:
+    return len(path.parts) >= len(suffix) and path.parts[-len(suffix):] == suffix
+
+
+def build_covenant_log_projection(log_path: str | Path) -> dict[str, object]:
+    """Return content-free counts for logs/covenant.log.
+
+    D20 treats covenant log lines as bonded-content by default. This reader
+    intentionally counts rows without returning the row text, path, command
+    parameters, refusal rationale, or timestamps.
+    """
+    path = Path(log_path)
+    if not _path_has_suffix(path, _EXPECTED_COVENANT_LOG_SUFFIX):
+        return _build_mixed_store_projection(
+            store_kind="covenant_log",
+            mode="unavailable",
+            row_count=0,
+        )
+    if not path.is_file():
+        return _build_mixed_store_projection(
+            store_kind="covenant_log",
+            mode="unavailable",
+            row_count=0,
+        )
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            row_count = sum(1 for _line in handle)
+    except OSError:
+        return _build_mixed_store_projection(
+            store_kind="covenant_log",
+            mode="unavailable",
+            row_count=0,
+        )
+    return _build_mixed_store_projection(
+        store_kind="covenant_log",
+        mode="content_free_counts",
+        row_count=row_count,
+    )
+
+
+def build_audit_log_projection(db_path: str | Path) -> dict[str, object]:
+    """Return content-free counts for memory/audit_log.db.
+
+    The audit table carries params, reasoning, command outputs, and direct-edit
+    context, so S7 exposes only aggregate count unless a future reviewed
+    projection proves a narrower field content-free.
+    """
+    path = Path(db_path)
+    if not _path_has_suffix(path, _EXPECTED_AUDIT_LOG_DB_SUFFIX):
+        return _build_mixed_store_projection(
+            store_kind="audit_log_db",
+            mode="unavailable",
+            row_count=0,
+        )
+    if not path.is_file():
+        return _build_mixed_store_projection(
+            store_kind="audit_log_db",
+            mode="unavailable",
+            row_count=0,
+        )
+    try:
+        with sqlite3.connect(path) as conn:
+            exists = conn.execute(
+                """
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'audit_log'
+                """
+            ).fetchone()
+            if not exists:
+                return _build_mixed_store_projection(
+                    store_kind="audit_log_db",
+                    mode="unavailable",
+                    row_count=0,
+                )
+            row_count = conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0]
+    except sqlite3.Error:
+        return _build_mixed_store_projection(
+            store_kind="audit_log_db",
+            mode="unavailable",
+            row_count=0,
+        )
+    return _build_mixed_store_projection(
+        store_kind="audit_log_db",
+        mode="content_free_counts",
+        row_count=int(row_count),
+    )
 
 
 @dataclass(frozen=True)
