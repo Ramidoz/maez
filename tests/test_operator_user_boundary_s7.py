@@ -2172,6 +2172,7 @@ class S7SelfModDialogWrappingTests(unittest.TestCase):
             user_text="yes",
             authority_context=authority,
             s7_artifact_id="artifact-selfmod-1",
+            s7_now=NOW,
         )
 
         self.assertEqual(result.kind, "ratified")

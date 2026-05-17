@@ -953,7 +953,7 @@ class DecisionPipeline:
         # Look up the linked dialog via card_request_id
         try:
             dialog_store = self._get_dialog_store()
-            from skills.self_mod_dialog import handle_dialog_reply
+            from skills.self_mod_dialog import DialogStage, handle_dialog_reply
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(
@@ -1000,6 +1000,10 @@ class DecisionPipeline:
 
         if turn.kind == "ratified":
             if not self._s7_card_precondition_fresh(card):
+                dialog_store.set_blocked(
+                    turn.dialog.dialog_id,
+                    reason="stale S7 self-mod precondition",
+                )
                 result = self._block_s7_card(
                     card,
                     reason="stale S7 self-mod precondition",
@@ -1036,6 +1040,28 @@ class DecisionPipeline:
             # surface it alongside whatever _on_approve produced
             if result and turn.reply_text:
                 result.dialog_reply_text = turn.reply_text
+            if result and result.status in (
+                PipelineStatus.BLOCKED,
+                PipelineStatus.REFUSED_AUDIT,
+                PipelineStatus.REFUSED_WILL,
+            ):
+                dialog_store.set_blocked(
+                    turn.dialog.dialog_id,
+                    reason=result.message or "S7 execution could not start",
+                )
+            elif result and result.status == PipelineStatus.EXECUTED:
+                if result.execution_success is True:
+                    dialog_store.set_stage(
+                        turn.dialog.dialog_id,
+                        DialogStage.EXECUTED.value,
+                        execution_output=result.execution_output,
+                    )
+                elif result.execution_success is False:
+                    dialog_store.set_stage(
+                        turn.dialog.dialog_id,
+                        DialogStage.FAILED.value,
+                        execution_error=result.execution_error,
+                    )
             return result
 
         if turn.kind in ("denied", "cancelled", "cap_reached"):

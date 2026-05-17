@@ -22,10 +22,13 @@ FUTURE = "2026-05-17T17:00:00+00:00"
 class _CountingActionEngine:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict, str, int]] = []
+        self.success = True
+        self.output = "executed"
+        self.error = ""
 
     def _execute_action(self, action: str, params: dict, reason: str, *, tier: int):
         self.calls.append((action, dict(params or {}), reason, tier))
-        return SimpleNamespace(success=True, output="executed", error="")
+        return SimpleNamespace(success=self.success, output=self.output, error=self.error)
 
 
 class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
@@ -216,7 +219,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
 
     def test_ratified_self_mod_dialog_without_s7_artifact_does_not_execute(self):
         card = self._card()
-        self._open_dialog(card, require_s7_linkage=False)
+        dialog = self._open_dialog(card, require_s7_linkage=False)
 
         result = self.pipeline._handle_dialog_reply_for_card(
             card=card,
@@ -232,6 +235,10 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertIsNotNone(fresh)
         assert fresh is not None
         self.assertEqual(fresh.status, "blocked")
+        fresh_dialog = self.dialog_store.get(dialog.dialog_id)
+        self.assertIsNotNone(fresh_dialog)
+        assert fresh_dialog is not None
+        self.assertEqual(fresh_dialog.stage, "blocked")
 
     def test_pending_dialog_card_without_linked_dialog_blocks_ordinary_approval(self):
         card = self._card()
@@ -257,7 +264,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         card = self._card()
         authorization = self._authorization_bundle(card)
         request_hash = authorization.rendered.request_envelope_hash
-        self._open_dialog(card, require_s7_linkage=True, request_hash=request_hash)
+        dialog = self._open_dialog(card, require_s7_linkage=True, request_hash=request_hash)
 
         result = self.pipeline._handle_dialog_reply_for_card(
             card=card,
@@ -280,6 +287,41 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertIsNotNone(fresh)
         assert fresh is not None
         self.assertEqual(fresh.status, CardStatus.DONE.value)
+        fresh_dialog = self.dialog_store.get(dialog.dialog_id)
+        self.assertIsNotNone(fresh_dialog)
+        assert fresh_dialog is not None
+        self.assertEqual(fresh_dialog.stage, "executed")
+
+    def test_failed_s7_dialog_execution_marks_dialog_failed(self):
+        card = self._card()
+        authorization = self._authorization_bundle(card)
+        self.engine.success = False
+        self.engine.error = "simulated execution failure"
+        dialog = self._open_dialog(
+            card,
+            require_s7_linkage=True,
+            request_hash=authorization.rendered.request_envelope_hash,
+        )
+
+        result = self.pipeline._handle_dialog_reply_for_card(
+            card=card,
+            text="yes",
+            user_id="rohit",
+            s7_execution_authorization=authorization,
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.status.value, "executed")
+        self.assertFalse(result.execution_success)
+        fresh = self.card_store.get(card.request_id)
+        self.assertIsNotNone(fresh)
+        assert fresh is not None
+        self.assertEqual(fresh.status, CardStatus.FAILED.value)
+        fresh_dialog = self.dialog_store.get(dialog.dialog_id)
+        self.assertIsNotNone(fresh_dialog)
+        assert fresh_dialog is not None
+        self.assertEqual(fresh_dialog.stage, "failed")
 
     def test_stale_s7_dialog_precondition_does_not_consume_artifact(self):
         target = self.root / "config" / "soul.md"
@@ -289,7 +331,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         state_fields = _dp._drop_volatile(_dp._fingerprint_for_action("write_any_file", params))
         card = self._card(params=params, state_fields=state_fields)
         authorization = self._authorization_bundle(card)
-        self._open_dialog(
+        dialog = self._open_dialog(
             card,
             require_s7_linkage=True,
             request_hash=authorization.rendered.request_envelope_hash,
@@ -317,6 +359,10 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertIsNotNone(fresh)
         assert fresh is not None
         self.assertEqual(fresh.status, "blocked")
+        fresh_dialog = self.dialog_store.get(dialog.dialog_id)
+        self.assertIsNotNone(fresh_dialog)
+        assert fresh_dialog is not None
+        self.assertEqual(fresh_dialog.stage, "blocked")
 
     def test_threaded_pending_dialog_reply_cannot_use_ordinary_approval_path(self):
         dialog_card = self._card()
@@ -392,7 +438,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         authorization_a = self._authorization_bundle(card_a)
         card_b = self._card(chat_id="chat_b")
         authorization_b = self._authorization_bundle(card_b)
-        self._open_dialog(
+        dialog_b = self._open_dialog(
             card_b,
             require_s7_linkage=True,
             request_hash=authorization_b.rendered.request_envelope_hash,
@@ -415,11 +461,15 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
                 (authorization_a.artifact_id,),
             ).fetchone()[0]
         self.assertIsNone(consumed_at)
+        fresh_dialog = self.dialog_store.get(dialog_b.dialog_id)
+        self.assertIsNotNone(fresh_dialog)
+        assert fresh_dialog is not None
+        self.assertEqual(fresh_dialog.stage, "blocked")
 
     def test_mark_running_failure_does_not_consume_s7_artifact(self):
         card = self._card()
         authorization = self._authorization_bundle(card)
-        self._open_dialog(
+        dialog = self._open_dialog(
             card,
             require_s7_linkage=True,
             request_hash=authorization.rendered.request_envelope_hash,
@@ -446,6 +496,50 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
                 (authorization.artifact_id,),
             ).fetchone()[0]
         self.assertIsNone(consumed_at)
+        fresh_dialog = self.dialog_store.get(dialog.dialog_id)
+        self.assertIsNotNone(fresh_dialog)
+        assert fresh_dialog is not None
+        self.assertEqual(fresh_dialog.stage, "blocked")
+
+    def test_will_i_refusal_after_s7_dialog_ratification_marks_dialog_blocked(self):
+        card = self._card()
+        authorization = self._authorization_bundle(card)
+        dialog = self._open_dialog(
+            card,
+            require_s7_linkage=True,
+            request_hash=authorization.rendered.request_envelope_hash,
+        )
+
+        def refuse_will(*_args, **_kwargs):
+            return _dp.PipelineResult(
+                status=_dp.PipelineStatus.REFUSED_WILL,
+                message="will-I refused",
+                card=card,
+            )
+
+        self.pipeline._will_i_check = refuse_will  # type: ignore[method-assign]
+
+        result = self.pipeline._handle_dialog_reply_for_card(
+            card=card,
+            text="yes",
+            user_id="rohit",
+            s7_execution_authorization=authorization,
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.status.value, "refused_will")
+        self.assertEqual(len(self.engine.calls), 0)
+        with sqlite3.connect(authorization.store.db_path) as conn:
+            consumed_at = conn.execute(
+                "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                (authorization.artifact_id,),
+            ).fetchone()[0]
+        self.assertIsNone(consumed_at)
+        fresh_dialog = self.dialog_store.get(dialog.dialog_id)
+        self.assertIsNotNone(fresh_dialog)
+        assert fresh_dialog is not None
+        self.assertEqual(fresh_dialog.stage, "blocked")
 
 
 if __name__ == "__main__":
