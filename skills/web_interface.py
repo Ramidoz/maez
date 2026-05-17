@@ -20,10 +20,13 @@ import time
 import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import urlparse
 from uuid import uuid4
 
-sys.path.insert(0, "/home/rohit/maez")
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 from core.infra.secrets import (
     load_ordinary_config_for_process,
     load_secrets_for_process,
