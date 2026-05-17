@@ -663,7 +663,7 @@ def resolve_fate_directive(
     """Resolve only already-attested activation state; this is not authoring."""
     if user_directive:
         directive = validate_fate_directive(user_directive)
-        if not authorship_attested_user_directive:
+        if authorship_attested_user_directive is not True:
             if directive == "explicit_dissolution":
                 raise ValueError("explicit_dissolution resolution requires authorship-attested bonded-user directive")
         else:

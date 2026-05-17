@@ -1015,6 +1015,18 @@ class S6FateDirectiveTests(unittest.TestCase):
             "explicit_dissolution",
         )
 
+    def test_065b_resolve_fate_directive_requires_strict_true_attestation(self):
+        from core.governance import successor_governance as s6
+
+        for sloppy_attestation in ("true", 1, [1], {"attested": True}):
+            with self.subTest(sloppy_attestation=sloppy_attestation):
+                with self.assertRaises(ValueError):
+                    s6.resolve_fate_directive(
+                        "explicit_dissolution",
+                        None,
+                        authorship_attested_user_directive=sloppy_attestation,
+                    )
+
     def test_066_capacity_loss_cannot_trigger_fate_directive(self):
         from core.governance import successor_governance as s6
 
