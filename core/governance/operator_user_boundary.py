@@ -1231,6 +1231,31 @@ def build_operator_health_projection(
     }
 
 
+def build_operator_unavailable_recovery_projection(
+    *,
+    deployment_track: str,
+    bonded_user_is_operator: bool,
+) -> dict[str, object]:
+    """Project D16 readiness without naming people or granting authority."""
+    validate_deployment_track(deployment_track)
+    if bonded_user_is_operator is not True and bonded_user_is_operator is not False:
+        raise ValueError("bonded_user_is_operator must be bool")
+    separated = bonded_user_is_operator is not True
+    blocked = separated or deployment_track == "track_b"
+    mode = "operator_unavailable_recovery_not_implemented" if blocked else "ready"
+    red_gates = ("operator_unavailable_recovery_not_implemented",) if blocked else ()
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "mode": validate_operator_health_mode(mode),
+        "deployment_track": deployment_track,
+        "bonded_user_operator_separated": separated,
+        "track_b_activation_blocker": blocked,
+        "operator_recovery_ceremony_ready": False,
+        "red_gate_modes": tuple(validate_operator_red_gate_mode(gate) for gate in red_gates),
+        "content_authority": validate_mixed_store_content_authority("not_granted"),
+    }
+
+
 def _build_mixed_store_projection(
     *,
     store_kind: str,

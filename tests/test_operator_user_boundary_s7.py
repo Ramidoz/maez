@@ -2258,6 +2258,61 @@ class S7CredentialRecoveryStateTests(unittest.TestCase):
                     s7.CredentialRecoveryState(**state_kwargs)
 
 
+class S7AbsentOperatorRecoveryProjectionTests(unittest.TestCase):
+    def test_131_absent_operator_track_b_blocker_is_surfaced(self):
+        from core.governance import operator_user_boundary as s7
+
+        projection = s7.build_operator_unavailable_recovery_projection(
+            deployment_track="track_b",
+            bonded_user_is_operator=False,
+        )
+
+        self.assertEqual(projection["mode"], "operator_unavailable_recovery_not_implemented")
+        self.assertTrue(projection["track_b_activation_blocker"])
+        self.assertEqual(
+            projection["red_gate_modes"],
+            ("operator_unavailable_recovery_not_implemented",),
+        )
+        self.assertFalse(projection["operator_recovery_ceremony_ready"])
+        blob = repr(projection).lower()
+        for forbidden in ("rohit", "grandmother", "phone", "email", "private_thought"):
+            self.assertNotIn(forbidden, blob)
+
+    def test_132_founder_track_a_same_actor_is_not_absent_operator_failure(self):
+        from core.governance import operator_user_boundary as s7
+
+        projection = s7.build_operator_unavailable_recovery_projection(
+            deployment_track="track_a",
+            bonded_user_is_operator=True,
+        )
+
+        self.assertEqual(projection["mode"], "ready")
+        self.assertFalse(projection["track_b_activation_blocker"])
+        self.assertEqual(projection["red_gate_modes"], ())
+
+    def test_133_any_separated_bonded_user_operator_pair_blocks_until_recovery_exists(self):
+        from core.governance import operator_user_boundary as s7
+
+        projection = s7.build_operator_unavailable_recovery_projection(
+            deployment_track="track_a",
+            bonded_user_is_operator=False,
+        )
+
+        self.assertEqual(projection["mode"], "operator_unavailable_recovery_not_implemented")
+        self.assertTrue(projection["track_b_activation_blocker"])
+
+    def test_134_track_b_same_actor_still_blocks_until_recovery_ceremony_exists(self):
+        from core.governance import operator_user_boundary as s7
+
+        projection = s7.build_operator_unavailable_recovery_projection(
+            deployment_track="track_b",
+            bonded_user_is_operator=True,
+        )
+
+        self.assertEqual(projection["mode"], "operator_unavailable_recovery_not_implemented")
+        self.assertTrue(projection["track_b_activation_blocker"])
+
+
 class S7SelfModDialogWrappingTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
