@@ -1070,6 +1070,33 @@ class S7AuthorizationStore:
 
 
 @dataclass(frozen=True)
+class S7ExecutionAuthorization:
+    """Exact authorization bundle consumed at the execution edge."""
+
+    store: S7AuthorizationStore
+    artifact_id: str
+    rendered: RenderedRequestStatement
+    action_params_hash: str
+    authority_context: AuthorityContext
+    precondition_hash: str
+    derived_work_class: str
+    derived_aggregation_group: str
+    now: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.store, S7AuthorizationStore):
+            raise ValueError("S7 execution authorization requires an authorization store")
+        if not self.artifact_id:
+            raise ValueError("S7 execution authorization requires artifact_id")
+        _validate_hash64(self.action_params_hash, field="action_params_hash")
+        _validate_hash64(self.precondition_hash, field="precondition_hash")
+        validate_work_class(self.derived_work_class)
+        if not self.derived_aggregation_group:
+            raise ValueError("S7 execution authorization requires derived_aggregation_group")
+        _timestamp_text(self.now, field="now")
+
+
+@dataclass(frozen=True)
 class WebAuthnCredentialRecord:
     credential_ref: str
     actor_handle_hmac: str

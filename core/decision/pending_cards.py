@@ -89,6 +89,7 @@ class CardStatus(str, Enum):
     OPEN      = "open"
     DEFERRED  = "deferred"
     APPROVED  = "approved"
+    BLOCKED   = "blocked"
     DENIED    = "denied"
     EXPIRED   = "expired"
     RUNNING   = "running"
@@ -102,6 +103,7 @@ AWAITING_STATUSES = frozenset({CardStatus.OPEN.value, CardStatus.DEFERRED.value}
 EXECUTING_STATUSES = frozenset({CardStatus.APPROVED.value, CardStatus.RUNNING.value})
 # Terminal statuses — no more transitions allowed
 TERMINAL_STATUSES = frozenset({
+    CardStatus.BLOCKED.value,
     CardStatus.DENIED.value,
     CardStatus.EXPIRED.value,
     CardStatus.DONE.value,
@@ -794,6 +796,23 @@ class PendingCardStore:
             extras={
                 "resolved_at": time.time(),
                 "resolved_via": "system",
+                "resolution_notes": reason,
+            },
+        )
+
+    def block(self, request_id: str, reason: str) -> CardRecord:
+        return self._transition(
+            request_id,
+            CardStatus.BLOCKED.value,
+            allow_from={
+                CardStatus.OPEN.value,
+                CardStatus.DEFERRED.value,
+                CardStatus.APPROVED.value,
+                CardStatus.RUNNING.value,
+            },
+            extras={
+                "resolved_at": time.time(),
+                "resolved_via": "s7",
                 "resolution_notes": reason,
             },
         )
