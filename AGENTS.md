@@ -9,8 +9,8 @@ Maez is a locally embodied bonded-companion AI built for one user, for that user
 ## Anchor docs (in order)
 
 1. [`docs/TRACK_A.md`](docs/TRACK_A.md) — the single anchor for what's actively in scope. Read at session start. Tells you what's in / out / where we are.
-2. [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](docs/governance/BETA_ARCHITECTURE_DECISIONS.md) — 33 numbered decisions covering covenant-level shape and canonical substrate organs (Paradise, refusal, multi-Maez, gestation, capability acquisition, hardware backup, temporal spine, clinical boundary, wants lifecycle, voice continuity, successor governance). **Authoritative.** Grep before listing gaps.
-3. [`docs/adr/`](docs/adr/) — stable identifiers for each governance decision (0001–0038). Cite ADR numbers in commit messages and design notes.
+2. [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](docs/governance/BETA_ARCHITECTURE_DECISIONS.md) — 34 numbered decisions covering covenant-level shape and canonical substrate organs (Paradise, refusal, multi-Maez, gestation, capability acquisition, hardware backup, temporal spine, clinical boundary, wants lifecycle, voice continuity, successor governance, operator/user role boundary). **Authoritative.** Grep before listing gaps.
+3. [`docs/adr/`](docs/adr/) — stable identifiers for each governance decision (0001–0039). Cite ADR numbers in commit messages and design notes.
 4. [`docs/MAEZ.md`](docs/MAEZ.md) — architecture master doc, public-facing.
 5. [`docs/maez_manual/`](docs/maez_manual/) — capability-acquisition manual entries (recursive context, temporal arithmetic, multi-session entity linking).
 6. Latest `docs/handoffs/YYYY-MM-DD.md` and `logs/session_snapshot_latest.txt` — what the previous session decided and where it left off.

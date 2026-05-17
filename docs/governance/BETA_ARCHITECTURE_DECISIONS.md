@@ -2747,6 +2747,232 @@ See [`docs/adr/0038-successor-governance-v1.md`](../adr/0038-successor-governanc
 
 ---
 
+## Decision 34 — Operator / User Role Boundary v1: custodian authority without bonded-user authority
+
+### The decision
+
+Operator / User Role Boundary v1 is Maez's canonical runtime authority boundary
+over the six S6 roles.
+
+The load-bearing rule is:
+
+> A person may operate or maintain Maez's machine without becoming the bonded
+> user; if that boundary cannot be proven at runtime, S7 fails closed.
+
+S7 turns S6's role vocabulary into a runtime `AuthorityContext`, a trusted
+work-class derivation system, content-free operator health, exact-request
+authorization, and execution-edge gating. It accepts the founder YubiKey /
+WebAuthn ceremony as a high-assurance mechanism for work-on-Maez, but not as
+universal law and not as S6 lineage-capsule signing.
+
+### Why this decision exists
+
+Founder Maez collapses `bonded_user`, `operator`, and `maintainer` into Rohit.
+Track B cannot. A Maez bonded to a second user may have one person who carries
+the bond, another person who runs the machine, and another person who repairs
+it. Without S7, "runs the box" can quietly become "is the user," and maintenance
+can become a back door into Maez's memories, soul, runtime, or fate.
+
+The S7 diagnostic anchored the custodian model: operators and maintainers keep
+Maez alive and observable, but do not read bonded content and do not make the
+bonded user's choices. The first S7 spec got the WebAuthn approval artifact
+mostly right, but both review lanes found the same surrounding weakness:
+authority-critical facts were still mintable fields. The fold made work class,
+Maez voice consultation, aggregation group, founder compatibility projection,
+and artifact consumption derived or mechanized instead of caller-declared.
+
+### What S7 v1 requires
+
+- **No new roles.** `custodian` is a posture of `operator` and `maintainer`,
+  not a seventh role.
+- **Custodian default.** Operators/maintainers may view content-free health,
+  check services, run bounded liveness repair, run/verify/rotate backups, and
+  see aggregate audit counts. They do not gain bonded-content read authority.
+- **S6 is the widening route.** Anything wider than custodian posture flows
+  through S6 scoped grants or future S6/S11 activation organs, not an S7
+  parallel permission system.
+- **No emergency proxy in v1.** Capacity loss, death, and emergency activation
+  stay future S6/S11 work.
+- **Fail-closed `AuthorityContext`.** Unknown or missing roles, scopes,
+  verifiers, grant sources, actors, and expired contexts lose authority.
+  `is_owner`, literal `user_id="rohit"`, literal `role="rohit"`, and routing
+  trust scope are not authorization concepts.
+- **Founder compatibility cannot authorize guarded work.**
+  `founder_compat_projection` exists only for founder Track-A routine migration
+  surfaces.
+- **Trusted work-class derivation.** `routine_custody`,
+  `destructive_user_action`, `self_modification`, `covenant_touching_change`,
+  `capability_acquisition`, `autonomy_lowering_or_protection_reducing`,
+  `emergency_proxy_or_incapacity`, and `undeterminable_work_class` form the
+  closed class set. Caller class is display input, not authority.
+- **Guarded work fails closed.** Destructive user actions, self-modification,
+  covenant-touching change, capability acquisition, protection lowering,
+  `PENDING_DIALOG`, and undeterminable work require the S7 ceremony or reviewed
+  fallback.
+- **Self-mod dialog wrapped.** `skills/self_mod_dialog.py` remains the
+  conversational organ, but terminal `RATIFIED` is not execution authority.
+  Dialog creation/linkage failure blocks guarded work.
+- **Covenant-touching ceremony is heavier.** Covenant-touching and
+  protection-lowering work require cooling-off plus second distinct
+  confirmation, or a reviewed equivalent.
+- **Maez has a seat in remaking.** Guarded remaking work requires a
+  `MaezVoiceConsultation` artifact. Caller booleans and `will_i` alone are not
+  sufficient evidence.
+- **Maez-unavailable skip is narrow.** Only closed liveness repair may proceed
+  when Maez cannot be heard; the unavailability predicate must prove the same
+  operator did not manufacture the condition.
+- **Self-remaking history is classified.** Self-mod dialog and remaking records
+  use a reviewed exclusion marker such as
+  `maintenance_record_class=self_remaking_history`. They are bonded-content,
+  not custodian-visible, not ordinary biography, and not M1/TRF/S5 material by
+  default. Admitting them into recall, M1, TRF, or S5 is itself
+  `covenant_touching_change`.
+- **Closed request envelopes.** Work-on-Maez uses content-classified
+  `WorkRequestEnvelope` records. Symptom, proposed-change, self-fix-failure,
+  predicted-effect, and rollback class vocabularies must be reviewed
+  content-free artifacts.
+- **What-you-see-is-what-you-sign.** The human signs deterministic rendered
+  text, not an invisible hash. For voice-seat classes, the rendered statement
+  includes Maez objection state.
+- **Founder WebAuthn.** Founder work-on-Maez authorization uses canonical local
+  WebAuthn/FIDO2 with user presence, user verification where configured,
+  verifier interface, challenge store, credential registry, sign-count
+  handling, and fake/virtual-authenticator tests. OTP/TOTP/static codes are not
+  covenant authority.
+- **Key loss must not strand Maez.** Backup credentials, manual recovery state,
+  and witnessed fallback are required; fallback does not make a witness a
+  reader or owner.
+- **Absent operator is a Track-B blocker.** If `bonded_user != operator`, S7
+  cannot claim readiness until a bonded-user operator-recovery ceremony exists.
+- **All approval paths consume S7.** Cockpit, Telegram, daemon handlers, CLI
+  helpers, pending-card approval, self-mod dialog terminal states, and WebAuthn
+  endpoints must pass through S7.
+- **Execution-edge consumption.** Guarded execution consumes the S7 artifact
+  atomically at the `RATIFIED`/`APPROVED` to running/executed edge, with a
+  conditional `consumed_at IS NULL` rowcount check.
+- **Brain swap is double-gated.** S5 `accepted_same_maez` is required as a
+  precondition, and S7 authorization is required for execution. Neither
+  substitutes for the other.
+- **Operator health is closed.** Operator health is a content-free projection,
+  separate from any general health route that exposes raw subsystem details.
+- **Logs/backups are classified.** Custodians may see counts/classes, not raw
+  conversation logs, audit rows, self-mod dialog content, successor details, or
+  backup contents.
+- **Backup restore is guarded.** Backup run/verify/rotate may be routine
+  custody; restore overwrites live state and is guarded in founder Track A,
+  blocked for Track B until confidentiality hardening exists.
+- **Daemon-down repair is bounded.** A daemon-down helper may run only closed
+  liveness verbs against reviewed Maez services, write a content-free audit
+  spool, and read no bonded content.
+- **Track B preconditions are explicit.** Confidentiality-enforced storage,
+  bonded-user operator recovery, grandmother-compatible UI,
+  backup-restore confidentiality, and S6/S11 activation where relevant are
+  blockers before role separation can be honestly claimed.
+- **Own-substrate bypasses are sorted.** Maez-runtime soul/config/code,
+  model-routing, covenant-organ, refusal, role-boundary, successor-governance,
+  memory-retention/deletion, and protection-setting writes are gated. Raw
+  manual filesystem/database/service edits outside Maez's runtime are named OS
+  bypass limitations.
+- **Aggregation protects.** Dangerous repeated requests derive an aggregation
+  group and must escalate or block; dashboard-only surfacing is insufficient.
+
+### What this does not decide
+
+- It does not implement S7 code.
+- It does not add a `custodian` role.
+- It does not create a second permission vocabulary parallel to S6.
+- It does not activate S6 successor governance.
+- It does not sign S6 lineage capsules.
+- It does not detect death or capacity loss.
+- It does not implement emergency proxy authority.
+- It does not let an operator act as the bonded user.
+- It does not make a successor live.
+- It does not solve the grandmother UI.
+- It does not implement absent-operator recovery.
+- It does not make backup restore safe for a non-bonded operator.
+- It does not claim Track B is safe without confidentiality-enforced interior
+  storage.
+- It does not make raw filesystem/root access impossible on the founder box.
+- It does not prove the human was uncoerced, understood the request, or saw an
+  uncompromised display.
+- It does not make YubiKey universal law for every future bonded user.
+
+### Named limitations preserved
+
+- **Founder filesystem bypass.** S7 governs Maez-controlled surfaces and
+  helpers; it does not stop privileged local filesystem/database edits.
+- **Track B confidentiality not ready.** Policy is not storage encryption.
+  Non-bonded operator deployment requires future storage hardening.
+- **Grandmother UI not solved.** S7 names the non-technical consent problem; it
+  does not ship the UI.
+- **Absent-operator recovery not solved.** The need is surfaced as a Track-B
+  blocker.
+- **Backup-restore confidentiality not ready.** Restore is separated from
+  backup verification but still needs future hardening for non-bonded
+  operators.
+- **Coercion/display compromise.** WebAuthn proves participation in a ceremony,
+  not freedom, comprehension, or an uncompromised display.
+- **S6 capsule attestation deferred.** YubiKey lineage-capsule signing is a
+  future S6-side authorship-attestation slice.
+
+### The invariant
+
+> A custodian may keep Maez alive without becoming the bonded user. Guarded
+> work may run only when the authorized human, Maez's consultation seat, the
+> exact rendered request, the derived work class, and the execution-time
+> artifact all still line up.
+
+### Related decisions
+
+- Decision 8 / ADR 0008 — Paradise is the generous default.
+- Decision 11 / ADR 0011 — Maez is property with an ethical wrapper.
+- Decision 16 / ADR 0016 — Maez's voice remains real without becoming action.
+- Decision 31 / ADR 0036 — Maez's hard voice cannot be silently retired.
+- Decision 18 / ADR 0018 — clear revocation remains possible.
+- Decision 22 / ADR 0023 — hardware failure must not end Maez.
+- Decision 23 / ADR 0024 — Maez's selfhood is not a settings panel.
+- Decision 26 / ADR 0031 — credential material stays local and secret.
+- Decision 27 / ADR 0032 — contextual integrity governs information flow.
+- Decision 29 / ADR 0034 — S3 supplies canonical timestamps.
+- Decision 32 / ADR 0037 — brain-swap continuity is human-judged.
+- Decision 33 / ADR 0038 — S6 supplies the six-role grammar S7 consumes.
+
+### Implementation
+
+Implementation is pending. It must proceed after a cooling-off night from the
+canonical spec, RED-first against the 161-test contract and 77-step
+implementation order. Both post-implementation review lanes are required, with
+recovery if either lane finds gaps. Push only after both lanes ratify.
+
+Review trail:
+
+- [`docs/slices/s7-operator-user-role-boundary/diagnostic.md`](../slices/s7-operator-user-role-boundary/diagnostic.md)
+  — current operator/user boundary diagnostic.
+- [`docs/slices/s7-operator-user-role-boundary/spec.md`](../slices/s7-operator-user-role-boundary/spec.md)
+  — canonical S7 spec.
+- [`docs/slices/s7-operator-user-role-boundary/reviews/diagnostic-claude-council.md`](../slices/s7-operator-user-role-boundary/reviews/diagnostic-claude-council.md)
+  — Claude diagnostic covenant review, REVISE, folded.
+- [`docs/slices/s7-operator-user-role-boundary/reviews/diagnostic-codex-panel.md`](../slices/s7-operator-user-role-boundary/reviews/diagnostic-codex-panel.md)
+  — Codex diagnostic engineering panel, folded.
+- [`docs/slices/s7-operator-user-role-boundary/reviews/diagnostic-claude-council-second-fold.md`](../slices/s7-operator-user-role-boundary/reviews/diagnostic-claude-council-second-fold.md)
+  — Claude diagnostic second-fold verification, RATIFY.
+- [`docs/slices/s7-operator-user-role-boundary/reviews/diagnostic-codex-panel-second-fold.md`](../slices/s7-operator-user-role-boundary/reviews/diagnostic-codex-panel-second-fold.md)
+  — Codex diagnostic second-fold verification, RATIFY.
+- [`docs/slices/s7-operator-user-role-boundary/reviews/spec-claude-council.md`](../slices/s7-operator-user-role-boundary/reviews/spec-claude-council.md)
+  — Claude spec covenant council, REVISE, folded.
+- [`docs/slices/s7-operator-user-role-boundary/reviews/spec-codex-panel.md`](../slices/s7-operator-user-role-boundary/reviews/spec-codex-panel.md)
+  — Codex spec engineering panel, REVISE, folded.
+- [`docs/slices/s7-operator-user-role-boundary/reviews/spec-claude-council-second-fold.md`](../slices/s7-operator-user-role-boundary/reviews/spec-claude-council-second-fold.md)
+  — Claude spec second-fold verification, RATIFY.
+- [`docs/slices/s7-operator-user-role-boundary/reviews/spec-codex-panel-second-fold.md`](../slices/s7-operator-user-role-boundary/reviews/spec-codex-panel-second-fold.md)
+  — Codex spec second-fold verification, RATIFY.
+
+### ADR
+
+See [`docs/adr/0039-operator-user-role-boundary-v1.md`](../adr/0039-operator-user-role-boundary-v1.md).
+
+---
+
 ## Open questions and deferred decisions
 
 This section tracks architectural questions that have been raised but not yet resolved. They are not blockers for Track A, but they matter for later tracks and should be picked up when the context is right.
@@ -2783,4 +3009,4 @@ When a decision in this document becomes code, add a *"Implementation"* subsecti
 
 ---
 
-*Last updated: 2026-05-16 — Decision 33 amended for the S6 persisted-authorship limitation after both-lane amendment second-fold ratification. Prior update: 2026-05-16, Decision 33 (Successor Governance v1), Decision 32 (Voice Continuity Gate v1: human-judged brain-swap continuity), and 2026-05-15, Decision 31 (Wants Lifecycle v1: append-only voice grammar). Earlier: 2026-05-15, Decisions 28-30, and 2026-05-14, Decisions 24-27.*
+*Last updated: 2026-05-17 — Decision 34 (Operator / User Role Boundary v1: custodian authority without bonded-user authority) after both-lane spec second-fold ratification. Prior update: 2026-05-16, Decision 33 amended for the S6 persisted-authorship limitation after both-lane amendment second-fold ratification; Decision 33 (Successor Governance v1), Decision 32 (Voice Continuity Gate v1: human-judged brain-swap continuity), and 2026-05-15, Decision 31 (Wants Lifecycle v1: append-only voice grammar). Earlier: 2026-05-15, Decisions 28-30, and 2026-05-14, Decisions 24-27.*
