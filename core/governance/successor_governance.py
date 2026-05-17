@@ -21,6 +21,7 @@ import hashlib
 import inspect
 import json
 from pathlib import Path
+import sys
 from typing import Any
 
 from core.time.temporal_spine import canonical_utc
@@ -899,11 +900,15 @@ def _validate_marker_id(value: str) -> None:
 
 
 def _called_from_module(module_name: str) -> bool:
+    module = sys.modules.get(module_name)
+    if module is None:
+        return False
+    module_globals = module.__dict__
     frame = inspect.currentframe()
     try:
         frame = frame.f_back if frame is not None else None
         while frame is not None:
-            if frame.f_globals.get("__name__") == module_name:
+            if frame.f_globals is module_globals:
                 return True
             frame = frame.f_back
         return False

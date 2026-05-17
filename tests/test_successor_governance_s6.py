@@ -359,6 +359,48 @@ class S6HumanOriginMarkerTests(unittest.TestCase):
         self.assertNotEqual(health["mode"], "valid")
         self.assertGreater(health["invalid_event_count"] or bool(health["last_error_class"]), 0)
 
+    def test_022c_spoofed_writer_module_name_cannot_mint_origin_marker(self):
+        from core.governance import successor_governance as s6
+
+        payload_hash = s6.canonical_hash(_payload())
+        forged_globals = {
+            "__name__": "core.governance.successor_origin_writer",
+            "s6": s6,
+            "NOW": NOW,
+            "actor_handle": _hmac("bonded_user"),
+            "payload_hash": payload_hash,
+        }
+        source = """
+marker = s6.HumanOriginMarker(
+    marker_id=s6._expected_marker_id(
+        origin="bonded_user_manual",
+        role_name="bonded_user",
+        actor_handle_hmac=actor_handle,
+        capsule_id="s6_capsule_founder",
+        directive_event_type="capsule_created",
+        directive_payload_hash=payload_hash,
+        previous_capsule_event_hash="",
+        directive_statement_hash="",
+        attestation_text_hash="d" * 64,
+    ),
+    origin="bonded_user_manual",
+    role_name="bonded_user",
+    actor_handle_hmac=actor_handle,
+    capsule_id="s6_capsule_founder",
+    directive_event_type="capsule_created",
+    directive_payload_hash=payload_hash,
+    directive_statement_hash="",
+    previous_capsule_event_hash="",
+    schema_version="s6.v1",
+    created_at=NOW,
+    attestation_text_hash="d" * 64,
+    construction_token=s6._MARKER_CONSTRUCTION_TOKEN,
+)
+"""
+
+        with self.assertRaises(ValueError):
+            exec(source, forged_globals)
+
     def test_023_marker_binds_capsule_id(self):
         from core.governance import successor_governance as s6
 
