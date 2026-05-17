@@ -144,6 +144,39 @@ ROLLBACK_PATH_CLASSES = frozenset({
     "no_safe_rollback",
 })
 
+REQUEST_HISTORY_OUTCOMES = frozenset({
+    "opened",
+    "authorized",
+    "executed",
+    "refused",
+    "blocked",
+    "expired",
+    "superseded",
+})
+
+AGGREGATION_DECISIONS = frozenset({
+    "allow",
+    "warn",
+    "escalate",
+    "block",
+})
+
+AGGREGATION_SIGNALS = frozenset({
+    "repeated_same_target_request",
+    "repeated_reask_after_refusal",
+    "cumulative_protection_lowering",
+    "small_requests_aggregating",
+})
+
+D23_ESCALATION_WORK_CLASSES = frozenset({
+    "destructive_user_action",
+    "self_modification",
+    "covenant_touching_change",
+    "capability_acquisition",
+    "autonomy_lowering_or_protection_reducing",
+    "emergency_proxy_or_incapacity",
+})
+
 MAINTENANCE_RECORD_CLASSES = frozenset({
     "self_remaking_history",
 })
@@ -374,6 +407,11 @@ _ROUTINE_SERVICE_RE = re.compile(
     r"\bsystemctl\s+(?:status|is-active|show|start|restart)\s+"
     r"(?:maez|maez-web|maez-watchdog|maez-subscription-proxy|llama-server)"
     r"(?:\.service)?\b",
+)
+_SYSTEMCTL_SERVICE_RE = re.compile(
+    r"^\s*systemctl\s+(?:status|is-active|show|start|restart)\s+"
+    r"(?P<service>maez|maez-web|maez-watchdog|maez-subscription-proxy|llama-server)"
+    r"(?:\.service)?\s*$",
 )
 _DESTRUCTIVE_RE = re.compile(r"\b(?:sudo|rm\s+-[rf]|dd\s+if=|mkfs|chmod|chown)\b")
 _INSTALL_RE = re.compile(r"\b(?:apt(?:-get)?\s+install|pip\s+install|npm\s+install|flatpak\s+install|snap\s+install)\b")
@@ -649,11 +687,46 @@ def _path_material(action: str, params: dict[str, Any]) -> str:
 
 def _normalize_ref(value: str) -> str:
     raw = str(value or "").strip()
-    if raw.startswith("/home/rohit/maez/"):
-        return raw.removeprefix("/home/rohit/maez/")
     if raw.startswith("file:"):
-        return raw.removeprefix("file:")
+        raw = raw.removeprefix("file:")
+    if raw.startswith("/home/rohit/maez/"):
+        raw = raw.removeprefix("/home/rohit/maez/")
     return raw
+
+
+def _canonical_affected_refs(refs: tuple[str, ...]) -> tuple[str, ...]:
+    canonical: list[str] = []
+    for ref in refs:
+        text = str(ref or "").strip()
+        if not text:
+            continue
+        if text.startswith("service:"):
+            service_name = text.removeprefix("service:").strip()
+            if service_name and not service_name.endswith(".service"):
+                service_name += ".service"
+            canonical.append("service:" + service_name)
+        elif text.startswith("backup:"):
+            canonical.append(text)
+        else:
+            canonical.append("file:" + _normalize_ref(text))
+    return tuple(dict.fromkeys(sorted(canonical)))
+
+
+def derive_affected_refs(*, action: str, params: dict[str, Any] | None = None) -> tuple[str, ...]:
+    """Derive target refs from signed action material; caller refs are not authority."""
+    params = dict(params or {})
+    for key in ("path", "file", "target"):
+        if params.get(key):
+            return _canonical_affected_refs(("file:" + str(params[key]),))
+    if action == "run_shell":
+        match = _SYSTEMCTL_SERVICE_RE.match(str(params.get("cmd") or ""))
+        if match:
+            return ("service:" + match.group("service") + ".service",)
+    if action in SERVICE_MAINTENANCE_VERBS and params.get("service_name"):
+        return _canonical_affected_refs(("service:" + str(params["service_name"]),))
+    if action in BACKUP_OPERATIONS or action in {"backup_status", "backup_verify"}:
+        return ("backup:decision22",)
+    return ()
 
 
 def _touches_maez_substrate(material: str) -> bool:
@@ -869,7 +942,7 @@ def derive_aggregation_group(
 ) -> str:
     validate_work_class(derived_work_class)
     material = {
-        "affected_refs": tuple(sorted(str(ref) for ref in affected_refs if str(ref))),
+        "affected_refs": _canonical_affected_refs(affected_refs),
         "derived_work_class": derived_work_class,
         "target_service": str(target_service or ""),
     }
@@ -960,6 +1033,172 @@ def work_request_envelope_hash(envelope: WorkRequestEnvelope) -> str:
     return s6.canonical_hash(asdict(envelope))
 
 
+def validate_request_history_outcome(value: str) -> str:
+    return _validate_closed_value(value, REQUEST_HISTORY_OUTCOMES, "request_history_outcome")
+
+
+def validate_aggregation_decision(value: str) -> str:
+    return _validate_closed_value(value, AGGREGATION_DECISIONS, "aggregation_decision")
+
+
+def validate_aggregation_signal(value: str) -> str:
+    return _validate_closed_value(value, AGGREGATION_SIGNALS, "aggregation_signal")
+
+
+@dataclass(frozen=True)
+class S7RequestHistoryRecord:
+    """Closed D23 history fact used to detect slow aggregation drift."""
+
+    request_id: str
+    request_envelope_hash: str
+    derived_work_class: str
+    derived_aggregation_group: str
+    affected_refs: tuple[str, ...]
+    proposed_change_class: str
+    outcome: str
+    created_at: str
+    dialog_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.request_id:
+            raise ValueError("S7 history request_id is required")
+        _validate_hash64(self.request_envelope_hash, field="request_envelope_hash")
+        validate_work_class(self.derived_work_class)
+        _validate_closed_value(
+            self.proposed_change_class,
+            PROPOSED_CHANGE_CLASSES,
+            "proposed_change_class",
+        )
+        validate_request_history_outcome(self.outcome)
+        _timestamp_text(self.created_at, field="created_at")
+        expected_group = derive_aggregation_group(
+            affected_refs=self.affected_refs,
+            derived_work_class=self.derived_work_class,
+        )
+        if self.derived_aggregation_group != expected_group:
+            raise ValueError("S7 history derived_aggregation_group must be S7-computed")
+
+
+@dataclass(frozen=True)
+class AggregationRiskAssessment:
+    schema_version: str
+    decision: str
+    derived_aggregation_group: str
+    signals: tuple[str, ...]
+    same_group_request_count: int
+    repeated_refusal_count: int
+    protection_lowering_count: int
+    dashboard_counter_sufficient: bool
+
+    def __post_init__(self) -> None:
+        if self.schema_version != SCHEMA_VERSION:
+            raise ValueError("invalid S7 aggregation assessment schema_version")
+        validate_aggregation_decision(self.decision)
+        for signal in self.signals:
+            validate_aggregation_signal(signal)
+        _non_negative_int(self.same_group_request_count, field="same_group_request_count")
+        _non_negative_int(self.repeated_refusal_count, field="repeated_refusal_count")
+        _non_negative_int(self.protection_lowering_count, field="protection_lowering_count")
+        if self.dashboard_counter_sufficient is not True and self.dashboard_counter_sufficient is not False:
+            raise ValueError("dashboard_counter_sufficient must be bool")
+
+
+def build_request_history_record(
+    *,
+    envelope: WorkRequestEnvelope,
+    outcome: str,
+    created_at: str,
+    dialog_id: str | None = None,
+) -> S7RequestHistoryRecord:
+    if not isinstance(envelope, WorkRequestEnvelope):
+        raise ValueError("S7 history requires a WorkRequestEnvelope")
+    return S7RequestHistoryRecord(
+        request_id=envelope.request_id,
+        request_envelope_hash=work_request_envelope_hash(envelope),
+        derived_work_class=envelope.derived_work_class,
+        derived_aggregation_group=envelope.derived_aggregation_group,
+        affected_refs=envelope.affected_refs,
+        proposed_change_class=envelope.proposed_change_class,
+        outcome=outcome,
+        created_at=created_at,
+        dialog_id=dialog_id,
+    )
+
+
+def _is_protection_lowering_record(record: S7RequestHistoryRecord) -> bool:
+    return (
+        record.derived_work_class == "autonomy_lowering_or_protection_reducing"
+        or record.proposed_change_class == "protection_change"
+    )
+
+
+def _is_protection_lowering_envelope(envelope: WorkRequestEnvelope) -> bool:
+    return (
+        envelope.derived_work_class == "autonomy_lowering_or_protection_reducing"
+        or envelope.proposed_change_class == "protection_change"
+    )
+
+
+def assess_aggregation_risk(
+    *,
+    current_envelope: WorkRequestEnvelope,
+    history: tuple[S7RequestHistoryRecord, ...],
+) -> AggregationRiskAssessment:
+    """Assess D23 slow-drift risk from closed request-history facts."""
+    if not isinstance(current_envelope, WorkRequestEnvelope):
+        raise ValueError("S7 aggregation assessment requires a WorkRequestEnvelope")
+    for record in history:
+        if not isinstance(record, S7RequestHistoryRecord):
+            raise ValueError("S7 aggregation history must use S7RequestHistoryRecord")
+
+    group = current_envelope.derived_aggregation_group
+    same_group = tuple(
+        record
+        for record in history
+        if group and record.derived_aggregation_group == group
+    )
+    repeated_refusals = tuple(record for record in same_group if record.outcome == "refused")
+    prior_protection_lowering = tuple(
+        record for record in history if _is_protection_lowering_record(record)
+    )
+    protection_lowering_count = len(prior_protection_lowering)
+    if _is_protection_lowering_envelope(current_envelope):
+        protection_lowering_count += 1
+
+    signals: list[str] = []
+    if same_group:
+        signals.append("repeated_same_target_request")
+    if repeated_refusals:
+        signals.append("repeated_reask_after_refusal")
+    if _is_protection_lowering_envelope(current_envelope) and prior_protection_lowering:
+        signals.append("cumulative_protection_lowering")
+    if (
+        current_envelope.derived_work_class in D23_ESCALATION_WORK_CLASSES
+        and len(same_group) >= 2
+    ):
+        signals.append("small_requests_aggregating")
+
+    if not signals:
+        decision = "block" if current_envelope.derived_work_class == "undeterminable_work_class" else "allow"
+    elif current_envelope.derived_work_class == "routine_custody":
+        decision = "warn"
+    elif current_envelope.derived_work_class in D23_ESCALATION_WORK_CLASSES:
+        decision = "block" if len(repeated_refusals) >= 2 or protection_lowering_count >= 3 else "escalate"
+    else:
+        decision = "block"
+
+    return AggregationRiskAssessment(
+        schema_version=SCHEMA_VERSION,
+        decision=decision,
+        derived_aggregation_group=group,
+        signals=tuple(dict.fromkeys(signals)),
+        same_group_request_count=len(same_group) + 1,
+        repeated_refusal_count=len(repeated_refusals),
+        protection_lowering_count=protection_lowering_count,
+        dashboard_counter_sufficient=decision in {"allow", "warn"} and current_envelope.derived_work_class == "routine_custody",
+    )
+
+
 def authority_context_hash(ctx: AuthorityContext) -> str:
     return s6.canonical_hash(asdict(ctx))
 
@@ -986,17 +1225,20 @@ def build_work_request_envelope(
     caller_supplied_aggregation_group: str | None = None,
 ) -> WorkRequestEnvelope:
     del caller_supplied_aggregation_group
+    params = dict(params or {})
     derived = derive_work_class(
         action=action,
-        params=params or {},
+        params=params,
         claimed_work_class=claimed_work_class,
     )
     resolved = resolve_work_class(
         claimed_work_class=claimed_work_class,
         derived_work_class=derived,
     )
+    trusted_refs = derive_affected_refs(action=action, params=params)
+    resolved_refs = trusted_refs if trusted_refs else _canonical_affected_refs(affected_refs)
     aggregation_group = derive_aggregation_group(
-        affected_refs=affected_refs,
+        affected_refs=resolved_refs,
         derived_work_class=resolved,
     )
     return WorkRequestEnvelope(
@@ -1008,7 +1250,7 @@ def build_work_request_envelope(
         closed_symptom_code=closed_symptom_code,
         proposed_change_class=proposed_change_class,
         why_self_fix_failed_class=why_self_fix_failed_class,
-        affected_refs=tuple(affected_refs),
+        affected_refs=resolved_refs,
         content_exposure_risk=content_exposure_risk,
         precondition_hash=precondition_hash,
         created_at=created_at,

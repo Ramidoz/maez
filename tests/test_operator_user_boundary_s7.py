@@ -2871,6 +2871,224 @@ class S7OwnSubstrateBypassTaxonomyTests(unittest.TestCase):
             self.assertIn("soul/config/model-routing", lowered)
 
 
+class S7AggregationHabitTests(unittest.TestCase):
+    def _protection_envelope(self, request_id: str, *, path: str = "/home/rohit/maez/config/protection.yml"):
+        from core.governance import operator_user_boundary as s7
+
+        return s7.build_work_request_envelope(
+            request_id=request_id,
+            action="write_any_file",
+            params={"path": path, "content": "lower guard"},
+            claimed_work_class="autonomy_lowering_or_protection_reducing",
+            requesting_subsystem="unit",
+            closed_symptom_code="verification_needed",
+            proposed_change_class="protection_change",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("file:" + path.removeprefix("/home/rohit/maez/"),),
+            content_exposure_risk="content_free",
+            precondition_hash="a" * 64,
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="protection_change",
+            rollback_path_class="manual_review",
+        )
+
+    def _soul_envelope(self, request_id: str):
+        from core.governance import operator_user_boundary as s7
+
+        return s7.build_work_request_envelope(
+            request_id=request_id,
+            action="write_any_file",
+            params={"path": "/home/rohit/maez/config/soul.md", "content": "change voice"},
+            claimed_work_class="self_modification",
+            requesting_subsystem="unit",
+            closed_symptom_code="self_mod_requested",
+            proposed_change_class="soul_change",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("file:config/soul.md",),
+            content_exposure_risk="bonded_content_ref",
+            precondition_hash="b" * 64,
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="behavior_change",
+            rollback_path_class="revert_patch",
+            free_text_ref_hash="c" * 64,
+        )
+
+    def _service_envelope(self, request_id: str):
+        from core.governance import operator_user_boundary as s7
+
+        return s7.build_work_request_envelope(
+            request_id=request_id,
+            action="run_shell",
+            params={"cmd": "systemctl restart maez.service"},
+            claimed_work_class="routine_custody",
+            requesting_subsystem="unit",
+            closed_symptom_code="service_unhealthy",
+            proposed_change_class="service_restart",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("service:maez.service",),
+            content_exposure_risk="content_free",
+            precondition_hash="d" * 64,
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="liveness_restore",
+            rollback_path_class="restart_service",
+        )
+
+    def test_155_repeated_protection_lowering_escalates_or_blocks_not_dashboard_only(self):
+        from core.governance import operator_user_boundary as s7
+
+        prior = self._protection_envelope("req-protect-1")
+        current = self._protection_envelope("req-protect-2")
+        history = (
+            s7.build_request_history_record(
+                envelope=prior,
+                outcome="refused",
+                created_at=PAST,
+            ),
+        )
+
+        assessment = s7.assess_aggregation_risk(
+            current_envelope=current,
+            history=history,
+        )
+
+        self.assertIn(assessment.decision, {"escalate", "block"})
+        self.assertIn("cumulative_protection_lowering", assessment.signals)
+        self.assertFalse(assessment.dashboard_counter_sufficient)
+
+    def test_156_repeated_same_target_refusal_reask_escalates_or_blocks(self):
+        from core.governance import operator_user_boundary as s7
+
+        prior = self._soul_envelope("req-soul-1")
+        current = self._soul_envelope("req-soul-2")
+        history = (
+            s7.build_request_history_record(
+                envelope=prior,
+                outcome="refused",
+                created_at=PAST,
+                dialog_id="dialog-a",
+            ),
+        )
+
+        assessment = s7.assess_aggregation_risk(
+            current_envelope=current,
+            history=history,
+        )
+
+        self.assertIn(assessment.decision, {"escalate", "block"})
+        self.assertIn("repeated_reask_after_refusal", assessment.signals)
+        self.assertFalse(assessment.dashboard_counter_sufficient)
+
+    def test_157_routine_custody_aggregation_can_warn_without_blocking(self):
+        from core.governance import operator_user_boundary as s7
+
+        prior = self._service_envelope("req-service-1")
+        current = self._service_envelope("req-service-2")
+        history = (
+            s7.build_request_history_record(
+                envelope=prior,
+                outcome="executed",
+                created_at=PAST,
+            ),
+        )
+
+        assessment = s7.assess_aggregation_risk(
+            current_envelope=current,
+            history=history,
+        )
+
+        self.assertEqual(assessment.decision, "warn")
+        self.assertIn("repeated_same_target_request", assessment.signals)
+        self.assertTrue(assessment.dashboard_counter_sufficient)
+
+    def test_158_history_record_rejects_caller_supplied_aggregation_group(self):
+        from core.governance import operator_user_boundary as s7
+
+        env = self._soul_envelope("req-soul-1")
+
+        with self.assertRaises(ValueError):
+            s7.S7RequestHistoryRecord(
+                request_id=env.request_id,
+                request_envelope_hash=s7.work_request_envelope_hash(env),
+                derived_work_class=env.derived_work_class,
+                derived_aggregation_group="attacker-controlled",
+                affected_refs=env.affected_refs,
+                proposed_change_class=env.proposed_change_class,
+                outcome="refused",
+                created_at=PAST,
+                dialog_id="dialog-a",
+            )
+
+    def test_159_mismatched_affected_refs_cannot_hide_same_path_reask(self):
+        from core.governance import operator_user_boundary as s7
+
+        prior = self._soul_envelope("req-soul-1")
+        current = s7.build_work_request_envelope(
+            request_id="req-soul-2",
+            action="write_any_file",
+            params={"path": "/home/rohit/maez/config/soul.md", "content": "change voice"},
+            claimed_work_class="self_modification",
+            requesting_subsystem="unit",
+            closed_symptom_code="self_mod_requested",
+            proposed_change_class="soul_change",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("file:config/decoy.md",),
+            content_exposure_risk="bonded_content_ref",
+            precondition_hash="b" * 64,
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="behavior_change",
+            rollback_path_class="revert_patch",
+            free_text_ref_hash="c" * 64,
+        )
+        history = (
+            s7.build_request_history_record(
+                envelope=prior,
+                outcome="refused",
+                created_at=PAST,
+            ),
+        )
+
+        assessment = s7.assess_aggregation_risk(
+            current_envelope=current,
+            history=history,
+        )
+
+        self.assertEqual(current.affected_refs, ("file:config/soul.md",))
+        self.assertIn(assessment.decision, {"escalate", "block"})
+        self.assertIn("repeated_reask_after_refusal", assessment.signals)
+
+    def test_160_protection_lowering_accumulates_across_protection_refs(self):
+        from core.governance import operator_user_boundary as s7
+
+        prior = self._protection_envelope(
+            "req-protect-1",
+            path="/home/rohit/maez/config/protection.yml",
+        )
+        current = self._protection_envelope(
+            "req-protect-2",
+            path="/home/rohit/maez/config/role-boundary-protection.yml",
+        )
+        history = (
+            s7.build_request_history_record(
+                envelope=prior,
+                outcome="executed",
+                created_at=PAST,
+            ),
+        )
+
+        assessment = s7.assess_aggregation_risk(
+            current_envelope=current,
+            history=history,
+        )
+
+        self.assertIn(assessment.decision, {"escalate", "block"})
+        self.assertIn("cumulative_protection_lowering", assessment.signals)
+        self.assertFalse(assessment.dashboard_counter_sufficient)
+
+
 class S7SelfModDialogWrappingTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
