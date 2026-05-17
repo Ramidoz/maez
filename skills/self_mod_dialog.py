@@ -186,6 +186,7 @@ class SelfModDialog:
     s7_authority_context_hash: Optional[str] = None
     s7_artifact_id: Optional[str] = None
     s7_block_reason: Optional[str] = None
+    maintenance_record_class: str = "self_remaking_history"
     # Ephemeral flag — when the classifier last suggested resolution and
     # Maez asked the user "does this feel resolved?", we stash that fact
     # so the next user reply is interpreted as a yes/no against the
@@ -223,7 +224,8 @@ CREATE TABLE IF NOT EXISTS self_mod_dialogs (
     s7_request_envelope_hash TEXT,
     s7_authority_context_hash TEXT,
     s7_artifact_id TEXT,
-    s7_block_reason TEXT
+    s7_block_reason TEXT,
+    maintenance_record_class TEXT DEFAULT 'self_remaking_history'
 );
 """
 
@@ -296,6 +298,7 @@ def _row_to_dialog(row: sqlite3.Row) -> SelfModDialog:
         s7_authority_context_hash=_safe_col("s7_authority_context_hash"),
         s7_artifact_id=_safe_col("s7_artifact_id"),
         s7_block_reason=_safe_col("s7_block_reason"),
+        maintenance_record_class=_safe_col("maintenance_record_class") or "self_remaking_history",
         awaiting_completion_confirmation=awaiting,
     )
 
@@ -343,6 +346,11 @@ class SelfModDialogStore:
                 conn.execute("ALTER TABLE self_mod_dialogs ADD COLUMN s7_artifact_id TEXT")
             if "s7_block_reason" not in cols:
                 conn.execute("ALTER TABLE self_mod_dialogs ADD COLUMN s7_block_reason TEXT")
+            if "maintenance_record_class" not in cols:
+                conn.execute(
+                    "ALTER TABLE self_mod_dialogs "
+                    "ADD COLUMN maintenance_record_class TEXT DEFAULT 'self_remaking_history'"
+                )
 
             # 3. Indexes come last so CREATE INDEX on columns added via
             #    ALTER TABLE on existing DBs is safe.
@@ -392,8 +400,9 @@ class SelfModDialogStore:
                     stage, history_json, reversible_path_json,
                     target_file, target_action, target_scope,
                     prior_dialog_ids_json, awaiting_confirmation,
-                    s7_required, s7_request_envelope_hash, s7_block_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+                    s7_required, s7_request_envelope_hash, s7_block_reason,
+                    maintenance_record_class
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
                 """,
                 (
                     dialog_id, card_request_id, now, now,
@@ -405,6 +414,7 @@ class SelfModDialogStore:
                     1 if s7_required else 0,
                     s7_request_envelope_hash,
                     block_reason,
+                    "self_remaking_history",
                 ),
             )
         return self.get(dialog_id)  # type: ignore[return-value]

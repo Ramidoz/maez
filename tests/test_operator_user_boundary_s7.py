@@ -2295,5 +2295,89 @@ class S7SelfModDialogWrappingTests(unittest.TestCase):
         self.assertEqual(dialog.s7_block_reason, "missing_s7_request_envelope_hash")
 
 
+class S7SelfRemakingHistoryLaneTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _open_dialog(self):
+        from skills.self_mod_dialog import SelfModDialogStore, open_dialog_for_card
+
+        store = SelfModDialogStore(Path(self._tmp.name) / "self_mod_dialogs.db")
+        dialog, _opening = open_dialog_for_card(
+            store=store,
+            card_action="write_any_file",
+            card_params={"path": "config/soul.md", "content": "# edited"},
+            card_request_id="card-self-remaking-1",
+            audit_reasoning="modifies soul",
+            concerns=["self modification"],
+            opener_llm_fn=lambda _ctx: "I want to change config/soul.md.",
+            require_s7_linkage=True,
+            s7_request_envelope_hash="a" * 64,
+        )
+        return store, dialog
+
+    def test_093_self_mod_dialog_rows_carry_self_remaking_history_marker(self):
+        _store, dialog = self._open_dialog()
+
+        self.assertEqual(dialog.maintenance_record_class, "self_remaking_history")
+
+    def test_094_self_mod_history_is_excluded_from_biography_corpora(self):
+        from core.governance import operator_user_boundary as s7
+
+        for corpus in (
+            "ordinary_recall",
+            "m1_lived_episode",
+            "trf",
+            "s5_voice_continuity",
+        ):
+            with self.subTest(corpus=corpus):
+                self.assertFalse(
+                    s7.maintenance_record_admissible_to_corpus(
+                        "self_remaking_history",
+                        corpus,
+                    )
+                )
+
+    def test_095_self_remaking_history_lane_preserves_role_stamped_record(self):
+        from core.governance import operator_user_boundary as s7
+
+        record = s7.build_self_remaking_history_record(
+            record_id="record-self-remaking-1",
+            source_ref_kind="self_mod_dialog",
+            source_ref_hash="a" * 64,
+            role_names=("bonded_user", "operator"),
+            authority_context_hash="b" * 64,
+            work_request_envelope_hash="c" * 64,
+            created_at=NOW,
+        )
+
+        self.assertEqual(record.maintenance_record_class, "self_remaking_history")
+        self.assertEqual(record.role_names, ("bonded_user", "operator"))
+        self.assertTrue(
+            s7.maintenance_record_admissible_to_corpus(
+                record.maintenance_record_class,
+                "self_remaking_history",
+            )
+        )
+        self.assertFalse(hasattr(record, "raw_text"))
+
+    def test_096_self_remaking_history_record_requires_created_at(self):
+        from core.governance import operator_user_boundary as s7
+
+        with self.assertRaises(ValueError):
+            s7.build_self_remaking_history_record(
+                record_id="record-self-remaking-undated",
+                source_ref_kind="self_mod_dialog",
+                source_ref_hash="a" * 64,
+                role_names=("bonded_user",),
+                authority_context_hash="b" * 64,
+                work_request_envelope_hash="c" * 64,
+                created_at="",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -143,6 +143,30 @@ ROLLBACK_PATH_CLASSES = frozenset({
     "no_safe_rollback",
 })
 
+MAINTENANCE_RECORD_CLASSES = frozenset({
+    "self_remaking_history",
+})
+
+MAINTENANCE_CORPORA = frozenset({
+    "ordinary_recall",
+    "m1_lived_episode",
+    "trf",
+    "s5_voice_continuity",
+    "self_remaking_history",
+})
+
+BIOGRAPHY_CORPORA = frozenset({
+    "ordinary_recall",
+    "m1_lived_episode",
+    "trf",
+    "s5_voice_continuity",
+})
+
+SELF_REMAKING_SOURCE_REF_KINDS = frozenset({
+    "self_mod_dialog",
+    "s7_maintenance_ceremony",
+})
+
 VOICE_SEAT_WORK_CLASSES = frozenset({
     "self_modification",
     "covenant_touching_change",
@@ -243,6 +267,18 @@ def _validate_closed_value(value: str, allowed: frozenset[str], field: str) -> s
     if value not in allowed:
         raise ValueError(f"unknown S7 {field}")
     return value
+
+
+def validate_maintenance_record_class(record_class: str) -> str:
+    return _validate_closed_value(
+        record_class,
+        MAINTENANCE_RECORD_CLASSES,
+        "maintenance_record_class",
+    )
+
+
+def validate_maintenance_corpus(corpus: str) -> str:
+    return _validate_closed_value(corpus, MAINTENANCE_CORPORA, "maintenance corpus")
 
 
 def _validate_hash64(value: str, *, field: str) -> str:
@@ -825,6 +861,77 @@ def voice_consultation_health_projection(consultation: MaezVoiceConsultation) ->
         "maez_voice_ref_hash": consultation.source_ref_hash,
         "unavailable_reason_code": consultation.unavailable_reason_code or "none",
     }
+
+
+@dataclass(frozen=True)
+class SelfRemakingHistoryRecord:
+    record_id: str
+    schema_version: str
+    maintenance_record_class: str
+    source_ref_kind: str
+    source_ref_hash: str
+    role_names: tuple[str, ...]
+    authority_context_hash: str
+    work_request_envelope_hash: str
+    created_at: str
+
+    def __post_init__(self) -> None:
+        if not self.record_id:
+            raise ValueError("S7 self-remaking record_id is required")
+        if self.schema_version != SCHEMA_VERSION:
+            raise ValueError("invalid S7 schema_version")
+        validate_maintenance_record_class(self.maintenance_record_class)
+        _validate_closed_value(
+            self.source_ref_kind,
+            SELF_REMAKING_SOURCE_REF_KINDS,
+            "self_remaking source_ref_kind",
+        )
+        _validate_hash64(self.source_ref_hash, field="source_ref_hash")
+        if not self.role_names:
+            raise ValueError("S7 self-remaking history requires role_names")
+        for role_name in self.role_names:
+            validate_role_name(role_name)
+        _validate_hash64(self.authority_context_hash, field="authority_context_hash")
+        _validate_hash64(self.work_request_envelope_hash, field="work_request_envelope_hash")
+        _timestamp_text(self.created_at, field="created_at")
+
+
+def maintenance_record_admissible_to_corpus(
+    maintenance_record_class: str,
+    target_corpus: str,
+) -> bool:
+    """Return whether a maintenance record may enter a target corpus by default."""
+    validate_maintenance_record_class(maintenance_record_class)
+    validate_maintenance_corpus(target_corpus)
+    if target_corpus in BIOGRAPHY_CORPORA:
+        return False
+    return (
+        maintenance_record_class == "self_remaking_history"
+        and target_corpus == "self_remaking_history"
+    )
+
+
+def build_self_remaking_history_record(
+    *,
+    record_id: str,
+    source_ref_kind: str,
+    source_ref_hash: str,
+    role_names: tuple[str, ...],
+    authority_context_hash: str,
+    work_request_envelope_hash: str,
+    created_at: str,
+) -> SelfRemakingHistoryRecord:
+    return SelfRemakingHistoryRecord(
+        record_id=record_id,
+        schema_version=SCHEMA_VERSION,
+        maintenance_record_class="self_remaking_history",
+        source_ref_kind=source_ref_kind,
+        source_ref_hash=source_ref_hash,
+        role_names=tuple(role_names),
+        authority_context_hash=authority_context_hash,
+        work_request_envelope_hash=work_request_envelope_hash,
+        created_at=created_at,
+    )
 
 
 @dataclass(frozen=True)
