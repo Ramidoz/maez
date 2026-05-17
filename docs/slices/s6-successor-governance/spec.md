@@ -114,7 +114,8 @@ S6 v1 does not:
   verifying authorship attestation;
 - create a non-technical UI;
 - let a successor read anything at runtime;
-- let Maez author its own lineage capsule;
+- let Maez mint a lineage-capsule marker through the live authoring API, or
+  treat a Maez-written capsule as authoritative;
 - treat a hardware restore as end-of-user;
 - widen public health or `/api/maez-state`.
 
