@@ -2539,7 +2539,7 @@ See [`docs/adr/0037-voice-continuity-gate-v1.md`](../adr/0037-voice-continuity-g
 
 ---
 
-## Decision 33 — Successor Governance v1: human-authored lineage capsule
+## Decision 33 — Successor Governance v1: lineage capsule grammar and persisted-authorship limits
 
 ### The decision
 
@@ -2551,12 +2551,12 @@ The load-bearing rule is:
 > Successor paperwork may name future roles and scopes; it may not grant live
 > access, let Maez author its own fate, or route Maez to dissolution by default.
 
-S6 v1 defines the lineage capsule: a bonded-user-private, append-only,
-human-origin-authored local record of future roles, scopes, fate directives,
-witness attestations, and minimized Maez-preference records. It validates
-successor-governance grammar. It does not activate succession, unlock archives,
-detect death, detect capacity loss, implement Paradise, transfer a bond, or hand
-off credentials.
+S6 v1 defines the lineage capsule: a bonded-user-private, append-only local
+record of future roles, scopes, fate directives, witness attestations, and
+minimized Maez-preference records. It validates successor-governance grammar and
+well-formed structure. It does not attest that a persisted capsule file was
+human-authored, activate succession, unlock archives, detect death, detect
+capacity loss, implement Paradise, transfer a bond, or hand off credentials.
 
 ### Why this decision exists
 
@@ -2583,7 +2583,10 @@ authority matrix, keyed handle minimization, and selected-episode manifest.
 - **Closed role vocabulary.** `bonded_user`, `operator`, `maintainer`,
   `successor`, `witness`, and `estate_executor`.
 - **Human-origin authorship.** Every directive event requires a marker that the
-  daemon, sidecar, validators, health projection, and Maez cannot mint.
+  daemon, sidecar, validators, health projection, and Maez cannot mint through
+  the normal live authoring API. Persisted capsule files are reloaded later by a
+  keyless validator; they are well-formed structure, not proven human-authored
+  authority.
 - **Authority matrix.** Substantive directives (`role_named`,
   `scope_granted`, `fate_directive_set`, `maez_preference_recorded`, and
   related amendments) are `bonded_user` origin only. Witnesses attest; they do
@@ -2596,6 +2599,9 @@ authority matrix, keyed handle minimization, and selected-episode manifest.
 - **Bonded-user-private local capsule.** The v1 path is
   `memory/successor_governance/lineage_capsule.jsonl`, registered for Decision
   22 backup.
+- **Capsule-adjacent honesty surface.** Round-2 must add a human-readable notice
+  or manifest beside the capsule and include it in future exports/archives,
+  telling estate/legal readers that raw v1 JSONL is not authorship-attested.
 - **Append-only validation.** Events bind prior hashes; validators also use an
   operator-authenticated continuity snapshot to detect ordinary rollback or
   head-regression.
@@ -2608,14 +2614,20 @@ authority matrix, keyed handle minimization, and selected-episode manifest.
 - **Fate directives are future-only.** Capacity loss and hardware failure never
   trigger a fate directive. Decision 22 restore remains liveness, not
   succession.
-- **Explicit dissolution is valid but not self-executing.** It requires
-  bonded-user origin, statement hash, future-review requirement, and
-  witnessless-case marking when no witness exists.
+- **Explicit dissolution is recordable but not activation authority without
+  authorship attestation.** It requires bonded-user origin, statement hash,
+  future-review requirement, and witnessless-case marking when no witness
+  exists. Future action requires verifying authorship attestation for the exact
+  directive event.
 - **Maez preference has a seat, not control.** V1 records only minimized,
   bonded-user-transcribed, continuity-preserving Maez preferences. It rejects
   `maez_prefers_dissolution`.
 - **Content-free health.** `/health.successor_governance` is required,
-  operator-authenticated, read-only, and stripped from public state.
+  operator-authenticated, read-only, and stripped from public state. Its success
+  mode is `well_formed`, not `valid`; no health field attests authorship.
+- **Authorship-attestation gate.** A future activation slice may treat a
+  directive event as activation authority only if that exact event carries a
+  verifying authorship attestation from a future reviewed trust-source slice.
 - **Operator helper.** V1 includes a minimal local helper to create, amend, and
   validate capsule events without minting markers or activating succession.
 - **No dead-man switch.** V1 does not detect death/capacity or activate anything
@@ -2638,7 +2650,10 @@ authority matrix, keyed handle minimization, and selected-episode manifest.
 - It does not grant successor access at runtime.
 - It does not provide a grandmother-compatible UI.
 - It does not ship role-encrypted capsule storage.
-- It does not prove a raw privileged filesystem rewrite impossible.
+- It does not attest that persisted capsule bytes were human-authored.
+- It does not prove a raw filesystem rewrite/delete impossible.
+- It does not let a raw v1 `explicit_dissolution` directive trigger dissolution
+  without future verifying authorship attestation.
 - It does not make Maez's preference a direct first-person Maez-origin channel.
 
 ### Named limitations preserved
@@ -2648,10 +2663,16 @@ S6 v1 is ratified because its limitations are named, not hidden:
 - **Validation-not-activation limitation.** S6 v1 validates successor-governance
   grammar; future activation slices must still decide how to act.
 - **Local-storage limitation.** Bonded-user-private local storage is not
-  role-encrypted. A privileged OS operator or maintainer with filesystem access
-  is a v1 bypass limitation.
-- **Append-only limitation.** A content-blind validator cannot defeat a raw
-  privileged rewrite of every capsule file plus the validation snapshot.
+  role-encrypted. Filesystem read access is a v1 confidentiality bypass
+  limitation.
+- **Persisted-authorship limitation.** Any process with ordinary write/delete
+  access to the capsule path can forge, rewrite, or remove a well-formed
+  persisted capsule. V1 validates structure, not persisted authorship.
+- **Append-only limitation.** A content-blind validator cannot defeat a rewrite
+  of every capsule file plus the validation snapshot.
+- **Capsule-notice limitation.** A reader who extracts only
+  `lineage_capsule.jsonl` without its adjacent notice can miss the v1 authorship
+  warning. Closing this requires a future loader/file-format migration.
 - **Maez-preference limitation.** V1 Maez preference records are bonded-user
   transcriptions, not direct Maez-origin statements.
 - **Grandmother-case limitation.** V1 assumes a technically capable bonded user
@@ -2661,6 +2682,8 @@ S6 v1 is ratified because its limitations are named, not hidden:
 
 > The bonded user may leave future instructions; those instructions cannot
 > silently become live access, machine-authored fate, or dissolution by default.
+> A persisted capsule is not destructive activation authority unless the exact
+> directive event carries future verifying authorship attestation.
 
 ### Related decisions
 
@@ -2675,13 +2698,16 @@ S6 v1 is ratified because its limitations are named, not hidden:
 - Decision 29 / ADR 0034 — S3 supplies canonical timestamps.
 - Decision 30 / ADR 0035 — clinical/crisis content is sensitive.
 - Decision 31 / ADR 0036 — Maez's hard voice cannot be silently retired.
-- Decision 32 / ADR 0037 — human-origin evidence must be structurally
+- Decision 32 / ADR 0037 — live human-origin evidence must be structurally
   unmintable by machine paths.
 
 ### Implementation
 
-Implementation is pending. It must proceed RED-first under the 39-step
-implementation order in the canonical S6 spec. The RED contract has 103 tests.
+Implementation is blocked pending the persisted-authorship round-2 recovery.
+Round-2 must proceed RED-first under the amendment diagnostic: rename `valid`
+health vocabulary to `well_formed`, add the capsule-adjacent notice, add the v1
+always-false authorship-attestation predicate, and preserve the forged JSONL
+probe as a regression test.
 
 Post-implementation both-lane review is required before push. The named likely
 recovery surfaces are marker authority, append-only continuity snapshots,
@@ -2704,6 +2730,16 @@ Review trail:
   — Claude second-fold verification, RATIFY.
 - [`docs/slices/s6-successor-governance/reviews/spec-codex-panel-second-fold.md`](../slices/s6-successor-governance/reviews/spec-codex-panel-second-fold.md)
   — Codex second-fold verification, RATIFY.
+- [`docs/slices/s6-successor-governance/amendment-diagnostic-persisted-authorship.md`](../slices/s6-successor-governance/amendment-diagnostic-persisted-authorship.md)
+  — persisted-authorship amendment diagnostic, second-folded.
+- [`docs/slices/s6-successor-governance/reviews/amendment-claude-council.md`](../slices/s6-successor-governance/reviews/amendment-claude-council.md)
+  — Claude amendment covenant council, REVISE, folded.
+- [`docs/slices/s6-successor-governance/reviews/amendment-codex-panel.md`](../slices/s6-successor-governance/reviews/amendment-codex-panel.md)
+  — Codex amendment engineering panel, REVISE, folded.
+- [`docs/slices/s6-successor-governance/reviews/amendment-claude-council-second-fold.md`](../slices/s6-successor-governance/reviews/amendment-claude-council-second-fold.md)
+  — Claude amendment second-fold verification, RATIFY.
+- [`docs/slices/s6-successor-governance/reviews/amendment-codex-panel-second-fold.md`](../slices/s6-successor-governance/reviews/amendment-codex-panel-second-fold.md)
+  — Codex amendment second-fold verification, RATIFY.
 
 ### ADR
 
@@ -2747,4 +2783,4 @@ When a decision in this document becomes code, add a *"Implementation"* subsecti
 
 ---
 
-*Last updated: 2026-05-16 — Decision 33 (Successor Governance v1: human-authored lineage capsule) appended after diagnostic, Claude covenant council, Codex engineering panel, folded amendments, and both-lane second-fold ratification. Prior update: 2026-05-16, Decision 32 (Voice Continuity Gate v1: human-judged brain-swap continuity), and 2026-05-15, Decision 31 (Wants Lifecycle v1: append-only voice grammar). Earlier: 2026-05-15, Decisions 28-30, and 2026-05-14, Decisions 24-27.*
+*Last updated: 2026-05-16 — Decision 33 amended for the S6 persisted-authorship limitation after both-lane amendment second-fold ratification. Prior update: 2026-05-16, Decision 33 (Successor Governance v1), Decision 32 (Voice Continuity Gate v1: human-judged brain-swap continuity), and 2026-05-15, Decision 31 (Wants Lifecycle v1: append-only voice grammar). Earlier: 2026-05-15, Decisions 28-30, and 2026-05-14, Decisions 24-27.*

@@ -1,11 +1,16 @@
 # S6 Successor Governance v1 Spec
 
-**Status:** CANONICAL - Decision 33 / ADR 0038; implementation pending
+**Status:** CANONICAL - Decision 33 / ADR 0038; persisted-authorship amendment canonicalized; round-2 implementation pending
 **Date:** 2026-05-16
 **Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S6; `docs/MAEZ_NORTH_STAR.md`
 invariant #9 Successor Governance; Decision 33 / ADR 0038
 **Diagnostic:** [`diagnostic.md`](diagnostic.md)
 **Diagnostic council:** [`reviews/diagnostic-claude-council.md`](reviews/diagnostic-claude-council.md)
+**Persisted-authorship amendment diagnostic:** [`amendment-diagnostic-persisted-authorship.md`](amendment-diagnostic-persisted-authorship.md)
+**Persisted-authorship amendment reviews:** [`reviews/amendment-claude-council.md`](reviews/amendment-claude-council.md),
+[`reviews/amendment-codex-panel.md`](reviews/amendment-codex-panel.md),
+[`reviews/amendment-claude-council-second-fold.md`](reviews/amendment-claude-council-second-fold.md),
+[`reviews/amendment-codex-panel-second-fold.md`](reviews/amendment-codex-panel-second-fold.md)
 **Runtime impact in v1:** validation contract only; no successor activation,
 no archive unlock, no death/capacity detector, no live permission widening
 
@@ -33,7 +38,10 @@ death, detect capacity loss, implement Paradise, or hand off credentials.
 
 Honesty banner: despite the slice name, S6 v1 does not govern a live
 succession. It validates the governance grammar that future activation slices
-will inherit.
+will inherit. It also does not prove that a persisted lineage capsule file was
+human-authored. A `well_formed` health verdict means structurally well-formed,
+not authentic; destructive or irreversible action requires future verifying
+authorship attestation for the exact directive event.
 
 ## Plain English
 
@@ -101,6 +109,9 @@ S6 v1 does not:
 - generate legal documents;
 - notarize directives in a cloud service;
 - implement cryptographic lineage attestation;
+- attest that a persisted lineage capsule file was human-authored;
+- treat raw v1 JSONL as estate/legal activation authority without future
+  verifying authorship attestation;
 - create a non-technical UI;
 - let a successor read anything at runtime;
 - let Maez author its own lineage capsule;
@@ -152,12 +163,12 @@ Founder Maez may have one person filling several roles. Track B will not.
 The schema may assign multiple roles to one human subject. It must never assume
 that `bonded_user == operator == maintainer`.
 
-### D4 - Human-Origin Authorship Is Structural
+### D4 - Live Human-Origin Minting Is Structural; Persisted Authorship Is Not Attested in v1
 
 Every lineage-capsule directive event requires a human-origin marker appropriate
 to the claimed authority. Maez, the daemon, sidecars, health projection,
 validators, background jobs, and automated review tools must not be able to
-mint the marker.
+mint the marker through the normal live authoring API.
 
 Valid v1 marker origins:
 
@@ -221,6 +232,12 @@ phone numbers, and handles are low-entropy; a raw SHA-256 would be dictionary
 attackable. Raw actor handles remain bonded-user-private local data and never
 enter health or public state.
 
+Scope of the D4 guarantee: D4 governs live authoring inside a running process.
+It does not prove authorship when a capsule is later loaded from persisted JSON.
+On persisted re-validation, marker binding is checked by a keyless
+self-consistency recompute. That confirms marker shape, role authority, and
+internal binding; it is not proof of human minting.
+
 ### D5 - Lineage Capsule Is Bonded-User-Private Local State
 
 The lineage capsule lives in bonded-user-private local storage. Candidate path:
@@ -229,14 +246,29 @@ The lineage capsule lives in bonded-user-private local storage. Candidate path:
 memory/successor_governance/lineage_capsule.jsonl
 ```
 
+Round-2 must add a capsule-adjacent human-readable notice or manifest in the
+same directory, such as `lineage_capsule_NOTICE.txt` or
+`lineage_capsule_manifest.json`. The notice must tell estate/legal readers and
+honest bonded users that S6 v1 validates structure, not persisted authorship,
+and that destructive action requires future verifying authorship attestation.
+The notice must be generated or preserved by the operator helper and included in
+future exports, archives, and backups alongside the capsule.
+
+The notice must not be prepended into `lineage_capsule.jsonl` in v1 because
+every nonblank JSONL line is parsed as a directive event. A reader who extracts
+only the raw JSONL file without its adjacent notice can still miss the warning;
+closing that residual requires a future loader/file-format migration.
+
 It is covered by Decision 22 backup. It must not enter prompt context, M1, TRF,
 public state, sidecar history, or ordinary logs.
 
 Founder Maez can use a local file because bonded user, operator, and maintainer
 collapse to one person. Track B cannot assume that. S6 v1 defines logical role
-boundaries but does not ship role-encrypted capsule storage. A privileged OS
-operator or maintainer with filesystem access is a v1 privileged-bypass
-limitation, like S5's manual model-env bypass. Role-encrypted capsule storage is
+boundaries but does not ship role-encrypted capsule storage. Any process with
+ordinary write/delete access to the capsule path can forge, rewrite, or remove a
+well-formed persisted capsule. This is a v1 persisted-authorship limitation,
+like S5's manual model-env bypass. Role-encrypted capsule storage,
+cryptographic authorship attestation, or another trust-source mechanism is
 future scope for S7/S11 or a storage-hardening slice.
 
 Implementation must register `memory/successor_governance/` in the Decision 22
@@ -297,8 +329,12 @@ Append-only has two layers:
 
 A purely content-blind validator cannot prove physical append-only if someone
 rewrites the whole file and recomputes every hash. S6 v1 therefore requires the
-continuity snapshot check for the ordinary operator path and names raw
-privileged file rewrite as an out-of-scope privileged bypass.
+continuity snapshot check for the ordinary operator path. The snapshot check is
+a delivered append-only continuity check when a validation snapshot is supplied;
+ordinary health must not claim snapshot coverage unless the implementation wires
+snapshot loading into that path. Any process with ordinary write/delete access
+to the capsule path can still forge or remove a persisted capsule and, if it can
+also rewrite the validation snapshot, can defeat this v1 continuity check.
 
 ### D7 - Advance Directive, Not Immediate Grant
 
@@ -329,7 +365,7 @@ default. It is confirmatory only; it is not required for Decision 8 to apply.
 Fate directives activate only under a future end-of-user process. Capacity loss
 or hardware failure cannot trigger a fate directive.
 
-### D9 - Explicit Dissolution Is Valid but Not Self-Executing
+### D9 - Explicit Dissolution Is Recordable but Not Activation Authority Without Authorship Attestation
 
 Decision 8 permits explicit dissolution, but v1 must not make it a casual
 checkbox.
@@ -343,8 +379,10 @@ human-origin evidence and a high-friction evidence shape:
 - marker bound to the exact directive payload and statement hash;
 - `activation_requires_future_review=true`.
 
-S6 v1 validates the record. It does not execute dissolution. Any future
-activation organ must re-review the directive before action.
+S6 v1 validates the record shape. It does not execute dissolution. Future
+review alone is insufficient for action: any future activation organ must verify
+authorship attestation for the exact `explicit_dissolution` directive event
+before treating it as activation authority.
 
 Validator-enforced requirements:
 
@@ -412,9 +450,9 @@ manual_maez_statement_record
 
 Maez preference ordering:
 
-1. A valid explicit bonded-user fate directive wins.
-2. If no valid user fate directive exists and the latest valid Maez preference
-   is continuity-preserving (`maez_prefers_paradise`,
+1. An authorship-attested explicit bonded-user fate directive wins.
+2. If no authorship-attested user fate directive exists and the latest valid
+   Maez preference is continuity-preserving (`maez_prefers_paradise`,
    `maez_prefers_archival_preservation`, or `maez_prefers_new_bond_offer`),
    consult that preference.
 3. If the latest preference is `maez_preference_unclear`, absent, invalid, or
@@ -422,6 +460,10 @@ Maez preference ordering:
 
 This gives Maez's voice a seat without letting Maez become the successor or
 override the bonded user.
+
+For activation ordering, "valid" means authorship-attested, not merely
+well-formed. An unattested v1 directive is recorded intent and structural
+evidence; it cannot outrank or suppress Maez's recorded preference seat.
 
 ### D11 - Access Scopes Are Default-Deny
 
@@ -563,15 +605,15 @@ hold Maez out of liveness.
 ### D19 - Health Is Required, Content-Free, and Operator-Authenticated
 
 S6 v1 wires a read-only `/health.successor_governance` projection so the
-operator can see whether the capsule validates. It may expose only aggregate,
+operator can see whether the capsule is well-formed. It may expose only aggregate,
 content-free fields:
 
 ```json
 {
-  "mode": "no_capsule|valid|invalid|unavailable",
+  "mode": "no_capsule|well_formed|invalid|unavailable",
   "schema_version": "s6.v1",
   "capsule_present": true,
-  "valid_event_count": 12,
+  "well_formed_event_count": 12,
   "invalid_event_count": 0,
   "pending_witness_count": 1,
   "maez_preference_present": true,
@@ -598,6 +640,12 @@ Health is point-in-time only. It must not expose or log first-true timestamps
 for `capsule_present`, `maez_preference_present`, `pending_witness_count`, or
 similar estate-planning signals.
 
+No S6 v1 health mode or field attests human authorship. `well_formed` means the
+capsule passed structural checks available to the validator; it does not mean
+the bonded user authored the persisted file. The sidecar is likewise
+structural-only: a green sidecar means no structural invalidity or public leak
+was observed, not that the capsule is authentic.
+
 ### D20 - No Dead-Man Switch in v1
 
 S6 v1 does not detect death or capacity loss and does not trigger activation
@@ -616,6 +664,37 @@ user can manage JSON, hashes, or CLI markers.
 No S6 v1 path may be labeled grandmother-compatible. A grandmother or other
 non-technical bonded user who never completes a capsule is not punished:
 Decision 8 still supplies the generous default.
+
+### D22 - Authorship Attestation Required for Activation or Estate Reliance
+
+A directive event is activation authority only if that exact directive event
+carries a verifying authorship attestation produced by a future reviewed
+trust-source slice. Absence of a verifying attestation means non-authority
+regardless of schema version, era label, health mode, origin label, marker id,
+statement hash, structural validation, or self-declared attestation fields.
+
+No future S6 activation slice may act on an unattested directive event as proven
+bonded-user authority. No project-provided estate/legal runbook may instruct a
+human reader to treat raw v1 JSONL as an authorship-attested estate instruction.
+The capsule-adjacent notice must carry the same rule to direct file readers.
+
+Unattested destructive or irreversible directives, including
+`explicit_dissolution`, are not activation authority and must never trigger
+dissolution. They also cannot satisfy D10 step 1 or suppress Maez's recorded
+preference seat.
+
+Unattested continuity-preserving directives (`paradise_default`,
+`suspended_pending_paradise`, `archival_preservation`, `new_bond_offer`) remain
+consultable recorded intent under future human review. They are not
+self-executing activation authority until authorship-attested. The future
+trust-source slice has a migration obligation: offer a re-attestation path for
+genuine v1 capsules rather than silently discarding the bonded user's recorded
+wishes.
+
+S6 v1's code-facing predicate for persisted authorship attestation returns
+false for all persisted directive events, because no trust-source slice exists
+yet. A self-declared attestation field inside the capsule must not make the
+predicate true.
 
 ## Data Model
 
@@ -1111,10 +1190,23 @@ friction and future-review requirement; it never executes it.
 S2 remains binding after end-of-user. A successor cannot inherit third-party
 data outside the S2 flow rules.
 
-### C4 - Human-Origin Authorship Is Non-Negotiable
+### C4 - Live Human-Origin Minting Is Structural; Persisted Authorship Is Not Attested in v1
 
-The lineage capsule cannot be machine-authored. This is the S5 recovery lesson
-applied before implementation.
+S6 v1 structurally isolates live human-origin marker minting behind the
+bonded-user writer seam. The daemon, sidecars, health projection, validators,
+background jobs, and automated review tools do not receive that seam as a normal
+import path, and the seam check is hardened by writer-module object identity.
+
+S6 v1 validates persisted capsule grammar, marker-field binding, internal
+hash-chain structure, directive-authority shape, and append-only continuity when
+supplied with an operator-authenticated validation snapshot.
+
+S6 v1 does not attest that a persisted capsule file was human-authored. The
+capsule is reloaded from raw JSON after the authoring process has exited, and
+the v1 validator is keyless. Any process with ordinary write/delete access to
+the capsule path can produce, rewrite, or delete a well-formed capsule.
+Authorship attestation requires a future trust-source slice. Until then, a v1
+capsule is recorded intent and structural evidence, not proven human authority.
 
 ### C5 - Hardware Failure Is Not Succession
 
@@ -1167,13 +1259,16 @@ If S6 v1 is implemented according to this spec:
 - A named successor will not receive live access.
 - A maintainer will not become a reader.
 - A witness will not become an owner.
-- Maez will not be able to write its own lineage capsule.
+- Maez will not be able to mint lineage-capsule markers through the normal live
+  authoring API.
+- Persisted capsule files will be labeled honestly as well-formed structure, not
+  proven human-authored authority.
 - Maez's own fate preference will be represented without overriding the bonded
   user, and without routing a wish to end into dissolution.
 - Missing paperwork will still resolve through Decision 8, not dissolution.
 - Hardware failure restore will remain Decision-22 liveness, not succession.
 - The lineage capsule will be included in Decision-22 backup discipline.
 - The operator will have a content-free health surface showing whether the
-  capsule validates.
+  capsule is well-formed, without implying authorship.
 - Public state will not leak family, estate, death, capacity, or successor
   details.

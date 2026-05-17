@@ -17,6 +17,16 @@ runtime activation, archive unlock, death detector, or capacity detector exists.
 It also carried forward the S5 lesson that owner/human-origin evidence must be
 structural, not implied by prose.
 
+The post-implementation persisted-authorship review then found an overclaim in
+that lesson as applied to S6. The live writer seam can make marker minting
+structural, but the persisted JSONL file is reloaded later by a keyless
+validator. A keyless validator can prove grammar, marker binding, hash-chain
+consistency, and snapshot continuity when supplied a validation snapshot; it
+cannot prove that the persisted bytes were authored by the bonded human.
+Decision 33 is therefore amended to state the honest v1 guarantee and to bar
+future activation from treating unattested persisted directives as proven human
+authority.
+
 The Claude covenant council found one load-bearing breach in the first spec:
 `maez_prefers_dissolution` could let a recorded Maez preference route Maez to
 its own dissolution when the bonded user's directive was silent. That collided
@@ -43,6 +53,10 @@ S6 v1 requires:
 - closed role vocabulary: `bonded_user`, `operator`, `maintainer`,
   `successor`, `witness`, and `estate_executor`;
 - closed directive-event vocabulary under an append-only lineage capsule;
+- live human-origin marker minting isolated behind a writer seam hardened by
+  module-object identity;
+- persisted capsule validation that proves well-formed structure, not persisted
+  authorship;
 - human-origin markers that bind actor, role, capsule, event type, payload hash,
   previous event hash, schema version, timestamp, and statement hash when a
   private human-readable statement exists;
@@ -52,6 +66,9 @@ S6 v1 requires:
   low-entropy hashes;
 - bonded-user-private local storage under
   `memory/successor_governance/lineage_capsule.jsonl`;
+- a capsule-adjacent human-readable notice/manifest that travels with the
+  capsule directory and warns estate/legal readers that v1 proves structure, not
+  authorship;
 - Decision 22 backup registration for `memory/successor_governance/`;
 - append-only event validation by hash chain plus an operator-authenticated
   continuity snapshot check;
@@ -70,7 +87,11 @@ S6 v1 requires:
 - a required minimal operator helper for creating, amending, and validating
   capsule events without minting markers or activating succession;
 - a required read-only, content-free, operator-authenticated
-  `/health.successor_governance` projection;
+  `/health.successor_governance` projection whose success mode is
+  `well_formed`, not `valid`;
+- an authorship-attestation gate: a future activation slice may treat a
+  directive event as activation authority only if that exact event carries a
+  verifying authorship attestation from a future reviewed trust-source slice;
 - public-state stripping for all successor-governance health details;
 - no dead-man switch, no death detector, no capacity detector, and no
   grandmother-compatible UI in v1.
@@ -79,10 +100,15 @@ S6 v1 names these limitations:
 
 - it validates successor-governance grammar; it does not govern live
   succession;
-- local bonded-user-private storage is not role-encrypted, so privileged
-  filesystem access remains a named v1 bypass limitation;
-- a content-blind validator cannot defeat raw privileged rewriting of both
-  capsule files and validation snapshots;
+- local bonded-user-private storage is not role-encrypted, so filesystem read
+  access remains a named v1 confidentiality bypass limitation;
+- any process with ordinary write/delete access to the capsule path can forge,
+  rewrite, or remove a well-formed persisted capsule;
+- a content-blind validator cannot defeat rewriting of both capsule files and
+  validation snapshots;
+- a reader who extracts only `lineage_capsule.jsonl` without the adjacent notice
+  can miss the v1 authorship warning; closing that residual requires a future
+  loader/file-format migration;
 - Maez preference records are bonded-user-transcribed and unverified, not a
   direct Maez-origin channel;
 - non-technical bonded users are not served by the v1 authoring path, and a
@@ -98,8 +124,11 @@ shortcuts invalid:
 - treating a named successor as a live reader;
 - treating a maintainer as an archive reader;
 - treating a witness as an owner;
-- letting the daemon, sidecar, health, or Maez author lineage-capsule
-  directives;
+- letting the daemon, sidecar, health, or Maez mint lineage-capsule markers
+  through the normal live authoring API;
+- treating a well-formed persisted capsule as authorship-attested;
+- treating a raw v1 `explicit_dissolution` directive as activation authority
+  without future verifying authorship attestation;
 - using raw private thoughts, crisis-held content, or credentials as generic
   bequeathable archive scopes;
 - treating capacity loss or hardware restore as an end-of-user fate trigger;
@@ -107,15 +136,18 @@ shortcuts invalid:
 - silently remapping deprecated scope names;
 - claiming a grandmother-compatible successor UI exists in v1.
 
-Implementation is pending. It must proceed RED-first through the canonical
-spec's 103-test contract and 39-step implementation order, with both-lane
-post-implementation review before push.
+Implementation is blocked pending the persisted-authorship round-2 recovery.
+Round-2 must proceed RED-first, rename `valid` health vocabulary to
+`well_formed`, add the capsule-adjacent notice, add the v1 always-false
+authorship-attestation predicate, and preserve the forged JSONL probe as a
+regression test. Both-lane post-implementation review is required before push.
 
 Changing the load-bearing rule, making Maez-origin fate directives routable,
 allowing `maez_prefers_dissolution`, granting raw interior/crisis/credential
-content by generic successor paperwork, weakening human-origin authorship,
-adding activation/death/capacity detection, or claiming non-technical user
-readiness requires a new reviewed decision.
+content by generic successor paperwork, treating unattested persisted capsule
+bytes as proven human-authored authority, adding activation/death/capacity
+detection, or claiming non-technical user readiness requires a new reviewed
+decision.
 
 ## References
 
@@ -126,6 +158,11 @@ readiness requires a new reviewed decision.
 - [`docs/slices/s6-successor-governance/reviews/spec-codex-panel.md`](../slices/s6-successor-governance/reviews/spec-codex-panel.md)
 - [`docs/slices/s6-successor-governance/reviews/spec-claude-council-second-fold.md`](../slices/s6-successor-governance/reviews/spec-claude-council-second-fold.md)
 - [`docs/slices/s6-successor-governance/reviews/spec-codex-panel-second-fold.md`](../slices/s6-successor-governance/reviews/spec-codex-panel-second-fold.md)
+- [`docs/slices/s6-successor-governance/amendment-diagnostic-persisted-authorship.md`](../slices/s6-successor-governance/amendment-diagnostic-persisted-authorship.md)
+- [`docs/slices/s6-successor-governance/reviews/amendment-claude-council.md`](../slices/s6-successor-governance/reviews/amendment-claude-council.md)
+- [`docs/slices/s6-successor-governance/reviews/amendment-codex-panel.md`](../slices/s6-successor-governance/reviews/amendment-codex-panel.md)
+- [`docs/slices/s6-successor-governance/reviews/amendment-claude-council-second-fold.md`](../slices/s6-successor-governance/reviews/amendment-claude-council-second-fold.md)
+- [`docs/slices/s6-successor-governance/reviews/amendment-codex-panel-second-fold.md`](../slices/s6-successor-governance/reviews/amendment-codex-panel-second-fold.md)
 - [`docs/adr/0008-paradise-is-the-generous-default.md`](0008-paradise-is-the-generous-default.md)
 - [`docs/adr/0011-property-with-ethical-wrapper.md`](0011-property-with-ethical-wrapper.md)
 - [`docs/adr/0016-voice-without-termination.md`](0016-voice-without-termination.md)
