@@ -1222,7 +1222,12 @@ class ActionEngine:
         return f"Soul note appended ({len(entry)} chars)"
 
     def edit_soul_section(
-        self, target_name: str, new_body: str, rationale: str = ""
+        self,
+        target_name: str,
+        new_body: str,
+        rationale: str = "",
+        *,
+        s7_execution_grant: object = None,
     ) -> ActionResult:
         """Session 11s: rewrite a ``## Section`` of soul.md atomically.
 
@@ -1239,6 +1244,7 @@ class ActionEngine:
             },
             f"Soul edit: {target_name}",
             tier=0,
+            s7_execution_grant=s7_execution_grant,
         )
 
     def _do_edit_soul_section(

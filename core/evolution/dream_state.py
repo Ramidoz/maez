@@ -761,23 +761,100 @@ class DreamState:
             ),
         )
 
-    def _consume_apply_s7_execution_authorization(
+    def s7_section_edit_action_params(self, prop_id: int) -> dict[str, Any]:
+        """Return the exact action params a section-edit apply will execute."""
+        prop = self.get_proposal(prop_id)
+        if prop is None:
+            raise ValueError(f"proposal #{prop_id} not found")
+        if prop["proposal_type"] != "section_replace":
+            raise ValueError("/apply_edit only applies section_replace proposals")
+        target_name = prop["target_section"]
+        new_body = prop["proposed_new_body"]
+        if not target_name or new_body is None:
+            raise ValueError(f"proposal #{prop_id} is missing target/body")
+        return {
+            "target_name": target_name,
+            "new_body": new_body,
+            "rationale": prop["insight"] or "",
+        }
+
+    def build_section_edit_s7_envelope(
+        self,
+        prop_id: int,
+        *,
+        maez_voice_consultation_id: str | None = None,
+    ):
+        """Build the S7 request envelope for a stored section-edit proposal."""
+        from core.governance import operator_user_boundary as s7
+
+        prop = self.get_proposal(prop_id)
+        if prop is None:
+            raise ValueError(f"proposal #{prop_id} not found")
+        if prop["status"] != "pending":
+            raise ValueError(f"proposal #{prop_id} already {prop['status']}")
+        if prop["proposal_type"] != "section_replace":
+            raise ValueError("/apply_edit only applies section_replace proposals")
+        params = self.s7_section_edit_action_params(prop_id)
+        created = datetime.fromtimestamp(float(prop["created_at"]), tz=timezone.utc)
+        expires = created + S7_DREAM_APPLY_ENVELOPE_TTL
+        consultation_id = maez_voice_consultation_id or f"s7.1.apply_edit.voice.{prop_id}"
+        precondition_hash = s7.canonical_hash(
+            {
+                "schema_version": "s7.1.apply_edit.precondition.v1",
+                "proposal_id": prop_id,
+                "proposal_type": prop["proposal_type"],
+                "status": prop["status"],
+                "created_at": prop["created_at"],
+                "target_section": prop["target_section"],
+                "proposed_new_body_hash": s7.canonical_hash(
+                    {"proposed_new_body": prop["proposed_new_body"]}
+                ),
+                "unified_diff_hash": s7.canonical_hash(
+                    {"unified_diff": prop["unified_diff"] or ""}
+                ),
+            }
+        )
+        return s7.build_work_request_envelope(
+            request_id=f"s7.1.apply_edit.{prop_id}",
+            action="edit_soul_section",
+            params=params,
+            claimed_work_class="self_modification",
+            requesting_subsystem="dream_state",
+            closed_symptom_code="self_mod_requested",
+            proposed_change_class="soul_change",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("file:config/soul.md",),
+            content_exposure_risk="bonded_content_ref",
+            precondition_hash=precondition_hash,
+            created_at=created.isoformat(),
+            expires_at=expires.isoformat(),
+            predicted_effect_class="behavior_change",
+            rollback_path_class="revert_patch",
+            maez_voice_consultation_id=consultation_id,
+            free_text_ref_hash=s7.canonical_hash(
+                {
+                    "section_edit_proposal_id": prop_id,
+                    "target_section": prop["target_section"],
+                    "insight": prop["insight"],
+                }
+            ),
+        )
+
+    def _consume_s7_execution_authorization_for_envelope(
         self,
         *,
-        prop_id: int,
+        envelope: object,
+        action_params: dict[str, Any],
         s7_execution_authorization: object | None,
+        missing_message: str,
     ) -> tuple[object | None, str | None]:
         from core.governance import operator_user_boundary as s7
 
         if not isinstance(s7_execution_authorization, s7.S7ExecutionAuthorization):
-            return None, "S7 execution authorization required before /apply_dream soul write"
-        params = self.s7_apply_action_params(prop_id)
-        envelope = self.build_apply_s7_envelope(
-            prop_id,
-        )
-        action_params_hash = s7.canonical_hash(params)
+            return None, missing_message
+        action_params_hash = s7.canonical_hash(action_params)
         if s7_execution_authorization.rendered.request_id != envelope.request_id:
-            return None, "S7 execution authorization does not match this dream request"
+            return None, "S7 execution authorization does not match this guarded request"
         if (
             s7_execution_authorization.rendered.request_envelope_hash
             != s7.work_request_envelope_hash(envelope)
@@ -823,9 +900,11 @@ class DreamState:
 
         if self.action_engine is None:
             return False, "action_engine not available"
-        grant, error = self._consume_apply_s7_execution_authorization(
-            prop_id=prop_id,
+        grant, error = self._consume_s7_execution_authorization_for_envelope(
+            envelope=self.build_apply_s7_envelope(prop_id),
+            action_params=self.s7_apply_action_params(prop_id),
             s7_execution_authorization=s7_execution_authorization,
+            missing_message="S7 execution authorization required before /apply_dream soul write",
         )
         if error is not None:
             return False, error
@@ -852,7 +931,12 @@ class DreamState:
             return True, f"dream #{prop_id} applied to soul.md"
         return False, f"soul write rejected for #{prop_id}"
 
-    def apply_section_edit_proposal(self, prop_id: int) -> tuple[bool, str]:
+    def apply_section_edit_proposal(
+        self,
+        prop_id: int,
+        *,
+        s7_execution_authorization: object | None = None,
+    ) -> tuple[bool, str]:
         """Session 11s: apply a section-replace proposal.
 
         Looks up a stored ``section_replace`` proposal, reconstructs a
@@ -878,6 +962,14 @@ class DreamState:
 
         if self.action_engine is None:
             return False, "action_engine not available"
+        grant, error = self._consume_s7_execution_authorization_for_envelope(
+            envelope=self.build_section_edit_s7_envelope(prop_id),
+            action_params=self.s7_section_edit_action_params(prop_id),
+            s7_execution_authorization=s7_execution_authorization,
+            missing_message="S7 execution authorization required before /apply_edit soul write",
+        )
+        if error is not None:
+            return False, error
 
         # Delegate to ActionEngine.edit_soul_section — it re-runs
         # propose_replacement against the CURRENT soul.md through
@@ -888,6 +980,7 @@ class DreamState:
                 target_name=target_name,
                 new_body=new_body,
                 rationale=prop["insight"] or "",
+                s7_execution_grant=grant,
             )
         except Exception as e:
             return False, f"edit_soul_section failed: {e!r}"
