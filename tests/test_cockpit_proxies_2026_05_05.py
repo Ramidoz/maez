@@ -219,6 +219,26 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
                     self.assertEqual(body["status"], "deferred")
                     self.assertEqual(body["surface"], "cockpit")
 
+    def test_status_route_proxies_to_daemon_even_when_ceremony_flag_off(self):
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["method"] = req.get_method()
+            return _make_urlopen_response(
+                b'{"ok": true, "live_flag_enabled": false}',
+                status=200,
+            )
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            response = self.client.get("/api/v1/s7/webauthn/status")
+
+        body = json.loads(response.get_data())
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(body["live_flag_enabled"])
+        self.assertEqual(captured["url"], "http://127.0.0.1:11435/internal/s7/webauthn/status")
+        self.assertEqual(captured["method"], "GET")
+
     def test_flag_on_register_begin_forwards_with_internal_channel_not_browser_origin(self):
         captured = {}
 

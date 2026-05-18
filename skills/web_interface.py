@@ -1442,6 +1442,42 @@ def _s7_cockpit_proxy_to_daemon(route: str, internal_route: str):
         ), 502
 
 
+def _s7_cockpit_status_proxy():
+    import urllib.error as _urlerr
+    import urllib.request as _urlreq
+
+    try:
+        req = _urlreq.Request(
+            f"{_DAEMON_BASE}/internal/s7/webauthn/status",
+            method="GET",
+        )
+        with _urlreq.urlopen(req, timeout=_COCKPIT_PROXY_TIMEOUT_S) as resp:
+            payload = resp.read()
+            status = resp.status
+            ctype = resp.headers.get("Content-Type", "application/json")
+        return (payload, status, {"Content-Type": ctype})
+    except _urlerr.HTTPError as e:
+        try:
+            payload = e.read()
+        except Exception:
+            payload = str(e).encode("utf-8")
+        return (payload, e.code, {"Content-Type": "application/json"})
+    except Exception as e:
+        return jsonify(
+            {
+                "ok": False,
+                "error": "daemon_unreachable",
+                "route": "/api/v1/s7/webauthn/status",
+                "detail": str(e)[:200],
+            }
+        ), 502
+
+
+@app.route("/api/v1/s7/webauthn/status", methods=["GET"])
+def api_s7_webauthn_status():
+    return _s7_cockpit_status_proxy()
+
+
 @app.route("/api/v1/s7/webauthn/register/begin", methods=["POST"])
 def api_s7_webauthn_register_begin():
     from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled

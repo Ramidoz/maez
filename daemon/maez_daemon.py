@@ -5614,6 +5614,15 @@ class MaezDaemon:
         def operator_health():
             return jsonify(self._operator_health())
 
+        @app.route("/internal/s7/webauthn/status", methods=["GET"])
+        def s7_webauthn_status():
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=S7ProductionWebAuthnVerifier(),
+                store_factory=lambda: S7WebAuthnBootstrapStore(_s7_webauthn_store_root()),
+            )
+            result = service.status(now=datetime.now(timezone.utc).isoformat())
+            return jsonify(result.body), result.status_code
+
         @app.route("/internal/s7/webauthn/register/begin", methods=["POST"])
         def s7_webauthn_register_begin():
             if live_webauthn_ceremony_enabled():
