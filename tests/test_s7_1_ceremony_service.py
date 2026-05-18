@@ -456,6 +456,30 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.body["maez_objection_state"], "absent")
 
+    def test_d23_aggregation_recheck_blocks_guarded_reask(self):
+        from dataclasses import replace
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_ceremony import authorization_aggregation_recheck
+
+        prior = self._self_mod_envelope()
+        current = replace(prior, request_id="req-s7-1-d23-reask")
+        history = (
+            s7.build_request_history_record(
+                envelope=prior,
+                outcome="refused",
+                created_at=NOW,
+            ),
+        )
+
+        result = authorization_aggregation_recheck(
+            envelope=current,
+            history=history,
+        )
+
+        self.assertEqual(result.status_code, 409)
+        self.assertEqual(result.body["error"], "s7_aggregation_block")
+        self.assertIn("repeated_reask_after_refusal", result.body["signals"])
+
 
 if __name__ == "__main__":
     unittest.main()

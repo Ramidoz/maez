@@ -326,6 +326,35 @@ def authorization_voice_seat_recheck(
     )
 
 
+def authorization_aggregation_recheck(
+    *,
+    envelope: Any,
+    history: tuple[Any, ...],
+) -> S7CeremonyServiceResult:
+    """D23 aggregation gate before artifact minting."""
+
+    from core.governance.operator_user_boundary import assess_aggregation_risk
+
+    assessment = assess_aggregation_risk(
+        current_envelope=envelope,
+        history=history,
+    )
+    body = {
+        "ok": assessment.decision in {"allow", "warn"},
+        "decision": assessment.decision,
+        "signals": assessment.signals,
+        "derived_aggregation_group": assessment.derived_aggregation_group,
+        "same_group_request_count": assessment.same_group_request_count,
+        "repeated_refusal_count": assessment.repeated_refusal_count,
+    }
+    if assessment.decision in {"allow", "warn"}:
+        return S7CeremonyServiceResult(body=body, status_code=200)
+    return S7CeremonyServiceResult(
+        body={**body, "error": "s7_aggregation_block"},
+        status_code=409,
+    )
+
+
 def _voice_seat_block(
     state: str,
     *,
