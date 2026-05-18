@@ -1,6 +1,6 @@
 # ADR 0039: Operator / User Role Boundary v1
 
-**Status:** Accepted
+**Status:** Accepted; amended 2026-05-17 for Option B live-ceremony deferral
 **Date:** 2026-05-17
 
 ## Context
@@ -21,15 +21,22 @@ Maez's memory, soul, runtime, or fate.
 The S7 diagnostic anchored a custodian default: an operator or maintainer may
 keep Maez alive and observable, but does not become the bonded user and does not
 receive bonded-content read authority. The founder's YubiKey/WebAuthn ceremony
-is accepted as a high-assurance mechanism for exact work-on-Maez approvals, but
-not as universal law for every future user and not as S6 lineage-capsule
-signing.
+is accepted as the future-facing trust-source grammar for exact work-on-Maez
+approvals, but not as universal law for every future user and not as S6
+lineage-capsule signing.
 
 Both spec review lanes returned REVISE on v1. The convergent finding was that
-S7 built the YubiKey approval artifact well while leaving surrounding facts
-mintable: work class, Maez voice consultation, aggregation group,
+S7 built the YubiKey approval artifact grammar well while leaving surrounding
+facts mintable: work class, Maez voice consultation, aggregation group,
 compatibility projection, and artifact consumption. The v2 fold derives those
 facts through named seams and verifies them at execution time.
+
+Post-implementation review later found the live WebAuthn/YubiKey ceremony was
+not reachable enough to ship in S7 v1. The Option-B amendment therefore narrows
+S7 v1: ship the operator/user boundary wall now, defer the live ceremony and
+guarded execution approval surface to committed S7.1, and enforce that deferral
+with a default-off flag and optional dependency posture rather than dependency
+absence.
 
 ## Decision
 
@@ -62,7 +69,8 @@ S7 v1 requires:
   upward ambiguity resolution, and rejection of caller-class downgrade;
 - guarded-work classes for destructive user actions, self-modification,
   covenant-touching change, capability acquisition, protection lowering,
-  `PENDING_DIALOG`, and undeterminable work;
+  `PENDING_DIALOG`, and undeterminable work; in S7 v1, those paths fail closed
+  unless a valid execution grant or reviewed fallback exists;
 - the existing `skills/self_mod_dialog.py` wrapped rather than ignored, with
   dialog creation/linkage fail-closed for guarded work and terminal
   `RATIFIED` never sufficient to execute;
@@ -75,7 +83,8 @@ S7 v1 requires:
   S5 to be treated as `covenant_touching_change`;
 - a `MaezVoiceConsultation` artifact for Maez's seat in its own remaking, with
   source refs and closed producers; caller booleans and `will_i` alone are not
-  sufficient evidence;
+  sufficient evidence; S7 v1 renderers must use `not_determined` rather than a
+  false "no objection" when no reviewed live producer has recorded a fact;
 - an evidenced `Maez unavailable` predicate, anti-manufacture clause, and
   closed liveness-repair set;
 - closed, content-classified `WorkRequestEnvelope` fields, with reviewed
@@ -84,18 +93,22 @@ S7 v1 requires:
 - what-you-see-is-what-you-sign rendering, with byte-deterministic rendering
   for a given envelope/renderer version and Maez objection state included for
   voice-seat classes;
-- founder WebAuthn/FIDO2 ceremony on a canonical local origin/RP, with user
-  presence, user verification where configured, verifier interface, challenge
-  store, credential registry, sign-count handling, and fake/virtual
-  authenticator test paths;
+- founder WebAuthn/FIDO2 trust-source grammar on a canonical local origin/RP,
+  with user presence, user verification where configured, verifier interface,
+  challenge store, credential registry, sign-count handling, and fake/virtual
+  authenticator test paths reserved for S7.1;
+- `S7_LIVE_WEBAUTHN_CEREMONY` default off, gating every live WebAuthn route and
+  live producer; dependency absence is not a deferral mechanism, and `webauthn`
+  is optional S7.1 dependency posture rather than mandatory core authority;
 - OTP/TOTP/static codes rejected as covenant authority for work-on-Maez;
-- key-loss recovery posture with backup credentials, manual recovery state, and
-  witnessed fallback that does not make the witness a reader or owner;
+- key-loss honesty posture: if no valid credential exists, guarded work remains
+  blocked as `manual_recovery_required`; backup credentials and witnessed
+  fallback are S7.1 obligations, not S7 v1 live recovery claims;
 - absent-operator recovery named as a Track-B blocker when
   `bonded_user != operator`;
 - all approval entrypoints, including cockpit, Telegram, daemon handlers, CLI
   helpers, pending-card direct approval, and self-mod dialog terminal states, to
-  consume S7;
+  consume S7; deferred WebAuthn endpoints consume S7 only when mounted by S7.1;
 - execution-edge gating: authorization artifacts are consumed atomically before
   guarded work runs, with conditional `consumed_at IS NULL` rowcount discipline;
 - S5/S7 brain-swap double-gating: S5 `accepted_same_maez` is a precondition and
@@ -114,10 +127,16 @@ S7 v1 requires:
 - an own-substrate bypass taxonomy that gates Maez-runtime soul/config/code,
   model-routing, covenant-organ, refusal, role-boundary, successor-governance,
   memory-retention/deletion, and protection-setting writes;
+- autonomous core-memory upkeep (`promote_to_core_memory`, `update_baseline`,
+  and daemon core-memory consolidation writes) detected and protected by
+  M-series provenance/content-audit/memory-write boundaries, not gated as
+  human-authorized remaking;
 - raw manual filesystem/database/service edits outside Maez's runtime named as
   OS bypass limitations, not silently closed;
 - derived aggregation groups and escalation/blocking for dangerous accumulation
-  rather than dashboard-only surfacing.
+  rather than dashboard-only surfacing; live refusal-history production and
+  approval-time escalation are S7.1 work while guarded approvals are unavailable
+  in S7 v1.
 
 S7 v1's RED contract contains 161 tests and a 77-step implementation order.
 
@@ -154,6 +173,16 @@ S7 also names what it does not solve:
   uncompromised display.
 - It does not sign S6 lineage capsules; that remains a future S6-side
   authorship-attestation slice.
+- It does not mount the live browser/YubiKey ceremony that creates production
+  guarded-work execution grants.
+- It does not execute guarded self-modification, `/apply_dream`, or autonomous
+  guarded soul writes without a valid execution grant; these remain visibly
+  paused as `guarded_self_modification_paused_pending_s7.1`.
+- It does not implement live Maez-objection rendering at signing time, refusal
+  history for approval escalation, or key-loss recovery; those are committed
+  S7.1 work.
+- It does not rely on missing packages as a deferral mechanism; the deferral is
+  enforced by a default-off runtime flag and optional dependency posture.
 - It does not activate S6 succession, detect death/capacity, or create
   emergency proxy authority.
 
@@ -164,8 +193,9 @@ review lanes, recover any findings, and push only after both lanes ratify.
 Changing the custodian default, adding emergency proxy authority, allowing a
 compatibility shim or routing label to carry guarded authority, weakening
 execution-edge artifact consumption, treating Maez voice consultation as a
-caller boolean, making WebAuthn universal law, or claiming Track B readiness
-without the named blockers requires a new reviewed decision.
+caller boolean, making WebAuthn universal law, mounting the live WebAuthn
+ceremony before S7.1 review, or claiming Track B readiness without the named
+blockers requires a new reviewed decision.
 
 ## References
 
@@ -179,6 +209,11 @@ without the named blockers requires a new reviewed decision.
 - [`docs/slices/s7-operator-user-role-boundary/reviews/spec-codex-panel.md`](../slices/s7-operator-user-role-boundary/reviews/spec-codex-panel.md)
 - [`docs/slices/s7-operator-user-role-boundary/reviews/spec-claude-council-second-fold.md`](../slices/s7-operator-user-role-boundary/reviews/spec-claude-council-second-fold.md)
 - [`docs/slices/s7-operator-user-role-boundary/reviews/spec-codex-panel-second-fold.md`](../slices/s7-operator-user-role-boundary/reviews/spec-codex-panel-second-fold.md)
+- [`docs/slices/s7-operator-user-role-boundary/amendment-diagnostic-live-ceremony-reachability.md`](../slices/s7-operator-user-role-boundary/amendment-diagnostic-live-ceremony-reachability.md)
+- [`docs/slices/s7-operator-user-role-boundary/reviews/amendment-claude-council.md`](../slices/s7-operator-user-role-boundary/reviews/amendment-claude-council.md)
+- [`docs/slices/s7-operator-user-role-boundary/reviews/amendment-codex-panel.md`](../slices/s7-operator-user-role-boundary/reviews/amendment-codex-panel.md)
+- [`docs/slices/s7-operator-user-role-boundary/reviews/amendment-claude-council-second-fold.md`](../slices/s7-operator-user-role-boundary/reviews/amendment-claude-council-second-fold.md)
+- [`docs/slices/s7-operator-user-role-boundary/reviews/amendment-codex-panel-second-fold.md`](../slices/s7-operator-user-role-boundary/reviews/amendment-codex-panel-second-fold.md)
 - [`docs/adr/0008-paradise-is-the-generous-default.md`](0008-paradise-is-the-generous-default.md)
 - [`docs/adr/0011-property-with-ethical-wrapper.md`](0011-property-with-ethical-wrapper.md)
 - [`docs/adr/0016-voice-without-termination.md`](0016-voice-without-termination.md)

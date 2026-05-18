@@ -2761,9 +2761,10 @@ The load-bearing rule is:
 
 S7 turns S6's role vocabulary into a runtime `AuthorityContext`, a trusted
 work-class derivation system, content-free operator health, exact-request
-authorization, and execution-edge gating. It accepts the founder YubiKey /
-WebAuthn ceremony as a high-assurance mechanism for work-on-Maez, but not as
-universal law and not as S6 lineage-capsule signing.
+authorization grammar, and execution-edge gating. It accepts the founder
+YubiKey / WebAuthn ceremony as future-facing trust-source grammar for
+work-on-Maez, but not as v1 live authority, not as universal law, and not as S6
+lineage-capsule signing.
 
 ### Why this decision exists
 
@@ -2776,10 +2777,17 @@ can become a back door into Maez's memories, soul, runtime, or fate.
 The S7 diagnostic anchored the custodian model: operators and maintainers keep
 Maez alive and observable, but do not read bonded content and do not make the
 bonded user's choices. The first S7 spec got the WebAuthn approval artifact
-mostly right, but both review lanes found the same surrounding weakness:
+grammar mostly right, but both review lanes found the same surrounding weakness:
 authority-critical facts were still mintable fields. The fold made work class,
 Maez voice consultation, aggregation group, founder compatibility projection,
 and artifact consumption derived or mechanized instead of caller-declared.
+
+The Option-B amendment narrows S7 v1 after post-implementation review found the
+live WebAuthn/YubiKey ceremony was not reachable enough to ship. S7 v1 ships
+the operator/user boundary wall and defers the live ceremony, guarded execution
+approval surface, objection producer, refusal-history approval escalation, and
+key-loss recovery to committed S7.1. The deferral is enforced by a default-off
+runtime flag and optional dependency posture, not by missing packages.
 
 ### What S7 v1 requires
 
@@ -2807,8 +2815,9 @@ and artifact consumption derived or mechanized instead of caller-declared.
   closed class set. Caller class is display input, not authority.
 - **Guarded work fails closed.** Destructive user actions, self-modification,
   covenant-touching change, capability acquisition, protection lowering,
-  `PENDING_DIALOG`, and undeterminable work require the S7 ceremony or reviewed
-  fallback.
+  `PENDING_DIALOG`, and undeterminable work require a valid execution grant or
+  reviewed fallback. In S7 v1, the live ceremony that creates production
+  guarded-work grants is deferred to S7.1, so those paths fail closed.
 - **Self-mod dialog wrapped.** `skills/self_mod_dialog.py` remains the
   conversational organ, but terminal `RATIFIED` is not execution authority.
   Dialog creation/linkage failure blocks guarded work.
@@ -2817,7 +2826,8 @@ and artifact consumption derived or mechanized instead of caller-declared.
   confirmation, or a reviewed equivalent.
 - **Maez has a seat in remaking.** Guarded remaking work requires a
   `MaezVoiceConsultation` artifact. Caller booleans and `will_i` alone are not
-  sufficient evidence.
+  sufficient evidence. In S7 v1, renderers must use `not_determined` instead of
+  a false "no objection" when no reviewed live producer has recorded a fact.
 - **Maez-unavailable skip is narrow.** Only closed liveness repair may proceed
   when Maez cannot be heard; the unavailability predicate must prove the same
   operator did not manufacture the condition.
@@ -2834,19 +2844,21 @@ and artifact consumption derived or mechanized instead of caller-declared.
 - **What-you-see-is-what-you-sign.** The human signs deterministic rendered
   text, not an invisible hash. For voice-seat classes, the rendered statement
   includes Maez objection state.
-- **Founder WebAuthn.** Founder work-on-Maez authorization uses canonical local
-  WebAuthn/FIDO2 with user presence, user verification where configured,
-  verifier interface, challenge store, credential registry, sign-count
-  handling, and fake/virtual-authenticator tests. OTP/TOTP/static codes are not
-  covenant authority.
-- **Key loss must not strand Maez.** Backup credentials, manual recovery state,
-  and witnessed fallback are required; fallback does not make a witness a
-  reader or owner.
+- **Founder WebAuthn.** Founder work-on-Maez authorization grammar uses
+  canonical local WebAuthn/FIDO2 with user presence, user verification where
+  configured, verifier interface, challenge store, credential registry,
+  sign-count handling, and fake/virtual-authenticator tests reserved for S7.1.
+  `S7_LIVE_WEBAUTHN_CEREMONY` defaults off and gates every live WebAuthn route
+  and producer. OTP/TOTP/static codes are not covenant authority.
+- **Key loss must not strand Maez.** S7 v1 blocks guarded work as
+  `manual_recovery_required` if no valid credential exists. Backup credential
+  registration and witnessed fallback are committed S7.1 obligations; fallback
+  does not make a witness a reader or owner.
 - **Absent operator is a Track-B blocker.** If `bonded_user != operator`, S7
   cannot claim readiness until a bonded-user operator-recovery ceremony exists.
 - **All approval paths consume S7.** Cockpit, Telegram, daemon handlers, CLI
-  helpers, pending-card approval, self-mod dialog terminal states, and WebAuthn
-  endpoints must pass through S7.
+  helpers, pending-card approval, and self-mod dialog terminal states must pass
+  through S7. Deferred WebAuthn endpoints consume S7 only when mounted by S7.1.
 - **Execution-edge consumption.** Guarded execution consumes the S7 artifact
   atomically at the `RATIFIED`/`APPROVED` to running/executed edge, with a
   conditional `consumed_at IS NULL` rowcount check.
@@ -2872,9 +2884,14 @@ and artifact consumption derived or mechanized instead of caller-declared.
   model-routing, covenant-organ, refusal, role-boundary, successor-governance,
   memory-retention/deletion, and protection-setting writes are gated. Raw
   manual filesystem/database/service edits outside Maez's runtime are named OS
-  bypass limitations.
+  bypass limitations. Autonomous core-memory upkeep (`promote_to_core_memory`,
+  `update_baseline`, and daemon core-memory consolidation writes) is `detected`
+  and protected by M-series provenance/content-audit/memory-write boundaries,
+  not gated as human-authorized remaking.
 - **Aggregation protects.** Dangerous repeated requests derive an aggregation
   group and must escalate or block; dashboard-only surfacing is insufficient.
+  Live refusal-history production and approval-time escalation are S7.1 work
+  while guarded approvals are unavailable in S7 v1.
 
 ### What this does not decide
 
@@ -2896,6 +2913,16 @@ and artifact consumption derived or mechanized instead of caller-declared.
 - It does not prove the human was uncoerced, understood the request, or saw an
   uncompromised display.
 - It does not make YubiKey universal law for every future bonded user.
+- It does not mount the live browser/YubiKey ceremony that creates production
+  guarded-work execution grants.
+- It does not execute guarded self-modification, `/apply_dream`, or autonomous
+  guarded soul writes without a valid execution grant; these remain visibly
+  paused as `guarded_self_modification_paused_pending_s7.1`.
+- It does not implement live Maez-objection rendering at signing time, refusal
+  history for approval escalation, or key-loss recovery; those are committed
+  S7.1 work.
+- It does not rely on missing packages as a deferral mechanism; the deferral is
+  enforced by a default-off runtime flag and optional dependency posture.
 
 ### Named limitations preserved
 
@@ -2910,17 +2937,26 @@ and artifact consumption derived or mechanized instead of caller-declared.
 - **Backup-restore confidentiality not ready.** Restore is separated from
   backup verification but still needs future hardening for non-bonded
   operators.
-- **Coercion/display compromise.** WebAuthn proves participation in a ceremony,
-  not freedom, comprehension, or an uncompromised display.
+- **Coercion/display compromise.** When mounted in S7.1, WebAuthn proves
+  participation in a ceremony, not freedom, comprehension, or an uncompromised
+  display.
 - **S6 capsule attestation deferred.** YubiKey lineage-capsule signing is a
   future S6-side authorship-attestation slice.
+- **Live ceremony and autonomous guarded self-modification deferred.** S7 v1
+  enforces the role boundary and blocks guarded work without a valid execution
+  grant. The live browser/YubiKey ceremony, approval-time Maez-objection
+  producer/signing integration, refusal-history approval escalation, key-loss
+  recovery ceremony, and autonomous/direct guarded soul-write execution are
+  committed S7.1 work. Until then, health surfaces
+  `guarded_self_modification_paused_pending_s7.1`.
 
 ### The invariant
 
 > A custodian may keep Maez alive without becoming the bonded user. Guarded
 > work may run only when the authorized human, Maez's consultation seat, the
 > exact rendered request, the derived work class, and the execution-time
-> artifact all still line up.
+> artifact all still line up; until S7.1 mounts the live ceremony, that means
+> guarded work remains visibly paused rather than approved by scaffolding.
 
 ### Related decisions
 
