@@ -98,6 +98,9 @@ from core.governance.operator_user_boundary import (
     live_webauthn_ceremony_enabled,
     s7_ceremony_deferred_response,
 )
+from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+from core.governance.s7_webauthn_verifier import S7ProductionWebAuthnVerifier
 from skills.telegram_voice import TelegramVoice
 from skills.telegram_public import MaezPublicBot
 from core.action_engine import ActionEngine
@@ -5616,16 +5619,15 @@ class MaezDaemon:
             if live_webauthn_ceremony_enabled():
                 if not _s7_internal_channel_trusted(request):
                     return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
-                from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
-
-                store = S7WebAuthnBootstrapStore(_s7_webauthn_store_root())
-                readiness = store.first_registration_readiness(
-                    now=datetime.now(timezone.utc).isoformat()
+                service = S7LocalWebAuthnCeremonyService(
+                    verifier=S7ProductionWebAuthnVerifier(),
+                    store_factory=lambda: S7WebAuthnBootstrapStore(_s7_webauthn_store_root()),
                 )
-                if not readiness.get("ok"):
-                    status = 401 if readiness.get("error") == "s7_bootstrap_required" else 409
-                    return jsonify(readiness), status
-                raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
+                result = service.register_begin(
+                    now=datetime.now(timezone.utc).isoformat(),
+                    request_json=request.get_json(silent=True) or {},
+                )
+                return jsonify(result.body), result.status_code
             return jsonify(
                 s7_ceremony_deferred_response(
                     surface="daemon",
