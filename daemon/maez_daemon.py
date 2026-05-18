@@ -8,6 +8,7 @@ Runs a continuous reasoning loop and exposes a health check endpoint.
 """
 
 import hashlib
+import hmac
 import json
 import logging
 import re
@@ -195,6 +196,9 @@ from core.infra.http_security import (
 LOOP_INTERVAL = 30  # seconds
 HEALTH_PORT = 11435
 WS_PORT = 11436
+S7_INTERNAL_CHANNEL_HEADER = "X-Maez-S7-Internal-Channel"
+S7_INTERNAL_CHANNEL_TOKEN_ENV = "S7_INTERNAL_CHANNEL_TOKEN"
+S7_WEBAUTHN_STORE_ROOT_ENV = "S7_WEBAUTHN_STORE_ROOT"
 
 
 def _is_ws_invalid_handshake_noise(record: logging.LogRecord) -> bool:
@@ -216,6 +220,25 @@ def _is_ws_invalid_handshake_noise(record: logging.LogRecord) -> bool:
             return True
         exc = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
     return False
+
+
+def _s7_internal_channel_trusted(req) -> bool:
+    """Return true only for the reviewed cockpit-to-daemon private channel."""
+    token = os.environ.get(S7_INTERNAL_CHANNEL_TOKEN_ENV, "")
+    presented = req.headers.get(S7_INTERNAL_CHANNEL_HEADER, "")
+    if not token or not presented:
+        return False
+    if req.headers.get("Origin"):
+        return False
+    return secrets_compare(token, presented)
+
+
+def secrets_compare(expected: str, presented: str) -> bool:
+    return hmac.compare_digest(expected.encode("utf-8"), presented.encode("utf-8"))
+
+
+def _s7_webauthn_store_root() -> Path:
+    return Path(os.environ.get(S7_WEBAUTHN_STORE_ROOT_ENV, "memory/s7_1_webauthn"))
 
 
 class _WebsocketInvalidHandshakeFilter(logging.Filter):
@@ -5591,6 +5614,17 @@ class MaezDaemon:
         @app.route("/internal/s7/webauthn/register/begin", methods=["POST"])
         def s7_webauthn_register_begin():
             if live_webauthn_ceremony_enabled():
+                if not _s7_internal_channel_trusted(request):
+                    return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+                store = S7WebAuthnBootstrapStore(_s7_webauthn_store_root())
+                readiness = store.first_registration_readiness(
+                    now=datetime.now(timezone.utc).isoformat()
+                )
+                if not readiness.get("ok"):
+                    status = 401 if readiness.get("error") == "s7_bootstrap_required" else 409
+                    return jsonify(readiness), status
                 raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
             return jsonify(
                 s7_ceremony_deferred_response(
@@ -5602,6 +5636,8 @@ class MaezDaemon:
         @app.route("/internal/s7/webauthn/register/finish", methods=["POST"])
         def s7_webauthn_register_finish():
             if live_webauthn_ceremony_enabled():
+                if not _s7_internal_channel_trusted(request):
+                    return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
                 raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
             return jsonify(
                 s7_ceremony_deferred_response(
@@ -5613,6 +5649,8 @@ class MaezDaemon:
         @app.route("/internal/s7/cards/<request_id>/webauthn/begin", methods=["POST"])
         def s7_webauthn_authorize_begin(request_id: str):
             if live_webauthn_ceremony_enabled():
+                if not _s7_internal_channel_trusted(request):
+                    return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
                 raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
             return jsonify(
                 s7_ceremony_deferred_response(
@@ -5624,6 +5662,8 @@ class MaezDaemon:
         @app.route("/internal/s7/cards/<request_id>/webauthn/finish", methods=["POST"])
         def s7_webauthn_authorize_finish(request_id: str):
             if live_webauthn_ceremony_enabled():
+                if not _s7_internal_channel_trusted(request):
+                    return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
                 raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
             return jsonify(
                 s7_ceremony_deferred_response(
