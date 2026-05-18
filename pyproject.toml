@@ -100,6 +100,12 @@ google = [
     "requests-oauthlib>=2.0",
 ]
 
+# S7.1 founder-local WebAuthn ceremony. Kept out of core runtime so
+# `pip install -e .` cannot silently arm the authority-minting path.
+s7-webauthn = [
+    "webauthn>=2.7.1,<2.8",
+]
+
 # Development and CI.
 dev = [
     "ruff>=0.6",
@@ -109,7 +115,7 @@ dev = [
 
 # Everything — convenience for contributors who want the full surface.
 all = [
-    "maez[vision,telegram,google,dev,legacy-face]",
+    "maez[vision,telegram,google,dev,legacy-face,s7-webauthn]",
 ]
 
 [project.urls]
