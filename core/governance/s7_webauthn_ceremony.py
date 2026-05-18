@@ -45,12 +45,36 @@ class S7LocalWebAuthnCeremonyService:
         if dependency.get("ok") is not True:
             return S7CeremonyServiceResult(body=dependency, status_code=503)
         store = self.store_factory()
+        try:
+            request = _require_mapping(request_json)
+        except ValueError:
+            request = {}
+        registration_class = request.get("registration_class", "primary")
+        if registration_class not in {"primary", "backup"}:
+            return _schema_invalid("registration_class")
+        if registration_class == "backup":
+            if not store.has_enabled_primary():
+                return S7CeremonyServiceResult(
+                    body={"ok": False, "error": "s7_credential_setup_incomplete"},
+                    status_code=409,
+                )
+            return S7CeremonyServiceResult(
+                body={
+                    "ok": False,
+                    "error": "s7_authorization_required",
+                    "registration_class": "backup",
+                    "message": (
+                        "Backup registration requires a live founder authorization "
+                        "artifact; S7.1 has not wired that producer yet."
+                    ),
+                },
+                status_code=403,
+            )
         readiness = store.first_registration_readiness(now=now)
         if readiness.get("ok") is not True:
             status = 401 if readiness.get("error") == "s7_bootstrap_required" else 410
             return S7CeremonyServiceResult(body=readiness, status_code=status)
         try:
-            request = _require_mapping(request_json)
             intent_id = _require_text(request, "bootstrap_intent_id")
             raw_token = _require_text(request, "bootstrap_token")
             session_binding = _require_text(request, "session_binding")

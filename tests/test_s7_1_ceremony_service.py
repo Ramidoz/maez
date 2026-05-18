@@ -304,6 +304,51 @@ class S71CeremonyServiceTests(unittest.TestCase):
                 ).fetchone()[0]
             self.assertEqual(count, 1)
 
+    def test_backup_registration_begin_requires_founder_authorization(self):
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, intent = self._store_with_bootstrap(tmp)
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+            primary_begin = service.register_begin(
+                now=NOW,
+                request_json={
+                    "bootstrap_intent_id": intent.intent_id,
+                    "bootstrap_token": intent.raw_token,
+                    "session_binding": "session-a",
+                },
+            )
+            primary_finish = service.register_finish(
+                now=NOW,
+                request_json={
+                    "challenge_id": primary_begin.body["challenge_id"],
+                    "bootstrap_intent_id": intent.intent_id,
+                    "bootstrap_token": intent.raw_token,
+                    "session_binding": "session-a",
+                    "registration_response": {"clientDataJSON": "valid"},
+                },
+            )
+
+            result = service.register_begin(
+                now=NOW,
+                request_json={
+                    "registration_class": "backup",
+                    "session_binding": "session-b",
+                },
+            )
+
+            self.assertEqual(primary_finish.status_code, 200)
+            self.assertEqual(result.status_code, 403)
+            self.assertEqual(result.body["error"], "s7_authorization_required")
+            with closing(sqlite3.connect(store.db_path)) as conn:
+                challenges = conn.execute(
+                    "SELECT challenge_kind FROM s7_ceremony_challenges ORDER BY created_at"
+                ).fetchall()
+            self.assertEqual([row[0] for row in challenges], ["register_primary"])
+
 
 if __name__ == "__main__":
     unittest.main()
