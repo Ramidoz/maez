@@ -1395,6 +1395,52 @@ def api_card_approve(request_id: str):
         ), 502
 
 
+def _s7_cockpit_ceremony_deferred(route: str):
+    from core.governance.operator_user_boundary import s7_ceremony_deferred_response
+
+    return jsonify(s7_ceremony_deferred_response(surface="cockpit", route=route)), 503
+
+
+@app.route("/api/v1/s7/webauthn/register/begin", methods=["POST"])
+def api_s7_webauthn_register_begin():
+    from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
+
+    route = "/api/v1/s7/webauthn/register/begin"
+    if not live_webauthn_ceremony_enabled():
+        return _s7_cockpit_ceremony_deferred(route)
+    return _s7_cockpit_ceremony_deferred(route)
+
+
+@app.route("/api/v1/s7/webauthn/register/finish", methods=["POST"])
+def api_s7_webauthn_register_finish():
+    from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
+
+    route = "/api/v1/s7/webauthn/register/finish"
+    if not live_webauthn_ceremony_enabled():
+        return _s7_cockpit_ceremony_deferred(route)
+    return _s7_cockpit_ceremony_deferred(route)
+
+
+@app.route("/api/v1/s7/cards/<request_id>/webauthn/begin", methods=["POST"])
+def api_s7_webauthn_authorize_begin(request_id: str):
+    from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
+
+    route = f"/api/v1/s7/cards/{request_id}/webauthn/begin"
+    if not live_webauthn_ceremony_enabled():
+        return _s7_cockpit_ceremony_deferred(route)
+    return _s7_cockpit_ceremony_deferred(route)
+
+
+@app.route("/api/v1/s7/cards/<request_id>/webauthn/finish", methods=["POST"])
+def api_s7_webauthn_authorize_finish(request_id: str):
+    from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
+
+    route = f"/api/v1/s7/cards/{request_id}/webauthn/finish"
+    if not live_webauthn_ceremony_enabled():
+        return _s7_cockpit_ceremony_deferred(route)
+    return _s7_cockpit_ceremony_deferred(route)
+
+
 @app.route("/api/v1/services")
 def api_services():
     """systemctl status for maez/llama/ollama units."""

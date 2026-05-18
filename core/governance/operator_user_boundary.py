@@ -15,16 +15,19 @@ from __future__ import annotations
 from dataclasses import InitVar, asdict, dataclass
 from datetime import datetime, timezone
 import json
+import os
 import re
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from core.governance import successor_governance as s6
 
 
 SCHEMA_VERSION = "s7.v1"
+S7_LIVE_WEBAUTHN_CEREMONY_ENV = "S7_LIVE_WEBAUTHN_CEREMONY"
+S7_CEREMONY_DEFERRED_REASON = "s7_ceremony_deferred"
 
 ROLE_NAMES = s6.ROLE_NAMES
 S6_ACCESS_SCOPES = s6.ACCESS_SCOPES - s6.DEPRECATED_ACCESS_SCOPES
@@ -223,6 +226,7 @@ OPERATOR_HEALTH_MODES = frozenset({
     "ready",
     "degraded",
     "manual_recovery_required",
+    "guarded_self_modification_paused_pending_s7.1",
     "track_b_confidentiality_not_ready",
     "operator_unavailable_recovery_not_implemented",
     "unavailable",
@@ -243,6 +247,7 @@ OPERATOR_FRESHNESS_CLASSES = frozenset({
 })
 
 OPERATOR_RED_GATE_MODES = frozenset({
+    "guarded_self_modification_paused_pending_s7.1",
     "track_b_confidentiality_not_ready",
     "operator_unavailable_recovery_not_implemented",
     "backup_restore_confidentiality_not_ready",
@@ -622,6 +627,68 @@ def _canonical_timestamp(value: str) -> datetime | None:
     if dt.tzinfo is None:
         raise ValueError("S7 timestamp must be timezone-aware")
     return dt.astimezone(timezone.utc)
+
+
+class S7CeremonyDeferredError(RuntimeError):
+    """Raised when S7 v1 refuses a live WebAuthn ceremony path."""
+
+    def __init__(self, *, surface: str, route: str | None = None):
+        self.reason_code = S7_CEREMONY_DEFERRED_REASON
+        self.surface = surface
+        self.route = route
+        super().__init__(self.reason_code)
+
+    def to_response(self) -> dict[str, object]:
+        return s7_ceremony_deferred_response(surface=self.surface, route=self.route)
+
+
+def live_webauthn_ceremony_enabled(
+    *,
+    env: Mapping[str, str] | None = None,
+) -> bool:
+    """Return whether the reviewed S7.1 live ceremony has been explicitly enabled."""
+
+    source = os.environ if env is None else env
+    raw = str(source.get(S7_LIVE_WEBAUTHN_CEREMONY_ENV, "")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def s7_ceremony_deferred_response(
+    *,
+    surface: str,
+    route: str | None = None,
+) -> dict[str, object]:
+    """Structured, visible S7 v1 deferral response for live ceremony surfaces."""
+
+    response: dict[str, object] = {
+        "ok": False,
+        "status": "deferred",
+        "error": S7_CEREMONY_DEFERRED_REASON,
+        "reason_code": S7_CEREMONY_DEFERRED_REASON,
+        "surface": surface,
+        "message": (
+            "S7 v1 ships the operator/user boundary with the live WebAuthn "
+            "ceremony deferred to S7.1."
+        ),
+    }
+    if route is not None:
+        response["route"] = route
+    return response
+
+
+def ensure_live_webauthn_ceremony_enabled(
+    *,
+    surface: str,
+    route: str | None = None,
+    live_ceremony_enabled: bool | None = None,
+) -> None:
+    enabled = (
+        live_webauthn_ceremony_enabled()
+        if live_ceremony_enabled is None
+        else live_ceremony_enabled is True
+    )
+    if not enabled:
+        raise S7CeremonyDeferredError(surface=surface, route=route)
 
 
 def _timestamp_text(value: str, *, field: str) -> str:
@@ -2881,6 +2948,18 @@ def build_own_substrate_bypass_inventory() -> tuple[dict[str, object], ...]:
             maez_runtime_or_helper=True,
         ),
         _bypass_entry(
+            path=(
+                "autonomous core-memory upkeep (promote_to_core_memory, "
+                "update_baseline, daemon core-memory consolidation writes)"
+            ),
+            sort="detected",
+            required_handling=(
+                "protected by M-series provenance, content-audit, and "
+                "memory-write boundaries; Maez living, not Maez being remade"
+            ),
+            maez_runtime_or_helper=True,
+        ),
+        _bypass_entry(
             path="dream-state soul writes/proposals",
             sort="gated",
             required_handling="soul-writing is self-modification/covenant-touching",
@@ -3590,6 +3669,49 @@ def register_founder_webauthn_credential(
     )
 
 
+def register_founder_webauthn_credential_from_response(
+    *,
+    credential_registry: object | None,
+    response: object,
+    live_ceremony_enabled: bool | None = None,
+) -> WebAuthnCredentialRecord:
+    """S7.1 placeholder for production credential registration.
+
+    S7 v1 keeps the grammar and test seam but refuses live registration before
+    any credential registry or browser response processing can occur.
+    """
+
+    ensure_live_webauthn_ceremony_enabled(
+        surface="producer",
+        route="register_credential",
+        live_ceremony_enabled=live_ceremony_enabled,
+    )
+    raise NotImplementedError("s7.1_live_webauthn_registration_not_mounted")
+
+
+def build_local_webauthn_execution_authorization(
+    *,
+    verifier: object | None,
+    credential_registry: object | None,
+    challenge_store: object | None,
+    request_history_store: object | None,
+    artifact_store: object | None,
+    live_ceremony_enabled: bool | None = None,
+) -> S7AuthorizationArtifact:
+    """S7.1 placeholder for production work-on-Maez authorization.
+
+    The default-off check must run before verifier, credential, challenge,
+    request-history, or artifact work.
+    """
+
+    ensure_live_webauthn_ceremony_enabled(
+        surface="producer",
+        route="execution_authorization",
+        live_ceremony_enabled=live_ceremony_enabled,
+    )
+    raise NotImplementedError("s7.1_live_webauthn_authorization_not_mounted")
+
+
 def _webauthn_requires_user_verification(work_class: str) -> bool:
     validate_work_class(work_class)
     return work_class in {
@@ -3766,7 +3888,7 @@ class RenderedRequestStatement:
             )
         _validate_closed_value(
             self.maez_objection_state,
-            frozenset({"none", "absent", "present", "unavailable"}),
+            frozenset({"none", "absent", "present", "unavailable", "not_determined"}),
             "maez_objection_state",
         )
         if not self.maez_unavailable_state:
@@ -3787,6 +3909,8 @@ class RenderedRequestStatement:
             return "no"
         if self.maez_objection_state == "unavailable":
             return "unavailable"
+        if self.maez_objection_state == "not_determined":
+            return "not determined"
         return "not applicable"
 
 

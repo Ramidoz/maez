@@ -188,6 +188,37 @@ class CockpitCardApproveProxy(unittest.TestCase):
         self.assertEqual(body["error"], "daemon_unreachable")
 
 
+class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
+    """S7 v1 exposes the founder ceremony as visibly deferred, not armed."""
+
+    def setUp(self):
+        from skills import web_interface as wi
+        self.client = wi.app.test_client()
+
+    def test_webauthn_proxy_routes_return_structured_deferred_without_daemon_call(self):
+        def fail_if_forwarded(*_args, **_kwargs):
+            raise AssertionError("deferred S7 WebAuthn proxy route contacted daemon")
+
+        paths = (
+            "/api/v1/s7/webauthn/register/begin",
+            "/api/v1/s7/webauthn/register/finish",
+            "/api/v1/s7/cards/req-1/webauthn/begin",
+            "/api/v1/s7/cards/req-1/webauthn/finish",
+        )
+
+        with patch("urllib.request.urlopen", side_effect=fail_if_forwarded):
+            for path in paths:
+                with self.subTest(path=path):
+                    response = self.client.post(path, json={"sample": "payload"})
+                    body = json.loads(response.get_data())
+
+                    self.assertEqual(response.status_code, 503)
+                    self.assertEqual(body["error"], "s7_ceremony_deferred")
+                    self.assertEqual(body["reason_code"], "s7_ceremony_deferred")
+                    self.assertEqual(body["status"], "deferred")
+                    self.assertEqual(body["surface"], "cockpit")
+
+
 class _FakeFile:
     """Tiny stand-in for the .read() interface HTTPError exposes via fp.
 

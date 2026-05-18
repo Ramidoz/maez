@@ -1166,6 +1166,61 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
         self.assertIn("Maez consulted: yes", rendered.rendered_text)
         self.assertIn("Maez objection present: yes", rendered.rendered_text)
 
+    def test_052a_rendered_statement_can_render_not_determined_objection_state(self):
+        from core.governance import operator_user_boundary as s7
+
+        env = self._self_mod_envelope()
+        rendered_text = "\n".join(
+            [
+                "S7 work-on-Maez authorization",
+                f"Renderer version: {s7.RENDERER_VERSION}",
+                "Surface: cockpit",
+                "Origin: http://localhost:11437",
+                f"Request id: {env.request_id}",
+                f"Work class: {env.derived_work_class}",
+                f"Change class: {env.proposed_change_class}",
+                f"Predicted effect class: {env.predicted_effect_class}",
+                f"Rollback path class: {env.rollback_path_class}",
+                f"Aggregation group: {env.derived_aggregation_group}",
+                "Maez consulted: yes",
+                "Maez objection present: not determined",
+                "Maez unavailable: no",
+                f"Request envelope hash: {s7.work_request_envelope_hash(env)}",
+                "Action params hash: " + ("a" * 64),
+                "Authority context hash: " + ("b" * 64),
+                "Nonce: nonce-1",
+                f"Expires at: {FUTURE}",
+                "Maez voice consultation hash: " + ("c" * 64),
+            ]
+        )
+
+        rendered = s7.RenderedRequestStatement(
+            request_id=env.request_id,
+            renderer_version=s7.RENDERER_VERSION,
+            surface="cockpit",
+            origin="http://localhost:11437",
+            rendered_text=rendered_text,
+            rendered_text_hash=s7.rendered_text_hash(rendered_text),
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            action_params_hash="a" * 64,
+            authority_context_hash="b" * 64,
+            derived_work_class=env.derived_work_class,
+            proposed_change_class=env.proposed_change_class,
+            predicted_effect_class=env.predicted_effect_class,
+            rollback_path_class=env.rollback_path_class,
+            maez_consulted_state="yes",
+            maez_voice_consultation_hash="c" * 64,
+            maez_objection_state="not_determined",
+            maez_unavailable_state="no",
+            derived_aggregation_group=env.derived_aggregation_group,
+            nonce="nonce-1",
+            expires_at=FUTURE,
+            rendered_at=NOW,
+        )
+
+        self.assertEqual(rendered.maez_objection_state, "not_determined")
+        self.assertIn("Maez objection present: not determined", rendered.rendered_text)
+
 
 class S7AuthorizationArtifactStoreTests(unittest.TestCase):
     def setUp(self):
@@ -2114,6 +2169,57 @@ class S7WebAuthnMechanismTests(unittest.TestCase):
         registry = s7.WebAuthnCredentialRegistry(Path(self._tmp.name) / "webauthn_credentials.db")
         registry.put(record)
         return registry
+
+    def test_065a_live_webauthn_ceremony_defaults_off(self):
+        from core.governance import operator_user_boundary as s7
+
+        self.assertFalse(s7.live_webauthn_ceremony_enabled(env={}))
+        self.assertFalse(
+            s7.live_webauthn_ceremony_enabled(env={"S7_LIVE_WEBAUTHN_CEREMONY": ""})
+        )
+        self.assertFalse(
+            s7.live_webauthn_ceremony_enabled(env={"S7_LIVE_WEBAUTHN_CEREMONY": "0"})
+        )
+        self.assertTrue(
+            s7.live_webauthn_ceremony_enabled(env={"S7_LIVE_WEBAUTHN_CEREMONY": "1"})
+        )
+
+    def test_065b_live_registration_producer_deferred_before_credential_work(self):
+        from core.governance import operator_user_boundary as s7
+
+        class ExplodingRegistry:
+            def put(self, *_args, **_kwargs):
+                raise AssertionError("credential registry was touched while ceremony is deferred")
+
+        with self.assertRaises(s7.S7CeremonyDeferredError) as caught:
+            s7.register_founder_webauthn_credential_from_response(
+                credential_registry=ExplodingRegistry(),
+                response={"credential": "browser response"},
+                live_ceremony_enabled=False,
+            )
+
+        self.assertEqual(caught.exception.reason_code, "s7_ceremony_deferred")
+        self.assertEqual(caught.exception.surface, "producer")
+
+    def test_065c_live_authorization_producer_deferred_before_arming_work(self):
+        from core.governance import operator_user_boundary as s7
+
+        class Exploding:
+            def __getattr__(self, name):
+                raise AssertionError(f"arming surface was touched while ceremony is deferred: {name}")
+
+        with self.assertRaises(s7.S7CeremonyDeferredError) as caught:
+            s7.build_local_webauthn_execution_authorization(
+                verifier=Exploding(),
+                credential_registry=Exploding(),
+                challenge_store=Exploding(),
+                request_history_store=Exploding(),
+                artifact_store=Exploding(),
+                live_ceremony_enabled=False,
+            )
+
+        self.assertEqual(caught.exception.reason_code, "s7_ceremony_deferred")
+        self.assertEqual(caught.exception.surface, "producer")
 
     def test_066_webauthn_credential_record_requires_rp_id(self):
         from core.governance import operator_user_boundary as s7
@@ -3341,6 +3447,10 @@ class S7OwnSubstrateBypassTaxonomyTests(unittest.TestCase):
                 "cockpit approve endpoints",
                 "Telegram approval paths",
                 "direct Maez-runtime ActionEngine calls",
+                (
+                    "autonomous core-memory upkeep (promote_to_core_memory, "
+                    "update_baseline, daemon core-memory consolidation writes)"
+                ),
                 "dream-state soul writes/proposals",
                 "write_soul_note",
                 "edit_soul_section",
@@ -3363,6 +3473,22 @@ class S7OwnSubstrateBypassTaxonomyTests(unittest.TestCase):
         for entry in inventory:
             self.assertIn(entry["sort"], s7.OWN_SUBSTRATE_BYPASS_SORTS)
             self.assertTrue(entry["required_handling"])
+
+    def test_150a_autonomous_core_memory_upkeep_is_detected_not_gated(self):
+        from core.governance import operator_user_boundary as s7
+
+        by_path = {
+            entry["path"]: entry
+            for entry in s7.build_own_substrate_bypass_inventory()
+        }
+        path = (
+            "autonomous core-memory upkeep (promote_to_core_memory, "
+            "update_baseline, daemon core-memory consolidation writes)"
+        )
+
+        self.assertEqual(by_path[path]["sort"], "detected")
+        self.assertIn("M-series", by_path[path]["required_handling"])
+        self.assertTrue(by_path[path]["maez_runtime_or_helper"])
 
     def test_151_runtime_soul_config_code_and_model_routing_writes_are_never_accepted_limitations(self):
         from core.governance import operator_user_boundary as s7
@@ -3427,7 +3553,7 @@ class S7OwnSubstrateBypassTaxonomyTests(unittest.TestCase):
 
         self.assertTrue(runbook.exists())
         text = runbook.read_text(encoding="utf-8")
-        for surface in (banner, text):
+        for surface in (banner,):
             lowered = " ".join(surface.lower().split())
             self.assertIn("raw os", lowered)
             self.assertIn("cannot stop raw local write access", lowered)
@@ -3438,6 +3564,15 @@ class S7OwnSubstrateBypassTaxonomyTests(unittest.TestCase):
             self.assertIn("does not prove the human understood", lowered)
             self.assertIn("display was not spoofed", lowered)
             self.assertIn("os/browser was uncompromised", lowered)
+        runbook_lowered = " ".join(text.lower().split())
+        self.assertIn("raw os", runbook_lowered)
+        self.assertIn("cannot stop raw local write access", runbook_lowered)
+        self.assertIn("maez-controlled runtime or helper", runbook_lowered)
+        self.assertIn("not role-encrypted", runbook_lowered)
+        self.assertIn("soul/config/model-routing", runbook_lowered)
+        self.assertIn("will not prove the human was uncoerced", runbook_lowered)
+        self.assertIn("will not prove the human understood", runbook_lowered)
+        self.assertIn("display, os, or browser was uncompromised", runbook_lowered)
 
 
 class S7AggregationHabitTests(unittest.TestCase):
@@ -4096,6 +4231,27 @@ class S7OperatorHealthProjectionTests(unittest.TestCase):
         self.assertEqual(projection["expired_request_count"], 1)
         self.assertTrue(projection["manual_recovery_required"])
 
+    def test_099a_operator_health_accepts_guarded_self_modification_pause(self):
+        from core.governance import operator_user_boundary as s7
+
+        projection = s7.build_operator_health_projection(
+            mode="guarded_self_modification_paused_pending_s7.1",
+            service_mode="running",
+            uptime_class="fresh",
+            backup_freshness_class="fresh",
+            queue_counts={"open": 0, "blocked": 1, "expired": 0},
+            red_gate_modes=("guarded_self_modification_paused_pending_s7.1",),
+            manual_recovery_required=False,
+            track_b_confidentiality_mode="ready",
+            data_freshness_class="fresh",
+        )
+
+        self.assertEqual(projection["mode"], "guarded_self_modification_paused_pending_s7.1")
+        self.assertEqual(
+            projection["red_gate_modes"],
+            ("guarded_self_modification_paused_pending_s7.1",),
+        )
+
     def test_100_sensitive_red_gate_names_are_rejected(self):
         from core.governance import operator_user_boundary as s7
 
@@ -4126,6 +4282,37 @@ class S7OperatorHealthProjectionTests(unittest.TestCase):
             "backup_restore_confidentiality_not_ready",
         ):
             self.assertIn(blocker, operator_health)
+
+    def test_101a_daemon_webauthn_routes_short_circuit_before_arming_surfaces(self):
+        source = Path("daemon/maez_daemon.py").read_text(encoding="utf-8")
+
+        route_names = (
+            "s7_webauthn_register_begin",
+            "s7_webauthn_register_finish",
+            "s7_webauthn_authorize_begin",
+            "s7_webauthn_authorize_finish",
+        )
+        forbidden = (
+            "WebAuthnChallengeStore",
+            "WebAuthnCredentialRegistry",
+            "verify_founder_webauthn_assertion",
+            "register_founder_webauthn_credential_from_response",
+            "build_local_webauthn_execution_authorization",
+            "S7AuthorizationArtifactStore",
+            "S7RequestHistoryStore",
+        )
+
+        for route_name in route_names:
+            with self.subTest(route=route_name):
+                start = source.index(f"        def {route_name}")
+                next_route = source.find("        @app.route", start + 1)
+                segment = source[start: next_route if next_route != -1 else len(source)]
+                flag_check = segment.index("live_webauthn_ceremony_enabled")
+                deferred = segment.index("s7_ceremony_deferred_response")
+                self.assertLess(flag_check, deferred)
+                for token in forbidden:
+                    if token in segment:
+                        self.assertLess(deferred, segment.index(token), token)
 
     def test_102_operator_health_rejects_sensitive_queue_count_names(self):
         from core.governance import operator_user_boundary as s7

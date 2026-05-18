@@ -91,7 +91,11 @@ from core.safety.clinical_boundary import (
 from core.time.temporal_spine import temporal_spine_health
 from core.voice_continuity import voice_continuity_health
 from core.governance.successor_governance import successor_governance_health
-from core.governance.operator_user_boundary import build_operator_health_projection
+from core.governance.operator_user_boundary import (
+    build_operator_health_projection,
+    live_webauthn_ceremony_enabled,
+    s7_ceremony_deferred_response,
+)
 from skills.telegram_voice import TelegramVoice
 from skills.telegram_public import MaezPublicBot
 from core.action_engine import ActionEngine
@@ -5578,6 +5582,70 @@ class MaezDaemon:
         @app.route("/operator/health")
         def operator_health():
             return jsonify(self._operator_health())
+
+        @app.route("/internal/s7/webauthn/register/begin", methods=["POST"])
+        def s7_webauthn_register_begin():
+            if not live_webauthn_ceremony_enabled():
+                return jsonify(
+                    s7_ceremony_deferred_response(
+                        surface="daemon",
+                        route="/internal/s7/webauthn/register/begin",
+                    )
+                ), 503
+            return jsonify(
+                s7_ceremony_deferred_response(
+                    surface="daemon",
+                    route="/internal/s7/webauthn/register/begin",
+                )
+            ), 503
+
+        @app.route("/internal/s7/webauthn/register/finish", methods=["POST"])
+        def s7_webauthn_register_finish():
+            if not live_webauthn_ceremony_enabled():
+                return jsonify(
+                    s7_ceremony_deferred_response(
+                        surface="daemon",
+                        route="/internal/s7/webauthn/register/finish",
+                    )
+                ), 503
+            return jsonify(
+                s7_ceremony_deferred_response(
+                    surface="daemon",
+                    route="/internal/s7/webauthn/register/finish",
+                )
+            ), 503
+
+        @app.route("/internal/s7/cards/<request_id>/webauthn/begin", methods=["POST"])
+        def s7_webauthn_authorize_begin(request_id: str):
+            if not live_webauthn_ceremony_enabled():
+                return jsonify(
+                    s7_ceremony_deferred_response(
+                        surface="daemon",
+                        route=f"/internal/s7/cards/{request_id}/webauthn/begin",
+                    )
+                ), 503
+            return jsonify(
+                s7_ceremony_deferred_response(
+                    surface="daemon",
+                    route=f"/internal/s7/cards/{request_id}/webauthn/begin",
+                )
+            ), 503
+
+        @app.route("/internal/s7/cards/<request_id>/webauthn/finish", methods=["POST"])
+        def s7_webauthn_authorize_finish(request_id: str):
+            if not live_webauthn_ceremony_enabled():
+                return jsonify(
+                    s7_ceremony_deferred_response(
+                        surface="daemon",
+                        route=f"/internal/s7/cards/{request_id}/webauthn/finish",
+                    )
+                ), 503
+            return jsonify(
+                s7_ceremony_deferred_response(
+                    surface="daemon",
+                    route=f"/internal/s7/cards/{request_id}/webauthn/finish",
+                )
+            ), 503
 
         @app.route("/message", methods=["POST"])
         def message():
