@@ -1054,6 +1054,40 @@ class S7WebAuthnBootstrapStore:
             ).fetchone()
         return None if row is None else dict(row)
 
+    def consumed_authorization_challenge_for_artifact(
+        self,
+        *,
+        challenge_id: str,
+        session_binding: str,
+        internal_channel_binding: str,
+        now: str,
+    ) -> dict[str, Any] | None:
+        now_text = _parse_time(now).isoformat()
+        session_binding_hash = _fingerprint(session_binding)
+        internal_channel_binding_hash = _fingerprint(internal_channel_binding)
+        with closing(self._conn()) as conn:
+            row = conn.execute(
+                """
+                SELECT challenge_id, challenge_kind, challenge_hash, rp_id, origin, host,
+                       challenge_b64, session_binding_hash, internal_channel_binding_hash,
+                       expires_at, consumed_at, invalidated_at, request_id,
+                       request_envelope_hash, rendered_text_hash, action_params_hash,
+                       precondition_hash, authority_context_hash,
+                       maez_voice_consultation_hash, derived_aggregation_group,
+                       nonce, uv_required
+                FROM s7_ceremony_challenges
+                WHERE challenge_id = ?
+                  AND challenge_kind = 'authorize_guarded_request'
+                  AND session_binding_hash = ?
+                  AND internal_channel_binding_hash = ?
+                  AND consumed_at IS NOT NULL
+                  AND invalidated_at IS NULL
+                  AND expires_at > ?
+                """,
+                (challenge_id, session_binding_hash, internal_channel_binding_hash, now_text),
+            ).fetchone()
+        return None if row is None else dict(row)
+
     def registration_challenge_for_finish(
         self,
         *,

@@ -263,7 +263,7 @@ def _s7_route_session_binding(request_json: dict):
     return session_binding
 
 
-def _s7_route_authority_context(now: str, *, expires_at: str):
+def _s7_route_authority_context(now: str, *, expires_at: str, credential_ref: str | None = None):
     from core.governance import operator_user_boundary as s7
 
     return s7.AuthorityContext(
@@ -276,7 +276,7 @@ def _s7_route_authority_context(now: str, *, expires_at: str):
         allowed_scopes=("operator_health",),
         auth_method="founder_webauthn",
         surface="cockpit",
-        credential_ref=None,
+        credential_ref=credential_ref,
         created_at=now,
         expires_at=expires_at,
         verified=True,
@@ -310,6 +310,7 @@ def _s7_authorization_route_material(
     request_id: str,
     now: str,
     store: S7WebAuthnBootstrapStore,
+    allow_consumed_authorization_challenge: bool = False,
 ):
     from core.governance import operator_user_boundary as s7
 
@@ -319,6 +320,7 @@ def _s7_authorization_route_material(
     session_binding = _s7_route_session_binding(request_json)
     if not session_binding:
         return _s7_route_error("s7_schema_invalid", 400, detail="session_binding")
+    credential_ref = str(request_json.get("credential_ref") or "")
     internal_channel_binding = req.headers.get(S7_INTERNAL_CHANNEL_HEADER, "")
     pipe = _s7_route_pipeline_for_daemon(daemon)
     if pipe is None or getattr(pipe, "card_store", None) is None:
@@ -342,17 +344,29 @@ def _s7_authorization_route_material(
     challenge_id = str(request_json.get("challenge_id") or "")
     challenge = None
     if challenge_id:
-        challenge = store.authorization_challenge_for_finish(
-            challenge_id=challenge_id,
-            session_binding=session_binding,
-            internal_channel_binding=internal_channel_binding,
-            now=now,
-        )
+        if allow_consumed_authorization_challenge is True:
+            challenge = store.consumed_authorization_challenge_for_artifact(
+                challenge_id=challenge_id,
+                session_binding=session_binding,
+                internal_channel_binding=internal_channel_binding,
+                now=now,
+            )
+        else:
+            challenge = store.authorization_challenge_for_finish(
+                challenge_id=challenge_id,
+                session_binding=session_binding,
+                internal_channel_binding=internal_channel_binding,
+                now=now,
+            )
     nonce = str((challenge or {}).get("nonce") or hashlib.sha256(
         f"{request_id}|{now}|{session_binding}".encode("utf-8")
     ).hexdigest())
     expires_at = str((challenge or {}).get("expires_at") or _s7_route_expires_at(now))
-    authority_context = _s7_route_authority_context(envelope.created_at, expires_at=expires_at)
+    authority_context = _s7_route_authority_context(
+        envelope.created_at,
+        expires_at=expires_at,
+        credential_ref=credential_ref or None,
+    )
     action_params = pipe._execution_params_for_card(card)
     action_params_hash = s7.canonical_hash(action_params)
     rendered = s7.render_request_statement(
@@ -402,6 +416,7 @@ def _s7_backup_registration_authorization(daemon, req, *, now: str, store: S7Web
             or ""
         ),
         "challenge_id": str(request_json.get("authorization_challenge_id") or ""),
+        "credential_ref": str(request_json.get("authorization_credential_ref") or ""),
     }
 
     class _AuthorizationRequest:
@@ -417,6 +432,7 @@ def _s7_backup_registration_authorization(daemon, req, *, now: str, store: S7Web
         request_id=request_id,
         now=now,
         store=store,
+        allow_consumed_authorization_challenge=True,
     )
     if material.ok is not True:
         return material

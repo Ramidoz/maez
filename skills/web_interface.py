@@ -1142,6 +1142,12 @@ _S7_WEBAUTHN_PROOF_PAGE = r"""<!DOCTYPE html>
     <input id="backupAuthorizationRequestId" autocomplete="off">
     <label>S7 authorization artifact id for backup registration</label>
     <input id="backupArtifactId" autocomplete="off">
+    <label>S7 authorization challenge id for backup registration</label>
+    <input id="backupAuthorizationChallengeId" autocomplete="off">
+    <label>S7 authorization session binding for backup registration</label>
+    <input id="backupAuthorizationSessionBinding" autocomplete="off">
+    <label>S7 authorization credential ref for backup registration</label>
+    <input id="backupAuthorizationCredentialRef" autocomplete="off">
     <label>Session binding</label>
     <input id="backupSession" value="manual-proof-backup">
     <button onclick="registerCredential('backup')" class="secondary">Register backup with navigator.credentials.create</button>
@@ -1249,6 +1255,9 @@ async function registerCredential(kind) {
     } else {
       beginBody.s7_authorization_artifact_id = backupArtifactId.value;
       beginBody.backup_authorization_request_id = backupAuthorizationRequestId.value;
+      beginBody.authorization_challenge_id = backupAuthorizationChallengeId.value;
+      beginBody.authorization_session_binding = backupAuthorizationSessionBinding.value;
+      beginBody.authorization_credential_ref = backupAuthorizationCredentialRef.value;
     }
     const begin = await jsonFetch("/api/v1/s7/webauthn/register/begin", beginBody);
     appendLog(`${kind} register begin`, begin);
@@ -1262,6 +1271,9 @@ async function registerCredential(kind) {
       registration_response: encodeCredentialResponse(credential),
     });
     appendLog(`${kind} register finish`, finish);
+    if (kind === "primary") {
+      credentialRef.value = finish.credential_ref || credentialRef.value;
+    }
     await loadStatus();
   } catch (err) {
     appendLog(`${kind} register error`, describeError(err));
@@ -1283,8 +1295,16 @@ async function authorizeCard() {
   try {
     const requestId = cardRequestId.value;
     const session = authSession.value;
-    const begin = await jsonFetch(`/api/v1/s7/cards/${encodeURIComponent(requestId)}/webauthn/begin`, {session_binding: session});
+    const begin = await jsonFetch(`/api/v1/s7/cards/${encodeURIComponent(requestId)}/webauthn/begin`, {
+      session_binding: session,
+      credential_ref: credentialRef.value,
+    });
     appendLog("authorize begin", begin);
+    if (requestId && requestId === backupAuthorizationRequestId.value) {
+      backupAuthorizationChallengeId.value = begin.challenge_id || "";
+      backupAuthorizationSessionBinding.value = session;
+      backupAuthorizationCredentialRef.value = credentialRef.value;
+    }
     const credential = await navigator.credentials.get(normalizeRequestOptions(begin.public_key_options));
     const finish = await jsonFetch(`/api/v1/s7/cards/${encodeURIComponent(requestId)}/webauthn/finish`, {
       session_binding: session,
