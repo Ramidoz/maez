@@ -46,7 +46,7 @@ import re
 import sqlite3
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -118,6 +118,8 @@ NOVELTY_DREAM_LOOKBACK = 20
 
 
 TRAINING_EVAL_COOLDOWN_S = 86400.0  # 24 hours between training proposals
+
+S7_DREAM_APPLY_ENVELOPE_TTL = timedelta(days=30)
 
 
 class DreamState:
@@ -691,6 +693,117 @@ class DreamState:
             "unified_diff": row[9],
         }
 
+    def s7_apply_action_params(self, prop_id: int) -> dict[str, Any]:
+        """Return the exact action params a dream apply will execute."""
+        prop = self.get_proposal(prop_id)
+        if prop is None:
+            raise ValueError(f"dream #{prop_id} not found")
+        if prop["proposal_type"] != "append":
+            raise ValueError("/apply_dream only applies append proposals")
+        return {"note": f"[DREAM] {prop['insight']}"}
+
+    def build_apply_s7_envelope(
+        self,
+        prop_id: int,
+        *,
+        maez_voice_consultation_id: str | None = None,
+    ):
+        """Build the S7 request envelope for this stored dream proposal.
+
+        The execution edge recomputes this from the DB row so authorization is
+        bound to the actual pending work item, not to caller-supplied prose.
+        """
+        from core.governance import operator_user_boundary as s7
+
+        prop = self.get_proposal(prop_id)
+        if prop is None:
+            raise ValueError(f"dream #{prop_id} not found")
+        if prop["status"] != "pending":
+            raise ValueError(f"dream #{prop_id} already {prop['status']}")
+        if prop["proposal_type"] != "append":
+            raise ValueError("/apply_dream only applies append proposals")
+        params = self.s7_apply_action_params(prop_id)
+        created = datetime.fromtimestamp(float(prop["created_at"]), tz=timezone.utc)
+        expires = created + S7_DREAM_APPLY_ENVELOPE_TTL
+        consultation_id = maez_voice_consultation_id or f"s7.1.apply_dream.voice.{prop_id}"
+        precondition_hash = s7.canonical_hash(
+            {
+                "schema_version": "s7.1.apply_dream.precondition.v1",
+                "proposal_id": prop_id,
+                "proposal_type": prop["proposal_type"],
+                "status": prop["status"],
+                "created_at": prop["created_at"],
+                "insight_hash": s7.canonical_hash({"insight": prop["insight"]}),
+            }
+        )
+        return s7.build_work_request_envelope(
+            request_id=f"s7.1.apply_dream.{prop_id}",
+            action="write_soul_note",
+            params=params,
+            claimed_work_class="self_modification",
+            requesting_subsystem="dream_state",
+            closed_symptom_code="self_mod_requested",
+            proposed_change_class="soul_change",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("file:config/soul.md",),
+            content_exposure_risk="bonded_content_ref",
+            precondition_hash=precondition_hash,
+            created_at=created.isoformat(),
+            expires_at=expires.isoformat(),
+            predicted_effect_class="behavior_change",
+            rollback_path_class="revert_patch",
+            maez_voice_consultation_id=consultation_id,
+            free_text_ref_hash=s7.canonical_hash(
+                {
+                    "dream_proposal_id": prop_id,
+                    "insight": prop["insight"],
+                }
+            ),
+        )
+
+    def _consume_apply_s7_execution_authorization(
+        self,
+        *,
+        prop_id: int,
+        s7_execution_authorization: object | None,
+    ) -> tuple[object | None, str | None]:
+        from core.governance import operator_user_boundary as s7
+
+        if not isinstance(s7_execution_authorization, s7.S7ExecutionAuthorization):
+            return None, "S7 execution authorization required before /apply_dream soul write"
+        params = self.s7_apply_action_params(prop_id)
+        envelope = self.build_apply_s7_envelope(
+            prop_id,
+        )
+        action_params_hash = s7.canonical_hash(params)
+        if s7_execution_authorization.rendered.request_id != envelope.request_id:
+            return None, "S7 execution authorization does not match this dream request"
+        if (
+            s7_execution_authorization.rendered.request_envelope_hash
+            != s7.work_request_envelope_hash(envelope)
+        ):
+            return None, "S7 execution authorization envelope hash mismatch"
+        if s7_execution_authorization.action_params_hash != action_params_hash:
+            return None, "S7 execution authorization action hash mismatch"
+        if s7_execution_authorization.precondition_hash != envelope.precondition_hash:
+            return None, "S7 execution authorization precondition mismatch"
+        grant, _result = s7_execution_authorization.store.consume_for_execution(
+            s7_execution_authorization.artifact_id,
+            rendered=s7_execution_authorization.rendered,
+            action_params_hash=action_params_hash,
+            authority_context=s7_execution_authorization.authority_context,
+            precondition_hash=envelope.precondition_hash,
+            derived_work_class=envelope.derived_work_class,
+            derived_aggregation_group=envelope.derived_aggregation_group,
+            now=s7_execution_authorization.now,
+            covenant_ceremony_evidence=(
+                s7_execution_authorization.covenant_ceremony_evidence
+            ),
+        )
+        if not isinstance(grant, s7.S7ExecutionGrant):
+            return None, "S7 execution authorization could not be consumed"
+        return grant, None
+
     def apply_proposal(
         self,
         prop_id: int,
@@ -710,11 +823,15 @@ class DreamState:
 
         if self.action_engine is None:
             return False, "action_engine not available"
-        if s7_execution_authorization is None:
-            return False, "S7 execution authorization required before /apply_dream soul write"
+        grant, error = self._consume_apply_s7_execution_authorization(
+            prop_id=prop_id,
+            s7_execution_authorization=s7_execution_authorization,
+        )
+        if error is not None:
+            return False, error
 
         try:
-            result = self.action_engine.write_soul_note(note)
+            result = self.action_engine.write_soul_note(note, s7_execution_grant=grant)
         except Exception as e:
             return False, f"write_soul_note failed: {e!r}"
 

@@ -1198,11 +1198,17 @@ class ActionEngine:
         )
         return f"Promoted to core: {core_id}"
 
-    def write_soul_note(self, note: str) -> ActionResult:
+    def write_soul_note(
+        self,
+        note: str,
+        *,
+        s7_execution_grant: object = None,
+    ) -> ActionResult:
         """Append an observation to soul.md (after principles section)."""
         return self._execute_action(
             "write_soul_note", {"note": note},
             f"Soul note: {note[:100]}", tier=0,
+            s7_execution_grant=s7_execution_grant,
         )
 
     def _do_write_soul_note(self, note: str) -> str:
