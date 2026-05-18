@@ -65,6 +65,17 @@ class _ValidRegistrationVerifier(_AvailableVerifier):
         }
 
 
+class _PresenceOnlyAuthenticationVerifier(_ValidRegistrationVerifier):
+    def verify_authentication_response(self, **_kwargs):
+        return {
+            "ok": True,
+            "credential_ref": "cred-primary",
+            "sign_count": 1,
+            "user_presence": True,
+            "user_verification": False,
+        }
+
+
 class S71CeremonyServiceTests(unittest.TestCase):
     def _self_mod_envelope(self):
         from core.governance import operator_user_boundary as s7
@@ -680,6 +691,48 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(finish.status_code, 200)
         self.assertEqual(finish.body["grant_source"], "founder_webauthn")
         self.assertTrue(consumed)
+
+    def test_authorize_finish_rejects_presence_only_for_uv_required_work(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_PresenceOnlyAuthenticationVerifier(),
+                store_factory=lambda: store,
+            )
+            envelope = self._self_mod_envelope()
+            rendered = self._rendered_statement()
+            begin = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+            )
+
+            finish = service.authorize_finish(
+                now=NOW,
+                envelope=envelope,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                maez_voice_consultation=self._voice_consultation(state="absent"),
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+                request_json={
+                    "challenge_id": begin.body["challenge_id"],
+                    "authentication_response": {"clientDataJSON": "presence-only"},
+                },
+            )
+
+        self.assertEqual(finish.status_code, 400)
+        self.assertEqual(finish.body["error"], "s7_authentication_invalid")
+        self.assertEqual(finish.body["detail"], "user_verification_required")
+        with self.assertRaises(KeyError):
+            _ = finish.body["artifact_id"]
 
 
 if __name__ == "__main__":

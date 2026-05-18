@@ -330,6 +330,24 @@ class S7LocalWebAuthnCeremonyService:
         )
         if verified.get("ok") is not True:
             return S7CeremonyServiceResult(body=verified, status_code=400)
+        if verified.get("user_presence") is not True:
+            return S7CeremonyServiceResult(
+                body={
+                    "ok": False,
+                    "error": "s7_authentication_invalid",
+                    "detail": "user_presence_required",
+                },
+                status_code=400,
+            )
+        if bool(challenge["uv_required"]) and verified.get("user_verification") is not True:
+            return S7CeremonyServiceResult(
+                body={
+                    "ok": False,
+                    "error": "s7_authentication_invalid",
+                    "detail": "user_verification_required",
+                },
+                status_code=400,
+            )
         credential_ref = str(verified["credential_ref"])
         if not store.credential_can_authorize(credential_ref):
             return S7CeremonyServiceResult(
