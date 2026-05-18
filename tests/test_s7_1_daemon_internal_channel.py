@@ -329,6 +329,50 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
         self.assertEqual(seen["request_json"]["challenge_id"], "challenge-route")
         self.assertEqual(seen["rendered_statement"].request_id, "req-route-finish")
 
+    def test_daemon_backup_register_begin_passes_s7_execution_authorization_to_service(self):
+        seen = {}
+
+        class Service:
+            def __init__(self, **_kwargs):
+                pass
+
+            def register_begin(self, **kwargs):
+                seen.update(kwargs)
+
+                class Result:
+                    status_code = 210
+                    body = {
+                        "ok": True,
+                        "has_authorization": kwargs["s7_execution_authorization"] is not None,
+                    }
+
+                return Result()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {
+                "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "S7_WEBAUTHN_STORE_ROOT": f"{tmp}/memory/s7_1_webauthn",
+            }
+            with patch.dict(os.environ, env, clear=False):
+                with patch("daemon.maez_daemon.S7LocalWebAuthnCeremonyService", Service):
+                    response = self._client(
+                        configure_daemon=self._daemon_with_card_pipeline("req-backup-register")
+                    ).post(
+                        "/internal/s7/webauthn/register/begin",
+                        json={
+                            "registration_class": "backup",
+                            "session_binding": "session-backup",
+                            "backup_authorization_request_id": "req-backup-register",
+                            "s7_authorization_artifact_id": "artifact-backup-register",
+                        },
+                        headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                    )
+
+        self.assertEqual(response.status_code, 210)
+        self.assertTrue(response.get_json()["has_authorization"])
+        self.assertEqual(seen["request_json"]["registration_class"], "backup")
+
     def test_daemon_authorize_routes_mint_artifact_through_real_service(self):
         from core.governance import operator_user_boundary as s7
         from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore

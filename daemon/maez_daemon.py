@@ -354,11 +354,12 @@ def _s7_authorization_route_material(
     expires_at = str((challenge or {}).get("expires_at") or _s7_route_expires_at(now))
     authority_context = _s7_route_authority_context(envelope.created_at, expires_at=expires_at)
     action_params = pipe._execution_params_for_card(card)
+    action_params_hash = s7.canonical_hash(action_params)
     rendered = s7.render_request_statement(
         envelope=envelope,
         surface="cockpit",
         origin="http://localhost:11437",
-        action_params_hash=s7.canonical_hash(action_params),
+        action_params_hash=action_params_hash,
         authority_context=authority_context,
         maez_voice_consultation=maez_voice_consultation,
         nonce=nonce,
@@ -368,11 +369,68 @@ def _s7_authorization_route_material(
     return _s7_route_material(
         envelope=envelope,
         rendered_statement=rendered,
+        action_params_hash=action_params_hash,
+        authority_context=authority_context,
         precondition_hash=envelope.precondition_hash,
         maez_voice_consultation=maez_voice_consultation,
         session_binding=session_binding,
         internal_channel_binding=internal_channel_binding,
         request_json=request_json,
+    )
+
+
+def _s7_backup_registration_authorization(daemon, req, *, now: str, store: S7WebAuthnBootstrapStore):
+    from core.governance import operator_user_boundary as s7
+
+    request_json = req.get_json(silent=True) or {}
+    if not isinstance(request_json, dict) or request_json.get("registration_class") != "backup":
+        return _s7_route_material(s7_execution_authorization=None)
+    artifact_id = str(request_json.get("s7_authorization_artifact_id") or "")
+    request_id = str(request_json.get("backup_authorization_request_id") or "")
+    if not artifact_id:
+        return _s7_route_error("s7_schema_invalid", 400, detail="s7_authorization_artifact_id")
+    if not request_id:
+        return _s7_route_error("s7_schema_invalid", 400, detail="backup_authorization_request_id")
+
+    auth_request_json = {
+        "session_binding": str(
+            request_json.get("authorization_session_binding")
+            or request_json.get("session_binding")
+            or ""
+        ),
+        "challenge_id": str(request_json.get("authorization_challenge_id") or ""),
+    }
+
+    class _AuthorizationRequest:
+        headers = req.headers
+
+        @staticmethod
+        def get_json(*_args, **_kwargs):
+            return auth_request_json
+
+    material = _s7_authorization_route_material(
+        daemon,
+        _AuthorizationRequest(),
+        request_id=request_id,
+        now=now,
+        store=store,
+    )
+    if material.ok is not True:
+        return material
+    return _s7_route_material(
+        s7_execution_authorization=s7.S7ExecutionAuthorization(
+            store=s7.S7AuthorizationStore(store.db_path),
+            artifact_id=artifact_id,
+            rendered=material.kwargs["rendered_statement"],
+            action_params_hash=material.kwargs["action_params_hash"],
+            authority_context=material.kwargs["authority_context"],
+            precondition_hash=material.kwargs["precondition_hash"],
+            derived_work_class=material.kwargs["rendered_statement"].derived_work_class,
+            derived_aggregation_group=material.kwargs[
+                "rendered_statement"
+            ].derived_aggregation_group,
+            now=now,
+        )
     )
 
 
@@ -5772,13 +5830,24 @@ class MaezDaemon:
             if live_webauthn_ceremony_enabled():
                 if not _s7_internal_channel_trusted(request):
                     return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                now = datetime.now(timezone.utc).isoformat()
+                store = S7WebAuthnBootstrapStore(_s7_webauthn_store_root())
+                authorization = _s7_backup_registration_authorization(
+                    self,
+                    request,
+                    now=now,
+                    store=store,
+                )
+                if authorization.ok is not True:
+                    return jsonify(authorization.body), authorization.status_code
                 service = S7LocalWebAuthnCeremonyService(
                     verifier=S7ProductionWebAuthnVerifier(),
-                    store_factory=lambda: S7WebAuthnBootstrapStore(_s7_webauthn_store_root()),
+                    store_factory=lambda: store,
                 )
                 result = service.register_begin(
-                    now=datetime.now(timezone.utc).isoformat(),
+                    now=now,
                     request_json=request.get_json(silent=True) or {},
+                    s7_execution_authorization=authorization.kwargs["s7_execution_authorization"],
                 )
                 return jsonify(result.body), result.status_code
             return jsonify(
