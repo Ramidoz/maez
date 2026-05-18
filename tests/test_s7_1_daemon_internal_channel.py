@@ -599,6 +599,45 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
         self.assertEqual(register_begin.status_code, 200)
         self.assertEqual(register_begin.get_json()["registration_class"], "backup")
 
+    def test_daemon_backup_authorization_infers_single_primary_when_credential_ref_omitted(self):
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = f"{tmp}/memory/s7_1_webauthn"
+            store = S7WebAuthnBootstrapStore(root)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            env = {
+                "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "S7_WEBAUTHN_STORE_ROOT": root,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                with patch("daemon.maez_daemon.S7ProductionWebAuthnVerifier", _RouteAuthenticationVerifier):
+                    client = self._client(
+                        configure_daemon=self._daemon_with_backup_registration_pipeline(
+                            "req-backup-infer-primary"
+                        )
+                    )
+                    authorize_begin = client.post(
+                        "/internal/s7/cards/req-backup-infer-primary/webauthn/begin",
+                        json={"session_binding": "session-auth"},
+                        headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                    )
+                    authorize_finish = client.post(
+                        "/internal/s7/cards/req-backup-infer-primary/webauthn/finish",
+                        json={
+                            "session_binding": "session-auth",
+                            "challenge_id": authorize_begin.get_json()["challenge_id"],
+                            "credential_ref": "cred-primary",
+                            "authentication_response": {"clientDataJSON": "valid-auth"},
+                        },
+                        headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                    )
+
+        self.assertEqual(authorize_begin.status_code, 200)
+        self.assertEqual(authorize_finish.status_code, 200)
+        self.assertEqual(authorize_finish.get_json()["request_id"], "req-backup-infer-primary")
+
     def test_032_browser_presented_internal_channel_proof_is_rejected(self):
         env = {
             "S7_LIVE_WEBAUTHN_CEREMONY": "1",

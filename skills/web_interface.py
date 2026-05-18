@@ -1295,21 +1295,24 @@ async function authorizeCard() {
   try {
     const requestId = cardRequestId.value;
     const session = authSession.value;
+    let selectedCredentialRef = credentialRef.value;
     const begin = await jsonFetch(`/api/v1/s7/cards/${encodeURIComponent(requestId)}/webauthn/begin`, {
       session_binding: session,
-      credential_ref: credentialRef.value,
+      credential_ref: selectedCredentialRef,
     });
     appendLog("authorize begin", begin);
+    selectedCredentialRef = selectedCredentialRef || (begin.allow_credentials || [])[0] || "";
+    if (selectedCredentialRef) credentialRef.value = selectedCredentialRef;
     if (requestId && requestId === backupAuthorizationRequestId.value) {
       backupAuthorizationChallengeId.value = begin.challenge_id || "";
       backupAuthorizationSessionBinding.value = session;
-      backupAuthorizationCredentialRef.value = credentialRef.value;
+      backupAuthorizationCredentialRef.value = selectedCredentialRef;
     }
     const credential = await navigator.credentials.get(normalizeRequestOptions(begin.public_key_options));
     const finish = await jsonFetch(`/api/v1/s7/cards/${encodeURIComponent(requestId)}/webauthn/finish`, {
       session_binding: session,
       challenge_id: begin.challenge_id,
-      credential_ref: credentialRef.value || credential.id,
+      credential_ref: selectedCredentialRef || credential.id,
       authentication_response: encodeCredentialResponse(credential),
     });
     appendLog("authorize finish", finish);

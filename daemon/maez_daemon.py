@@ -284,6 +284,17 @@ def _s7_route_authority_context(now: str, *, expires_at: str, credential_ref: st
     )
 
 
+def _s7_single_enabled_primary_credential_ref(store: S7WebAuthnBootstrapStore) -> str | None:
+    primary_refs = tuple(
+        record.credential_ref
+        for record in store.list_credentials()
+        if record.enabled
+        and record.credential_kind == "primary"
+        and "bonded_user" in record.role_names
+    )
+    return primary_refs[0] if len(primary_refs) == 1 else None
+
+
 def _s7_route_expires_at(now: str) -> str:
     try:
         return (datetime.fromisoformat(now) + timedelta(minutes=5)).isoformat()
@@ -320,7 +331,6 @@ def _s7_authorization_route_material(
     session_binding = _s7_route_session_binding(request_json)
     if not session_binding:
         return _s7_route_error("s7_schema_invalid", 400, detail="session_binding")
-    credential_ref = str(request_json.get("credential_ref") or "")
     internal_channel_binding = req.headers.get(S7_INTERNAL_CHANNEL_HEADER, "")
     pipe = _s7_route_pipeline_for_daemon(daemon)
     if pipe is None or getattr(pipe, "card_store", None) is None:
@@ -331,6 +341,12 @@ def _s7_authorization_route_material(
     requires_s7 = getattr(pipe, "_card_requires_s7_authorization", lambda _card: True)(card)
     if requires_s7 is not True:
         return _s7_route_error("s7_authorization_not_required", 409)
+    allow_degraded_primary_only = (
+        getattr(card, "action", None) == "register_backup_webauthn_credential"
+    )
+    credential_ref = str(request_json.get("credential_ref") or "")
+    if not credential_ref and allow_degraded_primary_only:
+        credential_ref = _s7_single_enabled_primary_credential_ref(store) or ""
 
     envelope = pipe._s7_request_envelope_for_card(card)
     maez_voice_consultation = _s7_route_voice_consultation(pipe, card, envelope)
@@ -390,9 +406,7 @@ def _s7_authorization_route_material(
         session_binding=session_binding,
         internal_channel_binding=internal_channel_binding,
         request_json=request_json,
-        allow_degraded_primary_only=(
-            getattr(card, "action", None) == "register_backup_webauthn_credential"
-        ),
+        allow_degraded_primary_only=allow_degraded_primary_only,
     )
 
 
