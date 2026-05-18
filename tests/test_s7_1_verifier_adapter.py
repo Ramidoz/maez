@@ -39,6 +39,65 @@ class S71VerifierAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "s7_virtual_authenticator_requires_isolated_store"):
             S7VirtualAuthenticatorHarness(store_root=Path("memory/s7_1_webauthn"))
 
+    def test_053a_virtual_authenticator_harness_requires_explicit_test_origin(self):
+        from core.governance.s7_webauthn_verifier import S7VirtualAuthenticatorHarness
+
+        with self.assertRaisesRegex(ValueError, "s7_virtual_authenticator_requires_test_origin"):
+            S7VirtualAuthenticatorHarness(store_root=Path("build/s7_1_virtual_authenticator"))
+
+    def test_053b_virtual_authenticator_harness_rejects_production_origin_and_rp(self):
+        from core.governance.s7_webauthn_verifier import S7VirtualAuthenticatorHarness
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "s7_virtual_authenticator_must_not_target_production_cockpit",
+        ):
+            S7VirtualAuthenticatorHarness(
+                store_root=Path("build/s7_1_virtual_authenticator"),
+                origin="http://localhost:11437",
+                rp_id="localhost",
+                remote_debugging_enabled=True,
+            )
+
+    def test_054_virtual_authenticator_harness_requires_test_automation_channel(self):
+        from core.governance.s7_webauthn_verifier import S7VirtualAuthenticatorHarness
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "s7_virtual_authenticator_requires_test_automation_channel",
+        ):
+            S7VirtualAuthenticatorHarness(
+                store_root=Path("build/s7_1_virtual_authenticator"),
+                origin="http://127.0.0.1:11438",
+                rp_id="127.0.0.1",
+            )
+
+    def test_054a_virtual_authenticator_harness_accepts_isolated_test_service(self):
+        from core.governance.s7_webauthn_verifier import S7VirtualAuthenticatorHarness
+
+        harness = S7VirtualAuthenticatorHarness(
+            store_root=Path("build/s7_1_virtual_authenticator"),
+            origin="http://127.0.0.1:11438",
+            rp_id="127.0.0.1",
+            remote_debugging_enabled=True,
+        )
+
+        self.assertEqual(harness.origin, "http://127.0.0.1:11438")
+        self.assertEqual(harness.rp_id, "127.0.0.1")
+        self.assertTrue(harness.remote_debugging_enabled)
+
+    def test_054b_production_cockpit_sources_expose_no_remote_debugging_channel(self):
+        production_sources = (
+            Path("skills/web_interface.py"),
+            Path("daemon/maez_daemon.py"),
+        )
+
+        for path in production_sources:
+            source = path.read_text(encoding="utf-8")
+            self.assertNotIn("--remote-debugging-port", source, path.as_posix())
+            self.assertNotIn("remote_debugging_enabled=True", source, path.as_posix())
+            self.assertNotIn("virtual-authenticator", source, path.as_posix())
+
     def test_adapter_reports_installed_webauthn_version_without_importing_fake(self):
         from core.governance.s7_webauthn_verifier import S7ProductionWebAuthnVerifier
 

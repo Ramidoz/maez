@@ -154,11 +154,15 @@ class S7VirtualAuthenticatorHarness:
     """CI-only virtual-authenticator harness configuration.
 
     This is only a boundary guard for the later browser virtual-authenticator
-    implementation. It refuses Maez's live ceremony store so tests cannot
-    self-assemble authority against production memory.
+    implementation. It refuses Maez's live ceremony store and production
+    origin/RP so tests cannot self-assemble authority against production memory
+    or the real cockpit.
     """
 
     store_root: Path | str
+    origin: str | None = None
+    rp_id: str | None = None
+    remote_debugging_enabled: bool = False
 
     def __post_init__(self) -> None:
         root = Path(self.store_root)
@@ -166,6 +170,14 @@ class S7VirtualAuthenticatorHarness:
             "/memory/s7_1_webauthn"
         ):
             raise ValueError("s7_virtual_authenticator_requires_isolated_store")
+        if not self.origin or not self.rp_id:
+            raise ValueError("s7_virtual_authenticator_requires_test_origin")
+        if self.origin == "http://localhost:11437" or self.rp_id == "localhost":
+            raise ValueError(
+                "s7_virtual_authenticator_must_not_target_production_cockpit"
+            )
+        if not self.remote_debugging_enabled:
+            raise ValueError("s7_virtual_authenticator_requires_test_automation_channel")
 
 
 def _b64url_decode(value: str) -> bytes:
