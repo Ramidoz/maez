@@ -244,6 +244,138 @@ def _s7_webauthn_store_root() -> Path:
     return Path(os.environ.get(S7_WEBAUTHN_STORE_ROOT_ENV, "memory/s7_1_webauthn"))
 
 
+def _s7_route_error(error: str, status_code: int, **extra):
+    return SimpleNamespace(
+        ok=False,
+        status_code=status_code,
+        body={"ok": False, "error": error, **extra},
+    )
+
+
+def _s7_route_material(**kwargs):
+    return SimpleNamespace(ok=True, kwargs=kwargs)
+
+
+def _s7_route_session_binding(request_json: dict):
+    session_binding = str(request_json.get("session_binding") or "")
+    if not session_binding:
+        return None
+    return session_binding
+
+
+def _s7_route_authority_context(now: str, *, expires_at: str):
+    from core.governance import operator_user_boundary as s7
+
+    return s7.AuthorityContext(
+        actor_id="founder",
+        actor_handle_hmac="hmac:s7:founder:" + hashlib.sha256(
+            b"s7.1.local.webauthn.founder"
+        ).hexdigest(),
+        role_names=("bonded_user",),
+        grant_source="founder_webauthn",
+        allowed_scopes=("operator_health",),
+        auth_method="founder_webauthn",
+        surface="cockpit",
+        credential_ref=None,
+        created_at=now,
+        expires_at=expires_at,
+        verified=True,
+        verification_reason="founder_local_webauthn_challenge_pending",
+    )
+
+
+def _s7_route_expires_at(now: str) -> str:
+    try:
+        return (datetime.fromisoformat(now) + timedelta(minutes=5)).isoformat()
+    except Exception:
+        return (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+
+
+def _s7_route_pipeline_for_daemon(daemon):
+    telegram = getattr(daemon, "telegram", None)
+    return telegram._get_pipeline() if telegram else None
+
+
+def _s7_route_voice_consultation(pipe, card, envelope):
+    producer = getattr(pipe, "_s7_voice_consultation_for_card", None)
+    if not callable(producer):
+        return None
+    return producer(card, envelope)
+
+
+def _s7_authorization_route_material(
+    daemon,
+    req,
+    *,
+    request_id: str,
+    now: str,
+    store: S7WebAuthnBootstrapStore,
+):
+    from core.governance import operator_user_boundary as s7
+
+    request_json = req.get_json(silent=True) or {}
+    if not isinstance(request_json, dict):
+        return _s7_route_error("s7_schema_invalid", 400, detail="json_object_required")
+    session_binding = _s7_route_session_binding(request_json)
+    if not session_binding:
+        return _s7_route_error("s7_schema_invalid", 400, detail="session_binding")
+    internal_channel_binding = req.headers.get(S7_INTERNAL_CHANNEL_HEADER, "")
+    pipe = _s7_route_pipeline_for_daemon(daemon)
+    if pipe is None or getattr(pipe, "card_store", None) is None:
+        return _s7_route_error("s7_execution_edge_unavailable", 503)
+    card = pipe.card_store.get(request_id)
+    if card is None:
+        return _s7_route_error("s7_request_not_found", 404)
+    requires_s7 = getattr(pipe, "_card_requires_s7_authorization", lambda _card: True)(card)
+    if requires_s7 is not True:
+        return _s7_route_error("s7_authorization_not_required", 409)
+
+    envelope = pipe._s7_request_envelope_for_card(card)
+    maez_voice_consultation = _s7_route_voice_consultation(pipe, card, envelope)
+    if envelope.derived_work_class in s7.VOICE_SEAT_WORK_CLASSES and maez_voice_consultation is None:
+        return _s7_route_error(
+            "s7_voice_seat_unresolved",
+            409,
+            maez_objection_state="not_determined",
+        )
+
+    challenge_id = str(request_json.get("challenge_id") or "")
+    challenge = None
+    if challenge_id:
+        challenge = store.authorization_challenge_for_finish(
+            challenge_id=challenge_id,
+            session_binding=session_binding,
+            internal_channel_binding=internal_channel_binding,
+            now=now,
+        )
+    nonce = str((challenge or {}).get("nonce") or hashlib.sha256(
+        f"{request_id}|{now}|{session_binding}".encode("utf-8")
+    ).hexdigest())
+    expires_at = str((challenge or {}).get("expires_at") or _s7_route_expires_at(now))
+    authority_context = _s7_route_authority_context(now, expires_at=expires_at)
+    action_params = pipe._execution_params_for_card(card)
+    rendered = s7.render_request_statement(
+        envelope=envelope,
+        surface="cockpit",
+        origin="http://localhost:11437",
+        action_params_hash=s7.canonical_hash(action_params),
+        authority_context=authority_context,
+        maez_voice_consultation=maez_voice_consultation,
+        nonce=nonce,
+        expires_at=expires_at,
+        rendered_at=now,
+    )
+    return _s7_route_material(
+        envelope=envelope,
+        rendered_statement=rendered,
+        precondition_hash=envelope.precondition_hash,
+        maez_voice_consultation=maez_voice_consultation,
+        session_binding=session_binding,
+        internal_channel_binding=internal_channel_binding,
+        request_json=request_json,
+    )
+
+
 class _WebsocketInvalidHandshakeFilter(logging.Filter):
     _maez_ws_invalid_handshake_filter = True
 
@@ -5670,7 +5802,29 @@ class MaezDaemon:
             if live_webauthn_ceremony_enabled():
                 if not _s7_internal_channel_trusted(request):
                     return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
-                raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
+                now = datetime.now(timezone.utc).isoformat()
+                store = S7WebAuthnBootstrapStore(_s7_webauthn_store_root())
+                material = _s7_authorization_route_material(
+                    self,
+                    request,
+                    request_id=request_id,
+                    now=now,
+                    store=store,
+                )
+                if material.ok is not True:
+                    return jsonify(material.body), material.status_code
+                service = S7LocalWebAuthnCeremonyService(
+                    verifier=S7ProductionWebAuthnVerifier(),
+                    store_factory=lambda: store,
+                )
+                result = service.authorize_begin(
+                    now=now,
+                    rendered_statement=material.kwargs["rendered_statement"],
+                    precondition_hash=material.kwargs["precondition_hash"],
+                    session_binding=material.kwargs["session_binding"],
+                    internal_channel_binding=material.kwargs["internal_channel_binding"],
+                )
+                return jsonify(result.body), result.status_code
             return jsonify(
                 s7_ceremony_deferred_response(
                     surface="daemon",
@@ -5683,7 +5837,32 @@ class MaezDaemon:
             if live_webauthn_ceremony_enabled():
                 if not _s7_internal_channel_trusted(request):
                     return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
-                raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
+                now = datetime.now(timezone.utc).isoformat()
+                store = S7WebAuthnBootstrapStore(_s7_webauthn_store_root())
+                material = _s7_authorization_route_material(
+                    self,
+                    request,
+                    request_id=request_id,
+                    now=now,
+                    store=store,
+                )
+                if material.ok is not True:
+                    return jsonify(material.body), material.status_code
+                service = S7LocalWebAuthnCeremonyService(
+                    verifier=S7ProductionWebAuthnVerifier(),
+                    store_factory=lambda: store,
+                )
+                result = service.authorize_finish(
+                    now=now,
+                    envelope=material.kwargs["envelope"],
+                    rendered_statement=material.kwargs["rendered_statement"],
+                    precondition_hash=material.kwargs["precondition_hash"],
+                    maez_voice_consultation=material.kwargs["maez_voice_consultation"],
+                    session_binding=material.kwargs["session_binding"],
+                    internal_channel_binding=material.kwargs["internal_channel_binding"],
+                    request_json=material.kwargs["request_json"],
+                )
+                return jsonify(result.body), result.status_code
             return jsonify(
                 s7_ceremony_deferred_response(
                     surface="daemon",
