@@ -1401,13 +1401,54 @@ def _s7_cockpit_ceremony_deferred(route: str):
     return jsonify(s7_ceremony_deferred_response(surface="cockpit", route=route)), 503
 
 
+def _s7_cockpit_proxy_to_daemon(route: str, internal_route: str):
+    import urllib.error as _urlerr
+    import urllib.request as _urlreq
+
+    token = os.environ.get("S7_INTERNAL_CHANNEL_TOKEN", "")
+    if not token:
+        return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 503
+    body = request.get_data() or b"{}"
+    headers = {
+        "Content-Type": request.headers.get("Content-Type", "application/json"),
+        "X-Maez-S7-Internal-Channel": token,
+    }
+    try:
+        req = _urlreq.Request(
+            f"{_DAEMON_BASE}{internal_route}",
+            data=body,
+            headers=headers,
+            method="POST",
+        )
+        with _urlreq.urlopen(req, timeout=_COCKPIT_PROXY_TIMEOUT_S) as resp:
+            payload = resp.read()
+            status = resp.status
+            ctype = resp.headers.get("Content-Type", "application/json")
+        return (payload, status, {"Content-Type": ctype})
+    except _urlerr.HTTPError as e:
+        try:
+            payload = e.read()
+        except Exception:
+            payload = str(e).encode("utf-8")
+        return (payload, e.code, {"Content-Type": "application/json"})
+    except Exception as e:
+        return jsonify(
+            {
+                "ok": False,
+                "error": "daemon_unreachable",
+                "route": route,
+                "detail": str(e)[:200],
+            }
+        ), 502
+
+
 @app.route("/api/v1/s7/webauthn/register/begin", methods=["POST"])
 def api_s7_webauthn_register_begin():
     from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
 
     route = "/api/v1/s7/webauthn/register/begin"
     if live_webauthn_ceremony_enabled():
-        raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
+        return _s7_cockpit_proxy_to_daemon(route, "/internal/s7/webauthn/register/begin")
     return _s7_cockpit_ceremony_deferred(route)
 
 
@@ -1417,7 +1458,7 @@ def api_s7_webauthn_register_finish():
 
     route = "/api/v1/s7/webauthn/register/finish"
     if live_webauthn_ceremony_enabled():
-        raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
+        return _s7_cockpit_proxy_to_daemon(route, "/internal/s7/webauthn/register/finish")
     return _s7_cockpit_ceremony_deferred(route)
 
 
@@ -1427,7 +1468,10 @@ def api_s7_webauthn_authorize_begin(request_id: str):
 
     route = f"/api/v1/s7/cards/{request_id}/webauthn/begin"
     if live_webauthn_ceremony_enabled():
-        raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
+        return _s7_cockpit_proxy_to_daemon(
+            route,
+            f"/internal/s7/cards/{request_id}/webauthn/begin",
+        )
     return _s7_cockpit_ceremony_deferred(route)
 
 
@@ -1437,7 +1481,10 @@ def api_s7_webauthn_authorize_finish(request_id: str):
 
     route = f"/api/v1/s7/cards/{request_id}/webauthn/finish"
     if live_webauthn_ceremony_enabled():
-        raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
+        return _s7_cockpit_proxy_to_daemon(
+            route,
+            f"/internal/s7/cards/{request_id}/webauthn/finish",
+        )
     return _s7_cockpit_ceremony_deferred(route)
 
 

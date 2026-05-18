@@ -21,6 +21,7 @@ These tests lock in the proxy contract:
 from __future__ import annotations
 
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -217,6 +218,57 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
                     self.assertEqual(body["reason_code"], "s7_ceremony_deferred")
                     self.assertEqual(body["status"], "deferred")
                     self.assertEqual(body["surface"], "cockpit")
+
+    def test_flag_on_register_begin_forwards_with_internal_channel_not_browser_origin(self):
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.header_items())
+            captured["body"] = req.data
+            return _make_urlopen_response(
+                b'{"ok": false, "error": "s7_bootstrap_required"}',
+                status=401,
+            )
+
+        env = {
+            "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+            "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                response = self.client.post(
+                    "/api/v1/s7/webauthn/register/begin",
+                    json={"bootstrap_token": "token"},
+                    headers={"Origin": "http://localhost:11437"},
+                )
+
+        body = json.loads(response.get_data())
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(body["error"], "s7_bootstrap_required")
+        self.assertEqual(
+            captured["url"],
+            "http://127.0.0.1:11435/internal/s7/webauthn/register/begin",
+        )
+        self.assertEqual(captured["headers"]["X-maez-s7-internal-channel"], "test-channel-secret")
+        self.assertNotIn("Origin", captured["headers"])
+        self.assertEqual(captured["body"], b'{"bootstrap_token": "token"}')
+
+    def test_flag_on_malicious_origin_gets_s7_typed_error_before_forward(self):
+        def fail_if_forwarded(*_args, **_kwargs):
+            raise AssertionError("malicious browser origin reached daemon proxy")
+
+        with patch.dict(os.environ, {"S7_LIVE_WEBAUTHN_CEREMONY": "1"}, clear=False):
+            with patch("urllib.request.urlopen", side_effect=fail_if_forwarded):
+                response = self.client.post(
+                    "/api/v1/s7/webauthn/register/begin",
+                    json={"bootstrap_token": "token"},
+                    headers={"Origin": "https://evil.example"},
+                )
+
+        body = json.loads(response.get_data())
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(body["error"], "s7_untrusted_origin")
 
 
 class _FakeFile:

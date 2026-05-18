@@ -68,12 +68,15 @@ def reject_untrusted_browser_write(request):
         return None
     origin = request.headers.get("Origin")
     referer = request.headers.get("Referer")
+    is_s7_webauthn = "/s7/webauthn" in request.path or "/internal/s7/" in request.path
     if origin and not is_trusted_loopback_origin(origin):
         from flask import jsonify
 
-        return jsonify({"ok": False, "error": "untrusted_origin"}), 403
+        error = "s7_untrusted_origin" if is_s7_webauthn else "untrusted_origin"
+        return jsonify({"ok": False, "error": error}), 403
     if not origin and referer and not is_trusted_loopback_origin(referer):
         from flask import jsonify
 
-        return jsonify({"ok": False, "error": "untrusted_referer"}), 403
+        error = "s7_untrusted_origin" if is_s7_webauthn else "untrusted_referer"
+        return jsonify({"ok": False, "error": error}), 403
     return None
