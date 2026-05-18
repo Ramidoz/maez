@@ -4304,6 +4304,22 @@ class S7OperatorHealthProjectionTests(unittest.TestCase):
         )
         self.assertIs(projection["guarded_self_modification_paused_pending_s7_1"], True)
 
+    def test_099c_live_daemon_operator_health_keeps_pause_when_flag_on_but_consumer_absent(self):
+        from unittest.mock import patch
+        from daemon.maez_daemon import MaezDaemon
+
+        daemon = MaezDaemon.__new__(MaezDaemon)
+
+        with patch.dict("os.environ", {"S7_LIVE_WEBAUTHN_CEREMONY": "1"}, clear=False):
+            projection = daemon._operator_health()
+
+        self.assertEqual(projection["mode"], "guarded_self_modification_paused_pending_s7.1")
+        self.assertIn(
+            "guarded_self_modification_paused_pending_s7.1",
+            projection["red_gate_modes"],
+        )
+        self.assertIs(projection["guarded_self_modification_paused_pending_s7_1"], True)
+
     def test_100_sensitive_red_gate_names_are_rejected(self):
         from core.governance import operator_user_boundary as s7
 

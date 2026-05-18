@@ -1120,6 +1120,8 @@ class MaezDaemon:
         """Closed S7 operator-health projection; counts and modes only."""
         queue_counts = {"open": 0, "blocked": 0, "expired": 0}
         data_freshness_class = "unavailable"
+        pipe = None
+        card_store = None
         try:
             telegram = getattr(self, "telegram", None)
             pipe = telegram._get_pipeline() if telegram else None
@@ -1137,15 +1139,25 @@ class MaezDaemon:
             logger.warning("S7 operator health degraded: %s", exc)
             data_freshness_class = "unavailable"
         s7_live_ceremony_deferred = not live_webauthn_ceremony_enabled()
+        guarded_execution_consumer_live = (
+            card_store is not None
+            and callable(getattr(pipe, "_s7_request_envelope_for_card", None))
+            and callable(getattr(pipe, "_execution_params_for_card", None))
+        )
+        guarded_self_modification_paused = (
+            s7_live_ceremony_deferred or not guarded_execution_consumer_live
+        )
         red_gate_modes = (
             "track_b_confidentiality_not_ready",
             "operator_unavailable_recovery_not_implemented",
             "backup_restore_confidentiality_not_ready",
         )
-        if s7_live_ceremony_deferred:
+        if guarded_self_modification_paused:
             red_gate_modes = red_gate_modes + (GUARDED_SELF_MODIFICATION_PAUSED_MODE,)
         return build_operator_health_projection(
-            mode=GUARDED_SELF_MODIFICATION_PAUSED_MODE if s7_live_ceremony_deferred else "degraded",
+            mode=GUARDED_SELF_MODIFICATION_PAUSED_MODE
+            if guarded_self_modification_paused
+            else "degraded",
             service_mode="running",
             uptime_class="fresh",
             backup_freshness_class="unavailable",
