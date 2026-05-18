@@ -84,6 +84,7 @@ class S7ProductionWebAuthnVerifier:
                 "ok": False,
                 "error": "s7_registration_invalid",
                 "detail": exc.__class__.__name__,
+                "reason": str(exc)[:300],
             }
         return {
             "ok": True,
@@ -136,6 +137,7 @@ class S7ProductionWebAuthnVerifier:
                 "ok": False,
                 "error": "s7_authentication_invalid",
                 "detail": exc.__class__.__name__,
+                "reason": str(exc)[:300],
             }
         sign_count = getattr(verified, "new_sign_count", getattr(verified, "sign_count", 0))
         return {

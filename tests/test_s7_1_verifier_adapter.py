@@ -141,6 +141,8 @@ class S71VerifierAdapterTests(unittest.TestCase):
 
         self.assertEqual(result["ok"], False)
         self.assertEqual(result["error"], "s7_registration_invalid")
+        self.assertEqual(result["detail"], "ValueError")
+        self.assertEqual(result["reason"], "bad webauthn response")
 
     def test_060_062_registration_verifier_returns_attestation_and_uv_metadata(self):
         from core.governance.s7_webauthn_verifier import S7ProductionWebAuthnVerifier
@@ -211,6 +213,8 @@ class S71VerifierAdapterTests(unittest.TestCase):
 
         self.assertEqual(result["ok"], False)
         self.assertEqual(result["error"], "s7_authentication_invalid")
+        self.assertEqual(result["detail"], "ValueError")
+        self.assertEqual(result["reason"], "bad assertion")
 
     def test_authentication_verifier_returns_uv_and_sign_count_metadata(self):
         from core.governance.s7_webauthn_verifier import S7ProductionWebAuthnVerifier
