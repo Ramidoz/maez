@@ -203,6 +203,7 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
         paths = (
             "/api/v1/s7/webauthn/register/begin",
             "/api/v1/s7/webauthn/register/finish",
+            "/api/v1/s7/webauthn/register/backup-card",
             "/api/v1/s7/cards/req-1/webauthn/begin",
             "/api/v1/s7/cards/req-1/webauthn/finish",
         )
@@ -274,6 +275,39 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
         self.assertNotIn("Origin", captured["headers"])
         self.assertEqual(captured["body"], b'{"bootstrap_token": "token"}')
 
+    def test_flag_on_backup_card_create_forwards_with_internal_channel(self):
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.header_items())
+            captured["body"] = req.data
+            return _make_urlopen_response(
+                b'{"ok": true, "request_id": "req-backup-register"}',
+                status=201,
+            )
+
+        env = {
+            "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+            "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                response = self.client.post(
+                    "/api/v1/s7/webauthn/register/backup-card",
+                    json={"session_binding": "session-backup-card"},
+                )
+
+        body = json.loads(response.get_data())
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(body["request_id"], "req-backup-register")
+        self.assertEqual(
+            captured["url"],
+            "http://127.0.0.1:11435/internal/s7/webauthn/register/backup-card",
+        )
+        self.assertEqual(captured["headers"]["X-maez-s7-internal-channel"], "test-channel-secret")
+        self.assertEqual(captured["body"], b'{"session_binding": "session-backup-card"}')
+
     def test_flag_on_malicious_origin_gets_s7_typed_error_before_forward(self):
         def fail_if_forwarded(*_args, **_kwargs):
             raise AssertionError("malicious browser origin reached daemon proxy")
@@ -300,8 +334,10 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
         self.assertIn("navigator.credentials.get", text)
         self.assertIn("/api/v1/s7/webauthn/register/begin", text)
         self.assertIn("/api/v1/s7/webauthn/register/finish", text)
+        self.assertIn("/api/v1/s7/webauthn/register/backup-card", text)
         self.assertIn("/api/v1/s7/cards/", text)
         self.assertIn("backup_authorization_request_id", text)
+        self.assertIn("createBackupRegistrationCard", text)
         self.assertIn("bufferToB64url", text)
         self.assertIn("b64urlToBuffer", text)
 

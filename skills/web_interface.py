@@ -1137,6 +1137,7 @@ _S7_WEBAUTHN_PROOF_PAGE = r"""<!DOCTYPE html>
   <section>
     <h2>2. Register backup</h2>
     <p>Requires an existing reviewed S7 authorization for backup registration.</p>
+    <button onclick="createBackupRegistrationCard()" class="secondary">Create backup-registration request card</button>
     <label>Backup-registration authorization card request id</label>
     <input id="backupAuthorizationRequestId" autocomplete="off">
     <label>S7 authorization artifact id for backup registration</label>
@@ -1255,6 +1256,14 @@ async function registerCredential(kind) {
   appendLog(`${kind} register finish`, finish);
   await loadStatus();
 }
+async function createBackupRegistrationCard() {
+  const card = await jsonFetch("/api/v1/s7/webauthn/register/backup-card", {
+    session_binding: backupSession.value,
+  });
+  appendLog("backup registration card", card);
+  backupAuthorizationRequestId.value = card.request_id || "";
+  cardRequestId.value = card.request_id || "";
+}
 async function authorizeCard() {
   const requestId = cardRequestId.value;
   const session = authSession.value;
@@ -1268,6 +1277,9 @@ async function authorizeCard() {
     authentication_response: encodeCredentialResponse(credential),
   });
   appendLog("authorize finish", finish);
+  if (requestId && requestId === backupAuthorizationRequestId.value) {
+    backupArtifactId.value = finish.artifact_id || "";
+  }
 }
 async function copyProofLog() {
   await navigator.clipboard.writeText(document.getElementById("proofLog").value);
@@ -1682,6 +1694,16 @@ def api_s7_webauthn_register_finish():
     route = "/api/v1/s7/webauthn/register/finish"
     if live_webauthn_ceremony_enabled():
         return _s7_cockpit_proxy_to_daemon(route, "/internal/s7/webauthn/register/finish")
+    return _s7_cockpit_ceremony_deferred(route)
+
+
+@app.route("/api/v1/s7/webauthn/register/backup-card", methods=["POST"])
+def api_s7_webauthn_register_backup_card():
+    from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
+
+    route = "/api/v1/s7/webauthn/register/backup-card"
+    if live_webauthn_ceremony_enabled():
+        return _s7_cockpit_proxy_to_daemon(route, "/internal/s7/webauthn/register/backup-card")
     return _s7_cockpit_ceremony_deferred(route)
 
 

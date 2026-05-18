@@ -373,6 +373,48 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
         self.assertTrue(response.get_json()["has_authorization"])
         self.assertEqual(seen["request_json"]["registration_class"], "backup")
 
+    def test_daemon_backup_registration_card_route_creates_pending_request(self):
+        created = {}
+
+        class Card:
+            request_id = "req-backup-register"
+            status = "open"
+
+        class Store:
+            def create_card(self, **kwargs):
+                created.update(kwargs)
+                return Card()
+
+        class Pipe:
+            card_store = Store()
+
+        class Telegram:
+            def _get_pipeline(self):
+                return Pipe()
+
+        def configure(daemon):
+            daemon.telegram = Telegram()
+
+        env = {
+            "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+            "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            response = self._client(configure_daemon=configure).post(
+                "/internal/s7/webauthn/register/backup-card",
+                json={"session_binding": "session-backup-card"},
+                headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+            )
+
+        body = response.get_json()
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["request_id"], "req-backup-register")
+        self.assertEqual(created["action"], "register_backup_webauthn_credential")
+        self.assertEqual(created["params"]["registration_class"], "backup")
+        self.assertEqual(created["channel"], "cockpit_s7_1_manual_proof")
+        self.assertEqual(created["user_id"], "rohit")
+
     def test_daemon_authorize_routes_mint_artifact_through_real_service(self):
         from core.governance import operator_user_boundary as s7
         from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore

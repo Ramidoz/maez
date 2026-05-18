@@ -434,6 +434,36 @@ def _s7_backup_registration_authorization(daemon, req, *, now: str, store: S7Web
     )
 
 
+def _s7_create_backup_registration_card(daemon):
+    from core.governance.s7_webauthn_ceremony import backup_registration_action_params
+
+    telegram = getattr(daemon, "telegram", None)
+    pipe = telegram._get_pipeline() if telegram else None
+    card_store = getattr(pipe, "card_store", None)
+    if card_store is None:
+        return _s7_route_error("s7_pending_card_store_unavailable", 503)
+
+    card = card_store.create_card(
+        action="register_backup_webauthn_credential",
+        params=backup_registration_action_params(),
+        reason="S7.1 backup WebAuthn credential enrollment requires founder authorization.",
+        plain_english="Authorize S7.1 backup WebAuthn credential enrollment.",
+        channel="cockpit_s7_1_manual_proof",
+        chat_id="s7.1-manual-proof",
+        user_id="rohit",
+    )
+    return SimpleNamespace(
+        ok=True,
+        status_code=201,
+        body={
+            "ok": True,
+            "request_id": card.request_id,
+            "action": "register_backup_webauthn_credential",
+            "status": getattr(getattr(card, "status", None), "value", getattr(card, "status", "")),
+        },
+    )
+
+
 class _WebsocketInvalidHandshakeFilter(logging.Filter):
     _maez_ws_invalid_handshake_filter = True
 
@@ -5875,6 +5905,20 @@ class MaezDaemon:
                 s7_ceremony_deferred_response(
                     surface="daemon",
                     route="/internal/s7/webauthn/register/finish",
+                )
+            ), 503
+
+        @app.route("/internal/s7/webauthn/register/backup-card", methods=["POST"])
+        def s7_webauthn_register_backup_card():
+            if live_webauthn_ceremony_enabled():
+                if not _s7_internal_channel_trusted(request):
+                    return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                result = _s7_create_backup_registration_card(self)
+                return jsonify(result.body), result.status_code
+            return jsonify(
+                s7_ceremony_deferred_response(
+                    surface="daemon",
+                    route="/internal/s7/webauthn/register/backup-card",
                 )
             ), 503
 
