@@ -158,6 +158,26 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
             user_id="rohit",
         )
 
+    def test_s7_card_envelope_is_stable_for_stored_card_across_call_time(self):
+        from core.governance import operator_user_boundary as s7
+
+        card = self._card()
+
+        with (
+            patch.object(_dp, "_s7_now_text", return_value="2026-05-17T16:00:00+00:00"),
+            patch.object(_dp, "_s7_one_hour_from_now_text", return_value="2026-05-17T17:00:00+00:00"),
+        ):
+            first = self.pipeline._s7_request_envelope_for_card(card)
+        with (
+            patch.object(_dp, "_s7_now_text", return_value="2026-05-17T16:30:00+00:00"),
+            patch.object(_dp, "_s7_one_hour_from_now_text", return_value="2026-05-17T17:30:00+00:00"),
+        ):
+            second = self.pipeline._s7_request_envelope_for_card(card)
+
+        self.assertEqual(s7.work_request_envelope_hash(first), s7.work_request_envelope_hash(second))
+        self.assertEqual(first.created_at, second.created_at)
+        self.assertEqual(first.expires_at, second.expires_at)
+
     def _open_dialog(self, card, *, require_s7_linkage: bool, request_hash: str | None = None):
         from skills.self_mod_dialog import open_dialog_for_card
 

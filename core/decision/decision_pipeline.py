@@ -111,6 +111,10 @@ def _s7_one_hour_from_now_text() -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
 
 
+def _s7_card_time_text(epoch_seconds: float) -> str:
+    return datetime.fromtimestamp(float(epoch_seconds), timezone.utc).isoformat()
+
+
 def _resolve_audit_request_id(card: Any) -> str:
     """Return a usable audit_request_id for a card, synthesizing a
     deterministic `orphan-card-<request_id>` fallback when the card
@@ -990,6 +994,8 @@ class DecisionPipeline:
             if content_exposure_risk == "bonded_content_ref"
             else None
         )
+        created_at = _s7_card_time_text(card.created_at)
+        expires_at = _s7_card_time_text(card.created_at + 3600)
         return s7.build_work_request_envelope(
             request_id=card.request_id,
             action=card.action,
@@ -1009,8 +1015,8 @@ class DecisionPipeline:
                 "card_state_hash": card.state_hash,
                 "state_fields": card.state_fields,
             }),
-            created_at=_s7_now_text(),
-            expires_at=_s7_one_hour_from_now_text(),
+            created_at=created_at,
+            expires_at=expires_at,
             predicted_effect_class=predicted_effect_class,
             rollback_path_class=(
                 "manual_review"
