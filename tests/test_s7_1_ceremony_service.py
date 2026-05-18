@@ -76,6 +76,11 @@ class _PresenceOnlyAuthenticationVerifier(_ValidRegistrationVerifier):
         }
 
 
+class _ExplodingAuthenticationVerifier(_ValidRegistrationVerifier):
+    def verify_authentication_response(self, **_kwargs):
+        raise AssertionError("verifier touched before credential lookup")
+
+
 class S71CeremonyServiceTests(unittest.TestCase):
     def _self_mod_envelope(self):
         from core.governance import operator_user_boundary as s7
@@ -673,6 +678,7 @@ class S71CeremonyServiceTests(unittest.TestCase):
                 internal_channel_binding="daemon-channel",
                 request_json={
                     "challenge_id": begin.body["challenge_id"],
+                    "credential_ref": "cred-primary",
                     "authentication_response": {"clientDataJSON": "valid-auth"},
                 },
             )
@@ -724,6 +730,7 @@ class S71CeremonyServiceTests(unittest.TestCase):
                 internal_channel_binding="daemon-channel",
                 request_json={
                     "challenge_id": begin.body["challenge_id"],
+                    "credential_ref": "cred-primary",
                     "authentication_response": {"clientDataJSON": "presence-only"},
                 },
             )
@@ -733,6 +740,45 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(finish.body["detail"], "user_verification_required")
         with self.assertRaises(KeyError):
             _ = finish.body["artifact_id"]
+
+    def test_authorize_finish_unknown_credential_fails_before_verifier(self):
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ExplodingAuthenticationVerifier(),
+                store_factory=lambda: store,
+            )
+            envelope = self._self_mod_envelope()
+            rendered = self._rendered_statement()
+            begin = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+            )
+
+            finish = service.authorize_finish(
+                now=NOW,
+                envelope=envelope,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                maez_voice_consultation=self._voice_consultation(state="absent"),
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+                request_json={
+                    "challenge_id": begin.body["challenge_id"],
+                    "credential_ref": "cred-missing",
+                    "authentication_response": {"clientDataJSON": "unknown-credential"},
+                },
+            )
+
+        self.assertEqual(finish.status_code, 409)
+        self.assertEqual(finish.body["error"], "s7_credential_disabled")
 
 
 if __name__ == "__main__":

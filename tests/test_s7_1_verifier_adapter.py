@@ -130,6 +130,66 @@ class S71VerifierAdapterTests(unittest.TestCase):
         self.assertEqual(result["library_version"], "2.7.1")
         self.assertEqual(result["uv_capable"], True)
 
+    def test_072_production_authentication_verifier_fails_closed_on_invalid_assertion(self):
+        from core.governance.s7_webauthn_verifier import S7ProductionWebAuthnVerifier
+
+        class WebAuthnModule:
+            @staticmethod
+            def verify_authentication_response(**_kwargs):
+                raise ValueError("bad assertion")
+
+        verifier = S7ProductionWebAuthnVerifier(import_module=lambda _name: WebAuthnModule)
+
+        result = verifier.verify_authentication_response(
+            authentication_response={"clientDataJSON": "not-real"},
+            challenge={"challenge_b64": "Y2hhbGxlbmdl"},
+            credential_public_key="cHVibGljLWtleQ",
+            current_sign_count=7,
+            expected_origin="http://localhost:11437",
+            expected_rp_id="localhost",
+            require_user_verification=True,
+        )
+
+        self.assertEqual(result["ok"], False)
+        self.assertEqual(result["error"], "s7_authentication_invalid")
+
+    def test_authentication_verifier_returns_uv_and_sign_count_metadata(self):
+        from core.governance.s7_webauthn_verifier import S7ProductionWebAuthnVerifier
+
+        class Verified:
+            credential_id = b"credential-id"
+            new_sign_count = 8
+            user_verified = True
+
+        class WebAuthnModule:
+            @staticmethod
+            def verify_authentication_response(**kwargs):
+                self.assertEqual(kwargs["expected_challenge"], b"challenge")
+                self.assertEqual(kwargs["expected_rp_id"], "localhost")
+                self.assertEqual(kwargs["expected_origin"], "http://localhost:11437")
+                self.assertEqual(kwargs["credential_public_key"], b"public-key")
+                self.assertEqual(kwargs["credential_current_sign_count"], 7)
+                self.assertIs(kwargs["require_user_verification"], True)
+                return Verified()
+
+        with patch.object(importlib.metadata, "version", return_value="2.7.1"):
+            verifier = S7ProductionWebAuthnVerifier(import_module=lambda _name: WebAuthnModule)
+            result = verifier.verify_authentication_response(
+                authentication_response={"clientDataJSON": "valid"},
+                challenge={"challenge_b64": "Y2hhbGxlbmdl"},
+                credential_public_key="cHVibGljLWtleQ",
+                current_sign_count=7,
+                expected_origin="http://localhost:11437",
+                expected_rp_id="localhost",
+                require_user_verification=True,
+            )
+
+        self.assertEqual(result["ok"], True)
+        self.assertEqual(result["credential_ref"], "Y3JlZGVudGlhbC1pZA")
+        self.assertEqual(result["sign_count"], 8)
+        self.assertTrue(result["user_presence"])
+        self.assertTrue(result["user_verification"])
+
 
 if __name__ == "__main__":
     unittest.main()

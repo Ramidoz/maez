@@ -282,6 +282,7 @@ class S7LocalWebAuthnCeremonyService:
         try:
             request = _require_mapping(request_json)
             challenge_id = _require_text(request, "challenge_id")
+            claimed_credential_ref = _require_text(request, "credential_ref")
             authentication_response = request["authentication_response"]
             if not isinstance(authentication_response, dict):
                 raise ValueError("authentication_response")
@@ -315,6 +316,12 @@ class S7LocalWebAuthnCeremonyService:
         )
         if aggregation.status_code != 200:
             return aggregation
+        credential = store.get_credential(claimed_credential_ref)
+        if credential is None or not credential.enabled or "bonded_user" not in credential.role_names:
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_credential_disabled"},
+                status_code=409,
+            )
         verifier_method = getattr(self.verifier, "verify_authentication_response", None)
         if verifier_method is None:
             return S7CeremonyServiceResult(
@@ -326,6 +333,8 @@ class S7LocalWebAuthnCeremonyService:
             challenge=challenge,
             expected_origin="http://localhost:11437",
             expected_rp_id="localhost",
+            credential_public_key=credential.public_key,
+            current_sign_count=credential.sign_count,
             require_user_verification=bool(challenge["uv_required"]),
         )
         if verified.get("ok") is not True:
@@ -349,6 +358,11 @@ class S7LocalWebAuthnCeremonyService:
                 status_code=400,
             )
         credential_ref = str(verified["credential_ref"])
+        if credential_ref != claimed_credential_ref:
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_authentication_invalid", "detail": "credential_mismatch"},
+                status_code=400,
+            )
         if not store.credential_can_authorize(credential_ref):
             return S7CeremonyServiceResult(
                 body={"ok": False, "error": "s7_credential_disabled"},

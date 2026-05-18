@@ -102,6 +102,52 @@ class S7ProductionWebAuthnVerifier:
             "uv_capable": bool(verified.user_verified),
         }
 
+    def verify_authentication_response(
+        self,
+        *,
+        authentication_response: dict[str, Any],
+        challenge: dict[str, Any],
+        credential_public_key: str,
+        current_sign_count: int,
+        expected_origin: str,
+        expected_rp_id: str,
+        require_user_verification: bool,
+    ) -> dict[str, Any]:
+        module = self._load()
+        if module is None:
+            return {
+                "ok": False,
+                "error": "s7_webauthn_dependency_missing",
+                "library_name": self.package_name,
+                "library_version": None,
+            }
+        try:
+            verified = module.verify_authentication_response(
+                credential=authentication_response,
+                expected_challenge=_b64url_decode(str(challenge["challenge_b64"])),
+                expected_rp_id=expected_rp_id,
+                expected_origin=expected_origin,
+                credential_public_key=_b64url_decode(credential_public_key),
+                credential_current_sign_count=int(current_sign_count),
+                require_user_verification=require_user_verification,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": "s7_authentication_invalid",
+                "detail": exc.__class__.__name__,
+            }
+        sign_count = getattr(verified, "new_sign_count", getattr(verified, "sign_count", 0))
+        return {
+            "ok": True,
+            "credential_ref": _b64url_encode(verified.credential_id),
+            "sign_count": int(sign_count),
+            "user_presence": True,
+            "user_verification": bool(verified.user_verified),
+            "library_name": self.package_name,
+            "library_version": self.dependency_state().get("library_version"),
+        }
+
 
 @dataclass(frozen=True)
 class S7VirtualAuthenticatorHarness:
