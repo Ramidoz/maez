@@ -295,6 +295,17 @@ def _s7_single_enabled_primary_credential_ref(store: S7WebAuthnBootstrapStore) -
     return primary_refs[0] if len(primary_refs) == 1 else None
 
 
+def _s7_single_enabled_backup_credential_ref(store: S7WebAuthnBootstrapStore) -> str | None:
+    backup_refs = tuple(
+        record.credential_ref
+        for record in store.list_credentials()
+        if record.enabled
+        and record.credential_kind == "backup"
+        and "bonded_user" in record.role_names
+    )
+    return backup_refs[0] if len(backup_refs) == 1 else None
+
+
 def _s7_route_expires_at(now: str) -> str:
     try:
         return (datetime.fromisoformat(now) + timedelta(minutes=5)).isoformat()
@@ -341,12 +352,18 @@ def _s7_authorization_route_material(
     requires_s7 = getattr(pipe, "_card_requires_s7_authorization", lambda _card: True)(card)
     if requires_s7 is not True:
         return _s7_route_error("s7_authorization_not_required", 409)
-    allow_degraded_primary_only = (
-        getattr(card, "action", None) == "register_backup_webauthn_credential"
+    action = getattr(card, "action", None)
+    card_params = dict(getattr(card, "params", None) or {})
+    allow_degraded_primary_only = action == "register_backup_webauthn_credential"
+    allow_degraded_backup_only = (
+        action == "disable_founder_webauthn_credential"
+        and card_params.get("credential_kind") == "backup"
     )
     credential_ref = str(request_json.get("credential_ref") or "")
     if not credential_ref and allow_degraded_primary_only:
         credential_ref = _s7_single_enabled_primary_credential_ref(store) or ""
+    if not credential_ref and allow_degraded_backup_only:
+        credential_ref = _s7_single_enabled_backup_credential_ref(store) or ""
 
     envelope = pipe._s7_request_envelope_for_card(card)
     maez_voice_consultation = _s7_route_voice_consultation(pipe, card, envelope)
@@ -408,6 +425,7 @@ def _s7_authorization_route_material(
         internal_channel_binding=internal_channel_binding,
         request_json=request_json,
         allow_degraded_primary_only=allow_degraded_primary_only,
+        allow_degraded_backup_only=allow_degraded_backup_only,
     )
 
 
@@ -6153,6 +6171,7 @@ class MaezDaemon:
                     session_binding=material.kwargs["session_binding"],
                     internal_channel_binding=material.kwargs["internal_channel_binding"],
                     allow_degraded_primary_only=material.kwargs["allow_degraded_primary_only"],
+                    allow_degraded_backup_only=material.kwargs["allow_degraded_backup_only"],
                 )
                 return jsonify(result.body), result.status_code
             return jsonify(

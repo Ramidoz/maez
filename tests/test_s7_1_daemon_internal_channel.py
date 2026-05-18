@@ -188,7 +188,13 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
 
         return configure
 
-    def _daemon_with_disable_credential_pipeline(self, request_id: str, credential_ref: str):
+    def _daemon_with_disable_credential_pipeline(
+        self,
+        request_id: str,
+        credential_ref: str,
+        *,
+        credential_kind: str = "primary",
+    ):
         from core.governance import operator_user_boundary as s7
         from core.governance.s7_webauthn_ceremony import (
             build_disable_credential_envelope,
@@ -197,12 +203,12 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
 
         params = disable_credential_action_params(
             credential_ref=credential_ref,
-            credential_kind="primary",
+            credential_kind=credential_kind,
         )
         envelope = build_disable_credential_envelope(
             request_id=request_id,
             credential_ref=credential_ref,
-            credential_kind="primary",
+            credential_kind=credential_kind,
             created_at="2026-05-18T11:00:00+00:00",
             expires_at="2026-05-18T12:00:00+00:00",
             maez_voice_consultation_id=f"voice-{request_id}",
@@ -783,6 +789,43 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
             disabled.disabled_by_authorization_id,
             authorize_finish.get_json()["artifact_id"],
         )
+
+    def test_daemon_proof_disable_backup_can_authorize_after_primary_disabled(self):
+        from dataclasses import replace
+
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = f"{tmp}/memory/s7_1_webauthn"
+            store = S7WebAuthnBootstrapStore(root)
+            store.store_credential(
+                replace(self._credential_record("cred-primary", kind="primary"), enabled=False)
+            )
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            env = {
+                "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "S7_WEBAUTHN_STORE_ROOT": root,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                client = self._client(
+                    configure_daemon=self._daemon_with_disable_credential_pipeline(
+                        "req-disable-backup",
+                        "cred-backup",
+                        credential_kind="backup",
+                    )
+                )
+                authorize_begin = client.post(
+                    "/internal/s7/cards/req-disable-backup/webauthn/begin",
+                    json={
+                        "session_binding": "session-auth",
+                        "credential_ref": "cred-backup",
+                    },
+                    headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                )
+
+        self.assertEqual(authorize_begin.status_code, 200)
+        self.assertEqual(tuple(authorize_begin.get_json()["allow_credentials"]), ("cred-backup",))
 
     def test_032_browser_presented_internal_channel_proof_is_rejected(self):
         env = {

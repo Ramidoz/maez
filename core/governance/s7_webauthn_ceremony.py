@@ -412,6 +412,7 @@ class S7LocalWebAuthnCeremonyService:
         session_binding: str,
         internal_channel_binding: str,
         allow_degraded_primary_only: bool = False,
+        allow_degraded_backup_only: bool = False,
     ) -> S7CeremonyServiceResult:
         dependency = self.verifier.dependency_state()
         if dependency.get("ok") is not True:
@@ -419,10 +420,16 @@ class S7LocalWebAuthnCeremonyService:
         store = self.store_factory()
         recovery = store.credential_recovery_state()
         if recovery.get("mode") != "ready":
-            if (
-                allow_degraded_primary_only is not True
-                or recovery.get("primary_credential_state") != "enabled"
-            ):
+            primary_only_allowed = (
+                allow_degraded_primary_only is True
+                and recovery.get("primary_credential_state") == "enabled"
+            )
+            backup_only_allowed = (
+                allow_degraded_backup_only is True
+                and recovery.get("primary_credential_state") == "missing"
+                and recovery.get("backup_credential_state") == "enabled"
+            )
+            if not primary_only_allowed and not backup_only_allowed:
                 return S7CeremonyServiceResult(
                     body={
                         "ok": False,
@@ -450,6 +457,14 @@ class S7LocalWebAuthnCeremonyService:
                 for record in store.list_credentials()
                 if record.enabled
                 and record.credential_kind == "primary"
+                and "bonded_user" in record.role_names
+            )
+        elif allow_degraded_backup_only is True:
+            allow_credentials = tuple(
+                record.credential_ref
+                for record in store.list_credentials()
+                if record.enabled
+                and record.credential_kind == "backup"
                 and "bonded_user" in record.role_names
             )
         return S7CeremonyServiceResult(
