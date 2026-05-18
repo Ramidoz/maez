@@ -1406,8 +1406,8 @@ def api_s7_webauthn_register_begin():
     from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
 
     route = "/api/v1/s7/webauthn/register/begin"
-    if not live_webauthn_ceremony_enabled():
-        return _s7_cockpit_ceremony_deferred(route)
+    if live_webauthn_ceremony_enabled():
+        raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
     return _s7_cockpit_ceremony_deferred(route)
 
 
@@ -1416,8 +1416,8 @@ def api_s7_webauthn_register_finish():
     from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
 
     route = "/api/v1/s7/webauthn/register/finish"
-    if not live_webauthn_ceremony_enabled():
-        return _s7_cockpit_ceremony_deferred(route)
+    if live_webauthn_ceremony_enabled():
+        raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
     return _s7_cockpit_ceremony_deferred(route)
 
 
@@ -1426,8 +1426,8 @@ def api_s7_webauthn_authorize_begin(request_id: str):
     from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
 
     route = f"/api/v1/s7/cards/{request_id}/webauthn/begin"
-    if not live_webauthn_ceremony_enabled():
-        return _s7_cockpit_ceremony_deferred(route)
+    if live_webauthn_ceremony_enabled():
+        raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
     return _s7_cockpit_ceremony_deferred(route)
 
 
@@ -1436,8 +1436,8 @@ def api_s7_webauthn_authorize_finish(request_id: str):
     from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
 
     route = f"/api/v1/s7/cards/{request_id}/webauthn/finish"
-    if not live_webauthn_ceremony_enabled():
-        return _s7_cockpit_ceremony_deferred(route)
+    if live_webauthn_ceremony_enabled():
+        raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
     return _s7_cockpit_ceremony_deferred(route)
 
 

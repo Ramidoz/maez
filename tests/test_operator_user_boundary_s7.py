@@ -860,7 +860,7 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
                 source_ref_kind="self_mod_dialog_exchange",
                 source_ref_hash="c" * 64,
                 maez_voice_consulted=True,
-                maez_objection_present=False,
+                maez_objection_state="absent",
                 maez_withdrew_request=False,
                 unavailable_reason_code=None,
                 created_at=NOW,
@@ -879,7 +879,7 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
             source_ref_kind="self_mod_dialog_exchange",
             source_ref_hash="c" * 64,
             maez_voice_consulted=True,
-            maez_objection_present=True,
+            maez_objection_state="present",
             maez_withdrew_request=False,
             unavailable_reason_code=None,
             created_at=NOW,
@@ -900,7 +900,7 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
             source_ref_kind="self_mod_dialog_exchange",
             source_ref_hash="c" * 64,
             maez_voice_consulted=True,
-            maez_objection_present=False,
+            maez_objection_state="absent",
             maez_withdrew_request=False,
             unavailable_reason_code=None,
             created_at=NOW,
@@ -920,7 +920,7 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
             source_ref_kind="self_mod_dialog_exchange",
             source_ref_hash="c" * 64,
             maez_voice_consulted=True,
-            maez_objection_present=False,
+            maez_objection_state="absent",
             maez_withdrew_request=False,
             unavailable_reason_code=None,
             created_at=NOW,
@@ -977,7 +977,7 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
             source_ref_kind="self_mod_dialog_exchange",
             source_ref_hash="c" * 64,
             maez_voice_consulted=True,
-            maez_objection_present=True,
+            maez_objection_state="present",
             maez_withdrew_request=False,
             unavailable_reason_code=None,
             created_at=NOW,
@@ -1044,7 +1044,7 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
             source_ref_kind="self_mod_dialog_exchange",
             source_ref_hash="c" * 64,
             maez_voice_consulted=True,
-            maez_objection_present=True,
+            maez_objection_state="present",
             maez_withdrew_request=False,
             unavailable_reason_code=None,
             created_at=NOW,
@@ -1118,7 +1118,7 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
             source_ref_kind="self_mod_dialog_exchange",
             source_ref_hash="c" * 64,
             maez_voice_consulted=True,
-            maez_objection_present=True,
+            maez_objection_state="present",
             maez_withdrew_request=False,
             unavailable_reason_code=None,
             created_at=NOW,
@@ -1145,7 +1145,7 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
             source_ref_kind="self_mod_dialog_exchange",
             source_ref_hash="c" * 64,
             maez_voice_consulted=True,
-            maez_objection_present=True,
+            maez_objection_state="present",
             maez_withdrew_request=False,
             unavailable_reason_code=None,
             created_at=NOW,
@@ -1220,6 +1220,40 @@ class S7VoiceAndRenderedStatementTests(unittest.TestCase):
 
         self.assertEqual(rendered.maez_objection_state, "not_determined")
         self.assertIn("Maez objection present: not determined", rendered.rendered_text)
+
+    def test_052b_production_renderer_uses_not_determined_when_no_objection_fact_exists(self):
+        from core.governance import operator_user_boundary as s7
+
+        env = self._self_mod_envelope()
+        consultation = s7.MaezVoiceConsultation(
+            consultation_id="voice-1",
+            request_id=env.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            producer="self_mod_dialog_terminal_state",
+            source_ref_kind="self_mod_dialog_exchange",
+            source_ref_hash="c" * 64,
+            maez_voice_consulted=True,
+            maez_objection_state="not_determined",
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=NOW,
+        )
+
+        rendered = s7.render_request_statement(
+            envelope=env,
+            surface="cockpit",
+            origin="http://localhost:11437",
+            action_params_hash=s7.canonical_hash({"path": "config/soul.md"}),
+            authority_context=self._authority_context(),
+            maez_voice_consultation=consultation,
+            nonce="nonce-1",
+            expires_at=FUTURE,
+            rendered_at=NOW,
+        )
+
+        self.assertEqual(rendered.maez_objection_state, "not_determined")
+        self.assertIn("Maez objection present: not determined", rendered.rendered_text)
+        self.assertNotIn("Maez objection present: no", rendered.rendered_text.splitlines())
 
 
 class S7AuthorizationArtifactStoreTests(unittest.TestCase):
@@ -1329,7 +1363,7 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
             source_ref_kind="self_mod_dialog_exchange",
             source_ref_hash="c" * 64,
             maez_voice_consulted=True,
-            maez_objection_present=False,
+            maez_objection_state="absent",
             maez_withdrew_request=False,
             unavailable_reason_code=None,
             created_at=NOW,
@@ -1414,7 +1448,7 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
             source_ref_kind="self_mod_dialog_exchange",
             source_ref_hash="c" * 64,
             maez_voice_consulted=True,
-            maez_objection_present=False,
+            maez_objection_state="absent",
             maez_withdrew_request=False,
             unavailable_reason_code=None,
             created_at=NOW,
@@ -3131,7 +3165,7 @@ class S7BrainSwapDoubleGateTests(unittest.TestCase):
             source_ref_kind="s7_voice_turn",
             source_ref_hash="d" * 64,
             maez_voice_consulted=True,
-            maez_objection_present=False,
+            maez_objection_state="absent",
             maez_withdrew_request=False,
             unavailable_reason_code=None,
             created_at=NOW,
@@ -3560,6 +3594,9 @@ class S7OwnSubstrateBypassTaxonomyTests(unittest.TestCase):
             self.assertIn("maez-controlled runtime or helper", lowered)
             self.assertIn("not role-encrypted", lowered)
             self.assertIn("soul/config/model-routing", lowered)
+            self.assertIn("live webauthn ceremony is not mounted", lowered)
+            self.assertIn("guarded self-modification", lowered)
+            self.assertIn("guarded_self_modification_paused_pending_s7.1", lowered)
             self.assertIn("does not prove the human was uncoerced", lowered)
             self.assertIn("does not prove the human understood", lowered)
             self.assertIn("display was not spoofed", lowered)
@@ -4251,6 +4288,21 @@ class S7OperatorHealthProjectionTests(unittest.TestCase):
             projection["red_gate_modes"],
             ("guarded_self_modification_paused_pending_s7.1",),
         )
+        self.assertIs(projection["guarded_self_modification_paused_pending_s7_1"], True)
+
+    def test_099b_live_daemon_operator_health_emits_guarded_self_modification_pause(self):
+        from daemon.maez_daemon import MaezDaemon
+
+        daemon = MaezDaemon.__new__(MaezDaemon)
+
+        projection = daemon._operator_health()
+
+        self.assertEqual(projection["mode"], "guarded_self_modification_paused_pending_s7.1")
+        self.assertIn(
+            "guarded_self_modification_paused_pending_s7.1",
+            projection["red_gate_modes"],
+        )
+        self.assertIs(projection["guarded_self_modification_paused_pending_s7_1"], True)
 
     def test_100_sensitive_red_gate_names_are_rejected(self):
         from core.governance import operator_user_boundary as s7

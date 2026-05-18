@@ -204,7 +204,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
             source_ref_kind="self_mod_dialog_exchange",
             source_ref_hash="c" * 64,
             maez_voice_consulted=True,
-            maez_objection_present=False,
+            maez_objection_state="absent",
             maez_withdrew_request=False,
             unavailable_reason_code=None,
             created_at=NOW,

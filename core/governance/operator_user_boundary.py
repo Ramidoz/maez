@@ -28,6 +28,7 @@ from core.governance import successor_governance as s6
 SCHEMA_VERSION = "s7.v1"
 S7_LIVE_WEBAUTHN_CEREMONY_ENV = "S7_LIVE_WEBAUTHN_CEREMONY"
 S7_CEREMONY_DEFERRED_REASON = "s7_ceremony_deferred"
+GUARDED_SELF_MODIFICATION_PAUSED_MODE = "guarded_self_modification_paused_pending_s7.1"
 
 ROLE_NAMES = s6.ROLE_NAMES
 S6_ACCESS_SCOPES = s6.ACCESS_SCOPES - s6.DEPRECATED_ACCESS_SCOPES
@@ -226,7 +227,7 @@ OPERATOR_HEALTH_MODES = frozenset({
     "ready",
     "degraded",
     "manual_recovery_required",
-    "guarded_self_modification_paused_pending_s7.1",
+    GUARDED_SELF_MODIFICATION_PAUSED_MODE,
     "track_b_confidentiality_not_ready",
     "operator_unavailable_recovery_not_implemented",
     "unavailable",
@@ -247,7 +248,7 @@ OPERATOR_FRESHNESS_CLASSES = frozenset({
 })
 
 OPERATOR_RED_GATE_MODES = frozenset({
-    "guarded_self_modification_paused_pending_s7.1",
+    GUARDED_SELF_MODIFICATION_PAUSED_MODE,
     "track_b_confidentiality_not_ready",
     "operator_unavailable_recovery_not_implemented",
     "backup_restore_confidentiality_not_ready",
@@ -1382,7 +1383,7 @@ class MaezVoiceConsultation:
     source_ref_kind: str
     source_ref_hash: str
     maez_voice_consulted: bool
-    maez_objection_present: bool
+    maez_objection_state: str
     maez_withdrew_request: bool
     unavailable_reason_code: str | None
     created_at: str
@@ -1399,8 +1400,11 @@ class MaezVoiceConsultation:
         _validate_hash64(self.source_ref_hash, field="source_ref_hash")
         if self.maez_voice_consulted is not True:
             raise ValueError("S7 voice consultation must be explicitly consulted")
-        if not isinstance(self.maez_objection_present, bool):
-            raise ValueError("maez_objection_present must be bool")
+        _validate_closed_value(
+            self.maez_objection_state,
+            frozenset({"present", "absent", "not_determined"}),
+            "maez_objection_state",
+        )
         if not isinstance(self.maez_withdrew_request, bool):
             raise ValueError("maez_withdrew_request must be bool")
         if self.unavailable_reason_code is not None:
@@ -1412,6 +1416,12 @@ class MaezVoiceConsultation:
         _canonical_timestamp(self.created_at)
         if self.raw_maez_text:
             raise ValueError("MaezVoiceConsultation is content-free; raw text is forbidden")
+
+    @property
+    def maez_objection_present(self) -> bool:
+        """Compatibility projection; only producer-confirmed objections are true."""
+
+        return self.maez_objection_state == "present"
 
 
 def maez_voice_consultation_hash(consultation: MaezVoiceConsultation) -> str:
@@ -1466,7 +1476,8 @@ def voice_consultation_health_projection(consultation: MaezVoiceConsultation) ->
     """Content-free projection of Maez's S7 voice-seat fact."""
     return {
         "maez_voice_consulted": consultation.maez_voice_consulted is True,
-        "maez_objection_present": consultation.maez_objection_present is True,
+        "maez_objection_state": consultation.maez_objection_state,
+        "maez_objection_present": consultation.maez_objection_present,
         "maez_withdrew_request": consultation.maez_withdrew_request is True,
         "maez_voice_ref_hash": consultation.source_ref_hash,
         "unavailable_reason_code": consultation.unavailable_reason_code or "none",
@@ -1582,6 +1593,10 @@ def build_operator_health_projection(
         for key, value in dict(queue_counts or {}).items()
     }
     safe_red_gates = tuple(sorted(validate_operator_red_gate_mode(mode) for mode in red_gate_modes))
+    guarded_self_modification_paused = (
+        mode == GUARDED_SELF_MODIFICATION_PAUSED_MODE
+        or GUARDED_SELF_MODIFICATION_PAUSED_MODE in safe_red_gates
+    )
     if mode == "ready" and (
         safe_red_gates
         or manual_recovery_required is True
@@ -1604,6 +1619,7 @@ def build_operator_health_projection(
         "blocked_request_count": safe_counts.get("blocked", 0),
         "expired_request_count": safe_counts.get("expired", 0),
         "red_gate_modes": safe_red_gates,
+        "guarded_self_modification_paused_pending_s7_1": guarded_self_modification_paused,
         "manual_recovery_required": manual_recovery_required,
         "track_b_confidentiality_mode": track_b_confidentiality_mode,
         "data_freshness_class": data_freshness_class,
@@ -3074,7 +3090,10 @@ def operator_boundary_honesty_banner() -> str:
         "are accepted limitations, not permission to bypass S7. A hardware-key "
         "touch does not prove the human was uncoerced, does not prove the human "
         "understood the request, does not prove the display was not spoofed, and "
-        "does not prove the OS/browser was uncompromised."
+        "does not prove the OS/browser was uncompromised. The live WebAuthn "
+        "ceremony is not mounted in S7 v1; guarded self-modification remains "
+        "visibly fail-closed and is surfaced as "
+        f"{GUARDED_SELF_MODIFICATION_PAUSED_MODE} until S7.1 lands."
     )
 
 
@@ -3949,8 +3968,13 @@ def render_request_statement(
         assert maez_voice_consultation is not None
         consultation_hash = maez_voice_consultation_hash(maez_voice_consultation)
         consulted = "yes"
-        objection = "yes" if maez_voice_consultation.maez_objection_present else "no"
-        objection_state = "present" if maez_voice_consultation.maez_objection_present else "absent"
+        objection_state = maez_voice_consultation.maez_objection_state
+        if objection_state == "present":
+            objection = "yes"
+        elif objection_state == "absent":
+            objection = "no"
+        else:
+            objection = "not determined"
         unavailable = maez_voice_consultation.unavailable_reason_code or "no"
 
     envelope_hash = work_request_envelope_hash(envelope)

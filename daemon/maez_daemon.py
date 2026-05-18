@@ -92,6 +92,7 @@ from core.time.temporal_spine import temporal_spine_health
 from core.voice_continuity import voice_continuity_health
 from core.governance.successor_governance import successor_governance_health
 from core.governance.operator_user_boundary import (
+    GUARDED_SELF_MODIFICATION_PAUSED_MODE,
     build_operator_health_projection,
     live_webauthn_ceremony_enabled,
     s7_ceremony_deferred_response,
@@ -977,17 +978,21 @@ class MaezDaemon:
         except Exception as exc:
             logger.warning("S7 operator health degraded: %s", exc)
             data_freshness_class = "unavailable"
+        s7_live_ceremony_deferred = not live_webauthn_ceremony_enabled()
+        red_gate_modes = (
+            "track_b_confidentiality_not_ready",
+            "operator_unavailable_recovery_not_implemented",
+            "backup_restore_confidentiality_not_ready",
+        )
+        if s7_live_ceremony_deferred:
+            red_gate_modes = red_gate_modes + (GUARDED_SELF_MODIFICATION_PAUSED_MODE,)
         return build_operator_health_projection(
-            mode="degraded",
+            mode=GUARDED_SELF_MODIFICATION_PAUSED_MODE if s7_live_ceremony_deferred else "degraded",
             service_mode="running",
             uptime_class="fresh",
             backup_freshness_class="unavailable",
             queue_counts=queue_counts,
-            red_gate_modes=(
-                "track_b_confidentiality_not_ready",
-                "operator_unavailable_recovery_not_implemented",
-                "backup_restore_confidentiality_not_ready",
-            ),
+            red_gate_modes=red_gate_modes,
             manual_recovery_required=False,
             track_b_confidentiality_mode="track_b_confidentiality_not_ready",
             data_freshness_class=data_freshness_class,
@@ -5585,13 +5590,8 @@ class MaezDaemon:
 
         @app.route("/internal/s7/webauthn/register/begin", methods=["POST"])
         def s7_webauthn_register_begin():
-            if not live_webauthn_ceremony_enabled():
-                return jsonify(
-                    s7_ceremony_deferred_response(
-                        surface="daemon",
-                        route="/internal/s7/webauthn/register/begin",
-                    )
-                ), 503
+            if live_webauthn_ceremony_enabled():
+                raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
             return jsonify(
                 s7_ceremony_deferred_response(
                     surface="daemon",
@@ -5601,13 +5601,8 @@ class MaezDaemon:
 
         @app.route("/internal/s7/webauthn/register/finish", methods=["POST"])
         def s7_webauthn_register_finish():
-            if not live_webauthn_ceremony_enabled():
-                return jsonify(
-                    s7_ceremony_deferred_response(
-                        surface="daemon",
-                        route="/internal/s7/webauthn/register/finish",
-                    )
-                ), 503
+            if live_webauthn_ceremony_enabled():
+                raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
             return jsonify(
                 s7_ceremony_deferred_response(
                     surface="daemon",
@@ -5617,13 +5612,8 @@ class MaezDaemon:
 
         @app.route("/internal/s7/cards/<request_id>/webauthn/begin", methods=["POST"])
         def s7_webauthn_authorize_begin(request_id: str):
-            if not live_webauthn_ceremony_enabled():
-                return jsonify(
-                    s7_ceremony_deferred_response(
-                        surface="daemon",
-                        route=f"/internal/s7/cards/{request_id}/webauthn/begin",
-                    )
-                ), 503
+            if live_webauthn_ceremony_enabled():
+                raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
             return jsonify(
                 s7_ceremony_deferred_response(
                     surface="daemon",
@@ -5633,13 +5623,8 @@ class MaezDaemon:
 
         @app.route("/internal/s7/cards/<request_id>/webauthn/finish", methods=["POST"])
         def s7_webauthn_authorize_finish(request_id: str):
-            if not live_webauthn_ceremony_enabled():
-                return jsonify(
-                    s7_ceremony_deferred_response(
-                        surface="daemon",
-                        route=f"/internal/s7/cards/{request_id}/webauthn/finish",
-                    )
-                ), 503
+            if live_webauthn_ceremony_enabled():
+                raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
             return jsonify(
                 s7_ceremony_deferred_response(
                     surface="daemon",
