@@ -144,6 +144,27 @@ class S71CredentialRegistryTests(unittest.TestCase):
 
         self.assertFalse(store.credential_can_authorize("cred-primary"))
 
+    def test_043a_disable_credential_records_authorization_and_manual_recovery_when_last_key(self):
+        store = self._store()
+        store.store_credential(self._record("cred-primary", kind="primary"))
+
+        result = store.disable_credential(
+            "cred-primary",
+            authorization_id="s7authz-disable-primary",
+            now=LATER,
+        )
+
+        self.assertEqual(result, {"ok": True, "credential_ref": "cred-primary"})
+        disabled = store.get_credential("cred-primary")
+        self.assertIsNotNone(disabled)
+        assert disabled is not None
+        self.assertFalse(disabled.enabled)
+        self.assertEqual(disabled.disabled_at, LATER)
+        self.assertEqual(disabled.disabled_by_authorization_id, "s7authz-disable-primary")
+        state = store.credential_recovery_state()
+        self.assertTrue(state["manual_recovery_required"])
+        self.assertEqual(state["manual_recovery_cause"], "no_enabled_founder_credential")
+
     def test_044_reenable_requires_existing_enabled_credential_or_fails(self):
         store = self._store()
         store.store_credential(replace(self._record("cred-primary", kind="primary"), enabled=False))

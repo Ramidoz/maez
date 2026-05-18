@@ -308,6 +308,54 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
         self.assertEqual(captured["headers"]["X-maez-s7-internal-channel"], "test-channel-secret")
         self.assertEqual(captured["body"], b'{"session_binding": "session-backup-card"}')
 
+    def test_flag_on_proof_disable_routes_forward_with_internal_channel(self):
+        captured = []
+
+        def fake_urlopen(req, timeout=None):
+            captured.append(
+                {
+                    "url": req.full_url,
+                    "headers": dict(req.header_items()),
+                    "body": req.data,
+                }
+            )
+            return _make_urlopen_response(
+                b'{"ok": true, "request_id": "req-disable-primary"}',
+                status=200,
+            )
+
+        env = {
+            "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+            "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                card_response = self.client.post(
+                    "/api/v1/s7/webauthn/proof/disable-card",
+                    json={"credential_ref": "cred-primary", "credential_kind": "primary"},
+                )
+                disable_response = self.client.post(
+                    "/api/v1/s7/webauthn/proof/disable-credential",
+                    json={
+                        "credential_ref": "cred-primary",
+                        "disable_authorization_request_id": "req-disable-primary",
+                        "s7_authorization_artifact_id": "s7authz-primary",
+                    },
+                )
+
+        self.assertEqual(card_response.status_code, 200)
+        self.assertEqual(disable_response.status_code, 200)
+        self.assertEqual(
+            captured[0]["url"],
+            "http://127.0.0.1:11435/internal/s7/webauthn/proof/disable-card",
+        )
+        self.assertEqual(
+            captured[1]["url"],
+            "http://127.0.0.1:11435/internal/s7/webauthn/proof/disable-credential",
+        )
+        self.assertEqual(captured[0]["headers"]["X-maez-s7-internal-channel"], "test-channel-secret")
+        self.assertEqual(captured[1]["headers"]["X-maez-s7-internal-channel"], "test-channel-secret")
+
     def test_flag_on_malicious_origin_gets_s7_typed_error_before_forward(self):
         def fail_if_forwarded(*_args, **_kwargs):
             raise AssertionError("malicious browser origin reached daemon proxy")
@@ -347,6 +395,11 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
         self.assertIn("register error", text)
         self.assertIn("authorize error", text)
         self.assertIn("err.payload", text)
+        self.assertIn("Create primary-disable proof card", text)
+        self.assertIn("Create backup-disable proof card", text)
+        self.assertIn("/api/v1/s7/webauthn/proof/disable-card", text)
+        self.assertIn("/api/v1/s7/webauthn/proof/disable-credential", text)
+        self.assertIn("disableCredentialForProof", text)
         self.assertIn("bufferToB64url", text)
         self.assertIn("b64urlToBuffer", text)
 

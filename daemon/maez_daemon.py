@@ -399,6 +399,7 @@ def _s7_authorization_route_material(
     return _s7_route_material(
         envelope=envelope,
         rendered_statement=rendered,
+        action_params=action_params,
         action_params_hash=action_params_hash,
         authority_context=authority_context,
         precondition_hash=envelope.precondition_hash,
@@ -493,6 +494,138 @@ def _s7_create_backup_registration_card(daemon):
             "request_id": card.request_id,
             "action": "register_backup_webauthn_credential",
             "status": getattr(getattr(card, "status", None), "value", getattr(card, "status", "")),
+        },
+    )
+
+
+def _s7_create_disable_credential_card(daemon, req, *, now: str):
+    from core.governance.s7_webauthn_ceremony import disable_credential_action_params
+
+    request_json = req.get_json(silent=True) or {}
+    if not isinstance(request_json, dict):
+        return _s7_route_error("s7_schema_invalid", 400, detail="json_object_required")
+    credential_ref = str(request_json.get("credential_ref") or "")
+    credential_kind = str(request_json.get("credential_kind") or "")
+    if credential_kind not in {"primary", "backup"}:
+        return _s7_route_error("s7_schema_invalid", 400, detail="credential_kind")
+    try:
+        params = disable_credential_action_params(
+            credential_ref=credential_ref,
+            credential_kind=credential_kind,
+        )
+    except ValueError as exc:
+        return _s7_route_error("s7_schema_invalid", 400, detail=str(exc))
+
+    telegram = getattr(daemon, "telegram", None)
+    pipe = telegram._get_pipeline() if telegram else None
+    card_store = getattr(pipe, "card_store", None)
+    if card_store is None:
+        return _s7_route_error("s7_pending_card_store_unavailable", 503)
+
+    card = card_store.create_card(
+        action="disable_founder_webauthn_credential",
+        params=params,
+        reason=f"S7.1 manual proof disables the {credential_kind} WebAuthn credential.",
+        plain_english=f"Authorize disabling the S7.1 {credential_kind} WebAuthn credential.",
+        channel="cockpit_s7_1_manual_proof",
+        chat_id="s7.1-manual-proof",
+        user_id="rohit",
+    )
+    return SimpleNamespace(
+        ok=True,
+        status_code=201,
+        body={
+            "ok": True,
+            "request_id": card.request_id,
+            "action": "disable_founder_webauthn_credential",
+            "credential_ref": credential_ref,
+            "credential_kind": credential_kind,
+            "created_at": now,
+            "status": getattr(getattr(card, "status", None), "value", getattr(card, "status", "")),
+        },
+    )
+
+
+def _s7_disable_credential_for_proof(daemon, req, *, now: str, store: S7WebAuthnBootstrapStore):
+    from core.governance import operator_user_boundary as s7
+
+    request_json = req.get_json(silent=True) or {}
+    if not isinstance(request_json, dict):
+        return _s7_route_error("s7_schema_invalid", 400, detail="json_object_required")
+    artifact_id = str(request_json.get("s7_authorization_artifact_id") or "")
+    request_id = str(request_json.get("disable_authorization_request_id") or "")
+    requested_credential_ref = str(request_json.get("credential_ref") or "")
+    if not artifact_id:
+        return _s7_route_error("s7_schema_invalid", 400, detail="s7_authorization_artifact_id")
+    if not request_id:
+        return _s7_route_error("s7_schema_invalid", 400, detail="disable_authorization_request_id")
+
+    auth_request_json = {
+        "session_binding": str(request_json.get("authorization_session_binding") or ""),
+        "challenge_id": str(request_json.get("authorization_challenge_id") or ""),
+        "credential_ref": str(request_json.get("authorization_credential_ref") or ""),
+    }
+
+    class _AuthorizationRequest:
+        headers = req.headers
+
+        @staticmethod
+        def get_json(*_args, **_kwargs):
+            return auth_request_json
+
+    material = _s7_authorization_route_material(
+        daemon,
+        _AuthorizationRequest(),
+        request_id=request_id,
+        now=now,
+        store=store,
+        allow_consumed_authorization_challenge=True,
+    )
+    if material.ok is not True:
+        return material
+    action_params = dict(material.kwargs["action_params"])
+    target_credential_ref = str(action_params.get("credential_ref") or "")
+    if requested_credential_ref and requested_credential_ref != target_credential_ref:
+        return _s7_route_error("s7_d12_binding_mismatch", 409)
+    grant, _callback_result = s7.S7AuthorizationStore(store.db_path).consume_for_execution(
+        artifact_id,
+        rendered=material.kwargs["rendered_statement"],
+        action_params_hash=material.kwargs["action_params_hash"],
+        authority_context=material.kwargs["authority_context"],
+        precondition_hash=material.kwargs["precondition_hash"],
+        derived_work_class=material.kwargs["rendered_statement"].derived_work_class,
+        derived_aggregation_group=material.kwargs[
+            "rendered_statement"
+        ].derived_aggregation_group,
+        now=now,
+    )
+    if grant is None:
+        return _s7_route_error("s7_authorization_required", 403)
+    if not s7.consume_execution_grant_for_action(
+        grant,
+        action="disable_founder_webauthn_credential",
+        params=action_params,
+    ):
+        return _s7_route_error("s7_authorization_required", 403)
+    disabled = store.disable_credential(
+        target_credential_ref,
+        authorization_id=artifact_id,
+        now=now,
+    )
+    if disabled.get("ok") is not True:
+        return _s7_route_error(str(disabled.get("error") or "s7_credential_setup_incomplete"), 409)
+    recovery = store.credential_recovery_state()
+    return SimpleNamespace(
+        ok=True,
+        status_code=200,
+        body={
+            "ok": True,
+            "credential_ref": target_credential_ref,
+            "artifact_id": artifact_id,
+            "ceremony_mode": recovery["mode"],
+            "manual_recovery_required": recovery["manual_recovery_required"],
+            "manual_recovery_cause": recovery["manual_recovery_cause"],
+            "active_credential_count": recovery["active_credential_count"],
         },
     )
 
@@ -5952,6 +6085,44 @@ class MaezDaemon:
                 s7_ceremony_deferred_response(
                     surface="daemon",
                     route="/internal/s7/webauthn/register/backup-card",
+                )
+            ), 503
+
+        @app.route("/internal/s7/webauthn/proof/disable-card", methods=["POST"])
+        def s7_webauthn_proof_disable_card():
+            if live_webauthn_ceremony_enabled():
+                if not _s7_internal_channel_trusted(request):
+                    return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                result = _s7_create_disable_credential_card(
+                    self,
+                    request,
+                    now=datetime.now(timezone.utc).isoformat(),
+                )
+                return jsonify(result.body), result.status_code
+            return jsonify(
+                s7_ceremony_deferred_response(
+                    surface="daemon",
+                    route="/internal/s7/webauthn/proof/disable-card",
+                )
+            ), 503
+
+        @app.route("/internal/s7/webauthn/proof/disable-credential", methods=["POST"])
+        def s7_webauthn_proof_disable_credential():
+            if live_webauthn_ceremony_enabled():
+                if not _s7_internal_channel_trusted(request):
+                    return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                store = S7WebAuthnBootstrapStore(_s7_webauthn_store_root())
+                result = _s7_disable_credential_for_proof(
+                    self,
+                    request,
+                    now=datetime.now(timezone.utc).isoformat(),
+                    store=store,
+                )
+                return jsonify(result.body), result.status_code
+            return jsonify(
+                s7_ceremony_deferred_response(
+                    surface="daemon",
+                    route="/internal/s7/webauthn/proof/disable-credential",
                 )
             ), 503
 

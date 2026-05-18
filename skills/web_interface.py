@@ -1163,6 +1163,29 @@ _S7_WEBAUTHN_PROOF_PAGE = r"""<!DOCTYPE html>
     <button onclick="authorizeCard()">Authorize with navigator.credentials.get</button>
   </section>
   <section>
+    <h2>4. Complete D19 disable/recovery proof</h2>
+    <p>Creates proof-only guarded cards; each disable consumes the S7 artifact minted by the selected physical key.</p>
+    <label>Primary credential ref</label>
+    <input id="primaryCredentialRef" autocomplete="off">
+    <label>Backup credential ref</label>
+    <input id="backupCredentialRef" autocomplete="off">
+    <button onclick="createDisableCredentialCard('primary')" class="secondary">Create primary-disable proof card</button>
+    <button onclick="createDisableCredentialCard('backup')" class="secondary">Create backup-disable proof card</button>
+    <label>Disable authorization request id</label>
+    <input id="disableAuthorizationRequestId" autocomplete="off">
+    <label>Disable target credential ref</label>
+    <input id="disableCredentialRef" autocomplete="off">
+    <label>S7 authorization artifact id for disable</label>
+    <input id="lastArtifactId" autocomplete="off">
+    <label>S7 authorization challenge id for disable</label>
+    <input id="lastAuthorizationChallengeId" autocomplete="off">
+    <label>S7 authorization session binding for disable</label>
+    <input id="lastAuthorizationSessionBinding" autocomplete="off">
+    <label>S7 authorization credential ref for disable</label>
+    <input id="lastAuthorizationCredentialRef" autocomplete="off">
+    <button onclick="disableCredentialForProof()" class="secondary">Disable credential using consumed S7 artifact</button>
+  </section>
+  <section>
     <h2>Proof log</h2>
     <button onclick="copyProofLog()">Copy proof log</button>
     <textarea id="proofLog" readonly></textarea>
@@ -1273,6 +1296,9 @@ async function registerCredential(kind) {
     appendLog(`${kind} register finish`, finish);
     if (kind === "primary") {
       credentialRef.value = finish.credential_ref || credentialRef.value;
+      primaryCredentialRef.value = finish.credential_ref || primaryCredentialRef.value;
+    } else {
+      backupCredentialRef.value = finish.credential_ref || backupCredentialRef.value;
     }
     await loadStatus();
   } catch (err) {
@@ -1303,6 +1329,9 @@ async function authorizeCard() {
     appendLog("authorize begin", begin);
     selectedCredentialRef = selectedCredentialRef || (begin.allow_credentials || [])[0] || "";
     if (selectedCredentialRef) credentialRef.value = selectedCredentialRef;
+    lastAuthorizationChallengeId.value = begin.challenge_id || "";
+    lastAuthorizationSessionBinding.value = session;
+    lastAuthorizationCredentialRef.value = selectedCredentialRef;
     if (requestId && requestId === backupAuthorizationRequestId.value) {
       backupAuthorizationChallengeId.value = begin.challenge_id || "";
       backupAuthorizationSessionBinding.value = session;
@@ -1316,11 +1345,46 @@ async function authorizeCard() {
       authentication_response: encodeCredentialResponse(credential),
     });
     appendLog("authorize finish", finish);
+    lastArtifactId.value = finish.artifact_id || "";
     if (requestId && requestId === backupAuthorizationRequestId.value) {
       backupArtifactId.value = finish.artifact_id || "";
     }
   } catch (err) {
     appendLog("authorize error", describeError(err));
+  }
+}
+async function createDisableCredentialCard(kind) {
+  try {
+    const credential = kind === "primary" ? primaryCredentialRef.value : backupCredentialRef.value;
+    const card = await jsonFetch("/api/v1/s7/webauthn/proof/disable-card", {
+      credential_ref: credential,
+      credential_kind: kind,
+    });
+    appendLog(`${kind} disable card`, card);
+    disableAuthorizationRequestId.value = card.request_id || "";
+    disableCredentialRef.value = card.credential_ref || credential;
+    cardRequestId.value = card.request_id || "";
+    credentialRef.value = card.credential_ref || credential;
+  } catch (err) {
+    appendLog(`${kind} disable card error`, describeError(err));
+  }
+}
+async function disableCredentialForProof() {
+  try {
+    const result = await jsonFetch("/api/v1/s7/webauthn/proof/disable-credential", {
+      credential_ref: disableCredentialRef.value,
+      disable_authorization_request_id: disableAuthorizationRequestId.value,
+      s7_authorization_artifact_id: lastArtifactId.value,
+      authorization_challenge_id: lastAuthorizationChallengeId.value,
+      authorization_session_binding: lastAuthorizationSessionBinding.value,
+      authorization_credential_ref: lastAuthorizationCredentialRef.value,
+    });
+    appendLog("disable credential finish", result);
+    if (disableCredentialRef.value === primaryCredentialRef.value) primaryCredentialRef.value = "";
+    if (disableCredentialRef.value === backupCredentialRef.value) backupCredentialRef.value = "";
+    await loadStatus();
+  } catch (err) {
+    appendLog("disable credential error", describeError(err));
   }
 }
 async function copyProofLog() {
@@ -1746,6 +1810,29 @@ def api_s7_webauthn_register_backup_card():
     route = "/api/v1/s7/webauthn/register/backup-card"
     if live_webauthn_ceremony_enabled():
         return _s7_cockpit_proxy_to_daemon(route, "/internal/s7/webauthn/register/backup-card")
+    return _s7_cockpit_ceremony_deferred(route)
+
+
+@app.route("/api/v1/s7/webauthn/proof/disable-card", methods=["POST"])
+def api_s7_webauthn_proof_disable_card():
+    from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
+
+    route = "/api/v1/s7/webauthn/proof/disable-card"
+    if live_webauthn_ceremony_enabled():
+        return _s7_cockpit_proxy_to_daemon(route, "/internal/s7/webauthn/proof/disable-card")
+    return _s7_cockpit_ceremony_deferred(route)
+
+
+@app.route("/api/v1/s7/webauthn/proof/disable-credential", methods=["POST"])
+def api_s7_webauthn_proof_disable_credential():
+    from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
+
+    route = "/api/v1/s7/webauthn/proof/disable-credential"
+    if live_webauthn_ceremony_enabled():
+        return _s7_cockpit_proxy_to_daemon(
+            route,
+            "/internal/s7/webauthn/proof/disable-credential",
+        )
     return _s7_cockpit_ceremony_deferred(route)
 
 

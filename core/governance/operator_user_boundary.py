@@ -870,6 +870,7 @@ def derive_work_class(
     if action in {
         "register_founder_webauthn_credential",
         "register_backup_webauthn_credential",
+        "disable_founder_webauthn_credential",
         "reenable_founder_webauthn_credential",
     }:
         return "self_modification"

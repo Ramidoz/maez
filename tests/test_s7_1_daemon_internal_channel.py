@@ -188,6 +188,81 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
 
         return configure
 
+    def _daemon_with_disable_credential_pipeline(self, request_id: str, credential_ref: str):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_ceremony import (
+            build_disable_credential_envelope,
+            disable_credential_action_params,
+        )
+
+        params = disable_credential_action_params(
+            credential_ref=credential_ref,
+            credential_kind="primary",
+        )
+        envelope = build_disable_credential_envelope(
+            request_id=request_id,
+            credential_ref=credential_ref,
+            credential_kind="primary",
+            created_at="2026-05-18T11:00:00+00:00",
+            expires_at="2026-05-18T12:00:00+00:00",
+            maez_voice_consultation_id=f"voice-{request_id}",
+        )
+
+        class Card:
+            action = "disable_founder_webauthn_credential"
+            state_hash = "empty"
+            state_fields = None
+
+        card = Card()
+        card.request_id = request_id
+        card.params = params
+        card.created_at = 1779102000.0
+
+        class Store:
+            def get(self, _request_id):
+                return card if _request_id == request_id else None
+
+            def create_card(self, **_kwargs):
+                return card
+
+        class Pipe:
+            card_store = Store()
+
+            def _card_requires_s7_authorization(self, _card):
+                return True
+
+            def _s7_request_envelope_for_card(self, _card):
+                return envelope
+
+            @staticmethod
+            def _execution_params_for_card(_card):
+                return dict(card.params)
+
+            @staticmethod
+            def _s7_voice_consultation_for_card(_card, _envelope):
+                return s7.MaezVoiceConsultation(
+                    consultation_id=f"voice-{request_id}",
+                    request_id=request_id,
+                    request_envelope_hash=s7.work_request_envelope_hash(envelope),
+                    producer="s7_voice_consultation_turn",
+                    source_ref_kind="s7_voice_turn",
+                    source_ref_hash=s7.canonical_hash({"voice": request_id}),
+                    maez_voice_consulted=True,
+                    maez_objection_state="absent",
+                    maez_withdrew_request=False,
+                    unavailable_reason_code=None,
+                    created_at="2026-05-18T11:00:00+00:00",
+                )
+
+        class Telegram:
+            def _get_pipeline(self):
+                return Pipe()
+
+        def configure(daemon):
+            daemon.telegram = Telegram()
+
+        return configure
+
     def _credential_record(self, credential_ref: str, *, kind: str):
         from core.governance.s7_webauthn_bootstrap import FounderWebAuthnCredentialRecord
 
@@ -637,6 +712,77 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
         self.assertEqual(authorize_begin.status_code, 200)
         self.assertEqual(authorize_finish.status_code, 200)
         self.assertEqual(authorize_finish.get_json()["request_id"], "req-backup-infer-primary")
+
+    def test_daemon_proof_disable_credential_consumes_matching_s7_artifact(self):
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = f"{tmp}/memory/s7_1_webauthn"
+            store = S7WebAuthnBootstrapStore(root)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            env = {
+                "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "S7_WEBAUTHN_STORE_ROOT": root,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                with patch("daemon.maez_daemon.S7ProductionWebAuthnVerifier", _RouteAuthenticationVerifier):
+                    client = self._client(
+                        configure_daemon=self._daemon_with_disable_credential_pipeline(
+                            "req-disable-primary",
+                            "cred-primary",
+                        )
+                    )
+                    authorize_begin = client.post(
+                        "/internal/s7/cards/req-disable-primary/webauthn/begin",
+                        json={
+                            "session_binding": "session-auth",
+                            "credential_ref": "cred-primary",
+                        },
+                        headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                    )
+                    authorize_finish = client.post(
+                        "/internal/s7/cards/req-disable-primary/webauthn/finish",
+                        json={
+                            "session_binding": "session-auth",
+                            "challenge_id": authorize_begin.get_json()["challenge_id"],
+                            "credential_ref": "cred-primary",
+                            "authentication_response": {"clientDataJSON": "valid-auth"},
+                        },
+                        headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                    )
+                    disable = client.post(
+                        "/internal/s7/webauthn/proof/disable-credential",
+                        json={
+                            "credential_ref": "cred-primary",
+                            "disable_authorization_request_id": "req-disable-primary",
+                            "s7_authorization_artifact_id": authorize_finish.get_json()[
+                                "artifact_id"
+                            ],
+                            "authorization_challenge_id": authorize_begin.get_json()[
+                                "challenge_id"
+                            ],
+                            "authorization_session_binding": "session-auth",
+                            "authorization_credential_ref": "cred-primary",
+                        },
+                        headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                    )
+
+            disabled = store.get_credential("cred-primary")
+
+        self.assertEqual(authorize_begin.status_code, 200)
+        self.assertEqual(authorize_finish.status_code, 200)
+        self.assertEqual(disable.status_code, 200)
+        self.assertEqual(disable.get_json()["credential_ref"], "cred-primary")
+        self.assertEqual(disable.get_json()["ceremony_mode"], "degraded")
+        self.assertIsNotNone(disabled)
+        assert disabled is not None
+        self.assertFalse(disabled.enabled)
+        self.assertEqual(
+            disabled.disabled_by_authorization_id,
+            authorize_finish.get_json()["artifact_id"],
+        )
 
     def test_032_browser_presented_internal_channel_proof_is_rejected(self):
         env = {

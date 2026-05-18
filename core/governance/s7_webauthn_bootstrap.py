@@ -768,6 +768,47 @@ class S7WebAuthnBootstrapStore:
             "sign_count_mode": sign_count_mode,
         }
 
+    def disable_credential(
+        self,
+        credential_ref: str,
+        *,
+        authorization_id: str,
+        now: str,
+    ) -> dict[str, Any]:
+        _parse_time(now)
+        if not credential_ref:
+            return {"ok": False, "error": "s7_credential_setup_incomplete"}
+        if not authorization_id:
+            return {"ok": False, "error": "s7_authorization_required"}
+        with closing(self._conn()) as conn:
+            cur = conn.execute(
+                """
+                UPDATE s7_founder_webauthn_credentials
+                SET enabled = 0,
+                    disabled_at = ?,
+                    disabled_by_authorization_id = ?,
+                    record_hash = ''
+                WHERE credential_ref = ?
+                  AND enabled = 1
+                """,
+                (now, authorization_id, credential_ref),
+            )
+            if cur.rowcount != 1:
+                return {"ok": False, "error": "s7_credential_setup_incomplete"}
+        record = self.get_credential_without_hash_check(credential_ref)
+        if record is None:
+            return {"ok": False, "error": "s7_credential_setup_incomplete"}
+        self._update_record_hash(_with_current_record_hash(record))
+        self._audit(
+            "credential_disabled",
+            {
+                "credential_ref": credential_ref,
+                "authorization_id": authorization_id,
+                "disabled_at": now,
+            },
+        )
+        return {"ok": True, "credential_ref": credential_ref}
+
     def reenable_credential(
         self,
         credential_ref: str,

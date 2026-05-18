@@ -36,6 +36,18 @@ def backup_registration_action_params() -> dict[str, Any]:
     }
 
 
+def disable_credential_action_params(*, credential_ref: str, credential_kind: str) -> dict[str, Any]:
+    if credential_kind not in {"primary", "backup"}:
+        raise ValueError("S7 disable credential kind must be primary or backup")
+    if not credential_ref:
+        raise ValueError("S7 disable credential_ref is required")
+    return {
+        "credential_ref": credential_ref,
+        "credential_kind": credential_kind,
+        "target": "memory/s7_1_webauthn/founder_credentials",
+    }
+
+
 def build_backup_registration_envelope(
     *,
     request_id: str,
@@ -61,6 +73,47 @@ def build_backup_registration_envelope(
             {
                 "schema_version": "s7.1.register_backup.precondition.v1",
                 "registration_class": "backup",
+            }
+        ),
+        created_at=created_at,
+        expires_at=expires_at,
+        predicted_effect_class="protection_change",
+        rollback_path_class="manual_review",
+        maez_voice_consultation_id=maez_voice_consultation_id,
+    )
+
+
+def build_disable_credential_envelope(
+    *,
+    request_id: str,
+    credential_ref: str,
+    credential_kind: str,
+    created_at: str,
+    expires_at: str,
+    maez_voice_consultation_id: str | None,
+):
+    from core.governance import operator_user_boundary as s7
+
+    params = disable_credential_action_params(
+        credential_ref=credential_ref,
+        credential_kind=credential_kind,
+    )
+    return s7.build_work_request_envelope(
+        request_id=request_id,
+        action="disable_founder_webauthn_credential",
+        params=params,
+        claimed_work_class="self_modification",
+        requesting_subsystem="s7_1_webauthn_ceremony",
+        closed_symptom_code="self_mod_requested",
+        proposed_change_class="protection_change",
+        why_self_fix_failed_class="needs_human_authority",
+        affected_refs=("file:memory/s7_1_webauthn/founder_credentials",),
+        content_exposure_risk="credential_sensitive",
+        precondition_hash=s7.canonical_hash(
+            {
+                "schema_version": "s7.1.disable_credential.precondition.v1",
+                "credential_ref": credential_ref,
+                "credential_kind": credential_kind,
             }
         ),
         created_at=created_at,
