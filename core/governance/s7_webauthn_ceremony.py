@@ -207,6 +207,34 @@ class S7LocalWebAuthnCeremonyService:
             status_code=200,
         )
 
+    def authorize_begin(
+        self,
+        *,
+        now: str,
+        rendered_statement: Any,
+        session_binding: str,
+        internal_channel_binding: str,
+    ) -> S7CeremonyServiceResult:
+        del rendered_statement, session_binding, internal_channel_binding
+        dependency = self.verifier.dependency_state()
+        if dependency.get("ok") is not True:
+            return S7CeremonyServiceResult(body=dependency, status_code=503)
+        store = self.store_factory()
+        recovery = store.credential_recovery_state()
+        if recovery.get("mode") != "ready":
+            return S7CeremonyServiceResult(
+                body={
+                    "ok": False,
+                    "error": "s7_credential_setup_incomplete",
+                    "ceremony_mode": recovery.get("mode"),
+                    "primary_credential_state": recovery.get("primary_credential_state"),
+                    "backup_credential_state": recovery.get("backup_credential_state"),
+                    "distinct_device_confidence": recovery.get("distinct_device_confidence"),
+                },
+                status_code=409,
+            )
+        raise NotImplementedError("s7.1_authorization_challenge_not_wired")
+
     def status(self, *, now: str) -> S7CeremonyServiceResult:
         dependency = self.verifier.dependency_state()
         dependency_state = "available" if dependency.get("ok") is True else "missing"

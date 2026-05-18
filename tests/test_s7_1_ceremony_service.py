@@ -98,6 +98,35 @@ class S71CeremonyServiceTests(unittest.TestCase):
             created_at=NOW,
         )
 
+    def _rendered_statement(self):
+        from core.governance import operator_user_boundary as s7
+
+        envelope = self._self_mod_envelope()
+        authority = s7.AuthorityContext(
+            actor_id="founder",
+            actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+            role_names=("bonded_user",),
+            grant_source="founder_webauthn",
+            allowed_scopes=("operator_health",),
+            auth_method="founder_webauthn",
+            surface="cockpit",
+            credential_ref="cred-primary",
+            created_at=NOW,
+            expires_at="2026-05-18T11:05:00+00:00",
+            verified=True,
+        )
+        return s7.render_request_statement(
+            envelope=envelope,
+            surface="cockpit",
+            origin="http://localhost:11437",
+            action_params_hash=s7.canonical_hash({"path": "config/soul.md"}),
+            authority_context=authority,
+            maez_voice_consultation=self._voice_consultation(state="absent"),
+            nonce="nonce-s7-1-auth",
+            expires_at="2026-05-18T11:05:00+00:00",
+            rendered_at=NOW,
+        )
+
     def test_018_missing_dependency_fails_before_store_work(self):
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 
@@ -479,6 +508,45 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(result.status_code, 409)
         self.assertEqual(result.body["error"], "s7_aggregation_block")
         self.assertIn("repeated_reask_after_refusal", result.body["signals"])
+
+    def test_authorize_begin_requires_ready_primary_and_backup_state(self):
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, intent = self._store_with_bootstrap(tmp)
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+            primary_begin = service.register_begin(
+                now=NOW,
+                request_json={
+                    "bootstrap_intent_id": intent.intent_id,
+                    "bootstrap_token": intent.raw_token,
+                    "session_binding": "session-a",
+                },
+            )
+            service.register_finish(
+                now=NOW,
+                request_json={
+                    "challenge_id": primary_begin.body["challenge_id"],
+                    "bootstrap_intent_id": intent.intent_id,
+                    "bootstrap_token": intent.raw_token,
+                    "session_binding": "session-a",
+                    "registration_response": {"clientDataJSON": "valid"},
+                },
+            )
+
+            result = service.authorize_begin(
+                now=NOW,
+                rendered_statement=self._rendered_statement(),
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+            )
+
+            self.assertEqual(result.status_code, 409)
+            self.assertEqual(result.body["error"], "s7_credential_setup_incomplete")
+            self.assertEqual(result.body["ceremony_mode"], "degraded")
 
 
 if __name__ == "__main__":
