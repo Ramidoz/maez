@@ -368,6 +368,13 @@ class S7LocalWebAuthnCeremonyService:
                 body={"ok": False, "error": "s7_credential_disabled"},
                 status_code=409,
             )
+        sign_count = store.advance_sign_count(
+            credential_ref,
+            new_sign_count=int(verified.get("sign_count", credential.sign_count)),
+            now=now,
+        )
+        if sign_count.get("ok") is not True:
+            return S7CeremonyServiceResult(body=sign_count, status_code=409)
         if not store.consume_challenge(challenge_id, now=now):
             return S7CeremonyServiceResult(
                 body={"ok": False, "error": "s7_challenge_replayed"},

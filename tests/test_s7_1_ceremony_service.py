@@ -698,6 +698,47 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(finish.body["grant_source"], "founder_webauthn")
         self.assertTrue(consumed)
 
+    def test_authorize_finish_advances_sign_count(self):
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+            envelope = self._self_mod_envelope()
+            rendered = self._rendered_statement()
+            begin = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+            )
+
+            finish = service.authorize_finish(
+                now=NOW,
+                envelope=envelope,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                maez_voice_consultation=self._voice_consultation(state="absent"),
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+                request_json={
+                    "challenge_id": begin.body["challenge_id"],
+                    "credential_ref": "cred-primary",
+                    "authentication_response": {"clientDataJSON": "valid-auth"},
+                },
+            )
+            updated = store.get_credential("cred-primary")
+
+        self.assertEqual(finish.status_code, 200)
+        assert updated is not None
+        self.assertEqual(updated.sign_count, 1)
+
     def test_authorize_finish_rejects_presence_only_for_uv_required_work(self):
         from core.governance import operator_user_boundary as s7
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService

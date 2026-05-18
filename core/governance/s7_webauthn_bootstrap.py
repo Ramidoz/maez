@@ -725,6 +725,49 @@ class S7WebAuthnBootstrapStore:
         record = self.get_credential(credential_ref)
         return bool(record and record.enabled and "bonded_user" in record.role_names)
 
+    def advance_sign_count(
+        self,
+        credential_ref: str,
+        *,
+        new_sign_count: int,
+        now: str,
+    ) -> dict[str, Any]:
+        _parse_time(now)
+        record = self.get_credential(credential_ref)
+        if record is None or not record.enabled:
+            return {"ok": False, "error": "s7_credential_disabled"}
+        if new_sign_count > record.sign_count:
+            sign_count_mode = "advancing"
+        elif new_sign_count == 0 and record.sign_count == 0:
+            sign_count_mode = "constant_zero"
+        else:
+            return {"ok": False, "error": "s7_clone_suspected"}
+        with closing(self._conn()) as conn:
+            cur = conn.execute(
+                """
+                UPDATE s7_founder_webauthn_credentials
+                SET sign_count = ?,
+                    sign_count_mode = ?,
+                    last_used_at = ?,
+                    record_hash = ''
+                WHERE credential_ref = ?
+                  AND enabled = 1
+                """,
+                (new_sign_count, sign_count_mode, now, credential_ref),
+            )
+            if cur.rowcount != 1:
+                return {"ok": False, "error": "s7_credential_disabled"}
+        updated = self.get_credential_without_hash_check(credential_ref)
+        if updated is None:
+            return {"ok": False, "error": "s7_credential_disabled"}
+        self._update_record_hash(_with_current_record_hash(updated))
+        return {
+            "ok": True,
+            "credential_ref": credential_ref,
+            "sign_count": new_sign_count,
+            "sign_count_mode": sign_count_mode,
+        }
+
     def reenable_credential(
         self,
         credential_ref: str,
