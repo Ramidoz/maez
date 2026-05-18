@@ -867,6 +867,12 @@ def derive_work_class(
         return "routine_custody"
     if action == "capability.acquire" or _INSTALL_RE.search(lowered):
         return "capability_acquisition"
+    if action in {
+        "register_founder_webauthn_credential",
+        "register_backup_webauthn_credential",
+        "reenable_founder_webauthn_credential",
+    }:
+        return "self_modification"
     if "backup_restore" in action or "restore_backup" in action:
         return "destructive_user_action"
     if action in {"write_soul_note", "edit_soul_section"}:

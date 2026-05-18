@@ -65,6 +65,15 @@ class _ValidRegistrationVerifier(_AvailableVerifier):
         }
 
 
+class _ValidBackupRegistrationVerifier(_ValidRegistrationVerifier):
+    def verify_registration_response(self, **kwargs):
+        result = dict(super().verify_registration_response(**kwargs))
+        if result.get("ok") is True:
+            result["credential_ref"] = "cred-backup"
+            result["public_key"] = "public-key-backup"
+        return result
+
+
 class _PresenceOnlyAuthenticationVerifier(_ValidRegistrationVerifier):
     def verify_authentication_response(self, **_kwargs):
         return {
@@ -155,6 +164,78 @@ class S71CeremonyServiceTests(unittest.TestCase):
             nonce="nonce-s7-1-auth",
             expires_at="2026-05-18T11:05:00+00:00",
             rendered_at=NOW,
+        )
+
+    def _backup_registration_authorization(self, db_path: Path):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_ceremony import (
+            backup_registration_action_params,
+            build_backup_registration_envelope,
+        )
+
+        authority = self._authority_context()
+        envelope = build_backup_registration_envelope(
+            request_id="s7.1.register_backup.test",
+            created_at=NOW,
+            expires_at="2026-05-18T11:05:00+00:00",
+            maez_voice_consultation_id="voice-backup-register",
+        )
+        consultation = s7.MaezVoiceConsultation(
+            consultation_id="voice-backup-register",
+            request_id=envelope.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(envelope),
+            producer="s7_voice_consultation_turn",
+            source_ref_kind="s7_voice_turn",
+            source_ref_hash="d" * 64,
+            maez_voice_consulted=True,
+            maez_objection_state="absent",
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=NOW,
+        )
+        rendered = s7.render_request_statement(
+            envelope=envelope,
+            surface="cockpit",
+            origin="http://localhost:11437",
+            action_params_hash=s7.canonical_hash(backup_registration_action_params()),
+            authority_context=authority,
+            maez_voice_consultation=consultation,
+            nonce="nonce-backup-register",
+            expires_at="2026-05-18T11:05:00+00:00",
+            rendered_at=NOW,
+        )
+        artifact = s7.S7AuthorizationArtifact(
+            artifact_id="artifact-backup-register",
+            request_id=rendered.request_id,
+            request_envelope_hash=rendered.request_envelope_hash,
+            rendered_text_hash=rendered.rendered_text_hash,
+            action_params_hash=rendered.action_params_hash,
+            precondition_hash=envelope.precondition_hash,
+            authority_context_hash=s7.authority_context_hash(authority),
+            derived_work_class=rendered.derived_work_class,
+            derived_aggregation_group=rendered.derived_aggregation_group,
+            nonce=rendered.nonce,
+            credential_ref="cred-primary",
+            auth_method="founder_webauthn",
+            grant_source="founder_webauthn",
+            user_presence=True,
+            user_verification=True,
+            created_at=NOW,
+            expires_at="2026-05-18T11:05:00+00:00",
+            consumed_at=None,
+        )
+        store = s7.S7AuthorizationStore(db_path)
+        store.put(artifact)
+        return s7.S7ExecutionAuthorization(
+            store=store,
+            artifact_id=artifact.artifact_id,
+            rendered=rendered,
+            action_params_hash=rendered.action_params_hash,
+            authority_context=authority,
+            precondition_hash=envelope.precondition_hash,
+            derived_work_class=rendered.derived_work_class,
+            derived_aggregation_group=rendered.derived_aggregation_group,
+            now=NOW,
         )
 
     def _credential_record(self, credential_ref: str, *, kind: str):
@@ -479,6 +560,115 @@ class S71CeremonyServiceTests(unittest.TestCase):
                     "SELECT challenge_kind FROM s7_ceremony_challenges ORDER BY created_at"
                 ).fetchall()
             self.assertEqual([row[0] for row in challenges], ["register_primary"])
+
+    def test_backup_registration_begin_with_founder_authorization_creates_backup_challenge(self):
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, intent = self._store_with_bootstrap(tmp)
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+            primary_begin = service.register_begin(
+                now=NOW,
+                request_json={
+                    "bootstrap_intent_id": intent.intent_id,
+                    "bootstrap_token": intent.raw_token,
+                    "session_binding": "session-a",
+                },
+            )
+            service.register_finish(
+                now=NOW,
+                request_json={
+                    "challenge_id": primary_begin.body["challenge_id"],
+                    "bootstrap_intent_id": intent.intent_id,
+                    "bootstrap_token": intent.raw_token,
+                    "session_binding": "session-a",
+                    "registration_response": {"clientDataJSON": "valid"},
+                },
+            )
+            authorization = self._backup_registration_authorization(
+                store.db_path,
+            )
+
+            result = service.register_begin(
+                now=NOW,
+                request_json={
+                    "registration_class": "backup",
+                    "session_binding": "session-b",
+                },
+                s7_execution_authorization=authorization,
+            )
+            with closing(sqlite3.connect(store.db_path)) as conn:
+                consumed_at = conn.execute(
+                    "SELECT consumed_at FROM s7_authorization_artifacts WHERE artifact_id = ?",
+                    (authorization.artifact_id,),
+                ).fetchone()[0]
+
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.body["challenge_kind"], "register_backup")
+        self.assertEqual(tuple(result.body["exclude_credentials"]), ("cred-primary",))
+        self.assertIsNotNone(consumed_at)
+
+    def test_backup_registration_finish_stores_backup_credential(self):
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, intent = self._store_with_bootstrap(tmp)
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+            primary_begin = service.register_begin(
+                now=NOW,
+                request_json={
+                    "bootstrap_intent_id": intent.intent_id,
+                    "bootstrap_token": intent.raw_token,
+                    "session_binding": "session-a",
+                },
+            )
+            service.register_finish(
+                now=NOW,
+                request_json={
+                    "challenge_id": primary_begin.body["challenge_id"],
+                    "bootstrap_intent_id": intent.intent_id,
+                    "bootstrap_token": intent.raw_token,
+                    "session_binding": "session-a",
+                    "registration_response": {"clientDataJSON": "valid"},
+                },
+            )
+            authorization = self._backup_registration_authorization(store.db_path)
+            backup_service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidBackupRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+            backup_begin = service.register_begin(
+                now=NOW,
+                request_json={
+                    "registration_class": "backup",
+                    "session_binding": "session-b",
+                },
+                s7_execution_authorization=authorization,
+            )
+
+            result = backup_service.register_finish(
+                now=NOW,
+                request_json={
+                    "registration_class": "backup",
+                    "challenge_id": backup_begin.body["challenge_id"],
+                    "session_binding": "session-b",
+                    "registration_response": {"clientDataJSON": "valid-backup"},
+                },
+            )
+            backup = store.get_credential("cred-backup")
+
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.body["registration_class"], "backup")
+        self.assertIsNotNone(backup)
+        assert backup is not None
+        self.assertEqual(backup.credential_kind, "backup")
+        self.assertTrue(backup.backup_credential)
 
     def test_authorization_voice_recheck_blocks_not_determined(self):
         from core.governance.s7_webauthn_ceremony import authorization_voice_seat_recheck
