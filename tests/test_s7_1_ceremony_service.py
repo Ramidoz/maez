@@ -888,6 +888,59 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(finish.body["grant_source"], "founder_webauthn")
         self.assertTrue(consumed)
 
+    def test_authorize_finish_rejects_rendered_statement_that_differs_from_challenge(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ExplodingAuthenticationVerifier(),
+                store_factory=lambda: store,
+            )
+            envelope = self._self_mod_envelope()
+            rendered = self._rendered_statement()
+            tampered_rendered = s7.render_request_statement(
+                envelope=envelope,
+                surface="cockpit",
+                origin="http://localhost:11437",
+                action_params_hash=rendered.action_params_hash,
+                authority_context=self._authority_context(),
+                maez_voice_consultation=self._voice_consultation(state="absent"),
+                nonce="nonce-s7-1-auth-tampered",
+                expires_at="2026-05-18T11:05:00+00:00",
+                rendered_at=NOW,
+            )
+            begin = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+            )
+
+            finish = service.authorize_finish(
+                now=NOW,
+                envelope=envelope,
+                rendered_statement=tampered_rendered,
+                precondition_hash=envelope.precondition_hash,
+                maez_voice_consultation=self._voice_consultation(state="absent"),
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+                request_json={
+                    "challenge_id": begin.body["challenge_id"],
+                    "credential_ref": "cred-primary",
+                    "authentication_response": {"clientDataJSON": "valid-auth"},
+                },
+            )
+
+        self.assertEqual(finish.status_code, 409)
+        self.assertEqual(finish.body["error"], "s7_d12_binding_mismatch")
+        with self.assertRaises(KeyError):
+            _ = finish.body["artifact_id"]
+
     def test_authorize_finish_advances_sign_count(self):
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 

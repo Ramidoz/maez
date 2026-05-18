@@ -432,6 +432,12 @@ class S7LocalWebAuthnCeremonyService:
                 body={"ok": False, "error": "s7_challenge_replayed"},
                 status_code=410,
             )
+        if not _challenge_matches_rendered_d12(
+            challenge=challenge,
+            rendered_statement=rendered_statement,
+            precondition_hash=precondition_hash,
+        ):
+            return _d12_binding_mismatch()
         voice = authorization_voice_seat_recheck(
             envelope=envelope,
             maez_voice_consultation=maez_voice_consultation,
@@ -773,6 +779,37 @@ def _schema_invalid(detail: str) -> S7CeremonyServiceResult:
     return S7CeremonyServiceResult(
         body={"ok": False, "error": "s7_schema_invalid", "detail": detail},
         status_code=400,
+    )
+
+
+def _challenge_matches_rendered_d12(
+    *,
+    challenge: dict[str, Any],
+    rendered_statement: Any,
+    precondition_hash: str,
+) -> bool:
+    expected = {
+        "request_id": str(rendered_statement.request_id),
+        "request_envelope_hash": str(rendered_statement.request_envelope_hash),
+        "rendered_text_hash": str(rendered_statement.rendered_text_hash),
+        "action_params_hash": str(rendered_statement.action_params_hash),
+        "precondition_hash": str(precondition_hash),
+        "authority_context_hash": str(rendered_statement.authority_context_hash),
+        "maez_voice_consultation_hash": str(rendered_statement.maez_voice_consultation_hash or ""),
+        "derived_aggregation_group": str(rendered_statement.derived_aggregation_group),
+        "nonce": str(rendered_statement.nonce),
+    }
+    for key, value in expected.items():
+        actual = "" if challenge.get(key) is None else str(challenge.get(key))
+        if actual != value:
+            return False
+    return True
+
+
+def _d12_binding_mismatch() -> S7CeremonyServiceResult:
+    return S7CeremonyServiceResult(
+        body={"ok": False, "error": "s7_d12_binding_mismatch"},
+        status_code=409,
     )
 
 
