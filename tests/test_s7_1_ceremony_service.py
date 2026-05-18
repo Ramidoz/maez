@@ -55,6 +55,15 @@ class _ValidRegistrationVerifier(_AvailableVerifier):
             "uv_capable": True,
         }
 
+    def verify_authentication_response(self, **_kwargs):
+        return {
+            "ok": True,
+            "credential_ref": "cred-primary",
+            "sign_count": 1,
+            "user_presence": True,
+            "user_verification": True,
+        }
+
 
 class S71CeremonyServiceTests(unittest.TestCase):
     def _self_mod_envelope(self):
@@ -98,11 +107,10 @@ class S71CeremonyServiceTests(unittest.TestCase):
             created_at=NOW,
         )
 
-    def _rendered_statement(self):
+    def _authority_context(self, *, credential_ref: str = "cred-primary"):
         from core.governance import operator_user_boundary as s7
 
-        envelope = self._self_mod_envelope()
-        authority = s7.AuthorityContext(
+        return s7.AuthorityContext(
             actor_id="founder",
             actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
             role_names=("bonded_user",),
@@ -115,6 +123,12 @@ class S71CeremonyServiceTests(unittest.TestCase):
             expires_at="2026-05-18T11:05:00+00:00",
             verified=True,
         )
+
+    def _rendered_statement(self):
+        from core.governance import operator_user_boundary as s7
+
+        envelope = self._self_mod_envelope()
+        authority = self._authority_context()
         return s7.render_request_statement(
             envelope=envelope,
             surface="cockpit",
@@ -615,6 +629,57 @@ class S71CeremonyServiceTests(unittest.TestCase):
         assert challenge is not None
         self.assertEqual(challenge["rendered_text_hash"], rendered.rendered_text_hash)
         self.assertEqual(challenge["request_envelope_hash"], rendered.request_envelope_hash)
+
+    def test_authorize_finish_mints_consumable_s7_artifact(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+            envelope = self._self_mod_envelope()
+            rendered = self._rendered_statement()
+            begin = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+            )
+
+            finish = service.authorize_finish(
+                now=NOW,
+                envelope=envelope,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                maez_voice_consultation=self._voice_consultation(state="absent"),
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+                request_json={
+                    "challenge_id": begin.body["challenge_id"],
+                    "authentication_response": {"clientDataJSON": "valid-auth"},
+                },
+            )
+            artifact_store = s7.S7AuthorizationStore(store.db_path)
+            consumed = artifact_store.consume_verified(
+                finish.body["artifact_id"],
+                rendered=rendered,
+                action_params_hash=rendered.action_params_hash,
+                authority_context=self._authority_context(),
+                precondition_hash=envelope.precondition_hash,
+                derived_work_class=rendered.derived_work_class,
+                derived_aggregation_group=rendered.derived_aggregation_group,
+                now=NOW,
+            )
+
+        self.assertEqual(finish.status_code, 200)
+        self.assertEqual(finish.body["grant_source"], "founder_webauthn")
+        self.assertTrue(consumed)
 
 
 if __name__ == "__main__":

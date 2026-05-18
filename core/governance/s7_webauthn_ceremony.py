@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
+import uuid
 
 from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
 from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
@@ -258,6 +259,120 @@ class S7LocalWebAuthnCeremonyService:
                         for credential_ref in allow_credentials
                     ],
                 },
+            },
+            status_code=200,
+        )
+
+    def authorize_finish(
+        self,
+        *,
+        now: str,
+        envelope: Any,
+        rendered_statement: Any,
+        precondition_hash: str,
+        maez_voice_consultation: Any,
+        session_binding: str,
+        internal_channel_binding: str,
+        request_json: dict[str, Any] | None,
+    ) -> S7CeremonyServiceResult:
+        dependency = self.verifier.dependency_state()
+        if dependency.get("ok") is not True:
+            return S7CeremonyServiceResult(body=dependency, status_code=503)
+        store = self.store_factory()
+        try:
+            request = _require_mapping(request_json)
+            challenge_id = _require_text(request, "challenge_id")
+            authentication_response = request["authentication_response"]
+            if not isinstance(authentication_response, dict):
+                raise ValueError("authentication_response")
+        except (KeyError, ValueError) as exc:
+            return _schema_invalid(str(exc))
+
+        challenge = store.authorization_challenge_for_finish(
+            challenge_id=challenge_id,
+            session_binding=session_binding,
+            internal_channel_binding=internal_channel_binding,
+            now=now,
+        )
+        if challenge is None:
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_challenge_replayed"},
+                status_code=410,
+            )
+        voice = authorization_voice_seat_recheck(
+            envelope=envelope,
+            maez_voice_consultation=maez_voice_consultation,
+            refusal_history_store=store,
+            rendered_text_hash=rendered_statement.rendered_text_hash,
+            requester_ref="founder-local-browser",
+            now=now,
+        )
+        if voice.status_code != 200:
+            return voice
+        aggregation = authorization_aggregation_recheck(
+            envelope=envelope,
+            history=store.refusal_history_for_envelope(envelope),
+        )
+        if aggregation.status_code != 200:
+            return aggregation
+        verifier_method = getattr(self.verifier, "verify_authentication_response", None)
+        if verifier_method is None:
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_authentication_invalid"},
+                status_code=400,
+            )
+        verified = verifier_method(
+            authentication_response=authentication_response,
+            challenge=challenge,
+            expected_origin="http://localhost:11437",
+            expected_rp_id="localhost",
+            require_user_verification=bool(challenge["uv_required"]),
+        )
+        if verified.get("ok") is not True:
+            return S7CeremonyServiceResult(body=verified, status_code=400)
+        credential_ref = str(verified["credential_ref"])
+        if not store.credential_can_authorize(credential_ref):
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_credential_disabled"},
+                status_code=409,
+            )
+        if not store.consume_challenge(challenge_id, now=now):
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_challenge_replayed"},
+                status_code=410,
+            )
+
+        from core.governance import operator_user_boundary as s7
+
+        artifact_id = f"s7authz_{uuid.uuid4().hex}"
+        artifact = s7.S7AuthorizationArtifact(
+            artifact_id=artifact_id,
+            request_id=rendered_statement.request_id,
+            request_envelope_hash=rendered_statement.request_envelope_hash,
+            rendered_text_hash=rendered_statement.rendered_text_hash,
+            action_params_hash=rendered_statement.action_params_hash,
+            precondition_hash=precondition_hash,
+            authority_context_hash=rendered_statement.authority_context_hash,
+            derived_work_class=rendered_statement.derived_work_class,
+            derived_aggregation_group=rendered_statement.derived_aggregation_group,
+            nonce=rendered_statement.nonce,
+            credential_ref=credential_ref,
+            auth_method="founder_webauthn",
+            grant_source="founder_webauthn",
+            user_presence=bool(verified.get("user_presence", True)),
+            user_verification=bool(verified.get("user_verification", False)),
+            created_at=now,
+            expires_at=str(challenge["expires_at"]),
+            consumed_at=None,
+        )
+        s7.S7AuthorizationStore(store.db_path).put(artifact)
+        return S7CeremonyServiceResult(
+            body={
+                "ok": True,
+                "artifact_id": artifact_id,
+                "request_id": rendered_statement.request_id,
+                "credential_ref": credential_ref,
+                "grant_source": "founder_webauthn",
             },
             status_code=200,
         )
