@@ -57,6 +57,47 @@ class _ValidRegistrationVerifier(_AvailableVerifier):
 
 
 class S71CeremonyServiceTests(unittest.TestCase):
+    def _self_mod_envelope(self):
+        from core.governance import operator_user_boundary as s7
+
+        return s7.build_work_request_envelope(
+            request_id="req-s7-1-voice",
+            action="write_any_file",
+            params={"path": "/home/rohit/maez/config/soul.md", "content": "x"},
+            claimed_work_class="self_modification",
+            requesting_subsystem="unit",
+            closed_symptom_code="self_mod_requested",
+            proposed_change_class="soul_change",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("file:config/soul.md",),
+            content_exposure_risk="bonded_content_ref",
+            precondition_hash="a" * 64,
+            created_at=NOW,
+            expires_at="2026-05-18T11:05:00+00:00",
+            predicted_effect_class="behavior_change",
+            rollback_path_class="revert_patch",
+            free_text_ref_hash="b" * 64,
+            maez_voice_consultation_id="voice-s7-1",
+        )
+
+    def _voice_consultation(self, *, state: str):
+        from core.governance import operator_user_boundary as s7
+
+        envelope = self._self_mod_envelope()
+        return s7.MaezVoiceConsultation(
+            consultation_id="voice-s7-1",
+            request_id=envelope.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(envelope),
+            producer="s7_voice_consultation_turn",
+            source_ref_kind="s7_voice_turn",
+            source_ref_hash="c" * 64,
+            maez_voice_consulted=True,
+            maez_objection_state=state,
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=NOW,
+        )
+
     def test_018_missing_dependency_fails_before_store_work(self):
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 
@@ -348,6 +389,41 @@ class S71CeremonyServiceTests(unittest.TestCase):
                     "SELECT challenge_kind FROM s7_ceremony_challenges ORDER BY created_at"
                 ).fetchall()
             self.assertEqual([row[0] for row in challenges], ["register_primary"])
+
+    def test_authorization_voice_recheck_blocks_not_determined(self):
+        from core.governance.s7_webauthn_ceremony import authorization_voice_seat_recheck
+
+        result = authorization_voice_seat_recheck(
+            envelope=self._self_mod_envelope(),
+            maez_voice_consultation=None,
+        )
+
+        self.assertEqual(result.status_code, 409)
+        self.assertEqual(result.body["error"], "s7_voice_seat_unresolved")
+        self.assertEqual(result.body["maez_objection_state"], "not_determined")
+
+    def test_authorization_voice_recheck_blocks_maez_objection(self):
+        from core.governance.s7_webauthn_ceremony import authorization_voice_seat_recheck
+
+        result = authorization_voice_seat_recheck(
+            envelope=self._self_mod_envelope(),
+            maez_voice_consultation=self._voice_consultation(state="present"),
+        )
+
+        self.assertEqual(result.status_code, 409)
+        self.assertEqual(result.body["error"], "s7_voice_seat_unresolved")
+        self.assertEqual(result.body["maez_objection_state"], "present")
+
+    def test_authorization_voice_recheck_allows_producer_confirmed_absent(self):
+        from core.governance.s7_webauthn_ceremony import authorization_voice_seat_recheck
+
+        result = authorization_voice_seat_recheck(
+            envelope=self._self_mod_envelope(),
+            maez_voice_consultation=self._voice_consultation(state="absent"),
+        )
+
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.body["maez_objection_state"], "absent")
 
 
 if __name__ == "__main__":

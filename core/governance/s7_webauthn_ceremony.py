@@ -253,6 +253,55 @@ def default_s7_webauthn_ceremony_service(
     )
 
 
+def authorization_voice_seat_recheck(
+    *,
+    envelope: Any,
+    maez_voice_consultation: Any,
+) -> S7CeremonyServiceResult:
+    """Finish-time S7.1 voice-seat gate before artifact minting."""
+
+    from core.governance.operator_user_boundary import (
+        VOICE_SEAT_WORK_CLASSES,
+        voice_consultation_satisfies_request,
+    )
+
+    if getattr(envelope, "derived_work_class", None) not in VOICE_SEAT_WORK_CLASSES:
+        return S7CeremonyServiceResult(
+            body={"ok": True, "maez_objection_state": "none"},
+            status_code=200,
+        )
+    if not voice_consultation_satisfies_request(envelope, maez_voice_consultation):
+        return _voice_seat_block("not_determined", reason="missing_or_mismatched_voice_fact")
+    state = str(getattr(maez_voice_consultation, "maez_objection_state", "not_determined"))
+    unavailable_reason = getattr(maez_voice_consultation, "unavailable_reason_code", None)
+    if state != "absent":
+        return _voice_seat_block(state, reason="maez_voice_not_clear")
+    if unavailable_reason not in {None, "none"}:
+        return _voice_seat_block("not_determined", reason=str(unavailable_reason))
+    if getattr(maez_voice_consultation, "maez_withdrew_request", False) is True:
+        return _voice_seat_block("present", reason="maez_withdrew_request")
+    return S7CeremonyServiceResult(
+        body={
+            "ok": True,
+            "maez_objection_state": "absent",
+            "maez_voice_consultation_id": maez_voice_consultation.consultation_id,
+        },
+        status_code=200,
+    )
+
+
+def _voice_seat_block(state: str, *, reason: str) -> S7CeremonyServiceResult:
+    return S7CeremonyServiceResult(
+        body={
+            "ok": False,
+            "error": "s7_voice_seat_unresolved",
+            "maez_objection_state": state,
+            "reason": reason,
+        },
+        status_code=409,
+    )
+
+
 def _require_mapping(request_json: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(request_json, dict):
         raise ValueError("request_json")
