@@ -20,6 +20,20 @@ class _RecordingActionEngine:
         return "written"
 
 
+class _LiveAuthorizationVerifier:
+    def dependency_state(self):
+        return {"ok": True, "library_name": "webauthn", "library_version": "2.7.1"}
+
+    def verify_authentication_response(self, **_kwargs):
+        return {
+            "ok": True,
+            "credential_ref": "cred-primary",
+            "sign_count": 1,
+            "user_presence": True,
+            "user_verification": True,
+        }
+
+
 class S71DreamExecutionTests(unittest.TestCase):
     def _authority_context(self):
         from core.governance import operator_user_boundary as s7
@@ -109,6 +123,37 @@ class S71DreamExecutionTests(unittest.TestCase):
             now=NOW,
         )
 
+    def _credential_record(self, credential_ref: str, *, kind: str):
+        from core.governance.s7_webauthn_bootstrap import FounderWebAuthnCredentialRecord
+
+        return FounderWebAuthnCredentialRecord.build(
+            credential_ref=credential_ref,
+            actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+            role_names=("bonded_user",),
+            public_key=f"public-key-{credential_ref}",
+            sign_count=0,
+            rp_id="localhost",
+            origin="http://localhost:11437",
+            created_at=NOW,
+            backup_credential=(kind == "backup"),
+            enabled=True,
+            credential_kind=kind,
+            label=f"{kind} key",
+            registration_challenge_id=f"challenge-{credential_ref}",
+            attestation_format="packed",
+            aaguid="00112233-4455-6677-8899-aabbccddeeff",
+            authenticator_attachment="cross-platform",
+            backup_eligible=False,
+            backed_up=False,
+            transports=("usb",),
+            library_name="webauthn",
+            library_version="2.7.1",
+            sign_count_mode="advancing",
+            uv_capable=True,
+            uv_required_for_guarded=True,
+            distinct_device_confidence="confirmed_distinct",
+        )
+
     def test_apply_dream_without_s7_execution_authorization_fails_closed(self):
         from core.evolution.dream_state import DreamState
 
@@ -169,6 +214,87 @@ class S71DreamExecutionTests(unittest.TestCase):
         self.assertIsNotNone(prop)
         assert prop is not None
         self.assertEqual(prop["status"], "applied")
+
+    def test_apply_dream_accepts_artifact_minted_by_s7_1_authorize_finish(self):
+        from core.evolution.dream_state import DreamState
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            action_engine = _RecordingActionEngine()
+            dream = DreamState(
+                memory=None,
+                telegram=None,
+                action_engine=action_engine,
+                db_path=str(tmp_path / "dream_proposals.db"),
+            )
+            prop_id = dream._store_proposal("Maez noticed a durable pattern.")
+            store = S7WebAuthnBootstrapStore(tmp_path / "s7_1_webauthn")
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_LiveAuthorizationVerifier(),
+                store_factory=lambda: store,
+            )
+            envelope = dream.build_apply_s7_envelope(prop_id)
+            params = dream.s7_apply_action_params(prop_id)
+            authority = self._authority_context()
+            rendered = s7.render_request_statement(
+                envelope=envelope,
+                surface="cockpit",
+                origin="http://localhost:11437",
+                action_params_hash=s7.canonical_hash(params),
+                authority_context=authority,
+                maez_voice_consultation=self._voice_consultation(envelope),
+                nonce="nonce-dream-live",
+                expires_at=FUTURE,
+                rendered_at=NOW,
+            )
+            begin = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                session_binding="session-dream",
+                internal_channel_binding="internal-dream",
+            )
+            finish = service.authorize_finish(
+                now=NOW,
+                envelope=envelope,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                maez_voice_consultation=self._voice_consultation(envelope),
+                session_binding="session-dream",
+                internal_channel_binding="internal-dream",
+                request_json={
+                    "challenge_id": begin.body["challenge_id"],
+                    "credential_ref": "cred-primary",
+                    "authentication_response": {"clientDataJSON": "valid-auth"},
+                },
+            )
+            authorization = s7.S7ExecutionAuthorization(
+                store=s7.S7AuthorizationStore(store.db_path),
+                artifact_id=finish.body["artifact_id"],
+                rendered=rendered,
+                action_params_hash=rendered.action_params_hash,
+                authority_context=authority,
+                precondition_hash=envelope.precondition_hash,
+                derived_work_class=rendered.derived_work_class,
+                derived_aggregation_group=rendered.derived_aggregation_group,
+                now=NOW,
+            )
+
+            ok, message = dream.apply_proposal(
+                prop_id,
+                s7_execution_authorization=authorization,
+            )
+
+        self.assertEqual(begin.status_code, 200)
+        self.assertEqual(finish.status_code, 200)
+        self.assertTrue(ok, message)
+        self.assertEqual(len(action_engine.calls), 1)
+        self.assertIsNotNone(action_engine.calls[0][1])
 
 
 if __name__ == "__main__":
