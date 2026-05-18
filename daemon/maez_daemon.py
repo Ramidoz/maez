@@ -376,6 +376,9 @@ def _s7_authorization_route_material(
         session_binding=session_binding,
         internal_channel_binding=internal_channel_binding,
         request_json=request_json,
+        allow_degraded_primary_only=(
+            getattr(card, "action", None) == "register_backup_webauthn_credential"
+        ),
     )
 
 
@@ -5948,6 +5951,7 @@ class MaezDaemon:
                     precondition_hash=material.kwargs["precondition_hash"],
                     session_binding=material.kwargs["session_binding"],
                     internal_channel_binding=material.kwargs["internal_channel_binding"],
+                    allow_degraded_primary_only=material.kwargs["allow_degraded_primary_only"],
                 )
                 return jsonify(result.body), result.status_code
             return jsonify(

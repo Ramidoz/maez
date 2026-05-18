@@ -826,6 +826,31 @@ class S71CeremonyServiceTests(unittest.TestCase):
             self.assertEqual(result.body["error"], "s7_credential_setup_incomplete")
             self.assertEqual(result.body["ceremony_mode"], "degraded")
 
+    def test_authorize_begin_allows_backup_registration_with_primary_only(self):
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+            rendered = self._rendered_statement()
+
+            result = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash="a" * 64,
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+                allow_degraded_primary_only=True,
+            )
+
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.body["challenge_kind"], "authorize_guarded_request")
+        self.assertEqual(tuple(result.body["allow_credentials"]), ("cred-primary",))
+
     def test_authorize_begin_creates_d12_bound_authorization_challenge_when_ready(self):
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 
