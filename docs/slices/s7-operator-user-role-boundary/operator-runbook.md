@@ -8,10 +8,13 @@ S7 is not role-encrypted on the founder box. It governs Maez-controlled runtime
 or helper paths, including soul/config/model-routing changes, but it cannot stop
 raw local write access through raw OS filesystem, database, or service edits
 outside Maez's runtime. Those raw OS paths are accepted limitations, not
-permission to bypass S7. When S7.1 mounts a reviewed ceremony, a hardware-key
-touch will not prove the human was uncoerced, will not prove the human
-understood the request, and will not prove the display, OS, or browser was
-uncompromised.
+permission to bypass S7. The S7.1 local ceremony spec is ratified, but not yet
+implemented. Until S7.1 implementation and post-implementation verification
+pass, guarded self-modification remains visibly paused as
+`guarded_self_modification_paused_pending_s7.1`. When S7.1 mounts a reviewed
+ceremony, a hardware-key touch will not prove the human was uncoerced, will not
+prove the human understood the request, and will not prove the display, OS, or
+browser was uncompromised.
 
 ## D22 Bypass Boundary
 
@@ -30,8 +33,11 @@ uncompromised.
 ## Local Founder WebAuthn Ceremony
 
 S7 v1 does not mount the live founder browser/YubiKey ceremony. It defines the
-trust-source grammar and keeps the operator/user boundary fail-closed; the live
-approval surface is committed S7.1 work.
+trust-source grammar and keeps the operator/user boundary fail-closed. The S7.1
+spec now ratifies the local WebAuthn security-key ceremony plan, including
+first-credential bootstrap, authenticated cockpit-to-daemon internal channel,
+primary plus backup registration, and guarded execution-edge consumption. That
+plan is not live until S7.1 code is implemented and verified.
 
 The v1 deferral is enforced by `S7_LIVE_WEBAUTHN_CEREMONY`, default off. When
 the flag is off, WebAuthn registration and guarded-card routes must
@@ -48,16 +54,25 @@ Operational rules:
   other channel as authorization. They may notify only.
 - Do not use fake or virtual authenticator verifiers from daemon or cockpit
   production routes.
-- Do not point the user to witnessed fallback or backup-credential recovery as a
-  live v1 path. Those are S7.1 obligations.
+- Do not point the user to backup-credential registration as a live v1 path.
+  That is S7.1 implementation work.
+- Do not point the user to witnessed social recovery as an S7.1 path. It is
+  deferred as L9 to `S7.2-witnessed-social-recovery`.
 - If no active founder credential exists, guarded work remains blocked with
   `manual_recovery_required`.
 - Founder interim instruction: if a reviewed local credential already exists,
   preserve that YubiKey and do not disable it. If no credential exists, do not
   create one through deferred v1 routes; S7.1 provides the reviewed registration
-  path. When S7.1 lands, register primary and backup credentials promptly. Until
-  then, loss of the only usable founder key is unrecoverable in v1 and guarded
-  work remains blocked until a reviewed recovery path exists.
+  path. When S7.1 implementation is verified and enabled, register primary and
+  backup credentials promptly. Until then, loss of the only usable founder key is
+  unrecoverable in v1 and guarded work remains blocked until a reviewed recovery
+  path exists.
+- Manual recovery instruction: if S7.1 later reports
+  `manual_recovery_required` because both credentials are lost, clone suspicion
+  disabled the only usable key, or the registry is missing/corrupt, stop guarded
+  work and preserve current files/logs for review. Preserve evidence does not
+  mean the `0600` audit JSONL is append-only or tamper-proof; a privileged local
+  filesystem actor remains covered by L1.
 - Remote iPhone approval, Tailscale/VPN exposure, or Telegram deep links require
   a separate reviewed slice before they can authorize guarded work.
 
@@ -83,12 +98,18 @@ Operational rules:
   S7 authority until a future reviewed authorship-attestation slice exists.
 - L8 - Live Ceremony and Autonomous Guarded Self-Modification Deferred: S7 v1
   enforces the role boundary and blocks guarded work without a valid execution
-  grant. It does not mount the live browser/YubiKey ceremony, approval-time
-  Maez-objection producer/signing integration, refusal-history approval
-  escalation, key-loss recovery ceremony, or autonomous/direct guarded
-  soul-write execution. These are committed S7.1 work. Until then, guarded
-  self-modification is paused and surfaced as
+  grant. The S7.1 spec ratifies the plan for the live local WebAuthn
+  security-key ceremony, approval-time Maez-objection producer/signing
+  integration, refusal-history approval escalation, primary/backup credential
+  registration, and autonomous/direct guarded soul-write execution. That plan is
+  not implementation. Until S7.1 code passes post-implementation verification,
+  guarded self-modification is paused and surfaced as
   `guarded_self_modification_paused_pending_s7.1`.
+- L9 - Witnessed Social Recovery Deferred: S7.1 does not implement witnessed
+  social recovery. If both primary and backup founder credentials are
+  unavailable, guarded work enters `manual_recovery_required`. Witnessed
+  recovery is committed to `S7.2-witnessed-social-recovery` unless a later
+  reviewed amendment renames that slice id.
 
 ## Track B Activation Blockers
 

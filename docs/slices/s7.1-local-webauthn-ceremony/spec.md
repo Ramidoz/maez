@@ -1,8 +1,8 @@
 # S7.1 Local WebAuthn Security-Key Ceremony Spec
 
-**Status:** SPEC DRAFT v2 ONLY - folds spec review findings; proposal for second-fold review, not canonical law
+**Status:** Canonical spec; implementation pending
 **Date:** 2026-05-18
-**Maps to:** S7 / Decision 34 / ADR 0039 follow-up; proposed live form of S7 D13 and proposed resolution of S7 L8
+**Maps to:** S7 / Decision 34 / ADR 0039 follow-up; ratified live form of S7 D13 and conditional resolution plan for S7 L8
 **Diagnostic:** [`diagnostic.md`](diagnostic.md)
 **Diagnostic reviews:** [`reviews/diagnostic-claude-council.md`](reviews/diagnostic-claude-council.md),
 [`reviews/diagnostic-codex-panel.md`](reviews/diagnostic-codex-panel.md),
@@ -310,6 +310,10 @@ S7_LIVE_WEBAUTHN_CEREMONY
 
 This is deliberate. The flag means "the reviewed S7.1 ceremony stack is mounted."
 It does not mean every state is ready.
+
+A staged registration-before-authorization enable was considered and rejected:
+one flag mounts the reviewed stack, while setup/readiness states still gate
+registration and authorization separately.
 
 When the flag is off:
 
@@ -750,10 +754,12 @@ match the work item under execution. A function may not pass an artifact minted
 for request A while executing request B; tests must prove that substitution
 fails.
 
-### D15 - Proposed L8 Resolution and Guarded Soul-Write Execution
+### D15 - Conditional L8 Resolution and Guarded Soul-Write Execution
 
-S7.1 proposes to retire S7 L8 fully by wiring the guarded execution consumer,
-including autonomous/direct guarded soul-write paths.
+S7.1 plans to retire S7 L8 fully by wiring the guarded execution consumer,
+including autonomous/direct guarded soul-write paths. That retirement is not
+effective until implementation and post-implementation verification prove the
+positive flow.
 
 Paths in scope:
 
@@ -791,8 +797,8 @@ The health mode `guarded_self_modification_paused_pending_s7.1` clears only when
 - the guarded execution consumer is live for the paths above;
 - witnessed social recovery is either built or named as L9.
 
-If spec review decides the autonomous/direct lane is too large, the spec must
-narrow L8 instead of deleting it. This draft chooses scope-in, but that choice is
+If implementation cannot deliver the autonomous/direct lane, the follow-up must
+narrow L8 instead of deleting it. This spec chooses scope-in, but that choice is
 not treated as accomplished until positive-path tests walk the live producer and
 consumer for `/apply_dream` or the narrowed limitation is written.
 
@@ -843,6 +849,10 @@ S7.1 supplies honest runbook instructions for each cause. If the cause is
 or `schema_invalid`, S7.1 has no local witnessed recovery procedure; the
 instruction is to preserve evidence and enter the S7.2 witnessed-social-recovery
 or later reviewed recovery slice.
+
+Preserve evidence means preserve current files/logs for later review. The
+`0600` audit JSONL is not append-only or tamper-proof, and must not be described
+as forensic proof against S7 L1 filesystem control.
 
 ### D17 - Witnessed Social Recovery Deferred
 
@@ -1124,16 +1134,16 @@ the request, or saw an uncompromised display.
 
 ### L8 - Guarded Self-Modification Pause
 
-Inherited from S7. This draft proposes L8 retirement only if D15's positive
+Inherited from S7. This spec plans L8 retirement only if D15's positive
 autonomous/direct guarded-write flow is built and tested. If that flow is
 narrowed, L8 remains in canon under a narrower name and the health mode remains
 visible.
 
 ### L9 - Witnessed Social Recovery Deferred
 
-Proposed new canonical limitation. S7.1 does not implement witnessed social
-recovery. If both primary and backup credentials are unavailable, guarded work
-enters `manual_recovery_required`.
+Canonical limitation. S7.1 does not implement witnessed social recovery. If
+both primary and backup credentials are unavailable, guarded work enters
+`manual_recovery_required`.
 Witnessed recovery is committed to `S7.2-witnessed-social-recovery` unless a
 later reviewed amendment renames that slice id.
 
@@ -1320,7 +1330,7 @@ S7.1 implementation must write RED tests before code. Minimum contract:
 20. Run manual physical-key proof.
 21. Run both-lane post-implementation verification.
 
-## Proposed Spec Review Questions
+## Spec Review Questions
 
 1. Does the bootstrap token anchor close the first-credential authority gap?
 2. Does the D6 internal-channel lock close the direct-daemon route gap that
@@ -1331,8 +1341,8 @@ S7.1 implementation must write RED tests before code. Minimum contract:
    security-key claim?
 5. Is the registry path/permission/restore posture strong enough for founder
    S7.1?
-6. Does the spec honestly retire L8, or should autonomous/direct soul-write
-   execution remain a narrowed limitation?
+6. Does the spec honestly define the conditional L8 retirement plan, or should
+   autonomous/direct soul-write execution remain a narrowed limitation?
 7. Is witnessed social recovery correctly named as L9/S7.2 rather than built in
    S7.1?
 8. Does the test contract prevent self-assembled authority artifacts?

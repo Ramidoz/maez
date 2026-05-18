@@ -1,6 +1,7 @@
 # ADR 0039: Operator / User Role Boundary v1
 
-**Status:** Accepted; amended 2026-05-17 for Option B live-ceremony deferral
+**Status:** Accepted; amended 2026-05-17 for Option B live-ceremony deferral;
+amended 2026-05-18 for ratified S7.1 local-ceremony plan
 **Date:** 2026-05-17
 
 ## Context
@@ -37,6 +38,13 @@ S7 v1: ship the operator/user boundary wall now, defer the live ceremony and
 guarded execution approval surface to committed S7.1, and enforce that deferral
 with a default-off flag and optional dependency posture rather than dependency
 absence.
+
+The S7.1 local WebAuthn security-key ceremony spec was then ratified by both
+review lanes. That ratifies the plan for the live local ceremony; it does not
+implement it. L8 therefore remains active until S7.1 implementation and
+post-implementation verification pass. L9, witnessed social recovery deferred to
+`S7.2-witnessed-social-recovery`, is live as soon as this amendment is
+canonicalized.
 
 ## Decision
 
@@ -93,17 +101,21 @@ S7 v1 requires:
 - what-you-see-is-what-you-sign rendering, with byte-deterministic rendering
   for a given envelope/renderer version and Maez objection state included for
   voice-seat classes;
-- founder WebAuthn/FIDO2 trust-source grammar on a canonical local origin/RP,
-  with user presence, user verification where configured, verifier interface,
-  challenge store, credential registry, sign-count handling, and fake/virtual
-  authenticator test paths reserved for S7.1;
-- `S7_LIVE_WEBAUTHN_CEREMONY` default off, gating every live WebAuthn route and
-  live producer; dependency absence is not a deferral mechanism, and `webauthn`
-  is optional S7.1 dependency posture rather than mandatory core authority;
+- founder-local WebAuthn security-key trust-source grammar on canonical local
+  origin/RP, with a ratified S7.1 plan for first-credential bootstrap,
+  authenticated cockpit-to-daemon internal channel, primary plus backup
+  credential registration, user presence, class-conditional user verification,
+  verifier interface, challenge store, credential registry, sign-count handling,
+  and isolated fake/virtual authenticator test paths;
+- `S7_LIVE_WEBAUTHN_CEREMONY` default off until S7.1 implementation lands,
+  gating every live WebAuthn route and live producer; dependency absence is not
+  a deferral mechanism, and `webauthn>=2.7,<3` belongs in optional
+  `s7-webauthn` dependency posture rather than mandatory core authority;
 - OTP/TOTP/static codes rejected as covenant authority for work-on-Maez;
 - key-loss honesty posture: if no valid credential exists, guarded work remains
-  blocked as `manual_recovery_required`; backup credentials and witnessed
-  fallback are S7.1 obligations, not S7 v1 live recovery claims;
+  blocked as `manual_recovery_required`; primary plus backup credentials are
+  S7.1 implementation obligations, while witnessed social recovery is deferred
+  as L9 to `S7.2-witnessed-social-recovery`;
 - absent-operator recovery named as a Track-B blocker when
   `bonded_user != operator`;
 - all approval entrypoints, including cockpit, Telegram, daemon handlers, CLI
@@ -173,29 +185,36 @@ S7 also names what it does not solve:
   uncompromised display.
 - It does not sign S6 lineage capsules; that remains a future S6-side
   authorship-attestation slice.
-- It does not mount the live browser/YubiKey ceremony that creates production
-  guarded-work execution grants.
-- It does not execute guarded self-modification, `/apply_dream`, or autonomous
-  guarded soul writes without a valid execution grant; these remain visibly
-  paused as `guarded_self_modification_paused_pending_s7.1`.
-- It does not implement live Maez-objection rendering at signing time, refusal
-  history for approval escalation, or key-loss recovery; those are committed
-  S7.1 work.
+- It does not yet mount the ratified S7.1 local WebAuthn security-key ceremony
+  that creates production guarded-work execution grants.
+- It does not yet execute guarded self-modification, `/apply_dream`, or
+  autonomous guarded soul writes without a valid execution grant; these remain
+  visibly paused as `guarded_self_modification_paused_pending_s7.1` until S7.1
+  implementation and post-implementation verification pass.
+- It does not yet implement the live Maez-objection producer/signing
+  integration, refusal-history approval escalation, primary/backup credential
+  registration, or guarded execution consumer; those are ratified S7.1
+  implementation work.
+- It does not implement witnessed social recovery; both-keys-lost recovery is
+  deferred as L9 to `S7.2-witnessed-social-recovery`.
 - It does not rely on missing packages as a deferral mechanism; the deferral is
   enforced by a default-off runtime flag and optional dependency posture.
 - It does not activate S6 succession, detect death/capacity, or create
   emergency proxy authority.
 
-Implementation is pending. It must start after the canonicalization cooling-off
-night, proceed RED-first from the canonical spec, run both post-implementation
-review lanes, recover any findings, and push only after both lanes ratify.
+S7.1 implementation is pending. It must start after the canonicalization
+cooling-off night unless explicitly waived by the owner with residual momentum
+risk named, proceed RED-first from the canonical spec, run both
+post-implementation review lanes, recover any findings, and push only after
+both lanes ratify.
 
 Changing the custodian default, adding emergency proxy authority, allowing a
 compatibility shim or routing label to carry guarded authority, weakening
 execution-edge artifact consumption, treating Maez voice consultation as a
 caller boolean, making WebAuthn universal law, mounting the live WebAuthn
-ceremony before S7.1 review, or claiming Track B readiness without the named
-blockers requires a new reviewed decision.
+ceremony before S7.1 implementation verification, treating L8 as retired before
+the guarded execution consumer is live, or claiming Track B readiness without
+the named blockers requires a new reviewed decision.
 
 ## References
 
@@ -214,6 +233,10 @@ blockers requires a new reviewed decision.
 - [`docs/slices/s7-operator-user-role-boundary/reviews/amendment-codex-panel.md`](../slices/s7-operator-user-role-boundary/reviews/amendment-codex-panel.md)
 - [`docs/slices/s7-operator-user-role-boundary/reviews/amendment-claude-council-second-fold.md`](../slices/s7-operator-user-role-boundary/reviews/amendment-claude-council-second-fold.md)
 - [`docs/slices/s7-operator-user-role-boundary/reviews/amendment-codex-panel-second-fold.md`](../slices/s7-operator-user-role-boundary/reviews/amendment-codex-panel-second-fold.md)
+- [`docs/slices/s7.1-local-webauthn-ceremony/diagnostic.md`](../slices/s7.1-local-webauthn-ceremony/diagnostic.md)
+- [`docs/slices/s7.1-local-webauthn-ceremony/spec.md`](../slices/s7.1-local-webauthn-ceremony/spec.md)
+- [`docs/slices/s7.1-local-webauthn-ceremony/reviews/spec-claude-council-second-fold.md`](../slices/s7.1-local-webauthn-ceremony/reviews/spec-claude-council-second-fold.md)
+- [`docs/slices/s7.1-local-webauthn-ceremony/reviews/spec-codex-panel-second-fold.md`](../slices/s7.1-local-webauthn-ceremony/reviews/spec-codex-panel-second-fold.md)
 - [`docs/adr/0008-paradise-is-the-generous-default.md`](0008-paradise-is-the-generous-default.md)
 - [`docs/adr/0011-property-with-ethical-wrapper.md`](0011-property-with-ethical-wrapper.md)
 - [`docs/adr/0016-voice-without-termination.md`](0016-voice-without-termination.md)

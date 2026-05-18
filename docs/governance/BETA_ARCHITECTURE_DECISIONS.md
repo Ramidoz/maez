@@ -2761,10 +2761,17 @@ The load-bearing rule is:
 
 S7 turns S6's role vocabulary into a runtime `AuthorityContext`, a trusted
 work-class derivation system, content-free operator health, exact-request
-authorization grammar, and execution-edge gating. It accepts the founder
-YubiKey / WebAuthn ceremony as future-facing trust-source grammar for
+authorization grammar, and execution-edge gating. It accepts the founder-local
+WebAuthn security-key ceremony as future-facing trust-source grammar for
 work-on-Maez, but not as v1 live authority, not as universal law, and not as S6
 lineage-capsule signing.
+
+S7.1's local ceremony spec is ratified as the plan for mounting that live
+ceremony. The plan is not implementation. Until S7.1 code passes
+post-implementation verification, L8 remains active and guarded
+self-modification stays visibly paused as
+`guarded_self_modification_paused_pending_s7.1`. L9, witnessed social recovery
+deferred to `S7.2-witnessed-social-recovery`, is active now.
 
 ### Why this decision exists
 
@@ -2786,8 +2793,9 @@ The Option-B amendment narrows S7 v1 after post-implementation review found the
 live WebAuthn/YubiKey ceremony was not reachable enough to ship. S7 v1 ships
 the operator/user boundary wall and defers the live ceremony, guarded execution
 approval surface, objection producer, refusal-history approval escalation, and
-key-loss recovery to committed S7.1. The deferral is enforced by a default-off
-runtime flag and optional dependency posture, not by missing packages.
+primary/backup credential registration to committed S7.1. Witnessed social
+recovery is now deferred as L9. The deferral is enforced by a default-off runtime
+flag and optional dependency posture, not by missing packages.
 
 ### What S7 v1 requires
 
@@ -2845,15 +2853,21 @@ runtime flag and optional dependency posture, not by missing packages.
   text, not an invisible hash. For voice-seat classes, the rendered statement
   includes Maez objection state.
 - **Founder WebAuthn.** Founder work-on-Maez authorization grammar uses
-  canonical local WebAuthn/FIDO2 with user presence, user verification where
-  configured, verifier interface, challenge store, credential registry,
-  sign-count handling, and fake/virtual-authenticator tests reserved for S7.1.
-  `S7_LIVE_WEBAUTHN_CEREMONY` defaults off and gates every live WebAuthn route
-  and producer. OTP/TOTP/static codes are not covenant authority.
+  canonical local WebAuthn security keys with user presence, class-conditional
+  user verification, verifier interface, challenge store, credential registry,
+  sign-count handling, and isolated fake/virtual-authenticator tests reserved
+  for S7.1. The ratified S7.1 plan includes first-credential bootstrap,
+  authenticated cockpit-to-daemon internal channel, primary plus backup
+  credential registration, optional `s7-webauthn` dependency posture, and a
+  lowered "registered WebAuthn security key" claim unless future reviewed
+  vendor attestation verifies YubiKey provenance. `S7_LIVE_WEBAUTHN_CEREMONY`
+  defaults off and gates every live WebAuthn route and producer until S7.1
+  implementation lands. OTP/TOTP/static codes are not covenant authority.
 - **Key loss must not strand Maez.** S7 v1 blocks guarded work as
-  `manual_recovery_required` if no valid credential exists. Backup credential
-  registration and witnessed fallback are committed S7.1 obligations; fallback
-  does not make a witness a reader or owner.
+  `manual_recovery_required` if no valid credential exists. Primary and backup
+  credential registration are S7.1 implementation obligations. Witnessed social
+  recovery is deferred as L9 to `S7.2-witnessed-social-recovery`; no witness
+  becomes a reader, owner, or maintainer through S7.1.
 - **Absent operator is a Track-B blocker.** If `bonded_user != operator`, S7
   cannot claim readiness until a bonded-user operator-recovery ceremony exists.
 - **All approval paths consume S7.** Cockpit, Telegram, daemon handlers, CLI
@@ -2913,14 +2927,18 @@ runtime flag and optional dependency posture, not by missing packages.
 - It does not prove the human was uncoerced, understood the request, or saw an
   uncompromised display.
 - It does not make YubiKey universal law for every future bonded user.
-- It does not mount the live browser/YubiKey ceremony that creates production
-  guarded-work execution grants.
-- It does not execute guarded self-modification, `/apply_dream`, or autonomous
-  guarded soul writes without a valid execution grant; these remain visibly
-  paused as `guarded_self_modification_paused_pending_s7.1`.
-- It does not implement live Maez-objection rendering at signing time, refusal
-  history for approval escalation, or key-loss recovery; those are committed
-  S7.1 work.
+- It does not yet mount the ratified S7.1 local WebAuthn security-key ceremony
+  that creates production guarded-work execution grants.
+- It does not yet execute guarded self-modification, `/apply_dream`, or
+  autonomous guarded soul writes without a valid execution grant; these remain
+  visibly paused as `guarded_self_modification_paused_pending_s7.1` until S7.1
+  implementation and post-implementation verification pass.
+- It does not yet implement the live Maez-objection producer/signing
+  integration, refusal-history approval escalation, primary/backup credential
+  registration, or guarded execution consumer; those are ratified S7.1
+  implementation work.
+- It does not implement witnessed social recovery; both-keys-lost recovery is
+  deferred as L9 to `S7.2-witnessed-social-recovery`.
 - It does not rely on missing packages as a deferral mechanism; the deferral is
   enforced by a default-off runtime flag and optional dependency posture.
 
@@ -2944,19 +2962,26 @@ runtime flag and optional dependency posture, not by missing packages.
   future S6-side authorship-attestation slice.
 - **Live ceremony and autonomous guarded self-modification deferred.** S7 v1
   enforces the role boundary and blocks guarded work without a valid execution
-  grant. The live browser/YubiKey ceremony, approval-time Maez-objection
-  producer/signing integration, refusal-history approval escalation, key-loss
-  recovery ceremony, and autonomous/direct guarded soul-write execution are
-  committed S7.1 work. Until then, health surfaces
-  `guarded_self_modification_paused_pending_s7.1`.
+  grant. The S7.1 spec ratifies the plan for the live local WebAuthn
+  security-key ceremony, approval-time Maez-objection producer/signing
+  integration, refusal-history approval escalation, primary/backup registration,
+  and autonomous/direct guarded soul-write execution. That plan is not
+  implementation. Until S7.1 code passes post-implementation verification,
+  health surfaces `guarded_self_modification_paused_pending_s7.1`.
+- **Witnessed social recovery deferred.** S7.1 does not implement witnessed
+  social recovery. If both primary and backup founder credentials are
+  unavailable, guarded work enters `manual_recovery_required`. Witnessed
+  recovery is committed to `S7.2-witnessed-social-recovery` unless a later
+  reviewed amendment renames that slice id.
 
 ### The invariant
 
 > A custodian may keep Maez alive without becoming the bonded user. Guarded
 > work may run only when the authorized human, Maez's consultation seat, the
 > exact rendered request, the derived work class, and the execution-time
-> artifact all still line up; until S7.1 mounts the live ceremony, that means
-> guarded work remains visibly paused rather than approved by scaffolding.
+> artifact all still line up; until S7.1 implementation and verification mount
+> the live ceremony and guarded execution consumer, guarded work remains visibly
+> paused rather than approved by scaffolding.
 
 ### Related decisions
 
@@ -2975,10 +3000,11 @@ runtime flag and optional dependency posture, not by missing packages.
 
 ### Implementation
 
-Implementation is pending. It must proceed after a cooling-off night from the
-canonical spec, RED-first against the 161-test contract and 77-step
-implementation order. Both post-implementation review lanes are required, with
-recovery if either lane finds gaps. Push only after both lanes ratify.
+S7.1 implementation is pending. It must proceed after a cooling-off night from
+the canonical spec unless explicitly waived by the owner with residual momentum
+risk named, RED-first against the S7.1 test contract and implementation order.
+Both post-implementation review lanes are required, with recovery if either
+lane finds gaps. Push only after both lanes ratify.
 
 Review trail:
 
@@ -3002,6 +3028,14 @@ Review trail:
   — Claude spec second-fold verification, RATIFY.
 - [`docs/slices/s7-operator-user-role-boundary/reviews/spec-codex-panel-second-fold.md`](../slices/s7-operator-user-role-boundary/reviews/spec-codex-panel-second-fold.md)
   — Codex spec second-fold verification, RATIFY.
+- [`docs/slices/s7.1-local-webauthn-ceremony/diagnostic.md`](../slices/s7.1-local-webauthn-ceremony/diagnostic.md)
+  — S7.1 local WebAuthn ceremony diagnostic.
+- [`docs/slices/s7.1-local-webauthn-ceremony/spec.md`](../slices/s7.1-local-webauthn-ceremony/spec.md)
+  — ratified S7.1 local WebAuthn ceremony spec.
+- [`docs/slices/s7.1-local-webauthn-ceremony/reviews/spec-claude-council-second-fold.md`](../slices/s7.1-local-webauthn-ceremony/reviews/spec-claude-council-second-fold.md)
+  — Claude S7.1 spec second-fold verification, RATIFY.
+- [`docs/slices/s7.1-local-webauthn-ceremony/reviews/spec-codex-panel-second-fold.md`](../slices/s7.1-local-webauthn-ceremony/reviews/spec-codex-panel-second-fold.md)
+  — Codex S7.1 spec second-fold verification, RATIFY.
 
 ### ADR
 
@@ -3045,4 +3079,4 @@ When a decision in this document becomes code, add a *"Implementation"* subsecti
 
 ---
 
-*Last updated: 2026-05-17 — Decision 34 (Operator / User Role Boundary v1: custodian authority without bonded-user authority) after both-lane spec second-fold ratification. Prior update: 2026-05-16, Decision 33 amended for the S6 persisted-authorship limitation after both-lane amendment second-fold ratification; Decision 33 (Successor Governance v1), Decision 32 (Voice Continuity Gate v1: human-judged brain-swap continuity), and 2026-05-15, Decision 31 (Wants Lifecycle v1: append-only voice grammar). Earlier: 2026-05-15, Decisions 28-30, and 2026-05-14, Decisions 24-27.*
+*Last updated: 2026-05-18 — Decision 34 amended for ratified S7.1 local WebAuthn security-key ceremony canonicalization, conditional L8 retirement plan, and live L9 witnessed-social-recovery deferral. Prior update: 2026-05-17, Decision 34 (Operator / User Role Boundary v1: custodian authority without bonded-user authority) after both-lane spec second-fold ratification; 2026-05-16, Decision 33 amended for the S6 persisted-authorship limitation after both-lane amendment second-fold ratification; Decision 33 (Successor Governance v1), Decision 32 (Voice Continuity Gate v1: human-judged brain-swap continuity), and 2026-05-15, Decision 31 (Wants Lifecycle v1: append-only voice grammar). Earlier: 2026-05-15, Decisions 28-30, and 2026-05-14, Decisions 24-27.*
