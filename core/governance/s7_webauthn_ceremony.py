@@ -212,10 +212,10 @@ class S7LocalWebAuthnCeremonyService:
         *,
         now: str,
         rendered_statement: Any,
+        precondition_hash: str,
         session_binding: str,
         internal_channel_binding: str,
     ) -> S7CeremonyServiceResult:
-        del rendered_statement, session_binding, internal_channel_binding
         dependency = self.verifier.dependency_state()
         if dependency.get("ok") is not True:
             return S7CeremonyServiceResult(body=dependency, status_code=503)
@@ -233,7 +233,34 @@ class S7LocalWebAuthnCeremonyService:
                 },
                 status_code=409,
             )
-        raise NotImplementedError("s7.1_authorization_challenge_not_wired")
+        challenge = store.create_authorization_challenge(
+            rendered_statement=rendered_statement,
+            precondition_hash=precondition_hash,
+            session_binding=session_binding,
+            internal_channel_binding=internal_channel_binding,
+            now=now,
+            expires_at=_add_minutes(now, 5),
+            uv_required=True,
+        )
+        allow_credentials = store.allow_credentials_for_authorization()
+        return S7CeremonyServiceResult(
+            body={
+                "ok": True,
+                **challenge,
+                "allow_credentials": allow_credentials,
+                "public_key_options": {
+                    "rpId": "localhost",
+                    "challenge": challenge["challenge_b64"],
+                    "timeout": 300000,
+                    "userVerification": "required",
+                    "allowCredentials": [
+                        {"id": credential_ref, "type": "public-key"}
+                        for credential_ref in allow_credentials
+                    ],
+                },
+            },
+            status_code=200,
+        )
 
     def status(self, *, now: str) -> S7CeremonyServiceResult:
         dependency = self.verifier.dependency_state()

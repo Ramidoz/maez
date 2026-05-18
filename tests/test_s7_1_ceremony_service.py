@@ -127,6 +127,37 @@ class S71CeremonyServiceTests(unittest.TestCase):
             rendered_at=NOW,
         )
 
+    def _credential_record(self, credential_ref: str, *, kind: str):
+        from core.governance.s7_webauthn_bootstrap import FounderWebAuthnCredentialRecord
+
+        return FounderWebAuthnCredentialRecord.build(
+            credential_ref=credential_ref,
+            actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+            role_names=("bonded_user",),
+            public_key=f"public-key-{credential_ref}",
+            sign_count=0,
+            rp_id="localhost",
+            origin="http://localhost:11437",
+            created_at=NOW,
+            backup_credential=(kind == "backup"),
+            enabled=True,
+            credential_kind=kind,
+            label=f"{kind} key",
+            registration_challenge_id=f"challenge-{credential_ref}",
+            attestation_format="packed",
+            aaguid="00112233-4455-6677-8899-aabbccddeeff",
+            authenticator_attachment="cross-platform",
+            backup_eligible=False,
+            backed_up=False,
+            transports=("usb",),
+            library_name="webauthn",
+            library_version="2.7.1",
+            sign_count_mode="advancing",
+            uv_capable=True,
+            uv_required_for_guarded=True,
+            distinct_device_confidence="confirmed_distinct",
+        )
+
     def test_018_missing_dependency_fails_before_store_work(self):
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 
@@ -540,6 +571,7 @@ class S71CeremonyServiceTests(unittest.TestCase):
             result = service.authorize_begin(
                 now=NOW,
                 rendered_statement=self._rendered_statement(),
+                precondition_hash="a" * 64,
                 session_binding="session-auth",
                 internal_channel_binding="daemon-channel",
             )
@@ -547,6 +579,42 @@ class S71CeremonyServiceTests(unittest.TestCase):
             self.assertEqual(result.status_code, 409)
             self.assertEqual(result.body["error"], "s7_credential_setup_incomplete")
             self.assertEqual(result.body["ceremony_mode"], "degraded")
+
+    def test_authorize_begin_creates_d12_bound_authorization_challenge_when_ready(self):
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+            rendered = self._rendered_statement()
+
+            result = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash="a" * 64,
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+            )
+            challenge = store.authorization_challenge_for_finish(
+                challenge_id=result.body["challenge_id"],
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+                now=NOW,
+            )
+
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.body["challenge_kind"], "authorize_guarded_request")
+        self.assertEqual(result.body["request_id"], rendered.request_id)
+        self.assertTrue(result.body["uv_required"])
+        self.assertEqual(tuple(result.body["allow_credentials"]), ("cred-backup", "cred-primary"))
+        assert challenge is not None
+        self.assertEqual(challenge["rendered_text_hash"], rendered.rendered_text_hash)
+        self.assertEqual(challenge["request_envelope_hash"], rendered.request_envelope_hash)
 
 
 if __name__ == "__main__":

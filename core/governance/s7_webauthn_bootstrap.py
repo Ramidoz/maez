@@ -103,7 +103,15 @@ CREATE TABLE IF NOT EXISTS s7_ceremony_challenges (
     internal_channel_binding_hash TEXT,
     request_id TEXT,
     uv_required INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT ''
+    created_at TEXT NOT NULL DEFAULT '',
+    request_envelope_hash TEXT NOT NULL DEFAULT '',
+    rendered_text_hash TEXT NOT NULL DEFAULT '',
+    action_params_hash TEXT NOT NULL DEFAULT '',
+    precondition_hash TEXT NOT NULL DEFAULT '',
+    authority_context_hash TEXT NOT NULL DEFAULT '',
+    maez_voice_consultation_hash TEXT,
+    derived_aggregation_group TEXT NOT NULL DEFAULT '',
+    nonce TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS s7_refusal_history (
@@ -299,6 +307,14 @@ class S7WebAuthnBootstrapStore:
             "request_id": "TEXT",
             "uv_required": "INTEGER NOT NULL DEFAULT 0",
             "created_at": "TEXT NOT NULL DEFAULT ''",
+            "request_envelope_hash": "TEXT NOT NULL DEFAULT ''",
+            "rendered_text_hash": "TEXT NOT NULL DEFAULT ''",
+            "action_params_hash": "TEXT NOT NULL DEFAULT ''",
+            "precondition_hash": "TEXT NOT NULL DEFAULT ''",
+            "authority_context_hash": "TEXT NOT NULL DEFAULT ''",
+            "maez_voice_consultation_hash": "TEXT",
+            "derived_aggregation_group": "TEXT NOT NULL DEFAULT ''",
+            "nonce": "TEXT NOT NULL DEFAULT ''",
         }
         for column, ddl in challenge_desired.items():
             if column not in challenge_existing:
@@ -698,6 +714,13 @@ class S7WebAuthnBootstrapStore:
             if record.enabled
         )
 
+    def allow_credentials_for_authorization(self) -> tuple[str, ...]:
+        return tuple(
+            record.credential_ref
+            for record in self.list_credentials()
+            if record.enabled and "bonded_user" in record.role_names
+        )
+
     def credential_can_authorize(self, credential_ref: str) -> bool:
         record = self.get_credential(credential_ref)
         return bool(record and record.enabled and "bonded_user" in record.role_names)
@@ -850,6 +873,143 @@ class S7WebAuthnBootstrapStore:
             "session_binding_hash": session_binding_hash,
             "expires_at": expires_at,
         }
+
+    def create_authorization_challenge(
+        self,
+        *,
+        rendered_statement: Any,
+        precondition_hash: str,
+        session_binding: str,
+        internal_channel_binding: str,
+        now: str,
+        expires_at: str,
+        uv_required: bool,
+    ) -> dict[str, Any]:
+        _parse_time(now)
+        _parse_time(expires_at)
+        _validate_hash64_text(precondition_hash, field="precondition_hash")
+        challenge_id = f"s7auth_{uuid.uuid4().hex}"
+        challenge_b64 = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii").rstrip("=")
+        session_binding_hash = _fingerprint(session_binding)
+        internal_channel_binding_hash = _fingerprint(internal_channel_binding)
+        d12_parts = (
+            str(rendered_statement.request_id),
+            str(rendered_statement.request_envelope_hash),
+            str(rendered_statement.rendered_text_hash),
+            str(rendered_statement.action_params_hash),
+            precondition_hash,
+            str(rendered_statement.authority_context_hash),
+            str(rendered_statement.maez_voice_consultation_hash or ""),
+            str(rendered_statement.derived_aggregation_group),
+            str(rendered_statement.nonce),
+        )
+        challenge_hash = _fingerprint(
+            "|".join(
+                (
+                    challenge_id,
+                    "authorize_guarded_request",
+                    challenge_b64,
+                    "localhost",
+                    "http://localhost:11437",
+                    "localhost:11437",
+                    session_binding_hash,
+                    internal_channel_binding_hash,
+                    *d12_parts,
+                    now,
+                    expires_at,
+                )
+            )
+        )
+        with closing(self._conn()) as conn:
+            conn.execute(
+                """
+                INSERT INTO s7_ceremony_challenges(
+                    challenge_id, challenge_kind, expires_at, consumed_at, invalidated_at,
+                    challenge_hash, challenge_b64, rp_id, origin, host, session_binding_hash,
+                    internal_channel_binding_hash, request_id, uv_required, created_at,
+                    request_envelope_hash, rendered_text_hash, action_params_hash,
+                    precondition_hash, authority_context_hash, maez_voice_consultation_hash,
+                    derived_aggregation_group, nonce
+                ) VALUES (?, 'authorize_guarded_request', ?, NULL, NULL, ?, ?,
+                          'localhost', 'http://localhost:11437', 'localhost:11437',
+                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    challenge_id,
+                    expires_at,
+                    challenge_hash,
+                    challenge_b64,
+                    session_binding_hash,
+                    internal_channel_binding_hash,
+                    rendered_statement.request_id,
+                    1 if uv_required else 0,
+                    now,
+                    rendered_statement.request_envelope_hash,
+                    rendered_statement.rendered_text_hash,
+                    rendered_statement.action_params_hash,
+                    precondition_hash,
+                    rendered_statement.authority_context_hash,
+                    rendered_statement.maez_voice_consultation_hash,
+                    rendered_statement.derived_aggregation_group,
+                    rendered_statement.nonce,
+                ),
+            )
+        return {
+            "challenge_id": challenge_id,
+            "challenge_kind": "authorize_guarded_request",
+            "challenge_hash": challenge_hash,
+            "challenge_b64": challenge_b64,
+            "rp_id": "localhost",
+            "origin": "http://localhost:11437",
+            "host": "localhost:11437",
+            "request_id": rendered_statement.request_id,
+            "request_envelope_hash": rendered_statement.request_envelope_hash,
+            "rendered_text_hash": rendered_statement.rendered_text_hash,
+            "action_params_hash": rendered_statement.action_params_hash,
+            "precondition_hash": precondition_hash,
+            "authority_context_hash": rendered_statement.authority_context_hash,
+            "maez_voice_consultation_hash": rendered_statement.maez_voice_consultation_hash,
+            "derived_aggregation_group": rendered_statement.derived_aggregation_group,
+            "nonce": rendered_statement.nonce,
+            "session_binding_hash": session_binding_hash,
+            "internal_channel_binding_hash": internal_channel_binding_hash,
+            "uv_required": uv_required,
+            "expires_at": expires_at,
+        }
+
+    def authorization_challenge_for_finish(
+        self,
+        *,
+        challenge_id: str,
+        session_binding: str,
+        internal_channel_binding: str,
+        now: str,
+    ) -> dict[str, Any] | None:
+        now_text = _parse_time(now).isoformat()
+        session_binding_hash = _fingerprint(session_binding)
+        internal_channel_binding_hash = _fingerprint(internal_channel_binding)
+        with closing(self._conn()) as conn:
+            row = conn.execute(
+                """
+                SELECT challenge_id, challenge_kind, challenge_hash, rp_id, origin, host,
+                       challenge_b64, session_binding_hash, internal_channel_binding_hash,
+                       expires_at, consumed_at, invalidated_at, request_id,
+                       request_envelope_hash, rendered_text_hash, action_params_hash,
+                       precondition_hash, authority_context_hash,
+                       maez_voice_consultation_hash, derived_aggregation_group,
+                       nonce, uv_required
+                FROM s7_ceremony_challenges
+                WHERE challenge_id = ?
+                  AND challenge_kind = 'authorize_guarded_request'
+                  AND session_binding_hash = ?
+                  AND internal_channel_binding_hash = ?
+                  AND consumed_at IS NULL
+                  AND invalidated_at IS NULL
+                  AND expires_at > ?
+                """,
+                (challenge_id, session_binding_hash, internal_channel_binding_hash, now_text),
+            ).fetchone()
+        return None if row is None else dict(row)
 
     def registration_challenge_for_finish(
         self,
