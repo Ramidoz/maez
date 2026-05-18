@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import base64
+import io
 import os
 import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
+from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 NOW = "2026-05-18T09:00:00+00:00"
@@ -68,6 +72,41 @@ class S71WebAuthnBootstrapTests(unittest.TestCase):
             self.assertIsNotNone(row)
             self.assertNotIn(intent.raw_token, row[0])
             self.assertTrue(row[0].startswith("hmac:s7.1:bootstrap:"))
+
+    def test_002a_bootstrap_cli_prints_intent_id_and_token_for_browser_entry(self):
+        from core.governance import s7_webauthn_bootstrap as bootstrap
+
+        class Store:
+            def __init__(self, root):
+                self.root = root
+
+            def create_bootstrap_intent(self, **_kwargs):
+                return SimpleNamespace(
+                    intent_id="s7_bootstrap_test",
+                    raw_token="raw-token-for-browser",
+                    expires_at=FUTURE,
+                )
+
+        out = io.StringIO()
+        with patch.object(bootstrap, "S7WebAuthnBootstrapStore", Store):
+            with redirect_stdout(out):
+                result = bootstrap.main(
+                    [
+                        "create",
+                        "--purpose",
+                        "register_primary",
+                        "--ttl-minutes",
+                        "10",
+                        "--store-root",
+                        str(self.root),
+                    ]
+                )
+
+        text = out.getvalue()
+        self.assertEqual(result, 0)
+        self.assertIn("Intent id: s7_bootstrap_test", text)
+        self.assertIn("Token: raw-token-for-browser", text)
+        self.assertIn("Expires at: " + FUTURE, text)
 
     def test_003_expired_bootstrap_token_is_rejected(self):
         store = self._store()

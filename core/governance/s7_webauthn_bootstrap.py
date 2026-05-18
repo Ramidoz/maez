@@ -1512,7 +1512,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         print("S7.1 first-credential bootstrap token")
         print("Warning: this is a bearer secret visible to the terminal under S7 L1.")
-        print(intent.raw_token)
+        print(f"Intent id: {intent.intent_id}")
+        print(f"Token: {intent.raw_token}")
         print(f"Expires at: {intent.expires_at}")
         return 0
     raise RuntimeError("unreachable")
