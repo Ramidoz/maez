@@ -1137,6 +1137,8 @@ _S7_WEBAUTHN_PROOF_PAGE = r"""<!DOCTYPE html>
   <section>
     <h2>2. Register backup</h2>
     <p>Requires an existing reviewed S7 authorization for backup registration.</p>
+    <label>Backup-registration authorization card request id</label>
+    <input id="backupAuthorizationRequestId" autocomplete="off">
     <label>S7 authorization artifact id for backup registration</label>
     <input id="backupArtifactId" autocomplete="off">
     <label>Session binding</label>
@@ -1237,6 +1239,7 @@ async function registerCredential(kind) {
     beginBody.bootstrap_token = bootstrapToken.value;
   } else {
     beginBody.s7_authorization_artifact_id = backupArtifactId.value;
+    beginBody.backup_authorization_request_id = backupAuthorizationRequestId.value;
   }
   const begin = await jsonFetch("/api/v1/s7/webauthn/register/begin", beginBody);
   appendLog(`${kind} register begin`, begin);

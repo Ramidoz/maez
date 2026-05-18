@@ -301,6 +301,7 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
         self.assertIn("/api/v1/s7/webauthn/register/begin", text)
         self.assertIn("/api/v1/s7/webauthn/register/finish", text)
         self.assertIn("/api/v1/s7/cards/", text)
+        self.assertIn("backup_authorization_request_id", text)
         self.assertIn("bufferToB64url", text)
         self.assertIn("b64urlToBuffer", text)
 
