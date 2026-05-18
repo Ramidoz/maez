@@ -337,6 +337,32 @@ class S71CeremonyServiceTests(unittest.TestCase):
             self.assertEqual(result.body["origin"], "http://localhost:11437")
             self.assertTrue(store.challenge_is_active(result.body["challenge_id"], now=NOW))
 
+    def test_055a_register_begin_returns_browser_usable_public_key_options(self):
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, intent = self._store_with_bootstrap(tmp)
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_AvailableVerifier(),
+                store_factory=lambda: store,
+            )
+
+            result = service.register_begin(
+                now=NOW,
+                request_json={
+                    "bootstrap_intent_id": intent.intent_id,
+                    "bootstrap_token": intent.raw_token,
+                    "session_binding": "session-a",
+                },
+            )
+
+        options = result.body["public_key_options"]
+        self.assertEqual(options["rp"], {"id": "localhost", "name": "Maez local founder ceremony"})
+        self.assertEqual(options["user"]["name"], "founder")
+        self.assertRegex(options["user"]["id"], r"^[A-Za-z0-9_-]+$")
+        self.assertIn({"type": "public-key", "alg": -7}, options["pubKeyCredParams"])
+        self.assertEqual(options["authenticatorSelection"]["userVerification"], "required")
+
     def test_056_expired_registration_challenge_blocks_finish(self):
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 

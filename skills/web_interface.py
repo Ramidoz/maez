@@ -1097,6 +1097,190 @@ def cockpit_index():
     return send_from_directory(COCKPIT_DIR, "index.html")
 
 
+_S7_WEBAUTHN_PROOF_PAGE = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>S7.1 Manual Physical-Key Proof</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { max-width: 980px; margin: 32px auto; padding: 0 20px; font: 16px/1.5 ui-sans-serif, system-ui, sans-serif; background: #f8f3e8; color: #241b14; }
+    h1 { font-size: 32px; margin-bottom: 8px; }
+    section { background: #fffaf0; border: 1px solid #e2d4bd; border-radius: 14px; padding: 18px; margin: 18px 0; }
+    label { display: block; font-weight: 700; margin-top: 12px; }
+    input, textarea { box-sizing: border-box; width: 100%; padding: 10px; border-radius: 10px; border: 1px solid #bba98f; background: #fff; color: #241b14; }
+    textarea { min-height: 90px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    button { margin-top: 12px; padding: 10px 14px; border: 0; border-radius: 999px; background: #315b49; color: white; font-weight: 800; cursor: pointer; }
+    button.secondary { background: #7b4f28; }
+    pre { white-space: pre-wrap; background: #1f1914; color: #f8f3e8; padding: 14px; border-radius: 12px; }
+    .warn { color: #7b2f16; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h1>S7.1 Manual Physical-Key Proof</h1>
+  <p class="warn">Local proof surface only. Use Rohit's local browser at http://localhost:11437 with real physical security keys.</p>
+  <section>
+    <h2>Status</h2>
+    <button onclick="loadStatus()">Refresh status</button>
+    <pre id="status">not loaded</pre>
+  </section>
+  <section>
+    <h2>1. Register primary</h2>
+    <label>Bootstrap intent id</label>
+    <input id="bootstrapIntentId" autocomplete="off">
+    <label>Bootstrap token</label>
+    <input id="bootstrapToken" autocomplete="off">
+    <label>Session binding</label>
+    <input id="primarySession" value="manual-proof-primary">
+    <button onclick="registerCredential('primary')">Register primary with navigator.credentials.create</button>
+  </section>
+  <section>
+    <h2>2. Register backup</h2>
+    <p>Requires an existing reviewed S7 authorization for backup registration.</p>
+    <label>S7 authorization artifact id for backup registration</label>
+    <input id="backupArtifactId" autocomplete="off">
+    <label>Session binding</label>
+    <input id="backupSession" value="manual-proof-backup">
+    <button onclick="registerCredential('backup')" class="secondary">Register backup with navigator.credentials.create</button>
+  </section>
+  <section>
+    <h2>3. Authorize guarded card</h2>
+    <label>Pending guarded card request id</label>
+    <input id="cardRequestId" autocomplete="off">
+    <label>Credential ref</label>
+    <input id="credentialRef" autocomplete="off">
+    <label>Session binding</label>
+    <input id="authSession" value="manual-proof-auth">
+    <button onclick="authorizeCard()">Authorize with navigator.credentials.get</button>
+  </section>
+  <section>
+    <h2>Proof log</h2>
+    <button onclick="copyProofLog()">Copy proof log</button>
+    <textarea id="proofLog" readonly></textarea>
+  </section>
+<script>
+function b64urlToBuffer(value) {
+  const pad = "=".repeat((4 - value.length % 4) % 4);
+  const b64 = (value + pad).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(b64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out.buffer;
+}
+function bufferToB64url(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let raw = "";
+  for (const byte of bytes) raw += String.fromCharCode(byte);
+  return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+function encodeCredentialResponse(credential) {
+  const response = credential.response;
+  const body = {
+    id: credential.id,
+    rawId: bufferToB64url(credential.rawId),
+    type: credential.type,
+    response: {}
+  };
+  for (const key of ["clientDataJSON", "attestationObject", "authenticatorData", "signature", "userHandle"]) {
+    if (response[key]) body.response[key] = bufferToB64url(response[key]);
+  }
+  return body;
+}
+function normalizeCreationOptions(options) {
+  const publicKey = {...options};
+  publicKey.challenge = b64urlToBuffer(publicKey.challenge);
+  publicKey.user = {...publicKey.user, id: b64urlToBuffer(publicKey.user.id)};
+  publicKey.excludeCredentials = (publicKey.excludeCredentials || []).map((cred) => ({
+    ...cred,
+    id: b64urlToBuffer(cred.id),
+  }));
+  return {publicKey};
+}
+function normalizeRequestOptions(options) {
+  const publicKey = {...options};
+  publicKey.challenge = b64urlToBuffer(publicKey.challenge);
+  publicKey.allowCredentials = (publicKey.allowCredentials || []).map((cred) => ({
+    ...cred,
+    id: b64urlToBuffer(cred.id),
+  }));
+  return {publicKey};
+}
+function appendLog(label, payload) {
+  const log = document.getElementById("proofLog");
+  log.value += `\n[${new Date().toISOString()}] ${label}\n${JSON.stringify(payload, null, 2)}\n`;
+  log.scrollTop = log.scrollHeight;
+}
+async function jsonFetch(url, body) {
+  const response = await fetch(url, {
+    method: body === undefined ? "GET" : "POST",
+    headers: body === undefined ? {} : {"Content-Type": "application/json"},
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const payload = await response.json();
+  if (!response.ok || payload.ok === false) throw Object.assign(new Error(payload.error || response.statusText), {payload, status: response.status});
+  return payload;
+}
+async function loadStatus() {
+  try {
+    const status = await jsonFetch("/api/v1/s7/webauthn/status");
+    document.getElementById("status").textContent = JSON.stringify(status, null, 2);
+    appendLog("status", status);
+  } catch (err) {
+    appendLog("status error", err.payload || String(err));
+  }
+}
+async function registerCredential(kind) {
+  const session = kind === "primary" ? primarySession.value : backupSession.value;
+  const beginBody = {registration_class: kind, session_binding: session};
+  if (kind === "primary") {
+    beginBody.bootstrap_intent_id = bootstrapIntentId.value;
+    beginBody.bootstrap_token = bootstrapToken.value;
+  } else {
+    beginBody.s7_authorization_artifact_id = backupArtifactId.value;
+  }
+  const begin = await jsonFetch("/api/v1/s7/webauthn/register/begin", beginBody);
+  appendLog(`${kind} register begin`, begin);
+  const credential = await navigator.credentials.create(normalizeCreationOptions(begin.public_key_options));
+  const finish = await jsonFetch("/api/v1/s7/webauthn/register/finish", {
+    registration_class: kind,
+    challenge_id: begin.challenge_id,
+    session_binding: session,
+    bootstrap_intent_id: beginBody.bootstrap_intent_id,
+    bootstrap_token: beginBody.bootstrap_token,
+    registration_response: encodeCredentialResponse(credential),
+  });
+  appendLog(`${kind} register finish`, finish);
+  await loadStatus();
+}
+async function authorizeCard() {
+  const requestId = cardRequestId.value;
+  const session = authSession.value;
+  const begin = await jsonFetch(`/api/v1/s7/cards/${encodeURIComponent(requestId)}/webauthn/begin`, {session_binding: session});
+  appendLog("authorize begin", begin);
+  const credential = await navigator.credentials.get(normalizeRequestOptions(begin.public_key_options));
+  const finish = await jsonFetch(`/api/v1/s7/cards/${encodeURIComponent(requestId)}/webauthn/finish`, {
+    session_binding: session,
+    challenge_id: begin.challenge_id,
+    credential_ref: credentialRef.value || credential.id,
+    authentication_response: encodeCredentialResponse(credential),
+  });
+  appendLog("authorize finish", finish);
+}
+async function copyProofLog() {
+  await navigator.clipboard.writeText(document.getElementById("proofLog").value);
+}
+loadStatus();
+</script>
+</body>
+</html>
+"""
+
+
+@app.route("/cockpit/s7-webauthn-proof")
+def cockpit_s7_webauthn_proof():
+    return _S7_WEBAUTHN_PROOF_PAGE, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
 @app.route("/cockpit/<path:filename>")
 def cockpit_static(filename: str):
     # .jsx served as application/javascript so Babel-in-browser can

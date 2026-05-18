@@ -290,6 +290,20 @@ class CockpitS7WebAuthnDeferredProxy(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(body["error"], "s7_untrusted_origin")
 
+    def test_s7_webauthn_manual_proof_page_drives_browser_webauthn(self):
+        response = self.client.get("/cockpit/s7-webauthn-proof")
+        text = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("S7.1 Manual Physical-Key Proof", text)
+        self.assertIn("navigator.credentials.create", text)
+        self.assertIn("navigator.credentials.get", text)
+        self.assertIn("/api/v1/s7/webauthn/register/begin", text)
+        self.assertIn("/api/v1/s7/webauthn/register/finish", text)
+        self.assertIn("/api/v1/s7/cards/", text)
+        self.assertIn("bufferToB64url", text)
+        self.assertIn("b64urlToBuffer", text)
+
 
 class _FakeFile:
     """Tiny stand-in for the .read() interface HTTPError exposes via fp.

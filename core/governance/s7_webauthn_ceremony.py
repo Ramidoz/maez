@@ -133,8 +133,13 @@ class S7LocalWebAuthnCeremonyService:
                     "exclude_credentials": exclude_credentials,
                     "public_key_options": {
                         "rp": {"id": "localhost", "name": "Maez local founder ceremony"},
-                        "user": {"name": "founder-backup", "displayName": "Founder backup"},
+                        "user": {
+                            "id": "Zm91bmRlci1iYWNrdXA",
+                            "name": "founder-backup",
+                            "displayName": "Founder backup",
+                        },
                         "challenge": challenge["challenge_b64"],
+                        "pubKeyCredParams": _public_key_credential_params(),
                         "timeout": 600000,
                         "attestation": "direct",
                         "excludeCredentials": [
@@ -180,8 +185,13 @@ class S7LocalWebAuthnCeremonyService:
                 **challenge,
                 "public_key_options": {
                     "rp": {"id": "localhost", "name": "Maez local founder ceremony"},
-                    "user": {"name": "founder", "displayName": "Founder"},
+                    "user": {
+                        "id": "Zm91bmRlcg",
+                        "name": "founder",
+                        "displayName": "Founder",
+                    },
                     "challenge": challenge["challenge_b64"],
+                    "pubKeyCredParams": _public_key_credential_params(),
                     "timeout": 600000,
                     "attestation": "direct",
                     "authenticatorSelection": {
@@ -823,6 +833,13 @@ def _optional_bool(value: Any) -> bool | None:
     if value is None:
         return None
     return bool(value)
+
+
+def _public_key_credential_params() -> tuple[dict[str, int | str], ...]:
+    return (
+        {"type": "public-key", "alg": -7},
+        {"type": "public-key", "alg": -257},
+    )
 
 
 def _add_minutes(value: str, minutes: int) -> str:
