@@ -691,7 +691,12 @@ class DreamState:
             "unified_diff": row[9],
         }
 
-    def apply_proposal(self, prop_id: int) -> tuple[bool, str]:
+    def apply_proposal(
+        self,
+        prop_id: int,
+        *,
+        s7_execution_authorization: object | None = None,
+    ) -> tuple[bool, str]:
         """Apply a proposal: write it to soul.md via action_engine and
         mark the DB row as 'applied'. Returns (ok, message)."""
         prop = self.get_proposal(prop_id)
@@ -705,6 +710,8 @@ class DreamState:
 
         if self.action_engine is None:
             return False, "action_engine not available"
+        if s7_execution_authorization is None:
+            return False, "S7 execution authorization required before /apply_dream soul write"
 
         try:
             result = self.action_engine.write_soul_note(note)
