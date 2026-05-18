@@ -105,6 +105,21 @@ CREATE TABLE IF NOT EXISTS s7_ceremony_challenges (
     uv_required INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS s7_refusal_history (
+    record_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    request_envelope_hash TEXT NOT NULL,
+    derived_work_class TEXT NOT NULL,
+    derived_aggregation_group TEXT NOT NULL,
+    affected_refs_json TEXT NOT NULL,
+    proposed_change_class TEXT NOT NULL,
+    rendered_text_hash TEXT NOT NULL,
+    requester_ref TEXT NOT NULL,
+    denial_reason TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    dialog_id TEXT
+);
 """
 
 
@@ -920,6 +935,88 @@ class S7WebAuthnBootstrapStore:
             ).fetchone()
         return row is not None
 
+    def record_refusal_history(
+        self,
+        *,
+        envelope: Any,
+        rendered_text_hash: str,
+        requester_ref: str,
+        denial_reason: str,
+        created_at: str,
+        dialog_id: str | None = None,
+    ) -> str:
+        from core.governance import operator_user_boundary as s7
+
+        _validate_hash64_text(rendered_text_hash, field="rendered_text_hash")
+        if not requester_ref:
+            raise ValueError("s7_refusal_requester_ref_required")
+        if not denial_reason:
+            raise ValueError("s7_refusal_denial_reason_required")
+        _parse_time(created_at)
+        record = s7.build_request_history_record(
+            envelope=envelope,
+            outcome="refused",
+            created_at=created_at,
+            dialog_id=dialog_id,
+        )
+        record_id = f"s7ref_{uuid.uuid4().hex}"
+        with closing(self._conn()) as conn:
+            conn.execute(
+                """
+                INSERT INTO s7_refusal_history(
+                    record_id, request_id, request_envelope_hash, derived_work_class,
+                    derived_aggregation_group, affected_refs_json, proposed_change_class,
+                    rendered_text_hash, requester_ref, denial_reason, created_at, dialog_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record_id,
+                    record.request_id,
+                    record.request_envelope_hash,
+                    record.derived_work_class,
+                    record.derived_aggregation_group,
+                    json.dumps(list(record.affected_refs), separators=(",", ":")),
+                    record.proposed_change_class,
+                    rendered_text_hash,
+                    requester_ref,
+                    denial_reason,
+                    record.created_at,
+                    record.dialog_id,
+                ),
+            )
+        return record_id
+
+    def refusal_history_for_envelope(self, envelope: Any) -> tuple[Any, ...]:
+        from core.governance import operator_user_boundary as s7
+
+        group = getattr(envelope, "derived_aggregation_group", "")
+        with closing(self._conn()) as conn:
+            rows = conn.execute(
+                """
+                SELECT request_id, request_envelope_hash, derived_work_class,
+                       derived_aggregation_group, affected_refs_json,
+                       proposed_change_class, created_at, dialog_id
+                FROM s7_refusal_history
+                WHERE derived_aggregation_group = ?
+                ORDER BY created_at, record_id
+                """,
+                (group,),
+            ).fetchall()
+        return tuple(
+            s7.S7RequestHistoryRecord(
+                request_id=row["request_id"],
+                request_envelope_hash=row["request_envelope_hash"],
+                derived_work_class=row["derived_work_class"],
+                derived_aggregation_group=row["derived_aggregation_group"],
+                affected_refs=tuple(json.loads(row["affected_refs_json"])),
+                proposed_change_class=row["proposed_change_class"],
+                outcome="refused",
+                created_at=row["created_at"],
+                dialog_id=row["dialog_id"],
+            )
+            for row in rows
+        )
+
     def set_bootstrap_closed_at(self, value: str) -> None:
         _parse_time(value)
         with closing(self._conn()) as conn:
@@ -1029,6 +1126,13 @@ class S7WebAuthnBootstrapStore:
 
 def _fingerprint(value: str) -> str:
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _validate_hash64_text(value: str, *, field: str) -> None:
+    if not isinstance(value, str) or len(value) != 64 or any(
+        char not in "0123456789abcdef" for char in value
+    ):
+        raise ValueError(f"{field} must be 64 lowercase hex chars")
 
 
 def _parse_time(value: str) -> datetime:

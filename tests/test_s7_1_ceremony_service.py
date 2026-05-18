@@ -402,6 +402,37 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(result.body["error"], "s7_voice_seat_unresolved")
         self.assertEqual(result.body["maez_objection_state"], "not_determined")
 
+    def test_voice_recheck_denial_writes_refusal_history_for_d23(self):
+        from dataclasses import replace
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+        from core.governance.s7_webauthn_ceremony import authorization_voice_seat_recheck
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = S7WebAuthnBootstrapStore(Path(tmp) / "s7_1_webauthn")
+            prior = self._self_mod_envelope()
+            current = replace(prior, request_id="req-s7-1-voice-reask")
+
+            result = authorization_voice_seat_recheck(
+                envelope=prior,
+                maez_voice_consultation=None,
+                refusal_history_store=store,
+                rendered_text_hash="d" * 64,
+                requester_ref="founder-local-browser",
+                now=NOW,
+            )
+            history = store.refusal_history_for_envelope(current)
+            assessment = s7.assess_aggregation_risk(
+                current_envelope=current,
+                history=history,
+            )
+
+        self.assertEqual(result.status_code, 409)
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0].outcome, "refused")
+        self.assertIn("repeated_reask_after_refusal", assessment.signals)
+        self.assertIn(assessment.decision, {"escalate", "block"})
+
     def test_authorization_voice_recheck_blocks_maez_objection(self):
         from core.governance.s7_webauthn_ceremony import authorization_voice_seat_recheck
 

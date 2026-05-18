@@ -257,6 +257,10 @@ def authorization_voice_seat_recheck(
     *,
     envelope: Any,
     maez_voice_consultation: Any,
+    refusal_history_store: Any | None = None,
+    rendered_text_hash: str | None = None,
+    requester_ref: str | None = None,
+    now: str | None = None,
 ) -> S7CeremonyServiceResult:
     """Finish-time S7.1 voice-seat gate before artifact minting."""
 
@@ -271,15 +275,47 @@ def authorization_voice_seat_recheck(
             status_code=200,
         )
     if not voice_consultation_satisfies_request(envelope, maez_voice_consultation):
-        return _voice_seat_block("not_determined", reason="missing_or_mismatched_voice_fact")
+        return _voice_seat_block(
+            "not_determined",
+            reason="missing_or_mismatched_voice_fact",
+            envelope=envelope,
+            refusal_history_store=refusal_history_store,
+            rendered_text_hash=rendered_text_hash,
+            requester_ref=requester_ref,
+            now=now,
+        )
     state = str(getattr(maez_voice_consultation, "maez_objection_state", "not_determined"))
     unavailable_reason = getattr(maez_voice_consultation, "unavailable_reason_code", None)
     if state != "absent":
-        return _voice_seat_block(state, reason="maez_voice_not_clear")
+        return _voice_seat_block(
+            state,
+            reason="maez_voice_not_clear",
+            envelope=envelope,
+            refusal_history_store=refusal_history_store,
+            rendered_text_hash=rendered_text_hash,
+            requester_ref=requester_ref,
+            now=now,
+        )
     if unavailable_reason not in {None, "none"}:
-        return _voice_seat_block("not_determined", reason=str(unavailable_reason))
+        return _voice_seat_block(
+            "not_determined",
+            reason=str(unavailable_reason),
+            envelope=envelope,
+            refusal_history_store=refusal_history_store,
+            rendered_text_hash=rendered_text_hash,
+            requester_ref=requester_ref,
+            now=now,
+        )
     if getattr(maez_voice_consultation, "maez_withdrew_request", False) is True:
-        return _voice_seat_block("present", reason="maez_withdrew_request")
+        return _voice_seat_block(
+            "present",
+            reason="maez_withdrew_request",
+            envelope=envelope,
+            refusal_history_store=refusal_history_store,
+            rendered_text_hash=rendered_text_hash,
+            requester_ref=requester_ref,
+            now=now,
+        )
     return S7CeremonyServiceResult(
         body={
             "ok": True,
@@ -290,13 +326,34 @@ def authorization_voice_seat_recheck(
     )
 
 
-def _voice_seat_block(state: str, *, reason: str) -> S7CeremonyServiceResult:
+def _voice_seat_block(
+    state: str,
+    *,
+    reason: str,
+    envelope: Any | None = None,
+    refusal_history_store: Any | None = None,
+    rendered_text_hash: str | None = None,
+    requester_ref: str | None = None,
+    now: str | None = None,
+) -> S7CeremonyServiceResult:
+    refusal_record_id = None
+    if refusal_history_store is not None:
+        if envelope is None or rendered_text_hash is None or requester_ref is None or now is None:
+            raise ValueError("s7_refusal_history_context_required")
+        refusal_record_id = refusal_history_store.record_refusal_history(
+            envelope=envelope,
+            rendered_text_hash=rendered_text_hash,
+            requester_ref=requester_ref,
+            denial_reason=reason,
+            created_at=now,
+        )
     return S7CeremonyServiceResult(
         body={
             "ok": False,
             "error": "s7_voice_seat_unresolved",
             "maez_objection_state": state,
             "reason": reason,
+            "refusal_record_id": refusal_record_id,
         },
         status_code=409,
     )
