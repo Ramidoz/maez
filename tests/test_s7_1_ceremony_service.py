@@ -38,7 +38,9 @@ class _InvalidRegistrationVerifier(_AvailableVerifier):
 
 
 class _ValidRegistrationVerifier(_AvailableVerifier):
-    def verify_registration_response(self, **_kwargs):
+    def verify_registration_response(self, **kwargs):
+        if "challenge_b64" not in kwargs["challenge"]:
+            return {"ok": False, "error": "s7_challenge_raw_missing"}
         return {
             "ok": True,
             "credential_ref": "cred-primary",
@@ -256,6 +258,14 @@ class S71CeremonyServiceTests(unittest.TestCase):
             self.assertTrue(store.has_enabled_primary())
             self.assertFalse(store.challenge_is_active(begin.body["challenge_id"], now=NOW))
             self.assertEqual(store.bootstrap_state(now=NOW), "closed")
+            record = store.get_credential("cred-primary")
+            assert record is not None
+            self.assertEqual(record.attestation_format, "none")
+            self.assertEqual(record.authenticator_attachment, "cross-platform")
+            self.assertEqual(record.transports, ("usb",))
+            self.assertEqual(record.library_name, "webauthn")
+            self.assertEqual(record.library_version, "2.7.1")
+            self.assertIs(record.uv_capable, True)
 
     def test_register_finish_cannot_consume_challenge_twice(self):
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService

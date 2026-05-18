@@ -62,6 +62,74 @@ class S71VerifierAdapterTests(unittest.TestCase):
             },
         )
 
+    def test_058_production_registration_verifier_fails_closed_on_invalid_response(self):
+        from core.governance.s7_webauthn_verifier import S7ProductionWebAuthnVerifier
+
+        class WebAuthnModule:
+            @staticmethod
+            def verify_registration_response(**_kwargs):
+                raise ValueError("bad webauthn response")
+
+        verifier = S7ProductionWebAuthnVerifier(import_module=lambda _name: WebAuthnModule)
+
+        result = verifier.verify_registration_response(
+            registration_response={"clientDataJSON": "not-real"},
+            challenge={"challenge_b64": "Y2hhbGxlbmdl"},
+            expected_origin="http://localhost:11437",
+            expected_rp_id="localhost",
+            require_user_verification=True,
+        )
+
+        self.assertEqual(result["ok"], False)
+        self.assertEqual(result["error"], "s7_registration_invalid")
+
+    def test_060_062_registration_verifier_returns_attestation_and_uv_metadata(self):
+        from core.governance.s7_webauthn_verifier import S7ProductionWebAuthnVerifier
+
+        class Value:
+            def __init__(self, value: str):
+                self.value = value
+
+        class Verified:
+            credential_id = b"credential-id"
+            credential_public_key = b"public-key"
+            sign_count = 7
+            aaguid = "00000000-0000-0000-0000-000000000000"
+            fmt = Value("none")
+            credential_device_type = Value("single_device")
+            credential_backed_up = False
+            user_verified = True
+
+        class WebAuthnModule:
+            @staticmethod
+            def verify_registration_response(**kwargs):
+                self.assertEqual(kwargs["expected_challenge"], b"challenge")
+                self.assertEqual(kwargs["expected_rp_id"], "localhost")
+                self.assertEqual(kwargs["expected_origin"], "http://localhost:11437")
+                self.assertIs(kwargs["require_user_verification"], True)
+                return Verified()
+
+        with patch.object(importlib.metadata, "version", return_value="2.7.1"):
+            verifier = S7ProductionWebAuthnVerifier(import_module=lambda _name: WebAuthnModule)
+            result = verifier.verify_registration_response(
+                registration_response={"clientDataJSON": "valid"},
+                challenge={"challenge_b64": "Y2hhbGxlbmdl"},
+                expected_origin="http://localhost:11437",
+                expected_rp_id="localhost",
+                require_user_verification=True,
+            )
+
+        self.assertEqual(result["ok"], True)
+        self.assertEqual(result["credential_ref"], "Y3JlZGVudGlhbC1pZA")
+        self.assertEqual(result["public_key"], "cHVibGljLWtleQ")
+        self.assertEqual(result["attestation_format"], "none")
+        self.assertEqual(result["aaguid"], "00000000-0000-0000-0000-000000000000")
+        self.assertEqual(result["backup_eligible"], False)
+        self.assertEqual(result["backed_up"], False)
+        self.assertEqual(result["library_name"], "webauthn")
+        self.assertEqual(result["library_version"], "2.7.1")
+        self.assertEqual(result["uv_capable"], True)
+
 
 if __name__ == "__main__":
     unittest.main()

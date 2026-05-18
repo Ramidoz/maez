@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS s7_ceremony_challenges (
     consumed_at TEXT,
     invalidated_at TEXT,
     challenge_hash TEXT NOT NULL DEFAULT '',
+    challenge_b64 TEXT NOT NULL DEFAULT '',
     rp_id TEXT NOT NULL DEFAULT 'localhost',
     origin TEXT NOT NULL DEFAULT 'http://localhost:11437',
     host TEXT NOT NULL DEFAULT 'localhost:11437',
@@ -274,6 +275,7 @@ class S7WebAuthnBootstrapStore:
         }
         challenge_desired = {
             "challenge_hash": "TEXT NOT NULL DEFAULT ''",
+            "challenge_b64": "TEXT NOT NULL DEFAULT ''",
             "rp_id": "TEXT NOT NULL DEFAULT 'localhost'",
             "origin": "TEXT NOT NULL DEFAULT 'http://localhost:11437'",
             "host": "TEXT NOT NULL DEFAULT 'localhost:11437'",
@@ -471,6 +473,17 @@ class S7WebAuthnBootstrapStore:
         credential_ref: str,
         public_key: str,
         now: str,
+        sign_count: int = 0,
+        attestation_format: str | None = None,
+        aaguid: str | None = None,
+        authenticator_attachment: str | None = None,
+        backup_eligible: bool | None = None,
+        backed_up: bool | None = None,
+        transports: tuple[str, ...] = (),
+        library_name: str = "bootstrap-placeholder",
+        library_version: str = "0",
+        sign_count_mode: str = "unknown",
+        uv_capable: bool | None = None,
     ) -> dict[str, Any]:
         with closing(self._conn()) as conn:
             token_hash = self._hash_token(raw_token, conn)
@@ -501,7 +514,7 @@ class S7WebAuthnBootstrapStore:
                     actor_handle_hmac="hmac:s7:founder:" + ("0" * 64),
                     role_names=("bonded_user",),
                     public_key=public_key,
-                    sign_count=0,
+                    sign_count=sign_count,
                     rp_id="localhost",
                     origin="http://localhost:11437",
                     created_at=now,
@@ -510,16 +523,16 @@ class S7WebAuthnBootstrapStore:
                     credential_kind="primary",
                     label="Primary founder key",
                     registration_challenge_id=f"bootstrap:{intent_id}",
-                    attestation_format=None,
-                    aaguid=None,
-                    authenticator_attachment=None,
-                    backup_eligible=None,
-                    backed_up=None,
-                    transports=(),
-                    library_name="bootstrap-placeholder",
-                    library_version="0",
-                    sign_count_mode="unknown",
-                    uv_capable=None,
+                    attestation_format=attestation_format,
+                    aaguid=aaguid,
+                    authenticator_attachment=authenticator_attachment,
+                    backup_eligible=backup_eligible,
+                    backed_up=backed_up,
+                    transports=transports,
+                    library_name=library_name,
+                    library_version=library_version,
+                    sign_count_mode=sign_count_mode,
+                    uv_capable=uv_capable,
                     uv_required_for_guarded=True,
                     distinct_device_confidence="unknown",
                 )
@@ -769,6 +782,7 @@ class S7WebAuthnBootstrapStore:
         if challenge_kind not in {"register_primary", "register_backup"}:
             raise ValueError("s7_challenge_kind_invalid")
         challenge_id = f"s7reg_{uuid.uuid4().hex}"
+        challenge_b64 = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii").rstrip("=")
         session_binding_hash = _fingerprint(session_binding)
         internal_channel_binding_hash = (
             _fingerprint(internal_channel_binding) if internal_channel_binding else None
@@ -778,6 +792,7 @@ class S7WebAuthnBootstrapStore:
                 (
                     challenge_id,
                     challenge_kind,
+                    challenge_b64,
                     "localhost",
                     "http://localhost:11437",
                     "localhost:11437",
@@ -793,9 +808,9 @@ class S7WebAuthnBootstrapStore:
                 """
                 INSERT INTO s7_ceremony_challenges(
                     challenge_id, challenge_kind, expires_at, consumed_at, invalidated_at,
-                    challenge_hash, rp_id, origin, host, session_binding_hash,
+                    challenge_hash, challenge_b64, rp_id, origin, host, session_binding_hash,
                     internal_channel_binding_hash, request_id, uv_required, created_at
-                ) VALUES (?, ?, ?, NULL, NULL, ?, 'localhost', 'http://localhost:11437',
+                ) VALUES (?, ?, ?, NULL, NULL, ?, ?, 'localhost', 'http://localhost:11437',
                           'localhost:11437', ?, ?, NULL, 0, ?)
                 """,
                 (
@@ -803,6 +818,7 @@ class S7WebAuthnBootstrapStore:
                     challenge_kind,
                     expires_at,
                     challenge_hash,
+                    challenge_b64,
                     session_binding_hash,
                     internal_channel_binding_hash,
                     now,
@@ -812,6 +828,7 @@ class S7WebAuthnBootstrapStore:
             "challenge_id": challenge_id,
             "challenge_kind": challenge_kind,
             "challenge_hash": challenge_hash,
+            "challenge_b64": challenge_b64,
             "rp_id": "localhost",
             "origin": "http://localhost:11437",
             "host": "localhost:11437",
@@ -832,7 +849,8 @@ class S7WebAuthnBootstrapStore:
             row = conn.execute(
                 """
                 SELECT challenge_id, challenge_kind, challenge_hash, rp_id, origin, host,
-                       session_binding_hash, expires_at, consumed_at, invalidated_at
+                       challenge_b64, session_binding_hash, expires_at, consumed_at,
+                       invalidated_at
                 FROM s7_ceremony_challenges
                 WHERE challenge_id = ?
                   AND session_binding_hash = ?

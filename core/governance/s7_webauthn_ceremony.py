@@ -78,7 +78,7 @@ class S7LocalWebAuthnCeremonyService:
                 "public_key_options": {
                     "rp": {"id": "localhost", "name": "Maez local founder ceremony"},
                     "user": {"name": "founder", "displayName": "Founder"},
-                    "challenge": challenge["challenge_hash"],
+                    "challenge": challenge["challenge_b64"],
                     "timeout": 600000,
                     "attestation": "direct",
                     "authenticatorSelection": {
@@ -159,6 +159,17 @@ class S7LocalWebAuthnCeremonyService:
             credential_ref=str(verified["credential_ref"]),
             public_key=str(verified["public_key"]),
             now=now,
+            sign_count=int(verified.get("sign_count", 0)),
+            attestation_format=_optional_text(verified.get("attestation_format")),
+            aaguid=_optional_text(verified.get("aaguid")),
+            authenticator_attachment=_optional_text(verified.get("authenticator_attachment")),
+            backup_eligible=_optional_bool(verified.get("backup_eligible")),
+            backed_up=_optional_bool(verified.get("backed_up")),
+            transports=tuple(str(value) for value in verified.get("transports", ())),
+            library_name=str(verified.get("library_name", dependency.get("library_name", ""))),
+            library_version=str(verified.get("library_version", dependency.get("library_version", ""))),
+            sign_count_mode=str(verified.get("sign_count_mode", "unknown")),
+            uv_capable=_optional_bool(verified.get("uv_capable")),
         )
         if result.get("ok") is not True:
             return S7CeremonyServiceResult(body=result, status_code=409)
@@ -236,6 +247,18 @@ def _schema_invalid(detail: str) -> S7CeremonyServiceResult:
         body={"ok": False, "error": "s7_schema_invalid", "detail": detail},
         status_code=400,
     )
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    return bool(value)
 
 
 def _add_minutes(value: str, minutes: int) -> str:
