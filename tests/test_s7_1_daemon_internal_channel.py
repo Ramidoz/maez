@@ -108,6 +108,33 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.get_json()["error"], "s7_service_probe")
 
+    def test_daemon_register_finish_delegates_to_core_ceremony_service(self):
+        class Service:
+            def __init__(self, **_kwargs):
+                pass
+
+            def register_finish(self, **_kwargs):
+                class Result:
+                    status_code = 410
+                    body = {"ok": False, "error": "s7_finish_probe"}
+
+                return Result()
+
+        env = {
+            "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+            "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch("daemon.maez_daemon.S7LocalWebAuthnCeremonyService", Service):
+                response = self._client().post(
+                    "/internal/s7/webauthn/register/finish",
+                    json={"challenge_id": "challenge"},
+                    headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                )
+
+        self.assertEqual(response.status_code, 410)
+        self.assertEqual(response.get_json()["error"], "s7_finish_probe")
+
     def test_032_browser_presented_internal_channel_proof_is_rejected(self):
         env = {
             "S7_LIVE_WEBAUTHN_CEREMONY": "1",

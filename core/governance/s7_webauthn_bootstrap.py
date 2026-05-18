@@ -93,7 +93,16 @@ CREATE TABLE IF NOT EXISTS s7_ceremony_challenges (
     challenge_kind TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     consumed_at TEXT,
-    invalidated_at TEXT
+    invalidated_at TEXT,
+    challenge_hash TEXT NOT NULL DEFAULT '',
+    rp_id TEXT NOT NULL DEFAULT 'localhost',
+    origin TEXT NOT NULL DEFAULT 'http://localhost:11437',
+    host TEXT NOT NULL DEFAULT 'localhost:11437',
+    session_binding_hash TEXT NOT NULL DEFAULT '',
+    internal_channel_binding_hash TEXT,
+    request_id TEXT,
+    uv_required INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -259,6 +268,24 @@ class S7WebAuthnBootstrapStore:
         for column, ddl in desired.items():
             if column not in existing:
                 conn.execute(f"ALTER TABLE s7_founder_webauthn_credentials ADD COLUMN {column} {ddl}")
+        challenge_existing = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(s7_ceremony_challenges)")
+        }
+        challenge_desired = {
+            "challenge_hash": "TEXT NOT NULL DEFAULT ''",
+            "rp_id": "TEXT NOT NULL DEFAULT 'localhost'",
+            "origin": "TEXT NOT NULL DEFAULT 'http://localhost:11437'",
+            "host": "TEXT NOT NULL DEFAULT 'localhost:11437'",
+            "session_binding_hash": "TEXT NOT NULL DEFAULT ''",
+            "internal_channel_binding_hash": "TEXT",
+            "request_id": "TEXT",
+            "uv_required": "INTEGER NOT NULL DEFAULT 0",
+            "created_at": "TEXT NOT NULL DEFAULT ''",
+        }
+        for column, ddl in challenge_desired.items():
+            if column not in challenge_existing:
+                conn.execute(f"ALTER TABLE s7_ceremony_challenges ADD COLUMN {column} {ddl}")
 
     def _ensure_audit_file(self) -> None:
         self.audit_path.touch(exist_ok=True)
@@ -536,6 +563,35 @@ class S7WebAuthnBootstrapStore:
         )
         return {"ok": True, "credential_ref": credential_ref}
 
+    def bootstrap_intent_valid(
+        self,
+        *,
+        intent_id: str,
+        raw_token: str,
+        now: str,
+    ) -> bool:
+        now_text = _parse_time(now).isoformat()
+        with closing(self._conn()) as conn:
+            token_hash = self._hash_token(raw_token, conn)
+            row = conn.execute(
+                """
+                SELECT 1 FROM s7_bootstrap_intents
+                WHERE intent_id = ?
+                  AND purpose = 'register_primary'
+                  AND token_hash = ?
+                  AND consumed_at IS NULL
+                  AND revoked_at IS NULL
+                  AND expires_at > ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM s7_founder_webauthn_credentials
+                      WHERE credential_kind = 'primary' AND enabled = 1
+                  )
+                LIMIT 1
+                """,
+                (intent_id, token_hash, now_text),
+            ).fetchone()
+        return row is not None
+
     def store_credential(self, record: FounderWebAuthnCredentialRecord) -> None:
         record = _with_current_record_hash(record)
         with closing(self._conn()) as conn:
@@ -698,6 +754,139 @@ class S7WebAuthnBootstrapStore:
                 """,
                 (challenge_id, challenge_kind, expires_at),
             )
+
+    def create_registration_challenge(
+        self,
+        *,
+        challenge_kind: str,
+        session_binding: str,
+        now: str,
+        expires_at: str,
+        internal_channel_binding: str | None = None,
+    ) -> dict[str, Any]:
+        _parse_time(now)
+        _parse_time(expires_at)
+        if challenge_kind not in {"register_primary", "register_backup"}:
+            raise ValueError("s7_challenge_kind_invalid")
+        challenge_id = f"s7reg_{uuid.uuid4().hex}"
+        session_binding_hash = _fingerprint(session_binding)
+        internal_channel_binding_hash = (
+            _fingerprint(internal_channel_binding) if internal_channel_binding else None
+        )
+        challenge_hash = _fingerprint(
+            "|".join(
+                (
+                    challenge_id,
+                    challenge_kind,
+                    "localhost",
+                    "http://localhost:11437",
+                    "localhost:11437",
+                    session_binding_hash,
+                    internal_channel_binding_hash or "",
+                    now,
+                    expires_at,
+                )
+            )
+        )
+        with closing(self._conn()) as conn:
+            conn.execute(
+                """
+                INSERT INTO s7_ceremony_challenges(
+                    challenge_id, challenge_kind, expires_at, consumed_at, invalidated_at,
+                    challenge_hash, rp_id, origin, host, session_binding_hash,
+                    internal_channel_binding_hash, request_id, uv_required, created_at
+                ) VALUES (?, ?, ?, NULL, NULL, ?, 'localhost', 'http://localhost:11437',
+                          'localhost:11437', ?, ?, NULL, 0, ?)
+                """,
+                (
+                    challenge_id,
+                    challenge_kind,
+                    expires_at,
+                    challenge_hash,
+                    session_binding_hash,
+                    internal_channel_binding_hash,
+                    now,
+                ),
+            )
+        return {
+            "challenge_id": challenge_id,
+            "challenge_kind": challenge_kind,
+            "challenge_hash": challenge_hash,
+            "rp_id": "localhost",
+            "origin": "http://localhost:11437",
+            "host": "localhost:11437",
+            "session_binding_hash": session_binding_hash,
+            "expires_at": expires_at,
+        }
+
+    def registration_challenge_for_finish(
+        self,
+        *,
+        challenge_id: str,
+        session_binding: str,
+        now: str,
+    ) -> dict[str, Any] | None:
+        now_text = _parse_time(now).isoformat()
+        session_binding_hash = _fingerprint(session_binding)
+        with closing(self._conn()) as conn:
+            row = conn.execute(
+                """
+                SELECT challenge_id, challenge_kind, challenge_hash, rp_id, origin, host,
+                       session_binding_hash, expires_at, consumed_at, invalidated_at
+                FROM s7_ceremony_challenges
+                WHERE challenge_id = ?
+                  AND session_binding_hash = ?
+                  AND consumed_at IS NULL
+                  AND invalidated_at IS NULL
+                  AND expires_at > ?
+                """,
+                (challenge_id, session_binding_hash, now_text),
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def registration_challenge_status(
+        self,
+        *,
+        challenge_id: str,
+        session_binding: str,
+        now: str,
+    ) -> str:
+        now_text = _parse_time(now).isoformat()
+        session_binding_hash = _fingerprint(session_binding)
+        with closing(self._conn()) as conn:
+            row = conn.execute(
+                """
+                SELECT session_binding_hash, expires_at, consumed_at, invalidated_at
+                FROM s7_ceremony_challenges
+                WHERE challenge_id = ?
+                """,
+                (challenge_id,),
+            ).fetchone()
+        if row is None:
+            return "missing"
+        if row["consumed_at"] is not None or row["invalidated_at"] is not None:
+            return "replayed"
+        if row["expires_at"] <= now_text:
+            return "expired"
+        if row["session_binding_hash"] != session_binding_hash:
+            return "session_mismatch"
+        return "active"
+
+    def consume_challenge(self, challenge_id: str, *, now: str) -> bool:
+        now_text = _parse_time(now).isoformat()
+        with closing(self._conn()) as conn:
+            cur = conn.execute(
+                """
+                UPDATE s7_ceremony_challenges
+                SET consumed_at = ?
+                WHERE challenge_id = ?
+                  AND consumed_at IS NULL
+                  AND invalidated_at IS NULL
+                  AND expires_at > ?
+                """,
+                (now_text, challenge_id, now_text),
+            )
+            return cur.rowcount == 1
 
     def challenge_is_active(self, challenge_id: str, *, now: str) -> bool:
         with closing(self._conn()) as conn:

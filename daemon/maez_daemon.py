@@ -5649,7 +5649,15 @@ class MaezDaemon:
             if live_webauthn_ceremony_enabled():
                 if not _s7_internal_channel_trusted(request):
                     return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
-                raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
+                service = S7LocalWebAuthnCeremonyService(
+                    verifier=S7ProductionWebAuthnVerifier(),
+                    store_factory=lambda: S7WebAuthnBootstrapStore(_s7_webauthn_store_root()),
+                )
+                result = service.register_finish(
+                    now=datetime.now(timezone.utc).isoformat(),
+                    request_json=request.get_json(silent=True) or {},
+                )
+                return jsonify(result.body), result.status_code
             return jsonify(
                 s7_ceremony_deferred_response(
                     surface="daemon",

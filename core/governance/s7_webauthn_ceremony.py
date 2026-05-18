@@ -11,6 +11,7 @@ implementation fills in.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
@@ -40,7 +41,6 @@ class S7LocalWebAuthnCeremonyService:
         now: str,
         request_json: dict[str, Any] | None,
     ) -> S7CeremonyServiceResult:
-        del request_json
         dependency = self.verifier.dependency_state()
         if dependency.get("ok") is not True:
             return S7CeremonyServiceResult(body=dependency, status_code=503)
@@ -49,13 +49,127 @@ class S7LocalWebAuthnCeremonyService:
         if readiness.get("ok") is not True:
             status = 401 if readiness.get("error") == "s7_bootstrap_required" else 410
             return S7CeremonyServiceResult(body=readiness, status_code=status)
+        try:
+            request = _require_mapping(request_json)
+            intent_id = _require_text(request, "bootstrap_intent_id")
+            raw_token = _require_text(request, "bootstrap_token")
+            session_binding = _require_text(request, "session_binding")
+        except ValueError as exc:
+            return _schema_invalid(str(exc))
+        if not store.bootstrap_intent_valid(
+            intent_id=intent_id,
+            raw_token=raw_token,
+            now=now,
+        ):
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_bootstrap_invalid"},
+                status_code=401,
+            )
+        challenge = store.create_registration_challenge(
+            challenge_kind="register_primary",
+            session_binding=session_binding,
+            now=now,
+            expires_at=_add_minutes(now, 10),
+        )
         return S7CeremonyServiceResult(
             body={
-                "ok": False,
-                "error": "s7_schema_invalid",
-                "detail": "registration request schema not implemented yet",
+                "ok": True,
+                **challenge,
+                "public_key_options": {
+                    "rp": {"id": "localhost", "name": "Maez local founder ceremony"},
+                    "user": {"name": "founder", "displayName": "Founder"},
+                    "challenge": challenge["challenge_hash"],
+                    "timeout": 600000,
+                    "attestation": "direct",
+                    "authenticatorSelection": {
+                        "residentKey": "discouraged",
+                        "userVerification": "required",
+                    },
+                },
             },
-            status_code=400,
+            status_code=200,
+        )
+
+    def register_finish(
+        self,
+        *,
+        now: str,
+        request_json: dict[str, Any] | None,
+    ) -> S7CeremonyServiceResult:
+        dependency = self.verifier.dependency_state()
+        if dependency.get("ok") is not True:
+            return S7CeremonyServiceResult(body=dependency, status_code=503)
+        store = self.store_factory()
+        try:
+            request = _require_mapping(request_json)
+            challenge_id = _require_text(request, "challenge_id")
+            intent_id = _require_text(request, "bootstrap_intent_id")
+            raw_token = _require_text(request, "bootstrap_token")
+            session_binding = _require_text(request, "session_binding")
+            registration_response = request["registration_response"]
+            if not isinstance(registration_response, dict):
+                raise ValueError("registration_response")
+        except (KeyError, ValueError) as exc:
+            return _schema_invalid(str(exc))
+
+        challenge = store.registration_challenge_for_finish(
+            challenge_id=challenge_id,
+            session_binding=session_binding,
+            now=now,
+        )
+        if challenge is None:
+            status = store.registration_challenge_status(
+                challenge_id=challenge_id,
+                session_binding=session_binding,
+                now=now,
+            )
+            status_code = 410 if status in {"expired", "replayed"} else 400
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_challenge_replayed", "challenge_state": status},
+                status_code=status_code,
+            )
+        if not store.bootstrap_intent_valid(
+            intent_id=intent_id,
+            raw_token=raw_token,
+            now=now,
+        ):
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_bootstrap_invalid"},
+                status_code=401,
+            )
+
+        verified = self.verifier.verify_registration_response(
+            registration_response=registration_response,
+            challenge=challenge,
+            expected_origin="http://localhost:11437",
+            expected_rp_id="localhost",
+            require_user_verification=True,
+        )
+        if verified.get("ok") is not True:
+            return S7CeremonyServiceResult(body=verified, status_code=400)
+
+        if not store.consume_challenge(challenge_id, now=now):
+            return S7CeremonyServiceResult(
+                body={"ok": False, "error": "s7_challenge_replayed", "challenge_state": "replayed"},
+                status_code=410,
+            )
+        result = store.consume_for_first_primary(
+            intent_id=intent_id,
+            raw_token=raw_token,
+            credential_ref=str(verified["credential_ref"]),
+            public_key=str(verified["public_key"]),
+            now=now,
+        )
+        if result.get("ok") is not True:
+            return S7CeremonyServiceResult(body=result, status_code=409)
+        return S7CeremonyServiceResult(
+            body={
+                "ok": True,
+                "credential_ref": result["credential_ref"],
+                "registration_class": "primary",
+                "bootstrap_closed": True,
+            },
+            status_code=200,
         )
 
     def status(self, *, now: str) -> S7CeremonyServiceResult:
@@ -102,3 +216,30 @@ def default_s7_webauthn_ceremony_service(
         verifier=S7ProductionWebAuthnVerifier(),
         store_factory=store_factory,
     )
+
+
+def _require_mapping(request_json: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(request_json, dict):
+        raise ValueError("request_json")
+    return request_json
+
+
+def _require_text(data: dict[str, Any], key: str) -> str:
+    value = data.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(key)
+    return value
+
+
+def _schema_invalid(detail: str) -> S7CeremonyServiceResult:
+    return S7CeremonyServiceResult(
+        body={"ok": False, "error": "s7_schema_invalid", "detail": detail},
+        status_code=400,
+    )
+
+
+def _add_minutes(value: str, minutes: int) -> str:
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (dt + timedelta(minutes=minutes)).isoformat()
