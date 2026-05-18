@@ -36,6 +36,7 @@
     {"type": "sqlite_db", "path": "memory/temperament.db", "required": false, "comment": "Track A item #6 — 11/12-parameter temperament observations"},
     {"type": "sqlite_db", "path": "memory/wonderings.db", "required": false, "comment": "Wondering loop state (Slice 2)"},
     {"type": "sqlite_db", "path": "memory/entity_index.db", "required": false, "comment": "MSEL entity index (Step 5e). Populated by extractor + alias seed + backfill + LLM batch. Gitignored runtime data with no other authoritative source."},
+    {"type": "directory", "path": "memory/s7_1_webauthn", "required": false, "comment": "S7.1 local WebAuthn ceremony store: bootstrap, credential registry, challenges, authorization artifacts, refusal history, and audit JSONL"},
     {"type": "sqlite_db", "path": "core/memory/audit_log.db", "required": false, "comment": "Subpackage audit log; may be the same DB as memory/audit_log.db via shim"},
     {"type": "sqlite_db", "path": "core/memory/identity_ledger.db", "required": false},
     {"type": "sqlite_db", "path": "core/memory/pending_cards.db", "required": false},

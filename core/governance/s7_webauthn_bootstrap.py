@@ -14,7 +14,7 @@ from __future__ import annotations
 import argparse
 import base64
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
@@ -56,10 +56,44 @@ CREATE TABLE IF NOT EXISTS s7_bootstrap_intents (
 
 CREATE TABLE IF NOT EXISTS s7_founder_webauthn_credentials (
     credential_ref TEXT PRIMARY KEY,
+    actor_handle_hmac TEXT NOT NULL DEFAULT '',
+    role_names_json TEXT NOT NULL DEFAULT '[]',
     public_key TEXT NOT NULL,
+    sign_count INTEGER NOT NULL DEFAULT 0,
+    rp_id TEXT NOT NULL DEFAULT 'localhost',
+    origin TEXT NOT NULL DEFAULT 'http://localhost:11437',
     credential_kind TEXT NOT NULL,
+    backup_credential INTEGER NOT NULL DEFAULT 0,
     enabled INTEGER NOT NULL,
-    created_at TEXT NOT NULL
+    ceremony_kind TEXT NOT NULL DEFAULT 'founder_local_webauthn',
+    label TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    last_used_at TEXT,
+    disabled_at TEXT,
+    disabled_by_authorization_id TEXT,
+    reenabled_by_authorization_id TEXT,
+    registration_challenge_id TEXT NOT NULL DEFAULT '',
+    attestation_format TEXT,
+    aaguid TEXT,
+    authenticator_attachment TEXT,
+    backup_eligible INTEGER,
+    backed_up INTEGER,
+    transports_json TEXT NOT NULL DEFAULT '[]',
+    library_name TEXT NOT NULL DEFAULT '',
+    library_version TEXT NOT NULL DEFAULT '',
+    sign_count_mode TEXT NOT NULL DEFAULT 'unknown',
+    uv_capable INTEGER,
+    uv_required_for_guarded INTEGER NOT NULL DEFAULT 1,
+    distinct_device_confidence TEXT NOT NULL DEFAULT 'unknown',
+    record_hash TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS s7_ceremony_challenges (
+    challenge_id TEXT PRIMARY KEY,
+    challenge_kind TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT,
+    invalidated_at TEXT
 );
 """
 
@@ -71,6 +105,99 @@ class CreatedBootstrapIntent:
     purpose: str
     expires_at: str
     audit_ref: str
+
+
+@dataclass(frozen=True)
+class FounderWebAuthnCredentialRecord:
+    """S7.1 extension of the sealed S7 WebAuthn credential record."""
+
+    credential_ref: str
+    actor_handle_hmac: str
+    role_names: tuple[str, ...]
+    public_key: str
+    sign_count: int
+    rp_id: str
+    origin: str
+    created_at: str
+    backup_credential: bool
+    enabled: bool
+    ceremony_kind: str
+    credential_kind: str
+    label: str
+    last_used_at: str | None
+    disabled_at: str | None
+    disabled_by_authorization_id: str | None
+    reenabled_by_authorization_id: str | None
+    registration_challenge_id: str
+    attestation_format: str | None
+    aaguid: str | None
+    authenticator_attachment: str | None
+    backup_eligible: bool | None
+    backed_up: bool | None
+    transports: tuple[str, ...]
+    library_name: str
+    library_version: str
+    sign_count_mode: str
+    uv_capable: bool | None
+    uv_required_for_guarded: bool
+    distinct_device_confidence: str
+    record_hash: str
+
+    @classmethod
+    def build(cls, **kwargs: Any) -> "FounderWebAuthnCredentialRecord":
+        payload = dict(kwargs)
+        payload.setdefault("ceremony_kind", "founder_local_webauthn")
+        payload.setdefault("last_used_at", None)
+        payload.setdefault("disabled_at", None)
+        payload.setdefault("disabled_by_authorization_id", None)
+        payload.setdefault("reenabled_by_authorization_id", None)
+        payload["record_hash"] = ""
+        record = cls(**payload)
+        return cls(**{**asdict(record), "record_hash": _credential_record_hash(record)})
+
+    def __post_init__(self) -> None:
+        if not self.credential_ref:
+            raise ValueError("s7_credential_ref_required")
+        if not self.actor_handle_hmac.startswith("hmac:s7:") or len(
+            self.actor_handle_hmac.rsplit(":", 1)[-1]
+        ) != 64:
+            raise ValueError("s7_actor_handle_hmac_required")
+        if "bonded_user" not in self.role_names:
+            raise ValueError("s7_founder_credential_requires_bonded_user_role")
+        if not self.public_key:
+            raise ValueError("s7_public_key_required")
+        if not isinstance(self.sign_count, int) or self.sign_count < 0:
+            raise ValueError("s7_sign_count_invalid")
+        if self.rp_id != "localhost" or self.origin != "http://localhost:11437":
+            raise ValueError("s7_origin_binding_invalid")
+        _parse_time(self.created_at)
+        for value in (self.last_used_at, self.disabled_at):
+            if value is not None:
+                _parse_time(value)
+        if self.backup_credential is not True and self.backup_credential is not False:
+            raise ValueError("s7_backup_credential_bool_required")
+        if self.enabled is not True and self.enabled is not False:
+            raise ValueError("s7_enabled_bool_required")
+        if self.ceremony_kind != "founder_local_webauthn":
+            raise ValueError("s7_ceremony_kind_invalid")
+        if self.credential_kind not in {"primary", "backup"}:
+            raise ValueError("s7_credential_kind_invalid")
+        if self.backup_credential != (self.credential_kind == "backup"):
+            raise ValueError("s7_backup_credential_kind_mismatch")
+        if not self.label:
+            raise ValueError("s7_credential_label_required")
+        if not self.registration_challenge_id:
+            raise ValueError("s7_registration_challenge_id_required")
+        if self.sign_count_mode not in {"advancing", "constant_zero", "unknown"}:
+            raise ValueError("s7_sign_count_mode_invalid")
+        if self.uv_required_for_guarded is not True and self.uv_required_for_guarded is not False:
+            raise ValueError("s7_uv_required_bool_required")
+        if self.distinct_device_confidence not in {
+            "confirmed_distinct",
+            "same_device_override",
+            "unknown",
+        }:
+            raise ValueError("s7_distinct_device_confidence_invalid")
 
 
 class S7WebAuthnBootstrapStore:
@@ -86,13 +213,52 @@ class S7WebAuthnBootstrapStore:
         self._ensure_audit_file()
 
     def _init_db(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             conn.executescript(_SCHEMA)
             conn.execute(
                 "INSERT OR IGNORE INTO s7_ceremony_metadata(key, value) VALUES (?, ?)",
                 ("bootstrap_hmac_key", secrets.token_hex(32)),
             )
+            self._migrate_credential_columns(conn)
+            conn.commit()
         os.chmod(self.db_path, 0o600)
+
+    def _migrate_credential_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(s7_founder_webauthn_credentials)")
+        }
+        desired = {
+            "actor_handle_hmac": "TEXT NOT NULL DEFAULT ''",
+            "role_names_json": "TEXT NOT NULL DEFAULT '[]'",
+            "sign_count": "INTEGER NOT NULL DEFAULT 0",
+            "rp_id": "TEXT NOT NULL DEFAULT 'localhost'",
+            "origin": "TEXT NOT NULL DEFAULT 'http://localhost:11437'",
+            "backup_credential": "INTEGER NOT NULL DEFAULT 0",
+            "ceremony_kind": "TEXT NOT NULL DEFAULT 'founder_local_webauthn'",
+            "label": "TEXT NOT NULL DEFAULT ''",
+            "last_used_at": "TEXT",
+            "disabled_at": "TEXT",
+            "disabled_by_authorization_id": "TEXT",
+            "reenabled_by_authorization_id": "TEXT",
+            "registration_challenge_id": "TEXT NOT NULL DEFAULT ''",
+            "attestation_format": "TEXT",
+            "aaguid": "TEXT",
+            "authenticator_attachment": "TEXT",
+            "backup_eligible": "INTEGER",
+            "backed_up": "INTEGER",
+            "transports_json": "TEXT NOT NULL DEFAULT '[]'",
+            "library_name": "TEXT NOT NULL DEFAULT ''",
+            "library_version": "TEXT NOT NULL DEFAULT ''",
+            "sign_count_mode": "TEXT NOT NULL DEFAULT 'unknown'",
+            "uv_capable": "INTEGER",
+            "uv_required_for_guarded": "INTEGER NOT NULL DEFAULT 1",
+            "distinct_device_confidence": "TEXT NOT NULL DEFAULT 'unknown'",
+            "record_hash": "TEXT NOT NULL DEFAULT ''",
+        }
+        for column, ddl in desired.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE s7_founder_webauthn_credentials ADD COLUMN {column} {ddl}")
 
     def _ensure_audit_file(self) -> None:
         self.audit_path.touch(exist_ok=True)
@@ -283,7 +449,7 @@ class S7WebAuthnBootstrapStore:
             token_hash = self._hash_token(raw_token, conn)
             conn.execute("BEGIN IMMEDIATE")
             try:
-                conn.execute(
+                cur = conn.execute(
                     """
                     UPDATE s7_bootstrap_intents
                     SET consumed_at = ?
@@ -300,16 +466,51 @@ class S7WebAuthnBootstrapStore:
                     """,
                     (now, intent_id, token_hash, now),
                 )
-                if conn.total_changes < 1:
+                if cur.rowcount != 1:
                     conn.execute("ROLLBACK")
                     return {"ok": False, "error": "s7_bootstrap_invalid"}
+                record = FounderWebAuthnCredentialRecord.build(
+                    credential_ref=credential_ref,
+                    actor_handle_hmac="hmac:s7:founder:" + ("0" * 64),
+                    role_names=("bonded_user",),
+                    public_key=public_key,
+                    sign_count=0,
+                    rp_id="localhost",
+                    origin="http://localhost:11437",
+                    created_at=now,
+                    backup_credential=False,
+                    enabled=True,
+                    credential_kind="primary",
+                    label="Primary founder key",
+                    registration_challenge_id=f"bootstrap:{intent_id}",
+                    attestation_format=None,
+                    aaguid=None,
+                    authenticator_attachment=None,
+                    backup_eligible=None,
+                    backed_up=None,
+                    transports=(),
+                    library_name="bootstrap-placeholder",
+                    library_version="0",
+                    sign_count_mode="unknown",
+                    uv_capable=None,
+                    uv_required_for_guarded=True,
+                    distinct_device_confidence="unknown",
+                )
                 conn.execute(
                     """
                     INSERT INTO s7_founder_webauthn_credentials(
-                        credential_ref, public_key, credential_kind, enabled, created_at
-                    ) VALUES (?, ?, 'primary', 1, ?)
+                        credential_ref, actor_handle_hmac, role_names_json,
+                        public_key, sign_count, rp_id, origin, credential_kind,
+                        backup_credential, enabled, ceremony_kind, label, created_at,
+                        last_used_at, disabled_at, disabled_by_authorization_id,
+                        reenabled_by_authorization_id, registration_challenge_id,
+                        attestation_format, aaguid, authenticator_attachment,
+                        backup_eligible, backed_up, transports_json, library_name,
+                        library_version, sign_count_mode, uv_capable,
+                        uv_required_for_guarded, distinct_device_confidence, record_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (credential_ref, public_key, now),
+                    _credential_row_values(record),
                 )
                 conn.execute(
                     """
@@ -334,6 +535,254 @@ class S7WebAuthnBootstrapStore:
             {"intent_id": intent_id, "credential_ref": credential_ref, "created_at": now},
         )
         return {"ok": True, "credential_ref": credential_ref}
+
+    def store_credential(self, record: FounderWebAuthnCredentialRecord) -> None:
+        record = _with_current_record_hash(record)
+        with closing(self._conn()) as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM s7_founder_webauthn_credentials WHERE credential_ref = ?",
+                (record.credential_ref,),
+            ).fetchone()
+            if exists is not None:
+                raise ValueError("s7_credential_duplicate")
+            conn.execute(
+                """
+                INSERT INTO s7_founder_webauthn_credentials(
+                    credential_ref, actor_handle_hmac, role_names_json,
+                    public_key, sign_count, rp_id, origin, credential_kind,
+                    backup_credential, enabled, ceremony_kind, label, created_at,
+                    last_used_at, disabled_at, disabled_by_authorization_id,
+                    reenabled_by_authorization_id, registration_challenge_id,
+                    attestation_format, aaguid, authenticator_attachment,
+                    backup_eligible, backed_up, transports_json, library_name,
+                    library_version, sign_count_mode, uv_capable,
+                    uv_required_for_guarded, distinct_device_confidence, record_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                _credential_row_values(record),
+            )
+
+    def get_credential(self, credential_ref: str) -> FounderWebAuthnCredentialRecord | None:
+        if not self.db_path.exists():
+            return None
+        with closing(self._conn()) as conn:
+            row = conn.execute(
+                """
+                SELECT credential_ref, actor_handle_hmac, role_names_json,
+                       public_key, sign_count, rp_id, origin, credential_kind,
+                       backup_credential, enabled, ceremony_kind, label, created_at,
+                       last_used_at, disabled_at, disabled_by_authorization_id,
+                       reenabled_by_authorization_id, registration_challenge_id,
+                       attestation_format, aaguid, authenticator_attachment,
+                       backup_eligible, backed_up, transports_json, library_name,
+                       library_version, sign_count_mode, uv_capable,
+                       uv_required_for_guarded, distinct_device_confidence, record_hash
+                FROM s7_founder_webauthn_credentials
+                WHERE credential_ref = ?
+                """,
+                (credential_ref,),
+            ).fetchone()
+        if row is None:
+            return None
+        record = _credential_record_from_row(row)
+        if record.record_hash != _credential_record_hash(record):
+            raise RuntimeError("s7_record_hash_mismatch")
+        return record
+
+    def list_credentials(self) -> tuple[FounderWebAuthnCredentialRecord, ...]:
+        if not self.db_path.exists():
+            return ()
+        with closing(self._conn()) as conn:
+            rows = conn.execute(
+                """
+                SELECT credential_ref
+                FROM s7_founder_webauthn_credentials
+                ORDER BY credential_ref
+                """
+            ).fetchall()
+        return tuple(
+            record
+            for ref in rows
+            for record in (self.get_credential(str(ref["credential_ref"])),)
+            if record is not None
+        )
+
+    def exclude_credentials_for_backup_registration(self) -> tuple[str, ...]:
+        return tuple(
+            record.credential_ref
+            for record in self.list_credentials()
+            if record.enabled
+        )
+
+    def credential_can_authorize(self, credential_ref: str) -> bool:
+        record = self.get_credential(credential_ref)
+        return bool(record and record.enabled and "bonded_user" in record.role_names)
+
+    def reenable_credential(
+        self,
+        credential_ref: str,
+        *,
+        authorization_id: str,
+        now: str,
+    ) -> dict[str, Any]:
+        _parse_time(now)
+        enabled = tuple(
+            record
+            for record in self.list_credentials()
+            if record.enabled and record.credential_ref != credential_ref and "bonded_user" in record.role_names
+        )
+        if not enabled:
+            return {"ok": False, "error": "s7_credential_setup_incomplete"}
+        with closing(self._conn()) as conn:
+            cur = conn.execute(
+                """
+                UPDATE s7_founder_webauthn_credentials
+                SET enabled = 1,
+                    disabled_at = NULL,
+                    reenabled_by_authorization_id = ?,
+                    record_hash = ''
+                WHERE credential_ref = ?
+                  AND enabled = 0
+                """,
+                (authorization_id, credential_ref),
+            )
+            if cur.rowcount != 1:
+                return {"ok": False, "error": "s7_credential_setup_incomplete"}
+        record = self.get_credential_without_hash_check(credential_ref)
+        if record is None:
+            return {"ok": False, "error": "s7_credential_setup_incomplete"}
+        self._update_record_hash(_with_current_record_hash(record))
+        return {"ok": True, "credential_ref": credential_ref}
+
+    def credential_recovery_state(self) -> dict[str, Any]:
+        if not self.db_path.exists():
+            return _manual_recovery_state("registry_missing")
+        try:
+            records = self.list_credentials()
+        except (sqlite3.Error, RuntimeError, ValueError):
+            return _manual_recovery_state("registry_invalid")
+        active = tuple(record for record in records if record.enabled and "bonded_user" in record.role_names)
+        primary = tuple(record for record in active if record.credential_kind == "primary")
+        backup = tuple(record for record in active if record.credential_kind == "backup")
+        if not active:
+            return _manual_recovery_state("no_enabled_founder_credential")
+        confidence = _aggregate_distinct_device_confidence(backup)
+        if not primary or not backup or confidence != "confirmed_distinct":
+            return {
+                "mode": "degraded",
+                "manual_recovery_required": False,
+                "manual_recovery_cause": None,
+                "active_credential_count": len(active),
+                "primary_credential_state": "enabled" if primary else "missing",
+                "backup_credential_state": "enabled" if backup else "missing",
+                "distinct_device_confidence": confidence,
+            }
+        return {
+            "mode": "ready",
+            "manual_recovery_required": False,
+            "manual_recovery_cause": None,
+            "active_credential_count": len(active),
+            "primary_credential_state": "enabled",
+            "backup_credential_state": "enabled",
+            "distinct_device_confidence": "confirmed_distinct",
+        }
+
+    def create_challenge(self, *, challenge_id: str, challenge_kind: str, expires_at: str) -> None:
+        _parse_time(expires_at)
+        with closing(self._conn()) as conn:
+            conn.execute(
+                """
+                INSERT INTO s7_ceremony_challenges(
+                    challenge_id, challenge_kind, expires_at, consumed_at, invalidated_at
+                ) VALUES (?, ?, ?, NULL, NULL)
+                """,
+                (challenge_id, challenge_kind, expires_at),
+            )
+
+    def challenge_is_active(self, challenge_id: str, *, now: str) -> bool:
+        with closing(self._conn()) as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM s7_ceremony_challenges
+                WHERE challenge_id = ?
+                  AND consumed_at IS NULL
+                  AND invalidated_at IS NULL
+                  AND expires_at > ?
+                """,
+                (challenge_id, now),
+            ).fetchone()
+        return row is not None
+
+    def set_bootstrap_closed_at(self, value: str) -> None:
+        _parse_time(value)
+        with closing(self._conn()) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO s7_ceremony_metadata(key, value) VALUES (?, ?)",
+                ("bootstrap_closed_at", value),
+            )
+
+    def mark_restored(self, *, now: str) -> None:
+        _parse_time(now)
+        with closing(self._conn()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(
+                    """
+                    UPDATE s7_bootstrap_intents
+                    SET revoked_at = ?
+                    WHERE consumed_at IS NULL
+                      AND revoked_at IS NULL
+                    """,
+                    (now,),
+                )
+                conn.execute(
+                    """
+                    UPDATE s7_ceremony_challenges
+                    SET invalidated_at = ?
+                    WHERE consumed_at IS NULL
+                      AND invalidated_at IS NULL
+                    """,
+                    (now,),
+                )
+                conn.execute("COMMIT")
+            except sqlite3.Error:
+                conn.execute("ROLLBACK")
+                raise
+        self._audit("ceremony_store_restored", {"restored_at": now})
+
+    def get_credential_without_hash_check(
+        self,
+        credential_ref: str,
+    ) -> FounderWebAuthnCredentialRecord | None:
+        with closing(self._conn()) as conn:
+            row = conn.execute(
+                """
+                SELECT credential_ref, actor_handle_hmac, role_names_json,
+                       public_key, sign_count, rp_id, origin, credential_kind,
+                       backup_credential, enabled, ceremony_kind, label, created_at,
+                       last_used_at, disabled_at, disabled_by_authorization_id,
+                       reenabled_by_authorization_id, registration_challenge_id,
+                       attestation_format, aaguid, authenticator_attachment,
+                       backup_eligible, backed_up, transports_json, library_name,
+                       library_version, sign_count_mode, uv_capable,
+                       uv_required_for_guarded, distinct_device_confidence, record_hash
+                FROM s7_founder_webauthn_credentials
+                WHERE credential_ref = ?
+                """,
+                (credential_ref,),
+            ).fetchone()
+        return None if row is None else _credential_record_from_row(row)
+
+    def _update_record_hash(self, record: FounderWebAuthnCredentialRecord) -> None:
+        with closing(self._conn()) as conn:
+            conn.execute(
+                """
+                UPDATE s7_founder_webauthn_credentials
+                SET record_hash = ?
+                WHERE credential_ref = ?
+                """,
+                (record.record_hash, record.credential_ref),
+            )
 
     def has_enabled_primary(self, *, conn: sqlite3.Connection | None = None) -> bool:
         owns_conn = conn is None
@@ -375,11 +824,156 @@ def _fingerprint(value: str) -> str:
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _add_minutes(value: str, minutes: int) -> str:
+def _parse_time(value: str) -> datetime:
     dt = datetime.fromisoformat(value)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _add_minutes(value: str, minutes: int) -> str:
+    dt = _parse_time(value)
     return (dt + timedelta(minutes=minutes)).isoformat()
+
+
+def _stored_bool(value: bool | int | None) -> int | None:
+    if value is None:
+        return None
+    if value is True or value == 1:
+        return 1
+    if value is False or value == 0:
+        return 0
+    raise ValueError("s7_stored_bool_invalid")
+
+
+def _loaded_bool(value: Any, *, nullable: bool = False) -> bool | None:
+    if value is None and nullable:
+        return None
+    if value == 1:
+        return True
+    if value == 0:
+        return False
+    raise ValueError("s7_stored_bool_invalid")
+
+
+def _credential_hash_payload(record: FounderWebAuthnCredentialRecord) -> dict[str, Any]:
+    payload = asdict(record)
+    payload["record_hash"] = ""
+    payload["role_names"] = list(record.role_names)
+    payload["transports"] = list(record.transports)
+    return payload
+
+
+def _credential_record_hash(record: FounderWebAuthnCredentialRecord) -> str:
+    encoded = json.dumps(
+        _credential_hash_payload(record),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _with_current_record_hash(
+    record: FounderWebAuthnCredentialRecord,
+) -> FounderWebAuthnCredentialRecord:
+    return FounderWebAuthnCredentialRecord(**{**asdict(record), "record_hash": _credential_record_hash(record)})
+
+
+def _credential_row_values(record: FounderWebAuthnCredentialRecord) -> tuple[Any, ...]:
+    return (
+        record.credential_ref,
+        record.actor_handle_hmac,
+        json.dumps(list(record.role_names), separators=(",", ":")),
+        record.public_key,
+        record.sign_count,
+        record.rp_id,
+        record.origin,
+        record.credential_kind,
+        _stored_bool(record.backup_credential),
+        _stored_bool(record.enabled),
+        record.ceremony_kind,
+        record.label,
+        record.created_at,
+        record.last_used_at,
+        record.disabled_at,
+        record.disabled_by_authorization_id,
+        record.reenabled_by_authorization_id,
+        record.registration_challenge_id,
+        record.attestation_format,
+        record.aaguid,
+        record.authenticator_attachment,
+        _stored_bool(record.backup_eligible),
+        _stored_bool(record.backed_up),
+        json.dumps(list(record.transports), separators=(",", ":")),
+        record.library_name,
+        record.library_version,
+        record.sign_count_mode,
+        _stored_bool(record.uv_capable),
+        _stored_bool(record.uv_required_for_guarded),
+        record.distinct_device_confidence,
+        record.record_hash,
+    )
+
+
+def _credential_record_from_row(row: sqlite3.Row) -> FounderWebAuthnCredentialRecord:
+    return FounderWebAuthnCredentialRecord(
+        credential_ref=row["credential_ref"],
+        actor_handle_hmac=row["actor_handle_hmac"],
+        role_names=tuple(json.loads(row["role_names_json"])),
+        public_key=row["public_key"],
+        sign_count=int(row["sign_count"]),
+        rp_id=row["rp_id"],
+        origin=row["origin"],
+        credential_kind=row["credential_kind"],
+        backup_credential=bool(_loaded_bool(row["backup_credential"])),
+        enabled=bool(_loaded_bool(row["enabled"])),
+        ceremony_kind=row["ceremony_kind"],
+        label=row["label"],
+        created_at=row["created_at"],
+        last_used_at=row["last_used_at"],
+        disabled_at=row["disabled_at"],
+        disabled_by_authorization_id=row["disabled_by_authorization_id"],
+        reenabled_by_authorization_id=row["reenabled_by_authorization_id"],
+        registration_challenge_id=row["registration_challenge_id"],
+        attestation_format=row["attestation_format"],
+        aaguid=row["aaguid"],
+        authenticator_attachment=row["authenticator_attachment"],
+        backup_eligible=_loaded_bool(row["backup_eligible"], nullable=True),
+        backed_up=_loaded_bool(row["backed_up"], nullable=True),
+        transports=tuple(json.loads(row["transports_json"])),
+        library_name=row["library_name"],
+        library_version=row["library_version"],
+        sign_count_mode=row["sign_count_mode"],
+        uv_capable=_loaded_bool(row["uv_capable"], nullable=True),
+        uv_required_for_guarded=bool(_loaded_bool(row["uv_required_for_guarded"])),
+        distinct_device_confidence=row["distinct_device_confidence"],
+        record_hash=row["record_hash"],
+    )
+
+
+def _aggregate_distinct_device_confidence(
+    backups: tuple[FounderWebAuthnCredentialRecord, ...],
+) -> str:
+    if not backups:
+        return "missing"
+    values = {record.distinct_device_confidence for record in backups}
+    if "same_device_override" in values:
+        return "same_device_override"
+    if "unknown" in values:
+        return "unknown"
+    return "confirmed_distinct"
+
+
+def _manual_recovery_state(cause: str) -> dict[str, Any]:
+    return {
+        "mode": "manual_recovery_required",
+        "manual_recovery_required": True,
+        "manual_recovery_cause": cause,
+        "active_credential_count": 0,
+        "primary_credential_state": "missing",
+        "backup_credential_state": "missing",
+        "distinct_device_confidence": "missing",
+    }
 
 
 def _build_argparser() -> argparse.ArgumentParser:

@@ -7,6 +7,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 
@@ -59,7 +60,7 @@ class S71WebAuthnBootstrapTests(unittest.TestCase):
             len(base64.urlsafe_b64decode(intent.raw_token + "===")),
             16,
         )
-        with sqlite3.connect(store.db_path) as conn:
+        with closing(sqlite3.connect(store.db_path)) as conn:
             row = conn.execute(
                 "SELECT token_hash FROM s7_bootstrap_intents WHERE intent_id = ?",
                 (intent.intent_id,),
@@ -120,7 +121,7 @@ class S71WebAuthnBootstrapTests(unittest.TestCase):
 
         self.assertEqual(first, {"ok": True, "credential_ref": "cred-primary"})
         self.assertEqual(second, {"ok": False, "error": "s7_bootstrap_invalid"})
-        with sqlite3.connect(store.db_path) as conn:
+        with closing(sqlite3.connect(store.db_path)) as conn:
             count = conn.execute(
                 "SELECT COUNT(*) FROM s7_founder_webauthn_credentials "
                 "WHERE credential_kind = 'primary' AND enabled = 1"
