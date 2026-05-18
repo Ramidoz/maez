@@ -50,6 +50,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -65,6 +66,7 @@ from core.pending_cards import (
     CardStoreError,
     PendingCardStore,
     CardStatus,
+    compute_state_hash,
 )
 
 
@@ -101,6 +103,14 @@ def _owner_rejection_outcome() -> str:
     return f"{slug}_rejected"
 
 
+def _s7_now_text() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _s7_one_hour_from_now_text() -> str:
+    return (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+
+
 def _resolve_audit_request_id(card: Any) -> str:
     """Return a usable audit_request_id for a card, synthesizing a
     deterministic `orphan-card-<request_id>` fallback when the card
@@ -122,6 +132,7 @@ class PipelineStatus(str, Enum):
     EXECUTED            = "executed"             # Lane 0 ran inline
     PENDING_APPROVAL    = "pending_approval"     # Lane 2 card created
     PENDING_DIALOG      = "pending_dialog"       # Lane 3 self-mod dialog entry
+    BLOCKED             = "blocked"              # S7 or explicit runtime gate blocked
     REFUSED_COVENANT    = "refused_covenant"     # covenant gate refused
     REFUSED_AUDIT       = "refused_audit"        # audit judge said DENY
     REFUSED_WILL        = "refused_will"         # A-core #8: will-I volitional refusal
@@ -507,6 +518,15 @@ class DecisionPipeline:
                 pass
 
         if verdict.decision == Decision.APPROVE and is_lane_0:
+            if self._action_requires_s7_authorization(action, params):
+                return PipelineResult(
+                    status=PipelineStatus.BLOCKED,
+                    message="S7 authorization required before guarded inline execution",
+                    verdict=verdict,
+                    classification=classification,
+                    injection_matches=injection_matches,
+                    audit_request_id=audit_req_id,
+                )
             # A-core #8: will-I check before Lane 0 inline execution.
             will_refuse = self._will_i_check(
                 action, params,
@@ -574,6 +594,9 @@ class DecisionPipeline:
                     open_dialog_for_card,
                 )
                 dialog_store = self._get_dialog_store()
+                s7_envelope = self._s7_request_envelope_for_card(card)
+                from core.governance import operator_user_boundary as s7
+
                 _dialog, dialog_opening_text = open_dialog_for_card(
                     store=dialog_store,
                     card_action=action,
@@ -581,18 +604,24 @@ class DecisionPipeline:
                     card_request_id=card.request_id,
                     audit_reasoning=verdict.reasoning or "",
                     concerns=list(verdict.concerns or []),
+                    require_s7_linkage=True,
+                    s7_request_envelope_hash=s7.work_request_envelope_hash(s7_envelope),
                 )
             except Exception as e:
-                # Fail soft: if dialog creation errors, the card is
-                # still created and the owner can still see the proposal.
-                # The dialog just won't exist and replies will fall
-                # through to the normal card-reply classifier. Log so
-                # the failure is visible.
                 import logging
                 logging.getLogger(__name__).warning(
                     "A-core #4b: failed to open self-mod dialog for card %s: %s",
                     card.request_id, e,
                 )
+                blocked = self._block_s7_card(
+                    card,
+                    reason="self-mod dialog linkage failed for guarded work",
+                )
+                blocked.verdict = verdict
+                blocked.classification = classification
+                blocked.injection_matches = injection_matches
+                blocked.audit_request_id = audit_req_id
+                return blocked
 
         return PipelineResult(
             status=status,
@@ -795,6 +824,7 @@ class DecisionPipeline:
         chat_id: Optional[str] = None,
         reply_to_message_id: Optional[str] = None,
         channel: str = "telegram_text",
+        s7_execution_authorization: Any = None,
     ) -> Optional[PipelineResult]:
         """Handle an incoming reply/reaction. Returns None if the reply
         is unrelated to any open card (the caller handles it as normal
@@ -805,6 +835,27 @@ class DecisionPipeline:
         if not open_cards:
             return None
 
+        # If the reply is threaded to a specific card message, use that
+        # explicit target before the newest-card fallback below. A
+        # newer dialog must not hijack a reply explicitly aimed at a
+        # regular card.
+        explicit_target = None
+        explicit_target_card = None
+        if reply_to_message_id:
+            hit = self.card_store.get_by_message(channel, reply_to_message_id)
+            if hit and hit.status in {CardStatus.OPEN.value, CardStatus.DEFERRED.value}:
+                explicit_target = hit.request_id
+                explicit_target_card = hit
+
+        if (text or reaction_emoji) and explicit_target_card is not None:
+            if self._is_pending_dialog_card(explicit_target_card):
+                return self._handle_pending_dialog_input(
+                    card=explicit_target_card,
+                    text=text,
+                    user_id=user_id,
+                    s7_execution_authorization=s7_execution_authorization,
+                )
+
         # A-core #4b: route to self-mod dialog ONLY IF the newest open
         # card is PENDING_DIALOG. If a regular APPROVE card was queued
         # AFTER the dialog opened, "Yes" approves the newer card —
@@ -813,34 +864,24 @@ class DecisionPipeline:
         # Previous version always won for PENDING_DIALOG regardless of
         # age, which caused the cap_reached silent-pause episode:
         # a stale dialog ate every "Yes" meant for newer cards.
-        if text and open_cards:
+        if (text or reaction_emoji) and open_cards and explicit_target_card is None:
             sorted_cards = sorted(
                 open_cards,
                 key=lambda c: getattr(c, "created_at", 0.0),
                 reverse=True,
             )
             newest = sorted_cards[0]
-            newest_is_dialog = (
-                getattr(newest, "audit_decision", None) == "ESCALATE"
-                or str(getattr(newest, "lane", "")) == "3"
-            )
-            if newest_is_dialog:
-                dialog_result = self._handle_dialog_reply_for_card(
+            if self._is_pending_dialog_card(newest):
+                dialog_result = self._handle_pending_dialog_input(
                     card=newest,
                     text=text,
                     user_id=user_id,
+                    s7_execution_authorization=s7_execution_authorization,
                 )
                 if dialog_result is not None:
                     return dialog_result
                 # If 'unrelated' (dialog terminal or no linked dialog),
                 # fall through to the normal card reply classifier.
-
-        # If the reply is threaded to a specific card message, use that
-        explicit_target = None
-        if reply_to_message_id:
-            hit = self.card_store.get_by_message(channel, reply_to_message_id)
-            if hit and hit.status in {CardStatus.OPEN.value, CardStatus.DEFERRED.value}:
-                explicit_target = hit.request_id
 
         classification = classify_reply(
             text=text,
@@ -860,6 +901,14 @@ class DecisionPipeline:
         if card is None:
             return None
 
+        if self._is_pending_dialog_card(card):
+            return self._handle_pending_dialog_input(
+                card=card,
+                text=text,
+                user_id=user_id,
+                s7_execution_authorization=s7_execution_authorization,
+            )
+
         if classification.intent == ReplyIntent.APPROVE:
             return self._on_approve(card, classification, user_id)
         if classification.intent == ReplyIntent.DENY:
@@ -876,12 +925,111 @@ class DecisionPipeline:
     #  A-core #4b: self-mod dialog reply routing                      #
     # -------------------------------------------------------------- #
 
+    @staticmethod
+    def _is_pending_dialog_card(card: CardRecord) -> bool:
+        return (
+            getattr(card, "audit_decision", None) == "ESCALATE"
+            or str(getattr(card, "lane", "")) == "3"
+        )
+
+    def _handle_pending_dialog_input(
+        self,
+        *,
+        card: CardRecord,
+        text: Optional[str],
+        user_id: str,
+        s7_execution_authorization: Any = None,
+    ) -> Optional[PipelineResult]:
+        if not text:
+            return self._block_s7_card(
+                card,
+                reason="self-mod dialog requires text S7 authorization",
+            )
+        return self._handle_dialog_reply_for_card(
+            card=card,
+            text=text,
+            user_id=user_id,
+            s7_execution_authorization=s7_execution_authorization,
+        )
+
+    def _s7_request_envelope_for_card(self, card: CardRecord) -> Any:
+        from core.governance import operator_user_boundary as s7
+
+        path = str((card.params or {}).get("path") or (card.params or {}).get("file") or "")
+        lowered = " ".join((card.action, path)).lower()
+        if "soul" in lowered:
+            proposed_change_class = "soul_change"
+        elif "model_routing" in lowered or "trust_scope" in lowered:
+            proposed_change_class = "model_routing_change"
+        elif "config" in lowered:
+            proposed_change_class = "config_change"
+        elif "protection" in lowered:
+            proposed_change_class = "protection_change"
+        elif card.action == "capability.acquire":
+            proposed_change_class = "capability_install_intent"
+        elif card.action in {"write_any_file", "write_file", "append_to_file"}:
+            proposed_change_class = "code_change"
+        else:
+            proposed_change_class = "unknown_change"
+
+        derived = s7.derive_work_class(action=card.action, params=card.params)
+        predicted_effect_class = (
+            "protection_change"
+            if proposed_change_class == "protection_change"
+            else "behavior_change"
+            if derived in s7.GUARDED_WORK_CLASSES
+            else "no_behavior_change"
+        )
+        content_exposure_risk = (
+            "bonded_content_ref"
+            if any(key in (card.params or {}) for key in ("content", "note", "new_body", "proposed_new_body"))
+            else "content_free"
+        )
+        free_text_ref_hash = (
+            s7.canonical_hash({"params": card.params})
+            if content_exposure_risk == "bonded_content_ref"
+            else None
+        )
+        return s7.build_work_request_envelope(
+            request_id=card.request_id,
+            action=card.action,
+            params=card.params,
+            claimed_work_class=derived,
+            requesting_subsystem="decision_pipeline",
+            closed_symptom_code=(
+                "self_mod_requested"
+                if derived in s7.GUARDED_WORK_CLASSES
+                else "verification_needed"
+            ),
+            proposed_change_class=proposed_change_class,
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=s7.derive_affected_refs(action=card.action, params=card.params),
+            content_exposure_risk=content_exposure_risk,
+            precondition_hash=s7.canonical_hash({
+                "card_state_hash": card.state_hash,
+                "state_fields": card.state_fields,
+            }),
+            created_at=_s7_now_text(),
+            expires_at=_s7_one_hour_from_now_text(),
+            predicted_effect_class=predicted_effect_class,
+            rollback_path_class=(
+                "manual_review"
+                if proposed_change_class == "protection_change"
+                else "revert_patch"
+                if derived in s7.GUARDED_WORK_CLASSES
+                else "no_rollback_needed"
+            ),
+            maez_voice_consultation_id=None,
+            free_text_ref_hash=free_text_ref_hash,
+        )
+
     def _handle_dialog_reply_for_card(
         self,
         *,
         card: CardRecord,
         text: str,
         user_id: str,
+        s7_execution_authorization: Any = None,
     ) -> Optional[PipelineResult]:
         """Route a reply to an open PENDING_DIALOG card through the
         self-mod dialog handler. Translates the dialog's outcome into
@@ -903,25 +1051,34 @@ class DecisionPipeline:
         # Look up the linked dialog via card_request_id
         try:
             dialog_store = self._get_dialog_store()
-            from skills.self_mod_dialog import handle_dialog_reply
+            from skills.self_mod_dialog import DialogStage, handle_dialog_reply
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(
                 "A-core #4b: dialog store unavailable: %s", e,
             )
-            return None
+            return self._block_s7_card(
+                card,
+                reason="self-mod dialog store unavailable for guarded work",
+            )
 
         dialog = dialog_store.get_for_card(card.request_id)
         if dialog is None:
-            # No linked dialog — legacy Lane 3 card from before #4b,
-            # or a failed open_dialog_for_card at creation time. Fall
-            # through to the normal card-reply classifier.
-            return None
+            return self._block_s7_card(
+                card,
+                reason="self-mod dialog linkage missing for guarded work",
+            )
 
+        authority_context = getattr(s7_execution_authorization, "authority_context", None)
+        s7_artifact_id = getattr(s7_execution_authorization, "artifact_id", None)
+        s7_now = getattr(s7_execution_authorization, "now", None)
         turn = handle_dialog_reply(
             store=dialog_store,
             dialog=dialog,
             user_text=text,
+            authority_context=authority_context,
+            s7_artifact_id=s7_artifact_id,
+            s7_now=s7_now,
         )
 
         if turn.kind == "unrelated":
@@ -930,7 +1087,28 @@ class DecisionPipeline:
             # different open card or return None).
             return None
 
+        if turn.kind == "blocked":
+            result = self._block_s7_card(
+                card,
+                reason="self-mod dialog blocked by missing S7 authorization",
+            )
+            if result and turn.reply_text:
+                result.dialog_reply_text = turn.reply_text
+            return result
+
         if turn.kind == "ratified":
+            if not self._s7_card_precondition_fresh(card):
+                dialog_store.set_blocked(
+                    turn.dialog.dialog_id,
+                    reason="stale S7 self-mod precondition",
+                )
+                result = self._block_s7_card(
+                    card,
+                    reason="stale S7 self-mod precondition",
+                )
+                if result and turn.reply_text:
+                    result.dialog_reply_text = turn.reply_text
+                return result
             # Explicit or confirmed approval → run the action via the
             # existing card approve/execute path. We synthesize a
             # minimal classification-shaped object so _on_approve's
@@ -945,11 +1123,45 @@ class DecisionPipeline:
                 source = "self_mod_dialog"
                 reasoning = f"ratified via dialog {dialog.dialog_id[:12]}"
                 audit_request_id = _card_aid
-            result = self._on_approve(card, _SyntheticCls(), user_id)
+            result = self._on_approve(
+                card,
+                _SyntheticCls(),
+                user_id,
+                pre_execute_hook=lambda transition: self._consume_s7_execution_authorization(
+                    s7_execution_authorization,
+                    card=card,
+                    dialog=turn.dialog,
+                    after_consume_before_commit=transition,
+                ),
+                s7_artifact_id=getattr(s7_execution_authorization, "artifact_id", None),
+                pre_execute_block_reason="missing or invalid S7 execution authorization",
+            )
             # Carry the dialog's terminal reply back so the caller can
             # surface it alongside whatever _on_approve produced
             if result and turn.reply_text:
                 result.dialog_reply_text = turn.reply_text
+            if result and result.status in (
+                PipelineStatus.BLOCKED,
+                PipelineStatus.REFUSED_AUDIT,
+                PipelineStatus.REFUSED_WILL,
+            ):
+                dialog_store.set_blocked(
+                    turn.dialog.dialog_id,
+                    reason=result.message or "S7 execution could not start",
+                )
+            elif result and result.status == PipelineStatus.EXECUTED:
+                if result.execution_success is True:
+                    dialog_store.set_stage(
+                        turn.dialog.dialog_id,
+                        DialogStage.EXECUTED.value,
+                        execution_output=result.execution_output,
+                    )
+                elif result.execution_success is False:
+                    dialog_store.set_stage(
+                        turn.dialog.dialog_id,
+                        DialogStage.FAILED.value,
+                        execution_error=result.execution_error,
+                    )
             return result
 
         if turn.kind in ("denied", "cancelled", "cap_reached"):
@@ -975,21 +1187,151 @@ class DecisionPipeline:
             dialog_reply_text=turn.reply_text,
         )
 
+    def _consume_s7_execution_authorization(
+        self,
+        authorization: Any,
+        *,
+        card: CardRecord,
+        dialog: Any,
+        after_consume_before_commit: Optional[Callable[[Any], Any]] = None,
+    ) -> tuple[Any, Any]:
+        try:
+            from core.governance import operator_user_boundary as s7
+
+            if not isinstance(authorization, s7.S7ExecutionAuthorization):
+                return False, None
+            if authorization.rendered.request_id != card.request_id:
+                return False, None
+            if getattr(dialog, "s7_artifact_id", None) != authorization.artifact_id:
+                return False, None
+            if (
+                getattr(dialog, "s7_request_envelope_hash", None)
+                != authorization.rendered.request_envelope_hash
+            ):
+                return False, None
+            execute_params = self._execution_params_for_card(card)
+            actual_action_params_hash = s7.canonical_hash(execute_params)
+            if authorization.action_params_hash != actual_action_params_hash:
+                return False, None
+            grant, transitioned_card = authorization.store.consume_for_execution(
+                authorization.artifact_id,
+                rendered=authorization.rendered,
+                action_params_hash=actual_action_params_hash,
+                authority_context=authorization.authority_context,
+                precondition_hash=authorization.precondition_hash,
+                derived_work_class=authorization.derived_work_class,
+                derived_aggregation_group=authorization.derived_aggregation_group,
+                now=authorization.now,
+                covenant_ceremony_evidence=authorization.covenant_ceremony_evidence,
+                after_consume_before_commit=after_consume_before_commit,
+            )
+            if not isinstance(grant, s7.S7ExecutionGrant):
+                return False, transitioned_card
+            return grant, transitioned_card
+        except Exception:
+            return False, None
+
+    @staticmethod
+    def _execution_params_for_card(card: CardRecord) -> dict:
+        execute_params = dict(card.params or {})
+        if card.action == "capability.acquire":
+            execute_params.setdefault("card_request_id", card.request_id)
+            if card.reason is not None:
+                execute_params.setdefault("reason", card.reason)
+            summary = card.proposed_action_summary or card.plain_english
+            if summary is not None:
+                execute_params.setdefault("plain_english", summary)
+        return execute_params
+
+    def _action_requires_s7_authorization(self, action: str, params: dict | None) -> bool:
+        try:
+            from core.governance import operator_user_boundary as s7
+
+            work_class = s7.derive_work_class(action=action, params=params or {})
+            return work_class in s7.GUARDED_WORK_CLASSES
+        except Exception:
+            return True
+
+    def _s7_card_precondition_fresh(self, card: CardRecord) -> bool:
+        if card.state_hash == "empty":
+            return True
+        current = _drop_volatile(_fingerprint_for_action(card.action, card.params))
+        return compute_state_hash(current) == card.state_hash
+
+    def _card_requires_s7_authorization(self, card: CardRecord) -> bool:
+        return self._action_requires_s7_authorization(card.action, card.params)
+
+    def _block_s7_card(self, card: CardRecord, *, reason: str) -> PipelineResult:
+        try:
+            blocked = self.card_store.block(card.request_id, reason)
+        except CardStoreError as e:
+            logger.warning(
+                "card %s could not enter S7 blocked state (%s)",
+                card.request_id,
+                e,
+            )
+            blocked = self.card_store.get(card.request_id) or card
+        return PipelineResult(
+            status=PipelineStatus.BLOCKED,
+            message=reason,
+            card=blocked,
+        )
+
     # -------------------------------------------------------------- #
     #  Intent handlers                                                #
     # -------------------------------------------------------------- #
 
-    def _on_approve(self, card: CardRecord, cls: Any, user_id: str) -> PipelineResult:
+    def _on_approve(
+        self,
+        card: CardRecord,
+        cls: Any,
+        user_id: str,
+        *,
+        pre_execute_hook: Optional[Callable[..., Any]] = None,
+        s7_artifact_id: Optional[str] = None,
+        pre_execute_block_reason: str = "pre-execution gate blocked",
+    ) -> PipelineResult:
+        s7_required = self._card_requires_s7_authorization(card)
+        if s7_required and pre_execute_hook is None:
+            return self._block_s7_card(
+                card,
+                reason="missing S7 execution authorization for guarded card",
+            )
+        if s7_required and not s7_artifact_id:
+            return self._block_s7_card(
+                card,
+                reason="missing S7 authorization artifact for guarded card",
+            )
         # Re-check state hash against current world
         current = _drop_volatile(_fingerprint_for_action(card.action, card.params))
-        approved_or_expired = self.card_store.approve(
-            card.request_id,
-            user_id=user_id,
-            via=cls.source,
-            notes=cls.reasoning,
-            current_state_fields=current,
-        )
-        card = approved_or_expired
+        if s7_required:
+            if card.state_hash != "empty":
+                now_hash = compute_state_hash(current)
+                if now_hash != card.state_hash:
+                    expired = self.card_store.expire(
+                        card.request_id,
+                        f"state hash changed: was {card.state_hash}, now {now_hash}",
+                    )
+                    if self.renderer:
+                        self.renderer.send_resolution(expired)
+                    return PipelineResult(
+                        status=PipelineStatus.REFUSED_AUDIT,
+                        message="Card expired — state changed since creation. Re-ask to run a fresh audit.",
+                        card=expired,
+                    )
+        else:
+            try:
+                approved_or_expired = self.card_store.approve(
+                    card.request_id,
+                    user_id=user_id,
+                    via=cls.source,
+                    notes=cls.reasoning,
+                    current_state_fields=current,
+                    s7_authorized=False,
+                )
+            except CardStoreError as e:
+                return self._block_s7_card(card, reason=str(e))
+            card = approved_or_expired
 
         if card.status == CardStatus.EXPIRED.value:
             if self.renderer:
@@ -1010,30 +1352,88 @@ class DecisionPipeline:
         if will_refuse is not None:
             return will_refuse
 
-        # Mark running, execute, mark done/failed.
-        # tier=0 here means "run immediately" — the card already served
-        # as the approval step, so we don't want the tier system to
-        # re-queue the action for a second approval.
-        #
-        # 02-B1: if `mark_running` itself raises CardStoreError the card
-        # has already moved to a terminal state between the will-I check
-        # above and here (concurrent deny, manual expiry, second
-        # approval path). Treat that as "card already resolved" and
-        # return the current state rather than crashing with an
-        # unhandled CardStoreError up to the caller.
-        try:
-            self.card_store.mark_running(card.request_id)
-        except CardStoreError as e:
-            logger.warning(
-                "card %s already terminal at mark_running (%s); "
-                "skipping execution", card.request_id, e,
-            )
-            fresh = self.card_store.get(card.request_id) or card
-            return PipelineResult(
-                status=PipelineStatus.REFUSED_AUDIT,
-                message="Card was already resolved before execution could start.",
-                card=fresh,
-            )
+        if s7_required:
+            assert pre_execute_hook is not None
+
+            def _mark_running_after_s7_verification(grant: Any) -> CardRecord:
+                latest = _drop_volatile(_fingerprint_for_action(card.action, card.params))
+                return self.card_store.approve_and_mark_running(
+                    card.request_id,
+                    user_id=user_id,
+                    via=cls.source,
+                    notes=cls.reasoning,
+                    current_state_fields=latest,
+                    s7_artifact_id=s7_artifact_id,
+                    s7_execution_grant=grant,
+                    s7_execution_params=self._execution_params_for_card(card),
+                )
+
+            try:
+                pre_execute_result = pre_execute_hook(_mark_running_after_s7_verification)
+            except Exception:
+                pre_execute_result = (False, None)
+            if isinstance(pre_execute_result, tuple):
+                execution_grant = pre_execute_result[0]
+                transitioned_card = pre_execute_result[1] if len(pre_execute_result) > 1 else None
+            else:
+                execution_grant = None
+                transitioned_card = None
+            if not isinstance(transitioned_card, CardRecord):
+                return self._block_s7_card(card, reason="S7 transition did not return a running card")
+            try:
+                from core.governance import operator_user_boundary as s7
+
+                pre_execute_ok = s7.execution_grant_authorizes_card_transition(
+                    execution_grant,
+                    request_id=card.request_id,
+                    action=card.action,
+                    params=self._execution_params_for_card(card),
+                    artifact_id=s7_artifact_id,
+                )
+            except Exception:
+                pre_execute_ok = False
+            if not pre_execute_ok:
+                failed_card = transitioned_card if isinstance(transitioned_card, CardRecord) else card
+                return self._block_s7_card(failed_card, reason=pre_execute_block_reason)
+            card = transitioned_card
+            if card.status == CardStatus.EXPIRED.value:
+                if self.renderer:
+                    self.renderer.send_resolution(card)
+                return PipelineResult(
+                    status=PipelineStatus.REFUSED_AUDIT,
+                    message="Card expired — state changed since creation. Re-ask to run a fresh audit.",
+                    card=card,
+                )
+            if not self._s7_card_precondition_fresh(card):
+                return self._block_s7_card(
+                    card,
+                    reason="stale S7 precondition after authorization consume",
+                )
+        else:
+            # Mark running, execute, mark done/failed.
+            # tier=0 here means "run immediately" — the card already served
+            # as the approval step, so we don't want the tier system to
+            # re-queue the action for a second approval.
+            #
+            # 02-B1: if `mark_running` itself raises CardStoreError the card
+            # has already moved to a terminal state between the will-I check
+            # above and here (concurrent deny, manual expiry, second
+            # approval path). Treat that as "card already resolved" and
+            # return the current state rather than crashing with an
+            # unhandled CardStoreError up to the caller.
+            try:
+                card = self.card_store.mark_running(card.request_id)
+            except CardStoreError as e:
+                logger.warning(
+                    "card %s already terminal at mark_running (%s); "
+                    "skipping execution", card.request_id, e,
+                )
+                fresh = self.card_store.get(card.request_id) or card
+                return PipelineResult(
+                    status=PipelineStatus.REFUSED_AUDIT,
+                    message="Card was already resolved before execution could start.",
+                    card=fresh,
+                )
         # Enrich params for actions whose handlers need the surrounding
         # card metadata (request_id / reason / proposed summary). The
         # default _execute_action contract passes only card.action +
@@ -1043,21 +1443,12 @@ class DecisionPipeline:
         # acquisition queue for the audit trail — without enrichment
         # those queue fields would be NULL on real-card approvals.
         # (Step 4b post-review fix.)
-        execute_params = dict(card.params or {})
-        if card.action == "capability.acquire":
-            execute_params.setdefault("card_request_id", card.request_id)
-            if card.reason is not None:
-                execute_params.setdefault("reason", card.reason)
-            summary = card.proposed_action_summary or card.plain_english
-            if summary is not None:
-                # The capability queue still stores this under its
-                # legacy column name. The pending-card row now keeps
-                # the truth-boundary split as proposed_action_summary.
-                execute_params.setdefault("plain_english", summary)
+        execute_params = self._execution_params_for_card(card)
         try:
             result = self.action_engine._execute_action(
                 card.action, execute_params,
                 f"card:{card.request_id}", tier=0,
+                s7_execution_grant=execution_grant if s7_required else None,
             )
             ok = bool(getattr(result, "success", False))
             out = str(getattr(result, "output", "") or "")
@@ -1379,7 +1770,16 @@ if __name__ == "__main__":
     class _FakeEngine:
         def __init__(self):
             self.calls = []
-        def _execute_action(self, action, params, reason, tier=2):
+        def _execute_action(
+            self,
+            action,
+            params,
+            reason,
+            tier=2,
+            s7_authorized=False,
+            s7_execution_grant=None,
+        ):
+            del s7_authorized, s7_execution_grant
             self.calls.append({"action": action, "params": params, "tier": tier})
             if "fail" in str(params.get("cmd", "")):
                 return _FakeResult(False, "", "simulated failure")

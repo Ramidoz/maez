@@ -70,9 +70,10 @@ class ActionEnginePromotionProvenanceTests(unittest.TestCase):
         mem = _FakeMemory({"raw-safe": "owner said continuity matters"})
         engine = ActionEngine(memory=mem)
 
-        out = engine._do_promote_to_core_memory("raw-safe", "important")
+        result = engine.promote_to_core_memory("raw-safe", "important")
 
-        self.assertEqual(out, "Promoted to core: core-promoted")
+        self.assertTrue(result.success)
+        self.assertEqual(result.output, "Promoted to core: core-promoted")
         self.assertEqual(len(mem.store_core_calls), 1)
         call = mem.store_core_calls[0]
         self.assertEqual(call["source"], "promotion")
@@ -89,9 +90,10 @@ class ActionEnginePromotionProvenanceTests(unittest.TestCase):
         mem = _FakeMemory({})
         engine = ActionEngine(memory=mem)
 
-        out = engine._do_promote_to_core_memory("raw-missing", "important")
+        result = engine.promote_to_core_memory("raw-missing", "important")
 
-        self.assertIn("not found", out)
+        self.assertTrue(result.success)
+        self.assertIn("not found", result.output)
         self.assertEqual(mem.store_core_calls, [])
 
     def test_untrusted_ancestor_block_surfaces_as_failed_action(self):

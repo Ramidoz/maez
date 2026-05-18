@@ -652,6 +652,7 @@ class TestRealApprovalPathEnrichesParams(unittest.TestCase):
             # downstream enrichment path sees the original metadata.
             store = MagicMock()
             store.approve.return_value = card
+            store.approve_and_mark_running.return_value = card
             store.mark_running.return_value = card
             store.mark_done.return_value = card
             store.mark_failed.return_value = card
@@ -671,6 +672,99 @@ class TestRealApprovalPathEnrichesParams(unittest.TestCase):
             pipeline.audit_log = audit_log
             pipeline.action_engine = engine
             pipeline.renderer = None  # for any send_resolution path
+            from core.governance import operator_user_boundary as s7
+
+            env = s7.build_work_request_envelope(
+                request_id=card.request_id,
+                action=card.action,
+                params=card.params,
+                claimed_work_class="capability_acquisition",
+                requesting_subsystem="unit",
+                closed_symptom_code="verification_needed",
+                proposed_change_class="capability_install_intent",
+                why_self_fix_failed_class="needs_human_authority",
+                affected_refs=("capability:recursive-context-engine",),
+                content_exposure_risk="content_free",
+                precondition_hash="a" * 64,
+                created_at="2026-05-17T16:00:00+00:00",
+                expires_at="2026-05-17T17:00:00+00:00",
+                predicted_effect_class="behavior_change",
+                rollback_path_class="manual_review",
+                maez_voice_consultation_id="voice-card-test-req-id",
+            )
+            consultation = s7.MaezVoiceConsultation(
+                consultation_id="voice-card-test-req-id",
+                request_id=card.request_id,
+                request_envelope_hash=s7.work_request_envelope_hash(env),
+                producer="self_mod_dialog_terminal_state",
+                source_ref_kind="self_mod_dialog_exchange",
+                source_ref_hash="b" * 64,
+                maez_voice_consulted=True,
+                maez_objection_state="absent",
+                maez_withdrew_request=False,
+                unavailable_reason_code=None,
+                created_at="2026-05-17T16:00:00+00:00",
+            )
+            authority = s7.AuthorityContext(
+                actor_id="founder",
+                actor_handle_hmac="hmac:s7:founder:" + ("c" * 64),
+                role_names=("bonded_user", "operator"),
+                grant_source="founder_webauthn",
+                allowed_scopes=("operator_health",),
+                auth_method="founder_webauthn",
+                surface="cockpit",
+                credential_ref="cred-capability-test",
+                created_at="2026-05-17T16:00:00+00:00",
+                expires_at="2026-05-17T17:00:00+00:00",
+                verified=True,
+            )
+            params_hash = s7.canonical_hash(pipeline._execution_params_for_card(card))
+            rendered = s7.render_request_statement(
+                envelope=env,
+                surface="cockpit",
+                origin="http://localhost:11437",
+                action_params_hash=params_hash,
+                authority_context=authority,
+                maez_voice_consultation=consultation,
+                nonce="nonce-card-test-req-id",
+                expires_at="2026-05-17T17:00:00+00:00",
+                rendered_at="2026-05-17T16:00:00+00:00",
+            )
+            artifact = s7.S7AuthorizationArtifact(
+                artifact_id="artifact-capability-test",
+                request_id=card.request_id,
+                request_envelope_hash=s7.work_request_envelope_hash(env),
+                rendered_text_hash=rendered.rendered_text_hash,
+                action_params_hash=params_hash,
+                precondition_hash=env.precondition_hash,
+                authority_context_hash=s7.authority_context_hash(authority),
+                derived_work_class=env.derived_work_class,
+                derived_aggregation_group=env.derived_aggregation_group,
+                nonce=rendered.nonce,
+                credential_ref="cred-capability-test",
+                auth_method="founder_webauthn",
+                grant_source="founder_webauthn",
+                user_presence=True,
+                user_verification=True,
+                created_at="2026-05-17T16:00:00+00:00",
+                expires_at="2026-05-17T17:00:00+00:00",
+                consumed_at=None,
+            )
+            auth_store = s7.S7AuthorizationStore(Path(td) / "s7_authorization.db")
+            auth_store.put(artifact)
+
+            def consume_capability_artifact(transition):
+                return auth_store.consume_for_execution(
+                    artifact.artifact_id,
+                    rendered=rendered,
+                    action_params_hash=params_hash,
+                    authority_context=authority,
+                    precondition_hash=env.precondition_hash,
+                    derived_work_class=env.derived_work_class,
+                    derived_aggregation_group=env.derived_aggregation_group,
+                    now="2026-05-17T16:00:00+00:00",
+                    after_consume_before_commit=transition,
+                )
 
             # Patch the queue's default path so the test queue is used.
             # Also stub will-I check to never refuse (the real check
@@ -687,7 +781,13 @@ class TestRealApprovalPathEnrichesParams(unittest.TestCase):
                 cls.reasoning = "test approval"
                 cls.intent_category = None
                 cls.lane = 2
-                pipeline._on_approve(card, cls, user_id="test-owner")
+                pipeline._on_approve(
+                    card,
+                    cls,
+                    user_id="test-owner",
+                    pre_execute_hook=consume_capability_artifact,
+                    s7_artifact_id=artifact.artifact_id,
+                )
 
             queue = AcquisitionQueue(q_path)
             rows = queue.list_all()

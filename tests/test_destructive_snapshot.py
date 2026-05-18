@@ -253,26 +253,104 @@ class ActionEngineHooksSnapshot(unittest.TestCase):
     def test_destructive_run_shell_triggers_snapshot(self):
         from unittest.mock import patch, MagicMock
         from core.action_engine import ActionEngine
+        from core.governance import operator_user_boundary as s7
 
         engine = ActionEngine()
         # Stub _do_run_shell to avoid actually running any command
         engine._do_run_shell = MagicMock(return_value="(stubbed)")
-
-        with patch("core.destructive_snapshot.snapshot") as mock_snap:
-            mock_snap.return_value = {
-                "manifest_path": "/tmp/fake/manifest.json",
-                "n_files": 1,
-                "errors": [],
-            }
-            engine._execute_action(
+        params = {
+            "cmd": "rm -f /tmp/test-file-dne",
+            "reason": "cleanup",
+        }
+        with tempfile.TemporaryDirectory() as td:
+            env = s7.build_work_request_envelope(
+                request_id="req-destructive-snapshot",
                 action="run_shell",
-                params={
-                    "cmd": "rm /tmp/test-file-dne",
-                    "reason": "cleanup",
-                },
-                reasoning="test",
-                tier=2,
+                params=params,
+                claimed_work_class="destructive_user_action",
+                requesting_subsystem="unit",
+                closed_symptom_code="verification_needed",
+                proposed_change_class="user_content_write",
+                why_self_fix_failed_class="needs_human_authority",
+                affected_refs=("file:/tmp/test-file-dne",),
+                content_exposure_risk="content_free",
+                precondition_hash="a" * 64,
+                created_at="2026-05-17T16:00:00+00:00",
+                expires_at="2026-05-17T17:00:00+00:00",
+                predicted_effect_class="no_behavior_change",
+                rollback_path_class="restore_backup",
             )
+            authority = s7.AuthorityContext(
+                actor_id="founder",
+                actor_handle_hmac="hmac:s7:founder:" + ("d" * 64),
+                role_names=("bonded_user", "operator"),
+                grant_source="founder_webauthn",
+                allowed_scopes=("operator_health",),
+                auth_method="founder_webauthn",
+                surface="cockpit",
+                credential_ref="cred-destructive-snapshot",
+                created_at="2026-05-17T16:00:00+00:00",
+                expires_at="2026-05-17T17:00:00+00:00",
+                verified=True,
+            )
+            params_hash = s7.canonical_hash(params)
+            rendered = s7.render_request_statement(
+                envelope=env,
+                surface="cockpit",
+                origin="http://localhost:11437",
+                action_params_hash=params_hash,
+                authority_context=authority,
+                maez_voice_consultation=None,
+                nonce="nonce-destructive-snapshot",
+                expires_at="2026-05-17T17:00:00+00:00",
+                rendered_at="2026-05-17T16:00:00+00:00",
+            )
+            artifact = s7.S7AuthorizationArtifact(
+                artifact_id="artifact-destructive-snapshot",
+                request_id=env.request_id,
+                request_envelope_hash=s7.work_request_envelope_hash(env),
+                rendered_text_hash=rendered.rendered_text_hash,
+                action_params_hash=params_hash,
+                precondition_hash=env.precondition_hash,
+                authority_context_hash=s7.authority_context_hash(authority),
+                derived_work_class=env.derived_work_class,
+                derived_aggregation_group=env.derived_aggregation_group,
+                nonce=rendered.nonce,
+                credential_ref="cred-destructive-snapshot",
+                auth_method="founder_webauthn",
+                grant_source="founder_webauthn",
+                user_presence=True,
+                user_verification=True,
+                created_at="2026-05-17T16:00:00+00:00",
+                expires_at="2026-05-17T17:00:00+00:00",
+                consumed_at=None,
+            )
+            store = s7.S7AuthorizationStore(Path(td) / "s7_authorization.db")
+            store.put(artifact)
+            execution_grant, _ = store.consume_for_execution(
+                artifact.artifact_id,
+                rendered=rendered,
+                action_params_hash=params_hash,
+                authority_context=authority,
+                precondition_hash=env.precondition_hash,
+                derived_work_class=env.derived_work_class,
+                derived_aggregation_group=env.derived_aggregation_group,
+                now="2026-05-17T16:00:00+00:00",
+            )
+
+            with patch("core.destructive_snapshot.snapshot") as mock_snap:
+                mock_snap.return_value = {
+                    "manifest_path": "/tmp/fake/manifest.json",
+                    "n_files": 1,
+                    "errors": [],
+                }
+                engine._execute_action(
+                    action="run_shell",
+                    params=params,
+                    reasoning="test",
+                    tier=2,
+                    s7_execution_grant=execution_grant,
+                )
         # Snapshot was invoked:
         self.assertTrue(
             mock_snap.called,
@@ -281,7 +359,7 @@ class ActionEngineHooksSnapshot(unittest.TestCase):
         )
         # Invoked with the cmd that triggered it:
         call_kwargs = mock_snap.call_args.kwargs
-        self.assertIn("rm /tmp/test-file-dne", call_kwargs.get("cmd", ""))
+        self.assertIn("rm -f /tmp/test-file-dne", call_kwargs.get("cmd", ""))
         self.assertEqual(call_kwargs.get("shape"), "rm")
 
     def test_non_destructive_run_shell_skips_snapshot(self):

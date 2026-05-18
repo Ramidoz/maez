@@ -95,6 +95,7 @@ import time
 # still override.
 from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional
@@ -126,6 +127,7 @@ class DialogStage(str, Enum):
     CANCELLED   = "cancelled"     # Explicit abort / stop / cancel phrasing
     EXECUTED    = "executed"      # Ratification ran the underlying action
     FAILED      = "failed"        # Execution attempted but errored
+    BLOCKED     = "blocked"       # S7-required linkage/authorization unavailable
 
 
 # Terminal states — no further replies accepted on a dialog once it
@@ -138,6 +140,7 @@ TERMINAL_STAGES = frozenset({
     DialogStage.CANCELLED.value,
     DialogStage.EXECUTED.value,
     DialogStage.FAILED.value,
+    DialogStage.BLOCKED.value,
 })
 
 
@@ -150,6 +153,7 @@ LINKABLE_PRIOR_STAGES = frozenset({
     DialogStage.CAP_REACHED.value,
     DialogStage.CANCELLED.value,
     DialogStage.FAILED.value,
+    DialogStage.BLOCKED.value,
 })
 
 
@@ -177,6 +181,12 @@ class SelfModDialog:
     target_action: Optional[str] = None
     target_scope: Optional[str] = None
     prior_dialog_ids: list[str] = field(default_factory=list)
+    s7_required: bool = False
+    s7_request_envelope_hash: Optional[str] = None
+    s7_authority_context_hash: Optional[str] = None
+    s7_artifact_id: Optional[str] = None
+    s7_block_reason: Optional[str] = None
+    maintenance_record_class: str = "self_remaking_history"
     # Ephemeral flag — when the classifier last suggested resolution and
     # Maez asked the user "does this feel resolved?", we stash that fact
     # so the next user reply is interpreted as a yes/no against the
@@ -209,7 +219,13 @@ CREATE TABLE IF NOT EXISTS self_mod_dialogs (
     target_action        TEXT,
     target_scope         TEXT,
     prior_dialog_ids_json TEXT DEFAULT '[]',
-    awaiting_confirmation INTEGER DEFAULT 0
+    awaiting_confirmation INTEGER DEFAULT 0,
+    s7_required INTEGER DEFAULT 0,
+    s7_request_envelope_hash TEXT,
+    s7_authority_context_hash TEXT,
+    s7_artifact_id TEXT,
+    s7_block_reason TEXT,
+    maintenance_record_class TEXT DEFAULT 'self_remaking_history'
 );
 """
 
@@ -277,6 +293,12 @@ def _row_to_dialog(row: sqlite3.Row) -> SelfModDialog:
         target_action=_safe_col("target_action"),
         target_scope=_safe_col("target_scope"),
         prior_dialog_ids=prior_ids,
+        s7_required=bool(_safe_col("s7_required") == "1"),
+        s7_request_envelope_hash=_safe_col("s7_request_envelope_hash"),
+        s7_authority_context_hash=_safe_col("s7_authority_context_hash"),
+        s7_artifact_id=_safe_col("s7_artifact_id"),
+        s7_block_reason=_safe_col("s7_block_reason"),
+        maintenance_record_class=_safe_col("maintenance_record_class") or "self_remaking_history",
         awaiting_completion_confirmation=awaiting,
     )
 
@@ -314,6 +336,21 @@ class SelfModDialogStore:
                 conn.execute(
                     "ALTER TABLE self_mod_dialogs ADD COLUMN awaiting_confirmation INTEGER DEFAULT 0"
                 )
+            if "s7_required" not in cols:
+                conn.execute("ALTER TABLE self_mod_dialogs ADD COLUMN s7_required INTEGER DEFAULT 0")
+            if "s7_request_envelope_hash" not in cols:
+                conn.execute("ALTER TABLE self_mod_dialogs ADD COLUMN s7_request_envelope_hash TEXT")
+            if "s7_authority_context_hash" not in cols:
+                conn.execute("ALTER TABLE self_mod_dialogs ADD COLUMN s7_authority_context_hash TEXT")
+            if "s7_artifact_id" not in cols:
+                conn.execute("ALTER TABLE self_mod_dialogs ADD COLUMN s7_artifact_id TEXT")
+            if "s7_block_reason" not in cols:
+                conn.execute("ALTER TABLE self_mod_dialogs ADD COLUMN s7_block_reason TEXT")
+            if "maintenance_record_class" not in cols:
+                conn.execute(
+                    "ALTER TABLE self_mod_dialogs "
+                    "ADD COLUMN maintenance_record_class TEXT DEFAULT 'self_remaking_history'"
+                )
 
             # 3. Indexes come last so CREATE INDEX on columns added via
             #    ALTER TABLE on existing DBs is safe.
@@ -334,9 +371,22 @@ class SelfModDialogStore:
         target_action: Optional[str] = None,
         target_scope: Optional[str] = None,
         prior_dialog_ids: Optional[list[str]] = None,
+        s7_required: bool = False,
+        s7_request_envelope_hash: Optional[str] = None,
+        s7_block_reason: Optional[str] = None,
     ) -> SelfModDialog:
         dialog_id = secrets.token_hex(12)
         now = time.time()
+        stage = (
+            DialogStage.BLOCKED.value
+            if s7_required and not s7_request_envelope_hash
+            else DialogStage.PROPOSED.value
+        )
+        block_reason = (
+            "missing_s7_request_envelope_hash"
+            if s7_required and not s7_request_envelope_hash
+            else s7_block_reason
+        )
         history = [{
             "role": "maez",
             "content": opening_proposal,
@@ -349,16 +399,22 @@ class SelfModDialogStore:
                     dialog_id, card_request_id, created_at, updated_at,
                     stage, history_json, reversible_path_json,
                     target_file, target_action, target_scope,
-                    prior_dialog_ids_json, awaiting_confirmation
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                    prior_dialog_ids_json, awaiting_confirmation,
+                    s7_required, s7_request_envelope_hash, s7_block_reason,
+                    maintenance_record_class
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
                 """,
                 (
                     dialog_id, card_request_id, now, now,
-                    DialogStage.PROPOSED.value,
+                    stage,
                     json.dumps(history),
                     json.dumps(reversible_path) if reversible_path else None,
                     target_file, target_action, target_scope,
                     json.dumps(prior_dialog_ids or []),
+                    1 if s7_required else 0,
+                    s7_request_envelope_hash,
+                    block_reason,
+                    "self_remaking_history",
                 ),
             )
         return self.get(dialog_id)  # type: ignore[return-value]
@@ -494,6 +550,44 @@ class SelfModDialogStore:
                     time.time() if stage in TERMINAL_STAGES else None,
                     execution_output,
                     execution_error,
+                    dialog_id,
+                ),
+            )
+        return self.get(dialog_id)  # type: ignore[return-value]
+
+    def set_s7_authorization(
+        self,
+        dialog_id: str,
+        *,
+        artifact_id: str,
+        authority_context_hash: str,
+    ) -> SelfModDialog:
+        with self._conn() as conn:
+            conn.execute(
+                """
+                UPDATE self_mod_dialogs
+                SET s7_artifact_id = ?, s7_authority_context_hash = ?,
+                    updated_at = ?
+                WHERE dialog_id = ?
+                """,
+                (artifact_id, authority_context_hash, time.time(), dialog_id),
+            )
+        return self.get(dialog_id)  # type: ignore[return-value]
+
+    def set_blocked(self, dialog_id: str, *, reason: str) -> SelfModDialog:
+        with self._conn() as conn:
+            conn.execute(
+                """
+                UPDATE self_mod_dialogs
+                SET stage = ?, s7_block_reason = ?, updated_at = ?,
+                    resolved_at = ?
+                WHERE dialog_id = ?
+                """,
+                (
+                    DialogStage.BLOCKED.value,
+                    reason,
+                    time.time(),
+                    time.time(),
                     dialog_id,
                 ),
             )
@@ -1086,6 +1180,8 @@ def open_dialog_for_card(
     audit_reasoning: str,
     concerns: list[str],
     opener_llm_fn: Optional[Callable[[str], str]] = None,
+    require_s7_linkage: bool = False,
+    s7_request_envelope_hash: Optional[str] = None,
 ) -> tuple[SelfModDialog, str]:
     """Called when a PENDING_DIALOG card is created. Builds the
     opening turn per Rules 1 and 2 and records the dialog.
@@ -1140,8 +1236,67 @@ def open_dialog_for_card(
         target_action=target_action,
         target_scope=target_scope,
         prior_dialog_ids=prior_ids,
+        s7_required=require_s7_linkage,
+        s7_request_envelope_hash=s7_request_envelope_hash,
     )
     return dialog, opening
+
+
+def _s7_actor_role(authority_context: object | None) -> str:
+    roles = tuple(getattr(authority_context, "role_names", ()) or ())
+    if "bonded_user" in roles:
+        return "bonded_user"
+    if "operator" in roles:
+        return "operator"
+    if "maintainer" in roles:
+        return "maintainer"
+    return "unknown_actor"
+
+
+def _s7_authority_hash(authority_context: object | None) -> Optional[str]:
+    if authority_context is None:
+        return None
+    try:
+        from core.governance import operator_user_boundary as s7
+
+        return s7.authority_context_hash(authority_context)  # type: ignore[arg-type]
+    except Exception:
+        return None
+
+
+def _s7_ratification_ready(
+    dialog: SelfModDialog,
+    *,
+    authority_context: object | None,
+    s7_artifact_id: Optional[str],
+    now: Optional[str] = None,
+) -> bool:
+    if not dialog.s7_required:
+        return True
+    if not s7_artifact_id:
+        return False
+    if _s7_authority_hash(authority_context) is None:
+        return False
+    roles = tuple(getattr(authority_context, "role_names", ()) or ())
+    if "bonded_user" not in roles:
+        return False
+    try:
+        from core.governance import operator_user_boundary as s7
+
+        now_text = now or datetime.now(timezone.utc).isoformat()
+        return s7.authority_context_active_for_artifact(authority_context, now=now_text)
+    except Exception:
+        return False
+
+
+def _block_s7_ratification(store: SelfModDialogStore, dialog: SelfModDialog) -> DialogTurnResult:
+    blocked = store.set_blocked(
+        dialog.dialog_id,
+        reason="missing_s7_authorization_artifact",
+    )
+    ack = "Blocked by S7: this self-modification needs an exact authorization artifact before I can ratify it."
+    store.append_exchange(blocked.dialog_id, role="maez", content=ack)
+    return DialogTurnResult(kind="blocked", reply_text=ack, dialog=store.get(blocked.dialog_id))
 
 
 def handle_dialog_reply(
@@ -1155,6 +1310,9 @@ def handle_dialog_reply(
     # `answerer` callable. If provided, it is used as the response_llm_fn.
     answerer: Optional[Callable[..., str]] = None,
     turn_cap: int = HARD_TURN_CAP,
+    authority_context: object | None = None,
+    s7_artifact_id: Optional[str] = None,
+    s7_now: Optional[str] = None,
 ) -> DialogTurnResult:
     """Route the user's reply within an active self-mod dialog.
 
@@ -1200,7 +1358,7 @@ def handle_dialog_reply(
         response_llm_fn = _adapted
 
     # Record the incoming turn from the user
-    store.append_exchange(dialog.dialog_id, role="rohit", content=user_text)
+    store.append_exchange(dialog.dialog_id, role=_s7_actor_role(authority_context), content=user_text)
     dialog = store.get(dialog.dialog_id)  # type: ignore[assignment]
     assert dialog is not None
 
@@ -1213,6 +1371,20 @@ def handle_dialog_reply(
     if dialog.awaiting_completion_confirmation:
         terminal = classify_terminal_reply(user_text)
         if terminal == TerminalIntent.APPROVE:
+            if not _s7_ratification_ready(
+                dialog,
+                authority_context=authority_context,
+                s7_artifact_id=s7_artifact_id,
+                now=s7_now,
+            ):
+                return _block_s7_ratification(store, dialog)
+            auth_hash = _s7_authority_hash(authority_context)
+            if s7_artifact_id and auth_hash:
+                dialog = store.set_s7_authorization(
+                    dialog.dialog_id,
+                    artifact_id=s7_artifact_id,
+                    authority_context_hash=auth_hash,
+                )
             # Confirmed completion → RATIFIED
             dialog = store.set_stage(dialog.dialog_id, DialogStage.RATIFIED.value)
             ack = "Ratified. I have your go-ahead and I'll proceed with the change."
@@ -1249,6 +1421,20 @@ def handle_dialog_reply(
     # ----------------------------------------------------------------
     terminal = classify_terminal_reply(user_text)
     if terminal == TerminalIntent.APPROVE:
+        if not _s7_ratification_ready(
+            dialog,
+            authority_context=authority_context,
+            s7_artifact_id=s7_artifact_id,
+            now=s7_now,
+        ):
+            return _block_s7_ratification(store, dialog)
+        auth_hash = _s7_authority_hash(authority_context)
+        if s7_artifact_id and auth_hash:
+            dialog = store.set_s7_authorization(
+                dialog.dialog_id,
+                artifact_id=s7_artifact_id,
+                authority_context_hash=auth_hash,
+            )
         dialog = store.set_stage(dialog.dialog_id, DialogStage.RATIFIED.value)
         ack = "Ratified. I have your explicit yes and I'll proceed with the change."
         store.append_exchange(dialog.dialog_id, role="maez", content=ack)

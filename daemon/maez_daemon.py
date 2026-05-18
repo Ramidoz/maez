@@ -91,6 +91,12 @@ from core.safety.clinical_boundary import (
 from core.time.temporal_spine import temporal_spine_health
 from core.voice_continuity import voice_continuity_health
 from core.governance.successor_governance import successor_governance_health
+from core.governance.operator_user_boundary import (
+    GUARDED_SELF_MODIFICATION_PAUSED_MODE,
+    build_operator_health_projection,
+    live_webauthn_ceremony_enabled,
+    s7_ceremony_deferred_response,
+)
 from skills.telegram_voice import TelegramVoice
 from skills.telegram_public import MaezPublicBot
 from core.action_engine import ActionEngine
@@ -951,6 +957,46 @@ class MaezDaemon:
         """Content-free S5 state joined to the live identity-ledger fingerprint."""
 
         return voice_continuity_health(getattr(self, "_identity_ledger", None))
+
+    def _operator_health(self) -> dict:
+        """Closed S7 operator-health projection; counts and modes only."""
+        queue_counts = {"open": 0, "blocked": 0, "expired": 0}
+        data_freshness_class = "unavailable"
+        try:
+            telegram = getattr(self, "telegram", None)
+            pipe = telegram._get_pipeline() if telegram else None
+            card_store = getattr(pipe, "card_store", None) if pipe else None
+            if card_store is not None:
+                stats = card_store.stats()
+                by_status = dict(stats.get("by_status") or {})
+                queue_counts = {
+                    "open": int(stats.get("open") or 0),
+                    "blocked": int(by_status.get("blocked") or 0),
+                    "expired": int(by_status.get("expired") or 0),
+                }
+                data_freshness_class = "fresh"
+        except Exception as exc:
+            logger.warning("S7 operator health degraded: %s", exc)
+            data_freshness_class = "unavailable"
+        s7_live_ceremony_deferred = not live_webauthn_ceremony_enabled()
+        red_gate_modes = (
+            "track_b_confidentiality_not_ready",
+            "operator_unavailable_recovery_not_implemented",
+            "backup_restore_confidentiality_not_ready",
+        )
+        if s7_live_ceremony_deferred:
+            red_gate_modes = red_gate_modes + (GUARDED_SELF_MODIFICATION_PAUSED_MODE,)
+        return build_operator_health_projection(
+            mode=GUARDED_SELF_MODIFICATION_PAUSED_MODE if s7_live_ceremony_deferred else "degraded",
+            service_mode="running",
+            uptime_class="fresh",
+            backup_freshness_class="unavailable",
+            queue_counts=queue_counts,
+            red_gate_modes=red_gate_modes,
+            manual_recovery_required=False,
+            track_b_confidentiality_mode="track_b_confidentiality_not_ready",
+            data_freshness_class=data_freshness_class,
+        )
 
     def _mark_cycle_stage(self, stage: str) -> None:
         """Record the current daemon-cycle stage for hang diagnosis."""
@@ -5538,6 +5584,54 @@ class MaezDaemon:
                 }
             )
 
+        @app.route("/operator/health")
+        def operator_health():
+            return jsonify(self._operator_health())
+
+        @app.route("/internal/s7/webauthn/register/begin", methods=["POST"])
+        def s7_webauthn_register_begin():
+            if live_webauthn_ceremony_enabled():
+                raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
+            return jsonify(
+                s7_ceremony_deferred_response(
+                    surface="daemon",
+                    route="/internal/s7/webauthn/register/begin",
+                )
+            ), 503
+
+        @app.route("/internal/s7/webauthn/register/finish", methods=["POST"])
+        def s7_webauthn_register_finish():
+            if live_webauthn_ceremony_enabled():
+                raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
+            return jsonify(
+                s7_ceremony_deferred_response(
+                    surface="daemon",
+                    route="/internal/s7/webauthn/register/finish",
+                )
+            ), 503
+
+        @app.route("/internal/s7/cards/<request_id>/webauthn/begin", methods=["POST"])
+        def s7_webauthn_authorize_begin(request_id: str):
+            if live_webauthn_ceremony_enabled():
+                raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
+            return jsonify(
+                s7_ceremony_deferred_response(
+                    surface="daemon",
+                    route=f"/internal/s7/cards/{request_id}/webauthn/begin",
+                )
+            ), 503
+
+        @app.route("/internal/s7/cards/<request_id>/webauthn/finish", methods=["POST"])
+        def s7_webauthn_authorize_finish(request_id: str):
+            if live_webauthn_ceremony_enabled():
+                raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
+            return jsonify(
+                s7_ceremony_deferred_response(
+                    surface="daemon",
+                    route=f"/internal/s7/cards/{request_id}/webauthn/finish",
+                )
+            ), 503
+
         @app.route("/message", methods=["POST"])
         def message():
             data = request.get_json(silent=True) or {}
@@ -5666,12 +5760,28 @@ class MaezDaemon:
                             "error": f"card status is {card.status!r}, not approvable",
                         }
                     ), 409
+                if (
+                    pipe._is_pending_dialog_card(card)
+                    or pipe._card_requires_s7_authorization(card)
+                ):
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": "s7_authorization_required",
+                            "status": "blocked",
+                            "message": (
+                                "This card changes Maez's guarded substrate "
+                                "and cannot be approved by the cockpit legacy "
+                                "endpoint."
+                            ),
+                        }
+                    ), 403
 
                 class _CockpitCls:
                     source = "cockpit"
                     reasoning = "approved from cockpit UI"
 
-                result = pipe._on_approve(card, _CockpitCls(), "rohit")
+                result = pipe._on_approve(card, _CockpitCls(), card.user_id or "owner")
                 # PipelineResult may be the executed card result or a
                 # refusal (e.g., covenant / will-I / stale state).
                 ok = bool(getattr(result, "execution_success", None))

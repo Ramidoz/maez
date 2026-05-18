@@ -20,10 +20,13 @@ import time
 import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import urlparse
 from uuid import uuid4
 
-sys.path.insert(0, "/home/rohit/maez")
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 from core.infra.secrets import (
     load_ordinary_config_for_process,
     load_secrets_for_process,
@@ -1390,6 +1393,52 @@ def api_card_approve(request_id: str):
                 "detail": str(e)[:200],
             }
         ), 502
+
+
+def _s7_cockpit_ceremony_deferred(route: str):
+    from core.governance.operator_user_boundary import s7_ceremony_deferred_response
+
+    return jsonify(s7_ceremony_deferred_response(surface="cockpit", route=route)), 503
+
+
+@app.route("/api/v1/s7/webauthn/register/begin", methods=["POST"])
+def api_s7_webauthn_register_begin():
+    from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
+
+    route = "/api/v1/s7/webauthn/register/begin"
+    if live_webauthn_ceremony_enabled():
+        raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
+    return _s7_cockpit_ceremony_deferred(route)
+
+
+@app.route("/api/v1/s7/webauthn/register/finish", methods=["POST"])
+def api_s7_webauthn_register_finish():
+    from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
+
+    route = "/api/v1/s7/webauthn/register/finish"
+    if live_webauthn_ceremony_enabled():
+        raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
+    return _s7_cockpit_ceremony_deferred(route)
+
+
+@app.route("/api/v1/s7/cards/<request_id>/webauthn/begin", methods=["POST"])
+def api_s7_webauthn_authorize_begin(request_id: str):
+    from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
+
+    route = f"/api/v1/s7/cards/{request_id}/webauthn/begin"
+    if live_webauthn_ceremony_enabled():
+        raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
+    return _s7_cockpit_ceremony_deferred(route)
+
+
+@app.route("/api/v1/s7/cards/<request_id>/webauthn/finish", methods=["POST"])
+def api_s7_webauthn_authorize_finish(request_id: str):
+    from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
+
+    route = f"/api/v1/s7/cards/{request_id}/webauthn/finish"
+    if live_webauthn_ceremony_enabled():
+        raise NotImplementedError("s7.1_live_webauthn_route_not_mounted")
+    return _s7_cockpit_ceremony_deferred(route)
 
 
 @app.route("/api/v1/services")

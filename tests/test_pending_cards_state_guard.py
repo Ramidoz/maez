@@ -39,7 +39,7 @@ class StateGuardForEmptySentinel(unittest.TestCase):
         EXPIRED. This is the fix for the 2026-04-22 four-noise bug."""
         card = self.store.create_card(
             action="run_shell",
-            params={"cmd": "ls /tmp"},
+            params={"cmd": "systemctl status maez.service"},
             reason="smoke test — no state bound",
             plain_english="run a harmless ls",
         )
@@ -67,7 +67,7 @@ class StateGuardForEmptySentinel(unittest.TestCase):
         for cards that legitimately bound to state at creation."""
         card = self.store.create_card(
             action="run_shell",
-            params={"cmd": "ls /tmp"},
+            params={"cmd": "systemctl status maez.service"},
             reason="state-bound test",
             plain_english="run ls",
             state_fields={"cwd": "/original"},
@@ -91,7 +91,7 @@ class StateGuardForEmptySentinel(unittest.TestCase):
 
     def test_state_bound_card_approves_when_state_matches(self):
         card = self.store.create_card(
-            action="run_shell", params={"cmd": "ls /tmp"},
+            action="run_shell", params={"cmd": "systemctl status maez.service"},
             reason="state-bound, matches", plain_english="run ls",
             state_fields={"cwd": "/home/rohit"},
         )
@@ -185,27 +185,31 @@ class PendingCardTruthBoundary(unittest.TestCase):
             )
 
         card = self.store.create_card(
-            action="write_any_file",
-            params={"path": "/tmp/hi.txt", "content": "hi"},
+            action="quote_stock",
+            params={"ticker": "MAEZ"},
             reason="truth-boundary regression",
-            proposed_action_summary="Write a text file named 'hi.txt'.",
+            proposed_action_summary="Look up the MAEZ quote.",
         )
-        approved = self.store.approve(card.request_id, user_id="test", via="unit")
+        approved = self.store.approve(
+            card.request_id,
+            user_id="test",
+            via="unit",
+        )
         self.store.mark_running(approved.request_id)
         done = self.store.mark_done(
             approved.request_id,
-            output="Written: /tmp/hi.txt (2 chars)",
-            completed_action_summary="Wrote a text file named 'hi.txt'.",
+            output="MAEZ: unavailable",
+            completed_action_summary="Looked up the MAEZ quote.",
         )
 
         self.assertEqual(done.status, "done")
         self.assertEqual(
             done.completed_action_summary,
-            "Wrote a text file named 'hi.txt'.",
+            "Looked up the MAEZ quote.",
         )
         self.assertEqual(
             done.proposed_action_summary,
-            "Write a text file named 'hi.txt'.",
+            "Look up the MAEZ quote.",
         )
 
     def test_renderer_uses_proposed_summary_for_pending_card(self):
@@ -228,23 +232,27 @@ class PendingCardTruthBoundary(unittest.TestCase):
         from skills.approval_card import format_resolution_text
 
         card = self.store.create_card(
-            action="write_any_file",
-            params={"path": "/tmp/hi.txt", "content": "hi"},
+            action="quote_stock",
+            params={"ticker": "MAEZ"},
             reason="truth-boundary regression",
-            proposed_action_summary="Write a text file named 'hi.txt'.",
+            proposed_action_summary="Look up the MAEZ quote.",
         )
-        approved = self.store.approve(card.request_id, user_id="test", via="unit")
+        approved = self.store.approve(
+            card.request_id,
+            user_id="test",
+            via="unit",
+        )
         self.store.mark_running(approved.request_id)
         done = self.store.mark_done(
             approved.request_id,
-            output="Written: /tmp/hi.txt (2 chars)",
-            completed_action_summary="Wrote a text file named 'hi.txt'.",
+            output="MAEZ: unavailable",
+            completed_action_summary="Looked up the MAEZ quote.",
         )
 
         rendered = format_resolution_text(done)
 
-        self.assertIn("Wrote a text file named 'hi.txt'.", rendered)
-        self.assertIn("Written: /tmp/hi.txt", rendered)
+        self.assertIn("Looked up the MAEZ quote.", rendered)
+        self.assertIn("MAEZ: unavailable", rendered)
 
 
 if __name__ == "__main__":

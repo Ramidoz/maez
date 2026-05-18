@@ -524,9 +524,40 @@ class ActionEngine:
     # Writes and destructive actions still go through the full gate.
     _READ_ONLY_ACTIONS = frozenset({
         "read_file", "search_files", "web_search", "quote_stock",
-        "promote_to_core_memory", "write_soul_note",  # soul writer has its own guard
-        "update_baseline", "edit_soul_section",       # soul_editor enforces sections
+        "promote_to_core_memory",
+        "update_baseline",
     })
+    def _s7_invocation_gate(
+        self,
+        action: str,
+        params: dict,
+        *,
+        s7_execution_grant: object = None,
+    ) -> None:
+        try:
+            from core.governance import operator_user_boundary as s7
+
+            work_class = s7.derive_work_class(action=action, params=params or {})
+            guarded = work_class in s7.GUARDED_WORK_CLASSES
+        except Exception:
+            work_class = "undeterminable_work_class"
+            guarded = True
+        if guarded:
+            try:
+                authorized = s7.consume_execution_grant_for_action(
+                    s7_execution_grant,
+                    action=action,
+                    params=params or {},
+                )
+            except Exception:
+                authorized = False
+            if authorized:
+                return
+        if guarded:
+            raise ForbiddenActionError(
+                f"S7 authorization required before direct {action} invocation "
+                f"(work_class={work_class})"
+            )
 
     def _covenant_gate(self, action: str, params: dict):
         """Deterministic covenant gate. Runs before any audit LLM.
@@ -778,8 +809,11 @@ class ActionEngine:
 
     def _execute_action(self, action: str, params: dict,
                         reasoning: str, tier: int,
-                        action_id: str = "") -> ActionResult:
+                        action_id: str = "",
+                        s7_authorized: bool = False,
+                        s7_execution_grant: object = None) -> ActionResult:
         """Execute a single action with full safety and logging."""
+        del s7_authorized
         start = time.time()
         # Generate ID for Tier 0 direct executions (not queued)
         if not action_id:
@@ -789,6 +823,7 @@ class ActionEngine:
         # Session 11z: deterministic covenant gate runs BEFORE the
         # audit LLM (item 3 of Project A). Survival instincts first.
         try:
+            self._s7_invocation_gate(action, params, s7_execution_grant=s7_execution_grant)
             self._covenant_gate(action, params)
         except ForbiddenActionError as e:
             self._log_action(tier, action, reasoning, params, f"COVENANT_REFUSED: {e}")
@@ -2171,6 +2206,31 @@ class ActionEngine:
             target_entry = None
             for entry in self._pending:
                 if entry["id"] == action_id and entry["status"] == "pending":
+                    try:
+                        self._s7_invocation_gate(
+                            entry["action"],
+                            entry.get("params") or {},
+                        )
+                    except ForbiddenActionError as e:
+                        self._log_action(
+                            entry["tier"],
+                            entry["action"],
+                            entry["reasoning"],
+                            entry.get("params") or {},
+                            f"COVENANT_REFUSED: {e}",
+                        )
+                        _covenant_log(
+                            entry["action"],
+                            entry.get("params") or {},
+                            entry["reasoning"],
+                            str(e),
+                        )
+                        return ActionResult(
+                            entry["action"],
+                            entry["tier"],
+                            False,
+                            error=str(e),
+                        )
                     entry["status"] = "approved"
                     target_entry = entry
                     self._save_pending()
