@@ -1213,6 +1213,13 @@ function appendLog(label, payload) {
   log.value += `\n[${new Date().toISOString()}] ${label}\n${JSON.stringify(payload, null, 2)}\n`;
   log.scrollTop = log.scrollHeight;
 }
+function describeError(err) {
+  if (err && err.payload) return err.payload;
+  return {
+    name: err && err.name ? err.name : "Error",
+    message: err && err.message ? err.message : String(err),
+  };
+}
 async function jsonFetch(url, body) {
   const response = await fetch(url, {
     method: body === undefined ? "GET" : "POST",
@@ -1233,52 +1240,64 @@ async function loadStatus() {
   }
 }
 async function registerCredential(kind) {
-  const session = kind === "primary" ? primarySession.value : backupSession.value;
-  const beginBody = {registration_class: kind, session_binding: session};
-  if (kind === "primary") {
-    beginBody.bootstrap_intent_id = bootstrapIntentId.value;
-    beginBody.bootstrap_token = bootstrapToken.value;
-  } else {
-    beginBody.s7_authorization_artifact_id = backupArtifactId.value;
-    beginBody.backup_authorization_request_id = backupAuthorizationRequestId.value;
+  try {
+    const session = kind === "primary" ? primarySession.value : backupSession.value;
+    const beginBody = {registration_class: kind, session_binding: session};
+    if (kind === "primary") {
+      beginBody.bootstrap_intent_id = bootstrapIntentId.value;
+      beginBody.bootstrap_token = bootstrapToken.value;
+    } else {
+      beginBody.s7_authorization_artifact_id = backupArtifactId.value;
+      beginBody.backup_authorization_request_id = backupAuthorizationRequestId.value;
+    }
+    const begin = await jsonFetch("/api/v1/s7/webauthn/register/begin", beginBody);
+    appendLog(`${kind} register begin`, begin);
+    const credential = await navigator.credentials.create(normalizeCreationOptions(begin.public_key_options));
+    const finish = await jsonFetch("/api/v1/s7/webauthn/register/finish", {
+      registration_class: kind,
+      challenge_id: begin.challenge_id,
+      session_binding: session,
+      bootstrap_intent_id: beginBody.bootstrap_intent_id,
+      bootstrap_token: beginBody.bootstrap_token,
+      registration_response: encodeCredentialResponse(credential),
+    });
+    appendLog(`${kind} register finish`, finish);
+    await loadStatus();
+  } catch (err) {
+    appendLog(`${kind} register error`, describeError(err));
   }
-  const begin = await jsonFetch("/api/v1/s7/webauthn/register/begin", beginBody);
-  appendLog(`${kind} register begin`, begin);
-  const credential = await navigator.credentials.create(normalizeCreationOptions(begin.public_key_options));
-  const finish = await jsonFetch("/api/v1/s7/webauthn/register/finish", {
-    registration_class: kind,
-    challenge_id: begin.challenge_id,
-    session_binding: session,
-    bootstrap_intent_id: beginBody.bootstrap_intent_id,
-    bootstrap_token: beginBody.bootstrap_token,
-    registration_response: encodeCredentialResponse(credential),
-  });
-  appendLog(`${kind} register finish`, finish);
-  await loadStatus();
 }
 async function createBackupRegistrationCard() {
-  const card = await jsonFetch("/api/v1/s7/webauthn/register/backup-card", {
-    session_binding: backupSession.value,
-  });
-  appendLog("backup registration card", card);
-  backupAuthorizationRequestId.value = card.request_id || "";
-  cardRequestId.value = card.request_id || "";
+  try {
+    const card = await jsonFetch("/api/v1/s7/webauthn/register/backup-card", {
+      session_binding: backupSession.value,
+    });
+    appendLog("backup registration card", card);
+    backupAuthorizationRequestId.value = card.request_id || "";
+    cardRequestId.value = card.request_id || "";
+  } catch (err) {
+    appendLog("backup registration card error", describeError(err));
+  }
 }
 async function authorizeCard() {
-  const requestId = cardRequestId.value;
-  const session = authSession.value;
-  const begin = await jsonFetch(`/api/v1/s7/cards/${encodeURIComponent(requestId)}/webauthn/begin`, {session_binding: session});
-  appendLog("authorize begin", begin);
-  const credential = await navigator.credentials.get(normalizeRequestOptions(begin.public_key_options));
-  const finish = await jsonFetch(`/api/v1/s7/cards/${encodeURIComponent(requestId)}/webauthn/finish`, {
-    session_binding: session,
-    challenge_id: begin.challenge_id,
-    credential_ref: credentialRef.value || credential.id,
-    authentication_response: encodeCredentialResponse(credential),
-  });
-  appendLog("authorize finish", finish);
-  if (requestId && requestId === backupAuthorizationRequestId.value) {
-    backupArtifactId.value = finish.artifact_id || "";
+  try {
+    const requestId = cardRequestId.value;
+    const session = authSession.value;
+    const begin = await jsonFetch(`/api/v1/s7/cards/${encodeURIComponent(requestId)}/webauthn/begin`, {session_binding: session});
+    appendLog("authorize begin", begin);
+    const credential = await navigator.credentials.get(normalizeRequestOptions(begin.public_key_options));
+    const finish = await jsonFetch(`/api/v1/s7/cards/${encodeURIComponent(requestId)}/webauthn/finish`, {
+      session_binding: session,
+      challenge_id: begin.challenge_id,
+      credential_ref: credentialRef.value || credential.id,
+      authentication_response: encodeCredentialResponse(credential),
+    });
+    appendLog("authorize finish", finish);
+    if (requestId && requestId === backupAuthorizationRequestId.value) {
+      backupArtifactId.value = finish.artifact_id || "";
+    }
+  } catch (err) {
+    appendLog("authorize error", describeError(err));
   }
 }
 async function copyProofLog() {
