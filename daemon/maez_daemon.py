@@ -352,7 +352,7 @@ def _s7_authorization_route_material(
         f"{request_id}|{now}|{session_binding}".encode("utf-8")
     ).hexdigest())
     expires_at = str((challenge or {}).get("expires_at") or _s7_route_expires_at(now))
-    authority_context = _s7_route_authority_context(now, expires_at=expires_at)
+    authority_context = _s7_route_authority_context(envelope.created_at, expires_at=expires_at)
     action_params = pipe._execution_params_for_card(card)
     rendered = s7.render_request_statement(
         envelope=envelope,

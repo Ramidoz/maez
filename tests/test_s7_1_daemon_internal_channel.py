@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -27,6 +28,20 @@ class _FakeServer:
 
     def server_close(self):
         return None
+
+
+class _RouteAuthenticationVerifier:
+    def dependency_state(self):
+        return {"ok": True, "library_name": "webauthn", "library_version": "2.7.1"}
+
+    def verify_authentication_response(self, **_kwargs):
+        return {
+            "ok": True,
+            "credential_ref": "cred-primary",
+            "sign_count": 1,
+            "user_presence": True,
+            "user_verification": True,
+        }
 
 
 class S71DaemonInternalChannelTests(unittest.TestCase):
@@ -106,6 +121,37 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
             daemon.telegram = Telegram()
 
         return configure
+
+    def _credential_record(self, credential_ref: str, *, kind: str):
+        from core.governance.s7_webauthn_bootstrap import FounderWebAuthnCredentialRecord
+
+        return FounderWebAuthnCredentialRecord.build(
+            credential_ref=credential_ref,
+            actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+            role_names=("bonded_user",),
+            public_key=f"public-key-{credential_ref}",
+            sign_count=0,
+            rp_id="localhost",
+            origin="http://localhost:11437",
+            created_at="2026-05-18T11:00:00+00:00",
+            backup_credential=(kind == "backup"),
+            enabled=True,
+            credential_kind=kind,
+            label=f"{kind} key",
+            registration_challenge_id=f"challenge-{credential_ref}",
+            attestation_format="packed",
+            aaguid="00112233-4455-6677-8899-aabbccddeeff",
+            authenticator_attachment="cross-platform",
+            backup_eligible=False,
+            backed_up=False,
+            transports=("usb",),
+            library_name="webauthn",
+            library_version="2.7.1",
+            sign_count_mode="advancing",
+            uv_capable=True,
+            uv_required_for_guarded=True,
+            distinct_device_confidence="confirmed_distinct",
+        )
 
     def test_029_originless_local_curl_to_daemon_register_begin_is_rejected(self):
         with patch.dict(os.environ, {"S7_LIVE_WEBAUTHN_CEREMONY": "1"}, clear=False):
@@ -282,6 +328,61 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
         self.assertEqual(response.get_json()["request_id"], "req-route-finish")
         self.assertEqual(seen["request_json"]["challenge_id"], "challenge-route")
         self.assertEqual(seen["rendered_statement"].request_id, "req-route-finish")
+
+    def test_daemon_authorize_routes_mint_artifact_through_real_service(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = f"{tmp}/memory/s7_1_webauthn"
+            store = S7WebAuthnBootstrapStore(root)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            env = {
+                "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "S7_WEBAUTHN_STORE_ROOT": root,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                with patch("daemon.maez_daemon.S7ProductionWebAuthnVerifier", _RouteAuthenticationVerifier):
+                    client = self._client(
+                        configure_daemon=self._daemon_with_card_pipeline("req-route-live")
+                    )
+                    begin = client.post(
+                        "/internal/s7/cards/req-route-live/webauthn/begin",
+                        json={"session_binding": "session-auth"},
+                        headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                    )
+                    finish = client.post(
+                        "/internal/s7/cards/req-route-live/webauthn/finish",
+                        json={
+                            "session_binding": "session-auth",
+                            "challenge_id": begin.get_json()["challenge_id"],
+                            "credential_ref": "cred-primary",
+                            "authentication_response": {"clientDataJSON": "valid-auth"},
+                        },
+                        headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                    )
+            s7.S7AuthorizationStore(store.db_path)
+            with sqlite3.connect(store.db_path) as conn:
+                artifact_row = conn.execute(
+                    """
+                    SELECT request_id, grant_source, user_verification
+                    FROM s7_authorization_artifacts
+                    WHERE artifact_id = ?
+                    """,
+                    (finish.get_json()["artifact_id"],),
+                ).fetchone()
+
+        self.assertEqual(begin.status_code, 200)
+        self.assertEqual(begin.get_json()["challenge_kind"], "authorize_guarded_request")
+        self.assertEqual(finish.status_code, 200)
+        self.assertEqual(finish.get_json()["request_id"], "req-route-live")
+        self.assertIsNotNone(artifact_row)
+        assert artifact_row is not None
+        self.assertEqual(artifact_row[0], "req-route-live")
+        self.assertEqual(artifact_row[1], "founder_webauthn")
+        self.assertEqual(artifact_row[2], 1)
 
     def test_032_browser_presented_internal_channel_proof_is_rejected(self):
         env = {
