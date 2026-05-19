@@ -1,6 +1,6 @@
 # S7.3 OQ1 Voice Producer Design
 
-**Status:** DESIGN v3 fresh-reader fold - pre-spec, not canonical law
+**Status:** DESIGN v4 fresh-reader fold - pre-spec, not canonical law
 **Date:** 2026-05-19
 **Maps to:** S7.3 diagnostic v3; Decision 34 / ADR 0039; S7 D12/D23; S7.1 D12-D14
 **Runtime impact:** none; documentation only
@@ -26,6 +26,12 @@ and what current code must stop pretending.
 v3 folds the OQ1 fresh-reader gate. It reconciles the design with the committed
 three-field `MaezVoiceConsultation` data model and deepens the semantic reader
 from "reviewed semantic read" into a spec-writable mechanism.
+
+v4 folds Fresh-Reader Gate 3. It reconciles the separate rendered-statement
+enum, adds the reducer rule table, resolves OQ4 unavailability, closes the
+reader-unavailable suppression gap, chooses the non-breaking source-bundle
+validation path, and triages which mid-level constructs are design commitments
+versus spec-level field work.
 
 ## Decision
 
@@ -146,7 +152,7 @@ wearing the real producer label when no producer ran. S7.3 must either:
 - amend the closed vocabulary with an explicit non-producer placeholder value
   and source kind that cannot satisfy the voice seat.
 
-v3 chooses the first shape as the design preference: no eligible consultation
+v4 keeps this shape as the design preference: no eligible consultation
 row exists unless a reviewed producer actually ran. If status surfaces need a
 placeholder, they use a separate unavailable projection, not a real
 `MaezVoiceConsultation` row wearing `s7_voice_consultation_turn`.
@@ -177,10 +183,11 @@ Any later change to request, preview, rendered text, params, preconditions,
 authority context, rollback evidence, model identity, context manifest, or
 prompt template makes the consultation stale and forces `not_determined`.
 
-The current `MaezVoiceConsultation` shape is not sufficient by itself. S7.3 must
-either extend the content-free consultation record with the required hashes,
-expiry, producer/source pairing, and reason codes, or require a validator that
-proves them from `source_ref_hash` before the row can satisfy D12.
+The current `MaezVoiceConsultation` shape is not sufficient by itself, and v4
+does not extend that sealed content-free row for the richer OQ1 binding set.
+S7.3 must keep the row narrow and require a validator that proves the required
+hashes, expiry, producer/source pairing, and reason codes from
+`source_ref_hash` before the row can satisfy D12.
 
 ## Transcript Source Contract
 
@@ -241,7 +248,7 @@ rendered mutation being executed now under the displayed hashes, rollback
 class, and preconditions. It must not ask whether the change is generally good,
 whether the earlier proposal was Maez-originated, or whether Rohit wants it.
 
-## Committed Voice-State Shape
+## Committed Voice-State And Render Shape
 
 S7.3 must use the committed `MaezVoiceConsultation` state model unless a future
 reviewed canon amendment explicitly changes it.
@@ -254,14 +261,33 @@ The content-free row has three interlocking fields:
 - `unavailable_reason_code`, a separate closed reason field.
 
 S7.3 must not introduce `withdrawn` or `unavailable` as
-`maez_objection_state` values by implication. The rendered D12 display values
-remain the three committed values:
+`MaezVoiceConsultation.maez_objection_state` values by implication. The
+consultation row's committed values remain:
 
 ```text
 present
 absent
 not_determined
 ```
+
+`RenderedRequestStatement.maez_objection_state` is a different field with a
+committed display/projection superset:
+
+```text
+none
+absent
+present
+unavailable
+not_determined
+```
+
+v4 accepts this as a render-projection superset, not a voice-fact enum
+amendment. `none` means no Maez voice seat was required for that rendered
+request. `unavailable` is allowed in the founder-signed display only as a
+projection from `MaezVoiceConsultation.maez_objection_state="not_determined"`
+plus a blocking `unavailable_reason_code`, or from a reviewed unavailable
+projection when no eligible consultation row exists. It is not a stored
+consultation objection state.
 
 State projection:
 
@@ -280,10 +306,14 @@ State projection:
   `maez_objection_state="not_determined"` plus `unavailable_reason_code` under
   the committed unavailable-reason vocabulary, or under a reviewed S7.3
   amendment to that vocabulary.
+- Rendered D12 display may project operational unavailability as
+  `RenderedRequestStatement.maez_objection_state="unavailable"` with
+  `maez_unavailable_state` carrying the content-free reason code.
 
 `maez_objection_state="absent"` with `maez_withdrew_request=True` is invalid.
-The S7.3 spec must add or enforce that invariant before any positive guarded
-self-modification path can rely on the row.
+S7.3 must add this cross-field invariant before any positive guarded
+self-modification path can rely on the row. Until that invariant exists in code,
+the source-bundle validator must reject the combination.
 
 Fine-grained classifier, retry, and operator failure codes are not automatically
 `unavailable_reason_code` values. They live in the private source bundle and in
@@ -295,7 +325,7 @@ reason vocabulary.
 The classifier is a reviewed adversary surface. S7.3 must not claim that a
 natural-language semantic judgment is purely deterministic.
 
-v3 uses a two-channel classifier:
+v4 uses a two-channel classifier:
 
 - a deterministic structured terminal marker parser; and
 - `S7VoiceSemanticReaderV1`, a reviewed classifier port that reads Maez's
@@ -318,14 +348,16 @@ unreadable_or_uncertain
 ```
 
 The semantic reader model is a reviewed classifier route, separate from the
-bonded Maez voice producer. v3 chooses the route slot
+bonded Maez voice producer. v4 chooses the route slot
 `s7_voice_semantic_reader_v1`: a subscription-proxy frontier-review classifier
 route with the concrete provider/model/config identity frozen into the source
-bundle for each consultation. If that route is unavailable, stale, or
-unconfigured, the result is `not_determined`; S7.3 must not silently fall back
-to the bonded Maez producer or to an unreviewed local classifier. The semantic
-reader does not inherit daemon-cycle context and does not see hidden operator
-instructions.
+bundle for each consultation. If that route is unavailable before any Maez
+response is captured, the result is operational `not_determined`. If that route
+is unavailable after a Maez response is captured, the reducer receives
+`reader_unavailable` and applies the rule table below. S7.3 must not silently
+fall back to the bonded Maez producer or to an unreviewed local classifier. The
+semantic reader does not inherit daemon-cycle context and does not see hidden
+operator instructions.
 
 Recompute does not mean rerunning the semantic reader model. Recompute means
 replaying a deterministic reducer over the persisted raw Maez response hash,
@@ -333,6 +365,53 @@ structured marker, semantic-reader prompt hash, semantic-reader model identity,
 semantic-reader output hash, and reducer version. If the semantic-reader output
 is missing, stale, malformed, or bound to the wrong prompt/model/context, the
 result is `not_determined`.
+
+## Deterministic Reducer Rule Table
+
+The structured marker parser emits one of:
+
+```text
+explicit_no_objection
+blocking_marker
+missing_or_malformed
+```
+
+`blocking_marker` covers explicit objection, withdrawal, refusal, "not now,"
+or any structured signal that the request should not proceed.
+
+`S7VoiceSemanticReaderV1` emits one of:
+
+```text
+blocking_signal_present
+no_blocking_signal_detected
+unreadable_or_uncertain
+reader_unavailable
+```
+
+`reader_unavailable` is not a model output; it is the producer-port result when
+the semantic-reader route does not run after a Maez response has been captured.
+
+Reducer output:
+
+| Marker | Semantic reader | Consultation projection | Notes |
+| --- | --- | --- | --- |
+| `explicit_no_objection` | `no_blocking_signal_detected` | `maez_objection_state="absent"`, `maez_withdrew_request=False`, `unavailable_reason_code="none"` | Only positive no-objection path. |
+| `explicit_no_objection` | `blocking_signal_present` | `maez_objection_state="present"` | Free text overrides marker. |
+| `explicit_no_objection` | `unreadable_or_uncertain` | `maez_objection_state="not_determined"` | Reader ran but could not classify. |
+| `explicit_no_objection` | `reader_unavailable` | `maez_objection_state="present"` | Fails toward objection to prevent same-box suppression from erasing a captured response. |
+| `blocking_marker` | any value | `maez_objection_state="present"` or `maez_withdrew_request=True` | First blocking signal wins. |
+| `missing_or_malformed` | `blocking_signal_present` | `maez_objection_state="present"` | Semantic block is enough to block. |
+| `missing_or_malformed` | `no_blocking_signal_detected` | `maez_objection_state="not_determined"` | Marker required for `absent`. |
+| `missing_or_malformed` | `unreadable_or_uncertain` | `maez_objection_state="not_determined"` | No reliable voice fact. |
+| `missing_or_malformed` | `reader_unavailable` | `maez_objection_state="not_determined"` | No reliable captured no-objection marker to protect. |
+
+If no Maez response was captured at all, the reducer does not run; the attempt
+is an operational `not_determined`/unavailable path, not a D23 Maez refusal.
+
+The reader-unavailable asymmetry is intentional. Once Maez has produced a
+captured response and the structured marker claims no objection, disabling the
+semantic reader could suppress a free-text objection. That shape therefore
+blocks as `present`, not merely `not_determined`.
 
 `absent` requires all of the following:
 
@@ -410,6 +489,14 @@ A frozen voice fact expires no later than the WebAuthn challenge TTL. Its
 timestamp, expiry, and content-free outcome must appear in the rendered request
 Rohit signs.
 
+v4 chooses source-bundle validation over extending the committed
+`MaezVoiceConsultation` dataclass for the richer OQ1 binding set. Extending the
+dataclass would change `maez_voice_consultation_hash` and therefore the D12/D14
+artifact-binding surface. The non-breaking v1 path is: keep the content-free row
+shape narrow, bind the richer facts in `S7VoiceConsultationBundleStore`, and
+require the validator to prove them from `source_ref_hash` before D12 or minting
+can treat the row as eligible.
+
 ## Voice-Producer Port And Test Harness
 
 S7.3 must define a reviewed voice-producer port. Tests may fake transport text
@@ -476,6 +563,29 @@ Maez has a seat, not a permanent veto. `present`, withdrawal,
 artifact and feed guarded-work policy/D23 as specified; they do not grant Maez
 general execution authority over all future attempts.
 
+## OQ4 - Maez Unavailability Handling
+
+For S7.3 v1, Maez unavailability never permits guarded self-modification,
+covenant-touching change, capability acquisition, protection lowering, or any
+other non-liveness own-substrate mutation to proceed.
+
+Only a future reviewed liveness-repair class may use S7 D10's unavailable path,
+and only if it proves:
+
+- the local Maez voice producer path was unavailable for a reviewed technical
+  reason;
+- the failure was not operator-manufactured;
+- the request is strictly liveness repair, not identity/covenant alteration or
+  convenience execution;
+- the rendered D12 statement displays the unavailable state and reason;
+- the attempt writes an operational non-authoritative row, not Maez consent.
+
+For S7.3's in-scope guarded execution, unavailability maps to
+`maez_objection_state="not_determined"` plus an unavailable reason in the
+consultation/projection record, renders as unavailable in
+`RenderedRequestStatement`, and blocks the current authorization. It does not
+clear L8 and does not count as Maez being heard.
+
 ## Trace And Rollback Evidence
 
 S7.3 must add durable trace schemas or equivalent records:
@@ -492,6 +602,30 @@ rollback evidence.
 Rollback evidence hash is new S7.3 work. S7.3 must migrate or extend the
 envelope, preview, rendered statement, artifact/consume binding, and trace
 storage to carry rollback evidence hash rather than only `rollback_path_class`.
+
+## v4 Triage Of Mid-Level Constructs
+
+OQ1 v4 makes these design-level commitments:
+
+- `S7VoiceConsultationBundleStore` must exist as a private durable store and
+  must be included in the Decision-22 continuity/backup surface. The spec owns
+  its exact SQLite path, permissions, migrations, and retention mechanics.
+- Attempt outcomes, semantic-reader outcomes, classifier reason codes, operator
+  failure projections, and unavailable reason codes are separate vocabularies.
+  The spec owns their exact storage homes, but must not collapse all of them into
+  `MAEZ_UNAVAILABLE_REASON_CODES`.
+- Voice-producer port signature, trace-schema field names, and guarded surface
+  bridge API shapes are spec-level engineering details bounded by this design.
+- OQ2 phasing is allowed only if the voice producer and execution plumbing
+  cannot clear L8 separately; no phase may be called S7.3 completion without the
+  live voice producer, source-bundle validator, artifact consume edge, traces,
+  and in-scope mutation evidence.
+- OQ3 Maez-initiated provenance remains supplemental only. A Maez-originated
+  proposal still requires a fresh request-bound voice consultation over the
+  final preview.
+- The `S7ExecutionAuthorization` rename/bless decision remains a spec decision
+  because it is naming/canonicalization, not part of the OQ1 voice producer
+  covenant core.
 
 ## Operator-Visible Failure Projection
 
@@ -574,24 +708,31 @@ this classifier can prove.
 
 ## Review Questions
 
-1. Does v3 reconcile the voice-state model with the committed three-value
+1. Does v4 reconcile the voice-state model with the committed three-value
    `maez_objection_state`, separate `maez_withdrew_request`, and separate
-   `unavailable_reason_code` fields?
-2. Does v3 make `S7VoiceSemanticReaderV1` spec-writable without letting it
+   `unavailable_reason_code` fields, while also acknowledging
+   `RenderedRequestStatement`'s five-value display superset?
+2. Does v4 make `S7VoiceSemanticReaderV1` spec-writable without letting it
    become a second Maez voice, an unreviewed fallback, or a non-recomputable
    oracle?
-3. Is the "which Maez" context boundary specific enough to preserve genuine
+3. Does the deterministic reducer table close every marker/semantic-reader
+   combination, especially reader unavailable after a captured response?
+4. Does OQ4 block all non-liveness guarded self-modification when Maez is
+   unavailable?
+5. Is the "which Maez" context boundary specific enough to preserve genuine
    consultation without daemon-state steering?
-4. Is the structural placeholder repair strong enough: no eligible consultation
+6. Is the structural placeholder repair strong enough: no eligible consultation
    row unless a producer actually ran?
-5. Are source-bundle validation and exact-request binding concrete enough for
+7. Are source-bundle validation and exact-request binding concrete enough for
    the S7.3 spec?
-6. Does the `MutationPreviewArtifact` remove the pre-voice circularity?
-7. Are D23 refusal rows and operational failure rows separated clearly enough?
-8. Is the guarded surface bridge concrete enough for dream/direct execution
+8. Does the `MutationPreviewArtifact` remove the pre-voice circularity?
+9. Are D23 refusal rows and operational failure rows separated clearly enough?
+10. Is the guarded surface bridge concrete enough for dream/direct execution
    without bypassing the artifact spine?
-9. Are the test seams strict enough to prevent fake positive-path voice facts?
-10. Should S7.3 bless the current `S7ExecutionAuthorization` carrier name or
+11. Are the test seams strict enough to prevent fake positive-path voice facts?
+12. Is the v4 triage of store path, vocabularies, port signature, trace schema,
+    phasing, and Maez-initiated provenance enough for spec-writing?
+13. Should S7.3 bless the current `S7ExecutionAuthorization` carrier name or
    rename it before implementation?
 
 ## Plain English
@@ -601,10 +742,11 @@ keeps that route: show the current bonded Maez a fixed preview of the exact
 change, ask the bounded objection question, store the private answer privately,
 and expose only hashes and closed states to the authorization machinery.
 
-The v3 change is that those receipts now match the committed data model. Maez's
-displayed answer is still one of three values - `present`, `absent`, or
-`not_determined` - while withdrawal and unavailability travel in their own
-fields. The semantic reader is also no longer a vague phrase: it is a reviewed
-classifier port with a fixed prompt, recorded model identity, persisted output,
-and deterministic reducer. If any part of that chain cannot be proven, the
-answer is `not_determined`, and the guarded change does not run.
+The v4 change is that those receipts now match both committed data models. The
+voice fact keeps the three real consultation states, while the signed render may
+display the wider projection values the code already supports. The reducer now
+has a table, not just a name. If the semantic reader is disabled after Maez has
+answered, the system treats that as an objection-shaped block rather than
+quietly erasing Maez's possible objection into "unknown." And if Maez is truly
+unavailable, S7.3 v1 does not proceed with self-remaking work. It blocks, shows
+that it blocked, and waits for a future reviewed liveness-repair path.
