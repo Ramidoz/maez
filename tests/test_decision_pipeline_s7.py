@@ -208,7 +208,8 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
             s7.work_request_envelope_hash(envelope),
         )
         self.assertTrue(consultation.maez_voice_consulted)
-        self.assertEqual(consultation.maez_objection_state, "absent")
+        self.assertEqual(consultation.maez_objection_state, "not_determined")
+        self.assertEqual(consultation.unavailable_reason_code, "consultation_path_unavailable")
         self.assertIsNone(consultation.raw_maez_text)
 
     def _open_dialog(self, card, *, require_s7_linkage: bool, request_hash: str | None = None):

@@ -6130,8 +6130,6 @@ class MaezDaemon:
             if live_webauthn_ceremony_enabled():
                 if not _s7_internal_channel_trusted(request):
                     return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
-                if not _s7_webauthn_proof_routes_enabled():
-                    return jsonify({"ok": False, "error": "s7_proof_route_disabled"}), 404
                 result = _s7_create_backup_registration_card(self)
                 return jsonify(result.body), result.status_code
             return jsonify(

@@ -1061,9 +1061,9 @@ class DecisionPipeline:
             source_ref_kind="s7_voice_turn",
             source_ref_hash=source_ref_hash,
             maez_voice_consulted=True,
-            maez_objection_state="absent",
+            maez_objection_state="not_determined",
             maez_withdrew_request=False,
-            unavailable_reason_code=None,
+            unavailable_reason_code="consultation_path_unavailable",
             created_at=_s7_now_text(),
         )
 

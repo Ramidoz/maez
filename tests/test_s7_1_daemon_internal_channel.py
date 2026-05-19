@@ -547,7 +547,6 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
         env = {
             "S7_LIVE_WEBAUTHN_CEREMONY": "1",
             "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
-            "S7_WEBAUTHN_PROOF_ROUTES": "1",
         }
         with patch.dict(os.environ, env, clear=False):
             response = self._client(configure_daemon=configure).post(
@@ -565,10 +564,10 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
         self.assertEqual(created["channel"], "cockpit_s7_1_manual_proof")
         self.assertEqual(created["user_id"], "rohit")
 
-    def test_proof_only_card_routes_are_disabled_without_proof_flag(self):
+    def test_proof_only_disable_routes_are_disabled_without_proof_flag(self):
         class Store:
             def create_card(self, **_kwargs):
-                raise AssertionError("proof route must not create cards without proof flag")
+                raise AssertionError("disable proof route must not create cards without proof flag")
 
         class Pipe:
             card_store = Store()
@@ -585,14 +584,25 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
             "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
         }
         with patch.dict(os.environ, env, clear=False):
-            response = self._client(configure_daemon=configure).post(
-                "/internal/s7/webauthn/register/backup-card",
-                json={"session_binding": "session-backup-card"},
+            client = self._client(configure_daemon=configure)
+            card_response = client.post(
+                "/internal/s7/webauthn/proof/disable-card",
+                json={"credential_ref": "cred-backup", "credential_kind": "backup"},
+                headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+            )
+            finish_response = client.post(
+                "/internal/s7/webauthn/proof/disable-credential",
+                json={
+                    "credential_ref": "cred-backup",
+                    "s7_authorization_artifact_id": "s7authz_test",
+                },
                 headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
             )
 
-        self.assertEqual(response.status_code, 404)
-        self.assertEqual(response.get_json()["error"], "s7_proof_route_disabled")
+        self.assertEqual(card_response.status_code, 404)
+        self.assertEqual(card_response.get_json()["error"], "s7_proof_route_disabled")
+        self.assertEqual(finish_response.status_code, 404)
+        self.assertEqual(finish_response.get_json()["error"], "s7_proof_route_disabled")
 
     def test_daemon_authorize_routes_mint_artifact_through_real_service(self):
         from core.governance import operator_user_boundary as s7
