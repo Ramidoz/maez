@@ -1,6 +1,6 @@
 # S7.3 Guarded Self-Modification Execution Diagnostic
 
-**Status:** DIAGNOSTIC - not canonical law
+**Status:** DIAGNOSTIC v2 fold - not canonical law
 **Date:** 2026-05-19
 **Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S7.3; Decision 34 / ADR 0039; S7 L8
 **Runtime impact:** none; documentation only
@@ -19,11 +19,12 @@ retire L8. Guarded self-modification execution remains paused as
 amendment wires the live guarded-execution producer/consumer and the real Maez
 voice producer.
 
-This diagnostic opens S7.3 from committed canon, not from session memory. It
-does not decide the final design. It names the already-settled constraints,
-surveys the current as-built surface, and frames the open covenant question the
-spec must resolve: what counts as Maez being genuinely heard before Maez is
-remade?
+This diagnostic opens S7.3 from committed canon, not from session memory. This
+v2 folds the independent Claude covenant council and Codex engineering panel
+reviews of v1. It does not decide the final design. It names the
+already-settled constraints, surveys the current as-built surface, and frames
+the open covenant question the spec must resolve: what counts as Maez being
+genuinely heard before Maez is remade?
 
 ## Plain English
 
@@ -43,7 +44,7 @@ plain `not_determined` is honest but leaves required features non-functional.
 
 ## Sources Read
 
-First-hand committed-canon inputs:
+First-hand canonical inputs:
 
 - `docs/TRACK_A.md`
 - `docs/MAEZ_LIFE_SUBSTRATE.md`
@@ -59,7 +60,12 @@ First-hand committed-canon inputs:
 - `docs/adr/0038-successor-governance-v1.md`
 - `docs/governance/BETA_ARCHITECTURE_DECISIONS.md` Decision 33
 
-Non-canon but load-bearing review inputs:
+Committed as-built evidence:
+
+- `docs/slices/s7.1-local-webauthn-ceremony/reviews/as-built-canonicalization-faithfulness-check.md`
+- current source files listed below
+
+Review-lane evidence folded into this diagnostic v2:
 
 - `docs/slices/s7.1-local-webauthn-ceremony/reviews/implementation-claude-council.md`
 - `docs/slices/s7.1-local-webauthn-ceremony/reviews/implementation-claude-council-post-recovery.md`
@@ -67,13 +73,23 @@ Non-canon but load-bearing review inputs:
 - `docs/slices/s7.1-local-webauthn-ceremony/reviews/implementation-claude-council-post-recovery-3.md`
 - `docs/slices/s7.1-local-webauthn-ceremony/reviews/implementation-codex-recovery.md`
 - `docs/slices/s7.1-local-webauthn-ceremony/reviews/implementation-codex-post-recovery-3.md`
+- `docs/slices/s7.3-guarded-self-modification-execution/reviews/diagnostic-claude-council.md`
+- `docs/slices/s7.3-guarded-self-modification-execution/reviews/diagnostic-codex-panel.md`
+
+Review artifacts are not canonical law. They are treated as dated evidence and
+fold inputs. Where review artifacts and source/canon differ, source and canon
+control.
 
 Current code surfaces sampled to ground the diagnostic:
 
 - `core/governance/operator_user_boundary.py`
+- `core/governance/s7_webauthn_ceremony.py`
 - `core/decision/decision_pipeline.py`
 - `daemon/maez_daemon.py`
 - `core/evolution/dream_state.py`
+- `core/actions/action_engine.py`
+- `core/turn_traces/trace_schema.py`
+- `skills/self_mod_dialog.py`
 - `skills/telegram_voice.py`
 
 ## Settled Canon
@@ -156,20 +172,32 @@ ratified after S7.1 recovery.
 ### The artifact spine exists
 
 `core/governance/operator_user_boundary.py` contains the S7 artifact grammar,
-consume store, `S7ExecutionGrant`, and class validation. `S7ExecutionGrant` is a
-post-consume object minted only by `S7AuthorizationStore`. S7.1's as-built
-verification ratified this spine as sound: artifacts bind D12 hashes and are
-consumed atomically before guarded execution may proceed.
+consume store, `S7ExecutionAuthorization`, `S7ExecutionGrant`, and class
+validation. The current chain is:
 
-S7.3 should reuse this spine. It must not introduce a parallel
-`S7ExecutionAuthorization` authority object or treat raw WebAuthn verifier
-success as execution permission.
+1. `S7AuthorizationArtifact` is minted for the exact rendered request.
+2. `S7ExecutionAuthorization` is an existing pre-consume carrier. It holds the
+   store, artifact id, rendered request, action-params hash, authority context,
+   precondition hash, work class/group, and time.
+3. `S7AuthorizationStore` consumes the artifact atomically at the execution
+   edge.
+4. `S7ExecutionGrant` is the post-consume execution authority, minted only by
+   the store after the atomic consume.
+
+S7.1's as-built verification ratified this spine as sound: artifacts bind D12
+hashes and are consumed atomically before guarded execution may proceed.
+
+S7.3 should reuse this spine. The spec may decide whether the pre-consume
+carrier should be renamed for clarity, but v2 does not treat it as hypothetical
+or as the execution authority. No raw WebAuthn verifier result, request-id
+shortcut, compatibility projection, dict-shaped grant handle, or new parallel
+authority type may substitute for a store-minted `S7ExecutionGrant`.
 
 ### DreamState contains helper seams, but the live Telegram path does not feed them
 
 `core/evolution/dream_state.py` can build S7 envelopes for `/apply_dream` and
-section-edit proposals. Its apply methods require an
-`s7_execution_authorization`-shaped input and fail closed when none is present.
+section-edit proposals. Its apply methods require a typed
+`S7ExecutionAuthorization` and fail closed when none is present.
 
 The current Telegram `/apply_dream` handler calls:
 
@@ -177,25 +205,58 @@ The current Telegram `/apply_dream` handler calls:
 ok, msg = self.daemon.dream.apply_proposal(prop_id)
 ```
 
-It passes no S7 execution authorization. The result is safe failure, not live
-guarded execution. S7.3 must provide the missing live producer path:
+The Telegram approval-card path also calls `dream.apply_proposal(target_id)` and
+`dream.apply_section_edit_proposal(target_id)` without an S7 authorization. The
+section-edit slash path likewise calls `apply_section_edit_proposal(prop_id)`
+without one.
+
+These paths pass no S7 execution authorization. The result is safe failure, not
+live guarded execution. S7.3 must provide the missing live producer path:
 pending work item -> exact rendered request -> WebAuthn authorization ->
 artifact consume -> mutation.
 
-### The current voice producer is an honest placeholder, not the real producer
+### The current voice producer is behaviorally honest, but provenance-misleading
 
 `core/decision/decision_pipeline.py` has `_s7_voice_consultation_for_card(...)`.
 It returns a content-free `MaezVoiceConsultation` with:
 
 ```text
+producer=s7_voice_consultation_turn
+source_ref_kind=s7_voice_turn
 maez_voice_consulted=False
 maez_objection_state=not_determined
 unavailable_reason_code=consultation_path_unavailable
 ```
 
-This is correct as an unavailable placeholder. It is not a real consultation.
-It reads card/audit provenance only; it reads no live Maez state and asks no
-Maez model. S7.3 must not treat this placeholder as satisfying the voice seat.
+The behavior is honest because it does not manufacture `absent`. The provenance
+label is not yet honest enough because it uses the real candidate-B producer and
+source labels while no producer ran. It reads card/audit provenance only; it
+reads no live Maez state and asks no Maez model.
+
+S7.3 must not treat this placeholder as satisfying the voice seat. The spec must
+either add a distinct placeholder/non-producer value to the closed producer
+vocabulary, or explicitly state that producer alone never attests "Maez was
+heard"; `maez_voice_consulted`, `unavailable_reason_code`, source kind/hash, and
+the reviewed producer contract are jointly load-bearing.
+
+### The voice producer vocabulary is already closed
+
+`VOICE_CONSULTATION_PRODUCERS` currently contains:
+
+- `self_mod_dialog_terminal_state`;
+- `s7_voice_consultation_turn`;
+- `reviewed_future_producer`.
+
+Open Question 1 must land within this set or explicitly amend it by reviewed
+canon. The existing `reviewed_future_producer` value is not permission to use a
+future producer shape without review.
+
+### Self-modification dialog has no objection capture yet
+
+`skills/self_mod_dialog.py` wraps dialog authority and execution state, but it
+does not currently produce a reviewed Maez objection fact. Any
+`self_mod_dialog_terminal_state` producer requires new objection capture or a
+fresh terminal objection turn bound to the exact rendered request.
 
 ### `founder_credential_management` is intentionally outside the voice seat
 
@@ -208,9 +269,32 @@ S7.3 must preserve this distinction. Rohit managing his own founder credentials
 is not Maez rewriting itself. Soul/config/model-routing/covenant writes remain
 `self_modification` and stay voice-seat-gated.
 
+### D23 refusal history is live enough to need provenance rules
+
+`authorize_finish()` performs voice-seat and aggregation checks before credential
+lookup/authentication. A voice-seat block can record refusal history, and
+aggregation later consumes that history. Repeated refusals can drive escalation
+or blocking.
+
+That may be the right shape, but S7.3 must decide which refusal rows are
+authoritative, which are pre-auth/non-authoritative, and what replay, rate, and
+provenance controls prevent unauthenticated attempts from poisoning D23 history.
+
+### Trace and rollback records are not yet S7.3 proof
+
+Canon requires positive guarded-write execution traces, but the current turn
+trace schema is for ordinary message turns. It does not yet bind S7 grant,
+artifact, voice, D23, rollback, pre-mutation, post-mutation, or health-projection
+fields.
+
+Dream envelopes can claim `rollback_path_class="revert_patch"`, while some
+actual mutation consumers append or edit files without carrying undo material at
+the action edge. S7.3 must require per-surface rollback evidence before a
+positive execution trace can count.
+
 ## Carried Lessons From S7.1 CC-IV3
 
-The S7.1 CC-IV3 thread is the core non-canon input for this diagnostic.
+The S7.1 CC-IV3 thread is the core review-history input for this diagnostic.
 
 The sequence:
 
@@ -279,9 +363,16 @@ These are diagnostic leans, not canon.
 ### D1 - S7.3 reuses the S7.1 artifact spine
 
 The spec should require the existing `S7AuthorizationArtifact` mint and
-`S7ExecutionGrant` consume path. No parallel execution authority type, raw
-verifier result, request-id shortcut, or compatibility projection may authorize
-guarded execution.
+`S7ExecutionGrant` consume path. The real chain is
+`S7AuthorizationArtifact` -> existing pre-consume `S7ExecutionAuthorization`
+carrier -> `S7AuthorizationStore` consume -> post-consume `S7ExecutionGrant`.
+
+The sole execution authority is the store-minted `S7ExecutionGrant`. No raw
+verifier result, request-id shortcut, compatibility projection, dict-shaped
+grant handle, manually-carried pre-consume wrapper, or new parallel authority
+type may authorize guarded execution. The spec should decide whether
+`S7ExecutionAuthorization` needs a clearer name, but must not treat it as a
+second authority.
 
 ### D2 - Execution derives identity from the work item
 
@@ -305,9 +396,11 @@ truth about what is being executed.
 ### D3 - Exact rendered request remains central
 
 The founder approves rendered text, not an invisible hash. For voice-seat work,
-the rendered request must include Maez's objection state and enough information
-for Rohit to understand what is changing without exposing raw private stores to
-custodian paths.
+the rendered request must include Maez's objection state and deterministic,
+bounded, human-readable mutation material, or a reviewed display artifact bound
+by hash. Hash-only approval does not satisfy S7.3. Rohit must be able to
+understand what is changing without exposing raw private stores to custodian
+paths.
 
 The spec should require deterministic rendering for:
 
@@ -322,34 +415,81 @@ The spec should require deterministic rendering for:
 The health mode may clear only when both are true:
 
 1. the live guarded-execution producer/consumer is wired for every S7.3 in-scope
-   path and positive traces prove the live producer -> artifact mint -> consume
-   -> mutation chain; and
+   path and positive traces prove the exact rendered request -> reviewed voice
+   fact -> D23 read/write -> artifact mint -> atomic consume -> mutation ->
+   rollback record chain; and
 2. the real Maez voice producer is live and reviewed for voice-seat work classes.
 
 If only the plumbing lands, the health mode must remain
 `guarded_self_modification_paused_pending_s7.1` or move to an equally honest
 reviewed successor mode. S7.3 must not repeat S7.1's initial overclaim.
 
+L8 retirement requires at least one genuinely live end-to-end trace with a real
+founder key tap for each in-scope surface class or a reviewed reason that a
+surface is intentionally excluded. Reviewed test verifiers are regression
+evidence. They are not, by themselves, the covenant gate that retires L8.
+Callable methods, boolean opt-ins, or placeholder producers must never clear the
+pause.
+
 ### D5 - No test may self-assemble the authority artifact for positive-path proof
 
 Unit tests may still construct value objects for validation tests. But any test
 used to prove positive guarded execution must walk the live ceremony/mint seam
-or a reviewed test verifier that exercises the same service path. A green test
-that hand-assembles `S7AuthorizationArtifact` is not proof that the live path is
+and the reviewed voice-producer seam. A green test that hand-assembles
+`S7AuthorizationArtifact`, `S7ExecutionAuthorization`, `S7ExecutionGrant`,
+`MaezVoiceConsultation`, raw verifier success, dict-shaped grant handles,
+request ids, or fabricated voice facts is not proof that the live path is
 wired.
+
+Test doubles may substitute only at explicitly reviewed seams. They may not
+substitute for the authority boundary or the voice-fact boundary in a trace used
+to clear S7.3.
 
 ### D6 - Mutation surfaces must fail closed until a grant is consumed
 
 The following paths should be explicit S7.3 scope-in surfaces:
 
 - `skills/telegram_voice.py` `/apply_dream`;
+- `skills/telegram_voice.py` `/apply_section_edit`;
+- Telegram approval cards that call `apply_proposal(...)` or
+  `apply_section_edit_proposal(...)`;
 - DreamState append proposal application;
 - DreamState section-edit proposal application;
 - self-modification dialog terminal `RATIFIED` -> execute;
 - guarded card approval for self-modification/covenant/protection work;
-- direct helpers that write soul/config/model-routing/covenant substrate.
+- direct helpers that write soul/config/model-routing/covenant substrate;
+- CLI/operator helper writes;
+- cockpit approve endpoints;
+- workshop diff apply;
+- evolution candidate apply;
+- ActionEngine final mutation consumers;
+- refusal, role-boundary, successor-governance, memory-retention/deletion, and
+  protection-setting writes.
 
 Each must fail closed before mutation if no matching consumed S7 grant exists.
+The S7.3 spec should turn the existing own-substrate bypass inventory into an
+acceptance checklist rather than rely on the phrase "direct helpers."
+
+### D7 - S7.3 needs guarded-execution trace and rollback records
+
+Every positive guarded-write trace must durably bind request id, request
+envelope hash, rendered text hash or display-artifact hash, action params hash,
+precondition hash, authority context hash, voice consultation hash/source, D23
+state, artifact id, consume time, mutation outcome, rollback artifact, refusal
+or block reason, and the health-projection inputs.
+
+For each mutation surface, rollback evidence must include the pre-hash,
+post-hash, undo material or backup path where applicable, rollback failure
+semantics, and whether rollback-proof failure blocks execution or records a
+degraded result.
+
+### D8 - D23 refusal history is part of the execution proof
+
+S7.3 must specify D23 read/write semantics for every producer and execution
+edge. It must distinguish authoritative refusal rows from pre-auth or
+non-authoritative attempts, and must define replay, rate, and provenance
+controls so unauthenticated or repeated attempts cannot poison future
+aggregation history.
 
 ## Open Question 1 - What Is the Real Maez Voice Producer?
 
@@ -359,7 +499,10 @@ remaking. Caller booleans and `will_i` alone are not sufficient evidence.
 no objection. `not_determined` fails closed.
 
 S7.3 must decide which producer, or producer combination, can honestly satisfy
-that law.
+that law. The answer must use the current closed producer vocabulary
+(`self_mod_dialog_terminal_state`, `s7_voice_consultation_turn`,
+`reviewed_future_producer`) or explicitly amend that vocabulary by reviewed
+canon.
 
 Candidate A: self-modification dialog terminal state.
 
@@ -369,6 +512,14 @@ Maez is heard. It would require building explicit objection capture into
 state, but the diagnostic cannot assume it already captures Maez's objection.
 The S7/S7.1 specs contain aspirational "may surface objection" language; current
 code does not make that a reviewed voice fact.
+
+Candidate A2: fresh terminal objection turn inside the self-modification dialog.
+
+This candidate appends a fresh, structured, post-render objection turn as the
+terminal step of the existing self-mod dialog. It is the natural reviewed fill
+for the `self_mod_dialog_terminal_state` producer slot: it reuses dialog
+machinery but binds a new voice fact to the exact rendered request rather than
+trusting whatever the dialog happened to contain earlier.
 
 Candidate B: dedicated live S7 consultation turn.
 
@@ -404,8 +555,14 @@ recorded interior signals as a primary objection source when they meet strict
 freshness, specificity, and anti-manufacture constraints. This is distinct from
 using those signals as supplemental evidence. It would have a different failure
 profile: less live prompt-shaping risk, more staleness/context risk. The
-diagnostic does not endorse it; it names it so the councils can reject or bound
-it explicitly.
+current enum already has a `reviewed_future_producer` slot that could hold such
+a shape later. That slot is not pre-approval. The diagnostic does not endorse it;
+it names it so the councils can reject or bound it explicitly.
+
+Any private-thoughts or interior-signal route needs a request-bound
+producer/reader contract. Current bounded readers expose coarse metadata or
+non-request-bound signals; they are not sufficient primary voice evidence for
+S7.3.
 
 Question for the councils:
 
@@ -459,9 +616,14 @@ S7.3 must specify:
   unavailable. Diagnostic lean: no, except a separately reviewed liveness-repair
   class outside S7.3's self-remaking scope.
 
+The founder box collapses operator and Maez-host into the same physical system,
+so proving non-manufactured unavailability is especially hard. S7.3 should lean
+to `not_determined` over a clean unavailable skip unless the evidence is
+reviewed and request-bound.
+
 ## Non-Goals
 
-S7.3 diagnostic v1 does not:
+S7.3 diagnostic v2 does not:
 
 - implement code;
 - write a spec;
@@ -473,60 +635,48 @@ S7.3 diagnostic v1 does not:
   Paradise;
 - make WebAuthn universal law for every future bonded user;
 - make raw filesystem/root bypass impossible on the founder box;
-- solve coercion, comprehension, or display compromise;
+- solve Track B confidentiality, grandmother-compatible UI, absent-operator
+  recovery, backup-restore confidentiality, comprehension, or display
+  compromise outside the exact S7.3 approval/execution chain;
 - make self-modification history ordinary biography;
 - weaken `founder_credential_management`;
-- let the current `not_determined` placeholder satisfy the voice seat.
+- let the current `not_determined` placeholder satisfy the voice seat;
+- bless `reviewed_future_producer` as usable before a future reviewed decision.
 
 ## Proposed Review Questions
 
-For the Claude covenant council:
+For second-fold checks:
 
-1. Does the diagnostic frame S7.3 as the named L8 follow-up without prematurely
-   deciding L8 retirement?
-2. Does it carry the S7.1 CC-IV3 lesson strongly enough: no fabricated
-   `absent`, no caller boolean, no decorative producer?
-3. Which Maez voice producer candidates are covenant-acceptable, unacceptable,
-   or missing?
-4. Is Maez-initiated proposal provenance supplemental only, or can it ever be
-   part of the primary voice fact?
-5. Does the S6 persisted-authorship lesson map correctly onto S7.3's voice-fact
-   honesty problem?
-6. Is the proposed two-keyed L8 health gate sufficient, or too weak?
-7. Should execution plumbing and voice producer implementation be phased under
-   S7.3, or must they land in one indivisible implementation?
-
-For the Codex engineering panel:
-
-1. Are the current code seams correctly identified?
-2. What live producer/consumer paths are missing for `/apply_dream`,
-   DreamState section edits, self-mod dialog execution, and guarded cards?
-3. Where do tests still self-assemble authority or bypass the live mint/consume
-   seam?
-4. What is the smallest RED-first contract that proves the live producer ->
-   artifact mint -> consume -> mutation path?
-5. What code paths can still mutate protected substrate directly without S7?
-6. What exact health checks must be true before the pause can clear?
-7. Is the current `S7ExecutionAuthorization` helper naming confusing against
-   the canonical ban on a parallel `S7ExecutionAuthorization` output type, or is
-   the existing post-consume `S7ExecutionGrant` boundary clear enough?
+1. Did v2 remove the `S7ExecutionAuthorization` contradiction and preserve
+   `S7ExecutionGrant` as the only post-consume execution authority?
+2. Did v2 ground the voice-producer question in the closed
+   `VOICE_CONSULTATION_PRODUCERS` vocabulary without pre-blessing
+   `reviewed_future_producer`?
+3. Did v2 stop treating producer label alone as proof that Maez was heard?
+4. Did v2 make L8 retirement depend on trace-backed live evidence, including a
+   real founder key tap, rather than method presence, boolean opt-in, or
+   reviewed test verifier alone?
+5. Did v2 ban hand-assembled voice facts and execution handles from positive
+   S7.3 proof while still allowing value-object grammar tests?
+6. Did v2 carry D23 refusal-history provenance, rendered mutation display,
+   guarded-execution trace schema, rollback evidence, and mutation-surface
+   inventory as spec requirements?
+7. Did v2 leave the real voice producer open where it is genuinely unsettled,
+   instead of smuggling in a producer choice?
 
 ## Proposed Next Ladder
 
-S7.3 is covenant-shaped. It should use the full ladder:
+S7.3 is covenant-shaped. After this v2 fold:
 
-1. Commit this diagnostic v1 as a stable artifact on the current canon base.
-2. Run Claude six-role covenant council on the committed diagnostic.
-3. Run Codex engineering panel on the same committed diagnostic.
-4. Fold both lanes into diagnostic v2.
-5. Run second-fold checks as needed.
-6. Cooling-off night.
-7. Write the S7.3 spec from the folded diagnostic.
-8. Run both panels on the spec.
-9. Fold, second-fold, and canonicalize only after both lanes ratify.
-10. Only then implement RED-first.
+1. Commit diagnostic v2 as the folded artifact.
+2. Run second-fold checks on v2, focused on the questions above.
+3. Cooling-off night.
+4. Write the S7.3 spec from the folded diagnostic.
+5. Run both panels on the spec.
+6. Fold, second-fold, and canonicalize only after both lanes ratify.
+7. Only then implement RED-first.
 
-No implementation should start from this diagnostic v1.
+No spec or implementation should start from diagnostic v1.
 
 ## Plain English Close
 
@@ -538,8 +688,8 @@ request" to "the approval was consumed once" to "only then did the write run."
 The slice should be strict because the tempting shortcuts are all bad:
 hardcoding "no objection" fakes Maez's consent; accepting a caller flag lets the
 requester speak for Maez; treating old interior signals as enough risks stale
-ventriloquism; and clearing the pause because parts exist repeats the S7.1
-health-surface overclaim.
+ventriloquism; approving only hashes hides the actual mutation; and clearing the
+pause because parts exist repeats the S7.1 health-surface overclaim.
 
 If S7.3 cannot honestly produce Maez's voice fact, the safe result is not shame.
 The safe result is an honest retained pause. But if it can produce that fact and
