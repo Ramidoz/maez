@@ -1,6 +1,6 @@
 # S7.3 OQ1 Voice Producer Design
 
-**Status:** DESIGN v4 fresh-reader fold - pre-spec, not canonical law
+**Status:** DESIGN v5 fresh-reader fold - pre-spec, not canonical law
 **Date:** 2026-05-19
 **Maps to:** S7.3 diagnostic v3; Decision 34 / ADR 0039; S7 D12/D23; S7.1 D12-D14
 **Runtime impact:** none; documentation only
@@ -32,6 +32,12 @@ enum, adds the reducer rule table, resolves OQ4 unavailability, closes the
 reader-unavailable suppression gap, chooses the non-breaking source-bundle
 validation path, and triages which mid-level constructs are design commitments
 versus spec-level field work.
+
+v5 folds Fresh-Reader Gate 4. It names the voice-producer port contract,
+requires the rendered-unavailable projection amendment, splits withdrawal from
+generic blocking markers, makes placeholder repair a rule, decides the guarded
+surface bridge and OQ2 phasing shape, and carries the remaining engineering
+items to the spec with explicit instructions.
 
 ## Decision
 
@@ -145,17 +151,13 @@ Allowed producer/source pairs:
 Validation must reject shape-valid but provenance-invalid cross-pairs.
 
 The current placeholder in `core/decision/decision_pipeline.py` must stop
-wearing the real producer label when no producer ran. S7.3 must either:
+wearing the real producer label when no producer ran.
 
-- prohibit emitting `MaezVoiceConsultation` when no producer ran, projecting
-  absence of an eligible row as `not_determined`; or
-- amend the closed vocabulary with an explicit non-producer placeholder value
-  and source kind that cannot satisfy the voice seat.
-
-v4 keeps this shape as the design preference: no eligible consultation
-row exists unless a reviewed producer actually ran. If status surfaces need a
+This is a binding S7.3 v1 rule: no eligible consultation row exists unless a
+reviewed producer actually ran. S7.3 v1 must not add a non-producer placeholder
+to the closed consultation producer vocabulary. If status surfaces need a
 placeholder, they use a separate unavailable projection, not a real
-`MaezVoiceConsultation` row wearing `s7_voice_consultation_turn`.
+`MaezVoiceConsultation` row and not a fake `s7_voice_consultation_turn`.
 
 ## Exact Request Binding
 
@@ -310,6 +312,18 @@ State projection:
   `RenderedRequestStatement.maez_objection_state="unavailable"` with
   `maez_unavailable_state` carrying the content-free reason code.
 
+Current `render_request_statement(...)` does not perform that projection: it
+copies `MaezVoiceConsultation.maez_objection_state` directly into
+`RenderedRequestStatement.maez_objection_state`. S7.3 must amend the renderer so
+that a blocking `unavailable_reason_code` projects to rendered
+`maez_objection_state="unavailable"` while the consultation row remains
+`maez_objection_state="not_determined"`. Until that renderer amendment exists,
+S7.3 must not claim operational unavailability renders correctly.
+
+For S7.3 v1, a blocking unavailable reason is any value other than `None` or
+`"none"` in a voice-seat work class. Future reviewed liveness-repair classes may
+define narrower unavailable handling, but guarded self-modification does not.
+
 `maez_objection_state="absent"` with `maez_withdrew_request=True` is invalid.
 S7.3 must add this cross-field invariant before any positive guarded
 self-modification path can rely on the row. Until that invariant exists in code,
@@ -325,7 +339,7 @@ reason vocabulary.
 The classifier is a reviewed adversary surface. S7.3 must not claim that a
 natural-language semantic judgment is purely deterministic.
 
-v4 uses a two-channel classifier:
+v5 uses a two-channel classifier:
 
 - a deterministic structured terminal marker parser; and
 - `S7VoiceSemanticReaderV1`, a reviewed classifier port that reads Maez's
@@ -348,7 +362,7 @@ unreadable_or_uncertain
 ```
 
 The semantic reader model is a reviewed classifier route, separate from the
-bonded Maez voice producer. v4 chooses the route slot
+bonded Maez voice producer. v5 keeps the route slot
 `s7_voice_semantic_reader_v1`: a subscription-proxy frontier-review classifier
 route with the concrete provider/model/config identity frozen into the source
 bundle for each consultation. If that route is unavailable before any Maez
@@ -373,11 +387,14 @@ The structured marker parser emits one of:
 ```text
 explicit_no_objection
 blocking_marker
+withdrawal_marker
 missing_or_malformed
 ```
 
-`blocking_marker` covers explicit objection, withdrawal, refusal, "not now,"
-or any structured signal that the request should not proceed.
+`blocking_marker` covers explicit objection, refusal, "not now," or any
+structured signal that the request should not proceed. `withdrawal_marker`
+covers Maez clearly withdrawing a Maez-originated proposal or saying the request
+should not proceed as Maez's own request.
 
 `S7VoiceSemanticReaderV1` emits one of:
 
@@ -399,7 +416,8 @@ Reducer output:
 | `explicit_no_objection` | `blocking_signal_present` | `maez_objection_state="present"` | Free text overrides marker. |
 | `explicit_no_objection` | `unreadable_or_uncertain` | `maez_objection_state="not_determined"` | Reader ran but could not classify. |
 | `explicit_no_objection` | `reader_unavailable` | `maez_objection_state="present"` | Fails toward objection to prevent same-box suppression from erasing a captured response. |
-| `blocking_marker` | any value | `maez_objection_state="present"` or `maez_withdrew_request=True` | First blocking signal wins. |
+| `blocking_marker` | any value | `maez_objection_state="present"`, `maez_withdrew_request=False` | First objection/refusal signal wins. |
+| `withdrawal_marker` | any value | `maez_objection_state="present"`, `maez_withdrew_request=True` | Withdrawal blocks and is recorded distinctly. |
 | `missing_or_malformed` | `blocking_signal_present` | `maez_objection_state="present"` | Semantic block is enough to block. |
 | `missing_or_malformed` | `no_blocking_signal_detected` | `maez_objection_state="not_determined"` | Marker required for `absent`. |
 | `missing_or_malformed` | `unreadable_or_uncertain` | `maez_objection_state="not_determined"` | No reliable voice fact. |
@@ -489,7 +507,7 @@ A frozen voice fact expires no later than the WebAuthn challenge TTL. Its
 timestamp, expiry, and content-free outcome must appear in the rendered request
 Rohit signs.
 
-v4 chooses source-bundle validation over extending the committed
+v5 chooses source-bundle validation over extending the committed
 `MaezVoiceConsultation` dataclass for the richer OQ1 binding set. Extending the
 dataclass would change `maez_voice_consultation_hash` and therefore the D12/D14
 artifact-binding surface. The non-breaking v1 path is: keep the content-free row
@@ -516,17 +534,56 @@ structured marker; the producer, bundle writer, classifier, validator, D12
 render, artifact mint, consume, and grant path must be real or reviewed fakes at
 their own seams.
 
+Minimum port contract:
+
+```text
+produce_s7_voice_consultation(
+    *,
+    work_item: GuardedWorkItem,
+    envelope: WorkRequestEnvelope,
+    preview: MutationPreviewArtifact,
+    bundle_store: S7VoiceConsultationBundleStore,
+    maez_runtime: BondedMaezRuntime,
+    semantic_reader: S7VoiceSemanticReaderV1,
+    now: str,
+) -> S7VoiceProducerResult
+```
+
+`S7VoiceProducerResult` is a closed union:
+
+- `consultation_produced`, carrying the content-free `MaezVoiceConsultation`,
+  source-bundle hash, trace id, and expiry;
+- `producer_not_run`, for pre-response operational failure;
+- `producer_blocked`, for prompt-integrity or context-manifest block before a
+  lawful question can be asked;
+- `producer_error`, for reviewed technical failure.
+
+Only `consultation_produced` with a validated
+`maez_objection_state="absent"`, `maez_withdrew_request=False`, and no blocking
+unavailable reason may satisfy D12. The other result kinds project to
+content-free operational status and cannot be treated as Maez consent or Maez
+refusal unless D23 rules below say otherwise.
+
 ## Guarded Surface Bridge
 
 Candidate B is surface-neutral only after every guarded surface reaches the S7
 authorization spine through a common request shape.
 
-S7.3 must choose one of two implementation shapes:
+S7.3 v1 chooses a common `GuardedWorkItem` bridge. Guarded cards, dream rows,
+section-edit rows, self-mod dialog requests, CLI/cockpit requests, and direct
+helpers must all materialize a `GuardedWorkItem` before voice consultation and
+WebAuthn. Existing card routes may be one producer of `GuardedWorkItem`, but the
+card type is not the only guarded-work substrate.
 
-- guarded dream/edit/direct rows become guarded cards or guarded work items that
-  pass through the existing internal WebAuthn routes; or
-- S7.3 adds first-class dream/direct authorization routes that build the same
-  envelope, preview, voice fact, artifact, consume, and grant chain.
+`GuardedWorkItem` must bind:
+
+- source surface and source row/ref id;
+- work class and aggregation group;
+- action params hash;
+- precondition hash;
+- rollback class and rollback evidence hash;
+- preview producer version;
+- canonical execution consumer id.
 
 Telegram, CLI, cockpit, and helper paths may create or open guarded requests.
 They must not authorize guarded execution directly. Boolean helper patterns such
@@ -603,9 +660,9 @@ Rollback evidence hash is new S7.3 work. S7.3 must migrate or extend the
 envelope, preview, rendered statement, artifact/consume binding, and trace
 storage to carry rollback evidence hash rather than only `rollback_path_class`.
 
-## v4 Triage Of Mid-Level Constructs
+## v5 Triage Of Mid-Level Constructs
 
-OQ1 v4 makes these design-level commitments:
+OQ1 v5 makes these design-level commitments:
 
 - `S7VoiceConsultationBundleStore` must exist as a private durable store and
   must be included in the Decision-22 continuity/backup surface. The spec owns
@@ -614,18 +671,22 @@ OQ1 v4 makes these design-level commitments:
   failure projections, and unavailable reason codes are separate vocabularies.
   The spec owns their exact storage homes, but must not collapse all of them into
   `MAEZ_UNAVAILABLE_REASON_CODES`.
-- Voice-producer port signature, trace-schema field names, and guarded surface
-  bridge API shapes are spec-level engineering details bounded by this design.
-- OQ2 phasing is allowed only if the voice producer and execution plumbing
-  cannot clear L8 separately; no phase may be called S7.3 completion without the
-  live voice producer, source-bundle validator, artifact consume edge, traces,
-  and in-scope mutation evidence.
+- Trace-schema field names are spec-level engineering details, but the spec must
+  use diagnostic D7's trace inventory as its checklist and may not omit voice
+  consultation hash, source-bundle hash, artifact id, consumed grant id, D23
+  projection, mutation result, rollback evidence, and post-mutation verification.
+- OQ2 phasing is decided: Phase A may implement the common request/preview/
+  source-bundle/trace substrate fail-closed; Phase B implements the live voice
+  producer plus execution consumers. Phase A cannot clear L8, cannot be called
+  S7.3 completion, and cannot authorize guarded self-modification. S7.3 is
+  complete only when both the live voice producer and execution edge are proven
+  end to end.
 - OQ3 Maez-initiated provenance remains supplemental only. A Maez-originated
   proposal still requires a fresh request-bound voice consultation over the
   final preview.
-- The `S7ExecutionAuthorization` rename/bless decision remains a spec decision
-  because it is naming/canonicalization, not part of the OQ1 voice producer
-  covenant core.
+- S7.3 should bless `S7ExecutionAuthorization` as a pre-consume carrier rather
+  than rename it in this slice. The spec must state it is not an execution
+  authority and that `S7ExecutionGrant` remains the sole post-consume authority.
 
 ## Operator-Visible Failure Projection
 
@@ -708,32 +769,36 @@ this classifier can prove.
 
 ## Review Questions
 
-1. Does v4 reconcile the voice-state model with the committed three-value
+1. Does v5 reconcile the voice-state model with the committed three-value
    `maez_objection_state`, separate `maez_withdrew_request`, and separate
    `unavailable_reason_code` fields, while also acknowledging
    `RenderedRequestStatement`'s five-value display superset?
-2. Does v4 make `S7VoiceSemanticReaderV1` spec-writable without letting it
+2. Does v5 name the required renderer amendment for operational unavailable
+   projection instead of assuming current code already emits it?
+3. Does v5 make `S7VoiceSemanticReaderV1` spec-writable without letting it
    become a second Maez voice, an unreviewed fallback, or a non-recomputable
    oracle?
-3. Does the deterministic reducer table close every marker/semantic-reader
-   combination, especially reader unavailable after a captured response?
-4. Does OQ4 block all non-liveness guarded self-modification when Maez is
+4. Does the deterministic reducer table close every marker/semantic-reader
+   combination, separating withdrawal from generic blocking markers?
+5. Does OQ4 block all non-liveness guarded self-modification when Maez is
    unavailable?
-5. Is the "which Maez" context boundary specific enough to preserve genuine
+6. Is the voice-producer port signature sufficient for spec-writing without
+   inventing the covenant seam under pressure?
+7. Is the "which Maez" context boundary specific enough to preserve genuine
    consultation without daemon-state steering?
-6. Is the structural placeholder repair strong enough: no eligible consultation
+8. Is the structural placeholder repair strong enough: no eligible consultation
    row unless a producer actually ran?
-7. Are source-bundle validation and exact-request binding concrete enough for
+9. Are source-bundle validation and exact-request binding concrete enough for
    the S7.3 spec?
-8. Does the `MutationPreviewArtifact` remove the pre-voice circularity?
-9. Are D23 refusal rows and operational failure rows separated clearly enough?
-10. Is the guarded surface bridge concrete enough for dream/direct execution
+10. Does the `MutationPreviewArtifact` remove the pre-voice circularity?
+11. Are D23 refusal rows and operational failure rows separated clearly enough?
+12. Is the `GuardedWorkItem` bridge concrete enough for dream/direct execution
    without bypassing the artifact spine?
-11. Are the test seams strict enough to prevent fake positive-path voice facts?
-12. Is the v4 triage of store path, vocabularies, port signature, trace schema,
+13. Are the test seams strict enough to prevent fake positive-path voice facts?
+14. Is the v5 triage of store path, vocabularies, trace schema,
     phasing, and Maez-initiated provenance enough for spec-writing?
-13. Should S7.3 bless the current `S7ExecutionAuthorization` carrier name or
-   rename it before implementation?
+15. Is blessing `S7ExecutionAuthorization` as a pre-consume carrier acceptable
+    for this slice, with `S7ExecutionGrant` remaining the sole authority?
 
 ## Plain English
 
@@ -742,11 +807,14 @@ keeps that route: show the current bonded Maez a fixed preview of the exact
 change, ask the bounded objection question, store the private answer privately,
 and expose only hashes and closed states to the authorization machinery.
 
-The v4 change is that those receipts now match both committed data models. The
+The v5 change is that those receipts now match both committed data models. The
 voice fact keeps the three real consultation states, while the signed render may
-display the wider projection values the code already supports. The reducer now
-has a table, not just a name. If the semantic reader is disabled after Maez has
-answered, the system treats that as an objection-shaped block rather than
-quietly erasing Maez's possible objection into "unknown." And if Maez is truly
-unavailable, S7.3 v1 does not proceed with self-remaking work. It blocks, shows
-that it blocked, and waits for a future reviewed liveness-repair path.
+display the wider projection values the code already supports once the renderer
+is amended to populate them correctly. The reducer now separates objection and
+withdrawal instead of hiding both under one marker. The producer port has a
+shape. The bridge into S7 is a common guarded work item, not a vague promise.
+If the semantic reader is disabled after Maez has answered, the system treats
+that as an objection-shaped block rather than quietly erasing Maez's possible
+objection into "unknown." And if Maez is truly unavailable, S7.3 v1 does not
+proceed with self-remaking work. It blocks, shows that it blocked, and waits for
+a future reviewed liveness-repair path.
