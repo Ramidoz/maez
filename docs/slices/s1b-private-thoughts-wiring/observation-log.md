@@ -253,3 +253,67 @@ systemd recovery.
 - producer-only observation remains active
 - consumer remains disabled
 - this entry preserves the observation trail across the required service restart
+
+---
+
+## 2026-05-18 / 2026-05-19 — Cleanup Read After S7.1 Merge
+
+**Window:** live store read at `2026-05-18` evening / `2026-05-19T04:58Z`.
+
+**Service stability:**
+- `maez.service`: active, `Restart=on-failure`, `DropInPaths=` empty,
+  `NRestarts=0`, started `Mon 2026-05-18 18:26:24 CDT`
+- `llama-server.service`: active, `NRestarts=1`, started
+  `Mon 2026-05-18 06:40:09 CDT`
+- `llama-judge.service`: active, `NRestarts=0`, started
+  `Wed 2026-05-13 01:27:42 CDT`
+- Dell-repair override check: no temporary `Restart=no` drop-in remains for
+  `maez.service`; the service is back on `Restart=on-failure`.
+
+**S1b config:**
+- `producer_enabled`: `True`
+- `consumer_enabled`: `False`
+- `active_window_seconds`: `1800`
+- `hourly_write_cap`: `20`
+- `optional_output_sentence_cap`: `1`
+- `busy_timeout_ms`: `500`
+- `duty_cycle_window_seconds`: `86400`
+- `duty_cycle_min_samples`: `3`
+- `duty_cycle_max_dampened_ratio`: `0.8`
+- live daemon S1b env vars: none observed; owner-local
+  `config/private_thoughts_s1b.local.json` controls the flags.
+
+**Producer duty cycle:**
+- `residue_rows_total`: `1558`
+- `residue_rows_since_observation_start`: `1559` in the immediate query window
+  (off by one from total because the live daemon wrote while the checks were
+  running)
+- `residue_rows_24h`: `366`
+- `residue_rows_1h`: `20`
+- event_kind counts: all rows are bounded
+  `s1b_reasoning_residue_event` with
+  `producer_id=reasoning_residue`, `signal_kind=reasoning_residue`,
+  `signal_class=reasoning_residue`
+
+**Rate-limit summaries:**
+- `rate_limit_summaries_total`: `60`
+- `rate_limit_summaries_24h`: `17`
+- recent rows show `suppressed_count=21` for hourly windows, which means the
+  producer repeatedly reached the configured hourly cap.
+
+**Consumer duty cycle:**
+- `consumer_enabled`: `False`
+- presentation dampening opportunities were not evaluated for promotion because
+  the consumer is disabled.
+
+**Decision:**
+- Do **not** promote S1b to `[ ✓ partial - pacing-only consumer wired ]`.
+- Do **not** enable the consumer from this observation window.
+- Keep S1b at `[ ◐ scaffold + minimal wiring · councils ratified · observation pending ]`.
+
+**Rationale:**
+- The 200-cycle / 24h producer-only duration exists, but the producer duty cycle
+  is not low and rate-limit summaries are not rare or zero. The observation
+  therefore fails the promotion criteria in the safe direction.
+- The consumer is already disabled, which is the correct conservative posture.
+  No runtime flag change was made in this cleanup pass.

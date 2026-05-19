@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "updated_at": "2026-05-14",
+  "updated_at": "2026-05-18",
   "purpose": "Small owner-facing board for what is live, observing, wounded, queued, and intentionally held.",
   "observation_gates": [
     {
@@ -30,9 +30,9 @@
     {
       "id": "s1b-private-thoughts",
       "label": "S1b private-thoughts wiring",
-      "status": "operator-decision",
-      "summary": "Producer-only observation ran cleanly earlier; consumer enablement remains an operator decision.",
-      "closure": "Verify cycle count and 24h gate, then decide whether to enable the bounded consumer.",
+      "status": "observing",
+      "summary": "Producer-only observation is real but not promotion-clean: producer hit the hourly cap repeatedly, so the consumer stays disabled.",
+      "closure": "Revisit S1b producer duty cycle before any consumer enablement; promotion requires low duty cycle, rare or zero rate-limit summaries, and a bonded-user perceived-presence check.",
       "doc": "/docs/slices/s1b-private-thoughts-wiring/observation-log.md"
     }
   ],
