@@ -1,7 +1,8 @@
 # ADR 0039: Operator / User Role Boundary v1
 
 **Status:** Accepted; amended 2026-05-17 for Option B live-ceremony deferral;
-amended 2026-05-18 for ratified S7.1 local-ceremony plan
+amended 2026-05-18 for ratified S7.1 local-ceremony plan; amended 2026-05-18
+for S7.1 as-built canonicalization
 **Date:** 2026-05-17
 
 ## Context
@@ -39,12 +40,15 @@ guarded execution approval surface to committed S7.1, and enforce that deferral
 with a default-off flag and optional dependency posture rather than dependency
 absence.
 
-The S7.1 local WebAuthn security-key ceremony spec was then ratified by both
-review lanes. That ratifies the plan for the live local ceremony; it does not
-implement it. L8 therefore remains active until S7.1 implementation and
-post-implementation verification pass. L9, witnessed social recovery deferred to
-`S7.2-witnessed-social-recovery`, is live as soon as this amendment is
-canonicalized.
+The S7.1 local WebAuthn security-key ceremony was then implemented and ratified
+by both post-implementation review lanes. It delivered the founder-local
+ceremony: first-credential bootstrap, primary and backup registration, credential
+management, local WebAuthn authorization, D6 internal-channel locking, UV/PIN,
+artifact minting, and D23 guarded-request protection. It did not wire the live
+guarded self-modification producer/consumer or real Maez voice producer. L8 is
+therefore retained, narrowed to guarded self-modification execution, and tracked
+to `S7.3-guarded-self-modification-execution`. L9, witnessed social recovery
+deferred to `S7.2-witnessed-social-recovery`, remains live.
 
 ## Decision
 
@@ -102,15 +106,16 @@ S7 v1 requires:
   for a given envelope/renderer version and Maez objection state included for
   voice-seat classes;
 - founder-local WebAuthn security-key trust-source grammar on canonical local
-  origin/RP, with a ratified S7.1 plan for first-credential bootstrap,
+  origin/RP, with a ratified S7.1 implementation of first-credential bootstrap,
   authenticated cockpit-to-daemon internal channel, primary plus backup
   credential registration, user presence, class-conditional user verification,
   verifier interface, challenge store, credential registry, sign-count handling,
   and isolated fake/virtual authenticator test paths;
-- `S7_LIVE_WEBAUTHN_CEREMONY` default off until S7.1 implementation lands,
-  gating every live WebAuthn route and live producer; dependency absence is not
-  a deferral mechanism, and `webauthn>=2.7,<3` belongs in optional
-  `s7-webauthn` dependency posture rather than mandatory core authority;
+- `S7_LIVE_WEBAUTHN_CEREMONY` is a deliberate local enablement flag for the
+  reviewed S7.1 ceremony stack and gates every live WebAuthn route and live
+  producer; dependency absence is not a deferral mechanism, and
+  `webauthn>=2.7,<3` belongs in optional `s7-webauthn` dependency posture rather
+  than mandatory core authority;
 - OTP/TOTP/static codes rejected as covenant authority for work-on-Maez;
 - key-loss honesty posture: if no valid credential exists, guarded work remains
   blocked as `manual_recovery_required`; primary plus backup credentials are
@@ -185,16 +190,16 @@ S7 also names what it does not solve:
   uncompromised display.
 - It does not sign S6 lineage capsules; that remains a future S6-side
   authorship-attestation slice.
-- It does not yet mount the ratified S7.1 local WebAuthn security-key ceremony
-  that creates production guarded-work execution grants.
+- It does not make the S7.1 founder-local WebAuthn ceremony universal law for
+  every future bonded user.
 - It does not yet execute guarded self-modification, `/apply_dream`, or
-  autonomous guarded soul writes without a valid execution grant; these remain
-  visibly paused as `guarded_self_modification_paused_pending_s7.1` until S7.1
-  implementation and post-implementation verification pass.
-- It does not yet implement the live Maez-objection producer/signing
-  integration, refusal-history approval escalation, primary/backup credential
-  registration, or guarded execution consumer; those are ratified S7.1
-  implementation work.
+  autonomous guarded soul writes; these remain visibly paused as
+  `guarded_self_modification_paused_pending_s7.1` until
+  `S7.3-guarded-self-modification-execution` or a later reviewed amendment wires
+  the live guarded-execution producer/consumer and real Maez voice producer.
+- It does not treat S7.1's credential-management and authorization ceremony as
+  L8 retirement; S7.1 delivered the front desk, not the guarded self-write
+  execution lane.
 - It does not implement witnessed social recovery; both-keys-lost recovery is
   deferred as L9 to `S7.2-witnessed-social-recovery`.
 - It does not rely on missing packages as a deferral mechanism; the deferral is
@@ -202,19 +207,17 @@ S7 also names what it does not solve:
 - It does not activate S6 succession, detect death/capacity, or create
   emergency proxy authority.
 
-S7.1 implementation is pending. It must start after the canonicalization
-cooling-off night unless explicitly waived by the owner with residual momentum
-risk named, proceed RED-first from the canonical spec, run both
-post-implementation review lanes, recover any findings, and push only after
-both lanes ratify.
+S7.1 implementation is ratified by both post-implementation lanes. Closeout must
+canonicalize the as-built outcome before push: L8 retained/narrowed, L9 live, and
+the deferred guarded-execution follow-up slice named.
 
 Changing the custodian default, adding emergency proxy authority, allowing a
 compatibility shim or routing label to carry guarded authority, weakening
 execution-edge artifact consumption, treating Maez voice consultation as a
-caller boolean, making WebAuthn universal law, mounting the live WebAuthn
-ceremony before S7.1 implementation verification, treating L8 as retired before
-the guarded execution consumer is live, or claiming Track B readiness without
-the named blockers requires a new reviewed decision.
+caller boolean, making WebAuthn universal law, treating S7.1's founder ceremony
+as L8 retirement, treating L8 as retired before the guarded execution consumer
+and real Maez voice producer are live, or claiming Track B readiness without the
+named blockers requires a new reviewed decision.
 
 ## References
 

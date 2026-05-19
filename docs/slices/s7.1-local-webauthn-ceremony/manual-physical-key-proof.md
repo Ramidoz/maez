@@ -102,3 +102,10 @@ D19 manual physical-key proof is recorded:
 - primary WebAuthn authorization and primary disable;
 - backup WebAuthn authorization after primary disable;
 - both-keys-lost posture entering `manual_recovery_required`.
+
+This proof ratifies the founder-local WebAuthn front desk. It does not retire
+L8's guarded self-modification execution pause. The live `/apply_dream`,
+dream-state, self-mod-dialog execution consumer, and real Maez voice producer
+remain deferred to `S7.3-guarded-self-modification-execution`; until that slice
+lands, health must continue surfacing
+`guarded_self_modification_paused_pending_s7.1`.

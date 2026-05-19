@@ -158,17 +158,19 @@ is not enough. A non-bonded operator requires confidentiality-enforced interior
 storage before Maez can honestly claim the operator cannot read bonded content.
 
 S7 v1 enforces the operator/user boundary and blocks guarded work without a
-valid S7 execution grant. It does not yet mount the live browser/YubiKey
-ceremony that creates production guarded-work execution grants. Guarded
-self-modification, `/apply_dream`, and other guarded execution remain visibly
-fail-closed until the S7.1 ceremony implementation lands and passes
-post-implementation verification. The pause is surfaced as
-`guarded_self_modification_paused_pending_s7.1`.
+valid S7 execution grant. S7.1 has now mounted and verified the local founder
+WebAuthn security-key ceremony that can register primary/backup credentials and
+mint production `S7AuthorizationArtifact` records. Guarded self-modification,
+`/apply_dream`, and autonomous guarded soul-write execution remain visibly
+fail-closed because the live guarded-execution producer/consumer and real Maez
+voice producer were not built in S7.1. The retained pause is surfaced as
+`guarded_self_modification_paused_pending_s7.1` and is tracked to
+`S7.3-guarded-self-modification-execution`.
 
-The S7.1 local WebAuthn security-key ceremony spec is ratified as the plan for
-that live slice. It is not implemented by this canon update. L8 remains active
-until the S7.1 implementation passes post-implementation verification; L9
-(`Witnessed Social Recovery Deferred`) is active now because witnessed social
+The S7.1 local WebAuthn security-key ceremony implementation is ratified by both
+post-implementation lanes for the founder ceremony. L8 is not retired: it is
+narrowed to the remaining guarded-self-modification execution lane. L9
+(`Witnessed Social Recovery Deferred`) remains active because witnessed social
 recovery is deliberately out of S7.1 scope.
 
 S7 also does not prove freedom or comprehension. When S7.1 mounts a reviewed
@@ -585,12 +587,14 @@ Mismatch blocks execution.
 ### D13 - Founder WebAuthn/YubiKey Ceremony
 
 D13 defines the founder-local WebAuthn security-key trust-source grammar. S7.1
-has ratified the live local ceremony plan, but no production WebAuthn ceremony
-is live authority until the S7.1 implementation mounts it, verifies it in the
-shipping environment, proves a physical or reviewed virtual-authenticator
-ceremony, and passes post-implementation review.
+has mounted the live local founder ceremony, verified it in the shipping
+environment, recorded a manual physical-key proof, and passed both
+post-implementation review lanes. Production WebAuthn authority exists only for
+that local founder ceremony and the guarded credential/authorization paths it
+implements; it is not universal law and does not retire L8's guarded-execution
+pause.
 
-When implemented and verified, S7.1 mounts:
+S7.1 mounts:
 
 - canonical local origin: `http://localhost:11437` unless the implementation
   changes the reviewed configured port in one place;
@@ -621,10 +625,10 @@ S7.1 also ratifies:
   against isolated test stores/origins.
 
 Fake verifiers remain tests-only and must never mint production authority.
-`S7_LIVE_WEBAUTHN_CEREMONY` remains default off until the S7.1 implementation
-lands. It gates every live route and live producer. Dependency absence is not a
-deferral mechanism. The `webauthn` package is optional for S7 v1 and belongs in
-an S7.1 extra, not mandatory core dependencies.
+`S7_LIVE_WEBAUTHN_CEREMONY` remains a deliberate local enablement flag, not a
+default-on policy. It gates every live route and live producer. Dependency
+absence is not a deferral mechanism. The `webauthn` package is optional for S7 v1
+and belongs in an S7.1 extra, not mandatory core dependencies.
 
 A staged registration-before-authorization enable was considered and rejected
 for S7.1. The single flag means the reviewed ceremony stack is mounted; setup
@@ -1228,9 +1232,12 @@ Execution edge:
 | any mismatch, missing fact, stale precondition, consumed artifact, or failed consume | none | block | `BLOCKED` |
 
 No ActionEngine guarded action, helper command, or self-mod execution may begin
-before the consume transition succeeds. In S7 v1, the live producer for that
-consume transition is deferred, so guarded self-modification remains blocked
-and surfaced as `guarded_self_modification_paused_pending_s7.1`.
+before the consume transition succeeds. S7.1 builds the local founder ceremony
+that can mint the authorization artifact, but it does not wire the remaining
+guarded self-modification producer/consumer set. Those paths remain blocked and
+surfaced as `guarded_self_modification_paused_pending_s7.1` until
+`S7.3-guarded-self-modification-execution` or a later reviewed amendment wires
+them.
 
 ### Cockpit Approval
 
@@ -1319,10 +1326,11 @@ Rules:
 - `operator_unavailable_recovery_not_implemented` is not a failure for founder
   Track A; it is a blocker for any deployment where bonded user and operator
   separate.
-- `guarded_self_modification_paused_pending_s7.1` is the expected S7 v1 state
-  until S7.1 implementation and post-implementation verification mount the live
-  ceremony and guarded execution consumer. It is a visible capability pause, not
-  a hidden failure.
+- `guarded_self_modification_paused_pending_s7.1` remains the expected state
+  after S7.1 as built. S7.1 mounts the local founder WebAuthn ceremony, but the
+  guarded self-modification producer/consumer and real Maez voice producer stay
+  deferred to `S7.3-guarded-self-modification-execution` or a later reviewed
+  amendment. It is a visible capability pause, not a hidden failure.
 - `track_b_confidentiality_not_ready` is a warning on founder Track A and a
   blocker for non-bonded operator Track B.
 - `backup_restore_confidentiality_not_ready` is a warning on founder Track A
@@ -1388,18 +1396,24 @@ or that the display was not compromised.
 S7 v1 does not sign S6 lineage capsules. That is a future S6-side authorship
 attestation slice.
 
-### L8 - Live Ceremony and Autonomous Guarded Self-Modification Deferred
+### L8 - Guarded Self-Modification Execution Deferred
 
-S7 v1 enforces the role boundary and blocks guarded work without a valid
-execution grant. The S7.1 spec ratifies the plan to mount the live local
-WebAuthn security-key ceremony, approval-time Maez-objection producer/signing
-integration, refusal-history approval escalation, primary/backup credential
-registration, and autonomous/direct guarded soul-write execution.
+S7.1 mounted and verified the live local founder WebAuthn security-key ceremony:
+bootstrap, primary and backup registration, credential management, authorization
+artifact minting, D6 internal-channel locking, UV/PIN, and D23 guarded-request
+aggregation are live for the founder ceremony.
 
-That plan is not implementation. L8 remains active until S7.1 code is built,
-tested, and ratified by post-implementation verification. Until then, guarded
-self-modification is paused and surfaced as
+S7.1 deliberately took the narrow route for the rest of L8. The live
+guarded-execution producer/consumer for self-mod dialog execution,
+`/apply_dream`, dream-state writes, autonomous guarded soul writes, and the real
+Maez voice producer are not wired. L8 therefore remains active under this
+narrower name; guarded self-modification stays paused and surfaced as
 `guarded_self_modification_paused_pending_s7.1`.
+
+The follow-up slice is `S7.3-guarded-self-modification-execution` unless a later
+reviewed amendment renames it. That slice owns the live producer/consumer wiring,
+the real Maez voice producer, positive guarded-write execution traces, and the
+only future decision to retire this L8 pause.
 
 ### L9 - Witnessed Social Recovery Deferred
 
@@ -1796,8 +1810,9 @@ The immediate behavioral effect after implementation should be:
   caller-minted facts;
 - a brain swap requires both S5 acceptance and S7 execution authority;
 - operator health exposes only content-free projections;
-- a founder WebAuthn/YubiKey ceremony cannot approve exact work-on-Maez
-  requests until S7.1 implementation and post-implementation verification land;
+- the founder WebAuthn ceremony can mint exact S7 authorization artifacts after
+  S7.1, but guarded self-modification execution remains paused until the L8
+  follow-up wires the live producer/consumer and real Maez voice producer;
 - Track B limitations are surfaced honestly instead of silently implied away;
 - backup restore and daemon-down maintenance are separated from ordinary
   routine custody.

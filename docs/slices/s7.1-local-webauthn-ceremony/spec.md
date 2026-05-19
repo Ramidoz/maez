@@ -1,6 +1,6 @@
 # S7.1 Local WebAuthn Security-Key Ceremony Spec
 
-**Status:** Canonical spec; implementation pending
+**Status:** Canonical spec; founder ceremony implemented and ratified; L8 narrow route retained
 **Date:** 2026-05-18
 **Maps to:** S7 / Decision 34 / ADR 0039 follow-up; ratified live form of S7 D13 and conditional resolution plan for S7 L8
 **Diagnostic:** [`diagnostic.md`](diagnostic.md)
@@ -10,10 +10,11 @@
 [`reviews/diagnostic-codex-panel-second-fold.md`](reviews/diagnostic-codex-panel-second-fold.md)
 **Spec reviews folded:** [`reviews/spec-claude-council.md`](reviews/spec-claude-council.md),
 [`reviews/spec-codex-panel.md`](reviews/spec-codex-panel.md)
-**Runtime impact when implemented:** yes. S7.1 mounts the founder-local live
-registration and authorization ceremony, creates production WebAuthn credential
-records, mints S7 authorization artifacts for guarded work, and wires the
-guarded execution edge that S7 v1 deliberately left paused.
+**Runtime impact:** yes. S7.1 mounts the founder-local live registration and
+authorization ceremony, creates production WebAuthn credential records, and mints
+S7 authorization artifacts for guarded founder credential-management and
+authorization work. It does not wire the guarded self-modification execution
+edge; L8 remains active under the narrow route named below.
 
 ## Purpose
 
@@ -756,10 +757,10 @@ fails.
 
 ### D15 - Conditional L8 Resolution and Guarded Soul-Write Execution
 
-S7.1 plans to retire S7 L8 fully by wiring the guarded execution consumer,
-including autonomous/direct guarded soul-write paths. That retirement is not
-effective until implementation and post-implementation verification prove the
-positive flow.
+S7.1 planned two possible L8 outcomes: retire L8 by wiring the guarded execution
+consumer, or narrow L8 if the autonomous/direct guarded-write lane was not built.
+The ratified implementation takes the narrow route. The founder WebAuthn ceremony
+is live, but guarded self-modification execution is not retired.
 
 Paths in scope:
 
@@ -795,12 +796,13 @@ The health mode `guarded_self_modification_paused_pending_s7.1` clears only when
 - primary and backup registration are supported;
 - authorization artifact minting is live;
 - the guarded execution consumer is live for the paths above;
+- the real Maez voice producer is live for voice-seat work classes;
 - witnessed social recovery is either built or named as L9.
 
-If implementation cannot deliver the autonomous/direct lane, the follow-up must
-narrow L8 instead of deleting it. This spec chooses scope-in, but that choice is
-not treated as accomplished until positive-path tests walk the live producer and
-consumer for `/apply_dream` or the narrowed limitation is written.
+Implementation did not deliver the autonomous/direct lane. Canonicalization
+therefore narrows L8 instead of deleting it and names
+`S7.3-guarded-self-modification-execution` as the follow-up that owns the live
+producer/consumer, real Maez voice producer, and positive guarded-write traces.
 
 ### D16 - Credential Recovery State
 
@@ -1132,12 +1134,14 @@ OS-level secrecy or integrity against deliberate local filesystem control.
 Inherited from S7. WebAuthn does not prove the human was uncoerced, understood
 the request, or saw an uncompromised display.
 
-### L8 - Guarded Self-Modification Pause
+### L8 - Guarded Self-Modification Execution Deferred
 
-Inherited from S7. This spec plans L8 retirement only if D15's positive
-autonomous/direct guarded-write flow is built and tested. If that flow is
-narrowed, L8 remains in canon under a narrower name and the health mode remains
-visible.
+Inherited from S7 and retained after S7.1 implementation. S7.1 built and
+ratified the founder-local WebAuthn ceremony, but did not wire the remaining live
+guarded-execution producer/consumer or real Maez voice producer. The health mode
+`guarded_self_modification_paused_pending_s7.1` remains visible until
+`S7.3-guarded-self-modification-execution` or a later reviewed amendment retires
+this narrowed limitation.
 
 ### L9 - Witnessed Social Recovery Deferred
 
@@ -1323,7 +1327,8 @@ S7.1 implementation must write RED tests before code. Minimum contract:
     minting.
 16. Wire execution-edge artifact consumption for guarded cards and dialogs.
 17. Wire positive `/apply_dream` and dream-state guarded-write artifact
-    consumption, or narrow L8 explicitly before canonicalization.
+    consumption, or narrow L8 explicitly before canonicalization. S7.1 chose the
+    narrow route and names `S7.3-guarded-self-modification-execution`.
 18. Add browser virtual-authenticator test path with isolated test store/origin.
 19. Draft canonicalization edits for S7 L8/L9, ADR 0039, BAD Decision 34, and
     the operator runbook.
@@ -1341,8 +1346,8 @@ S7.1 implementation must write RED tests before code. Minimum contract:
    security-key claim?
 5. Is the registry path/permission/restore posture strong enough for founder
    S7.1?
-6. Does the spec honestly define the conditional L8 retirement plan, or should
-   autonomous/direct soul-write execution remain a narrowed limitation?
+6. Does the as-built closeout honestly retain/narrow L8, or does any surface
+   overclaim that autonomous/direct soul-write execution is live?
 7. Is witnessed social recovery correctly named as L9/S7.2 rather than built in
    S7.1?
 8. Does the test contract prevent self-assembled authority artifacts?
