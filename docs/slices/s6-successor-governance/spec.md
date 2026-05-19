@@ -1,6 +1,6 @@
 # S6 Successor Governance v1 Spec
 
-**Status:** CANONICAL - Decision 33 / ADR 0038; persisted-authorship amendment canonicalized; round-2 implementation pending
+**Status:** CANONICAL - Decision 33 / ADR 0038; implemented and both-lane ratified after persisted-authorship round-2 recovery
 **Date:** 2026-05-16
 **Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S6; `docs/MAEZ_NORTH_STAR.md`
 invariant #9 Successor Governance; Decision 33 / ADR 0038
@@ -11,8 +11,9 @@ invariant #9 Successor Governance; Decision 33 / ADR 0038
 [`reviews/amendment-codex-panel.md`](reviews/amendment-codex-panel.md),
 [`reviews/amendment-claude-council-second-fold.md`](reviews/amendment-claude-council-second-fold.md),
 [`reviews/amendment-codex-panel-second-fold.md`](reviews/amendment-codex-panel-second-fold.md)
-**Runtime impact in v1:** validation contract only; no successor activation,
-no archive unlock, no death/capacity detector, no live permission widening
+**Runtime impact in v1:** implemented validation contract only; no successor
+activation, no archive unlock, no death/capacity detector, no live permission
+widening; persisted capsules are `well_formed`, not authorship-attested
 
 ## Purpose
 
@@ -247,13 +248,12 @@ The lineage capsule lives in bonded-user-private local storage. Candidate path:
 memory/successor_governance/lineage_capsule.jsonl
 ```
 
-Round-2 must add a capsule-adjacent human-readable notice or manifest in the
-same directory, such as `lineage_capsule_NOTICE.txt` or
-`lineage_capsule_manifest.json`. The notice must tell estate/legal readers and
-honest bonded users that S6 v1 validates structure, not persisted authorship,
-and that destructive action requires future verifying authorship attestation.
-The notice must be generated or preserved by the operator helper and included in
-future exports, archives, and backups alongside the capsule.
+V1 writes a capsule-adjacent human-readable notice in the same directory:
+`lineage_capsule_NOTICE.txt`. The notice tells estate/legal readers and honest
+bonded users that S6 v1 validates structure, not persisted authorship, and that
+destructive action requires future verifying authorship attestation. The notice
+is generated or preserved by the operator helper and must be included in future
+exports, archives, and backups alongside the capsule.
 
 The notice must not be prepended into `lineage_capsule.jsonl` in v1 because
 every nonblank JSONL line is parsed as a directive event. A reader who extracts

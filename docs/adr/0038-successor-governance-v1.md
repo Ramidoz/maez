@@ -136,11 +136,19 @@ shortcuts invalid:
 - silently remapping deprecated scope names;
 - claiming a grandmother-compatible successor UI exists in v1.
 
-Implementation is blocked pending the persisted-authorship round-2 recovery.
-Round-2 must proceed RED-first, rename `valid` health vocabulary to
-`well_formed`, add the capsule-adjacent notice, add the v1 always-false
-authorship-attestation predicate, and preserve the forged JSONL probe as a
-regression test. Both-lane post-implementation review is required before push.
+Implementation is complete and both-lane ratified after the
+persisted-authorship round-2 recovery. The shipped v1 implementation renames
+`valid` health vocabulary to `well_formed`, writes the capsule-adjacent notice,
+exposes the v1 always-false authorship-attestation predicate, preserves the
+forged JSONL probe as a regression test, and hardens the destructive activation
+gate so only literal `True` from a future reviewed trust source can authorize
+`explicit_dissolution`.
+
+That completion is narrow. S6 is implemented as a grammar and validation organ,
+not as successor activation. A future activation, signature, storage-hardening,
+archive-unlock, capacity, Paradise, or new-bond slice still requires its own
+reviewed decision and must not treat a v1 well-formed capsule as
+authorship-attested authority.
 
 Changing the load-bearing rule, making Maez-origin fate directives routable,
 allowing `maez_prefers_dissolution`, granting raw interior/crisis/credential

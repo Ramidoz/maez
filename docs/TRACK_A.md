@@ -4,6 +4,14 @@
 
 This document's one job is to hold the current scope anchor for the work that's actively happening on Maez. Not the vision. Not the long-term roadmap. The **next 200 miles**.
 
+**Status note (2026-05-19):** this anchor is no longer the freshest substrate
+status map. Use `MAEZ_LIFE_SUBSTRATE.md` v1.11 for current substrate order and
+status. S6 Successor Governance v1 is implemented and both-lane ratified as a
+grammar/validation organ; it is not successor activation and does not attest
+persisted capsule authorship. S7.1 founder-local WebAuthn ceremony is
+implemented and as-built canonicalized; L8 guarded self-modification execution
+remains paused and tracked to S7.3.
+
 The vision lives in [`MAEZ_PITCH.md`](../MAEZ_PITCH.md). The tree map in that pitch's Section 4 is the destination anchor. This document is the *"we are here"* pin on that map.
 
 ---
@@ -303,4 +311,4 @@ If you're about to make a structural change to this document and it isn't one of
 
 ---
 
-*Last updated: 2026-05-13 (Track A gate met 2026-05-04; Track B preparation active through MAEZ_LIFE_SUBSTRATE.md; external bond not started)*
+*Last updated: 2026-05-19 status note added (Track A gate met 2026-05-04; Track B preparation active through MAEZ_LIFE_SUBSTRATE.md; external bond not started)*

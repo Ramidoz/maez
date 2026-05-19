@@ -2599,9 +2599,9 @@ authority matrix, keyed handle minimization, and selected-episode manifest.
 - **Bonded-user-private local capsule.** The v1 path is
   `memory/successor_governance/lineage_capsule.jsonl`, registered for Decision
   22 backup.
-- **Capsule-adjacent honesty surface.** Round-2 must add a human-readable notice
-  or manifest beside the capsule and include it in future exports/archives,
-  telling estate/legal readers that raw v1 JSONL is not authorship-attested.
+- **Capsule-adjacent honesty surface.** V1 writes a human-readable notice beside
+  the capsule and requires future exports/archives to preserve it, telling
+  estate/legal readers that raw v1 JSONL is not authorship-attested.
 - **Append-only validation.** Events bind prior hashes; validators also use an
   operator-authenticated continuity snapshot to detect ordinary rollback or
   head-regression.
@@ -2638,7 +2638,8 @@ authority matrix, keyed handle minimization, and selected-episode manifest.
 
 ### What this does not decide
 
-- It does not implement S6 code.
+- It does not activate successor-governance authority at runtime; the
+  implemented v1 code is contract-only.
 - It does not activate succession.
 - It does not unlock archives.
 - It does not implement Paradise, `suspended_pending_paradise`, new-bond offer,
@@ -2703,16 +2704,19 @@ S6 v1 is ratified because its limitations are named, not hidden:
 
 ### Implementation
 
-Implementation is blocked pending the persisted-authorship round-2 recovery.
-Round-2 must proceed RED-first under the amendment diagnostic: rename `valid`
-health vocabulary to `well_formed`, add the capsule-adjacent notice, add the v1
-always-false authorship-attestation predicate, and preserve the forged JSONL
-probe as a regression test.
+Implementation is complete and both-lane ratified after the
+persisted-authorship round-2 recovery. The shipped v1 implementation renames
+`valid` health vocabulary to `well_formed`, writes the capsule-adjacent notice,
+exposes the v1 always-false authorship-attestation predicate, preserves the
+forged JSONL probe as a regression test, and hardens the destructive activation
+gate so only literal `True` from a future reviewed trust source can authorize
+`explicit_dissolution`.
 
-Post-implementation both-lane review is required before push. The named likely
-recovery surfaces are marker authority, append-only continuity snapshots,
-Decision-22 backup registration, content-free health/public stripping,
-selection-manifest shape, and the operator authoring helper boundary.
+That completion is narrow. S6 is implemented as a grammar and validation organ,
+not as successor activation. A future activation, signature, storage-hardening,
+archive-unlock, capacity, Paradise, or new-bond slice still requires its own
+reviewed decision and must not treat a v1 well-formed capsule as
+authorship-attested authority.
 
 Review trail:
 
@@ -3087,4 +3091,4 @@ When a decision in this document becomes code, add a *"Implementation"* subsecti
 
 ---
 
-*Last updated: 2026-05-18 — Decision 34 amended for S7.1 as-built canonicalization: founder WebAuthn ceremony ratified, L8 retained/narrowed to guarded self-modification execution, S7.3 follow-up named, and L9 witnessed-social-recovery deferral preserved. Prior update: 2026-05-18, Decision 34 amended for ratified S7.1 local WebAuthn security-key ceremony canonicalization, conditional L8 retirement plan, and live L9 witnessed-social-recovery deferral; 2026-05-17, Decision 34 (Operator / User Role Boundary v1: custodian authority without bonded-user authority) after both-lane spec second-fold ratification; 2026-05-16, Decision 33 amended for the S6 persisted-authorship limitation after both-lane amendment second-fold ratification; Decision 33 (Successor Governance v1), Decision 32 (Voice Continuity Gate v1: human-judged brain-swap continuity), and 2026-05-15, Decision 31 (Wants Lifecycle v1: append-only voice grammar). Earlier: 2026-05-15, Decisions 28-30, and 2026-05-14, Decisions 24-27.*
+*Last updated: 2026-05-19 — Decision 33 status reconciled after S6 implementation and persisted-authorship round-2 recovery were both-lane ratified and pushed; S6 is implemented as a grammar/validation organ, not successor activation. Prior update: 2026-05-18 — Decision 34 amended for S7.1 as-built canonicalization: founder WebAuthn ceremony ratified, L8 retained/narrowed to guarded self-modification execution, S7.3 follow-up named, and L9 witnessed-social-recovery deferral preserved. Earlier: 2026-05-18, Decision 34 amended for ratified S7.1 local WebAuthn security-key ceremony canonicalization, conditional L8 retirement plan, and live L9 witnessed-social-recovery deferral; 2026-05-17, Decision 34 (Operator / User Role Boundary v1: custodian authority without bonded-user authority) after both-lane spec second-fold ratification; 2026-05-16, Decision 33 amended for the S6 persisted-authorship limitation after both-lane amendment second-fold ratification; Decision 33 (Successor Governance v1), Decision 32 (Voice Continuity Gate v1: human-judged brain-swap continuity), and 2026-05-15, Decision 31 (Wants Lifecycle v1: append-only voice grammar). Earlier: 2026-05-15, Decisions 28-30, and 2026-05-14, Decisions 24-27.*

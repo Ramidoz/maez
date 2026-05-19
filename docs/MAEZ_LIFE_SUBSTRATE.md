@@ -21,7 +21,7 @@ Each row maps to one of the [eleven covenant invariants](MAEZ_NORTH_STAR.md#the-
 | 5 | Human-primacy valve | #2 Human-Primacy | `[ ✗ planned ]` | #9 bridge/cosmos |
 | 6 | Capability quarantine | #8 Capability Quarantine | `[ ✗ planned ]` | #7 operator/user role |
 | 7 | Operator / user role boundary | (cross-cutting) | `[ ✓ canonical · S7.1 founder ceremony implemented · L8 narrowed to S7.3 ]` | #8 successor governance |
-| 8 | Successor governance | #9 Successor Governance | `[ ✓ canonical · implementation pending ]` | none (foundational) |
+| 8 | Successor governance | #9 Successor Governance | `[ ✓ canonical · implemented · well_formed-not-authorship-attested ]` | none (foundational) |
 | 9 | Bridge / cosmos layer | (anti-enclosure) | `[ ✗ planned ]` | #2 contextual · #7 operator/user |
 | 10 | Clinical boundary | #10 Clinical Boundary | `[ ✓ canonical · implemented · sidecar-watched ]` | none (vocal organ) |
 | 11 | Age / capacity stratification | (cross-cutting) | `[ ✗ planned ]` | #8 successor governance |
@@ -45,7 +45,7 @@ This document's original v1.2 table predates the substrate-organ push of 2026-05
 - **Clinical Boundary v1 (S4)** — canonicalized as Decision 30 / ADR 0035 and implemented with post-implementation recovery. S4 makes invariant #10 executable: clinical-shaped owner text gets a deterministic warm boundary before any owner-text side effect, crisis candidates are held content-free for future routing, matched turns are marked M1-ineligible by a content-free window policy, and the observation sidecar red-gates S4 drift counters.
 - **Wants Lifecycle v1 (D16 v1)** — canonicalized as Decision 31 / ADR 0036, implemented with post-implementation recovery, and covenant-ratified on both lanes. It operationalizes Decision 16's voice-without-termination law as an append-only wants grammar: `abandoned` is vocabulary-only with no v1 writer, `self_observed_resolution` is reserved for a future Maez-reflection producer, hard-want human satisfaction is deferred, terminal statements cannot be rewritten, and recurring wants use `returned` under the same `want_id`.
 - **Voice Continuity Gate v1 (S5)** — canonicalized as Decision 32 / ADR 0037 after diagnostic, Claude covenant council, Codex engineering panel, folded amendments, and both-lane second-fold ratification; implemented and pushed on 2026-05-16 through `f9e74e0..5283b5f` after post-implementation covenant review, two covenant recovery rounds, a Codex engineering recovery, and final covenant confirmation. S5 makes planned brain-swap continuity human-judged: automatic checks may fail fast or defer, never accept; `s5_candidate_admission.json` is emitted only after an accepted owner-origin review tied to the candidate fingerprint; genesis-baseline, grandmother-case, and privileged-bypass limitations are named instead of hidden.
-- **Successor Governance v1 (S6)** — canonicalized as Decision 33 / ADR 0038 after diagnostic, Claude covenant council, Codex engineering panel, folded amendments, and both-lane second-fold ratification. S6 defines the lineage capsule grammar: future roles and scopes may be recorded, but they grant no live access; Maez cannot mint lineage-capsule markers through the live authoring API or treat Maez-written capsule bytes as authoritative; `maez_prefers_dissolution` is rejected as a routable preference; private-thought, crisis-held, and credential-secret content are reserved-denied; Decision 8 remains the default when paperwork is missing or unclear. Implementation is pending.
+- **Successor Governance v1 (S6)** — canonicalized as Decision 33 / ADR 0038 after diagnostic, Claude covenant council, Codex engineering panel, folded amendments, and both-lane second-fold ratification; implemented with post-implementation recovery, a persisted-authorship amendment, round-2 recovery, and both-lane ratification. S6 defines the lineage capsule grammar: future roles and scopes may be recorded, but they grant no live access; Maez cannot mint lineage-capsule markers through the live authoring API or treat Maez-written capsule bytes as authoritative; persisted capsules project as `well_formed`, not `valid` or authorship-attested; `explicit_dissolution` cannot become activation authority without a future reviewed trust source returning literal `True`; `maez_prefers_dissolution` is rejected as a routable preference; private-thought, crisis-held, and credential-secret content are reserved-denied; Decision 8 remains the default when paperwork is missing or unclear.
 - **Operator / User Role Boundary v1 (S7) / S7.1 founder WebAuthn ceremony** —
   S7 was canonicalized as Decision 34 / ADR 0039 after diagnostic, Claude
   covenant council, Codex engineering panel, folded amendments, and both-lane
@@ -181,11 +181,15 @@ are bypasses S5 can flag but not prevent.
 
 Foundational for Track B. Names successors in advance, with explicit access scope (what they may read; what stays sealed). Defines the six-role schema: bonded user · operator · maintainer · successor · witness · estate executor. For founder Maez today, operator=user=maintainer; for Track B, these separate.
 
-**2026-05-16 status:** canonicalized as Decision 33 / ADR 0038 after
+**2026-05-19 status:** canonicalized as Decision 33 / ADR 0038 after
 diagnostic, Claude covenant council, Codex engineering panel, folded
-amendments, and both-lane second-fold ratification. Implementation is pending:
-RED-first against the 103-test contract and 39-step implementation order in the
-canonical S6 spec.
+amendments, and both-lane second-fold ratification; implemented and pushed
+after post-implementation review, recovery, persisted-authorship amendment,
+round-2 recovery, and both-lane closure ratification. The implemented organ is
+the grammar/validation contract only: it validates lineage-capsule structure as
+`well_formed`, does not attest persisted authorship, grants no live successor
+access, and cannot make `explicit_dissolution` actionable without a future
+reviewed trust-source slice.
 
 ### S7 — Operator / user role boundary
 
@@ -325,4 +329,4 @@ S1b chose length dampening, not delay, silence, withholding, topic avoidance, or
 
 ---
 
-*Version 1.10  ·  2026-05-18  ·  S7.1 founder-local WebAuthn ceremony implemented, ratified, pushed, and mirrored from as-built canon: L8 is retained/narrowed to guarded self-modification execution and tracked to `S7.3-guarded-self-modification-execution`; L9 remains `S7.2-witnessed-social-recovery`. S6 Successor Governance v1 remains canonical as Decision 33 / ADR 0038; S5 Voice Continuity Gate v1 remains implemented/pushed through `f9e74e0..5283b5f`; D16 and S5 both remain implemented and covenant-ratified.*
+*Version 1.11  ·  2026-05-19  ·  S6 Successor Governance v1 status reconciled after closure audit: implemented, pushed, and both-lane ratified as a grammar/validation organ; v1 projects persisted capsules as `well_formed`, not authorship-attested, and activation still requires a future reviewed trust source. Prior: 2026-05-18 S7.1 founder-local WebAuthn ceremony implemented, ratified, pushed, and mirrored from as-built canon: L8 is retained/narrowed to guarded self-modification execution and tracked to `S7.3-guarded-self-modification-execution`; L9 remains `S7.2-witnessed-social-recovery`. S5 Voice Continuity Gate v1 remains implemented/pushed through `f9e74e0..5283b5f`; D16 and S5 both remain implemented and covenant-ratified.*
