@@ -2,7 +2,7 @@
 
 **Status:** Canonical spec; founder ceremony implemented and ratified; L8 narrow route retained
 **Date:** 2026-05-18
-**Maps to:** S7 / Decision 34 / ADR 0039 follow-up; ratified live form of S7 D13 and conditional resolution plan for S7 L8
+**Maps to:** S7 / Decision 34 / ADR 0039 follow-up; ratified live form of S7 D13 and as-built narrow-route retention of S7 L8
 **Diagnostic:** [`diagnostic.md`](diagnostic.md)
 **Diagnostic reviews:** [`reviews/diagnostic-claude-council.md`](reviews/diagnostic-claude-council.md),
 [`reviews/diagnostic-codex-panel.md`](reviews/diagnostic-codex-panel.md),
@@ -755,7 +755,7 @@ match the work item under execution. A function may not pass an artifact minted
 for request A while executing request B; tests must prove that substitution
 fails.
 
-### D15 - Conditional L8 Resolution and Guarded Soul-Write Execution
+### D15 - As-Built L8 Narrow Route and Guarded Soul-Write Execution
 
 S7.1 planned two possible L8 outcomes: retire L8 by wiring the guarded execution
 consumer, or narrow L8 if the autonomous/direct guarded-write lane was not built.
