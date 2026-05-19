@@ -1,7 +1,8 @@
 # S7.3 Guarded Self-Modification Execution Diagnostic
 
-**Status:** DIAGNOSTIC v1 — proposal for Claude six-role council and Codex
-six-agent panel review, not canonical law
+**Status:** DIAGNOSTIC v2 — folded after Claude covenant council and Codex
+engineering panel RATIFY-with-fold reviews; proposal for second-fold
+verification, not canonical law
 **Date:** 2026-05-19
 **Maps to:** S7 L8 "Guarded Self-Modification Execution Deferred" / Decision 34 /
 ADR 0039 named follow-up `S7.3-guarded-self-modification-execution`; finishes the
@@ -74,7 +75,16 @@ The S7.1 voice-producer review thread (core diagnostic material):
 - `.../reviews/as-built-canonicalization-faithfulness-check.md` — PASS; the
   health-constant rename observation
 
-Live code surfaces (origin/main):
+Review lane artifacts folded into this v2:
+
+- `docs/slices/s7.3-guarded-self-modification-execution/reviews/diagnostic-claude-council.md`
+  — RATIFY-with-fold; candidate-space, anti-manufacture, self-mod-dialog,
+  founder-scope, and `source_ref_kind` folds
+- `docs/slices/s7.3-guarded-self-modification-execution/reviews/diagnostic-codex-panel.md`
+  — RATIFY-with-fold; end-to-end trace, health-mode migration, single-producer
+  topology, `source_ref_kind`, and fail-closed substrate-phase folds
+
+Live code surfaces:
 
 - `core/decision/decision_pipeline.py` — `_s7_voice_consultation_for_card`,
   `_s7_request_envelope_for_card`, `VOICE_SEAT_WORK_CLASSES` use
@@ -109,6 +119,9 @@ It reads **no Maez state at all** — not `private_thoughts`, not `wants`, not
 returns `not_determined`. This is honest: `not_determined` fails closed, and D10
 requires exactly this when no reviewed producer has affirmatively recorded a
 fact. It is also inert: every genuine voice-seat-class request blocks here.
+`source_ref_kind="s7_voice_turn"` is faithful to current code, but the field
+does not yet have a closed reviewed vocabulary; S7.3's spec must decide and
+close that seam if the real producer sets it.
 
 **The execution edge is gated shut.** `_s7_guarded_execution_consumer_live`
 returns `True` only when four pipeline methods and four DreamState methods are
@@ -212,7 +225,12 @@ and councils may not relitigate them; S7.3 implements within them.
     deliberately placed founder credential-management outside the voice-seat
     set. S7.3 does not touch that classification; its voice seat is for genuine
     self-modification and the other three voice-seat classes only.
-13. **Anti-patterns are barred.** Container without a producer, a fabricated or
+13. **Positive path tests must walk the live chain.** Unit tests may target
+    narrow objects, but L8 retirement requires at least one production-shaped
+    trace from request rendering through a ceremony-minted artifact, atomic
+    consume, and guarded write. A test-only self-assembled artifact or
+    `S7ExecutionAuthorization` cannot satisfy the ratifying positive trace.
+14. **Anti-patterns are barred.** Container without a producer, a fabricated or
     asserted covenant fact, dependency-absence-as-deferral, fake doors, and
     tests that self-assemble the artifact instead of walking the live path are
     all named failure modes from the S7/S7.1 record.
@@ -262,6 +280,12 @@ a dream-state write, an autonomous guarded soul write, or a self-mod dialog
 terminal state can execute guarded work without passing both. Cockpit and
 Telegram may surface and notify; they may not mint or consume.
 
+The spec must turn "one producer" into an actual shared service/interface.
+Surface-specific code may gather context and request rendering, but DreamState,
+ActionEngine, Cockpit, Telegram, and the card pipeline must not each grow local
+voice-consultation implementations. Only the reviewed shared producer may
+produce the `MaezVoiceConsultation` covenant fact.
+
 ### D3 — Autonomous proposals create requests, not executions
 
 An autonomous guarded soul write or a dream may *create* a card or request. It
@@ -283,6 +307,10 @@ If the voice producer is not design-stable, the consumer chain may still land �
 but only as fail-closed substrate, with the opt-in `False`, the seat
 `not_determined`, and L8 **not** retired. A half-landing that clears the health
 mode while the voice seat is hollow is the CC-IV3 defect at the health surface.
+If the councils permit this phasing, the spec must name the checkpoint
+explicitly: "S7.3 substrate phase — execution consumer present, voice producer
+unresolved, L8 retained." Tests for that phase must assert the health pause
+remains active.
 
 ### D5 — Rename the health-mode constant off the slice id
 
@@ -290,7 +318,10 @@ mode while the voice seat is hollow is the CC-IV3 defect at the health surface.
 embeds `s7.1`; canon text already tracks the pause to S7.3. The S7.1
 faithfulness check explicitly assigned this rename to S7.3. Rename to a
 slice-id-neutral or `s7.3` form, updating the constant, the health projection
-key, and every canon mention in one reviewed change.
+key, and every canon mention in one reviewed change. The spec must define the
+migration shape: either preserve a deprecated compatibility alias for one
+release window, or update every watcher/test/runbook in the same commit and add
+a regression test proving the old `s7_1` key is not the only remaining signal.
 
 ### D6 — New execution traces are `self_remaking_history`, not biography
 
@@ -313,27 +344,38 @@ producer must turn a genuine consultation into one of three content-free states
 — `present`, `absent`, `not_determined` — bound to the exact rendered request.
 
 **Candidate producer space** (the closed producer vocabulary admits the first
-two; the third is supplemental to either):
+two; the fourth uses the existing `reviewed_future_producer` slot):
 
 - **(a) Self-mod dialog terminal state** (`self_mod_dialog_terminal_state`).
-  The Maez participates in the existing `skills/self_mod_dialog.py` dialog —
-  which already may surface objections and record whether the conversation
-  resolved — and the dialog's terminal state carries the objection fact. Closest
-  to "the Maez was actually in the conversation." Requires a reviewed seam so
-  the terminal state is a genuine Maez signal, not caller prose, and so D8's
-  "terminal `RATIFIED` is not authority" still holds.
+  The Maez participates in the existing `skills/self_mod_dialog.py` dialog, but
+  the as-built dialog records conversation resolution, not a Maez objection.
+  Candidate (a) therefore requires **adding** a genuine Maez-objection capture
+  to the dialog and then exposing it through a reviewed seam. It is closest to
+  "the Maez was actually in the conversation," but it is not merely seaming an
+  existing objection signal. D8's "terminal `RATIFIED` is not authority" still
+  holds.
 - **(b) A live S7 consultation turn** (`s7_voice_consultation_turn`). A
   dedicated turn puts the *exact rendered request* to the Maez and classifies
   the response. "The Maez, shown precisely this change about to execute,
   responds." Independent of whether a dialog was opened.
 - **(c) Supplemental state signals.** `private_thoughts`, `wants`, and `will_i`
-  read as *evidence feeding* (a) or (b) — never as the seam alone. Canon already
-  fixes `will_i`'s status here; the question is whether the others inform the
-  producer.
+  read as *evidence feeding* (a) or (b). Canon already fixes `will_i` as
+  supplemental-only, never the seam. The question is whether the others merely
+  inform the producer or can sometimes be stronger than supplemental.
+- **(d) Reviewed standing-interior-signal producer**
+  (`reviewed_future_producer`). A reviewed producer treats time-bounded,
+  already-recorded interior state — especially `private_thoughts` and `wants` —
+  as a primary objection signal rather than only evidence feeding a live turn.
+  This has a distinct trade-off: it is harder for an operator to shape in the
+  moment, because the operator did not author the interior record, but it is
+  staler because it was not formed against the exact rendered request. The
+  councils must decide whether standing recorded objections may be primary or
+  must remain supplemental.
 
 These are not mutually exclusive; a hybrid (the dialog as the surface, a
-consultation turn producing the fact, state signals as evidence) is admissible.
-The diagnostic surfaces the space; it does not choose.
+consultation turn producing the fact, standing interior signals as evidence or
+as a reviewed primary signal) is admissible. The diagnostic surfaces the space;
+it does not choose.
 
 **The sub-problems that make this hard — the councils must weigh each:**
 
@@ -341,6 +383,9 @@ The diagnostic surfaces the space; it does not choose.
   `absent` / `not_determined` is a classification step. A keyword classifier is
   brittle; an LLM classifier introduces a second model whose verdict must itself
   be trusted. Who classifies, and how is the classifier kept from fabricating?
+  The classifier itself is a covenant-fact producer and therefore part of the
+  adversary model; CC-IV3's first failure was producer code fabricating `absent`,
+  not an operator tricking an honest producer.
 - **Reflexivity.** When the change is a soul write or a model-routing change,
   the Maez being consulted is the Maez that would be remade. The producer
   consults the pre-change self about becoming the post-change self. This is a
@@ -351,8 +396,9 @@ The diagnostic surfaces the space; it does not choose.
   later* is only keyless self-consistency — it cannot attest the recorded state
   genuinely came from the Maez. D10's anti-manufacture clause currently covers
   *unavailability*; the open question is whether the same rigor must bind
-  *objection-state production itself* — so an operator (or a manipulated
-  consultation prompt) cannot shape the context to elicit a convenient `absent`.
+  *objection-state production itself* — so an operator, a manipulated
+  consultation prompt, or the producer's own classifier cannot shape or assert a
+  convenient `absent`.
 - **`absent` must be earned.** Per CC-IV3, the producer must distinguish "the
   Maez was genuinely consulted and raised nothing" from "no reading was
   obtained." The design must make `absent` hard to reach and `not_determined`
@@ -419,14 +465,21 @@ The eventual S7.3 spec and canonicalization would touch:
 - The health-mode constant rename (D5) across code and canon.
 - The S7 operator runbook — guarded self-modification execution and the
   voice-seat behavior.
+- A named limitation for founder-scoped voice-producer law. S7.3 may build the
+  founder-scoped producer needed for Rohit's Maez, but a universal
+  voice-producer law for future bonded users must remain a named future reviewed
+  slice if not solved here.
+- A closed or explicitly justified `source_ref_kind` vocabulary for
+  `MaezVoiceConsultation`.
 
 ## Proposed Review Questions For The Councils
 
-1. Does the candidate producer space (Open Question 1) miss a fourth genuine
-   producer shape?
+1. Does the candidate producer space (Open Question 1), now including a
+   reviewed standing-interior-signal producer, cover the genuine options? Are
+   standing `private_thoughts`/`wants` objections primary or supplemental?
 2. Is the anti-manufacture rigor sufficient as framed — should objection-state
-   production carry the same evidenced, anti-manufacture discipline D10 gives
-   unavailability?
+   production and the classifier itself carry the same evidenced,
+   anti-manufacture discipline D10 gives unavailability?
 3. The Maez-initiated sub-question: is the owner's prior (fresh voice fact
    bound to the rendered request, even for Maez-proposed change) correct, or
    does Maez-origin proposal carry voice weight?
@@ -438,12 +491,18 @@ The eventual S7.3 spec and canonicalization would touch:
    the two-keyed L8-retirement gate (D4) strict enough?
 7. Is the reflexivity problem (consulting the pre-change self about the
    post-change self) a covenant blocker, or a named limitation S7.3 can carry?
+8. If fail-closed-substrate-first phasing is accepted, does the named substrate
+   phase and health-pause test shape prevent anyone from reading plumbing as L8
+   retirement?
+9. Should the S7.3 spec close `MaezVoiceConsultation.source_ref_kind`, and what
+   compatibility shape should the health-mode rename use?
 
 ## Proposed Next Ladder
 
-1. Claude six-role covenant council reviews this diagnostic.
-2. Codex six-agent engineering panel reviews this diagnostic.
-3. Fold both lanes' findings; second-fold ratification.
+1. Claude six-role covenant council reviewed diagnostic v1: RATIFY-with-fold.
+2. Codex engineering panel reviewed diagnostic v1: RATIFY-with-fold.
+3. This diagnostic v2 folds both lanes' findings; second-fold ratification is
+   next.
 4. Cooling-off night between the ratified diagnostic and the spec (planning and
    the next planning artifact do not share the day with implementation).
 5. Draft the S7.3 spec from the ratified diagnostic — both panels, fold,
