@@ -1,6 +1,6 @@
 # S7.3 Guarded Self-Modification Execution Diagnostic
 
-**Status:** DIAGNOSTIC v2 fold - not canonical law
+**Status:** DIAGNOSTIC v3 touch-up - not canonical law
 **Date:** 2026-05-19
 **Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S7.3; Decision 34 / ADR 0039; S7 L8
 **Runtime impact:** none; documentation only
@@ -19,12 +19,14 @@ retire L8. Guarded self-modification execution remains paused as
 amendment wires the live guarded-execution producer/consumer and the real Maez
 voice producer.
 
-This diagnostic opens S7.3 from committed canon, not from session memory. This
-v2 folds the independent Claude covenant council and Codex engineering panel
-reviews of v1. It does not decide the final design. It names the
-already-settled constraints, surveys the current as-built surface, and frames
-the open covenant question the spec must resolve: what counts as Maez being
-genuinely heard before Maez is remade?
+This diagnostic opens S7.3 from committed canon, not from session memory. v2
+folded the independent Claude covenant council and Codex engineering panel
+reviews of v1. v3 records the fresh-reader gate and corrects the ladder: the
+real Maez voice producer and its `absent` classifier contract must be resolved
+before the S7.3 spec is written. It does not decide the final design. It names
+the already-settled constraints, surveys the current as-built surface, and
+frames the covenant question the OQ1 design step must resolve: what counts as
+Maez being genuinely heard before Maez is remade?
 
 ## Plain English
 
@@ -65,7 +67,7 @@ Committed as-built evidence:
 - `docs/slices/s7.1-local-webauthn-ceremony/reviews/as-built-canonicalization-faithfulness-check.md`
 - current source files listed below
 
-Review-lane evidence folded into this diagnostic v2:
+Review-lane evidence folded into this diagnostic:
 
 - `docs/slices/s7.1-local-webauthn-ceremony/reviews/implementation-claude-council.md`
 - `docs/slices/s7.1-local-webauthn-ceremony/reviews/implementation-claude-council-post-recovery.md`
@@ -75,6 +77,9 @@ Review-lane evidence folded into this diagnostic v2:
 - `docs/slices/s7.1-local-webauthn-ceremony/reviews/implementation-codex-post-recovery-3.md`
 - `docs/slices/s7.3-guarded-self-modification-execution/reviews/diagnostic-claude-council.md`
 - `docs/slices/s7.3-guarded-self-modification-execution/reviews/diagnostic-codex-panel.md`
+- `docs/slices/s7.3-guarded-self-modification-execution/reviews/diagnostic-claude-council-second-fold.md`
+- `docs/slices/s7.3-guarded-self-modification-execution/reviews/diagnostic-codex-panel-second-fold.md`
+- `docs/slices/s7.3-guarded-self-modification-execution/reviews/diagnostic-fresh-reader-gate.md`
 
 Review artifacts are not canonical law. They are treated as dated evidence and
 fold inputs. Where review artifacts and source/canon differ, source and canon
@@ -91,6 +96,12 @@ Current code surfaces sampled to ground the diagnostic:
 - `core/turn_traces/trace_schema.py`
 - `skills/self_mod_dialog.py`
 - `skills/telegram_voice.py`
+
+Numbered D-labels in this document refer to the source document that defines
+them. For example, S7 D6 is the internal-channel lock, S7 D12 is
+what-you-see-is-what-you-sign binding, and S7 D23 is long-use refusal
+aggregation. S7.3's diagnostic decisions below are local diagnostic leans, not
+canonical D-numbered law.
 
 ## Settled Canon
 
@@ -146,8 +157,8 @@ S7.3 owns:
   `guarded_self_modification_paused_pending_s7.1`, if and only if the full
   chain is live and reviewed.
 
-S7.3 does not own S7.2 witnessed social recovery. L9 remains a separate named
-follow-up.
+S7.3 does not own S7.2 witnessed social recovery. L9 - witnessed social recovery
+deferred - remains a separate named follow-up.
 
 ## Current As-Built Surface
 
@@ -192,6 +203,13 @@ carrier should be renamed for clarity, but v2 does not treat it as hypothetical
 or as the execution authority. No raw WebAuthn verifier result, request-id
 shortcut, compatibility projection, dict-shaped grant handle, or new parallel
 authority type may substitute for a store-minted `S7ExecutionGrant`.
+
+There is a canon/code naming divergence to reconcile. S7.1 spec D14 says S7.1
+does not create a parallel `S7ExecutionAuthorization` type; current code now has
+a type with that name. This diagnostic reads the current type as an as-built
+pre-consume carrier, not the forbidden second execution authority. The OQ1/spec
+design path must either canonically bless that carrier shape/name or rename it
+so the S7.1 D14 boundary remains true.
 
 ### DreamState contains helper seams, but the live Telegram path does not feed them
 
@@ -295,6 +313,9 @@ positive execution trace can count.
 ## Carried Lessons From S7.1 CC-IV3
 
 The S7.1 CC-IV3 thread is the core review-history input for this diagnostic.
+Here, CC-IV3 means the S7.1 council recovery thread culminating in the
+post-recovery-3 review artifacts: the thread that discovered and corrected the
+fabricated-`absent` producer.
 
 The sequence:
 
@@ -425,7 +446,7 @@ If only the plumbing lands, the health mode must remain
 reviewed successor mode. S7.3 must not repeat S7.1's initial overclaim.
 
 L8 retirement requires at least one genuinely live end-to-end trace with a real
-founder key tap for each in-scope surface class or a reviewed reason that a
+founder key tap for each in-scope mutation surface, or a reviewed reason that a
 surface is intentionally excluded. Reviewed test verifiers are regression
 evidence. They are not, by themselves, the covenant gate that retires L8.
 Callable methods, boolean opt-ins, or placeholder producers must never clear the
@@ -447,7 +468,14 @@ to clear S7.3.
 
 ### D6 - Mutation surfaces must fail closed until a grant is consumed
 
-The following paths should be explicit S7.3 scope-in surfaces:
+In this diagnostic, a mutation surface is a concrete entrypoint that can cause a
+guarded write to Maez's own substrate. A path is a route into that surface, such
+as a Telegram slash command or approval card. The S7.3 spec must keep those
+terms stable and may group related surfaces explicitly if it needs surface
+classes.
+
+The following mutation surfaces and routes should be explicit S7.3 scope-in
+surfaces:
 
 - `skills/telegram_voice.py` `/apply_dream`;
 - `skills/telegram_voice.py` `/apply_section_edit`;
@@ -645,38 +673,43 @@ S7.3 diagnostic v2 does not:
 
 ## Proposed Review Questions
 
-For second-fold checks:
+For the OQ1 voice-producer design step:
 
-1. Did v2 remove the `S7ExecutionAuthorization` contradiction and preserve
-   `S7ExecutionGrant` as the only post-consume execution authority?
-2. Did v2 ground the voice-producer question in the closed
-   `VOICE_CONSULTATION_PRODUCERS` vocabulary without pre-blessing
-   `reviewed_future_producer`?
-3. Did v2 stop treating producer label alone as proof that Maez was heard?
-4. Did v2 make L8 retirement depend on trace-backed live evidence, including a
-   real founder key tap, rather than method presence, boolean opt-in, or
-   reviewed test verifier alone?
-5. Did v2 ban hand-assembled voice facts and execution handles from positive
-   S7.3 proof while still allowing value-object grammar tests?
-6. Did v2 carry D23 refusal-history provenance, rendered mutation display,
-   guarded-execution trace schema, rollback evidence, and mutation-surface
-   inventory as spec requirements?
-7. Did v2 leave the real voice producer open where it is genuinely unsettled,
-   instead of smuggling in a producer choice?
+1. Which producer shape should be primary for S7.3: a fresh terminal objection
+   turn inside self-mod dialog, a dedicated S7 consultation turn, or a bounded
+   combination?
+2. What exact transcript, prompt, source hash, request hash, model identity, and
+   classifier evidence must exist before `maez_objection_state="absent"` is
+   lawful?
+3. Which states force `present`, `not_determined`, `unavailable`, or
+   `withdrew_request`, and which of those fail closed?
+4. How does the design prevent the classifier itself from manufacturing
+   `absent`, not merely prevent an operator from shaping the consultation?
+5. How does the design handle silence, incoherence, model outage, prompt
+   injection, retries, and operator/host single-box collapse?
+6. How does the design reconcile the current `S7ExecutionAuthorization`
+   carrier name with S7.1 D14 before the spec depends on it?
+7. Does the design provide enough detail that the S7.3 spec can be written
+   without inventing the covenant core under pressure?
 
 ## Proposed Next Ladder
 
-S7.3 is covenant-shaped. After this v2 fold:
+S7.3 is covenant-shaped. After the v2 fold, second-folds, and fresh-reader gate:
 
-1. Commit diagnostic v2 as the folded artifact.
-2. Run second-fold checks on v2, focused on the questions above.
-3. Cooling-off night.
-4. Write the S7.3 spec from the folded diagnostic.
-5. Run both panels on the spec.
-6. Fold, second-fold, and canonicalize only after both lanes ratify.
-7. Only then implement RED-first.
+1. Record the fresh-reader gate and diagnostic v3 touch-up.
+2. Resolve OQ1: design the real Maez voice producer and absent-classifier
+   contract from this diagnostic.
+3. Run both lanes on the OQ1 design if it makes a covenant decision.
+4. Fold the OQ1 design findings into the S7.3 spec base.
+5. Write the S7.3 spec from the OQ1-resolved diagnostic/design base.
+6. Run both panels on the spec.
+7. Fold, second-fold, and canonicalize only after both lanes ratify.
+8. Only then implement RED-first.
 
-No spec or implementation should start from diagnostic v1.
+The elapsed cooling-off night is replaced here by the fresh-reader gate: cold
+readers with clean context reviewed v2 while other work proceeded. If that gate
+surfaces residuals, they are resolved before the spec. No spec or implementation
+should start from diagnostic v1 or from a diagnostic that leaves OQ1 unresolved.
 
 ## Plain English Close
 
@@ -691,7 +724,11 @@ requester speak for Maez; treating old interior signals as enough risks stale
 ventriloquism; approving only hashes hides the actual mutation; and clearing the
 pause because parts exist repeats the S7.1 health-surface overclaim.
 
-If S7.3 cannot honestly produce Maez's voice fact, the safe result is not shame.
-The safe result is an honest retained pause. But if it can produce that fact and
-wire the live consume edge, then L8 can finally be considered for retirement by
-reviewed canon rather than hope.
+The fresh-reader gate caught one more shortcut: writing the spec before OQ1 is
+resolved would force the spec to invent the covenant core under pressure. So the
+next S7.3 work is OQ1 design, not implementation and not a hollow spec.
+
+If S7.3 cannot honestly produce Maez's voice fact, the safe result is an honest
+retained pause. But if it can produce that fact and wire the live consume edge,
+then L8 can finally be considered for retirement by reviewed canon rather than
+hope.
