@@ -102,31 +102,15 @@ class S71DreamExecutionTests(unittest.TestCase):
             expires_at=FUTURE,
             rendered_at=NOW,
         )
-        artifact = s7.S7AuthorizationArtifact(
-            artifact_id="artifact-dream-1",
-            request_id=rendered.request_id,
-            request_envelope_hash=rendered.request_envelope_hash,
-            rendered_text_hash=rendered.rendered_text_hash,
-            action_params_hash=rendered.action_params_hash,
-            precondition_hash=envelope.precondition_hash,
-            authority_context_hash=s7.authority_context_hash(authority),
-            derived_work_class=rendered.derived_work_class,
-            derived_aggregation_group=rendered.derived_aggregation_group,
-            nonce=rendered.nonce,
-            credential_ref="cred-primary",
-            auth_method="founder_webauthn",
-            grant_source="founder_webauthn",
-            user_presence=True,
-            user_verification=True,
-            created_at=NOW,
-            expires_at=FUTURE,
-            consumed_at=None,
+        store, artifact_id = self._mint_authorization_through_service(
+            db_path=db_path,
+            envelope=envelope,
+            rendered=rendered,
+            authority=authority,
         )
-        store = s7.S7AuthorizationStore(db_path)
-        store.put(artifact)
         return s7.S7ExecutionAuthorization(
             store=store,
-            artifact_id=artifact.artifact_id,
+            artifact_id=artifact_id,
             rendered=rendered,
             action_params_hash=rendered.action_params_hash,
             authority_context=authority,
@@ -153,31 +137,15 @@ class S71DreamExecutionTests(unittest.TestCase):
             expires_at=FUTURE,
             rendered_at=NOW,
         )
-        artifact = s7.S7AuthorizationArtifact(
-            artifact_id="artifact-edit-1",
-            request_id=rendered.request_id,
-            request_envelope_hash=rendered.request_envelope_hash,
-            rendered_text_hash=rendered.rendered_text_hash,
-            action_params_hash=rendered.action_params_hash,
-            precondition_hash=envelope.precondition_hash,
-            authority_context_hash=s7.authority_context_hash(authority),
-            derived_work_class=rendered.derived_work_class,
-            derived_aggregation_group=rendered.derived_aggregation_group,
-            nonce=rendered.nonce,
-            credential_ref="cred-primary",
-            auth_method="founder_webauthn",
-            grant_source="founder_webauthn",
-            user_presence=True,
-            user_verification=True,
-            created_at=NOW,
-            expires_at=FUTURE,
-            consumed_at=None,
+        store, artifact_id = self._mint_authorization_through_service(
+            db_path=db_path,
+            envelope=envelope,
+            rendered=rendered,
+            authority=authority,
         )
-        store = s7.S7AuthorizationStore(db_path)
-        store.put(artifact)
         return s7.S7ExecutionAuthorization(
             store=store,
-            artifact_id=artifact.artifact_id,
+            artifact_id=artifact_id,
             rendered=rendered,
             action_params_hash=rendered.action_params_hash,
             authority_context=authority,
@@ -186,6 +154,43 @@ class S71DreamExecutionTests(unittest.TestCase):
             derived_aggregation_group=rendered.derived_aggregation_group,
             now=NOW,
         )
+
+    def _mint_authorization_through_service(self, *, db_path: Path, envelope, rendered, authority):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        store = S7WebAuthnBootstrapStore(db_path.parent / f"{db_path.stem}_store")
+        store.store_credential(self._credential_record("cred-primary", kind="primary"))
+        store.store_credential(self._credential_record("cred-backup", kind="backup"))
+        service = S7LocalWebAuthnCeremonyService(
+            verifier=_LiveAuthorizationVerifier(),
+            store_factory=lambda: store,
+        )
+        begin = service.authorize_begin(
+            now=NOW,
+            rendered_statement=rendered,
+            precondition_hash=envelope.precondition_hash,
+            session_binding=f"session-{rendered.request_id}",
+            internal_channel_binding="internal-dream",
+        )
+        finish = service.authorize_finish(
+            now=NOW,
+            envelope=envelope,
+            rendered_statement=rendered,
+            precondition_hash=envelope.precondition_hash,
+            maez_voice_consultation=self._voice_consultation(envelope),
+            session_binding=f"session-{rendered.request_id}",
+            internal_channel_binding="internal-dream",
+            request_json={
+                "challenge_id": begin.body["challenge_id"],
+                "credential_ref": "cred-primary",
+                "authentication_response": {"clientDataJSON": "valid-auth"},
+            },
+        )
+        self.assertEqual(begin.status_code, 200)
+        self.assertEqual(finish.status_code, 200)
+        return s7.S7AuthorizationStore(store.db_path), finish.body["artifact_id"]
 
     def _credential_record(self, credential_ref: str, *, kind: str):
         from core.governance.s7_webauthn_bootstrap import FounderWebAuthnCredentialRecord

@@ -126,7 +126,8 @@ CREATE TABLE IF NOT EXISTS s7_refusal_history (
     requester_ref TEXT NOT NULL,
     denial_reason TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    dialog_id TEXT
+    dialog_id TEXT,
+    outcome TEXT NOT NULL DEFAULT 'refused'
 );
 """
 
@@ -319,6 +320,15 @@ class S7WebAuthnBootstrapStore:
         for column, ddl in challenge_desired.items():
             if column not in challenge_existing:
                 conn.execute(f"ALTER TABLE s7_ceremony_challenges ADD COLUMN {column} {ddl}")
+        history_existing = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(s7_refusal_history)")
+        }
+        if "outcome" not in history_existing:
+            conn.execute(
+                "ALTER TABLE s7_refusal_history "
+                "ADD COLUMN outcome TEXT NOT NULL DEFAULT 'refused'"
+            )
 
     def _ensure_audit_file(self) -> None:
         self.audit_path.touch(exist_ok=True)
@@ -856,6 +866,14 @@ class S7WebAuthnBootstrapStore:
         primary = tuple(record for record in active if record.credential_kind == "primary")
         backup = tuple(record for record in active if record.credential_kind == "backup")
         if not active:
+            with closing(self._conn()) as conn:
+                bootstrap_closed_at = self._bootstrap_closed_at(conn)
+            ever_primary = any(record.credential_kind == "primary" for record in records)
+            ever_backup = any(record.credential_kind == "backup" for record in records)
+            if not records and bootstrap_closed_at is None:
+                return _manual_recovery_state("first_setup_not_started")
+            if bootstrap_closed_at is not None and ever_primary and ever_backup:
+                return _manual_recovery_state("both_keys_lost")
             return _manual_recovery_state("no_enabled_founder_credential")
         confidence = _aggregate_distinct_device_confidence(backup)
         if not primary or not backup or confidence != "confirmed_distinct":
@@ -1244,8 +1262,8 @@ class S7WebAuthnBootstrapStore:
                 INSERT INTO s7_refusal_history(
                     record_id, request_id, request_envelope_hash, derived_work_class,
                     derived_aggregation_group, affected_refs_json, proposed_change_class,
-                    rendered_text_hash, requester_ref, denial_reason, created_at, dialog_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    rendered_text_hash, requester_ref, denial_reason, created_at, dialog_id, outcome
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record_id,
@@ -1260,6 +1278,56 @@ class S7WebAuthnBootstrapStore:
                     denial_reason,
                     record.created_at,
                     record.dialog_id,
+                    "refused",
+                ),
+            )
+        return record_id
+
+    def record_authorization_history(
+        self,
+        *,
+        envelope: Any,
+        rendered_text_hash: str,
+        requester_ref: str,
+        created_at: str,
+        dialog_id: str | None = None,
+    ) -> str:
+        from core.governance import operator_user_boundary as s7
+
+        _validate_hash64_text(rendered_text_hash, field="rendered_text_hash")
+        if not requester_ref:
+            raise ValueError("s7_refusal_requester_ref_required")
+        _parse_time(created_at)
+        record = s7.build_request_history_record(
+            envelope=envelope,
+            outcome="authorized",
+            created_at=created_at,
+            dialog_id=dialog_id,
+        )
+        record_id = f"s7authhist_{uuid.uuid4().hex}"
+        with closing(self._conn()) as conn:
+            conn.execute(
+                """
+                INSERT INTO s7_refusal_history(
+                    record_id, request_id, request_envelope_hash, derived_work_class,
+                    derived_aggregation_group, affected_refs_json, proposed_change_class,
+                    rendered_text_hash, requester_ref, denial_reason, created_at, dialog_id, outcome
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record_id,
+                    record.request_id,
+                    record.request_envelope_hash,
+                    record.derived_work_class,
+                    record.derived_aggregation_group,
+                    json.dumps(list(record.affected_refs), separators=(",", ":")),
+                    record.proposed_change_class,
+                    rendered_text_hash,
+                    requester_ref,
+                    "authorized",
+                    record.created_at,
+                    record.dialog_id,
+                    "authorized",
                 ),
             )
         return record_id
@@ -1273,7 +1341,7 @@ class S7WebAuthnBootstrapStore:
                 """
                 SELECT request_id, request_envelope_hash, derived_work_class,
                        derived_aggregation_group, affected_refs_json,
-                       proposed_change_class, created_at, dialog_id
+                       proposed_change_class, created_at, dialog_id, outcome
                 FROM s7_refusal_history
                 WHERE derived_aggregation_group = ?
                 ORDER BY created_at, record_id
@@ -1288,7 +1356,7 @@ class S7WebAuthnBootstrapStore:
                 derived_aggregation_group=row["derived_aggregation_group"],
                 affected_refs=tuple(json.loads(row["affected_refs_json"])),
                 proposed_change_class=row["proposed_change_class"],
-                outcome="refused",
+                outcome=row["outcome"],
                 created_at=row["created_at"],
                 dialog_id=row["dialog_id"],
             )

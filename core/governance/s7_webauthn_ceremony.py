@@ -356,7 +356,10 @@ class S7LocalWebAuthnCeremonyService:
                 sign_count_mode=str(verified.get("sign_count_mode", "unknown")),
                 uv_capable=_optional_bool(verified.get("uv_capable")),
                 uv_required_for_guarded=True,
-                distinct_device_confidence="confirmed_distinct",
+                distinct_device_confidence=_backup_distinct_device_confidence(
+                    store=store,
+                    verified=verified,
+                ),
             )
             try:
                 store.store_credential(record)
@@ -634,6 +637,12 @@ class S7LocalWebAuthnCeremonyService:
             consumed_at=None,
         )
         s7.S7AuthorizationStore(store.db_path).put(artifact)
+        authorization_record_id = store.record_authorization_history(
+            envelope=envelope,
+            rendered_text_hash=rendered_statement.rendered_text_hash,
+            requester_ref="founder-local-browser",
+            created_at=now,
+        )
         return S7CeremonyServiceResult(
             body={
                 "ok": True,
@@ -641,6 +650,7 @@ class S7LocalWebAuthnCeremonyService:
                 "request_id": rendered_statement.request_id,
                 "credential_ref": credential_ref,
                 "grant_source": "founder_webauthn",
+                "authorization_record_id": authorization_record_id,
             },
             status_code=200,
         )
@@ -818,6 +828,40 @@ def _consume_backup_registration_authorization(
         covenant_ceremony_evidence=s7_execution_authorization.covenant_ceremony_evidence,
     )
     return grant if isinstance(grant, s7.S7ExecutionGrant) else None
+
+
+def _backup_distinct_device_confidence(
+    *,
+    store: Any,
+    verified: dict[str, Any],
+) -> str:
+    """Classify backup distinctness from verifier/registry evidence.
+
+    The code may not assert "confirmed_distinct" as a default. Confirmation
+    requires a different credential plus at least one verifier-supplied
+    authenticator signal; absent signals remain honest `unknown`.
+    """
+
+    credential_ref = str(verified.get("credential_ref") or "")
+    primary_records = tuple(
+        record
+        for record in store.list_credentials()
+        if record.enabled
+        and record.credential_kind == "primary"
+        and "bonded_user" in record.role_names
+    )
+    if not primary_records:
+        return "unknown"
+    if credential_ref and any(record.credential_ref == credential_ref for record in primary_records):
+        return "same_device_override"
+    signals = (
+        verified.get("aaguid"),
+        verified.get("authenticator_attachment"),
+        tuple(verified.get("transports", ()) or ()),
+    )
+    if not any(signals):
+        return "unknown"
+    return "confirmed_distinct"
 
 
 def _voice_seat_block(

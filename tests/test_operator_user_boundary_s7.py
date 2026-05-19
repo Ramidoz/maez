@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 import sqlite3
 import unittest
 from pathlib import Path
@@ -1885,6 +1886,32 @@ class S7AuthorizationArtifactStoreTests(unittest.TestCase):
                 now=NOW,
             ),
         )
+
+    def test_060c_store_consume_rejects_non_webauthn_ceremony_kind(self):
+        from core.governance import operator_user_boundary as s7
+
+        _env, authority, params_hash, rendered, artifact = self._routine_bundle()
+        store = s7.S7AuthorizationStore(self._path())
+        store.put(artifact)
+        with closing(sqlite3.connect(store.db_path)) as conn:
+            conn.execute(
+                "UPDATE s7_authorization_artifacts SET ceremony_kind = ? WHERE artifact_id = ?",
+                ("legacy_manual", artifact.artifact_id),
+            )
+            conn.commit()
+
+        grant, _result = store.consume_for_execution(
+            artifact.artifact_id,
+            rendered=rendered,
+            action_params_hash=params_hash,
+            authority_context=authority,
+            precondition_hash=artifact.precondition_hash,
+            derived_work_class=artifact.derived_work_class,
+            derived_aggregation_group=artifact.derived_aggregation_group,
+            now=NOW,
+        )
+
+        self.assertIsNone(grant)
 
     def test_061_superseded_request_rejects_old_artifact(self):
         from core.governance import operator_user_boundary as s7
@@ -4309,6 +4336,40 @@ class S7OperatorHealthProjectionTests(unittest.TestCase):
         from daemon.maez_daemon import MaezDaemon
 
         daemon = MaezDaemon.__new__(MaezDaemon)
+
+        with patch.dict("os.environ", {"S7_LIVE_WEBAUTHN_CEREMONY": "1"}, clear=False):
+            projection = daemon._operator_health()
+
+        self.assertEqual(projection["mode"], "guarded_self_modification_paused_pending_s7.1")
+        self.assertIn(
+            "guarded_self_modification_paused_pending_s7.1",
+            projection["red_gate_modes"],
+        )
+        self.assertIs(projection["guarded_self_modification_paused_pending_s7_1"], True)
+
+    def test_099d_health_keeps_l8_pause_until_voice_and_guarded_consumers_are_live(self):
+        from unittest.mock import patch
+        from daemon.maez_daemon import MaezDaemon
+
+        class CardStore:
+            def stats(self):
+                return {"open": 0, "by_status": {}}
+
+        class Pipe:
+            card_store = CardStore()
+
+            def _s7_request_envelope_for_card(self, _card):
+                return None
+
+            def _execution_params_for_card(self, _card):
+                return {}
+
+        class Telegram:
+            def _get_pipeline(self):
+                return Pipe()
+
+        daemon = MaezDaemon.__new__(MaezDaemon)
+        daemon.telegram = Telegram()
 
         with patch.dict("os.environ", {"S7_LIVE_WEBAUTHN_CEREMONY": "1"}, clear=False):
             projection = daemon._operator_health()

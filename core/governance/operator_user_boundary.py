@@ -12,6 +12,7 @@ mint WebAuthn assertions, or grant authority from legacy owner labels.
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import InitVar, asdict, dataclass
 from datetime import datetime, timezone
 import json
@@ -2068,6 +2069,7 @@ class S7AuthorizationArtifact:
     created_at: str
     expires_at: str
     consumed_at: str | None
+    ceremony_kind: str = "founder_local_webauthn"
 
     def __post_init__(self) -> None:
         if not self.artifact_id:
@@ -2088,6 +2090,8 @@ class S7AuthorizationArtifact:
             raise ValueError("S7 artifact credential_ref is required")
         validate_auth_method(self.auth_method)
         validate_grant_source(self.grant_source)
+        if self.ceremony_kind != "founder_local_webauthn":
+            raise ValueError("S7 artifact ceremony_kind must be founder_local_webauthn")
         if self.user_presence is not True and self.user_presence is not False:
             raise ValueError("S7 artifact user_presence must be bool")
         if self.user_verification is not True and self.user_verification is not False:
@@ -2246,7 +2250,8 @@ CREATE TABLE IF NOT EXISTS s7_authorization_artifacts (
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     consumed_at TEXT,
-    consumed_by_request_id TEXT
+    consumed_by_request_id TEXT,
+    ceremony_kind TEXT NOT NULL DEFAULT 'founder_local_webauthn'
 );
 """
 
@@ -2274,6 +2279,7 @@ class S7ExecutionGrant:
     auth_method: str
     grant_source: str
     consumed_at: str
+    ceremony_kind: str
     _mint_token: InitVar[object]
 
     def __post_init__(self, _mint_token: object) -> None:
@@ -2297,6 +2303,8 @@ class S7ExecutionGrant:
             raise ValueError("S7 execution grant requires credential_ref")
         validate_auth_method(self.auth_method)
         validate_grant_source(self.grant_source)
+        if self.ceremony_kind != "founder_local_webauthn":
+            raise ValueError("S7 execution grant ceremony_kind must be founder_local_webauthn")
         _timestamp_text(self.consumed_at, field="consumed_at")
 
 
@@ -2312,6 +2320,7 @@ def _mint_s7_execution_grant(
     credential_ref: str,
     auth_method: str,
     grant_source: str,
+    ceremony_kind: str,
     consumed_at: str,
 ) -> S7ExecutionGrant:
     return S7ExecutionGrant(
@@ -2328,6 +2337,7 @@ def _mint_s7_execution_grant(
         credential_ref=credential_ref,
         auth_method=auth_method,
         grant_source=grant_source,
+        ceremony_kind=ceremony_kind,
         consumed_at=consumed_at,
         _mint_token=_EXECUTION_GRANT_TOKEN,
     )
@@ -2337,8 +2347,18 @@ class S7AuthorizationStore:
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             conn.executescript(_AUTH_SCHEMA)
+            cols = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(s7_authorization_artifacts)")
+            }
+            if "ceremony_kind" not in cols:
+                conn.execute(
+                    "ALTER TABLE s7_authorization_artifacts "
+                    "ADD COLUMN ceremony_kind TEXT NOT NULL DEFAULT 'founder_local_webauthn'"
+                )
+            conn.commit()
 
     def put(self, artifact: S7AuthorizationArtifact) -> None:
         created_at = _timestamp_text(artifact.created_at, field="created_at")
@@ -2348,7 +2368,7 @@ class S7AuthorizationStore:
             if artifact.consumed_at is not None
             else None
         )
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute(
                 """
                 INSERT INTO s7_authorization_artifacts (
@@ -2357,8 +2377,8 @@ class S7AuthorizationStore:
                     authority_context_hash, derived_work_class,
                     derived_aggregation_group, nonce, credential_ref, auth_method,
                     grant_source, user_presence, user_verification, created_at,
-                    expires_at, consumed_at, consumed_by_request_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    expires_at, consumed_at, consumed_by_request_id, ceremony_kind
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
                 """,
                 (
                     artifact.artifact_id,
@@ -2379,8 +2399,10 @@ class S7AuthorizationStore:
                     created_at,
                     expires_at,
                     consumed_at,
+                    artifact.ceremony_kind,
                 ),
             )
+            conn.commit()
 
     def consume(self, artifact_id: str, *, request_id: str, now: str) -> bool:
         del artifact_id, request_id, now
@@ -2466,7 +2488,7 @@ class S7AuthorizationStore:
             return None, None
         now_text = _timestamp_text(now, field="now")
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with closing(sqlite3.connect(self.db_path)) as conn:
                 cur = conn.execute(
                     """
                     UPDATE s7_authorization_artifacts
@@ -2485,6 +2507,7 @@ class S7AuthorizationStore:
                       AND credential_ref = ?
                       AND auth_method = ?
                       AND grant_source = ?
+                      AND ceremony_kind = 'founder_local_webauthn'
                       AND user_presence = 1
                       AND user_verification IN (0, 1)
                       AND (? = 0 OR user_verification = 1)
@@ -2524,6 +2547,7 @@ class S7AuthorizationStore:
                     credential_ref=authority_context.credential_ref or "",
                     auth_method=authority_context.auth_method,
                     grant_source=authority_context.grant_source,
+                    ceremony_kind="founder_local_webauthn",
                     consumed_at=now_text,
                 )
                 callback_result = (
@@ -2531,6 +2555,7 @@ class S7AuthorizationStore:
                     if after_consume_before_commit is not None
                     else None
                 )
+                conn.commit()
                 return grant, callback_result
         except Exception:
             return None, None

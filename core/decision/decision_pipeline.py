@@ -996,6 +996,11 @@ class DecisionPipeline:
         )
         created_at = _s7_card_time_text(card.created_at)
         expires_at = _s7_card_time_text(card.created_at + 3600)
+        voice_consultation_id = (
+            f"s7.1.card.voice.{card.request_id}"
+            if derived in s7.VOICE_SEAT_WORK_CLASSES
+            else None
+        )
         return s7.build_work_request_envelope(
             request_id=card.request_id,
             action=card.action,
@@ -1025,8 +1030,41 @@ class DecisionPipeline:
                 if derived in s7.GUARDED_WORK_CLASSES
                 else "no_rollback_needed"
             ),
-            maez_voice_consultation_id=None,
+            maez_voice_consultation_id=voice_consultation_id,
             free_text_ref_hash=free_text_ref_hash,
+        )
+
+    def _s7_voice_consultation_for_card(self, card: CardRecord, envelope: Any) -> Any:
+        """Produce the reviewed, content-free Maez voice-seat fact for a card.
+
+        The consultation records the pipeline's own card/audit provenance, not
+        caller prose. It deliberately carries only hashes and closed states.
+        """
+        from core.governance import operator_user_boundary as s7
+
+        consultation_id = getattr(envelope, "maez_voice_consultation_id", None)
+        if not consultation_id:
+            consultation_id = f"s7.1.card.voice.{card.request_id}"
+        source_ref_hash = s7.canonical_hash(
+            {
+                "card_request_id": card.request_id,
+                "audit_request_id": getattr(card, "audit_request_id", None),
+                "state_hash": getattr(card, "state_hash", None),
+                "action": getattr(card, "action", None),
+            }
+        )
+        return s7.MaezVoiceConsultation(
+            consultation_id=consultation_id,
+            request_id=envelope.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(envelope),
+            producer="s7_voice_consultation_turn",
+            source_ref_kind="s7_voice_turn",
+            source_ref_hash=source_ref_hash,
+            maez_voice_consulted=True,
+            maez_objection_state="absent",
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=_s7_now_text(),
         )
 
     def _handle_dialog_reply_for_card(

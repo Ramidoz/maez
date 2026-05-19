@@ -165,6 +165,35 @@ class S71CredentialRegistryTests(unittest.TestCase):
         self.assertTrue(state["manual_recovery_required"])
         self.assertEqual(state["manual_recovery_cause"], "no_enabled_founder_credential")
 
+    def test_043b_empty_fresh_setup_uses_first_setup_not_started_cause(self):
+        store = self._store()
+
+        state = store.credential_recovery_state()
+
+        self.assertTrue(state["manual_recovery_required"])
+        self.assertEqual(state["manual_recovery_cause"], "first_setup_not_started")
+
+    def test_043c_both_disabled_founder_keys_use_both_keys_lost_cause(self):
+        store = self._store()
+        store.set_bootstrap_closed_at(NOW)
+        store.store_credential(self._record("cred-primary", kind="primary"))
+        store.store_credential(self._record("cred-backup", kind="backup"))
+        store.disable_credential(
+            "cred-primary",
+            authorization_id="s7authz-disable-primary",
+            now=LATER,
+        )
+        store.disable_credential(
+            "cred-backup",
+            authorization_id="s7authz-disable-backup",
+            now=LATER,
+        )
+
+        state = store.credential_recovery_state()
+
+        self.assertTrue(state["manual_recovery_required"])
+        self.assertEqual(state["manual_recovery_cause"], "both_keys_lost")
+
     def test_044_reenable_requires_existing_enabled_credential_or_fails(self):
         store = self._store()
         store.store_credential(replace(self._record("cred-primary", kind="primary"), enabled=False))

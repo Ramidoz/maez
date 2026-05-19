@@ -202,6 +202,7 @@ WS_PORT = 11436
 S7_INTERNAL_CHANNEL_HEADER = "X-Maez-S7-Internal-Channel"
 S7_INTERNAL_CHANNEL_TOKEN_ENV = "S7_INTERNAL_CHANNEL_TOKEN"
 S7_WEBAUTHN_STORE_ROOT_ENV = "S7_WEBAUTHN_STORE_ROOT"
+S7_WEBAUTHN_PROOF_ROUTES_ENV = "S7_WEBAUTHN_PROOF_ROUTES"
 
 
 def _is_ws_invalid_handshake_noise(record: logging.LogRecord) -> bool:
@@ -242,6 +243,10 @@ def secrets_compare(expected: str, presented: str) -> bool:
 
 def _s7_webauthn_store_root() -> Path:
     return Path(os.environ.get(S7_WEBAUTHN_STORE_ROOT_ENV, "memory/s7_1_webauthn"))
+
+
+def _s7_webauthn_proof_routes_enabled() -> bool:
+    return os.environ.get(S7_WEBAUTHN_PROOF_ROUTES_ENV) == "1"
 
 
 def _s7_route_error(error: str, status_code: int, **extra):
@@ -323,6 +328,33 @@ def _s7_route_voice_consultation(pipe, card, envelope):
     if not callable(producer):
         return None
     return producer(card, envelope)
+
+
+def _s7_guarded_execution_consumer_live(pipe, card_store, dream) -> bool:
+    if card_store is None or pipe is None:
+        return False
+    required_pipe_methods = (
+        "_s7_request_envelope_for_card",
+        "_execution_params_for_card",
+        "_s7_voice_consultation_for_card",
+        "_consume_s7_execution_authorization",
+    )
+    if not all(callable(getattr(pipe, name, None)) for name in required_pipe_methods):
+        return False
+    # D15's autonomous/direct lane must be explicitly live before health may
+    # claim L8 retired. Having DreamState helpers alone is not enough; the
+    # route/producer must opt in after it wires artifact consumption end to end.
+    if getattr(pipe, "s7_autonomous_guarded_write_consumer_live", False) is not True:
+        return False
+    required_dream_methods = (
+        "build_apply_s7_envelope",
+        "apply_proposal",
+        "build_section_edit_s7_envelope",
+        "apply_section_edit_proposal",
+    )
+    return dream is not None and all(
+        callable(getattr(dream, name, None)) for name in required_dream_methods
+    )
 
 
 def _s7_authorization_route_material(
@@ -1394,6 +1426,7 @@ class MaezDaemon:
         data_freshness_class = "unavailable"
         pipe = None
         card_store = None
+        dream = getattr(self, "dream", None)
         try:
             telegram = getattr(self, "telegram", None)
             pipe = telegram._get_pipeline() if telegram else None
@@ -1411,10 +1444,10 @@ class MaezDaemon:
             logger.warning("S7 operator health degraded: %s", exc)
             data_freshness_class = "unavailable"
         s7_live_ceremony_deferred = not live_webauthn_ceremony_enabled()
-        guarded_execution_consumer_live = (
-            card_store is not None
-            and callable(getattr(pipe, "_s7_request_envelope_for_card", None))
-            and callable(getattr(pipe, "_execution_params_for_card", None))
+        guarded_execution_consumer_live = _s7_guarded_execution_consumer_live(
+            pipe,
+            card_store,
+            dream,
         )
         guarded_self_modification_paused = (
             s7_live_ceremony_deferred or not guarded_execution_consumer_live
@@ -6097,6 +6130,8 @@ class MaezDaemon:
             if live_webauthn_ceremony_enabled():
                 if not _s7_internal_channel_trusted(request):
                     return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                if not _s7_webauthn_proof_routes_enabled():
+                    return jsonify({"ok": False, "error": "s7_proof_route_disabled"}), 404
                 result = _s7_create_backup_registration_card(self)
                 return jsonify(result.body), result.status_code
             return jsonify(
@@ -6111,6 +6146,8 @@ class MaezDaemon:
             if live_webauthn_ceremony_enabled():
                 if not _s7_internal_channel_trusted(request):
                     return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                if not _s7_webauthn_proof_routes_enabled():
+                    return jsonify({"ok": False, "error": "s7_proof_route_disabled"}), 404
                 result = _s7_create_disable_credential_card(
                     self,
                     request,
@@ -6129,6 +6166,8 @@ class MaezDaemon:
             if live_webauthn_ceremony_enabled():
                 if not _s7_internal_channel_trusted(request):
                     return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                if not _s7_webauthn_proof_routes_enabled():
+                    return jsonify({"ok": False, "error": "s7_proof_route_disabled"}), 404
                 store = S7WebAuthnBootstrapStore(_s7_webauthn_store_root())
                 result = _s7_disable_credential_for_proof(
                     self,

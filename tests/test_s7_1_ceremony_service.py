@@ -74,6 +74,16 @@ class _ValidBackupRegistrationVerifier(_ValidRegistrationVerifier):
         return result
 
 
+class _ValidBackupRegistrationVerifierWithoutDistinctSignals(_ValidBackupRegistrationVerifier):
+    def verify_registration_response(self, **kwargs):
+        result = dict(super().verify_registration_response(**kwargs))
+        if result.get("ok") is True:
+            result["aaguid"] = None
+            result["authenticator_attachment"] = None
+            result["transports"] = ()
+        return result
+
+
 class _PresenceOnlyAuthenticationVerifier(_ValidRegistrationVerifier):
     def verify_authentication_response(self, **_kwargs):
         return {
@@ -695,6 +705,67 @@ class S71CeremonyServiceTests(unittest.TestCase):
         assert backup is not None
         self.assertEqual(backup.credential_kind, "backup")
         self.assertTrue(backup.backup_credential)
+        self.assertEqual(backup.distinct_device_confidence, "confirmed_distinct")
+
+    def test_backup_registration_without_distinctness_signals_stays_unknown(self):
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, intent = self._store_with_bootstrap(tmp)
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+            primary_begin = service.register_begin(
+                now=NOW,
+                request_json={
+                    "bootstrap_intent_id": intent.intent_id,
+                    "bootstrap_token": intent.raw_token,
+                    "session_binding": "session-a",
+                },
+            )
+            service.register_finish(
+                now=NOW,
+                request_json={
+                    "challenge_id": primary_begin.body["challenge_id"],
+                    "bootstrap_intent_id": intent.intent_id,
+                    "bootstrap_token": intent.raw_token,
+                    "session_binding": "session-a",
+                    "registration_response": {"clientDataJSON": "valid"},
+                },
+            )
+            authorization = self._backup_registration_authorization(store.db_path)
+            backup_service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidBackupRegistrationVerifierWithoutDistinctSignals(),
+                store_factory=lambda: store,
+            )
+            backup_begin = service.register_begin(
+                now=NOW,
+                request_json={
+                    "registration_class": "backup",
+                    "session_binding": "session-b",
+                },
+                s7_execution_authorization=authorization,
+            )
+
+            result = backup_service.register_finish(
+                now=NOW,
+                request_json={
+                    "registration_class": "backup",
+                    "challenge_id": backup_begin.body["challenge_id"],
+                    "session_binding": "session-b",
+                    "registration_response": {"clientDataJSON": "valid-backup"},
+                },
+            )
+            backup = store.get_credential("cred-backup")
+            state = store.credential_recovery_state()
+
+        self.assertEqual(result.status_code, 200)
+        self.assertIsNotNone(backup)
+        assert backup is not None
+        self.assertEqual(backup.distinct_device_confidence, "unknown")
+        self.assertEqual(state["mode"], "degraded")
+        self.assertEqual(state["distinct_device_confidence"], "unknown")
 
     def test_authorization_voice_recheck_blocks_not_determined(self):
         from core.governance.s7_webauthn_ceremony import authorization_voice_seat_recheck
@@ -964,10 +1035,15 @@ class S71CeremonyServiceTests(unittest.TestCase):
                 derived_aggregation_group=rendered.derived_aggregation_group,
                 now=NOW,
             )
+            history = store.refusal_history_for_envelope(envelope)
 
         self.assertEqual(finish.status_code, 200)
         self.assertEqual(finish.body["grant_source"], "founder_webauthn")
+        self.assertRegex(finish.body["authorization_record_id"], r"^s7authhist_[0-9a-f]{32}$")
         self.assertTrue(consumed)
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0].outcome, "authorized")
+        self.assertEqual(history[0].request_id, envelope.request_id)
 
     def test_authorize_finish_rejects_rendered_statement_that_differs_from_challenge(self):
         from core.governance import operator_user_boundary as s7

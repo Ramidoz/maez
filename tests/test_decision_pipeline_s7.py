@@ -44,6 +44,20 @@ class _CountingActionEngine:
         return SimpleNamespace(success=self.success, output=self.output, error=self.error)
 
 
+class _S7RouteVerifier:
+    def dependency_state(self):
+        return {"ok": True, "library_name": "webauthn", "library_version": "2.7.1"}
+
+    def verify_authentication_response(self, **_kwargs):
+        return {
+            "ok": True,
+            "credential_ref": "cred-1",
+            "sign_count": 1,
+            "user_presence": True,
+            "user_verification": True,
+        }
+
+
 class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -178,6 +192,25 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertEqual(first.created_at, second.created_at)
         self.assertEqual(first.expires_at, second.expires_at)
 
+    def test_s7_voice_consultation_for_card_is_produced_by_pipeline(self):
+        from core.governance import operator_user_boundary as s7
+
+        card = self._card()
+        envelope = self.pipeline._s7_request_envelope_for_card(card)
+
+        consultation = self.pipeline._s7_voice_consultation_for_card(card, envelope)
+
+        self.assertIsInstance(consultation, s7.MaezVoiceConsultation)
+        self.assertEqual(consultation.request_id, card.request_id)
+        self.assertEqual(consultation.consultation_id, envelope.maez_voice_consultation_id)
+        self.assertEqual(
+            consultation.request_envelope_hash,
+            s7.work_request_envelope_hash(envelope),
+        )
+        self.assertTrue(consultation.maez_voice_consulted)
+        self.assertEqual(consultation.maez_objection_state, "absent")
+        self.assertIsNone(consultation.raw_maez_text)
+
     def _open_dialog(self, card, *, require_s7_linkage: bool, request_hash: str | None = None):
         from skills.self_mod_dialog import open_dialog_for_card
 
@@ -196,6 +229,11 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
 
     def _authorization_bundle(self, card):
         from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_bootstrap import (
+            FounderWebAuthnCredentialRecord,
+            S7WebAuthnBootstrapStore,
+        )
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 
         env = s7.build_work_request_envelope(
             request_id=card.request_id,
@@ -254,31 +292,71 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
             expires_at=FUTURE,
             rendered_at=NOW,
         )
-        artifact = s7.S7AuthorizationArtifact(
-            artifact_id=f"artifact-{card.request_id}",
-            request_id=card.request_id,
-            request_envelope_hash=s7.work_request_envelope_hash(env),
-            rendered_text_hash=rendered.rendered_text_hash,
-            action_params_hash=params_hash,
-            precondition_hash=env.precondition_hash,
-            authority_context_hash=s7.authority_context_hash(authority),
-            derived_work_class=env.derived_work_class,
-            derived_aggregation_group=env.derived_aggregation_group,
-            nonce=rendered.nonce,
-            credential_ref="cred-1",
-            auth_method="founder_webauthn",
-            grant_source="founder_webauthn",
-            user_presence=True,
-            user_verification=True,
-            created_at=NOW,
-            expires_at=FUTURE,
-            consumed_at=None,
+        bootstrap_store = S7WebAuthnBootstrapStore(self.root / f"s7_1_{card.request_id}")
+        for credential_ref, kind, confidence in (
+            ("cred-1", "primary", "unknown"),
+            ("cred-2", "backup", "confirmed_distinct"),
+        ):
+            bootstrap_store.store_credential(
+                FounderWebAuthnCredentialRecord.build(
+                    credential_ref=credential_ref,
+                    actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+                    role_names=("bonded_user",),
+                    public_key=f"public-key-{credential_ref}",
+                    sign_count=0,
+                    rp_id="localhost",
+                    origin="http://localhost:11437",
+                    created_at=NOW,
+                    backup_credential=(kind == "backup"),
+                    enabled=True,
+                    credential_kind=kind,
+                    label=f"{kind} key",
+                    registration_challenge_id=f"challenge-{credential_ref}",
+                    attestation_format="packed",
+                    aaguid="00112233-4455-6677-8899-aabbccddeeff",
+                    authenticator_attachment="cross-platform",
+                    backup_eligible=False,
+                    backed_up=False,
+                    transports=("usb",),
+                    library_name="webauthn",
+                    library_version="2.7.1",
+                    sign_count_mode="advancing",
+                    uv_capable=True,
+                    uv_required_for_guarded=True,
+                    distinct_device_confidence=confidence,
+                )
+            )
+        service = S7LocalWebAuthnCeremonyService(
+            verifier=_S7RouteVerifier(),
+            store_factory=lambda: bootstrap_store,
         )
-        store = s7.S7AuthorizationStore(self.root / "s7_authorization.db")
-        store.put(artifact)
+        begin = service.authorize_begin(
+            now=NOW,
+            rendered_statement=rendered,
+            precondition_hash=env.precondition_hash,
+            session_binding=f"session-{card.request_id}",
+            internal_channel_binding="internal-test-channel",
+        )
+        finish = service.authorize_finish(
+            now=NOW,
+            envelope=env,
+            rendered_statement=rendered,
+            precondition_hash=env.precondition_hash,
+            maez_voice_consultation=consultation,
+            session_binding=f"session-{card.request_id}",
+            internal_channel_binding="internal-test-channel",
+            request_json={
+                "challenge_id": begin.body["challenge_id"],
+                "credential_ref": "cred-1",
+                "authentication_response": {"clientDataJSON": "valid-auth"},
+            },
+        )
+        self.assertEqual(begin.status_code, 200)
+        self.assertEqual(finish.status_code, 200)
+        store = s7.S7AuthorizationStore(bootstrap_store.db_path)
         return s7.S7ExecutionAuthorization(
             store=store,
-            artifact_id=artifact.artifact_id,
+            artifact_id=finish.body["artifact_id"],
             rendered=rendered,
             action_params_hash=params_hash,
             authority_context=authority,
@@ -993,6 +1071,11 @@ class S7DaemonAndActionBypassTests(unittest.TestCase):
     def test_direct_action_engine_execution_grant_is_one_shot(self):
         from core.actions import action_engine as ae
         from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_bootstrap import (
+            FounderWebAuthnCredentialRecord,
+            S7WebAuthnBootstrapStore,
+        )
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
         from unittest.mock import MagicMock
 
         params = {"cmd": "rm -f /tmp/maez-s7-one-shot"}
@@ -1021,7 +1104,7 @@ class S7DaemonAndActionBypassTests(unittest.TestCase):
             allowed_scopes=("operator_health",),
             auth_method="founder_webauthn",
             surface="cockpit",
-            credential_ref="cred-one-shot",
+            credential_ref="cred-1",
             created_at=NOW,
             expires_at=FUTURE,
             verified=True,
@@ -1038,31 +1121,69 @@ class S7DaemonAndActionBypassTests(unittest.TestCase):
             expires_at=FUTURE,
             rendered_at=NOW,
         )
-        artifact = s7.S7AuthorizationArtifact(
-            artifact_id="artifact-one-shot",
-            request_id=env.request_id,
-            request_envelope_hash=s7.work_request_envelope_hash(env),
-            rendered_text_hash=rendered.rendered_text_hash,
-            action_params_hash=params_hash,
-            precondition_hash=env.precondition_hash,
-            authority_context_hash=s7.authority_context_hash(authority),
-            derived_work_class=env.derived_work_class,
-            derived_aggregation_group=env.derived_aggregation_group,
-            nonce=rendered.nonce,
-            credential_ref="cred-one-shot",
-            auth_method="founder_webauthn",
-            grant_source="founder_webauthn",
-            user_presence=True,
-            user_verification=True,
-            created_at=NOW,
-            expires_at=FUTURE,
-            consumed_at=None,
-        )
         with tempfile.TemporaryDirectory() as td:
-            store = s7.S7AuthorizationStore(Path(td) / "s7_authorization.db")
-            store.put(artifact)
+            bootstrap_store = S7WebAuthnBootstrapStore(Path(td) / "s7_1_webauthn")
+            for credential_ref, kind, confidence in (
+                ("cred-1", "primary", "unknown"),
+                ("cred-2", "backup", "confirmed_distinct"),
+            ):
+                bootstrap_store.store_credential(
+                    FounderWebAuthnCredentialRecord.build(
+                        credential_ref=credential_ref,
+                        actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+                        role_names=("bonded_user",),
+                        public_key=f"public-key-{credential_ref}",
+                        sign_count=0,
+                        rp_id="localhost",
+                        origin="http://localhost:11437",
+                        created_at=NOW,
+                        backup_credential=(kind == "backup"),
+                        enabled=True,
+                        credential_kind=kind,
+                        label=f"{kind} key",
+                        registration_challenge_id=f"challenge-{credential_ref}",
+                        attestation_format="packed",
+                        aaguid="00112233-4455-6677-8899-aabbccddeeff",
+                        authenticator_attachment="cross-platform",
+                        backup_eligible=False,
+                        backed_up=False,
+                        transports=("usb",),
+                        library_name="webauthn",
+                        library_version="2.7.1",
+                        sign_count_mode="advancing",
+                        uv_capable=True,
+                        uv_required_for_guarded=True,
+                        distinct_device_confidence=confidence,
+                    )
+                )
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_S7RouteVerifier(),
+                store_factory=lambda: bootstrap_store,
+            )
+            begin = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash=env.precondition_hash,
+                session_binding="session-one-shot",
+                internal_channel_binding="internal-one-shot",
+            )
+            finish = service.authorize_finish(
+                now=NOW,
+                envelope=env,
+                rendered_statement=rendered,
+                precondition_hash=env.precondition_hash,
+                maez_voice_consultation=None,
+                session_binding="session-one-shot",
+                internal_channel_binding="internal-one-shot",
+                request_json={
+                    "challenge_id": begin.body["challenge_id"],
+                    "credential_ref": "cred-1",
+                    "authentication_response": {"clientDataJSON": "valid-auth"},
+                },
+            )
+            store = s7.S7AuthorizationStore(bootstrap_store.db_path)
             grant, _ = store.consume_for_execution(
-                artifact.artifact_id,
+                finish.body["artifact_id"],
                 rendered=rendered,
                 action_params_hash=params_hash,
                 authority_context=authority,
@@ -1071,6 +1192,8 @@ class S7DaemonAndActionBypassTests(unittest.TestCase):
                 derived_aggregation_group=env.derived_aggregation_group,
                 now=NOW,
             )
+            self.assertEqual(begin.status_code, 200)
+            self.assertEqual(finish.status_code, 200)
             engine = ae.ActionEngine()
             engine._do_run_shell = MagicMock(return_value="executed")  # type: ignore[method-assign]
 
