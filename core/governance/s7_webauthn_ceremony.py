@@ -62,7 +62,7 @@ def build_backup_registration_envelope(
         request_id=request_id,
         action="register_backup_webauthn_credential",
         params=params,
-        claimed_work_class="self_modification",
+        claimed_work_class="founder_credential_management",
         requesting_subsystem="s7_1_webauthn_ceremony",
         closed_symptom_code="self_mod_requested",
         proposed_change_class="protection_change",
@@ -102,7 +102,7 @@ def build_disable_credential_envelope(
         request_id=request_id,
         action="disable_founder_webauthn_credential",
         params=params,
-        claimed_work_class="self_modification",
+        claimed_work_class="founder_credential_management",
         requesting_subsystem="s7_1_webauthn_ceremony",
         closed_symptom_code="self_mod_requested",
         proposed_change_class="protection_change",
@@ -814,7 +814,7 @@ def _consume_backup_registration_authorization(
     action_params_hash = s7.canonical_hash(backup_registration_action_params())
     if s7_execution_authorization.action_params_hash != action_params_hash:
         return None
-    if s7_execution_authorization.derived_work_class != "self_modification":
+    if s7_execution_authorization.derived_work_class != "founder_credential_management":
         return None
     grant, _result = s7_execution_authorization.store.consume_for_execution(
         s7_execution_authorization.artifact_id,

@@ -307,6 +307,7 @@ class S7VocabularyAndAuthorityContextTests(unittest.TestCase):
         for work_class in (
             "destructive_user_action",
             "self_modification",
+            "founder_credential_management",
             "covenant_touching_change",
             "capability_acquisition",
             "autonomy_lowering_or_protection_reducing",
@@ -327,6 +328,7 @@ class S7VocabularyAndAuthorityContextTests(unittest.TestCase):
 
         self.assertTrue(s7.authorizes_work(ctx, "routine_custody", now=NOW))
         self.assertFalse(s7.authorizes_work(ctx, "self_modification", now=NOW))
+        self.assertFalse(s7.authorizes_work(ctx, "founder_credential_management", now=NOW))
         self.assertFalse(s7.authorizes_work(ctx, "covenant_touching_change", now=NOW))
         self.assertFalse(
             s7.authorizes_work(
@@ -427,6 +429,21 @@ class S7WorkClassAndEnvelopeTests(unittest.TestCase):
                     ),
                     "routine_custody",
                 )
+
+    def test_025a_founder_credential_management_is_guarded_not_voice_seat(self):
+        from core.governance import operator_user_boundary as s7
+
+        for action in (
+            "register_founder_webauthn_credential",
+            "register_backup_webauthn_credential",
+            "disable_founder_webauthn_credential",
+            "reenable_founder_webauthn_credential",
+        ):
+            with self.subTest(action=action):
+                derived = s7.derive_work_class(action=action, params={})
+                self.assertEqual(derived, "founder_credential_management")
+                self.assertIn(derived, s7.GUARDED_WORK_CLASSES)
+                self.assertNotIn(derived, s7.VOICE_SEAT_WORK_CLASSES)
 
     def test_026_claimed_and_derived_class_disagreement_resolves_to_stricter(self):
         from core.governance import operator_user_boundary as s7

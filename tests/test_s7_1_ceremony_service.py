@@ -272,6 +272,33 @@ class S71CeremonyServiceTests(unittest.TestCase):
             now=NOW,
         )
 
+    def _backup_registration_rendered_without_voice(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_webauthn_ceremony import (
+            backup_registration_action_params,
+            build_backup_registration_envelope,
+        )
+
+        authority = self._authority_context()
+        envelope = build_backup_registration_envelope(
+            request_id="s7.1.register_backup.no_voice",
+            created_at=NOW,
+            expires_at="2026-05-18T11:05:00+00:00",
+            maez_voice_consultation_id=None,
+        )
+        rendered = s7.render_request_statement(
+            envelope=envelope,
+            surface="cockpit",
+            origin="http://localhost:11437",
+            action_params_hash=s7.canonical_hash(backup_registration_action_params()),
+            authority_context=authority,
+            maez_voice_consultation=None,
+            nonce="nonce-backup-register-no-voice",
+            expires_at="2026-05-18T11:05:00+00:00",
+            rendered_at=NOW,
+        )
+        return envelope, rendered
+
     def _credential_record(self, credential_ref: str, *, kind: str):
         from core.governance.s7_webauthn_bootstrap import FounderWebAuthnCredentialRecord
 
@@ -1128,6 +1155,45 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(len(history), 1)
         self.assertEqual(history[0].outcome, "authorized")
         self.assertEqual(history[0].request_id, envelope.request_id)
+
+    def test_backup_registration_authorization_completes_without_voice_producer(self):
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+            envelope, rendered = self._backup_registration_rendered_without_voice()
+            begin = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+                allow_degraded_primary_only=True,
+            )
+
+            finish = service.authorize_finish(
+                now=NOW,
+                envelope=envelope,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                maez_voice_consultation=None,
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+                request_json={
+                    "challenge_id": begin.body["challenge_id"],
+                    "credential_ref": "cred-primary",
+                    "authentication_response": {"clientDataJSON": "valid-auth"},
+                },
+            )
+
+        self.assertEqual(begin.status_code, 200)
+        self.assertEqual(finish.status_code, 200)
+        self.assertEqual(finish.body["grant_source"], "founder_webauthn")
 
     def test_authorize_finish_rejects_rendered_statement_that_differs_from_challenge(self):
         from core.governance import operator_user_boundary as s7

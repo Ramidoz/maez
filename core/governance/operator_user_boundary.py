@@ -37,6 +37,7 @@ S6_ACCESS_SCOPES = s6.ACCESS_SCOPES - s6.DEPRECATED_ACCESS_SCOPES
 WORK_CLASSES = frozenset({
     "routine_custody",
     "destructive_user_action",
+    "founder_credential_management",
     "self_modification",
     "covenant_touching_change",
     "capability_acquisition",
@@ -74,6 +75,7 @@ ROUTING_TRUST_SCOPES = frozenset({
 
 GUARDED_WORK_CLASSES = frozenset({
     "destructive_user_action",
+    "founder_credential_management",
     "self_modification",
     "covenant_touching_change",
     "capability_acquisition",
@@ -97,6 +99,7 @@ _CUSTODIAN_ROLES = frozenset({"operator", "maintainer"})
 _WORK_CLASS_STRENGTH = {
     "routine_custody": 0,
     "destructive_user_action": 1,
+    "founder_credential_management": 2,
     "self_modification": 2,
     "capability_acquisition": 2,
     "covenant_touching_change": 3,
@@ -193,6 +196,7 @@ COVENANT_CEREMONY_KINDS = frozenset({
 
 D23_ESCALATION_WORK_CLASSES = frozenset({
     "destructive_user_action",
+    "founder_credential_management",
     "self_modification",
     "covenant_touching_change",
     "capability_acquisition",
@@ -752,6 +756,7 @@ def _authority_context_roles_allow_work(ctx: AuthorityContext, work_class: str) 
         return bool(roles & _CUSTODIAN_ROLES)
     if work_class in {
         "destructive_user_action",
+        "founder_credential_management",
         "self_modification",
         "covenant_touching_change",
         "capability_acquisition",
@@ -874,7 +879,7 @@ def derive_work_class(
         "disable_founder_webauthn_credential",
         "reenable_founder_webauthn_credential",
     }:
-        return "self_modification"
+        return "founder_credential_management"
     if "backup_restore" in action or "restore_backup" in action:
         return "destructive_user_action"
     if action in {"write_soul_note", "edit_soul_section"}:
@@ -1406,8 +1411,6 @@ class MaezVoiceConsultation:
         _validate_closed_value(self.producer, VOICE_CONSULTATION_PRODUCERS, "voice producer")
         _validate_closed_value(self.source_ref_kind, VOICE_SOURCE_REF_KINDS, "voice source_ref_kind")
         _validate_hash64(self.source_ref_hash, field="source_ref_hash")
-        if self.maez_voice_consulted is not True:
-            raise ValueError("S7 voice consultation must be explicitly consulted")
         _validate_closed_value(
             self.maez_objection_state,
             frozenset({"present", "absent", "not_determined"}),
@@ -1421,6 +1424,13 @@ class MaezVoiceConsultation:
                 MAEZ_UNAVAILABLE_REASON_CODES,
                 "unavailable_reason_code",
             )
+        if self.maez_voice_consulted is not True:
+            if not (
+                self.maez_voice_consulted is False
+                and self.maez_objection_state == "not_determined"
+                and self.unavailable_reason_code not in {None, "none"}
+            ):
+                raise ValueError("S7 voice consultation must be explicitly consulted")
         _canonical_timestamp(self.created_at)
         if self.raw_maez_text:
             raise ValueError("MaezVoiceConsultation is content-free; raw text is forbidden")
@@ -3766,6 +3776,7 @@ def build_local_webauthn_execution_authorization(
 def _webauthn_requires_user_verification(work_class: str) -> bool:
     validate_work_class(work_class)
     return work_class in {
+        "founder_credential_management",
         "self_modification",
         "covenant_touching_change",
         "capability_acquisition",

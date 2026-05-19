@@ -33,6 +33,13 @@ Virtual authenticators were not used for the manual proof.
    - Status after backup registration: `ceremony_mode=ready`,
      `active_credential_count=2`
 
+   Distinctness note: WebAuthn AAGUID identifies an authenticator model, not a
+   unique physical key. Two same-model physical security keys may share an
+   AAGUID; in that case S7.1 must report `same_device_override` / degraded
+   rather than auto-confirming distinctness from WebAuthn evidence alone. Use
+   different key models for automatic confirmation, or treat the degraded state
+   as an honest evidence limit requiring reviewed manual handling.
+
 3. Primary disable proof succeeded after primary WebAuthn authorization.
    - Primary disable artifact:
      `s7authz_0d31aa8861794e6f814d3101ab077ffd`

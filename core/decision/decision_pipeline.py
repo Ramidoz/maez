@@ -1060,7 +1060,7 @@ class DecisionPipeline:
             producer="s7_voice_consultation_turn",
             source_ref_kind="s7_voice_turn",
             source_ref_hash=source_ref_hash,
-            maez_voice_consulted=True,
+            maez_voice_consulted=False,
             maez_objection_state="not_determined",
             maez_withdrew_request=False,
             unavailable_reason_code="consultation_path_unavailable",
