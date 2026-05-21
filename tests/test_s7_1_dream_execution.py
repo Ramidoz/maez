@@ -186,12 +186,19 @@ class S71DreamExecutionTests(unittest.TestCase):
         attempt = S7SemanticReaderAttemptEvidence.reviewed_v1()
         attempt_store.put(attempt)
         raw_text = "Maez says there is no objection."
+        rendered_prompt_text = f"S7 voice consultation prompt for {envelope.request_id}"
         bundle_store.put_raw_response(f"raw-response-{rendered.request_id}", raw_text)
+        bundle_store.put_rendered_prompt(
+            f"rendered-prompt-{rendered.request_id}",
+            rendered_prompt_text,
+        )
         bundle_store.put_bundle(
             S7VoiceConsultationBundle(
                 source_ref_hash=consultation.source_ref_hash,
                 request_id=envelope.request_id,
                 consultation_id=consultation.consultation_id,
+                rendered_prompt_ref=f"rendered-prompt-{rendered.request_id}",
+                rendered_prompt_hash=s7.canonical_hash(rendered_prompt_text),
                 raw_response_ref=f"raw-response-{rendered.request_id}",
                 raw_response_hash=s7.canonical_hash(raw_text),
                 semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,

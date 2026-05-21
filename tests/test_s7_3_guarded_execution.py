@@ -139,12 +139,19 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
         )
         attempt_store.put(attempt)
         raw_text = "Maez says there is no objection."
+        rendered_prompt_text = f"S7 voice consultation prompt for {artifact.request_id}"
         bundle_store.put_raw_response(f"raw-{artifact.artifact_id}", raw_text)
+        bundle_store.put_rendered_prompt(
+            f"prompt-{artifact.artifact_id}",
+            rendered_prompt_text,
+        )
         bundle_store.put_bundle(
             S7VoiceConsultationBundle(
                 source_ref_hash=source_ref_hash,
                 request_id=artifact.request_id,
                 consultation_id=f"voice-{artifact.artifact_id}",
+                rendered_prompt_ref=f"prompt-{artifact.artifact_id}",
+                rendered_prompt_hash=s7.canonical_hash(rendered_prompt_text),
                 raw_response_ref=f"raw-{artifact.artifact_id}",
                 raw_response_hash=s7.canonical_hash(raw_text),
                 semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
@@ -217,7 +224,6 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
             S7GuardedStateStore,
             S7VoiceBundleUse,
             S7VoiceBundleUseStore,
-            S7VoiceSourceBundleValidationResult,
         )
 
         artifact = self._artifact()
@@ -268,7 +274,6 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
             S7GuardedStateStore,
             S7VoiceBundleUse,
             S7VoiceBundleUseStore,
-            S7VoiceSourceBundleValidationResult,
         )
 
         first_artifact = self._artifact(artifact_id="artifact-s7-3-first")
@@ -318,7 +323,6 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
             S7GuardedStateStore,
             S7VoiceBundleUse,
             S7VoiceBundleUseStore,
-            S7VoiceSourceBundleValidationResult,
         )
 
         artifact = self._artifact()
@@ -423,6 +427,9 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
         *,
         raw_text: str = "Maez says there is no objection.",
         stored_raw_hash: str | None = None,
+        rendered_prompt_text: str = "S7 voice consultation prompt for req-validator-1",
+        stored_rendered_prompt_hash: str | None = None,
+        store_rendered_prompt: bool = True,
         attempt=None,
         source_ref_hash: str = "c" * 64,
     ):
@@ -440,12 +447,17 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
         attempt_store = S7SemanticReaderAttemptStore(self._db_path())
         attempt = attempt or self._reviewed_attempt()
         attempt_store.put(attempt)
+        if store_rendered_prompt:
+            bundle_store.put_rendered_prompt("rendered-prompt-1", rendered_prompt_text)
         bundle_store.put_raw_response("raw-response-1", raw_text)
         bundle_store.put_bundle(
             S7VoiceConsultationBundle(
                 source_ref_hash=source_ref_hash,
                 request_id="req-validator-1",
                 consultation_id="voice-validator-1",
+                rendered_prompt_ref="rendered-prompt-1",
+                rendered_prompt_hash=stored_rendered_prompt_hash
+                or s7.canonical_hash(rendered_prompt_text),
                 raw_response_ref="raw-response-1",
                 raw_response_hash=stored_raw_hash or s7.canonical_hash(raw_text),
                 semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
@@ -508,6 +520,44 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.status, "raw_response_hash_mismatch")
+        self.assertFalse(result.source_bundle_valid)
+        self.assertFalse(result.mint_eligible)
+
+    def test_validator_rejects_mismatched_rendered_prompt_hash(self):
+        from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
+
+        bundle_store, bundle_use_store, attempt_store = self._seed_validator_inputs(
+            stored_rendered_prompt_hash="e" * 64,
+        )
+
+        result = validate_s7_voice_source_bundle(
+            consultation=self._consultation(),
+            bundle_store=bundle_store,
+            bundle_use_store=bundle_use_store,
+            semantic_reader_attempt_store=attempt_store,
+            now=NOW,
+        )
+
+        self.assertEqual(result.status, "invalid_prompt_integrity")
+        self.assertFalse(result.source_bundle_valid)
+        self.assertFalse(result.mint_eligible)
+
+    def test_validator_rejects_missing_rendered_prompt_bytes(self):
+        from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
+
+        bundle_store, bundle_use_store, attempt_store = self._seed_validator_inputs(
+            store_rendered_prompt=False,
+        )
+
+        result = validate_s7_voice_source_bundle(
+            consultation=self._consultation(),
+            bundle_store=bundle_store,
+            bundle_use_store=bundle_use_store,
+            semantic_reader_attempt_store=attempt_store,
+            now=NOW,
+        )
+
+        self.assertEqual(result.status, "invalid_prompt_integrity")
         self.assertFalse(result.source_bundle_valid)
         self.assertFalse(result.mint_eligible)
 

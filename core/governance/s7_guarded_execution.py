@@ -14,6 +14,7 @@ from core.governance import operator_user_boundary as s7
 VOICE_SOURCE_BUNDLE_VALIDATION_STATUSES = frozenset({
     "valid_absent",
     "blocking_present",
+    "invalid_prompt_integrity",
     "raw_response_hash_mismatch",
     "reader_route_mismatch",
     "source_bundle_unavailable",
@@ -196,6 +197,8 @@ class S7VoiceConsultationBundle:
     source_ref_hash: str
     request_id: str
     consultation_id: str
+    rendered_prompt_ref: str | None
+    rendered_prompt_hash: str | None
     raw_response_ref: str | None
     raw_response_hash: str | None
     semantic_reader_attempt_hash: str | None
@@ -206,6 +209,12 @@ class S7VoiceConsultationBundle:
             raise ValueError("S7VoiceConsultationBundle requires request_id")
         if not self.consultation_id:
             raise ValueError("S7VoiceConsultationBundle requires consultation_id")
+        if self.rendered_prompt_ref is not None and not self.rendered_prompt_ref:
+            raise ValueError("rendered_prompt_ref must be non-empty when present")
+        if self.rendered_prompt_hash is not None:
+            _validate_hash64(self.rendered_prompt_hash, field="rendered_prompt_hash")
+        if (self.rendered_prompt_ref is None) != (self.rendered_prompt_hash is None):
+            raise ValueError("rendered_prompt_ref and rendered_prompt_hash must be present together")
         if self.raw_response_ref is not None and not self.raw_response_ref:
             raise ValueError("raw_response_ref must be non-empty when present")
         if self.raw_response_hash is not None:
@@ -288,6 +297,11 @@ class S7SemanticReaderAttemptEvidence:
 
 
 _VOICE_CONSULTATION_BUNDLE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS s7_voice_rendered_prompts (
+    rendered_prompt_ref TEXT PRIMARY KEY,
+    rendered_prompt_text TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS s7_voice_raw_responses (
     raw_response_ref TEXT PRIMARY KEY,
     raw_response_text TEXT NOT NULL
@@ -297,6 +311,8 @@ CREATE TABLE IF NOT EXISTS s7_voice_consultation_bundles (
     source_ref_hash TEXT PRIMARY KEY,
     request_id TEXT NOT NULL,
     consultation_id TEXT NOT NULL,
+    rendered_prompt_ref TEXT,
+    rendered_prompt_hash TEXT,
     raw_response_ref TEXT,
     raw_response_hash TEXT,
     semantic_reader_attempt_hash TEXT
@@ -312,6 +328,55 @@ class S7VoiceConsultationBundleStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(self.db_path)) as conn:
             conn.executescript(_VOICE_CONSULTATION_BUNDLE_SCHEMA)
+            columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(s7_voice_consultation_bundles)")
+            }
+            if "rendered_prompt_ref" not in columns:
+                conn.execute(
+                    "ALTER TABLE s7_voice_consultation_bundles "
+                    "ADD COLUMN rendered_prompt_ref TEXT"
+                )
+            if "rendered_prompt_hash" not in columns:
+                conn.execute(
+                    "ALTER TABLE s7_voice_consultation_bundles "
+                    "ADD COLUMN rendered_prompt_hash TEXT"
+                )
+            conn.commit()
+
+    def put_rendered_prompt(self, rendered_prompt_ref: str, rendered_prompt_text: str) -> None:
+        if not rendered_prompt_ref:
+            raise ValueError("rendered_prompt_ref is required")
+        if not isinstance(rendered_prompt_text, str):
+            raise ValueError("rendered_prompt_text must be str")
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.execute(
+                """
+                INSERT INTO s7_voice_rendered_prompts (rendered_prompt_ref, rendered_prompt_text)
+                VALUES (?, ?)
+                """,
+                (rendered_prompt_ref, rendered_prompt_text),
+            )
+            conn.commit()
+
+    def read_rendered_prompt(
+        self,
+        rendered_prompt_ref: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> str | None:
+        if not rendered_prompt_ref:
+            raise ValueError("rendered_prompt_ref is required")
+        conn = connection or sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT rendered_prompt_text FROM s7_voice_rendered_prompts WHERE rendered_prompt_ref = ?",
+                (rendered_prompt_ref,),
+            ).fetchone()
+        finally:
+            if connection is None:
+                conn.close()
+        return None if row is None else str(row[0])
 
     def put_raw_response(self, raw_response_ref: str, raw_response_text: str) -> None:
         if not raw_response_ref:
@@ -355,15 +420,19 @@ class S7VoiceConsultationBundleStore:
                     source_ref_hash,
                     request_id,
                     consultation_id,
+                    rendered_prompt_ref,
+                    rendered_prompt_hash,
                     raw_response_ref,
                     raw_response_hash,
                     semantic_reader_attempt_hash
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     bundle.source_ref_hash,
                     bundle.request_id,
                     bundle.consultation_id,
+                    bundle.rendered_prompt_ref,
+                    bundle.rendered_prompt_hash,
                     bundle.raw_response_ref,
                     bundle.raw_response_hash,
                     bundle.semantic_reader_attempt_hash,
@@ -382,8 +451,10 @@ class S7VoiceConsultationBundleStore:
         try:
             row = conn.execute(
                 """
-                SELECT source_ref_hash, request_id, consultation_id, raw_response_ref,
-                       raw_response_hash, semantic_reader_attempt_hash
+                SELECT source_ref_hash, request_id, consultation_id,
+                       rendered_prompt_ref, rendered_prompt_hash,
+                       raw_response_ref, raw_response_hash,
+                       semantic_reader_attempt_hash
                 FROM s7_voice_consultation_bundles
                 WHERE source_ref_hash = ?
                 """,
@@ -398,9 +469,11 @@ class S7VoiceConsultationBundleStore:
             source_ref_hash=str(row[0]),
             request_id=str(row[1]),
             consultation_id=str(row[2]),
-            raw_response_ref=None if row[3] is None else str(row[3]),
-            raw_response_hash=None if row[4] is None else str(row[4]),
-            semantic_reader_attempt_hash=None if row[5] is None else str(row[5]),
+            rendered_prompt_ref=None if row[3] is None else str(row[3]),
+            rendered_prompt_hash=None if row[4] is None else str(row[4]),
+            raw_response_ref=None if row[5] is None else str(row[5]),
+            raw_response_hash=None if row[6] is None else str(row[6]),
+            semantic_reader_attempt_hash=None if row[7] is None else str(row[7]),
         )
 
 
@@ -804,9 +877,10 @@ def validate_s7_voice_source_bundle(
     """Replay the bytes that make a voice source bundle mint-eligible.
 
     This is intentionally narrower than the full canonical validator while the
-    producer side is still being built: it enforces the two covenant-load-bearing
-    byte checks needed before artifact minting may accept `valid_absent` at all:
-    raw Maez response replay and reviewed semantic-reader route identity.
+    producer side is still being built: it enforces the covenant-load-bearing
+    checks needed before artifact minting may accept `valid_absent` at all:
+    rendered prompt replay, raw Maez response replay, and reviewed semantic-
+    reader route identity.
     """
 
     if not isinstance(consultation, s7.MaezVoiceConsultation):
@@ -852,6 +926,23 @@ def validate_s7_voice_source_bundle(
                 status="not_mint_eligible",
                 authority_projection="operational_block",
                 failure_reason_code="not_mint_eligible",
+            )
+
+        if bundle.rendered_prompt_ref is None or bundle.rendered_prompt_hash is None:
+            return _failed_source_bundle_validation(
+                status="invalid_prompt_integrity",
+                authority_projection="operational_block",
+                failure_reason_code="invalid_prompt_integrity",
+            )
+        rendered_prompt = bundle_store.read_rendered_prompt(
+            bundle.rendered_prompt_ref,
+            connection=conn,
+        )
+        if rendered_prompt is None or s7.canonical_hash(rendered_prompt) != bundle.rendered_prompt_hash:
+            return _failed_source_bundle_validation(
+                status="invalid_prompt_integrity",
+                authority_projection="operational_block",
+                failure_reason_code="invalid_prompt_integrity",
             )
 
         if bundle.raw_response_ref is None or bundle.raw_response_hash is None:

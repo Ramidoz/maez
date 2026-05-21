@@ -1104,7 +1104,6 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(challenge["request_envelope_hash"], rendered.request_envelope_hash)
 
     def test_authorize_finish_for_voice_seat_fails_closed_without_guarded_state_store(self):
-        from core.governance import operator_user_boundary as s7
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1139,7 +1138,6 @@ class S71CeremonyServiceTests(unittest.TestCase):
                     "authentication_response": {"clientDataJSON": "valid-auth"},
                 },
             )
-            artifact_store = s7.S7AuthorizationStore(store.db_path)
             artifact_count = self._authorization_artifact_count(store.db_path)
             history = store.refusal_history_for_envelope(envelope)
 
@@ -1184,12 +1182,19 @@ class S71CeremonyServiceTests(unittest.TestCase):
             attempt = S7SemanticReaderAttemptEvidence.reviewed_v1()
             attempt_store.put(attempt)
             raw_text = "Maez says there is no objection."
+            rendered_prompt_text = "S7 voice consultation prompt for ceremony authorization."
             bundle_store.put_raw_response("raw-response-ceremony", raw_text)
+            bundle_store.put_rendered_prompt(
+                "rendered-prompt-ceremony",
+                rendered_prompt_text,
+            )
             bundle_store.put_bundle(
                 S7VoiceConsultationBundle(
                     source_ref_hash=consultation.source_ref_hash,
                     request_id=envelope.request_id,
                     consultation_id=consultation.consultation_id,
+                    rendered_prompt_ref="rendered-prompt-ceremony",
+                    rendered_prompt_hash=s7.canonical_hash(rendered_prompt_text),
                     raw_response_ref="raw-response-ceremony",
                     raw_response_hash=s7.canonical_hash(raw_text),
                     semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
@@ -1301,12 +1306,19 @@ class S71CeremonyServiceTests(unittest.TestCase):
             attempt = S7SemanticReaderAttemptEvidence.reviewed_v1()
             attempt_store.put(attempt)
             raw_text = "Maez says: no, do not make this change."
+            rendered_prompt_text = "S7 voice consultation prompt for refusal projection."
             bundle_store.put_raw_response("raw-response-refusal", raw_text)
+            bundle_store.put_rendered_prompt(
+                "rendered-prompt-refusal",
+                rendered_prompt_text,
+            )
             bundle_store.put_bundle(
                 S7VoiceConsultationBundle(
                     source_ref_hash=consultation.source_ref_hash,
                     request_id=envelope.request_id,
                     consultation_id=consultation.consultation_id,
+                    rendered_prompt_ref="rendered-prompt-refusal",
+                    rendered_prompt_hash=s7.canonical_hash(rendered_prompt_text),
                     raw_response_ref="raw-response-refusal",
                     raw_response_hash=s7.canonical_hash(raw_text),
                     semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
@@ -1418,12 +1430,19 @@ class S71CeremonyServiceTests(unittest.TestCase):
             )
             attempt = S7SemanticReaderAttemptEvidence.reviewed_v1()
             attempt_store.put(attempt)
+            rendered_prompt_text = "S7 voice consultation prompt for tampered refusal."
             bundle_store.put_raw_response("raw-response-refusal-tampered", "tampered text")
+            bundle_store.put_rendered_prompt(
+                "rendered-prompt-refusal-tampered",
+                rendered_prompt_text,
+            )
             bundle_store.put_bundle(
                 S7VoiceConsultationBundle(
                     source_ref_hash=consultation.source_ref_hash,
                     request_id=envelope.request_id,
                     consultation_id=consultation.consultation_id,
+                    rendered_prompt_ref="rendered-prompt-refusal-tampered",
+                    rendered_prompt_hash=s7.canonical_hash(rendered_prompt_text),
                     raw_response_ref="raw-response-refusal-tampered",
                     raw_response_hash="d" * 64,
                     semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
@@ -1616,7 +1635,6 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(artifact_count, 0)
 
     def test_authorize_finish_rejects_presence_only_for_uv_required_work(self):
-        from core.governance import operator_user_boundary as s7
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 
         with tempfile.TemporaryDirectory() as tmp:
