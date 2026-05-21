@@ -34,7 +34,24 @@ VOICE_BUNDLE_RESERVATION_STATES = frozenset({
     "consumed",
 })
 
+S7_VOICE_SEMANTIC_READER_ROUTE_ID = "s7_voice_semantic_reader_v1"
+S7_VOICE_SEMANTIC_READER_PROVIDER = "subscription_proxy"
+S7_REVIEWED_SEMANTIC_READER_PROVIDER_MODEL = "s7_voice_semantic_reader_v1_model"
+S7_REVIEWED_SEMANTIC_READER_MODEL_SNAPSHOT = "s7_voice_semantic_reader_v1_snapshot"
+S7_REVIEWED_SEMANTIC_READER_DECODING_PARAMS_HASH = s7.canonical_hash({
+    "temperature": 0,
+    "top_p": 1,
+})
+S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH = s7.canonical_hash(
+    "prompts/s7.voice.semantic_reader_v1.md"
+)
+S7_REVIEWED_SEMANTIC_READER_ROUTE_CONFIG_HASH = s7.canonical_hash({
+    "route_id": S7_VOICE_SEMANTIC_READER_ROUTE_ID,
+    "provider": S7_VOICE_SEMANTIC_READER_PROVIDER,
+})
+
 _HASH64_RE = re.compile(r"^[0-9a-f]{64}$")
+_VALIDATOR_TOKEN = object()
 
 
 def _validate_hash64(value: str, *, field: str) -> None:
@@ -57,7 +74,41 @@ def _voice_bundle_use_hash(
     })
 
 
-@dataclass(frozen=True)
+def semantic_reader_route_identity_hash(
+    *,
+    semantic_reader_route_id: str,
+    semantic_reader_provider: str,
+    semantic_reader_provider_model: str,
+    semantic_reader_model_snapshot: str,
+    semantic_reader_decoding_params_hash: str,
+    semantic_reader_prompt_hash: str,
+    semantic_reader_route_config_hash: str,
+) -> str:
+    return s7.canonical_hash((
+        semantic_reader_route_id,
+        semantic_reader_provider,
+        semantic_reader_provider_model,
+        semantic_reader_model_snapshot,
+        semantic_reader_decoding_params_hash,
+        semantic_reader_prompt_hash,
+        semantic_reader_route_config_hash,
+    ))
+
+
+REVIEWED_SEMANTIC_READER_ROUTE_IDENTITIES = frozenset({
+    semantic_reader_route_identity_hash(
+        semantic_reader_route_id=S7_VOICE_SEMANTIC_READER_ROUTE_ID,
+        semantic_reader_provider=S7_VOICE_SEMANTIC_READER_PROVIDER,
+        semantic_reader_provider_model=S7_REVIEWED_SEMANTIC_READER_PROVIDER_MODEL,
+        semantic_reader_model_snapshot=S7_REVIEWED_SEMANTIC_READER_MODEL_SNAPSHOT,
+        semantic_reader_decoding_params_hash=S7_REVIEWED_SEMANTIC_READER_DECODING_PARAMS_HASH,
+        semantic_reader_prompt_hash=S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH,
+        semantic_reader_route_config_hash=S7_REVIEWED_SEMANTIC_READER_ROUTE_CONFIG_HASH,
+    )
+})
+
+
+@dataclass(frozen=True, init=False)
 class S7VoiceSourceBundleValidationResult:
     """Result of the S7.3 source-bundle validator that gates artifact minting."""
 
@@ -66,6 +117,35 @@ class S7VoiceSourceBundleValidationResult:
     mint_eligible: bool
     authority_projection: str
     failure_reason_code: str | None
+
+    def __init__(
+        self,
+        *,
+        status: str,
+        source_bundle_valid: bool,
+        mint_eligible: bool,
+        authority_projection: str,
+        failure_reason_code: str | None,
+        _validator_token: object | None = None,
+    ) -> None:
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "source_bundle_valid", source_bundle_valid)
+        object.__setattr__(self, "mint_eligible", mint_eligible)
+        object.__setattr__(self, "authority_projection", authority_projection)
+        object.__setattr__(self, "failure_reason_code", failure_reason_code)
+        object.__setattr__(self, "_validator_produced", _validator_token is _VALIDATOR_TOKEN)
+        self.__post_init__()
+
+    @classmethod
+    def _validator_pass(cls) -> "S7VoiceSourceBundleValidationResult":
+        return cls(
+            status="valid_absent",
+            source_bundle_valid=True,
+            mint_eligible=True,
+            authority_projection="valid_absent",
+            failure_reason_code=None,
+            _validator_token=_VALIDATOR_TOKEN,
+        )
 
     def __post_init__(self) -> None:
         if self.status not in VOICE_SOURCE_BUNDLE_VALIDATION_STATUSES:
@@ -76,6 +156,8 @@ class S7VoiceSourceBundleValidationResult:
                 f"{self.authority_projection}"
             )
         if self.status == "valid_absent":
+            if getattr(self, "_validator_produced", False) is not True:
+                raise ValueError("valid_absent source-bundle validation must be produced by validator")
             if self.failure_reason_code is not None:
                 raise ValueError("valid_absent source-bundle validation must not carry a failure reason")
             if self.source_bundle_valid is not True or self.mint_eligible is not True:
@@ -84,6 +166,311 @@ class S7VoiceSourceBundleValidationResult:
                 raise ValueError("valid_absent source-bundle validation must project valid_absent")
         elif self.failure_reason_code is None:
             raise ValueError("failed source-bundle validation must carry a failure reason")
+
+
+@dataclass(frozen=True)
+class S7VoiceConsultationBundle:
+    """Private replay bundle for one Maez voice consultation."""
+
+    source_ref_hash: str
+    request_id: str
+    consultation_id: str
+    raw_response_ref: str | None
+    raw_response_hash: str | None
+    semantic_reader_attempt_hash: str | None
+
+    def __post_init__(self) -> None:
+        _validate_hash64(self.source_ref_hash, field="source_ref_hash")
+        if not self.request_id:
+            raise ValueError("S7VoiceConsultationBundle requires request_id")
+        if not self.consultation_id:
+            raise ValueError("S7VoiceConsultationBundle requires consultation_id")
+        if self.raw_response_ref is not None and not self.raw_response_ref:
+            raise ValueError("raw_response_ref must be non-empty when present")
+        if self.raw_response_hash is not None:
+            _validate_hash64(self.raw_response_hash, field="raw_response_hash")
+        if (self.raw_response_ref is None) != (self.raw_response_hash is None):
+            raise ValueError("raw_response_ref and raw_response_hash must be present together")
+        if self.semantic_reader_attempt_hash is not None:
+            _validate_hash64(
+                self.semantic_reader_attempt_hash,
+                field="semantic_reader_attempt_hash",
+            )
+
+
+@dataclass(frozen=True)
+class S7SemanticReaderAttemptEvidence:
+    """Pinned semantic-reader route identity used by source-bundle validation."""
+
+    semantic_reader_route_id: str
+    semantic_reader_provider: str
+    semantic_reader_provider_model: str
+    semantic_reader_model_snapshot: str
+    semantic_reader_decoding_params_hash: str
+    semantic_reader_prompt_hash: str
+    semantic_reader_route_config_hash: str
+
+    @classmethod
+    def reviewed_v1(cls) -> "S7SemanticReaderAttemptEvidence":
+        return cls(
+            semantic_reader_route_id=S7_VOICE_SEMANTIC_READER_ROUTE_ID,
+            semantic_reader_provider=S7_VOICE_SEMANTIC_READER_PROVIDER,
+            semantic_reader_provider_model=S7_REVIEWED_SEMANTIC_READER_PROVIDER_MODEL,
+            semantic_reader_model_snapshot=S7_REVIEWED_SEMANTIC_READER_MODEL_SNAPSHOT,
+            semantic_reader_decoding_params_hash=S7_REVIEWED_SEMANTIC_READER_DECODING_PARAMS_HASH,
+            semantic_reader_prompt_hash=S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH,
+            semantic_reader_route_config_hash=S7_REVIEWED_SEMANTIC_READER_ROUTE_CONFIG_HASH,
+        )
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "semantic_reader_route_id",
+            "semantic_reader_provider",
+            "semantic_reader_provider_model",
+            "semantic_reader_model_snapshot",
+        ):
+            if not getattr(self, field_name):
+                raise ValueError(f"{field_name} is required")
+        _validate_hash64(
+            self.semantic_reader_decoding_params_hash,
+            field="semantic_reader_decoding_params_hash",
+        )
+        _validate_hash64(self.semantic_reader_prompt_hash, field="semantic_reader_prompt_hash")
+        _validate_hash64(
+            self.semantic_reader_route_config_hash,
+            field="semantic_reader_route_config_hash",
+        )
+
+    @property
+    def semantic_reader_route_identity_hash(self) -> str:
+        return semantic_reader_route_identity_hash(
+            semantic_reader_route_id=self.semantic_reader_route_id,
+            semantic_reader_provider=self.semantic_reader_provider,
+            semantic_reader_provider_model=self.semantic_reader_provider_model,
+            semantic_reader_model_snapshot=self.semantic_reader_model_snapshot,
+            semantic_reader_decoding_params_hash=self.semantic_reader_decoding_params_hash,
+            semantic_reader_prompt_hash=self.semantic_reader_prompt_hash,
+            semantic_reader_route_config_hash=self.semantic_reader_route_config_hash,
+        )
+
+    @property
+    def semantic_reader_attempt_hash(self) -> str:
+        return s7.canonical_hash({
+            "semantic_reader_decoding_params_hash": self.semantic_reader_decoding_params_hash,
+            "semantic_reader_model_snapshot": self.semantic_reader_model_snapshot,
+            "semantic_reader_prompt_hash": self.semantic_reader_prompt_hash,
+            "semantic_reader_provider": self.semantic_reader_provider,
+            "semantic_reader_provider_model": self.semantic_reader_provider_model,
+            "semantic_reader_route_config_hash": self.semantic_reader_route_config_hash,
+            "semantic_reader_route_id": self.semantic_reader_route_id,
+        })
+
+
+_VOICE_CONSULTATION_BUNDLE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS s7_voice_raw_responses (
+    raw_response_ref TEXT PRIMARY KEY,
+    raw_response_text TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS s7_voice_consultation_bundles (
+    source_ref_hash TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    consultation_id TEXT NOT NULL,
+    raw_response_ref TEXT,
+    raw_response_hash TEXT,
+    semantic_reader_attempt_hash TEXT
+);
+"""
+
+
+class S7VoiceConsultationBundleStore:
+    """SQLite store for private S7.3 voice consultation replay material."""
+
+    def __init__(self, db_path: str | Path):
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.executescript(_VOICE_CONSULTATION_BUNDLE_SCHEMA)
+
+    def put_raw_response(self, raw_response_ref: str, raw_response_text: str) -> None:
+        if not raw_response_ref:
+            raise ValueError("raw_response_ref is required")
+        if not isinstance(raw_response_text, str):
+            raise ValueError("raw_response_text must be str")
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.execute(
+                """
+                INSERT INTO s7_voice_raw_responses (raw_response_ref, raw_response_text)
+                VALUES (?, ?)
+                """,
+                (raw_response_ref, raw_response_text),
+            )
+            conn.commit()
+
+    def read_raw_response(
+        self,
+        raw_response_ref: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> str | None:
+        if not raw_response_ref:
+            raise ValueError("raw_response_ref is required")
+        conn = connection or sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT raw_response_text FROM s7_voice_raw_responses WHERE raw_response_ref = ?",
+                (raw_response_ref,),
+            ).fetchone()
+        finally:
+            if connection is None:
+                conn.close()
+        return None if row is None else str(row[0])
+
+    def put_bundle(self, bundle: S7VoiceConsultationBundle) -> None:
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.execute(
+                """
+                INSERT INTO s7_voice_consultation_bundles (
+                    source_ref_hash,
+                    request_id,
+                    consultation_id,
+                    raw_response_ref,
+                    raw_response_hash,
+                    semantic_reader_attempt_hash
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    bundle.source_ref_hash,
+                    bundle.request_id,
+                    bundle.consultation_id,
+                    bundle.raw_response_ref,
+                    bundle.raw_response_hash,
+                    bundle.semantic_reader_attempt_hash,
+                ),
+            )
+            conn.commit()
+
+    def get_for_source_ref(
+        self,
+        source_ref_hash: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> S7VoiceConsultationBundle | None:
+        _validate_hash64(source_ref_hash, field="source_ref_hash")
+        conn = connection or sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                """
+                SELECT source_ref_hash, request_id, consultation_id, raw_response_ref,
+                       raw_response_hash, semantic_reader_attempt_hash
+                FROM s7_voice_consultation_bundles
+                WHERE source_ref_hash = ?
+                """,
+                (source_ref_hash,),
+            ).fetchone()
+        finally:
+            if connection is None:
+                conn.close()
+        if row is None:
+            return None
+        return S7VoiceConsultationBundle(
+            source_ref_hash=str(row[0]),
+            request_id=str(row[1]),
+            consultation_id=str(row[2]),
+            raw_response_ref=None if row[3] is None else str(row[3]),
+            raw_response_hash=None if row[4] is None else str(row[4]),
+            semantic_reader_attempt_hash=None if row[5] is None else str(row[5]),
+        )
+
+
+_SEMANTIC_READER_ATTEMPT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS s7_semantic_reader_attempts (
+    semantic_reader_attempt_hash TEXT PRIMARY KEY,
+    semantic_reader_route_id TEXT NOT NULL,
+    semantic_reader_provider TEXT NOT NULL,
+    semantic_reader_provider_model TEXT NOT NULL,
+    semantic_reader_model_snapshot TEXT NOT NULL,
+    semantic_reader_decoding_params_hash TEXT NOT NULL,
+    semantic_reader_prompt_hash TEXT NOT NULL,
+    semantic_reader_route_config_hash TEXT NOT NULL
+);
+"""
+
+
+class S7SemanticReaderAttemptStore:
+    """SQLite store for semantic-reader route identity evidence."""
+
+    def __init__(self, db_path: str | Path):
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.executescript(_SEMANTIC_READER_ATTEMPT_SCHEMA)
+
+    def put(self, attempt: S7SemanticReaderAttemptEvidence) -> None:
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.execute(
+                """
+                INSERT INTO s7_semantic_reader_attempts (
+                    semantic_reader_attempt_hash,
+                    semantic_reader_route_id,
+                    semantic_reader_provider,
+                    semantic_reader_provider_model,
+                    semantic_reader_model_snapshot,
+                    semantic_reader_decoding_params_hash,
+                    semantic_reader_prompt_hash,
+                    semantic_reader_route_config_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    attempt.semantic_reader_attempt_hash,
+                    attempt.semantic_reader_route_id,
+                    attempt.semantic_reader_provider,
+                    attempt.semantic_reader_provider_model,
+                    attempt.semantic_reader_model_snapshot,
+                    attempt.semantic_reader_decoding_params_hash,
+                    attempt.semantic_reader_prompt_hash,
+                    attempt.semantic_reader_route_config_hash,
+                ),
+            )
+            conn.commit()
+
+    def get(
+        self,
+        semantic_reader_attempt_hash: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> S7SemanticReaderAttemptEvidence | None:
+        _validate_hash64(semantic_reader_attempt_hash, field="semantic_reader_attempt_hash")
+        conn = connection or sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                """
+                SELECT semantic_reader_route_id, semantic_reader_provider,
+                       semantic_reader_provider_model, semantic_reader_model_snapshot,
+                       semantic_reader_decoding_params_hash, semantic_reader_prompt_hash,
+                       semantic_reader_route_config_hash
+                FROM s7_semantic_reader_attempts
+                WHERE semantic_reader_attempt_hash = ?
+                """,
+                (semantic_reader_attempt_hash,),
+            ).fetchone()
+        finally:
+            if connection is None:
+                conn.close()
+        if row is None:
+            return None
+        attempt = S7SemanticReaderAttemptEvidence(
+            semantic_reader_route_id=str(row[0]),
+            semantic_reader_provider=str(row[1]),
+            semantic_reader_provider_model=str(row[2]),
+            semantic_reader_model_snapshot=str(row[3]),
+            semantic_reader_decoding_params_hash=str(row[4]),
+            semantic_reader_prompt_hash=str(row[5]),
+            semantic_reader_route_config_hash=str(row[6]),
+        )
+        if attempt.semantic_reader_attempt_hash != semantic_reader_attempt_hash:
+            raise ValueError("semantic reader attempt hash mismatch")
+        return attempt
 
 
 @dataclass(frozen=True)
@@ -231,19 +618,28 @@ class S7VoiceBundleUseStore:
             )
             conn.commit()
 
-    def get_for_source_ref(self, source_ref_hash: str) -> S7VoiceBundleUse | None:
+    def get_for_source_ref(
+        self,
+        source_ref_hash: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> S7VoiceBundleUse | None:
         _validate_hash64(source_ref_hash, field="source_ref_hash")
-        with closing(sqlite3.connect(self.db_path)) as conn:
+        conn = connection or sqlite3.connect(self.db_path)
+        try:
             row = conn.execute(
-                """
-                SELECT request_id, artifact_id, source_ref_hash, consultation_id,
-                       bundle_use_hash, reservation_token_hash, reservation_state,
-                       reserved_at, consumed_at, used_at
-                FROM s7_voice_bundle_uses
-                WHERE source_ref_hash = ?
-                """,
-                (source_ref_hash,),
-            ).fetchone()
+                    """
+                    SELECT request_id, artifact_id, source_ref_hash, consultation_id,
+                           bundle_use_hash, reservation_token_hash, reservation_state,
+                           reserved_at, consumed_at, used_at
+                    FROM s7_voice_bundle_uses
+                    WHERE source_ref_hash = ?
+                    """,
+                    (source_ref_hash,),
+                ).fetchone()
+        finally:
+            if connection is None:
+                conn.close()
         return _voice_bundle_use_from_row(row)
 
     def get_for_artifact(self, source_ref_hash: str, artifact_id: str) -> S7VoiceBundleUse | None:
@@ -358,6 +754,127 @@ def _voice_bundle_use_from_row(row: sqlite3.Row | tuple | None) -> S7VoiceBundle
         consumed_at=None if row[8] is None else str(row[8]),
         used_at=str(row[9]),
     )
+
+
+def _failed_source_bundle_validation(
+    *,
+    status: str,
+    authority_projection: str,
+    failure_reason_code: str,
+) -> S7VoiceSourceBundleValidationResult:
+    return S7VoiceSourceBundleValidationResult(
+        status=status,
+        source_bundle_valid=False,
+        mint_eligible=False,
+        authority_projection=authority_projection,
+        failure_reason_code=failure_reason_code,
+    )
+
+
+def validate_s7_voice_source_bundle(
+    *,
+    consultation: s7.MaezVoiceConsultation,
+    bundle_store: S7VoiceConsultationBundleStore,
+    bundle_use_store: S7VoiceBundleUseStore,
+    semantic_reader_attempt_store: S7SemanticReaderAttemptStore,
+    now: str | None = None,
+    connection: sqlite3.Connection | None = None,
+) -> S7VoiceSourceBundleValidationResult:
+    """Replay the bytes that make a voice source bundle mint-eligible.
+
+    This is intentionally narrower than the full canonical validator while the
+    producer side is still being built: it enforces the two covenant-load-bearing
+    byte checks needed before artifact minting may accept `valid_absent` at all:
+    raw Maez response replay and reviewed semantic-reader route identity.
+    """
+
+    if not isinstance(consultation, s7.MaezVoiceConsultation):
+        raise ValueError("validate_s7_voice_source_bundle requires MaezVoiceConsultation")
+    if now is None:
+        raise ValueError("validate_s7_voice_source_bundle requires now")
+
+    conn = connection or sqlite3.connect(bundle_store.db_path)
+    try:
+        bundle = bundle_store.get_for_source_ref(
+            consultation.source_ref_hash,
+            connection=conn,
+        )
+        if bundle is None:
+            return _failed_source_bundle_validation(
+                status="source_bundle_unavailable",
+                authority_projection="unavailable",
+                failure_reason_code="source_bundle_unavailable",
+            )
+        if (
+            bundle.request_id != consultation.request_id
+            or bundle.consultation_id != consultation.consultation_id
+        ):
+            return _failed_source_bundle_validation(
+                status="source_bundle_unavailable",
+                authority_projection="unavailable",
+                failure_reason_code="source_bundle_unavailable",
+            )
+
+        bundle_use = bundle_use_store.get_for_source_ref(
+            consultation.source_ref_hash,
+            connection=conn,
+        )
+        if (
+            bundle_use is None
+            or bundle_use.reservation_state != "unreserved"
+            or bundle_use.artifact_id is not None
+            or bundle_use.reservation_token_hash is not None
+            or bundle_use.reserved_at is not None
+            or bundle_use.consumed_at is not None
+        ):
+            return _failed_source_bundle_validation(
+                status="not_mint_eligible",
+                authority_projection="operational_block",
+                failure_reason_code="not_mint_eligible",
+            )
+
+        if bundle.raw_response_ref is None or bundle.raw_response_hash is None:
+            return _failed_source_bundle_validation(
+                status="source_bundle_unavailable",
+                authority_projection="unavailable",
+                failure_reason_code="source_bundle_unavailable",
+            )
+        raw_response = bundle_store.read_raw_response(
+            bundle.raw_response_ref,
+            connection=conn,
+        )
+        if raw_response is None or s7.canonical_hash(raw_response) != bundle.raw_response_hash:
+            return _failed_source_bundle_validation(
+                status="raw_response_hash_mismatch",
+                authority_projection="operational_block",
+                failure_reason_code="raw_response_hash_mismatch",
+            )
+
+        if bundle.semantic_reader_attempt_hash is None:
+            return _failed_source_bundle_validation(
+                status="reader_route_mismatch",
+                authority_projection="operational_block",
+                failure_reason_code="reader_route_mismatch",
+            )
+        attempt = semantic_reader_attempt_store.get(
+            bundle.semantic_reader_attempt_hash,
+            connection=conn,
+        )
+        if (
+            attempt is None
+            or attempt.semantic_reader_route_identity_hash
+            not in REVIEWED_SEMANTIC_READER_ROUTE_IDENTITIES
+        ):
+            return _failed_source_bundle_validation(
+                status="reader_route_mismatch",
+                authority_projection="operational_block",
+                failure_reason_code="reader_route_mismatch",
+            )
+
+        return S7VoiceSourceBundleValidationResult._validator_pass()
+    finally:
+        if connection is None:
+            conn.close()
 
 
 def require_source_bundle_validation_for_mint(

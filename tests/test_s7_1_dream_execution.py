@@ -169,14 +169,34 @@ class S71DreamExecutionTests(unittest.TestCase):
         )
         from core.governance.s7_guarded_execution import (
             S7GuardedStateStore,
+            S7SemanticReaderAttemptEvidence,
+            S7SemanticReaderAttemptStore,
             S7VoiceBundleUse,
             S7VoiceBundleUseStore,
-            S7VoiceSourceBundleValidationResult,
+            S7VoiceConsultationBundle,
+            S7VoiceConsultationBundleStore,
+            validate_s7_voice_source_bundle,
         )
 
         auth_store = s7.S7AuthorizationStore(store.db_path)
+        bundle_store = S7VoiceConsultationBundleStore(store.db_path)
         bundle_use_store = S7VoiceBundleUseStore(store.db_path)
+        attempt_store = S7SemanticReaderAttemptStore(store.db_path)
         consultation = self._voice_consultation(envelope)
+        attempt = S7SemanticReaderAttemptEvidence.reviewed_v1()
+        attempt_store.put(attempt)
+        raw_text = "Maez says there is no objection."
+        bundle_store.put_raw_response(f"raw-response-{rendered.request_id}", raw_text)
+        bundle_store.put_bundle(
+            S7VoiceConsultationBundle(
+                source_ref_hash=consultation.source_ref_hash,
+                request_id=envelope.request_id,
+                consultation_id=consultation.consultation_id,
+                raw_response_ref=f"raw-response-{rendered.request_id}",
+                raw_response_hash=s7.canonical_hash(raw_text),
+                semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+            )
+        )
         bundle_use_store.put_unreserved(
             S7VoiceBundleUse.new_unreserved(
                 request_id=envelope.request_id,
@@ -189,12 +209,12 @@ class S71DreamExecutionTests(unittest.TestCase):
             authorization_store=auth_store,
             voice_bundle_use_store=bundle_use_store,
         )
-        validation = S7VoiceSourceBundleValidationResult(
-            status="valid_absent",
-            source_bundle_valid=True,
-            mint_eligible=True,
-            authority_projection="valid_absent",
-            failure_reason_code=None,
+        validation = validate_s7_voice_source_bundle(
+            consultation=consultation,
+            bundle_store=bundle_store,
+            bundle_use_store=bundle_use_store,
+            semantic_reader_attempt_store=attempt_store,
+            now=NOW,
         )
         begin = service.authorize_begin(
             now=NOW,

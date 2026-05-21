@@ -108,6 +108,69 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
         with closing(sqlite3.connect(self._db_path())) as conn:
             return conn.execute("SELECT COUNT(*) FROM s7_authorization_artifacts").fetchone()[0]
 
+    def _valid_source_bundle_validation(self, artifact, *, source_ref_hash: str = "c" * 64):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_guarded_execution import (
+            S7_REVIEWED_SEMANTIC_READER_DECODING_PARAMS_HASH,
+            S7_REVIEWED_SEMANTIC_READER_MODEL_SNAPSHOT,
+            S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH,
+            S7_REVIEWED_SEMANTIC_READER_PROVIDER_MODEL,
+            S7_REVIEWED_SEMANTIC_READER_ROUTE_CONFIG_HASH,
+            S7_VOICE_SEMANTIC_READER_PROVIDER,
+            S7_VOICE_SEMANTIC_READER_ROUTE_ID,
+            S7SemanticReaderAttemptEvidence,
+            S7SemanticReaderAttemptStore,
+            S7VoiceBundleUseStore,
+            S7VoiceConsultationBundle,
+            S7VoiceConsultationBundleStore,
+            validate_s7_voice_source_bundle,
+        )
+
+        bundle_store = S7VoiceConsultationBundleStore(self._db_path())
+        attempt_store = S7SemanticReaderAttemptStore(self._db_path())
+        attempt = S7SemanticReaderAttemptEvidence(
+            semantic_reader_route_id=S7_VOICE_SEMANTIC_READER_ROUTE_ID,
+            semantic_reader_provider=S7_VOICE_SEMANTIC_READER_PROVIDER,
+            semantic_reader_provider_model=S7_REVIEWED_SEMANTIC_READER_PROVIDER_MODEL,
+            semantic_reader_model_snapshot=S7_REVIEWED_SEMANTIC_READER_MODEL_SNAPSHOT,
+            semantic_reader_decoding_params_hash=S7_REVIEWED_SEMANTIC_READER_DECODING_PARAMS_HASH,
+            semantic_reader_prompt_hash=S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH,
+            semantic_reader_route_config_hash=S7_REVIEWED_SEMANTIC_READER_ROUTE_CONFIG_HASH,
+        )
+        attempt_store.put(attempt)
+        raw_text = "Maez says there is no objection."
+        bundle_store.put_raw_response(f"raw-{artifact.artifact_id}", raw_text)
+        bundle_store.put_bundle(
+            S7VoiceConsultationBundle(
+                source_ref_hash=source_ref_hash,
+                request_id=artifact.request_id,
+                consultation_id=f"voice-{artifact.artifact_id}",
+                raw_response_ref=f"raw-{artifact.artifact_id}",
+                raw_response_hash=s7.canonical_hash(raw_text),
+                semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+            )
+        )
+        consultation = s7.MaezVoiceConsultation(
+            consultation_id=f"voice-{artifact.artifact_id}",
+            request_id=artifact.request_id,
+            request_envelope_hash=artifact.request_envelope_hash,
+            producer="self_mod_dialog_terminal_state",
+            source_ref_kind="self_mod_dialog_exchange",
+            source_ref_hash=source_ref_hash,
+            maez_voice_consulted=True,
+            maez_objection_state="absent",
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=NOW,
+        )
+        return validate_s7_voice_source_bundle(
+            consultation=consultation,
+            bundle_store=bundle_store,
+            bundle_use_store=S7VoiceBundleUseStore(self._db_path()),
+            semantic_reader_attempt_store=attempt_store,
+            now=NOW,
+        )
+
     def test_mint_refuses_to_skip_voice_source_bundle_validation(self):
         from core.governance import operator_user_boundary as s7
         from core.governance.s7_guarded_execution import S7GuardedStateStore
@@ -172,13 +235,7 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
             authorization_store=auth_store,
             voice_bundle_use_store=bundle_use_store,
         )
-        validation = S7VoiceSourceBundleValidationResult(
-            status="valid_absent",
-            source_bundle_valid=True,
-            mint_eligible=True,
-            authority_projection="valid_absent",
-            failure_reason_code=None,
-        )
+        validation = self._valid_source_bundle_validation(artifact)
 
         guarded_store.put_artifact_with_bundle_reservation(
             artifact=artifact,
@@ -230,13 +287,7 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
             authorization_store=auth_store,
             voice_bundle_use_store=bundle_use_store,
         )
-        validation = S7VoiceSourceBundleValidationResult(
-            status="valid_absent",
-            source_bundle_valid=True,
-            mint_eligible=True,
-            authority_projection="valid_absent",
-            failure_reason_code=None,
-        )
+        validation = self._valid_source_bundle_validation(first_artifact)
         guarded_store.put_artifact_with_bundle_reservation(
             artifact=first_artifact,
             source_bundle_validation=validation,
@@ -286,13 +337,7 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
             authorization_store=auth_store,
             voice_bundle_use_store=bundle_use_store,
         )
-        validation = S7VoiceSourceBundleValidationResult(
-            status="valid_absent",
-            source_bundle_valid=True,
-            mint_eligible=True,
-            authority_projection="valid_absent",
-            failure_reason_code=None,
-        )
+        validation = self._valid_source_bundle_validation(artifact)
 
         with self.assertRaises(sqlite3.IntegrityError):
             guarded_store.put_artifact_with_bundle_reservation(
@@ -311,6 +356,179 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
         self.assertIsNone(bundle_use.artifact_id)
         self.assertIsNone(bundle_use.reservation_token_hash)
         self.assertIsNone(bundle_use.reserved_at)
+
+
+class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _db_path(self) -> Path:
+        return Path(self._tmp.name) / "s7_3_validator.db"
+
+    def _consultation(self, *, source_ref_hash: str = "c" * 64):
+        from core.governance import operator_user_boundary as s7
+
+        return s7.MaezVoiceConsultation(
+            consultation_id="voice-validator-1",
+            request_id="req-validator-1",
+            request_envelope_hash="a" * 64,
+            producer="self_mod_dialog_terminal_state",
+            source_ref_kind="self_mod_dialog_exchange",
+            source_ref_hash=source_ref_hash,
+            maez_voice_consulted=True,
+            maez_objection_state="absent",
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=NOW,
+        )
+
+    def _reviewed_attempt(self):
+        from core.governance.s7_guarded_execution import (
+            S7_REVIEWED_SEMANTIC_READER_DECODING_PARAMS_HASH,
+            S7_REVIEWED_SEMANTIC_READER_MODEL_SNAPSHOT,
+            S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH,
+            S7_REVIEWED_SEMANTIC_READER_PROVIDER_MODEL,
+            S7_REVIEWED_SEMANTIC_READER_ROUTE_CONFIG_HASH,
+            S7_VOICE_SEMANTIC_READER_PROVIDER,
+            S7_VOICE_SEMANTIC_READER_ROUTE_ID,
+            S7SemanticReaderAttemptEvidence,
+        )
+
+        return S7SemanticReaderAttemptEvidence(
+            semantic_reader_route_id=S7_VOICE_SEMANTIC_READER_ROUTE_ID,
+            semantic_reader_provider=S7_VOICE_SEMANTIC_READER_PROVIDER,
+            semantic_reader_provider_model=S7_REVIEWED_SEMANTIC_READER_PROVIDER_MODEL,
+            semantic_reader_model_snapshot=S7_REVIEWED_SEMANTIC_READER_MODEL_SNAPSHOT,
+            semantic_reader_decoding_params_hash=S7_REVIEWED_SEMANTIC_READER_DECODING_PARAMS_HASH,
+            semantic_reader_prompt_hash=S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH,
+            semantic_reader_route_config_hash=S7_REVIEWED_SEMANTIC_READER_ROUTE_CONFIG_HASH,
+        )
+
+    def _unreviewed_attempt(self):
+        return type(self._reviewed_attempt())(
+            semantic_reader_route_id="unreviewed_reader",
+            semantic_reader_provider="subscription_proxy",
+            semantic_reader_provider_model="unreviewed-model",
+            semantic_reader_model_snapshot="unreviewed-snapshot",
+            semantic_reader_decoding_params_hash="1" * 64,
+            semantic_reader_prompt_hash="2" * 64,
+            semantic_reader_route_config_hash="3" * 64,
+        )
+
+    def _seed_validator_inputs(
+        self,
+        *,
+        raw_text: str = "Maez says there is no objection.",
+        stored_raw_hash: str | None = None,
+        attempt=None,
+        source_ref_hash: str = "c" * 64,
+    ):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_guarded_execution import (
+            S7SemanticReaderAttemptStore,
+            S7VoiceBundleUse,
+            S7VoiceBundleUseStore,
+            S7VoiceConsultationBundle,
+            S7VoiceConsultationBundleStore,
+        )
+
+        bundle_store = S7VoiceConsultationBundleStore(self._db_path())
+        bundle_use_store = S7VoiceBundleUseStore(self._db_path())
+        attempt_store = S7SemanticReaderAttemptStore(self._db_path())
+        attempt = attempt or self._reviewed_attempt()
+        attempt_store.put(attempt)
+        bundle_store.put_raw_response("raw-response-1", raw_text)
+        bundle_store.put_bundle(
+            S7VoiceConsultationBundle(
+                source_ref_hash=source_ref_hash,
+                request_id="req-validator-1",
+                consultation_id="voice-validator-1",
+                raw_response_ref="raw-response-1",
+                raw_response_hash=stored_raw_hash or s7.canonical_hash(raw_text),
+                semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+            )
+        )
+        bundle_use_store.put_unreserved(
+            S7VoiceBundleUse.new_unreserved(
+                request_id="req-validator-1",
+                source_ref_hash=source_ref_hash,
+                consultation_id="voice-validator-1",
+                used_at=NOW,
+            )
+        )
+        return bundle_store, bundle_use_store, attempt_store
+
+    def test_valid_absent_cannot_be_caller_constructed(self):
+        from core.governance.s7_guarded_execution import S7VoiceSourceBundleValidationResult
+
+        with self.assertRaisesRegex(ValueError, "validator"):
+            S7VoiceSourceBundleValidationResult(
+                status="valid_absent",
+                source_bundle_valid=True,
+                mint_eligible=True,
+                authority_projection="valid_absent",
+                failure_reason_code=None,
+            )
+
+    def test_validator_produces_valid_absent_after_raw_response_and_reader_replay(self):
+        from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
+
+        bundle_store, bundle_use_store, attempt_store = self._seed_validator_inputs()
+
+        result = validate_s7_voice_source_bundle(
+            consultation=self._consultation(),
+            bundle_store=bundle_store,
+            bundle_use_store=bundle_use_store,
+            semantic_reader_attempt_store=attempt_store,
+            now=NOW,
+        )
+
+        self.assertEqual(result.status, "valid_absent")
+        self.assertTrue(result.source_bundle_valid)
+        self.assertTrue(result.mint_eligible)
+        self.assertEqual(result.authority_projection, "valid_absent")
+        self.assertIsNone(result.failure_reason_code)
+
+    def test_validator_rejects_mismatched_raw_response_hash(self):
+        from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
+
+        bundle_store, bundle_use_store, attempt_store = self._seed_validator_inputs(
+            stored_raw_hash="d" * 64,
+        )
+
+        result = validate_s7_voice_source_bundle(
+            consultation=self._consultation(),
+            bundle_store=bundle_store,
+            bundle_use_store=bundle_use_store,
+            semantic_reader_attempt_store=attempt_store,
+            now=NOW,
+        )
+
+        self.assertEqual(result.status, "raw_response_hash_mismatch")
+        self.assertFalse(result.source_bundle_valid)
+        self.assertFalse(result.mint_eligible)
+
+    def test_validator_rejects_unreviewed_semantic_reader_identity(self):
+        from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
+
+        bundle_store, bundle_use_store, attempt_store = self._seed_validator_inputs(
+            attempt=self._unreviewed_attempt(),
+        )
+
+        result = validate_s7_voice_source_bundle(
+            consultation=self._consultation(),
+            bundle_store=bundle_store,
+            bundle_use_store=bundle_use_store,
+            semantic_reader_attempt_store=attempt_store,
+            now=NOW,
+        )
+
+        self.assertEqual(result.status, "reader_route_mismatch")
+        self.assertFalse(result.source_bundle_valid)
+        self.assertFalse(result.mint_eligible)
 
 
 class S73MintRouteStoreHygieneTests(unittest.TestCase):
