@@ -484,7 +484,9 @@ S7.3 reuses the committed S7.1 artifact spine:
 ```text
 S7AuthorizationArtifact (stored) /
 S7ExecutionAuthorization (pre-consume carrier)
--> S7GuardedStateStore.consume_artifact_for_execution(*, invocation, now)
+-> S7GuardedStateStore.consume_artifact_for_execution(
+       *, invocation, reservation_token, now
+   )
 -> S7ConsumeResult  // grant and GrantUse both minted during successful consume
 ```
 
@@ -496,7 +498,8 @@ timing to the execution edge. It must not be treated as permission to mutate.
 `S7ExecutionGrant` is the sole post-consume execution authority. It is minted
 only by the shared-state consume wrapper during atomic artifact consume; the
 live S7.3 API is
-`S7GuardedStateStore.consume_artifact_for_execution(*, invocation, now)`.
+`S7GuardedStateStore.consume_artifact_for_execution(*, invocation,
+reservation_token, now)`.
 On success the operation atomically consumes the artifact and mints both the
 grant and a durable `GrantUse` record (see D21). On inherited S7.1 failure
 paths it returns `S7ConsumeResult(None, None, callback_result_or_none,
@@ -1989,7 +1992,8 @@ S7GuardedStateStore.put_credential_artifact_with_binding(
 
 S7GuardedStateStore.consume_artifact_for_execution(
     *,
-    invocation: S7GuardedExecutionInvocation | S7GuardedCredentialInvocation,
+    invocation: S7GuardedExecutionInvocation,
+    reservation_token: ReservationToken,
     now: datetime,
     connection: sqlite3.Connection | None = None,
     after_consume_before_commit: S7PostConsumeCallback | None = None,
@@ -3054,9 +3058,9 @@ and commits or rolls back atomically.
 `consumer_id`, and
 `artifact_binding_inputs.expected_execution_consumer_id` must equal
 `execution_consumer_id_for(surface_manifest_row.source_surface,
-surface_manifest_row.source_method)`. The stored binding's
-`reservation_token` must be the token returned by the reservation step.
-`reservation_token` is not an input to
+surface_manifest_row.source_method)`. The voice bundle-use row's
+`reservation_token_hash` must be the hash of the token returned by the
+reservation step. Raw `reservation_token` is not an input to
 `S7AuthorizationArtifactBindingInputs`; a caller-supplied token at artifact
 mint is an impossibility loop and fails type validation. Any mismatch rolls
 back the transaction.
@@ -3077,9 +3081,11 @@ it loads the work item by `artifact_binding_inputs.work_item_id` and the bundle 
 credential-only mint path. It opens one shared-file transaction, verifies
 `credential_request.execution_consumer_id`, loads the WebAuthn challenge by
 `challenge_id`/`challenge_hash`, verifies `challenge_expires_at`, stores the
-inherited artifact and
-`S7AuthorizationArtifactBinding(reservation_token=None)`, and commits without
-reserving a voice bundle. It enforces
+inherited artifact and artifact binding without a voice-bundle reservation, and
+commits without reserving a voice bundle. The future credential-management slice
+must define a credential-specific live-possession binding before enabling
+credential consume; S7.3 v1's voice-seat reservation token is not silently
+borrowed by credential paths. It enforces
 `artifact_inputs.expires_at <= min(credential_request.expires_at,
 challenge_expires_at)`.
 
@@ -5069,20 +5075,22 @@ S7ExecutionAuthorization(
 legacy S7ExecutionAuthorization is compatibility-only for inherited voice-seat
 paths and explicitly non-mintable for credential paths. It is not a credential
 mutation carrier and cannot authorize a credential mutation by itself.
-Non-voice credential-management
-consumers use the closed ids `s7_credential_register_backup` and
-`s7_credential_disable`, but they consume only by passing
-`S7GuardedCredentialInvocation` into the guarded-state wrapper. A deprecated
+Non-voice credential-management consumers use the closed ids
+`s7_credential_register_backup` and `s7_credential_disable`, but the future
+credential-management slice must define a credential-specific consume seam and
+live-possession binding before those paths can run. They may not borrow the
+S7.3 v1 voice-seat reservation-token wrapper by passing
+`S7GuardedCredentialInvocation` into it. A deprecated
 compatibility function receiving a credential consumer id on
 `S7ExecutionAuthorization` fails closed before artifact consume. No conversion
 from `S7ExecutionAuthorization` to `S7GuardedCredentialInvocation` is implicit.
 
-**Consume API.** The live S7.3 API is the shared-state wrapper:
+**Consume API.** The S7.3 v1 voice-seat API is the shared-state wrapper:
 
 ```text
 S7GuardedStateStore.consume_artifact_for_execution(
     *,
-    invocation: S7GuardedExecutionInvocation | S7GuardedCredentialInvocation,
+    invocation: S7GuardedExecutionInvocation,
     reservation_token: ReservationToken,
     now: datetime,
     connection: sqlite3.Connection | None = None,
@@ -5093,7 +5101,8 @@ S7GuardedStateStore.consume_artifact_for_execution(
 The wrapper accepts no loose consume kwargs. If inherited code still needs the
 old argument shape, it may receive only the output of
 `unpack_guarded_execution_invocation(...)` or
-`unpack_guarded_credential_invocation(...)`.
+another future-slice loader that names its own credential live-possession
+contract.
 
 `S7ConsumeResult` preserves the inherited callback-result channel while adding
 durable grant-use evidence:
@@ -5472,11 +5481,12 @@ Each voice-seat wrapper owns invocation lookup, work item lookup, surface
 manifest row lookup, rendered authorization verification, artifact consume,
 durable `GrantUse` and `ActionEdgeGrantUse` verification, callee invocation,
 and trace finalization. The credential wrapper owns credential-invocation
-lookup, credential-request lookup, credential-specific binding checks, consume
-through `S7GuardedStateStore.consume_artifact_for_execution(...)`, and trace
-finalization. The underlying existing callee may
-remain unchanged only if the wrapper is the exclusive mutation entry for
-guarded paths.
+lookup, credential-request lookup, credential-specific binding checks, a future
+credential-specific consume seam, and trace finalization. That future seam must
+name its own live-possession binding before credential paths can run; it must
+not silently reuse the S7.3 v1 voice-seat reservation-token wrapper. The
+underlying existing callee may remain unchanged only if the wrapper is the
+exclusive mutation entry for guarded paths.
 
 Wrapper exclusivity is load-bearing. For each `execute_guarded_*(...)` wrapper,
 static analysis or code discovery must show the underlying substrate-mutating
@@ -5513,6 +5523,7 @@ consume_verified(
     *,
     execution_authorization: S7ExecutionAuthorization,
     expected_execution_consumer_id: str,
+    reservation_token: ReservationToken,
     guarded_execution_invocation_store: S7GuardedExecutionInvocationStore,
     now: str,
     conn: sqlite3.Connection,
@@ -5549,7 +5560,7 @@ execution_authorization.execution_consumer_id
 
 After this equality check, `consume_verified(...)` calls
 `S7GuardedStateStore.consume_artifact_for_execution(invocation=loaded_invocation,
-now=now, connection=conn)`. It must not construct
+reservation_token=reservation_token, now=now, connection=conn)`. It must not construct
 `S7GuardedExecutionInvocation` fields from `S7ExecutionAuthorization`.
 
 **Backup credential registration timing.** `s7_credential_register_backup`
@@ -6419,9 +6430,11 @@ Required proof classes:
   construction from draft plus Stage 1/Stage 2 output computes stable
   `source_ref_hash`;
 - **wrapper invocation carrier test**: each `execute_guarded_*(...)` wrapper
-  calls `consume_artifact_for_execution(...)` using
-  `S7GuardedExecutionInvocation` or `S7GuardedCredentialInvocation`, without
-  inventing loose consume kwargs;
+  for voice-seat work calls `consume_artifact_for_execution(...)` using
+  `S7GuardedExecutionInvocation` and the runtime `ReservationToken`, without
+  inventing loose consume kwargs. Credential wrapper tests are deferred until
+  the future credential-management slice defines its own consume seam and
+  live-possession binding;
 - **request store tests**: missing `WorkRequestEnvelope` returns
   `missing_request_envelope`; expired envelope returns
   `expired_request_envelope`; missing credential request returns
@@ -6540,12 +6553,14 @@ Required proof classes:
   artifact binding, missing voice bundle use when required, or mismatched
   reservation token fails before inherited consume;
 - **credential invocation carrier test**: register_begin, backup-card, and
-  disable consume through `S7GuardedCredentialInvocation` and
-  `unpack_guarded_credential_invocation`; register_finish does not consume a
-  second S7 artifact; it verifies `S7CredentialRegistrationGrantBinding` and
-  the WebAuthn registration result before the credential write; loose
-  credential kwargs fail before inherited consume, and a voice invocation with
-  credential null fields is rejected;
+  disable use `S7GuardedCredentialInvocation` and
+  `unpack_guarded_credential_invocation`, but the future credential-management
+  slice must define their credential-specific consume seam and live-possession
+  binding before any credential artifact consume can run. `register_finish`
+  does not consume a second S7 artifact; it verifies
+  `S7CredentialRegistrationGrantBinding` and the WebAuthn registration result
+  before the credential write; loose credential kwargs fail before inherited
+  consume, and a voice invocation with credential null fields is rejected;
 - **credential invocation reload-compare test**:
   `unpack_guarded_credential_invocation(...)` calls
   `credential_invocation_store.get(...)` before bundle loading; a memory-only
@@ -6934,10 +6949,12 @@ Before implementation can be claimed complete:
 11. `_s7_voice_consultation_for_card(...)` no longer emits eligible placeholder
     rows; replaced by `build_s7_voice_projection_for_card(...)` per D20.
 12. `S7GuardedStateStore.consume_artifact_for_execution(...)` implements the
-    D21 wrapper with the carrier-only `invocation:
-    S7GuardedExecutionInvocation | S7GuardedCredentialInvocation` API,
-    `unpack_guarded_execution_invocation` and
-    `unpack_guarded_credential_invocation` as the only loose-argument bridges,
+    D21 voice-seat wrapper with the carrier-only `invocation:
+    S7GuardedExecutionInvocation` API plus runtime `ReservationToken`;
+    `unpack_guarded_execution_invocation` is the only retained loose-argument
+    bridge in S7.3 v1, while credential loose-argument bridges are deferred
+    until the future credential-management slice defines a credential consume
+    seam,
     binding lookup by `artifact_id`,
     min-cap expiry enforcement, inherited 2-tuple to `S7ConsumeResult`
     translation, protocol-based rendered type checks over the closed

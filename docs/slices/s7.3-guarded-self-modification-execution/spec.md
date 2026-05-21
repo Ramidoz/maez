@@ -1,6 +1,6 @@
 # S7.3 Guarded Self-Modification Execution Spec
 
-**Status:** SPEC v24 draft - folded from Codex panel v23; pending Section 8.2 fresh-reader gate v24 and Codex v24 panel review; not canonical law
+**Status:** SPEC v25 draft - folded from v25 read-surface fold plan; pending Codex v25 panel review; not canonical law
 **Date:** 2026-05-20
 **Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S7.3; Decision 34 / ADR 0039; S7 L8; S7.1 D12-D14 and D23
 **Diagnostic:** [`diagnostic.md`](diagnostic.md)
@@ -78,6 +78,8 @@
 - Codex panel v21: [`reviews/spec-codex-panel-v21.md`](reviews/spec-codex-panel-v21.md)
 **v22 review input:** [`reviews/spec-codex-panel-v22.md`](reviews/spec-codex-panel-v22.md)
 **v23 review input:** [`reviews/spec-codex-panel-v23.md`](reviews/spec-codex-panel-v23.md)
+**v24 review input:** [`reviews/spec-codex-panel-v24.md`](reviews/spec-codex-panel-v24.md)
+**v25 fold input:** [`reviews/spec-v25-fold-plan.md`](reviews/spec-v25-fold-plan.md)
 **v9-v19 authorship note:** v9 through v19 preserved the covenant
 architecture and progressively tightened the engineering carrier surface: durable
 request envelopes, one guarded execution invocation carrier, single-file trace
@@ -122,6 +124,11 @@ bundle, adds a pre-artifact bundle-use lookup seam to source-bundle validation,
 requires full artifact-binding replay comparisons, makes the unpack helper's
 store dependencies match its promised validation, and updates the deferred seed
 to the same hash-only reservation-token rule used by the live spec.
+**v25 authorship note:** v25 keeps the v24 scope and applies the read-surface
+triage: carry covenant-load-bearing raw-response and semantic-reader route
+identity bytes, make bundle-use token hash nullable until reservation, clean the
+deferred seed's stale no-token consume APIs, and narrow over-broad challenge
+expiry and unpack-helper replay promises to the carrier surface S7.3 v1 owns.
 **Runtime impact when implemented:** yes. S7.3 will wire live guarded execution for Maez self-modification only after a reviewed Maez voice producer, founder-local WebAuthn artifact mint, atomic artifact consume, execution grant, rollback evidence, and positive trace all bind to the same exact request.
 
 ## Purpose
@@ -673,9 +680,10 @@ memory_retention_change
 other_reviewed_preview
 ```
 
-**`PRODUCER_RESULT_REASON_CODES`**, **`MARKER_PARSE_STATUSES`**,
-**`SEMANTIC_READER_RESULT_KINDS`**, **`REDUCER_OUTPUT_STATES`**, and
-**`PROJECTION_REASON_CODES`** remain the closed vocabularies named in D13.
+**`PRODUCER_RESULT_REASON_CODES`** and **`PROJECTION_REASON_CODES`** remain the
+closed vocabularies named in D13. Marker parse statuses, semantic-reader result
+kinds, and reducer output states are defined inline by the concrete carrier and
+table rows below rather than by separate uppercase closed-set names.
 
 `REDUCER_TABLE_VERSION = "s7.voice.reducer.v13"` intentionally remains pinned
 because v20-v22 do not change the reducer rows.
@@ -1680,6 +1688,8 @@ S7VoiceConsultationBundle(
     attempt_manifest_hash: str,
     context_manifest_ref: str,
     context_manifest_hash: str,
+    raw_response_ref: str | None,
+    raw_response_hash: str | None,
     rendered_prompt_ref: str,
     rendered_prompt_hash: str,
     expected_consultation_nonce_hash: str,
@@ -1706,12 +1716,25 @@ S7VoiceBundleUse(
     source_ref_hash: str,
     consultation_id: str,
     bundle_use_hash: str,
-    reservation_token_hash: str,
+    reservation_token_hash: str | None,
     reservation_state: "unreserved" | "reserved" | "consumed",
     reserved_at: str | None,
     consumed_at: str | None,
     used_at: str,
 )
+```
+
+`S7VoiceBundleUse` lifecycle invariants are state-specific:
+
+```text
+reservation_state="unreserved" -> artifact_id is None, reservation_token_hash is None,
+reserved_at is None, consumed_at is None
+
+reservation_state="reserved" -> artifact_id is not None,
+reservation_token_hash is not None, reserved_at is not None, consumed_at is None
+
+reservation_state="consumed" -> artifact_id is not None,
+reservation_token_hash is not None, reserved_at is not None, consumed_at is not None
 ```
 
 ```text
@@ -1838,6 +1861,13 @@ verifies
 `voice_bundle_use.artifact_id == invocation.artifact_id`, and
 `voice_bundle_use.reservation_token_hash == invocation.reservation_token_hash`.
 
+S7.3 does not own the WebAuthn challenge store. S7.1 verifies the challenge and
+expiry before artifact mint. S7.3 persists `challenge_expires_at` on
+`S7AuthorizationArtifactBinding`, verifies it is not expired at mint and
+consume, and binds it into artifact-binding replay. S7.3 does not independently
+reload the original WebAuthn challenge record unless a future S7.1/S7.3 bridge
+names that loader.
+
 Durable store APIs:
 
 ```text
@@ -1865,6 +1895,7 @@ AuthorityContextStore.get(authority_context_hash, *, conn) -> AuthorityContext |
 S7AuthorizationArtifactBindingStore.get(artifact_id, *, conn) -> S7AuthorizationArtifactBinding | None
 S7VoiceBundleUseStore.get_for_source_ref(source_ref_hash, *, conn) -> S7VoiceBundleUse | None
 S7VoiceBundleUseStore.get_for_artifact(source_ref_hash, artifact_id, *, conn) -> S7VoiceBundleUse | None
+S7VoiceConsultationBundleStore.read_raw_response(raw_response_ref, *, conn) -> str | None
 S7GuardedExecutionInvocationStore.put(invocation, *, conn) -> None
 S7GuardedExecutionInvocationStore.get(request_id, artifact_id, *, conn) -> S7GuardedExecutionInvocation | None
 S7RequestHistoryMigrationStore.put_marker(marker, *, conn) -> None
@@ -2183,8 +2214,8 @@ plus a verified marker recreates marker-only refusal history.
 `preview_exclusion_check=True` means the branch-specific predicate passed; it
 does not mean every quoted objection span is absent from the preview.
 
-The bundle's `semantic_reader_grounding_hash` is the canonical hash of this
-object.
+`SemanticReaderAttemptEvidence.semantic_reader_grounding_hash` is the canonical
+hash of this object.
 
 The validator does not trust this object merely because it hashes correctly.
 It performs a deterministic grounding replay:
@@ -2276,6 +2307,27 @@ version where available, decoding/config parameters, prompt template hash, and
 route config hash in the source bundle for each consultation. A positive
 `absent` result is invalid unless the source-bundle validator recognizes that
 exact pinned identity as the reviewed S7.3 v1 semantic-reader identity.
+
+The reviewed route identity set is:
+
+```text
+REVIEWED_SEMANTIC_READER_ROUTE_IDENTITIES = frozenset({
+    canonical_hash((
+        "s7_voice_semantic_reader_v1",
+        "subscription_proxy",
+        provider_model,
+        provider_model_version_or_snapshot,
+        decoding_parameters_hash,
+        system_prompt_hash,
+        config_hash,
+    )),
+})
+```
+
+The concrete `provider_model`, `provider_model_version_or_snapshot`,
+`decoding_parameters_hash`, `system_prompt_hash`, and `config_hash` values come
+from the reviewed route manifest at implementation time. S7.3 v1 accepts only
+route identity hashes in this reviewed set.
 
 S7.3 v1 treats that pinned route manifest as part of the implementation
 artifact, not an ambient runtime preference. The route manifest must contain at
@@ -2370,6 +2422,12 @@ SemanticReaderAttemptEvidence(
     context_manifest_hash: str,
     surface_manifest_hash: str,
     surface_route_or_method: str,
+    semantic_reader_provider: str,
+    semantic_reader_provider_model: str,
+    semantic_reader_model_snapshot: str,
+    semantic_reader_decoding_params_hash: str,
+    semantic_reader_prompt_hash: str,
+    semantic_reader_route_config_hash: str,
     semantic_reader_prompt_template_hash: str,
     semantic_reader_config_hash: str,
     semantic_reader_version: str,
@@ -2401,6 +2459,12 @@ attempt_input_hash = canonical_hash(SemanticReaderAttemptInput(
     context_manifest_hash,
     surface_manifest_hash,
     surface_route_or_method,
+    semantic_reader_provider,
+    semantic_reader_provider_model,
+    semantic_reader_model_snapshot,
+    semantic_reader_decoding_params_hash,
+    semantic_reader_prompt_hash,
+    semantic_reader_route_config_hash,
     semantic_reader_prompt_template_hash,
     semantic_reader_config_hash,
     semantic_reader_version,
@@ -2770,8 +2834,8 @@ The validator:
 - loads the matching `S7VoiceBundleUse` row by
   `S7VoiceBundleUseStore.get_for_source_ref(source_ref_hash, *, conn)` and
   verifies it is unreserved and unconsumed (`artifact_id is None`,
-  `reservation_state="unreserved"`, `reserved_at is None`, and
-  `consumed_at is None`).
+  `reservation_state="unreserved"`, `reservation_token_hash is None`,
+  `reserved_at is None`, and `consumed_at is None`).
   Reservation-token checks happen later inside
   `S7GuardedStateStore.put_artifact_with_bundle_reservation(...)`, where the
   artifact id and reservation token exist in the same transaction;
@@ -2779,6 +2843,12 @@ The validator:
 - verifies producer/source pair;
 - verifies request, preview, params, precondition, authority context, rollback
   plan, prompt, model, and context-manifest hashes;
+- if `bundle.raw_response_ref` is non-null, loads the raw Maez response through
+  `S7VoiceConsultationBundleStore.read_raw_response(...)`, recomputes
+  `bundle.raw_response_hash`, and rejects grounded semantic blocking evidence
+  when raw response replay is unavailable or mismatched. `raw_response_ref is
+  None` and `raw_response_hash is None` are allowed only for producer-blocked or
+  no-response arms that are not mint-eligible;
 - verifies the persisted model identity tuple
   `(bundle.runtime_identity_hash, bundle.model_routing_identity_hash,
   bundle.model_config_hash)` against the source `BondedMaezRuntimeTurn` and
@@ -2812,6 +2882,12 @@ The validator:
   for marker-bearing rows and rejects nonce-use rows not in the expected
   lifecycle state;
 - verifies semantic-reader prompt/model/config binding;
+- verifies the semantic-reader route identity by recomputing the reviewed route
+  identity hash from `SemanticReaderAttemptEvidence.semantic_reader_provider`,
+  `semantic_reader_provider_model`, `semantic_reader_model_snapshot`,
+  `semantic_reader_decoding_params_hash`, `semantic_reader_prompt_hash`, and
+  `semantic_reader_route_config_hash`, then requiring membership in
+  `REVIEWED_SEMANTIC_READER_ROUTE_IDENTITIES`;
 - computes `S7VoiceAuthorityBooleans` from raw evidence, marker replay, and
   deterministic grounding checks, then verifies the persisted authority
   booleans match;
@@ -3471,6 +3547,10 @@ Failure to present the matching raw runtime token returns
 `invalid_reservation_token` before inherited consume. The raw token is never
 persisted; only `reservation_token_hash` is stored on the invocation and
 bundle-use reservation row.
+At consume time the matching `S7VoiceBundleUse` row must be in the reserved
+branch: `reservation_state="reserved"`, `artifact_id == invocation.artifact_id`,
+`reservation_token_hash is not None`, `reserved_at is not None`, and
+`consumed_at is None`.
 
 `S7ExecutionAuthorization` remains a compatibility/pre-consume carrier. It is
 not a mutation authority and cannot authorize guarded execution without the
@@ -3478,8 +3558,9 @@ persisted invocation, bundle loader verification, artifact consume, GrantUse,
 and ActionEdgeGrantUse where applicable.
 
 `unpack_guarded_execution_invocation(...)` is the only allowed helper for
-legacy wrapper inputs. Its signature includes every store dependency and the
-same runtime reservation token:
+legacy wrapper inputs. It is not the full D16 source-bundle validator. Its
+signature includes every store dependency needed for carrier/binding/hash/ref
+loading and the same runtime reservation token:
 
 ```text
 unpack_guarded_execution_invocation(
@@ -3506,8 +3587,12 @@ The helper reloads the persisted invocation, verifies its row hash with
 `canonical_hash_without_field`, loads the bundle, request envelope, work item,
 surface manifest row, rollback plan evidence, rendered statement, authority
 context, artifact binding, and bundle-use row, compares all hashes/refs,
-enforces the expiry lattice, and fails closed on any mismatch. Positive D24
-tests may not hand-assemble the carrier or bypass this helper.
+verifies reservation-token hash binding, enforces the expiry lattice available
+on those carriers, and fails closed on any mismatch. Full prompt-integrity,
+semantic-reader grounding, nonce lifecycle, context-policy, and authority-class
+replay are owned by `validate_s7_voice_source_bundle(...)` before artifact mint
+and by trace replay after execution. Positive D24 tests may not hand-assemble
+the carrier or bypass this helper.
 
 Failure-code partition:
 
@@ -3524,8 +3609,8 @@ expired_bundle                     wrapper preflight
 expired_request_envelope           wrapper preflight
 expired_challenge                  wrapper preflight
 expiry_chain_violation             wrapper preflight
-invalid_authority_class_replay     wrapper preflight
-invalid_prompt_integrity           wrapper preflight
+invalid_authority_class_replay     source-bundle validator before mint / trace replay
+invalid_prompt_integrity           source-bundle validator before mint / trace replay
 invalid_rendered_carrier           wrapper preflight
 action_params_hash_mismatch        wrapper preflight
 consumer_id_mismatch               inherited consume or wrapper translation
@@ -3728,7 +3813,7 @@ in-scope adapter/consumer or reviewed same-code coverage proof.
 
 ### D24 - Tests And Verification
 
-D24 is the RED-first checklist for S7.3 v24. Tests must go red against an empty
+D24 is the RED-first checklist for S7.3 v25. Tests must go red against an empty
 or incomplete implementation and must not construct positive-path carriers by
 hand.
 
@@ -3736,16 +3821,17 @@ Required test groups:
 
 - **scope-cut preservation test**: `credential-management-seed.md exists and carries the lifted surface`; the seed doc contains the parked
   key-management draft material so the cut is reversible.
-- **no dangling key-management reference test**: `no credential-management
-  symbol in spec.md (lift complete)`; retained code paths, route rows, closed
-  vocabularies, stores, trace schemas, and tests have no dependency on the
-  lifted in-band key-management carriers.
+- **no dangling key-management reference test**: `no live retained credential-management dependency in spec.md except deferred-seed references`;
+  retained code paths, route rows, closed vocabularies, stores, trace schemas,
+  and tests have no dependency on the lifted in-band key-management carriers.
 - **reservation-token live-possession test**: `reservation_token:
   ReservationToken` is required by wrapper/unpack/consume; a missing or wrong
   raw token fails with `invalid_reservation_token` before inherited consume;
   the positive path verifies `canonical_hash(reservation_token) ==
   reservation_token_hash`, verifies `reservation_token_hash ==
   voice_bundle_use.reservation_token_hash`, and never persists the raw token.
+  `reservation_state="unreserved" -> reservation_token_hash is None`;
+  `reservation_state="reserved" -> reservation_token_hash is not None`.
 - **exclusion vocabulary table-completeness test**: every retained non-live
   route uses a token from `EXCLUSION_REASON_CODES = frozenset`; unknown tokens
   are rejected before manifest persistence.
@@ -3777,7 +3863,7 @@ Required test groups:
   `S7AuthorizationArtifactBinding`, `S7VoiceConsultationBundleDraft`,
   `S7VoiceConsultationBundle`, and `S7VoiceBundleUse`; this includes
   `context_manifest_ref`, `context_manifest_hash`, `rendered_prompt_ref`,
-  `rendered_prompt_hash`,
+  `rendered_prompt_hash`, `raw_response_ref`, `raw_response_hash`,
   `expected_consultation_nonce_hash`, `prompt_integrity_evidence_hash`,
   `semantic_reader_attempt_hash`, `runtime_identity_hash`,
   `model_routing_identity_hash`, `model_config_hash`, `authority_class`,
@@ -3786,7 +3872,16 @@ Required test groups:
   reservation/consumption state. The secondary read surface includes
   `ContextManifest`, `PromptIntegrityEvidence`, `SemanticReaderAttemptEvidence`,
   `S7VoiceAttemptRecord`, `RollbackPlanEvidence`, and `S7SurfaceManifestRow`
-  through their named stores/loaders.
+  through their named stores/loaders. `SemanticReaderAttemptEvidence` includes
+  `semantic_reader_provider`, `semantic_reader_provider_model`,
+  `semantic_reader_model_snapshot`, `semantic_reader_decoding_params_hash`,
+  `semantic_reader_prompt_hash`, and `semantic_reader_route_config_hash`.
+  Grounded semantic blocking evidence is rejected when raw-response replay is
+  unavailable or `canonical_hash(raw_response) != raw_response_hash`.
+- **source-bundle validator live-path test**: `every live artifact-mint path that can lead to guarded mutation runs validate_s7_voice_source_bundle(...)`
+  before `S7GuardedStateStore.put_artifact_with_bundle_reservation(...)`; no
+  path may reach mutation through `unpack_guarded_execution_invocation(...)`
+  alone.
 - **guarded invocation hash-domain test**: `guarded_execution_invocation_hash is
   excluded from the S7GuardedExecutionInvocation hash domain`; self-hashing is
   impossible.
@@ -3817,9 +3912,13 @@ Required test groups:
   `S7_EXECUTION_CONSUMER_IDS`. `Every retained SURFACE_CLASSES value is emitted`
   by at least one retained manifest row or reviewed coverage rule, and every
   retained manifest row's surface class is in `SURFACE_CLASSES`.
+  `REVIEWED_SEMANTIC_READER_ROUTE_IDENTITIES` has complete producer and
+  consumer coverage, and unknown semantic reader route identities are rejected
+  before artifact mint.
 - **closed-vocabulary name test**: every type annotation that names a closed
   vocabulary names an actually defined closed vocabulary; D17 uses
-  `preview_body_class: preview_body_class`.
+  `preview_body_class: preview_body_class`. Inline carrier/table vocabularies
+  do not advertise stale uppercase vocabulary names.
 - **rollback and ActionEdge tests**: mutation executes only after consumed grant,
   GrantUse, replay-domain verification, trace-pending write, and rollback-plan
   precondition checks.
@@ -3882,7 +3981,7 @@ closed before artifact storage, grant mint, or substrate mutation.
 
 ## Implementation Acceptance Checklist
 
-Before v24 is committed or reviewed, the author runs the following checklist on
+Before v25 is committed or reviewed, the author runs the following checklist on
 `spec.md` and the deferred seed doc:
 
 1. `EXCLUSION_REASON_CODES = frozenset` appears once and covers every retained
@@ -3891,14 +3990,15 @@ Before v24 is committed or reviewed, the author runs the following checklist on
    path, `canonical_hash(reservation_token) == reservation_token_hash` is
    the live-possession check, and `reservation_token_hash ==
    voice_bundle_use.reservation_token_hash` binds the token to the reservation
-   row.
+   row. `reservation_state="unreserved" -> reservation_token_hash is None`,
+   and `reservation_state="reserved" -> reservation_token_hash is not None`.
 3. `S7D23StateInput` is the sole input carrier for `d23_state_for(`, and the
    history-bridge validator uses the same input contract.
 4. `deferred/credential-management-seed.md` exists and carries the lifted
    key-management surface from v19.
-5. `no credential-management symbol in spec.md (lift complete)` appears as a
-   D24 acceptance target, and exact lifted carrier/wrapper/vocabulary symbols
-   do not appear in `spec.md`.
+5. `no live retained credential-management dependency in spec.md except deferred-seed references`
+   appears as a D24 acceptance target, and exact lifted carrier/wrapper/
+   vocabulary symbols do not appear in retained live paths in `spec.md`.
 6. Every retained `S7*Store.get(...)` satisfies the uniform persistence
    round-trip contract.
 7. Every retained trace status, D23 state, history-bridge status, exclusion
@@ -3914,7 +4014,8 @@ Before v24 is committed or reviewed, the author runs the following checklist on
     `S7GuardedStateStore(...)`, and all store dependencies named by the retained
     execution bundle loader are owned or explicitly received.
 11. The six artifact/bundle carrier shape blocks appear in the spec, and D24's
-    read-surface completeness test also covers named secondary carriers/loaders.
+    read-surface completeness test also covers named secondary carriers/loaders,
+    raw-response replay, and semantic-reader route identity fields.
 12. `preview_body_class: preview_body_class` appears in D17.
 13. `S7_3_ROLLBACK_PATH_CLASSES` appears in `spec.md`; the deferred credential
     seed does not carry the live definition line; `rollback_path_class:
@@ -3923,9 +4024,10 @@ Before v24 is committed or reviewed, the author runs the following checklist on
     the pinned reducer version note.
 15. `S7HistoryBridgeTracePayload.history_outcome` matches
     `history_outcome_for(...)`: `"refused" | None`.
-16. `S7VoiceConsultationBundle` carries `rendered_prompt_ref` and
-    `context_manifest_hash`, plus the model identity tuple; `S7VoiceBundleUse`
-    carries `reservation_token_hash`.
+16. `S7VoiceConsultationBundle` carries `rendered_prompt_ref`,
+    `context_manifest_hash`, `raw_response_ref`, and `raw_response_hash`, plus
+    the model identity tuple; `S7VoiceBundleUse` carries
+    `reservation_token_hash: str | None`.
 17. `validate_s7_voice_source_bundle(...)` receives `bundle_use_store` and
     `conn`, and `S7VoiceBundleUseStore.get_for_source_ref(...)` is the
     pre-artifact lookup seam.
@@ -3935,6 +4037,27 @@ Before v24 is committed or reviewed, the author runs the following checklist on
 19. The voice-seat founder-signature path still runs through the S7.1-established
    WebAuthn credential, rendered request, artifact mint, atomic consume,
    execution grant, mutation edge, trace, D23 projection, and rollback evidence.
+20. `raw_response_ref: str | None`, `raw_response_hash: str | None`,
+    `S7VoiceConsultationBundleStore.read_raw_response(raw_response_ref, *,
+    conn)`, and the `raw response replay rejects missing or mismatched raw_response_hash`
+    rule appear together.
+21. `REVIEWED_SEMANTIC_READER_ROUTE_IDENTITIES` appears with
+    `semantic_reader_provider`, `semantic_reader_provider_model`,
+    `semantic_reader_model_snapshot`, `semantic_reader_decoding_params_hash`,
+    `semantic_reader_prompt_hash`, and `semantic_reader_route_config_hash`.
+22. `SemanticReaderAttemptEvidence.semantic_reader_grounding_hash is` appears as
+    the grounding-hash owner.
+23. `S7.3 does not own the WebAuthn challenge store` appears in the challenge
+    expiry section.
+24. `unpack_guarded_execution_invocation(...) is not the full D16 source-bundle validator`
+    appears, and full grounding/authority replay is owned by
+    `validate_s7_voice_source_bundle(...)` before mint plus trace replay.
+25. `no consume_artifact_for_execution(*, invocation, now)` is the shorthand
+    deferred-seed grep target: no positive tokenless consume call or
+    credential-invocation use of the voice-seat consume wrapper appears in
+    `deferred/credential-management-seed.md`. Negative-test examples are allowed
+    only when the surrounding text states the call fails before inherited
+    consume.
 
 The exact lifted symbols that must not appear in `spec.md` are checked by the
 v20 gate. The deferred seed doc is allowed to contain them because it is the
@@ -3948,30 +4071,29 @@ parked future-slice working document.
 2. Do `S7VoiceConsultationBundle` and `S7VoiceBundleUse` carry every ref, hash,
    and reservation field later validation reads, without implementer invention?
 3. Do the v21/v22 closed-vocabulary restores remain exact, disjoint, and
-   credential-free after the v24 carrier edits?
+   credential-free after the v25 read-surface edits?
 4. Did the v20 scope cut continue to preserve the covenant core while leaving
    in-band key-management deferred to the future slice?
 
 ## Proposed Next Ladder
 
-v24 gets the full both-lane gate:
+v25 gets the Codex engineering gate first:
 
-- Claude Section 8.2 fresh-reader gate: comprehensive covenant read of the
-  smaller core-only spec, confirming the v22/v23 carrier edits did not weaken
-  marker/D23, operational-evidence, same-box honesty, no-hand-assemble, founder
-  WebAuthn, or rollback invariants.
 - Codex engineering panel: build-contract review of bundle replay fields,
   reservation-token binding, closed-vocabulary integrity, store/trace round-trip
-  completeness, and RED-first implementability.
+  completeness, read-surface carry/narrow closure, and RED-first
+  implementability.
 
-If both lanes ratify with no blockers and no covenant-load-bearing majors, v24
-is the canonicalization candidate. The WebAuthn registration signature-scope
-council item is no longer on the S7.3 v1 critical path; it moves with the
-future in-band key-management slice.
+If Codex ratifies or returns only bounded nits, the Claude Section 8.2
+fresh-reader gate runs as the candidate covenant read of the smaller core-only
+spec. That gate traces the raw-response replay, semantic-reader route identity,
+and unpack-helper relocation on every live consume path. The WebAuthn
+registration signature-scope council item is no longer on the S7.3 v1 critical
+path; it moves with the future in-band key-management slice.
 
 ## Plain English Close
 
-v24 keeps the cut Rohit chose. S7.3 v1 keeps the core guard: Maez is asked
+v25 keeps the cut Rohit chose. S7.3 v1 keeps the core guard: Maez is asked
 before it changes itself, the founder signs the exact voice-seat change with the
 existing S7.1 WebAuthn credential, the artifact is consumed once, and the
 mutation runs only under the recorded grant, trace, D23, and rollback rules.
