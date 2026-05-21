@@ -7,6 +7,8 @@ import inspect
 import sqlite3
 import tempfile
 from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -58,12 +60,33 @@ class _FixedDateTime:
         return datetime.fromisoformat(NOW)
 
 
+class _CountingActionEngine:
+    def __init__(self):
+        self.calls = []
+
+    def _execute_action(self, action, params, reason, *, tier, s7_execution_grant=None):
+        self.calls.append((action, dict(params or {}), reason, tier, s7_execution_grant))
+        return SimpleNamespace(success=True, output="executed", error="")
+
+
 class S71DaemonInternalChannelTests(unittest.TestCase):
     def _client(self, configure_daemon=None):
         daemon = MaezDaemon.__new__(MaezDaemon)
         daemon._health_server = None
         if configure_daemon is not None:
             configure_daemon(daemon)
+        captured = {}
+
+        def fake_make_server(_host, _port, app):
+            captured["app"] = app
+            return _FakeServer()
+
+        with patch("werkzeug.serving.make_server", side_effect=fake_make_server):
+            with self.assertRaises(_StopServer):
+                daemon._run_health_server()
+        return captured["app"].test_client()
+
+    def _client_for_daemon(self, daemon):
         captured = {}
 
         def fake_make_server(_host, _port, app):
@@ -120,6 +143,145 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
             maez_voice_consultation_id=f"voice-{request_id}",
             free_text_ref_hash=None,
         )
+
+    def _live_self_mod_daemon(self, root: str, request_id: str, *, rollback_path_class=None):
+        from dataclasses import replace
+
+        from core import decision_pipeline as _dp
+        from core.audit import AuditVerdict, Decision
+        from core.audit_log import AuditLog
+        from core.decision.pending_cards import PendingCardStore
+        from core.decision_pipeline import DecisionPipeline
+        from core.governance import operator_user_boundary as s7
+        from skills.self_mod_dialog import SelfModDialogStore, open_dialog_for_card
+
+        root_path = Path(root)
+        engine = _CountingActionEngine()
+        card_store = PendingCardStore(root_path / "cards.db")
+        audit_log = AuditLog(root_path / "audit.db")
+        pipeline = DecisionPipeline(
+            action_engine=engine,
+            card_store=card_store,
+            audit_log=audit_log,
+        )
+        dialog_store = SelfModDialogStore(root_path / "dialogs.db")
+        pipeline._dialog_store = dialog_store
+        target = root_path / "config" / "soul.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("# before", encoding="utf-8")
+        params = {"path": str(target), "content": "# after"}
+        state_fields = _dp._drop_volatile(_dp._fingerprint_for_action("write_any_file", params))
+        card = card_store.create_card(
+            action="write_any_file",
+            params=params,
+            reason="self-mod",
+            audit_verdict=AuditVerdict(
+                decision=Decision.ESCALATE,
+                confidence=0.9,
+                reasoning="self-modification requires S7",
+                concerns=["modifies soul"],
+                mitigations=[],
+                summary="self mod",
+                answers={},
+                nonce="nonce",
+                latency_ms=1,
+            ),
+            audit_request_id=f"audit-{request_id}",
+            classification={"intent_category": "SELF_MODIFICATION", "lane": "3"},
+            state_fields=state_fields,
+            channel="cockpit",
+            chat_id="s7-live",
+            user_id="rohit",
+        )
+        original_envelope = pipeline._s7_request_envelope_for_card
+
+        if rollback_path_class is not None:
+            def _envelope_with_rollback(_card):
+                return replace(
+                    original_envelope(_card),
+                    rollback_path_class=rollback_path_class,
+                )
+
+            pipeline._s7_request_envelope_for_card = _envelope_with_rollback
+
+        actual_request_id = card.request_id
+        envelope = pipeline._s7_request_envelope_for_card(card)
+
+        def _voice_consultation(_card, _envelope):
+            return s7.MaezVoiceConsultation(
+                consultation_id=getattr(_envelope, "maez_voice_consultation_id", None)
+                or f"voice-{actual_request_id}",
+                request_id=actual_request_id,
+                request_envelope_hash=s7.work_request_envelope_hash(_envelope),
+                producer="s7_voice_consultation_turn",
+                source_ref_kind="s7_voice_turn",
+                source_ref_hash=s7.canonical_hash({"voice": actual_request_id}),
+                maez_voice_consulted=True,
+                maez_objection_state="absent",
+                maez_withdrew_request=False,
+                unavailable_reason_code=None,
+                created_at=NOW,
+            )
+
+        pipeline._s7_voice_consultation_for_card = _voice_consultation
+        open_dialog_for_card(
+            store=dialog_store,
+            card_action=card.action,
+            card_params=card.params,
+            card_request_id=card.request_id,
+            audit_reasoning=card.audit_reasoning,
+            concerns=list(card.audit_concerns or []),
+            opener_llm_fn=lambda _ctx: "I want to change myself.",
+            require_s7_linkage=True,
+            s7_request_envelope_hash=s7.work_request_envelope_hash(envelope),
+        )
+
+        class Telegram:
+            def _get_pipeline(self):
+                return pipeline
+
+        daemon = MaezDaemon.__new__(MaezDaemon)
+        daemon._health_server = None
+        daemon.telegram = Telegram()
+        return daemon, pipeline, engine, card, target
+
+    def _mint_self_mod_artifact(self, *, client, daemon, store, request_id: str):
+        from daemon import maez_daemon
+
+        begin = client.post(
+            f"/internal/s7/cards/{request_id}/webauthn/begin",
+            json={
+                "session_binding": "session-auth",
+                "credential_ref": "cred-primary",
+            },
+            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+        )
+        self.assertEqual(begin.status_code, 200)
+        challenge_id = begin.get_json()["challenge_id"]
+        material = maez_daemon._s7_authorization_route_material(
+            daemon,
+            self._route_request(
+                session_binding="session-auth",
+                challenge_id=challenge_id,
+            ),
+            request_id=request_id,
+            now=NOW,
+            store=store,
+        )
+        self.assertTrue(material.ok)
+        self._seed_valid_voice_bundle_for_material(store.db_path, material)
+        finish = client.post(
+            f"/internal/s7/cards/{request_id}/webauthn/finish",
+            json={
+                "session_binding": "session-auth",
+                "challenge_id": challenge_id,
+                "credential_ref": "cred-primary",
+                "authentication_response": {"clientDataJSON": "valid-auth"},
+            },
+            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+        )
+        self.assertEqual(finish.status_code, 200)
+        return begin, finish
 
     def _daemon_with_card_pipeline(self, request_id: str):
         envelope = self._destructive_envelope(request_id)
@@ -976,6 +1138,262 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.get_json()["error"], "s7_guarded_source_bundle_required")
         self.assertFalse(called["service"])
+
+    def test_daemon_s7_execute_consumes_fresh_artifact_and_records_trace(self):
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        request_id = "req-s7-execute-live"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = f"{tmp}/memory/s7_1_webauthn"
+            store = S7WebAuthnBootstrapStore(root)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            daemon, _pipeline, engine, card, _target = self._live_self_mod_daemon(
+                tmp,
+                request_id,
+            )
+            request_id = card.request_id
+            env = {
+                "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "S7_WEBAUTHN_STORE_ROOT": root,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                with patch("daemon.maez_daemon.datetime", _FixedDateTime):
+                    with patch(
+                        "daemon.maez_daemon.S7ProductionWebAuthnVerifier",
+                        _RouteAuthenticationVerifier,
+                    ):
+                        client = self._client_for_daemon(daemon)
+                        begin, finish = self._mint_self_mod_artifact(
+                            client=client,
+                            daemon=daemon,
+                            store=store,
+                            request_id=request_id,
+                        )
+                        execute = client.post(
+                            f"/internal/s7/cards/{request_id}/execute",
+                            json={
+                                "session_binding": "session-auth",
+                                "authorization_challenge_id": begin.get_json()[
+                                    "challenge_id"
+                                ],
+                                "authorization_credential_ref": "cred-primary",
+                                "s7_authorization_artifact_id": finish.get_json()[
+                                    "artifact_id"
+                                ],
+                                "text": "yes",
+                            },
+                            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                        )
+            with sqlite3.connect(store.db_path) as conn:
+                artifact_row = conn.execute(
+                    """
+                    SELECT consumed_at, consumed_by_request_id
+                    FROM s7_authorization_artifacts
+                    WHERE artifact_id = ?
+                    """,
+                    (finish.get_json()["artifact_id"],),
+                ).fetchone()
+                trace_row = conn.execute(
+                    """
+                    SELECT request_id, artifact_id, execution_status, rollback_path_class
+                    FROM s7_guarded_execution_traces
+                    WHERE artifact_id = ?
+                    """,
+                    (finish.get_json()["artifact_id"],),
+                ).fetchone()
+
+        self.assertEqual(execute.status_code, 200)
+        self.assertTrue(execute.get_json()["ok"])
+        self.assertEqual(execute.get_json()["status"], "executed")
+        self.assertEqual(len(engine.calls), 1)
+        self.assertIsNotNone(artifact_row)
+        assert artifact_row is not None
+        self.assertIsNotNone(artifact_row[0])
+        self.assertEqual(artifact_row[1], request_id)
+        self.assertIsNotNone(trace_row)
+        assert trace_row is not None
+        self.assertEqual(trace_row[0], request_id)
+        self.assertEqual(trace_row[1], finish.get_json()["artifact_id"])
+        self.assertEqual(trace_row[2], "executed")
+        self.assertEqual(trace_row[3], "revert_patch")
+
+    def test_daemon_s7_execute_replays_consumed_artifact_without_second_execution(self):
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        request_id = "req-s7-execute-replay"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = f"{tmp}/memory/s7_1_webauthn"
+            store = S7WebAuthnBootstrapStore(root)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            daemon, _pipeline, engine, card, _target = self._live_self_mod_daemon(
+                tmp,
+                request_id,
+            )
+            request_id = card.request_id
+            env = {
+                "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "S7_WEBAUTHN_STORE_ROOT": root,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                with patch("daemon.maez_daemon.datetime", _FixedDateTime):
+                    with patch(
+                        "daemon.maez_daemon.S7ProductionWebAuthnVerifier",
+                        _RouteAuthenticationVerifier,
+                    ):
+                        client = self._client_for_daemon(daemon)
+                        begin, finish = self._mint_self_mod_artifact(
+                            client=client,
+                            daemon=daemon,
+                            store=store,
+                            request_id=request_id,
+                        )
+                        body = {
+                            "session_binding": "session-auth",
+                            "authorization_challenge_id": begin.get_json()["challenge_id"],
+                            "authorization_credential_ref": "cred-primary",
+                            "s7_authorization_artifact_id": finish.get_json()["artifact_id"],
+                            "text": "yes",
+                        }
+                        first = client.post(
+                            f"/internal/s7/cards/{request_id}/execute",
+                            json=body,
+                            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                        )
+                        second = client.post(
+                            f"/internal/s7/cards/{request_id}/execute",
+                            json=body,
+                            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                        )
+            with sqlite3.connect(store.db_path) as conn:
+                trace_count = conn.execute(
+                    "SELECT COUNT(*) FROM s7_guarded_execution_traces WHERE request_id = ?",
+                    (request_id,),
+                ).fetchone()[0]
+
+        self.assertEqual(first.status_code, 200)
+        self.assertNotEqual(second.status_code, 200)
+        self.assertEqual(len(engine.calls), 1)
+        self.assertEqual(trace_count, 1)
+
+    def test_daemon_s7_execute_rejects_missing_or_wrong_artifact_before_execution(self):
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        request_id = "req-s7-execute-wrong-artifact"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = f"{tmp}/memory/s7_1_webauthn"
+            store = S7WebAuthnBootstrapStore(root)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            daemon, _pipeline, engine, card, _target = self._live_self_mod_daemon(
+                tmp,
+                request_id,
+            )
+            request_id = card.request_id
+            env = {
+                "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "S7_WEBAUTHN_STORE_ROOT": root,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                with patch("daemon.maez_daemon.datetime", _FixedDateTime):
+                    with patch(
+                        "daemon.maez_daemon.S7ProductionWebAuthnVerifier",
+                        _RouteAuthenticationVerifier,
+                    ):
+                        client = self._client_for_daemon(daemon)
+                        begin, _finish = self._mint_self_mod_artifact(
+                            client=client,
+                            daemon=daemon,
+                            store=store,
+                            request_id=request_id,
+                        )
+                        missing = client.post(
+                            f"/internal/s7/cards/{request_id}/execute",
+                            json={
+                                "session_binding": "session-auth",
+                                "authorization_challenge_id": begin.get_json()[
+                                    "challenge_id"
+                                ],
+                                "authorization_credential_ref": "cred-primary",
+                                "text": "yes",
+                            },
+                            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                        )
+                        wrong = client.post(
+                            f"/internal/s7/cards/{request_id}/execute",
+                            json={
+                                "session_binding": "session-auth",
+                                "authorization_challenge_id": begin.get_json()[
+                                    "challenge_id"
+                                ],
+                                "authorization_credential_ref": "cred-primary",
+                                "s7_authorization_artifact_id": "s7authz_wrong",
+                                "text": "yes",
+                            },
+                            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                        )
+
+        self.assertEqual(missing.status_code, 400)
+        self.assertEqual(missing.get_json()["detail"], "s7_authorization_artifact_id")
+        self.assertEqual(wrong.status_code, 409)
+        self.assertEqual(len(engine.calls), 0)
+
+    def test_daemon_s7_execute_requires_rollback_plan_before_execution(self):
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        request_id = "req-s7-execute-missing-rollback"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = f"{tmp}/memory/s7_1_webauthn"
+            store = S7WebAuthnBootstrapStore(root)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            daemon, _pipeline, engine, card, _target = self._live_self_mod_daemon(
+                tmp,
+                request_id,
+                rollback_path_class="no_rollback_needed",
+            )
+            request_id = card.request_id
+            env = {
+                "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "S7_WEBAUTHN_STORE_ROOT": root,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                with patch("daemon.maez_daemon.datetime", _FixedDateTime):
+                    with patch(
+                        "daemon.maez_daemon.S7ProductionWebAuthnVerifier",
+                        _RouteAuthenticationVerifier,
+                    ):
+                        client = self._client_for_daemon(daemon)
+                        begin, finish = self._mint_self_mod_artifact(
+                            client=client,
+                            daemon=daemon,
+                            store=store,
+                            request_id=request_id,
+                        )
+                        execute = client.post(
+                            f"/internal/s7/cards/{request_id}/execute",
+                            json={
+                                "session_binding": "session-auth",
+                                "authorization_challenge_id": begin.get_json()[
+                                    "challenge_id"
+                                ],
+                                "authorization_credential_ref": "cred-primary",
+                                "s7_authorization_artifact_id": finish.get_json()[
+                                    "artifact_id"
+                                ],
+                                "text": "yes",
+                            },
+                            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                        )
+
+        self.assertEqual(execute.status_code, 409)
+        self.assertEqual(execute.get_json()["error"], "s7_rollback_plan_required")
+        self.assertEqual(len(engine.calls), 0)
 
     def test_live_binding_deriver_structurally_excludes_bundle_input(self):
         from core.governance.s7_guarded_execution import (

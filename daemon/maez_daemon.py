@@ -571,6 +571,91 @@ def _s7_backup_registration_authorization(daemon, req, *, now: str, store: S7Web
     )
 
 
+def _s7_guarded_card_execution_authorization(
+    daemon,
+    req,
+    *,
+    request_id: str,
+    now: str,
+    store: S7WebAuthnBootstrapStore,
+):
+    from core.governance import operator_user_boundary as s7
+
+    request_json = req.get_json(silent=True) or {}
+    if not isinstance(request_json, dict):
+        return _s7_route_error("s7_schema_invalid", 400, detail="json_object_required")
+    artifact_id = str(request_json.get("s7_authorization_artifact_id") or "")
+    if not artifact_id:
+        return _s7_route_error("s7_schema_invalid", 400, detail="s7_authorization_artifact_id")
+    challenge_id = str(
+        request_json.get("authorization_challenge_id")
+        or request_json.get("challenge_id")
+        or ""
+    )
+    if not challenge_id:
+        return _s7_route_error("s7_schema_invalid", 400, detail="authorization_challenge_id")
+    session_binding = str(
+        request_json.get("authorization_session_binding")
+        or request_json.get("session_binding")
+        or ""
+    )
+    if not session_binding:
+        return _s7_route_error("s7_schema_invalid", 400, detail="session_binding")
+    credential_ref = str(
+        request_json.get("authorization_credential_ref")
+        or request_json.get("credential_ref")
+        or ""
+    )
+    if not credential_ref:
+        return _s7_route_error("s7_schema_invalid", 400, detail="authorization_credential_ref")
+
+    auth_request_json = {
+        "session_binding": session_binding,
+        "challenge_id": challenge_id,
+        "credential_ref": credential_ref,
+    }
+
+    class _AuthorizationRequest:
+        headers = req.headers
+
+        @staticmethod
+        def get_json(*_args, **_kwargs):
+            return auth_request_json
+
+    material = _s7_authorization_route_material(
+        daemon,
+        _AuthorizationRequest(),
+        request_id=request_id,
+        now=now,
+        store=store,
+        allow_consumed_authorization_challenge=True,
+    )
+    if material.ok is not True:
+        return material
+    rendered = material.kwargs["rendered_statement"]
+    if rendered.rollback_path_class in {"no_rollback_needed", "no_safe_rollback"}:
+        return _s7_route_error(
+            "s7_rollback_plan_required",
+            409,
+            rollback_path_class=rendered.rollback_path_class,
+        )
+    authorization = s7.S7ExecutionAuthorization(
+        store=s7.S7AuthorizationStore(store.db_path),
+        artifact_id=artifact_id,
+        rendered=rendered,
+        action_params_hash=material.kwargs["action_params_hash"],
+        authority_context=material.kwargs["authority_context"],
+        precondition_hash=material.kwargs["precondition_hash"],
+        derived_work_class=rendered.derived_work_class,
+        derived_aggregation_group=rendered.derived_aggregation_group,
+        now=now,
+    )
+    return _s7_route_material(
+        s7_execution_authorization=authorization,
+        text=str(request_json.get("text") or "yes"),
+    )
+
+
 def _s7_create_backup_registration_card(daemon):
     from core.governance.s7_webauthn_ceremony import backup_registration_action_params
 
@@ -6343,6 +6428,67 @@ class MaezDaemon:
                 s7_ceremony_deferred_response(
                     surface="daemon",
                     route=f"/internal/s7/cards/{request_id}/webauthn/finish",
+                )
+            ), 503
+
+        @app.route("/internal/s7/cards/<request_id>/execute", methods=["POST"])
+        def s7_guarded_card_execute(request_id: str):
+            if live_webauthn_ceremony_enabled():
+                if not _s7_internal_channel_trusted(request):
+                    return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                now = datetime.now(timezone.utc).isoformat()
+                store = S7WebAuthnBootstrapStore(_s7_webauthn_store_root())
+                authorization = _s7_guarded_card_execution_authorization(
+                    self,
+                    request,
+                    request_id=request_id,
+                    now=now,
+                    store=store,
+                )
+                if authorization.ok is not True:
+                    return jsonify(authorization.body), authorization.status_code
+                pipe = _s7_route_pipeline_for_daemon(self)
+                if pipe is None or getattr(pipe, "card_store", None) is None:
+                    return jsonify({"ok": False, "error": "s7_execution_edge_unavailable"}), 503
+                card = pipe.card_store.get(request_id)
+                if card is None:
+                    return jsonify({"ok": False, "error": "s7_request_not_found"}), 404
+                if not callable(getattr(pipe, "_is_pending_dialog_card", None)):
+                    return jsonify({"ok": False, "error": "s7_execution_edge_unavailable"}), 503
+                if pipe._is_pending_dialog_card(card) is not True:
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": "s7_narrow_path_required",
+                            "detail": "S7.3 live execution is limited to founder-present self-mod dialog cards",
+                        }
+                    ), 409
+                result = pipe._handle_pending_dialog_input(
+                    card=card,
+                    text=authorization.kwargs["text"],
+                    user_id=getattr(card, "user_id", None) or "owner",
+                    s7_execution_authorization=authorization.kwargs[
+                        "s7_execution_authorization"
+                    ],
+                )
+                if result is None:
+                    return jsonify({"ok": False, "error": "s7_execution_unrelated"}), 409
+                status = getattr(getattr(result, "status", None), "value", str(getattr(result, "status", "")))
+                ok = status == "executed" and bool(getattr(result, "execution_success", False))
+                status_code = 200 if ok else 409
+                return jsonify(
+                    {
+                        "ok": ok,
+                        "status": status,
+                        "message": getattr(result, "message", ""),
+                        "output": (getattr(result, "execution_output", "") or "")[:2000],
+                        "error": getattr(result, "execution_error", None),
+                    }
+                ), status_code
+            return jsonify(
+                s7_ceremony_deferred_response(
+                    surface="daemon",
+                    route=f"/internal/s7/cards/{request_id}/execute",
                 )
             ), 503
 

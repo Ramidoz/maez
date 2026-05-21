@@ -1194,6 +1194,36 @@ class DecisionPipeline:
                     reason=result.message or "S7 execution could not start",
                 )
             elif result and result.status == PipelineStatus.EXECUTED:
+                try:
+                    from core.governance.s7_guarded_execution import (
+                        record_s7_guarded_execution_trace,
+                    )
+
+                    authorization = s7_execution_authorization
+                    rendered = getattr(authorization, "rendered", None)
+                    if rendered is not None:
+                        record_s7_guarded_execution_trace(
+                            db_path=authorization.store.db_path,
+                            request_id=card.request_id,
+                            artifact_id=authorization.artifact_id,
+                            request_envelope_hash=rendered.request_envelope_hash,
+                            rendered_text_hash=rendered.rendered_text_hash,
+                            action_params_hash=authorization.action_params_hash,
+                            precondition_hash=authorization.precondition_hash,
+                            rollback_path_class=rendered.rollback_path_class,
+                            dialog_id=getattr(turn.dialog, "dialog_id", None),
+                            execution_status=getattr(result.status, "value", str(result.status)),
+                            execution_success=bool(result.execution_success),
+                            card_status=getattr(getattr(result, "card", None), "status", None),
+                            output_text=getattr(result, "execution_output", None),
+                            error_text=getattr(result, "execution_error", None),
+                            executed_at=getattr(authorization, "now", None) or _s7_now_text(),
+                        )
+                except Exception:
+                    logger.warning(
+                        "S7 guarded execution trace could not be recorded",
+                        exc_info=True,
+                    )
                 if result.execution_success is True:
                     dialog_store.set_stage(
                         turn.dialog.dialog_id,

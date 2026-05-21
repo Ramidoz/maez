@@ -1862,6 +1862,19 @@ def api_s7_webauthn_authorize_finish(request_id: str):
     return _s7_cockpit_ceremony_deferred(route)
 
 
+@app.route("/api/v1/s7/cards/<request_id>/execute", methods=["POST"])
+def api_s7_guarded_card_execute(request_id: str):
+    from core.governance.operator_user_boundary import live_webauthn_ceremony_enabled
+
+    route = f"/api/v1/s7/cards/{request_id}/execute"
+    if live_webauthn_ceremony_enabled():
+        return _s7_cockpit_proxy_to_daemon(
+            route,
+            f"/internal/s7/cards/{request_id}/execute",
+        )
+    return _s7_cockpit_ceremony_deferred(route)
+
+
 @app.route("/api/v1/services")
 def api_services():
     """systemctl status for maez/llama/ollama units."""

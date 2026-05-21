@@ -180,6 +180,111 @@ REVIEWED_CONTEXT_MANIFEST_POLICY_HASHES = frozenset({
 })
 
 
+S7_GUARDED_EXECUTION_TRACE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS s7_guarded_execution_traces (
+    trace_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    artifact_id TEXT NOT NULL,
+    request_envelope_hash TEXT NOT NULL,
+    rendered_text_hash TEXT NOT NULL,
+    action_params_hash TEXT NOT NULL,
+    precondition_hash TEXT NOT NULL,
+    rollback_path_class TEXT NOT NULL,
+    dialog_id TEXT,
+    execution_status TEXT NOT NULL,
+    execution_success INTEGER NOT NULL,
+    card_status TEXT,
+    output_hash TEXT,
+    error_hash TEXT,
+    executed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_s7_guarded_execution_traces_request
+    ON s7_guarded_execution_traces(request_id);
+CREATE INDEX IF NOT EXISTS idx_s7_guarded_execution_traces_artifact
+    ON s7_guarded_execution_traces(artifact_id);
+"""
+
+
+def record_s7_guarded_execution_trace(
+    *,
+    db_path: str | Path,
+    request_id: str,
+    artifact_id: str,
+    request_envelope_hash: str,
+    rendered_text_hash: str,
+    action_params_hash: str,
+    precondition_hash: str,
+    rollback_path_class: str,
+    dialog_id: str | None,
+    execution_status: str,
+    execution_success: bool,
+    card_status: str | None,
+    output_text: str | None,
+    error_text: str | None,
+    executed_at: str,
+) -> str:
+    """Persist the D22 trace that proves a guarded execution actually ran."""
+
+    if not request_id:
+        raise ValueError("S7 guarded execution trace requires request_id")
+    if not artifact_id:
+        raise ValueError("S7 guarded execution trace requires artifact_id")
+    _validate_hash64(request_envelope_hash, field="request_envelope_hash")
+    _validate_hash64(rendered_text_hash, field="rendered_text_hash")
+    _validate_hash64(action_params_hash, field="action_params_hash")
+    _validate_hash64(precondition_hash, field="precondition_hash")
+    s7._validate_closed_value(
+        rollback_path_class,
+        s7.ROLLBACK_PATH_CLASSES,
+        "rollback_path_class",
+    )
+    if not execution_status:
+        raise ValueError("S7 guarded execution trace requires execution_status")
+    if not executed_at:
+        raise ValueError("S7 guarded execution trace requires executed_at")
+    output_hash = s7.canonical_hash(output_text or "") if output_text else None
+    error_hash = s7.canonical_hash(error_text or "") if error_text else None
+    trace_id = "s7exec_" + s7.canonical_hash({
+        "artifact_id": artifact_id,
+        "executed_at": executed_at,
+        "execution_status": execution_status,
+        "request_id": request_id,
+    })[:32]
+    with closing(sqlite3.connect(str(db_path))) as conn:
+        conn.executescript(S7_GUARDED_EXECUTION_TRACE_SCHEMA)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO s7_guarded_execution_traces (
+                trace_id, request_id, artifact_id, request_envelope_hash,
+                rendered_text_hash, action_params_hash, precondition_hash,
+                rollback_path_class, dialog_id, execution_status,
+                execution_success, card_status, output_hash, error_hash,
+                executed_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                trace_id,
+                request_id,
+                artifact_id,
+                request_envelope_hash,
+                rendered_text_hash,
+                action_params_hash,
+                precondition_hash,
+                rollback_path_class,
+                dialog_id,
+                execution_status,
+                1 if execution_success else 0,
+                card_status,
+                output_hash,
+                error_hash,
+                executed_at,
+            ),
+        )
+        conn.commit()
+    return trace_id
+
+
 @dataclass(frozen=True)
 class S7ContextManifest:
     """Immutable context manifest bound into an S7.3 voice source bundle."""
