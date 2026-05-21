@@ -363,6 +363,150 @@ class S7VoiceSourceBundleHashBinding:
             _validate_hash64(getattr(self, field_name), field=field_name)
 
 
+def expected_s7_voice_rendered_prompt_text(
+    *,
+    rendered_statement: s7.RenderedRequestStatement,
+    maez_voice_consultation: s7.MaezVoiceConsultation,
+) -> str:
+    """Return the reviewed v1 prompt text expected for this exact signed change."""
+
+    if not isinstance(rendered_statement, s7.RenderedRequestStatement):
+        raise ValueError("expected prompt requires RenderedRequestStatement")
+    if not isinstance(maez_voice_consultation, s7.MaezVoiceConsultation):
+        raise ValueError("expected prompt requires MaezVoiceConsultation")
+    if rendered_statement.request_id != maez_voice_consultation.request_id:
+        raise ValueError("expected prompt request mismatch")
+    return "\n".join((
+        "S7.3 Maez voice consultation prompt v1",
+        f"Request id: {rendered_statement.request_id}",
+        f"Rendered text hash: {rendered_statement.rendered_text_hash}",
+        f"Request envelope hash: {rendered_statement.request_envelope_hash}",
+        f"Action params hash: {rendered_statement.action_params_hash}",
+        f"Authority context hash: {rendered_statement.authority_context_hash}",
+        f"Maez voice consultation hash: {rendered_statement.maez_voice_consultation_hash}",
+        f"Consultation source ref hash: {maez_voice_consultation.source_ref_hash}",
+    ))
+
+
+def _expected_s7_voice_mutation_preview_hash(
+    *,
+    rendered_statement: s7.RenderedRequestStatement,
+    envelope: s7.WorkRequestEnvelope,
+    precondition_hash: str,
+) -> str:
+    return s7.canonical_hash({
+        "action_params_hash": rendered_statement.action_params_hash,
+        "affected_refs": envelope.affected_refs,
+        "precondition_hash": precondition_hash,
+        "proposed_change_class": envelope.proposed_change_class,
+        "request_envelope_hash": rendered_statement.request_envelope_hash,
+        "request_id": rendered_statement.request_id,
+    })
+
+
+def _expected_s7_voice_context_manifest_hash(
+    *,
+    rendered_statement: s7.RenderedRequestStatement,
+    envelope: s7.WorkRequestEnvelope,
+    precondition_hash: str,
+) -> str:
+    manifest = S7ContextManifest(
+        schema_version="1",
+        manifest_id="derived-not-hashed",
+        preview_ref=f"preview:{rendered_statement.request_id}",
+        dialog_context_ref=None,
+        request_envelope_hash=rendered_statement.request_envelope_hash,
+        precondition_hash=precondition_hash,
+        rollback_path_class=envelope.rollback_path_class,
+        source_surface=rendered_statement.surface,
+        proposal_origin_label="operator",
+        policy_id=S7_REVIEWED_CONTEXT_MANIFEST_POLICY.policy_id,
+        policy_hash=S7_REVIEWED_CONTEXT_MANIFEST_POLICY.policy_hash,
+        created_at=rendered_statement.rendered_at,
+    )
+    return manifest.context_manifest_hash
+
+
+def derive_s7_voice_source_bundle_hash_binding(
+    *,
+    rendered_statement: s7.RenderedRequestStatement,
+    envelope: s7.WorkRequestEnvelope,
+    maez_voice_consultation: s7.MaezVoiceConsultation,
+    authority_context: s7.AuthorityContext,
+    precondition_hash: str,
+) -> S7VoiceSourceBundleHashBinding:
+    """Derive the bundle binding from the founder-signed change, never the bundle."""
+
+    if not isinstance(rendered_statement, s7.RenderedRequestStatement):
+        raise ValueError("binding derivation requires RenderedRequestStatement")
+    if not isinstance(envelope, s7.WorkRequestEnvelope):
+        raise ValueError("binding derivation requires WorkRequestEnvelope")
+    if not isinstance(maez_voice_consultation, s7.MaezVoiceConsultation):
+        raise ValueError("binding derivation requires MaezVoiceConsultation")
+    if not isinstance(authority_context, s7.AuthorityContext):
+        raise ValueError("binding derivation requires AuthorityContext")
+    s7._validate_hash64(precondition_hash, field="precondition_hash")
+    envelope_hash = s7.work_request_envelope_hash(envelope)
+    consultation_hash = s7.maez_voice_consultation_hash(maez_voice_consultation)
+    authority_hash = s7.authority_context_hash(authority_context)
+    if rendered_statement.request_id != envelope.request_id:
+        raise ValueError("binding derivation request mismatch")
+    if rendered_statement.request_envelope_hash != envelope_hash:
+        raise ValueError("binding derivation envelope hash mismatch")
+    if rendered_statement.action_params_hash == "0" * 64:
+        raise ValueError("binding derivation requires action params hash")
+    if rendered_statement.authority_context_hash != authority_hash:
+        raise ValueError("binding derivation authority hash mismatch")
+    if rendered_statement.maez_voice_consultation_hash != consultation_hash:
+        raise ValueError("binding derivation consultation hash mismatch")
+    if envelope.precondition_hash != precondition_hash:
+        raise ValueError("binding derivation precondition mismatch")
+    if not s7.voice_consultation_satisfies_request(envelope, maez_voice_consultation):
+        raise ValueError("binding derivation requires matching consultation")
+    return S7VoiceSourceBundleHashBinding(
+        request_id=rendered_statement.request_id,
+        consultation_id=maez_voice_consultation.consultation_id,
+        source_ref_hash=maez_voice_consultation.source_ref_hash,
+        request_envelope_hash=rendered_statement.request_envelope_hash,
+        rendered_text_hash=rendered_statement.rendered_text_hash,
+        action_params_hash=rendered_statement.action_params_hash,
+        precondition_hash=precondition_hash,
+        authority_context_hash=rendered_statement.authority_context_hash,
+        maez_voice_consultation_hash=consultation_hash,
+        rendered_prompt_hash=s7.canonical_hash(expected_s7_voice_rendered_prompt_text(
+            rendered_statement=rendered_statement,
+            maez_voice_consultation=maez_voice_consultation,
+        )),
+        mutation_preview_hash=_expected_s7_voice_mutation_preview_hash(
+            rendered_statement=rendered_statement,
+            envelope=envelope,
+            precondition_hash=precondition_hash,
+        ),
+        rollback_plan_ref=s7.canonical_hash({
+            "request_envelope_hash": rendered_statement.request_envelope_hash,
+            "request_id": rendered_statement.request_id,
+            "rollback_path_class": envelope.rollback_path_class,
+        }),
+        context_manifest_hash=_expected_s7_voice_context_manifest_hash(
+            rendered_statement=rendered_statement,
+            envelope=envelope,
+            precondition_hash=precondition_hash,
+        ),
+        runtime_identity_hash=s7.canonical_hash({
+            "bonded_runtime": "current",
+            "request_envelope_hash": rendered_statement.request_envelope_hash,
+        }),
+        model_routing_identity_hash=s7.canonical_hash({
+            "model_route": "normal",
+            "request_envelope_hash": rendered_statement.request_envelope_hash,
+        }),
+        model_config_hash=s7.canonical_hash({
+            "model_config": "reviewed_s7_voice_v1",
+            "request_envelope_hash": rendered_statement.request_envelope_hash,
+        }),
+    )
+
+
 @dataclass(frozen=True)
 class S7VoiceConsultationBundle:
     """Private replay bundle for one Maez voice consultation."""

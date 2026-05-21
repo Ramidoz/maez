@@ -94,6 +94,7 @@ from core.voice_continuity import voice_continuity_health
 from core.governance.successor_governance import successor_governance_health
 from core.governance.operator_user_boundary import (
     GUARDED_SELF_MODIFICATION_PAUSED_MODE,
+    VOICE_SEAT_WORK_CLASSES,
     build_operator_health_projection,
     live_webauthn_ceremony_enabled,
     s7_ceremony_deferred_response,
@@ -458,6 +459,58 @@ def _s7_authorization_route_material(
         request_json=request_json,
         allow_degraded_primary_only=allow_degraded_primary_only,
         allow_degraded_backup_only=allow_degraded_backup_only,
+    )
+
+
+def _s7_voice_source_validation_for_material(
+    *,
+    store: S7WebAuthnBootstrapStore,
+    material,
+    now: str,
+):
+    from core.governance import operator_user_boundary as s7
+    from core.governance.s7_guarded_execution import (
+        S7GuardedStateStore,
+        S7SemanticReaderAttemptStore,
+        S7VoiceBundleUseStore,
+        S7VoiceConsultationBundleStore,
+        derive_s7_voice_source_bundle_hash_binding,
+        validate_s7_voice_source_bundle,
+    )
+
+    bundle_store = S7VoiceConsultationBundleStore(store.db_path)
+    bundle_use_store = S7VoiceBundleUseStore(store.db_path)
+    attempt_store = S7SemanticReaderAttemptStore(store.db_path)
+    binding = derive_s7_voice_source_bundle_hash_binding(
+        rendered_statement=material.kwargs["rendered_statement"],
+        envelope=material.kwargs["envelope"],
+        maez_voice_consultation=material.kwargs["maez_voice_consultation"],
+        authority_context=material.kwargs["authority_context"],
+        precondition_hash=material.kwargs["precondition_hash"],
+    )
+    validation = validate_s7_voice_source_bundle(
+        consultation=material.kwargs["maez_voice_consultation"],
+        bundle_store=bundle_store,
+        bundle_use_store=bundle_use_store,
+        semantic_reader_attempt_store=attempt_store,
+        expected_binding=binding,
+        now=now,
+    )
+    guarded_store = S7GuardedStateStore(
+        authorization_store=s7.S7AuthorizationStore(store.db_path),
+        voice_bundle_use_store=bundle_use_store,
+    )
+    reservation_token = s7.canonical_hash({
+        "purpose": "s7.3.voice_bundle_reservation",
+        "request_id": material.kwargs["rendered_statement"].request_id,
+        "rendered_text_hash": material.kwargs["rendered_statement"].rendered_text_hash,
+        "source_ref_hash": binding.source_ref_hash,
+    })
+    return _s7_route_material(
+        source_bundle_validation=validation,
+        guarded_store=guarded_store,
+        source_ref_hash=binding.source_ref_hash,
+        reservation_token=reservation_token,
     )
 
 
@@ -6234,6 +6287,39 @@ class MaezDaemon:
                 )
                 if material.ok is not True:
                     return jsonify(material.body), material.status_code
+                voice_source = _s7_route_material()
+                if (
+                    material.kwargs["envelope"].derived_work_class
+                    in VOICE_SEAT_WORK_CLASSES
+                ):
+                    voice_source = _s7_voice_source_validation_for_material(
+                        store=store,
+                        material=material,
+                        now=now,
+                    )
+                    validation = voice_source.kwargs["source_bundle_validation"]
+                    valid_absent = (
+                        validation.status == "valid_absent"
+                        and validation.source_bundle_valid is True
+                        and validation.mint_eligible is True
+                        and validation.authority_projection == "valid_absent"
+                        and validation.failure_reason_code is None
+                    )
+                    grounded_refusal = (
+                        validation.status == "blocking_present"
+                        and validation.source_bundle_valid is True
+                        and validation.mint_eligible is False
+                        and validation.authority_projection == "grounded_refusal"
+                        and validation.failure_reason_code is None
+                    )
+                    if not (valid_absent or grounded_refusal):
+                        return jsonify(
+                            {
+                                "ok": False,
+                                "error": "s7_guarded_source_bundle_required",
+                                "detail": validation.status,
+                            }
+                        ), 409
                 service = S7LocalWebAuthnCeremonyService(
                     verifier=S7ProductionWebAuthnVerifier(),
                     store_factory=lambda: store,
@@ -6247,6 +6333,10 @@ class MaezDaemon:
                     session_binding=material.kwargs["session_binding"],
                     internal_channel_binding=material.kwargs["internal_channel_binding"],
                     request_json=material.kwargs["request_json"],
+                    guarded_store=voice_source.kwargs.get("guarded_store"),
+                    source_bundle_validation=voice_source.kwargs.get("source_bundle_validation"),
+                    source_ref_hash=voice_source.kwargs.get("source_ref_hash"),
+                    reservation_token=voice_source.kwargs.get("reservation_token"),
                 )
                 return jsonify(result.body), result.status_code
             return jsonify(
