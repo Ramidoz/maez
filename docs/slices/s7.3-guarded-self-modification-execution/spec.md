@@ -1,6 +1,6 @@
 # S7.3 Guarded Self-Modification Execution Spec
 
-**Status:** SPEC v20 draft - folded from Codex panel v19 and v20 scope-cut delta-plan; pending Section 8.2 fresh-reader gate v20 and Codex v20 panel review; not canonical law
+**Status:** SPEC v21 draft - folded from v20 both-lane gate, v21 fold plan, and v21 vocabulary-restore addendum; pending Section 8.2 fresh-reader gate v21 and Codex v21 panel review; not canonical law
 **Date:** 2026-05-20
 **Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S7.3; Decision 34 / ADR 0039; S7 L8; S7.1 D12-D14 and D23
 **Diagnostic:** [`diagnostic.md`](diagnostic.md)
@@ -67,6 +67,12 @@
 **v18 fold input:** [`reviews/spec-v18-fold-plan.md`](reviews/spec-v18-fold-plan.md)
 **v19 fold input:** [`reviews/spec-v19-fold-plan.md`](reviews/spec-v19-fold-plan.md)
 **v20 fold input:** [`reviews/spec-v20-fold-plan.md`](reviews/spec-v20-fold-plan.md)
+**v20 review inputs:**
+- Section 8.2 fresh-reader gate v20: [`reviews/spec-fresh-reader-gate-v20.md`](reviews/spec-fresh-reader-gate-v20.md)
+- Codex panel v20: [`reviews/spec-codex-panel-v20.md`](reviews/spec-codex-panel-v20.md)
+**v21 fold inputs:**
+- [`reviews/spec-v21-fold-plan.md`](reviews/spec-v21-fold-plan.md)
+- [`reviews/spec-v21-fold-plan-addendum.md`](reviews/spec-v21-fold-plan-addendum.md)
 **v9-v19 authorship note:** v9 through v19 preserved the covenant
 architecture and progressively tightened the engineering carrier surface: durable
 request envelopes, one guarded execution invocation carrier, single-file trace
@@ -84,6 +90,14 @@ fold adds runtime reservation-token possession to voice-seat consume, defines
 `EXCLUSION_REASON_CODES`, and resolves D23 state production through one explicit
 input carrier. The S7.1-established founder WebAuthn credential remains the
 physical signature boundary for voice-seat self-modification.
+**v21 authorship note:** v21 keeps the v20 scope cut and restores the
+cut-damaged closed vocabulary family from the pre-cut baseline, removing only
+credential-only members. It restores mintable execution consumer ids, surface
+classes, reviewed-future ids, and the ActionEngine subset to internally
+consistent values; adds the missing artifact-binding store dependency; pins the
+artifact/bundle carrier shape blocks; fixes the preview-body-class annotation;
+and adds cross-vocabulary audit tests so future scope cuts cannot orphan or
+cross-contaminate closed vocabulary values.
 **Runtime impact when implemented:** yes. S7.3 will wire live guarded execution for Maez self-modification only after a reviewed Maez voice producer, founder-local WebAuthn artifact mint, atomic artifact consume, execution grant, rollback evidence, and positive trace all bind to the same exact request.
 
 ## Purpose
@@ -432,27 +446,19 @@ vocabulary. Positive guarded execution may use only the leaf ids below;
 non-mintable.
 
 ```text
-guarded_dream_apply
-guarded_section_edit_apply
-guarded_candidate_apply
-guarded_workshop_apply
+dream_apply_proposal
+dream_apply_section_edit_proposal
+evolution_apply_candidate
+workshop_apply_diff
 guarded_card_execute
-self_mod_dialog_terminal_execute
-cli_helper_guarded_execution
-cockpit_guarded_execution
-reviewed_substrate_adapter_execute
 action_engine_write_soul_note
 action_engine_edit_soul_section
 action_engine_write_any_file
 action_engine_append_to_file
 action_engine_capability_acquire
-action_engine_run_shell
-action_engine_execute_script
-action_engine_run_script
 action_engine_modify_config
 action_engine_register_new_skill
 action_engine_delete_file
-action_engine_sudo_command
 action_engine_write_file
 action_engine_promote_to_core_memory
 action_engine_update_baseline
@@ -471,6 +477,40 @@ action_engine_final_mutate
 Reviewed exclusions and fail-closed rows carry `execution_consumer_id=None`.
 They never mint an execution grant.
 
+**`REVIEWED_FUTURE_EXECUTION_CONSUMER_IDS`** is a reviewed reserved-id
+vocabulary, not an artifact-mint vocabulary. These ids are known surfaces that
+remain fail-closed until a later reviewed slice makes them live:
+
+```text
+self_mod_dialog_terminal_execute
+cli_helper_execute
+cockpit_helper_execute
+reviewed_substrate_adapter_execute
+action_engine_run_shell
+action_engine_execute_script
+action_engine_run_script
+action_engine_sudo_command
+action_engine_git_push
+action_engine_install_package
+action_engine_kill_process
+action_engine_restart_service
+action_engine_write_outside_maez
+action_engine_restart_critical_service
+action_engine_modify_firewall
+action_engine_system_reboot
+action_engine_free_disk_space
+action_engine_delete_temp_file
+action_engine_clean_temp_files
+action_engine_run_safe_command
+action_engine_install_package_t2
+telegram_rollback_adapter_execute
+```
+
+`S7GuardedStateStore.put_artifact_with_bundle_reservation(...)` and
+`S7GuardedStateStore.consume_artifact_for_execution(...)` reject
+`REVIEWED_FUTURE_EXECUTION_CONSUMER_IDS` before artifact mint or consume in
+S7.3 v1.
+
 **`S7_ACTION_ENGINE_CONSUMER_IDS`** is the ActionEngine subset of live leaf ids:
 
 ```text
@@ -479,13 +519,9 @@ action_engine_edit_soul_section
 action_engine_write_any_file
 action_engine_append_to_file
 action_engine_capability_acquire
-action_engine_run_shell
-action_engine_execute_script
-action_engine_run_script
 action_engine_modify_config
 action_engine_register_new_skill
 action_engine_delete_file
-action_engine_sudo_command
 action_engine_write_file
 action_engine_promote_to_core_memory
 action_engine_update_baseline
@@ -496,17 +532,17 @@ action_engine_integration_review_plan
 **`SURFACE_CLASSES`** is:
 
 ```text
-dream_apply
-section_edit_apply
-evolution_candidate_apply
-workshop_apply
-card_approval
-self_mod_dialog
-cli_helper
-cockpit_helper
-reviewed_substrate_adapter
-action_engine_final_mutation
-model_routing
+dream_proposal_application
+dream_section_edit_application
+evolution_candidate_application
+workshop_diff_application
+self_mod_dialog_terminal_execution
+guarded_card_execution
+cli_guarded_execution
+cockpit_guarded_execution
+reviewed_substrate_adapter_execution
+action_engine_final_mutation_execution
+model_routing_execution
 ```
 
 **`ROUTE_STATUSES`** is:
@@ -1500,6 +1536,7 @@ S7GuardedStateStore(
     bundle_store: S7VoiceConsultationBundleStore,
     bundle_use_store: S7VoiceBundleUseStore,
     authorization_store: S7AuthorizationStore,
+    artifact_binding_store: S7AuthorizationArtifactBindingStore,
     grant_use_store: S7GrantUseStore,
     work_item_store: S7GuardedWorkItemStore,
     preview_store: S7MutationPreviewStore,
@@ -1519,6 +1556,77 @@ S7GuardedStateStore(
     manual_review_store: ManualReviewEvidenceStore,
     trace_writer: S7TraceWriter,
 )
+
+Artifact/bundle carrier shapes used by the retained v21 core:
+
+```text
+S7AuthorizationArtifactInputs(
+    request_id: str,
+    rendered_text_hash: str,
+    request_envelope_hash: str,
+    action_params_hash: str,
+    precondition_hash: str,
+    authority_context_hash: str,
+    execution_consumer_id: str,
+    expires_at: str,
+)
+
+S7AuthorizationArtifactBindingInputs(
+    artifact_id: str,
+    request_id: str,
+    rendered_statement_hash: str,
+    request_envelope_hash: str,
+    action_params_hash: str,
+    precondition_hash: str,
+    authority_context_hash: str,
+    execution_consumer_id: str,
+    source_ref_hash: str,
+    challenge_expires_at: str,
+)
+
+S7AuthorizationArtifactBinding(
+    artifact_id: str,
+    request_id: str,
+    rendered_statement_hash: str,
+    request_envelope_hash: str,
+    action_params_hash: str,
+    precondition_hash: str,
+    authority_context_hash: str,
+    execution_consumer_id: str,
+    source_ref_hash: str,
+    challenge_expires_at: str,
+)
+
+S7VoiceConsultationBundleDraft(
+    request_id: str,
+    consultation_id: str,
+    attempt_manifest_hash: str,
+    reducer_version: str,
+    reducer_hash: str,
+    marker_text_hash: str | None,
+    created_at: str,
+)
+
+S7VoiceConsultationBundle(
+    request_id: str,
+    consultation_id: str,
+    source_ref_hash: str,
+    attempt_manifest_hash: str,
+    reducer_version: str,
+    reducer_hash: str,
+    maez_voice_consultation_hash: str,
+    expires_at: str,
+)
+
+S7VoiceBundleUse(
+    request_id: str,
+    artifact_id: str,
+    source_ref_hash: str,
+    consultation_id: str,
+    bundle_use_hash: str,
+    used_at: str,
+)
+```
 
 S7GuardedStateStore.put_artifact_with_bundle_reservation(
     *,
@@ -2661,7 +2769,7 @@ RenderedRequestStatement(
     precondition_hash: str,
     authority_context_hash: str,
     maez_voice_consultation_hash: str,
-    preview_body_class: PREVIEW_BODY_CLASSES,
+    preview_body_class: preview_body_class,
     preview_summary: str,
     preview_affected_paths: tuple[str, ...],
     mutation_preview_hash: str,
@@ -3479,7 +3587,7 @@ in-scope adapter/consumer or reviewed same-code coverage proof.
 
 ### D24 - Tests And Verification
 
-D24 is the RED-first checklist for S7.3 v20. Tests must go red against an empty
+D24 is the RED-first checklist for S7.3 v21. Tests must go red against an empty
 or incomplete implementation and must not construct positive-path carriers by
 hand.
 
@@ -3508,6 +3616,17 @@ Required test groups:
 - **uniform persistence contract test**: every retained `S7*Store.get(...)`
   either round-trips an all-column carrier or a ref-based carrier whose named
   loader signature carries all store dependencies and a SQLite connection.
+- **retained store-dependency completeness test**: every store dependency named
+  by `load_guarded_execution_invocation_bundle(...)` or
+  `unpack_guarded_execution_invocation(...)` is owned by
+  `S7GuardedStateStore(...)`; this explicitly includes
+  `artifact_binding_store: S7AuthorizationArtifactBindingStore`.
+- **artifact/bundle carrier-shape completeness test**: every field read by
+  artifact-binding replay, bundle validation, bundle-use lookup, or execution
+  bundle loading appears in the six carrier shape blocks for
+  `S7AuthorizationArtifactInputs`, `S7AuthorizationArtifactBindingInputs`,
+  `S7AuthorizationArtifactBinding`, `S7VoiceConsultationBundleDraft`,
+  `S7VoiceConsultationBundle`, and `S7VoiceBundleUse`.
 - **guarded invocation hash-domain test**: `guarded_execution_invocation_hash is
   excluded from the S7GuardedExecutionInvocation hash domain`; self-hashing is
   impossible.
@@ -3524,6 +3643,23 @@ Required test groups:
 - **route manifest tests**: `live_guarded` rows require mintable execution
   consumer ids; `fail_closed_until_review` and `reviewedly_excluded` rows carry
   `execution_consumer_id=None` plus a closed exclusion reason.
+- **cross-vocabulary restore audit**: `S7_EXECUTION_CONSUMER_IDS`,
+  `NON_MINTABLE_EXECUTION_CONSUMER_IDS`, and
+  `REVIEWED_FUTURE_EXECUTION_CONSUMER_IDS` are pairwise disjoint. Every
+  restored set has the exact v21 target cardinality:
+  `S7_EXECUTION_CONSUMER_IDS has exactly the 20 target values`,
+  `NON_MINTABLE_EXECUTION_CONSUMER_IDS has exactly action_engine_final_mutate`,
+  `REVIEWED_FUTURE_EXECUTION_CONSUMER_IDS has exactly the 22 target values`,
+  and `SURFACE_CLASSES has exactly the 11 credential-free pre-cut values`.
+  `Every retained S7_EXECUTION_CONSUMER_IDS value is emitted` by at least one
+  live-guarded manifest row, derivation row, or reviewed non-mintable
+  rationale. Every live-guarded manifest row's execution consumer id is in
+  `S7_EXECUTION_CONSUMER_IDS`. `Every retained SURFACE_CLASSES value is emitted`
+  by at least one retained manifest row or reviewed coverage rule, and every
+  retained manifest row's surface class is in `SURFACE_CLASSES`.
+- **closed-vocabulary name test**: every type annotation that names a closed
+  vocabulary names an actually defined closed vocabulary; D17 uses
+  `preview_body_class: preview_body_class`.
 - **rollback and ActionEdge tests**: mutation executes only after consumed grant,
   GrantUse, replay-domain verification, trace-pending write, and rollback-plan
   precondition checks.
@@ -3586,7 +3722,7 @@ closed before artifact storage, grant mint, or substrate mutation.
 
 ## Implementation Acceptance Checklist
 
-Before v20 is committed or reviewed, the author runs the following checklist on
+Before v21 is committed or reviewed, the author runs the following checklist on
 `spec.md` and the deferred seed doc:
 
 1. `EXCLUSION_REASON_CODES = frozenset` appears once and covers every retained
@@ -3606,7 +3742,18 @@ Before v20 is committed or reviewed, the author runs the following checklist on
 7. Every retained trace status, D23 state, history-bridge status, exclusion
    reason, route status, and failure reason has a producer/test or reviewed
    unreachable rationale.
-8. The voice-seat founder-signature path still runs through the S7.1-established
+8. Every retained `S7_EXECUTION_CONSUMER_IDS` value is emitted by a live-guarded
+   manifest row, derivation row, or reviewed non-mintable rationale; every
+   retained `SURFACE_CLASSES` value is emitted by a retained manifest row or
+   reviewed coverage rule.
+9. `S7_EXECUTION_CONSUMER_IDS`, `NON_MINTABLE_EXECUTION_CONSUMER_IDS`, and
+   `REVIEWED_FUTURE_EXECUTION_CONSUMER_IDS` are pairwise disjoint.
+10. `artifact_binding_store: S7AuthorizationArtifactBindingStore` appears in
+    `S7GuardedStateStore(...)`, and all store dependencies named by the retained
+    execution bundle loader are owned or explicitly received.
+11. The six artifact/bundle carrier shape blocks appear in the spec.
+12. `preview_body_class: preview_body_class` appears in D17.
+13. The voice-seat founder-signature path still runs through the S7.1-established
    WebAuthn credential, rendered request, artifact mint, atomic consume,
    execution grant, mutation edge, trace, D23 projection, and rollback evidence.
 
