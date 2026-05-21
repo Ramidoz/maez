@@ -261,6 +261,57 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
         self.assertEqual(reserved.artifact_id, first_artifact.artifact_id)
         self.assertEqual(reserved.reservation_token_hash, s7.canonical_hash("first-token"))
 
+    def test_mint_rolls_back_reservation_when_artifact_write_fails(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_guarded_execution import (
+            S7GuardedStateStore,
+            S7VoiceBundleUse,
+            S7VoiceBundleUseStore,
+            S7VoiceSourceBundleValidationResult,
+        )
+
+        artifact = self._artifact()
+        auth_store = s7.S7AuthorizationStore(self._db_path())
+        auth_store.put(artifact)
+        bundle_use_store = S7VoiceBundleUseStore(self._db_path())
+        bundle_use_store.put_unreserved(
+            S7VoiceBundleUse.new_unreserved(
+                request_id=artifact.request_id,
+                source_ref_hash="c" * 64,
+                consultation_id=f"voice-{artifact.artifact_id}",
+                used_at=NOW,
+            )
+        )
+        guarded_store = S7GuardedStateStore(
+            authorization_store=auth_store,
+            voice_bundle_use_store=bundle_use_store,
+        )
+        validation = S7VoiceSourceBundleValidationResult(
+            status="valid_absent",
+            source_bundle_valid=True,
+            mint_eligible=True,
+            authority_projection="valid_absent",
+            failure_reason_code=None,
+        )
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            guarded_store.put_artifact_with_bundle_reservation(
+                artifact=artifact,
+                source_bundle_validation=validation,
+                source_ref_hash="c" * 64,
+                reservation_token="runtime-token-rolled-back",
+                now=NOW,
+            )
+
+        self.assertEqual(self._artifact_count(), 1)
+        bundle_use = bundle_use_store.get_for_source_ref("c" * 64)
+        self.assertIsNotNone(bundle_use)
+        assert bundle_use is not None
+        self.assertEqual(bundle_use.reservation_state, "unreserved")
+        self.assertIsNone(bundle_use.artifact_id)
+        self.assertIsNone(bundle_use.reservation_token_hash)
+        self.assertIsNone(bundle_use.reserved_at)
+
 
 if __name__ == "__main__":
     unittest.main()

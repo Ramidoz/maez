@@ -2370,7 +2370,12 @@ class S7AuthorizationStore:
                 )
             conn.commit()
 
-    def put(self, artifact: S7AuthorizationArtifact) -> None:
+    def put(
+        self,
+        artifact: S7AuthorizationArtifact,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> None:
         created_at = _timestamp_text(artifact.created_at, field="created_at")
         expires_at = _timestamp_text(artifact.expires_at, field="expires_at")
         consumed_at = (
@@ -2378,41 +2383,67 @@ class S7AuthorizationStore:
             if artifact.consumed_at is not None
             else None
         )
+        if connection is not None:
+            self._put_with_connection(
+                connection,
+                artifact=artifact,
+                created_at=created_at,
+                expires_at=expires_at,
+                consumed_at=consumed_at,
+            )
+            return
         with closing(sqlite3.connect(self.db_path)) as conn:
-            conn.execute(
-                """
-                INSERT INTO s7_authorization_artifacts (
-                    artifact_id, request_id, request_envelope_hash,
-                    rendered_text_hash, action_params_hash, precondition_hash,
-                    authority_context_hash, derived_work_class,
-                    derived_aggregation_group, nonce, credential_ref, auth_method,
-                    grant_source, user_presence, user_verification, created_at,
-                    expires_at, consumed_at, consumed_by_request_id, ceremony_kind
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
-                """,
-                (
-                    artifact.artifact_id,
-                    artifact.request_id,
-                    artifact.request_envelope_hash,
-                    artifact.rendered_text_hash,
-                    artifact.action_params_hash,
-                    artifact.precondition_hash,
-                    artifact.authority_context_hash,
-                    artifact.derived_work_class,
-                    artifact.derived_aggregation_group,
-                    artifact.nonce,
-                    artifact.credential_ref,
-                    artifact.auth_method,
-                    artifact.grant_source,
-                    1 if artifact.user_presence else 0,
-                    1 if artifact.user_verification else 0,
-                    created_at,
-                    expires_at,
-                    consumed_at,
-                    artifact.ceremony_kind,
-                ),
+            self._put_with_connection(
+                conn,
+                artifact=artifact,
+                created_at=created_at,
+                expires_at=expires_at,
+                consumed_at=consumed_at,
             )
             conn.commit()
+
+    def _put_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        artifact: S7AuthorizationArtifact,
+        created_at: str,
+        expires_at: str,
+        consumed_at: str | None,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO s7_authorization_artifacts (
+                artifact_id, request_id, request_envelope_hash,
+                rendered_text_hash, action_params_hash, precondition_hash,
+                authority_context_hash, derived_work_class,
+                derived_aggregation_group, nonce, credential_ref, auth_method,
+                grant_source, user_presence, user_verification, created_at,
+                expires_at, consumed_at, consumed_by_request_id, ceremony_kind
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+            """,
+            (
+                artifact.artifact_id,
+                artifact.request_id,
+                artifact.request_envelope_hash,
+                artifact.rendered_text_hash,
+                artifact.action_params_hash,
+                artifact.precondition_hash,
+                artifact.authority_context_hash,
+                artifact.derived_work_class,
+                artifact.derived_aggregation_group,
+                artifact.nonce,
+                artifact.credential_ref,
+                artifact.auth_method,
+                artifact.grant_source,
+                1 if artifact.user_presence else 0,
+                1 if artifact.user_verification else 0,
+                created_at,
+                expires_at,
+                consumed_at,
+                artifact.ceremony_kind,
+            ),
+        )
 
     def consume(self, artifact_id: str, *, request_id: str, now: str) -> bool:
         del artifact_id, request_id, now

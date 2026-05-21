@@ -270,6 +270,7 @@ class S7VoiceBundleUseStore:
         artifact_id: str,
         reservation_token_hash: str,
         reserved_at: str,
+        connection: sqlite3.Connection | None = None,
     ) -> S7VoiceBundleUse:
         _validate_hash64(source_ref_hash, field="source_ref_hash")
         _validate_hash64(reservation_token_hash, field="reservation_token_hash")
@@ -278,39 +279,66 @@ class S7VoiceBundleUseStore:
         if not reserved_at:
             raise ValueError("reserve_for_artifact requires reserved_at")
 
-        existing = self.get_for_source_ref(source_ref_hash)
-        if existing is None:
-            raise ValueError("S7 voice bundle use must exist before reservation")
-        if (
-            existing.reservation_state != "unreserved"
-            or existing.artifact_id is not None
-            or existing.reservation_token_hash is not None
-            or existing.reserved_at is not None
-            or existing.consumed_at is not None
-        ):
-            raise ValueError("S7 voice bundle use must be unreserved before artifact mint")
-
-        with closing(sqlite3.connect(self.db_path)) as conn:
-            cursor = conn.execute(
-                """
-                UPDATE s7_voice_bundle_uses
-                SET artifact_id = ?,
-                    reservation_token_hash = ?,
-                    reservation_state = 'reserved',
-                    reserved_at = ?
-                WHERE source_ref_hash = ?
-                  AND artifact_id IS NULL
-                  AND reservation_token_hash IS NULL
-                  AND reservation_state = 'unreserved'
-                  AND reserved_at IS NULL
-                  AND consumed_at IS NULL
-                """,
-                (artifact_id, reservation_token_hash, reserved_at, source_ref_hash),
+        if connection is not None:
+            return self._reserve_for_artifact_with_connection(
+                connection,
+                source_ref_hash=source_ref_hash,
+                artifact_id=artifact_id,
+                reservation_token_hash=reservation_token_hash,
+                reserved_at=reserved_at,
+                commit=False,
             )
-            if cursor.rowcount != 1:
-                raise ValueError("S7 voice bundle use must be unreserved before artifact mint")
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            return self._reserve_for_artifact_with_connection(
+                conn,
+                source_ref_hash=source_ref_hash,
+                artifact_id=artifact_id,
+                reservation_token_hash=reservation_token_hash,
+                reserved_at=reserved_at,
+                commit=True,
+            )
+
+    def _reserve_for_artifact_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        source_ref_hash: str,
+        artifact_id: str,
+        reservation_token_hash: str,
+        reserved_at: str,
+        commit: bool,
+    ) -> S7VoiceBundleUse:
+        cursor = conn.execute(
+            """
+            UPDATE s7_voice_bundle_uses
+            SET artifact_id = ?,
+                reservation_token_hash = ?,
+                reservation_state = 'reserved',
+                reserved_at = ?
+            WHERE source_ref_hash = ?
+              AND artifact_id IS NULL
+              AND reservation_token_hash IS NULL
+              AND reservation_state = 'unreserved'
+              AND reserved_at IS NULL
+              AND consumed_at IS NULL
+            """,
+            (artifact_id, reservation_token_hash, reserved_at, source_ref_hash),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("S7 voice bundle use must be unreserved before artifact mint")
+        if commit:
             conn.commit()
-        reserved = self.get_for_source_ref(source_ref_hash)
+        row = conn.execute(
+            """
+            SELECT request_id, artifact_id, source_ref_hash, consultation_id,
+                   bundle_use_hash, reservation_token_hash, reservation_state,
+                   reserved_at, consumed_at, used_at
+            FROM s7_voice_bundle_uses
+            WHERE source_ref_hash = ?
+            """,
+            (source_ref_hash,),
+        ).fetchone()
+        reserved = _voice_bundle_use_from_row(row)
         assert reserved is not None
         return reserved
 
@@ -380,11 +408,16 @@ class S7GuardedStateStore:
             raise ValueError("S7.3 artifact mint requires reservation_token")
         if now is None:
             raise ValueError("S7.3 artifact mint requires now")
+        if self.authorization_store.db_path != self.voice_bundle_use_store.db_path:
+            raise ValueError("S7.3 guarded state store requires one SQLite database")
         reservation_token_hash = s7.canonical_hash(reservation_token)
-        self.voice_bundle_use_store.reserve_for_artifact(
-            source_ref_hash=source_ref_hash,
-            artifact_id=artifact.artifact_id,
-            reservation_token_hash=reservation_token_hash,
-            reserved_at=now,
-        )
-        self.authorization_store.put(artifact)
+        with closing(sqlite3.connect(self.authorization_store.db_path)) as conn:
+            self.voice_bundle_use_store.reserve_for_artifact(
+                source_ref_hash=source_ref_hash,
+                artifact_id=artifact.artifact_id,
+                reservation_token_hash=reservation_token_hash,
+                reserved_at=now,
+                connection=conn,
+            )
+            self.authorization_store.put(artifact, connection=conn)
+            conn.commit()
