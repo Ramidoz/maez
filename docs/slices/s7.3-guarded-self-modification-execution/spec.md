@@ -1,6 +1,6 @@
 # S7.3 Guarded Self-Modification Execution Spec
 
-**Status:** SPEC v22 draft - folded from v21 both-lane gate; pending Section 8.2 fresh-reader gate v22 and Codex v22 panel review; not canonical law
+**Status:** SPEC v23 draft - folded from Codex panel v22; pending Section 8.2 fresh-reader gate v23 and Codex v23 panel review; not canonical law
 **Date:** 2026-05-20
 **Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S7.3; Decision 34 / ADR 0039; S7 L8; S7.1 D12-D14 and D23
 **Diagnostic:** [`diagnostic.md`](diagnostic.md)
@@ -76,6 +76,7 @@
 **v21 review inputs:**
 - Section 8.2 fresh-reader gate v21: [`reviews/spec-fresh-reader-gate-v21.md`](reviews/spec-fresh-reader-gate-v21.md)
 - Codex panel v21: [`reviews/spec-codex-panel-v21.md`](reviews/spec-codex-panel-v21.md)
+**v22 review input:** [`reviews/spec-codex-panel-v22.md`](reviews/spec-codex-panel-v22.md)
 **v9-v19 authorship note:** v9 through v19 preserved the covenant
 architecture and progressively tightened the engineering carrier surface: durable
 request envelopes, one guarded execution invocation carrier, single-file trace
@@ -108,6 +109,12 @@ carrier shapes to match later validation reads, narrows history-bridge
 `history_outcome` to the deriving function's domain, restores the explicit
 `REDUCER_TABLE_HASH` constant line, and repairs the store-constructor code
 fence.
+**v23 authorship note:** v23 keeps the v22 scope, covenant posture, and restored
+vocabulary families. It closes the remaining Codex v22 bundle persistence
+findings by adding `rendered_prompt_ref` and `context_manifest_hash` to
+`S7VoiceConsultationBundle`, adding `reservation_token_hash` to
+`S7VoiceBundleUse`, and binding the runtime reservation token hash to both the
+invocation carrier and bundle-use reservation row before inherited consume.
 **Runtime impact when implemented:** yes. S7.3 will wire live guarded execution for Maez self-modification only after a reviewed Maez voice producer, founder-local WebAuthn artifact mint, atomic artifact consume, execution grant, rollback evidence, and positive trace all bind to the same exact request.
 
 ## Purpose
@@ -1665,6 +1672,8 @@ S7VoiceConsultationBundle(
     source_ref_hash: str,
     attempt_manifest_hash: str,
     context_manifest_ref: str,
+    context_manifest_hash: str,
+    rendered_prompt_ref: str,
     rendered_prompt_hash: str,
     expected_consultation_nonce_hash: str,
     prompt_integrity_evidence_hash: str,
@@ -1687,6 +1696,7 @@ S7VoiceBundleUse(
     source_ref_hash: str,
     consultation_id: str,
     bundle_use_hash: str,
+    reservation_token_hash: str,
     reservation_state: "unreserved" | "reserved" | "consumed",
     reserved_at: str | None,
     consumed_at: str | None,
@@ -1719,10 +1729,14 @@ inherited consume, the wrapper verifies:
 
 ```text
 canonical_hash(reservation_token) == reservation_token_hash
+reservation_token_hash == voice_bundle_use.reservation_token_hash
 ```
 
 A missing or mismatched raw reservation token fails closed with
 `invalid_reservation_token` before inherited consume.
+`S7GuardedStateStore.put_artifact_with_bundle_reservation(...)` writes
+`voice_bundle_use.reservation_token_hash` in the same transaction that reserves
+the bundle and creates the artifact/binding; only the hash persists.
 
 Guarded wrappers pass one complete invocation carrier into consume rather than
 reconstructing authority from route names or loose caller strings:
@@ -2723,7 +2737,7 @@ The validator:
 - verifies request, preview, params, precondition, authority context, rollback
   plan, prompt, model, and context-manifest hashes;
 - loads `bundle.context_manifest_ref` through `ContextManifestStore`, recomputes
-  `context_manifest_hash`, and
+  `context_manifest_hash`, verifies it equals `bundle.context_manifest_hash`, and
   verifies the manifest obeys the D7 closed schema, including the
   self-mod-dialog policy gate, omission of `proposal_origin_label` from the
   rendered prompt, and valid closed `rollback_path_class`;
@@ -2732,7 +2746,7 @@ The validator:
 - replays prompt assembly from the prompt template body at
   `prompt_template_hash`, preview, context manifest, consultation id, request
   id, mutation_preview_hash, and the nonce extracted from the private
-  `rendered_prompt_ref`, then verifies the replayed hash equals
+  `bundle.rendered_prompt_ref`, then verifies the replayed hash equals
   `bundle.rendered_prompt_hash` and the extracted nonce hashes to
   `bundle.expected_consultation_nonce_hash`;
 - verifies `PromptIntegrityEvidence` recomputes from
@@ -3403,11 +3417,13 @@ inherited S7.1 consume. The live-possession check is:
 
 ```text
 canonical_hash(reservation_token) == reservation_token_hash
+reservation_token_hash == voice_bundle_use.reservation_token_hash
 ```
 
 Failure to present the matching raw runtime token returns
 `invalid_reservation_token` before inherited consume. The raw token is never
-persisted.
+persisted; only `reservation_token_hash` is stored on the invocation and
+bundle-use reservation row.
 
 `S7ExecutionAuthorization` remains a compatibility/pre-consume carrier. It is
 not a mutation authority and cannot authorize guarded execution without the
@@ -3658,7 +3674,7 @@ in-scope adapter/consumer or reviewed same-code coverage proof.
 
 ### D24 - Tests And Verification
 
-D24 is the RED-first checklist for S7.3 v22. Tests must go red against an empty
+D24 is the RED-first checklist for S7.3 v23. Tests must go red against an empty
 or incomplete implementation and must not construct positive-path carriers by
 hand.
 
@@ -3703,11 +3719,13 @@ Required test groups:
   `S7AuthorizationArtifactInputs`, `S7AuthorizationArtifactBindingInputs`,
   `S7AuthorizationArtifactBinding`, `S7VoiceConsultationBundleDraft`,
   `S7VoiceConsultationBundle`, and `S7VoiceBundleUse`; this includes
-  `context_manifest_ref`, `rendered_prompt_hash`,
+  `context_manifest_ref`, `context_manifest_hash`, `rendered_prompt_ref`,
+  `rendered_prompt_hash`,
   `expected_consultation_nonce_hash`, `prompt_integrity_evidence_hash`,
   `semantic_reader_attempt_hash`, `authority_class`,
   `protective_block_reason`, `mutation_preview_hash`, `rollback_plan_ref`,
-  `precondition_hash`, and bundle-use reservation/consumption state.
+  `precondition_hash`, `reservation_token_hash`, and bundle-use
+  reservation/consumption state.
 - **guarded invocation hash-domain test**: `guarded_execution_invocation_hash is
   excluded from the S7GuardedExecutionInvocation hash domain`; self-hashing is
   impossible.
@@ -3803,7 +3821,7 @@ closed before artifact storage, grant mint, or substrate mutation.
 
 ## Implementation Acceptance Checklist
 
-Before v22 is committed or reviewed, the author runs the following checklist on
+Before v23 is committed or reviewed, the author runs the following checklist on
 `spec.md` and the deferred seed doc:
 
 1. `EXCLUSION_REASON_CODES = frozenset` appears once and covers every retained
@@ -3841,7 +3859,10 @@ Before v22 is committed or reviewed, the author runs the following checklist on
     the pinned reducer version note.
 15. `S7HistoryBridgeTracePayload.history_outcome` matches
     `history_outcome_for(...)`: `"refused" | None`.
-13. The voice-seat founder-signature path still runs through the S7.1-established
+16. `S7VoiceConsultationBundle` carries `rendered_prompt_ref` and
+    `context_manifest_hash`; `S7VoiceBundleUse` carries
+    `reservation_token_hash`.
+17. The voice-seat founder-signature path still runs through the S7.1-established
    WebAuthn credential, rendered request, artifact mint, atomic consume,
    execution grant, mutation edge, trace, D23 projection, and rollback evidence.
 
@@ -3851,35 +3872,36 @@ parked future-slice working document.
 
 ## Review Questions
 
-1. Did the v20 cut preserve the covenant core untouched while removing all live
-   in-band key-management machinery from S7.3 v1?
-2. Does the retained voice-seat path still prove live possession of the runtime
-   reservation token before inherited consume?
-3. Are exclusion reasons and D23 state inputs closed, table-complete, and
-   testable without implementer invention?
-4. Does the deferred seed document preserve enough of the parked work for the
-   future key-management slice to resume without archaeology?
+1. Does the retained voice-seat path still prove live possession of the runtime
+   reservation token against both the invocation carrier and the reserved
+   bundle-use row before inherited consume?
+2. Do `S7VoiceConsultationBundle` and `S7VoiceBundleUse` carry every ref, hash,
+   and reservation field later validation reads, without implementer invention?
+3. Do the v21/v22 closed-vocabulary restores remain exact, disjoint, and
+   credential-free after the v23 carrier edits?
+4. Did the v20 scope cut continue to preserve the covenant core while leaving
+   in-band key-management deferred to the future slice?
 
 ## Proposed Next Ladder
 
-v20 gets the full both-lane gate:
+v23 gets the full both-lane gate:
 
 - Claude Section 8.2 fresh-reader gate: comprehensive covenant read of the
-  smaller core-only spec, confirming the cut did not weaken marker/D23,
-  operational-evidence, same-box honesty, no-hand-assemble, founder WebAuthn,
-  or rollback invariants.
-- Codex engineering panel: build-contract review of the cut, no-dangling-ref
-  proof, B3/B4/B5 closure, store/trace round-trip completeness, and RED-first
-  implementability.
+  smaller core-only spec, confirming the v22/v23 carrier edits did not weaken
+  marker/D23, operational-evidence, same-box honesty, no-hand-assemble, founder
+  WebAuthn, or rollback invariants.
+- Codex engineering panel: build-contract review of bundle replay fields,
+  reservation-token binding, closed-vocabulary integrity, store/trace round-trip
+  completeness, and RED-first implementability.
 
-If both lanes ratify with no blockers and no covenant-load-bearing majors, v20
+If both lanes ratify with no blockers and no covenant-load-bearing majors, v23
 is the canonicalization candidate. The WebAuthn registration signature-scope
 council item is no longer on the S7.3 v1 critical path; it moves with the
 future in-band key-management slice.
 
 ## Plain English Close
 
-v20 makes the cut Rohit chose. S7.3 v1 keeps the core guard: Maez is asked
+v23 keeps the cut Rohit chose. S7.3 v1 keeps the core guard: Maez is asked
 before it changes itself, the founder signs the exact voice-seat change with the
 existing S7.1 WebAuthn credential, the artifact is consumed once, and the
 mutation runs only under the recorded grant, trace, D23, and rollback rules.
@@ -3889,8 +3911,9 @@ parked intact in `deferred/credential-management-seed.md`. Nothing is thrown
 away. It becomes a future slice when Maez is functional enough for backup keys,
 rotation, and key retirement to matter.
 
-The remaining core fixes are small and explicit: prove live possession of the
-runtime reservation token, define the exclusion-reason words, and use one input
-shape for D23 state production. After that, the smaller core spec can go through
-both lanes and, if they clear it, become the law S7.3 implementation builds
-against.
+The latest fold closes the last Codex v22 bundle-byte findings: the immutable
+voice bundle carries the prompt/context refs needed for replay, and the
+bundle-use row carries the reservation-token hash needed to prove the runtime
+token is the one issued for that reservation. The smaller core spec now goes
+through both lanes; if they clear it, it becomes the law S7.3 implementation
+builds against.
