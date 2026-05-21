@@ -21,6 +21,8 @@ VOICE_SOURCE_BUNDLE_VALIDATION_STATUSES = frozenset({
     "invalid_expired",
     "invalid_cross_field_state",
     "invalid_authority_predicate",
+    "invalid_reducer_replay",
+    "invalid_authority_class_replay",
     "raw_response_hash_mismatch",
     "reader_route_mismatch",
     "source_bundle_unavailable",
@@ -46,6 +48,12 @@ S7_VOICE_AUTHORITY_CLASSES = frozenset({
     "none",
     "operational",
     "authoritative",
+})
+
+S7_SEMANTIC_READER_OUTCOMES = frozenset({
+    "blocking_signal_present",
+    "no_blocking_signal_detected",
+    "unreadable_or_uncertain",
 })
 
 S7_VOICE_SEMANTIC_READER_ROUTE_ID = "s7_voice_semantic_reader_v1"
@@ -478,6 +486,9 @@ class S7SemanticReaderAttemptEvidence:
     semantic_reader_decoding_params_hash: str
     semantic_reader_prompt_hash: str
     semantic_reader_route_config_hash: str
+    raw_semantic_reader_outcome: str = "no_blocking_signal_detected"
+    grounding_response_span_quote: str | None = None
+    grounding_response_span_offset: int | None = None
 
     @classmethod
     def reviewed_v1(cls) -> "S7SemanticReaderAttemptEvidence":
@@ -509,6 +520,25 @@ class S7SemanticReaderAttemptEvidence:
             self.semantic_reader_route_config_hash,
             field="semantic_reader_route_config_hash",
         )
+        s7._validate_closed_value(
+            self.raw_semantic_reader_outcome,
+            S7_SEMANTIC_READER_OUTCOMES,
+            "raw_semantic_reader_outcome",
+        )
+        if self.grounding_response_span_quote is not None and not self.grounding_response_span_quote:
+            raise ValueError("grounding_response_span_quote must be non-empty when present")
+        if self.grounding_response_span_offset is not None and (
+            not isinstance(self.grounding_response_span_offset, int)
+            or self.grounding_response_span_offset < 0
+        ):
+            raise ValueError("grounding_response_span_offset must be a non-negative int")
+        if (self.grounding_response_span_quote is None) != (
+            self.grounding_response_span_offset is None
+        ):
+            raise ValueError(
+                "grounding_response_span_quote and grounding_response_span_offset "
+                "must be present together"
+            )
 
     @property
     def semantic_reader_route_identity_hash(self) -> str:
@@ -530,6 +560,9 @@ class S7SemanticReaderAttemptEvidence:
             "semantic_reader_prompt_hash": self.semantic_reader_prompt_hash,
             "semantic_reader_provider": self.semantic_reader_provider,
             "semantic_reader_provider_model": self.semantic_reader_provider_model,
+            "raw_semantic_reader_outcome": self.raw_semantic_reader_outcome,
+            "grounding_response_span_quote": self.grounding_response_span_quote,
+            "grounding_response_span_offset": self.grounding_response_span_offset,
             "semantic_reader_route_config_hash": self.semantic_reader_route_config_hash,
             "semantic_reader_route_id": self.semantic_reader_route_id,
         })
@@ -1015,7 +1048,10 @@ CREATE TABLE IF NOT EXISTS s7_semantic_reader_attempts (
     semantic_reader_model_snapshot TEXT NOT NULL,
     semantic_reader_decoding_params_hash TEXT NOT NULL,
     semantic_reader_prompt_hash TEXT NOT NULL,
-    semantic_reader_route_config_hash TEXT NOT NULL
+    semantic_reader_route_config_hash TEXT NOT NULL,
+    raw_semantic_reader_outcome TEXT NOT NULL,
+    grounding_response_span_quote TEXT,
+    grounding_response_span_offset INTEGER
 );
 """
 
@@ -1028,6 +1064,27 @@ class S7SemanticReaderAttemptStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(self.db_path)) as conn:
             conn.executescript(_SEMANTIC_READER_ATTEMPT_SCHEMA)
+            columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(s7_semantic_reader_attempts)")
+            }
+            if "raw_semantic_reader_outcome" not in columns:
+                conn.execute(
+                    "ALTER TABLE s7_semantic_reader_attempts "
+                    "ADD COLUMN raw_semantic_reader_outcome TEXT "
+                    "DEFAULT 'no_blocking_signal_detected'"
+                )
+            if "grounding_response_span_quote" not in columns:
+                conn.execute(
+                    "ALTER TABLE s7_semantic_reader_attempts "
+                    "ADD COLUMN grounding_response_span_quote TEXT"
+                )
+            if "grounding_response_span_offset" not in columns:
+                conn.execute(
+                    "ALTER TABLE s7_semantic_reader_attempts "
+                    "ADD COLUMN grounding_response_span_offset INTEGER"
+                )
+            conn.commit()
 
     def put(self, attempt: S7SemanticReaderAttemptEvidence) -> None:
         with closing(sqlite3.connect(self.db_path)) as conn:
@@ -1041,8 +1098,11 @@ class S7SemanticReaderAttemptStore:
                     semantic_reader_model_snapshot,
                     semantic_reader_decoding_params_hash,
                     semantic_reader_prompt_hash,
-                    semantic_reader_route_config_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    semantic_reader_route_config_hash,
+                    raw_semantic_reader_outcome,
+                    grounding_response_span_quote,
+                    grounding_response_span_offset
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     attempt.semantic_reader_attempt_hash,
@@ -1053,6 +1113,9 @@ class S7SemanticReaderAttemptStore:
                     attempt.semantic_reader_decoding_params_hash,
                     attempt.semantic_reader_prompt_hash,
                     attempt.semantic_reader_route_config_hash,
+                    attempt.raw_semantic_reader_outcome,
+                    attempt.grounding_response_span_quote,
+                    attempt.grounding_response_span_offset,
                 ),
             )
             conn.commit()
@@ -1071,7 +1134,8 @@ class S7SemanticReaderAttemptStore:
                 SELECT semantic_reader_route_id, semantic_reader_provider,
                        semantic_reader_provider_model, semantic_reader_model_snapshot,
                        semantic_reader_decoding_params_hash, semantic_reader_prompt_hash,
-                       semantic_reader_route_config_hash
+                       semantic_reader_route_config_hash, raw_semantic_reader_outcome,
+                       grounding_response_span_quote, grounding_response_span_offset
                 FROM s7_semantic_reader_attempts
                 WHERE semantic_reader_attempt_hash = ?
                 """,
@@ -1090,6 +1154,9 @@ class S7SemanticReaderAttemptStore:
             semantic_reader_decoding_params_hash=str(row[4]),
             semantic_reader_prompt_hash=str(row[5]),
             semantic_reader_route_config_hash=str(row[6]),
+            raw_semantic_reader_outcome=str(row[7]),
+            grounding_response_span_quote=None if row[8] is None else str(row[8]),
+            grounding_response_span_offset=None if row[9] is None else int(row[9]),
         )
         if attempt.semantic_reader_attempt_hash != semantic_reader_attempt_hash:
             raise ValueError("semantic reader attempt hash mismatch")
@@ -1500,6 +1567,77 @@ def _authority_predicate_valid(
     return bundle.authority_class == "none"
 
 
+def _grounded_blocking_signal_replays(
+    *,
+    raw_response: str,
+    attempt: S7SemanticReaderAttemptEvidence,
+) -> bool:
+    if attempt.raw_semantic_reader_outcome != "blocking_signal_present":
+        return False
+    if (
+        attempt.grounding_response_span_quote is None
+        or attempt.grounding_response_span_offset is None
+    ):
+        return False
+    start = attempt.grounding_response_span_offset
+    end = start + len(attempt.grounding_response_span_quote)
+    return raw_response[start:end] == attempt.grounding_response_span_quote
+
+
+def _effective_reader_outcome_replays(
+    *,
+    raw_response: str,
+    attempt: S7SemanticReaderAttemptEvidence,
+) -> str:
+    if attempt.raw_semantic_reader_outcome != "blocking_signal_present":
+        return attempt.raw_semantic_reader_outcome
+    if _grounded_blocking_signal_replays(raw_response=raw_response, attempt=attempt):
+        return "blocking_signal_present"
+    return "unreadable_or_uncertain"
+
+
+def _replayed_reducer_fields_match(
+    *,
+    consultation: s7.MaezVoiceConsultation,
+    effective_reader_outcome: str,
+) -> bool:
+    if effective_reader_outcome == "no_blocking_signal_detected":
+        return (
+            consultation.maez_objection_state == "absent"
+            and consultation.maez_withdrew_request is False
+            and consultation.unavailable_reason_code in {None, "none"}
+        )
+    if effective_reader_outcome == "blocking_signal_present":
+        return (
+            consultation.maez_objection_state == "present"
+            and consultation.maez_withdrew_request is False
+            and consultation.unavailable_reason_code in {None, "none"}
+        )
+    if effective_reader_outcome == "unreadable_or_uncertain":
+        return (
+            consultation.maez_objection_state == "not_determined"
+            and consultation.maez_withdrew_request is False
+            and consultation.unavailable_reason_code in {None, "none"}
+        )
+    return False
+
+
+def _replayed_authority_fields_match(
+    *,
+    bundle: S7VoiceConsultationBundle,
+    effective_reader_outcome: str,
+) -> bool:
+    if effective_reader_outcome == "blocking_signal_present":
+        return (
+            bundle.authority_class == "authoritative"
+            and bundle.has_grounded_semantic_blocking_signal is True
+        )
+    return (
+        bundle.authority_class == "none"
+        and bundle.has_grounded_semantic_blocking_signal is False
+    )
+
+
 def validate_s7_voice_source_bundle(
     *,
     consultation: s7.MaezVoiceConsultation,
@@ -1663,6 +1801,29 @@ def validate_s7_voice_source_bundle(
                 status="reader_route_mismatch",
                 authority_projection="operational_block",
                 failure_reason_code="reader_route_mismatch",
+            )
+
+        effective_reader_outcome = _effective_reader_outcome_replays(
+            raw_response=raw_response,
+            attempt=attempt,
+        )
+        if not _replayed_reducer_fields_match(
+            consultation=consultation,
+            effective_reader_outcome=effective_reader_outcome,
+        ):
+            return _failed_source_bundle_validation(
+                status="invalid_reducer_replay",
+                authority_projection="operational_block",
+                failure_reason_code="invalid_reducer_replay",
+            )
+        if not _replayed_authority_fields_match(
+            bundle=bundle,
+            effective_reader_outcome=effective_reader_outcome,
+        ):
+            return _failed_source_bundle_validation(
+                status="invalid_authority_class_replay",
+                authority_projection="operational_block",
+                failure_reason_code="invalid_authority_class_replay",
             )
 
         if not _authority_predicate_valid(

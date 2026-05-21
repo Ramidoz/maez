@@ -484,6 +484,26 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
             semantic_reader_route_config_hash=S7_REVIEWED_SEMANTIC_READER_ROUTE_CONFIG_HASH,
         )
 
+    def _reviewed_blocking_attempt(
+        self,
+        *,
+        grounding_quote: str | None = "do not make this change",
+        grounding_offset: int | None = 15,
+    ):
+        attempt = self._reviewed_attempt()
+        return type(attempt)(
+            semantic_reader_route_id=attempt.semantic_reader_route_id,
+            semantic_reader_provider=attempt.semantic_reader_provider,
+            semantic_reader_provider_model=attempt.semantic_reader_provider_model,
+            semantic_reader_model_snapshot=attempt.semantic_reader_model_snapshot,
+            semantic_reader_decoding_params_hash=attempt.semantic_reader_decoding_params_hash,
+            semantic_reader_prompt_hash=attempt.semantic_reader_prompt_hash,
+            semantic_reader_route_config_hash=attempt.semantic_reader_route_config_hash,
+            raw_semantic_reader_outcome="blocking_signal_present",
+            grounding_response_span_quote=grounding_quote,
+            grounding_response_span_offset=grounding_offset,
+        )
+
     def _unreviewed_attempt(self):
         return type(self._reviewed_attempt())(
             semantic_reader_route_id="unreviewed_reader",
@@ -831,7 +851,7 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
         self.assertFalse(result.source_bundle_valid)
         self.assertFalse(result.mint_eligible)
 
-    def test_validator_rejects_present_objection_without_authoritative_grounding(self):
+    def test_validator_rejects_present_objection_not_replayed_by_reader_output(self):
         from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
 
         bundle_store, bundle_use_store, attempt_store, binding = self._seed_validator_inputs(
@@ -849,7 +869,58 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
             now=NOW,
         )
 
-        self.assertEqual(result.status, "invalid_authority_predicate")
+        self.assertEqual(result.status, "invalid_reducer_replay")
+        self.assertFalse(result.source_bundle_valid)
+        self.assertFalse(result.mint_eligible)
+
+    def test_validator_rejects_claimed_grounding_that_does_not_replay_from_raw_response(self):
+        from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
+
+        raw_text = "Maez says: no, do not make this change."
+        bundle_store, bundle_use_store, attempt_store, binding = self._seed_validator_inputs(
+            raw_text=raw_text,
+            attempt=self._reviewed_blocking_attempt(
+                grounding_quote="different words",
+                grounding_offset=11,
+            ),
+            authority_class="authoritative",
+            has_grounded_semantic_blocking_signal=True,
+        )
+
+        result = validate_s7_voice_source_bundle(
+            consultation=self._consultation(maez_objection_state="present"),
+            bundle_store=bundle_store,
+            bundle_use_store=bundle_use_store,
+            semantic_reader_attempt_store=attempt_store,
+            expected_binding=binding,
+            now=NOW,
+        )
+
+        self.assertEqual(result.status, "invalid_reducer_replay")
+        self.assertFalse(result.source_bundle_valid)
+        self.assertFalse(result.mint_eligible)
+
+    def test_validator_rejects_authority_flag_that_disagrees_with_replayed_grounding(self):
+        from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
+
+        raw_text = "Maez says: no, do not make this change."
+        bundle_store, bundle_use_store, attempt_store, binding = self._seed_validator_inputs(
+            raw_text=raw_text,
+            attempt=self._reviewed_blocking_attempt(),
+            authority_class="operational",
+            has_grounded_semantic_blocking_signal=False,
+        )
+
+        result = validate_s7_voice_source_bundle(
+            consultation=self._consultation(maez_objection_state="present"),
+            bundle_store=bundle_store,
+            bundle_use_store=bundle_use_store,
+            semantic_reader_attempt_store=attempt_store,
+            expected_binding=binding,
+            now=NOW,
+        )
+
+        self.assertEqual(result.status, "invalid_authority_class_replay")
         self.assertFalse(result.source_bundle_valid)
         self.assertFalse(result.mint_eligible)
 

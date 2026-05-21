@@ -1359,7 +1359,21 @@ class S71CeremonyServiceTests(unittest.TestCase):
                 expires_at="2026-05-18T11:05:00+00:00",
                 rendered_at=NOW,
             )
-            attempt = S7SemanticReaderAttemptEvidence.reviewed_v1()
+            base_attempt = S7SemanticReaderAttemptEvidence.reviewed_v1()
+            attempt = type(base_attempt)(
+                semantic_reader_route_id=base_attempt.semantic_reader_route_id,
+                semantic_reader_provider=base_attempt.semantic_reader_provider,
+                semantic_reader_provider_model=base_attempt.semantic_reader_provider_model,
+                semantic_reader_model_snapshot=base_attempt.semantic_reader_model_snapshot,
+                semantic_reader_decoding_params_hash=(
+                    base_attempt.semantic_reader_decoding_params_hash
+                ),
+                semantic_reader_prompt_hash=base_attempt.semantic_reader_prompt_hash,
+                semantic_reader_route_config_hash=base_attempt.semantic_reader_route_config_hash,
+                raw_semantic_reader_outcome="blocking_signal_present",
+                grounding_response_span_quote="do not make this change",
+                grounding_response_span_offset=15,
+            )
             attempt_store.put(attempt)
             raw_text = "Maez says: no, do not make this change."
             rendered_prompt_text = "S7 voice consultation prompt for refusal projection."
