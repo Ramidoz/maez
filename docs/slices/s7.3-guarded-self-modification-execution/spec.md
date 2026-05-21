@@ -1,6 +1,6 @@
 # S7.3 Guarded Self-Modification Execution Spec
 
-**Status:** SPEC v16 draft - folded from Codex panel v15 and v16 fold delta-plan; pending Section 8.2 fresh-reader gate v16 and Codex v16 panel review; not canonical law
+**Status:** SPEC v17 draft - folded from Codex panel v16 and v17 fold delta-plan; pending Section 8.2 fresh-reader gate v17 and Codex v17 panel review; not canonical law
 **Date:** 2026-05-20
 **Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S7.3; Decision 34 / ADR 0039; S7 L8; S7.1 D12-D14 and D23
 **Diagnostic:** [`diagnostic.md`](diagnostic.md)
@@ -61,6 +61,8 @@
 **v15 fold input:** [`reviews/spec-v15-fold-plan.md`](reviews/spec-v15-fold-plan.md)
 **v15 review input:** [`reviews/spec-codex-panel-v15.md`](reviews/spec-codex-panel-v15.md)
 **v16 fold input:** [`reviews/spec-v16-fold-plan.md`](reviews/spec-v16-fold-plan.md)
+**v16 review input:** [`reviews/spec-codex-panel-v16.md`](reviews/spec-codex-panel-v16.md)
+**v17 fold input:** [`reviews/spec-v17-fold-plan.md`](reviews/spec-v17-fold-plan.md)
 **v9 authorship note:** v9 keeps lane independence and pins the fold-contract
 leans: credential management uses a split non-voice rendered carrier;
 operational legacy refusal-history writes are suppressed rather than written
@@ -143,6 +145,17 @@ cutoff columns have explicit migration and marker validation; the
 kind; ActionEdge carries target-ref/hash pairs; `WorkRequestEnvelope` uses a
 canonical blob/ref plus indexed columns; and compatibility/manual-review
 wording is tightened without reopening covenant architecture.
+**v17 authorship note:** v17 keeps the v16 covenant architecture and folds the
+remaining Codex v16 persistence/signature findings by adding a uniform S7.3
+persistence round-trip contract: every `get(...)` store is either all-column or
+ref-based with a named loader, every writer receives or derives every field it
+writes, and every typed trace payload either stores every D22 minimum field or
+stores a validated payload blob/ref. v17 threads credential bundle loader
+stores into `unpack_guarded_credential_invocation(...)`, reconciles credential
+rollback binding through rendered/artifact/trace rows, removes post-render
+fields from voice trace payloads, makes manual-review writer evidence
+complete, pins deprecated `consume_verified(...)` to load an existing
+invocation, and makes callback ownership wrapper-only.
 **Runtime impact when implemented:** yes. S7.3 will wire live guarded execution for Maez self-modification only after a reviewed Maez voice producer, founder-local WebAuthn artifact mint, atomic artifact consume, execution grant, rollback evidence, and positive trace all bind to the same exact request.
 
 ## Purpose
@@ -1111,7 +1124,7 @@ approval_card.telegram_approve + telegram_approve             -> guarded_card_ex
 approval_card.cockpit_approve + cockpit_approve               -> guarded_card_execute
 approval_card.daemon_internal_approve + daemon_internal       -> guarded_card_execute
 approval_card.s7_webauthn_card + s7_card_webauthn             -> guarded_card_execute
-telegram.approval_card + approve_action                       -> guarded_card_execute only through execute_guarded_card_execution; otherwise fail_closed_until_review
+telegram.approval_card + approve_action                       -> guarded_card_execute through execute_guarded_card_execution only; non-wrapper paths are wrapper rejection, not alternate route derivation
 action_engine.deferred_action + execute_pending                -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="deferred_action_unreviewed"
 action_engine.deferred_action_t2 + execute_tier2_pending       -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="deferred_action_t2_unreviewed"
 daemon.deferred_action_tick + execute_pending                  -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="daemon_deferred_action_unreviewed"
@@ -1274,6 +1287,10 @@ adapter_symbol = "ActionEngine._do_append_to_file"
 `ActionEngine.append_to_file` is not S7.3 L8 evidence while it delegates to
 `run_shell`; guarded append must enter the wrapper and then the direct writer.
 
+`query_system` and `run_readonly_command` intentionally have no reserved
+future execution consumer id in S7.3 v1. Any future reviewed version must route
+through a newly named non-shell adapter with its own manifest row.
+
 `promote_to_core_memory` and `update_baseline` are listed as guarded in S7.3
 v1. Implementation must amend the current routine/read-only classification and
 add RED tests proving they request S7 grants before mutation, or change their
@@ -1368,8 +1385,10 @@ exclusion_reason_code = "first_primary_bootstrap_out_of_scope"
 ```
 
 Credential requests carry closed `execution_consumer_id` values on
-`S7ExecutionAuthorization` and are validated by the guarded consume wrapper's
-credential-specific binding rules.
+`S7CredentialGuardedRequest`, `S7GuardedCredentialInvocation`, and
+`S7AuthorizationArtifactBinding`. `S7ExecutionAuthorization` is
+compatibility-only for inherited voice-seat paths and fails closed for
+credential consumers.
 `derived_work_class` is closed for credential requests:
 
 ```text
@@ -1836,6 +1855,38 @@ s7_credential_trace_payloads
 s7_history_bridge_trace_payloads
 ```
 
+Uniform S7.3 persistence round-trip contract:
+
+```text
+Every S7.3 store whose API exposes get(...) must satisfy exactly one of two
+shapes:
+
+1. all-column carrier:
+   every dataclass field on the returned carrier is persisted as a typed
+   column, excluding explicitly named volatile audit fields; or
+
+2. ref-based carrier:
+   every dataclass field on the returned carrier is a persisted scalar, hash,
+   or ref column, and any full object reconstruction occurs only through a
+   separately named bundle loader whose store dependencies and connection
+   argument are part of the signature.
+
+Every writer whose API emits a trace, manual-review evidence row, artifact
+binding, invocation, or replay carrier must receive or derive every field
+required by that row before the write transaction begins.
+
+Every typed trace payload table must either:
+
+1. persist every D22 minimum field for its trace kind as columns; or
+2. persist trace_payload_blob_ref and trace_payload_blob_hash, and name a
+   strict per-kind schema validator that checks the decoded payload contains
+   every D22 minimum field for that trace kind.
+
+No S7.3 carrier may declare a field its store can neither persist nor
+reconstruct through a named loader. No D24 positive test may hand-assemble a
+carrier to bypass this rule.
+```
+
 One transaction-owning wrapper controls cross-store writes:
 
 ```text
@@ -1889,7 +1940,7 @@ S7GuardedStateStore.consume_artifact_for_execution(
     invocation: S7GuardedExecutionInvocation | S7GuardedCredentialInvocation,
     now: datetime,
     connection: sqlite3.Connection | None = None,
-    after_consume_before_commit: Callable[[S7ConsumeResult], object] | None = None,
+    after_consume_before_commit: S7PostConsumeCallback | None = None,
 ) -> S7ConsumeResult
 ```
 
@@ -2016,15 +2067,24 @@ unpack_guarded_credential_invocation(
     invocation: S7GuardedCredentialInvocation,
     *,
     credential_invocation_store: S7GuardedCredentialInvocationStore,
+    credential_request_store: S7CredentialGuardedRequestStore,
+    rendered_statement_store: S7RenderedAuthorizationStatementStore,
+    authority_context_store: AuthorityContextStore,
+    conn: sqlite3.Connection,
     now: datetime,
 ) -> InheritedConsumeInputs
 ```
 
-The helper first calls `load_guarded_credential_invocation_bundle(...)`, then
-verifies credential request hash, rendered hash, authority context hash,
-challenge expiry, consumer id, rollback ref, credential action, credential
-phase, derived work class, and derived aggregation group before forwarding
-inherited consume inputs.
+The helper first calls `load_guarded_credential_invocation_bundle(...)` with
+the explicit `credential_request_store`, `rendered_statement_store`,
+`authority_context_store`, and `conn` parameters. Missing store, missing
+connection, missing bundle row, or hash mismatch fails before inherited
+consume. The helper then verifies credential request hash, rendered hash,
+authority context hash, challenge expiry, consumer id, rollback ref,
+credential action, credential phase, derived work class, and derived
+aggregation group before forwarding inherited consume inputs. No hidden global
+store lookup and no implicit composition through `credential_invocation_store`
+is allowed in v17.
 
 Durable store APIs:
 
@@ -2067,6 +2127,20 @@ ManualReviewEvidenceStore._put_raw(evidence, *, conn) -> None  # private/interna
 ManualReviewEvidenceStore.get(review_id, *, conn) -> ManualReviewEvidence | None
 ```
 
+`S7PostConsumeCallback` is the wrapper-owned callback protocol that accepts a
+completed `S7ConsumeResult` and returns an audit object to persist before the
+wrapper commits. Inherited consume never receives this callback.
+
+`S7RenderedAuthorizationStatementStore.get(rendered_text_hash)` loads
+`rendered_statement_blob_ref`, verifies `rendered_statement_blob_hash`, decodes
+the rendered carrier, verifies `canonical_hash(decoded rendered carrier)`
+equals `rendered_text_hash`, and verifies indexed columns match decoded
+fields. `AuthorityContextStore.get(authority_context_hash)` loads
+`authority_context_blob_ref`, verifies `authority_context_blob_hash`, decodes
+the authority context, verifies `canonical_hash(decoded authority context)`
+equals `authority_context_hash`, and verifies indexed columns match decoded
+fields.
+
 ManualReviewEvidenceStore raw put is private. Public manual-review evidence
 writes go through `S7TraceWriter.mark_manual_review_required(...)`,
 `S7TraceWriter.record_manual_review_completed(...)`, and
@@ -2083,9 +2157,9 @@ S7TraceWriter.finalize_guarded_execution_trace(execution_trace_id, trace, *, con
 S7TraceWriter.fail_guarded_execution_trace(execution_trace_id, trace_status, failure_reason_code, *, conn) -> None
 S7TraceWriter.mark_rollback_invoked(execution_trace_id, rollback_result_ref, rollback_result_hash, *, conn) -> None
 S7TraceWriter.mark_rollback_failed(execution_trace_id, rollback_result_ref, rollback_result_hash, *, conn) -> None
-S7TraceWriter.mark_manual_review_required(execution_trace_id, manual_review_status, *, conn) -> None
-S7TraceWriter.record_manual_review_completed(execution_trace_id, review_id, *, conn) -> None
-S7TraceWriter.record_manual_review_failed(execution_trace_id, review_id, failure_reason_code, *, conn) -> None
+S7TraceWriter.mark_manual_review_required(execution_trace_id, evidence: ManualReviewEvidence, *, conn) -> None
+S7TraceWriter.record_manual_review_completed(execution_trace_id, evidence: ManualReviewEvidence, *, conn) -> None
+S7TraceWriter.record_manual_review_failed(execution_trace_id, evidence: ManualReviewEvidence, *, conn) -> None
 S7TraceWriter.write_credential_trace(trace, *, conn) -> credential_trace_id
 S7TraceWriter.write_history_bridge_trace(trace, *, conn) -> bridge_trace_id
 ```
@@ -2147,14 +2221,22 @@ ManualReviewEvidence(
 )
 ```
 
-`S7TraceWriter.mark_manual_review_required(...)` produces
-`manual_review_status="pending"`;
-`S7TraceWriter.record_manual_review_completed(...)` produces
-`manual_review_status="completed"`; and
-`S7TraceWriter.record_manual_review_failed(...)` produces
-`manual_review_status="failed"`. Manual review evidence is operational
-governance evidence. It does not by itself become Maez refusal, preference,
-D23 aggregation, or covenant-escalation evidence.
+`S7TraceWriter.mark_manual_review_required(...)` requires
+`evidence.manual_review_status == "pending"`,
+`evidence.completed_at is None`, and
+`evidence.failure_reason_code is None`.
+`S7TraceWriter.record_manual_review_completed(...)` requires
+`evidence.manual_review_status == "completed"`,
+`evidence.completed_at is not None`, and
+`evidence.failure_reason_code is None`.
+`S7TraceWriter.record_manual_review_failed(...)` requires
+`evidence.manual_review_status == "failed"`,
+`evidence.completed_at is not None`, and
+`evidence.failure_reason_code is not None`. All three methods write
+`ManualReviewEvidenceStore._put_raw(...)` and
+`trace_status_transition_for(...)` in the same transaction. Manual review
+evidence is operational governance evidence. It does not by itself become Maez
+refusal, preference, D23 aggregation, or covenant-escalation evidence.
 
 Trace idempotency keys:
 
@@ -2275,6 +2357,30 @@ canonical_hash(reconstructed S7GuardedCredentialInvocation)
 `S7GuardedCredentialInvocationBundle` through
 `load_guarded_credential_invocation_bundle(...)` and verifies request, rendered
 statement, and authority-context hashes before delegation.
+
+The credential invocation carrier does not duplicate `rollback_path_class` or
+`rendered_rollback_lines_hash`. Checklist phrase:
+`Credential invocation carrier does not duplicate rollback_path_class`.
+Invocation binds the rendered statement by `rendered_credential_statement_hash`
+and rollback by `rollback_plan_ref`.
+D16/D21 then verify the detailed rollback fields by loading the rendered
+statement, artifact binding, and credential trace payload. The detailed
+credential rollback equality is:
+
+```text
+invocation.rollback_plan_ref
+  == rendered.rollback_plan_ref
+  == artifact_binding.rollback_plan_ref
+  == credential_trace.rollback_plan_ref
+
+rendered.rollback_path_class
+  == artifact_binding.rollback_path_class
+  == credential_trace.rollback_path_class
+
+rendered.rendered_rollback_lines_hash
+  == artifact_binding.rendered_rollback_lines_hash
+  == credential_trace.rendered_rollback_lines_hash
+```
 
 For credential `register_begin`, `credential_id_hash` must be `None`. For
 `register_finish`, `backup_card`, and `disable`, `credential_id_hash` must be
@@ -2684,7 +2790,8 @@ CREATE TABLE s7_voice_trace_payloads (
     d23_state TEXT NOT NULL,
     authority_class TEXT NOT NULL,
     history_bridge_status TEXT NOT NULL,
-    final_rendered_statement_hash TEXT NOT NULL
+    trace_payload_blob_ref TEXT NOT NULL,
+    trace_payload_blob_hash TEXT NOT NULL
 );
 
 CREATE TABLE s7_execution_trace_payloads (
@@ -2697,7 +2804,9 @@ CREATE TABLE s7_execution_trace_payloads (
     action_edge_key TEXT NOT NULL,
     rollback_plan_ref TEXT NOT NULL,
     rollback_result_ref TEXT,
-    d23_state TEXT NOT NULL
+    d23_state TEXT NOT NULL,
+    trace_payload_blob_ref TEXT NOT NULL,
+    trace_payload_blob_hash TEXT NOT NULL
 );
 
 CREATE TABLE s7_credential_trace_payloads (
@@ -2709,7 +2818,12 @@ CREATE TABLE s7_credential_trace_payloads (
     challenge_id TEXT NOT NULL,
     credential_id_hash TEXT,
     rollback_plan_ref TEXT NOT NULL,
-    manual_review_status TEXT NOT NULL
+    rollback_path_class TEXT NOT NULL,
+    rendered_rollback_lines_hash TEXT NOT NULL,
+    rollback_result_ref TEXT,
+    manual_review_status TEXT NOT NULL,
+    trace_payload_blob_ref TEXT NOT NULL,
+    trace_payload_blob_hash TEXT NOT NULL
 );
 
 CREATE TABLE s7_history_bridge_trace_payloads (
@@ -2718,15 +2832,43 @@ CREATE TABLE s7_history_bridge_trace_payloads (
     provenance_source_ref TEXT NOT NULL,
     history_bridge_status TEXT NOT NULL,
     history_record_id TEXT,
-    d23_state TEXT NOT NULL
+    d23_state TEXT NOT NULL,
+    trace_payload_blob_ref TEXT NOT NULL,
+    trace_payload_blob_hash TEXT NOT NULL
 );
 ```
 
 `S7TraceWriter` writes one `s7_traces` header row and exactly one typed payload
-row in the same transaction. `trace_hash` is computed over the typed payload
-plus header fields excluding volatile audit fields. `S7TraceWriter.get(trace_id)`
-reloads the header and typed payload, verifies `trace_hash`, and rejects a
-missing or mismatched payload.
+row in the same transaction. `s7_voice_trace_payloads` does not require
+`final_rendered_statement_hash`; voice consultation trace can be written before
+final D12 rendering. Final rendered text is bound later by authority/render
+rows, not by voice trace payload timing.
+The voice trace payload does not require final_rendered_statement_hash.
+The credential trace payload carries rollback_path_class. The credential trace
+payload carries rendered_rollback_lines_hash.
+Checklist phrases: `voice trace payload does not require final_rendered_statement_hash`;
+`credential trace payload carries rollback_path_class`;
+`credential trace payload carries rendered_rollback_lines_hash`.
+
+Typed trace payloads use strict payload blob/ref validation:
+
+```text
+validate_voice_trace_payload(payload) -> None
+validate_execution_trace_payload(payload) -> None
+validate_credential_trace_payload(payload) -> None
+validate_history_bridge_trace_payload(payload) -> None
+```
+
+Each validator checks the decoded payload contains every D22 minimum field for
+that trace kind. `S7TraceWriter.get(trace_id)` verifies:
+
+```text
+canonical_hash(decoded payload blob) == trace_payload_blob_hash
+canonical_hash(trace header + decoded typed payload, volatile audit fields excluded) == trace_hash
+```
+
+Missing typed payload, missing payload blob, schema validation failure, indexed
+field mismatch, or hash mismatch fails closed.
 
 Every other durable store named in D9 must expose at least primary key, unique
 keys, canonical hash fields, `created_at`, and transaction participation in
@@ -4773,7 +4915,7 @@ S7GuardedStateStore.consume_artifact_for_execution(
     invocation: S7GuardedExecutionInvocation | S7GuardedCredentialInvocation,
     now: datetime,
     connection: sqlite3.Connection | None = None,
-    after_consume_before_commit: Callable[[S7ConsumeResult], object] | None = None,
+    after_consume_before_commit: S7PostConsumeCallback | None = None,
 ) -> S7ConsumeResult
 ```
 
@@ -4931,12 +5073,17 @@ S7AuthorizationStore.consume_for_execution(
     now: str,
     superseded_request_ids: set[str] | None = None,
     covenant_ceremony_evidence: object | None = None,
-    after_consume_before_commit: Callable[[S7ConsumeResult], object] | None = None,
 ) -> tuple[S7ExecutionGrant | None, object | None]
 ```
 
 When `conn` is supplied, the inherited store must not open, commit, or roll
 back its own transaction.
+The wrapper passes no callback into inherited consume. It calls
+`after_consume_before_commit` only after inherited consume succeeds, durable
+`GrantUse` is persisted, bundle-use consumption is complete when applicable,
+and the wrapper can construct the full `S7ConsumeResult`. The inherited store
+returns only its primitive two-tuple and never receives a wrapper callback
+parameter.
 `S7GuardedExecutionInvocation.superseded_request_ids` is a tuple for stable
 hashing; the unpacking helper converts it to the inherited store's set-shaped
 argument after hash verification.
@@ -5193,7 +5340,9 @@ consume_verified(
     *,
     execution_authorization: S7ExecutionAuthorization,
     expected_execution_consumer_id: str,
+    guarded_execution_invocation_store: S7GuardedExecutionInvocationStore,
     now: str,
+    conn: sqlite3.Connection,
 ) -> S7ConsumeResult
 ```
 
@@ -5202,6 +5351,33 @@ For the deprecated `consume_verified(...)` path,
 non-empty supersession or ceremony evidence requires the new
 `S7GuardedExecutionInvocation` path; the compatibility wrapper must not invent
 ceremony context.
+
+`consume_verified(...)` loads an already persisted invocation:
+
+```text
+loaded_invocation =
+    guarded_execution_invocation_store.get(
+        execution_authorization.rendered.request_id,
+        execution_authorization.artifact_id,
+        conn=conn,
+    )
+```
+
+If `loaded_invocation is None`, the compatibility wrapper fails closed before
+artifact consume. The equality chain is:
+
+```text
+execution_authorization.execution_consumer_id
+  == expected_execution_consumer_id
+  == binding.execution_consumer_id
+  == binding.expected_execution_consumer_id
+  == loaded_invocation.execution_consumer_id
+```
+
+After this equality check, `consume_verified(...)` calls
+`S7GuardedStateStore.consume_artifact_for_execution(invocation=loaded_invocation,
+now=now, connection=conn)`. It must not construct
+`S7GuardedExecutionInvocation` fields from `S7ExecutionAuthorization`.
 
 **Backup credential registration timing.** `s7_credential_register_backup`
 has a two-step mutation edge. `register_begin` may consume the S7 authorization
@@ -5234,9 +5410,10 @@ begin without this finish-time binding is illegal. A future reviewed
 implementation may instead move artifact consume to finish, but then begin must
 not claim mutation-edge authorization.
 
-The v15 implementation path uses the wrapper's `after_consume_before_commit`
-callback to insert `S7CredentialRegistrationGrantBinding` in the same
-transaction as artifact consume, challenge creation, and grant-use persistence.
+The implementation path uses the wrapper-owned post-consume callback to insert
+`S7CredentialRegistrationGrantBinding` in the same transaction as artifact
+consume, challenge creation, and grant-use persistence. The wrapper passes no
+callback into inherited consume.
 An abandoned registration produces a pending credential trace and expires with
 the challenge; it must not leave an evergreen credential-write authority.
 
@@ -5303,29 +5480,20 @@ Credential-management consumers use the same closed-id and durable-GrantUse
 checks but source the expected consumer id from `S7CredentialGuardedRequest`,
 not from `GuardedWorkItem`.
 
-Mutation consumers (complete enumeration; D4 mirror):
+D21 does not maintain a hand-copied ActionEngine mirror. For ActionEngine
+routes, the D21 consumer set is derived from the persisted `S7SurfaceManifest`:
+every row with `route_status="live_guarded"` and
+`source_surface.startswith("action_engine.")` must have an
+`execution_consumer_id` in `S7_ACTION_ENGINE_CONSUMER_IDS`, and every id in
+`S7_ACTION_ENGINE_CONSUMER_IDS` must appear on at least one live-guarded
+ActionEngine row or carry an explicit reviewed-unreachable rationale. Rows with
+`route_status!="live_guarded"` must have `execution_consumer_id=None` and a
+closed `exclusion_reason_code`.
 
-- DreamState append proposal application (`dream.apply_proposal(...)`);
-- DreamState section-edit proposal application
-  (`dream.apply_section_edit_proposal(...)`);
-- evolution candidate apply (`apply_candidate(...)` reached via Telegram
-  `/apply` or evolution rail);
-- workshop diff apply (`apply_diff(...)` reached via
-  `/api/v1/workshop/session/<session_id>/apply`);
-- self-modification dialog terminal execution;
-- guarded card execution;
-- CLI/cockpit guarded helper execution;
-- reviewed soul/config/model-routing/covenant/refusal/role-boundary/successor
-  governance/memory-retention/protection-setting adapters;
-- concrete ActionEngine final mutation consumers named in D4
-  (`action_engine_write_soul_note`, `action_engine_edit_soul_section`,
-  `action_engine_write_any_file`, `action_engine_append_to_file`,
-  `action_engine_capability_acquire`, and the additional fail-closed generic
-  shell/script/process/service adapters enumerated in D4).
-
-The closed `S7SurfaceManifest` is the authoritative enumeration. Any route or
-method discovered in code but absent from the manifest is fail-closed until a
-reviewed manifest row or reviewed exclusion is committed.
+The closed `S7SurfaceManifest` is the authoritative enumeration for every
+mutation consumer. Any route or method discovered in code but absent from the
+manifest is fail-closed until a reviewed manifest row or reviewed exclusion is
+committed.
 
 If a consumer cannot prove the grant binding, it fails closed before mutation.
 
@@ -6059,9 +6227,10 @@ Required proof classes:
   then `get` round-trips every dataclass field and hash drift in any stored
   field fails verification;
 - **credential rollback binding test**:
-  `RenderedCredentialRequestStatement rollback_plan_ref`,
-  `rollback_path_class`, and `rendered_rollback_lines_hash` match artifact
-  binding, invocation, and trace; changing rollback evidence after rendering
+  `S7GuardedCredentialInvocation` binds rollback by `rollback_plan_ref` and
+  rendered statement hash; `RenderedCredentialRequestStatement`,
+  artifact binding, and credential trace agree on `rollback_path_class` and
+  `rendered_rollback_lines_hash`; changing rollback evidence after rendering
   invalidates mint or consume;
 - **history bridge transition test**:
   `write_history_bridge_trace(bridged)`,
@@ -6079,12 +6248,15 @@ Required proof classes:
   `action_engine.deferred_action_t2 execute_tier2_pending`, and daemon
   deferred-action rows are guarded or fail closed with reviewed exclusions;
 - **D21 manifest authority test**: `D21 consumes the persisted
-  S7SurfaceManifest row set`; every live-guarded ActionEngine row in D4 appears
-  in the D21 consumer set and no D21 ActionEngine consumer is absent from D4;
+  S7SurfaceManifest row set`; D21 does not maintain a hand-copied ActionEngine
+  mirror, every live-guarded ActionEngine row maps to
+  `S7_ACTION_ENGINE_CONSUMER_IDS`, and fail-closed rows have null consumer ids
+  plus closed exclusion reasons;
 - **manual review status producer test**: `ManualReviewEvidence`,
-  `record_manual_review_completed`, and `record_manual_review_failed` produce
-  every `MANUAL_REVIEW_STATUSES` value, and completed/failed manual review does
-  not count as D23 refusal evidence;
+  `mark_manual_review_required`, `record_manual_review_completed`, and
+  `record_manual_review_failed` produce every `MANUAL_REVIEW_STATUSES` value
+  from complete `ManualReviewEvidence` inputs, and completed/failed manual
+  review does not count as D23 refusal evidence;
 - **ActionEdge replay domain test**: `ActionEdgeGrantUse replay domain`,
   `target_ref_hashes_before_mutation`, request id, artifact id, source ref hash,
   action params hash, rendered statement hash, precondition hash, and rollback
@@ -6107,15 +6279,32 @@ Required proof classes:
   one `s7_traces` header and one typed payload row
   (`s7_voice_trace_payloads`, `s7_execution_trace_payloads`,
   `s7_credential_trace_payloads`, or `s7_history_bridge_trace_payloads`) in the
-  same transaction; mutating a typed payload field breaks `trace_hash`;
+  same transaction; each payload has `trace_payload_blob_ref` and
+  `trace_payload_blob_hash`; each `validate_*_trace_payload` function rejects
+  a payload missing any D22 minimum field; mutating a typed payload field
+  breaks `trace_hash`;
 - **v16 WorkRequestEnvelope round-trip test**:
   `request_envelope_blob_ref`, `request_envelope_blob_hash`, and indexed
   inherited columns reload the full envelope and reject blob/hash/index drift;
 - **v16 compatibility cleanup test**: credential consumer ids on legacy
   `S7ExecutionAuthorization` fail closed; deprecated `consume_verified(...)`
-  verifies both binding ids; manual review evidence cannot be publicly inserted
-  except through `S7TraceWriter`; illustrative SQL fences contain only SQL or
-  SQL comments;
+  loads an existing `S7GuardedExecutionInvocation`, verifies both binding ids
+  and `loaded_invocation.execution_consumer_id`, and cannot synthesize
+  invocation fields from `S7ExecutionAuthorization`; manual review evidence
+  cannot be publicly inserted except through `S7TraceWriter`; illustrative SQL
+  fences contain only SQL or SQL comments;
+- **uniform persistence round-trip test**: every `S7*Store.get(...)` either
+  round-trips an all-column carrier or a ref-based carrier exactly; every
+  ref-based carrier has a named loader with all store dependencies and
+  `conn: sqlite3.Connection` in the signature; every typed trace payload has
+  either every D22 field as columns or a validated payload blob/ref pair;
+- **wrapper-only callback ownership test**: inherited consume signature has no
+  callback parameter; wrapper callback runs only after
+  durable `GrantUse` persistence and before commit; inherited success followed
+  by callback failure rolls back wrapper writes;
+- **telegram approval-card wrapper-rejection test**: non-wrapper
+  `telegram.approval_card approve_action` paths fail wrapper preflight rather
+  than becoming a second derivation row;
 - **compatibility consume equality test**:
   `execution_authorization.execution_consumer_id == expected_execution_consumer_id`
   and `binding.execution_consumer_id == binding.expected_execution_consumer_id`
@@ -6323,23 +6512,28 @@ Before implementation can be claimed complete:
     `ActionEdgeGrantUse`. `s7_grant_uses`, `s7_action_edge_grant_uses`,
     `s7_authorization_artifact_bindings`, and
     `s7_credential_registration_grant_bindings` tables exist in the shared
-    state DB. `S7ExecutionAuthorization` carries a guarded-state consume
-    capability plus `execution_consumer_id`; credential paths carry
-    `challenge_expires_at` and the finish-time grant/challenge binding.
-    `consume_verified(...)` remains
-    only as a deprecated wrapper that reads this closed id and fails closed when
-    it cannot.
+    state DB. Voice-seat paths use `S7GuardedExecutionInvocation`; credential
+    paths use `S7GuardedCredentialInvocation`, challenge expiry, and the
+    finish-time grant/challenge binding. `S7ExecutionAuthorization` is
+    compatibility-only for inherited voice-seat paths and fails closed for
+    credential consumers. `consume_verified(...)` remains only as a deprecated
+    wrapper that loads an existing guarded invocation and fails closed when it
+    cannot.
 13. The closed `S7SurfaceManifest` exists and generates D2/D4/D21/D22/D25
     consistency. `/apply_dream`, `/apply_edit`, natural-language Telegram
     proposal/section
     approval, evolution candidate apply (`apply_candidate(...)`), workshop diff
     apply (`apply_diff(...)`), approval cards, self-mod dialog, CLI, cockpit,
-    reviewed substrate adapters, and concrete ActionEngine final mutation
-    consumers enter through `GuardedWorkItem` and require consumed grants.
+    reviewed substrate adapters, and concrete live ActionEngine final mutation
+    consumers enter through `GuardedWorkItem` and require consumed grants only
+    when their route status is `live_guarded`. Fail-closed or reviewedly
+    excluded rows have `execution_consumer_id=None`, a closed exclusion reason,
+    and no mintable grant path.
    `append_to_file` uses a direct write adapter; no shell-shaped or otherwise
-   indirect adapter satisfies this item in S7.3 v15.
+   indirect adapter satisfies this item in S7.3 v17.
    Credential-management consumers skip Maez voice and `GuardedWorkItem` but
-   use closed consumer ids plus D21 credential grant/challenge binding.
+   use closed consumer ids plus D21 credential grant/challenge binding when
+   their route status is `live_guarded`.
    Guarded code paths enter through the concrete wrapper services named in D21.
    Acceptance includes a code-discovery grep over `core/actions/action_engine.py`
    for every public/private method that can mutate Maez substrate or capability
@@ -6426,6 +6620,33 @@ Before implementation can be claimed complete:
     `legacy S7ExecutionAuthorization is compatibility-only for inherited voice-seat paths`,
     `binding.execution_consumer_id == binding.expected_execution_consumer_id`,
     and `ManualReviewEvidenceStore raw put is private`.
+21. **v17 grep checklist** passes before gate dispatch. The committed spec must
+    contain: `Uniform S7.3 persistence round-trip contract`,
+    `all-column carrier`, `ref-based carrier`, `trace_payload_blob_ref`,
+    `trace_payload_blob_hash`, `validate_voice_trace_payload`,
+    `validate_execution_trace_payload`, `validate_credential_trace_payload`,
+    `validate_history_bridge_trace_payload`,
+    `unpack_guarded_credential_invocation(`,
+    `credential_request_store: S7CredentialGuardedRequestStore`,
+    `rendered_statement_store: S7RenderedAuthorizationStatementStore`,
+    `authority_context_store: AuthorityContextStore`,
+    `conn: sqlite3.Connection`,
+    `Credential invocation carrier does not duplicate rollback_path_class`,
+    `credential trace payload carries rollback_path_class`,
+    `credential trace payload carries rendered_rollback_lines_hash`,
+    `voice trace payload does not require final_rendered_statement_hash`,
+    `S7ExecutionAuthorization fails closed for credential consumers`,
+    `D21 does not maintain a hand-copied ActionEngine mirror`,
+    `route_status!="live_guarded"`,
+    `ManualReviewEvidenceStore._put_raw`, `mark_manual_review_required`,
+    `evidence.manual_review_status == "pending"`, `consume_verified`,
+    `guarded_execution_invocation_store: S7GuardedExecutionInvocationStore`,
+    `loaded_invocation.execution_consumer_id`,
+    `The wrapper passes no callback into inherited consume`,
+    `S7RenderedAuthorizationStatementStore.get`,
+    `AuthorityContextStore.get`, `non-wrapper paths are wrapper rejection`,
+    `query_system and run_readonly_command intentionally have no reserved future execution consumer id`,
+    and `v17 requires both lanes before canonicalization`.
 
 ## Review Questions
 
@@ -6476,18 +6697,31 @@ Before implementation can be claimed complete:
 
 ## Proposed Next Ladder
 
-1. Section 8.2 fresh-reader gate runs on this exact committed v16 spec with three
+1. Section 8.2 fresh-reader gate runs on this exact committed v17 spec with three
    blank-context readers: cold covenant reader, cold spec-implementor, and cold
    residual-hunter.
-2. Codex engineering panel v16 runs independently on the same committed v16 spec.
+2. Codex engineering panel v17 runs independently on the same committed v17 spec.
 3. If either lane returns REVISE, fold narrowly. If both lanes ratify (or
    RATIFY-with-fold with only bounded touchups), proceed to canonicalization
    checks.
 4. Canonicalize only after the active lanes ratify.
 5. Implement RED-first from the ratified spec.
 
-No implementation begins from this v16 draft until both active review lanes
+No implementation begins from this v17 draft until both active review lanes
 ratify at the canonicalization-ready bar.
+
+v17 requires both lanes before canonicalization:
+
+1. Section 8.2 fresh-reader gate v17 includes a covenant reader focused on the
+   ref-based credential carrier and bundle loader. The reader verifies that
+   credential persistence/reconstruction did not widen what credential paths
+   can authorize.
+2. Codex engineering panel v17 focuses on the uniform persistence round-trip
+   contract, trace payload blob/ref validation, manual-review writer evidence,
+   and compatibility consume carrier loading.
+
+No covenant rule moves in v17. This note is a review-routing guard, not a new
+architecture claim.
 
 ## Plain English Close
 
@@ -6502,6 +6736,26 @@ plan hash, which are now lines on the signed text itself), and the reducer
 to replay deterministically over the persisted authority booleans. If the
 reader breaks, if Maez is unavailable, if the prompt is poisoned, if the
 bundle is stale, or if anything does not line up, the request blocks.
+
+S7.3 v17 absorbs the v17 persistence-contract and signature-closure fold on top
+of the v8-v16 covenant and build-contract decisions:
+
+- The uniform S7.3 persistence round-trip contract now applies to every store:
+  returned carriers are all-column or ref-based with explicit loaders, writers
+  receive or derive every emitted field, and typed trace payloads carry
+  validated payload blob refs/hashes unless every D22 field is a column.
+- `unpack_guarded_credential_invocation(...)` receives the request, rendered,
+  authority-context stores and SQLite connection required to load the credential
+  invocation bundle; no hidden store lookup is allowed.
+- Credential rollback binding no longer requires detailed rollback fields to
+  be duplicated on the invocation carrier; invocation binds by rendered hash
+  and `rollback_plan_ref`, while rendered statement, artifact binding, and
+  credential trace carry the detailed rollback fields.
+- Voice trace payloads do not require post-render fields; typed trace payloads
+  validate decoded blobs against D22 minimum fields.
+- Manual-review evidence writes take complete `ManualReviewEvidence` inputs,
+  deprecated `consume_verified(...)` loads an existing invocation, and
+  callbacks are wrapper-owned only.
 
 S7.3 v16 absorbs the v16 persistence-and-route cleanup fold on top of the
 v8-v15 covenant and build-contract decisions:
