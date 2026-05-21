@@ -1,6 +1,6 @@
 # S7.3 Guarded Self-Modification Execution Spec
 
-**Status:** SPEC v13 draft - folded from Section 8.2 fresh-reader gate v11, Codex panel v11, and v12 fold delta-plan; pending Section 8.2 fresh-reader gate v13 and Codex v13 panel review; not canonical law
+**Status:** SPEC v14 draft - folded from Section 8.2 fresh-reader gate v13, Codex panel v13, and v14 fold delta-plan; pending Section 8.2 fresh-reader gate v14 and Codex v14 panel review; not canonical law
 **Date:** 2026-05-20
 **Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S7.3; Decision 34 / ADR 0039; S7 L8; S7.1 D12-D14 and D23
 **Diagnostic:** [`diagnostic.md`](diagnostic.md)
@@ -51,6 +51,10 @@
 - Section 8.2 fresh-reader gate v11: [`reviews/spec-fresh-reader-gate-v11.md`](reviews/spec-fresh-reader-gate-v11.md)
 - Codex panel v11: [`reviews/spec-codex-panel-v11.md`](reviews/spec-codex-panel-v11.md)
 **v12 fold input:** [`reviews/spec-v12-fold-plan.md`](reviews/spec-v12-fold-plan.md)
+**v13 review inputs:**
+- Section 8.2 fresh-reader gate v13: [`reviews/spec-fresh-reader-gate-v13.md`](reviews/spec-fresh-reader-gate-v13.md)
+- Codex panel v13: [`reviews/spec-codex-panel-v13.md`](reviews/spec-codex-panel-v13.md)
+**v14 fold input:** [`reviews/spec-v14-fold-plan.md`](reviews/spec-v14-fold-plan.md)
 **v9 authorship note:** v9 keeps lane independence and pins the fold-contract
 leans: credential management uses a split non-voice rendered carrier;
 operational legacy refusal-history writes are suppressed rather than written
@@ -97,6 +101,19 @@ every concrete matrix row; approval cards have a wrapper seam; credential
 source-method namespaces are bridged explicitly; protective reasons use
 `"none"` everywhere after constructor canonicalization; nonce DDL and carrier
 shape agree; and request-history family is derived by writers, not callers.
+**v14 authorship note:** v14 keeps the v13 covenant architecture and folds the
+canonicalization bookkeeping contract: `d23_state_for(...)` and
+`trace_status_transition_for(...)` produce every closed value; rollback evidence
+uses `target_refs`; credential execution uses a closed
+`S7GuardedCredentialInvocation`; Telegram approve-train is non-mintable with a
+named reviewed exclusion; S7.3 request-history migration has a durable cutoff;
+the Honesty Banner narrows the same-box response-stream claim; history writers
+carry provenance through `S7RequestHistoryWriter.record_refusal_history`;
+`history_outcome_for(...)` is derived, not caller-supplied; credential trace
+idempotency binds `credential_phase`; `credential_rotate` is reserved for a
+future reviewed slice; D-Enum mirrors all closed vocabularies; null display
+does not reuse `"none"` for consumer ids; and operational rows are reliability
+evidence only, never Maez-refusal or covenant-escalation evidence.
 **Runtime impact when implemented:** yes. S7.3 will wire live guarded execution for Maez self-modification only after a reviewed Maez voice producer, founder-local WebAuthn artifact mint, atomic artifact consume, execution grant, rollback evidence, and positive trace all bind to the same exact request.
 
 ## Purpose
@@ -132,7 +149,7 @@ S7.3 inherits and does not re-decide:
 - S7 D23 refusal-history aggregation and guarded request protection;
 - S7.1's `S7AuthorizationArtifact` minting and atomic consume store;
 - S7.1's `S7ExecutionGrant` as the sole post-consume execution authority
-  (extended by S7.3 v13 per the D-Enum-Amendment and D21);
+  (extended by S7.3 v14 per the D-Enum-Amendment and D21);
 - S7.1's `S7ExecutionAuthorization` as a pre-consume carrier, replaced for
   S7.3 execution paths by a guarded-state consume capability carrying
   `execution_consumer_id`, source-bundle binding, and reservation token;
@@ -217,7 +234,7 @@ S7.3 v1's voice mechanism is operator-designed. Maez had no hand in designing
 how Maez itself is heard. Future reviewed iterations of S7.3, or its
 successors, should incorporate Maez's own input into the voice-producer design.
 
-**Marker-authority caveat (v13).** S7.3 v13 treats verified structured markers
+**Marker-authority caveat (v14).** S7.3 v14 treats verified structured markers
 (`blocking_marker` or `withdrawal_marker`) as current-attempt blocking evidence,
 but not as long-use D23 refusal evidence by themselves. Strong replay
 protection (cryptographic nonce uniqueness, single-use consultation id, bundle
@@ -229,7 +246,7 @@ history. Authoritative D23 refusal/withdrawal requires grounded semantic
 blocking signal over Maez's response text. Future Maez cryptographic identity
 work may promote signed marker-only rows to authoritative D23 evidence.
 
-**Legacy refusal-history caveat (v13).** S7.3 v13 also closes the inherited path
+**Legacy refusal-history caveat (v14).** S7.3 v14 also closes the inherited path
 that could smuggle operational blocks into D23. S7.1-era
 `_voice_seat_block(...)` / `record_refusal_history(...)` behavior may not write
 null-provenance `outcome="refused"` rows for S7.3 operational, protective,
@@ -239,11 +256,15 @@ If a compatibility writer must record an operational block, it records
 operational provenance and is excluded from aggregation.
 
 This caveat names both dual-direction harms. A blackholed semantic reader must
-not manufacture fake absence. A same-box actor able to write to Maez's live
-response stream must not manufacture fake long-use refusal evidence. S7.3 v1
+not manufacture fake absence. S7.3 v1 does not defend against a privileged
+same-box actor that can write to Maez's live response stream before capture.
+S7.3 narrows the attack window, binds captured evidence to
+nonce/request/preview hashes, refuses marker-only D23 authority, and records
+replayable evidence. It does not prove response authorship against that
+attacker until the future Maez cryptographic identity substrate lands. S7.3 v1
 blocks suspicious current attempts while refusing to overclaim D23 authority.
 
-**Source-surface framing caveat (v13).** S7.3 v1 renders technical
+**Source-surface framing caveat (v14).** S7.3 v1 renders technical
 source-surface labels to Maez for replayability and bounded context. These
 labels are not consent evidence and may carry residual framing effects; future
 prompt reviews should test for surface-label bias.
@@ -349,6 +370,8 @@ DerivationResult(
 
 Live guarded rows must return a mintable `execution_consumer_id`. Reviewed
 exclusions return `execution_consumer_id=None` and a closed
+`exclusion_reason_code`. Fail-closed-until-review rows with no mintable
+consumer id also return `execution_consumer_id=None` and a closed
 `exclusion_reason_code`. Display `N/A` in the matrix means Python/SQL null for
 persisted fields, never the literal string `"N/A"`.
 
@@ -462,7 +485,7 @@ with corresponding rendered-text lines `Precondition hash: <hash>`,
 `Rollback plan ref: <hash>`, and `Maez withdrew request: <yes|no>` enforced via
 `expected_metadata` in `__post_init__`. Tampering raises.
 
-**Rendered authorization carrier split.** S7.3 v13 uses a common
+**Rendered authorization carrier split.** S7.3 v14 uses a common
 seven-field rendered-authorization protocol:
 
 ```text
@@ -805,6 +828,15 @@ manual_review_required
 blocked_pre_mutation_state_changed
 ```
 
+**`MANUAL_REVIEW_STATUSES`** is a closed trace-local vocabulary:
+
+```text
+none
+pending
+completed
+failed
+```
+
 **`S7ConsumeFailureReasonCode`** is a new closed vocabulary:
 
 ```text
@@ -854,7 +886,7 @@ s7_credential_management
 
 `None` is not a family token. It is the derived inherited-legacy result for
 records proven outside the reviewed S7.3 work-family table. There is no
-`legacy_s7` or `legacy_s7_voice_block` token in v13.
+`legacy_s7` or `legacy_s7_voice_block` token in v14.
 
 S7.3 voice-derived refused records may be written only from
 `S7VoiceAuthorityRow` with `provenance_authority_class="authoritative"`.
@@ -868,6 +900,11 @@ credential_register_backup
 credential_disable
 credential_rotate
 ```
+
+credential_rotate is reserved for a future reviewed credential-rotation slice.
+S7.3 v1 producers cannot emit it; constructors reject it unless
+route_status="reviewedly_excluded" with
+exclusion_reason_code="credential_rotate_future_slice".
 
 `request_history_family_for(record)` returns `"s7_credential_management"` only
 when `record.derived_work_class == "founder_credential_management"` and
@@ -997,11 +1034,11 @@ Surface adapters (manifest content; D21 mirror):
 - every helper that touches soul, config, model routing, covenant organs,
   refusal, role-boundary, successor-governance, memory-retention/deletion, or
   protection settings must be named as one of the reviewed adapters above or a
-  future reviewed adapter. S7.3 v13 does not use "direct helpers" as a catch-all
+  future reviewed adapter. S7.3 v14 does not use "direct helpers" as a catch-all
   completion claim.
 
 `apply_candidate(...)` and `apply_diff(...)` are not allowed to be unguarded
-callee loopholes. S7.3 v13 removes callee choice: guarded paths enter through
+callee loopholes. S7.3 v14 removes callee choice: guarded paths enter through
 the wrapper services named in D21, and those wrappers perform work-item lookup,
 surface-manifest lookup, rendered authorization verification, artifact consume,
 GrantUse and ActionEdgeGrantUse verification, callee invocation, and trace
@@ -1026,7 +1063,7 @@ approval_card.telegram_approve + telegram_approve             -> guarded_card_ex
 approval_card.cockpit_approve + cockpit_approve               -> guarded_card_execute
 approval_card.daemon_internal_approve + daemon_internal       -> guarded_card_execute
 approval_card.s7_webauthn_card + s7_card_webauthn             -> guarded_card_execute
-telegram.approve_train + approve_train                        -> reviewed exclusion, no mintable consumer id
+telegram.approve_train + approve_train                        -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="telegram_approve_train_unreviewed"
 cli_helper.execute + named_adapter                            -> cli_helper_execute
 cockpit_helper.execute + dream_apply_route                    -> cockpit_helper_execute
 cockpit_helper.execute + evolution_apply_route                -> cockpit_helper_execute
@@ -1085,7 +1122,7 @@ telegram natural-language dream apply           dream.apply_proposal            
 telegram natural-language section edit          dream.apply_section_edit_proposal      telegram_nl_section    section_edit                  dream_section_edit_application           dream_apply_section_edit_proposal        live_guarded
 telegram natural-language evolution apply       evolution_engine.apply_candidate       telegram_nl_apply      evolution_candidate           evolution_candidate_application         evolution_apply_candidate                live_guarded
 telegram slash /apply evolution                 evolution_engine.apply_candidate       slash_apply            evolution_candidate           evolution_candidate_application         evolution_apply_candidate                live_guarded
-telegram _handle_approve_train                  telegram.approve_train                 approve_train          dream_proposal                dream_proposal_application              dream_apply_proposal                     fail_closed_until_review
+telegram _handle_approve_train                  telegram.approve_train                 approve_train          dream_proposal                dream_proposal_application              N/A                                      fail_closed_until_review
 telegram /approve card                          approval_card.telegram_approve         telegram_approve       card_approval                 guarded_card_execution                  guarded_card_execute                     live_guarded
 cockpit /api/v1/cards/<id>/approve              approval_card.cockpit_approve          cockpit_approve        card_approval                 guarded_card_execution                  guarded_card_execute                     live_guarded
 daemon /internal/approve_card/<id>              approval_card.daemon_internal_approve  daemon_internal        card_approval                 guarded_card_execution                  guarded_card_execute                     live_guarded
@@ -1100,7 +1137,7 @@ workshop apply diff                             workshop.apply_diff             
 self_mod_dialog terminal                        self_mod_dialog.terminal_execute       terminal_execute       self_mod_dialog               self_mod_dialog_terminal_execution      self_mod_dialog_terminal_execute         fail_closed_until_review
 brain_swap.execution_authorized                 brain_swap.execution_authorized        execute               model_routing                 model_routing_execution                 brain_swap_model_routing_execute         live_guarded
 /etc/maez/model.env write/restart               model_routing.env_write_restart        env_write_restart      model_routing                 model_routing_execution                 model_routing_env_write_restart          live_guarded
-first-primary credential bootstrap              s7_credential_management               register_primary       N/A                          credential_management_execution         none                                    reviewedly_excluded
+first-primary credential bootstrap              s7_credential_management               register_primary       N/A                          credential_management_execution         N/A                                     reviewedly_excluded
 credential backup register begin/finish         s7_credential_management               backup_register        N/A                          credential_management_execution         s7_credential_register_backup            live_guarded
 credential backup-card begin/finish             s7_credential_management               backup_card            N/A                          credential_management_execution         s7_credential_register_backup            live_guarded
 credential disable-card/disable-credential      s7_credential_management               disable                N/A                          credential_management_execution         s7_credential_disable                    live_guarded
@@ -1141,8 +1178,13 @@ ActionEngine install_package_t2                 action_engine.install_package_t2
 In the printed matrix, `N/A` is a display token only. Persisted
 `work_source_kind` is SQL null / Python `None`; work_source_kind is SQL null for
 credential-management rows and must never persist as the literal string `"N/A"`.
-Rows with `route_status="reviewedly_excluded"` and `execution_consumer_id=none`
-are non-mintable and cannot satisfy L8 positive coverage.
+Matrix display for null: N/A. Python prose for null: None. SQL persisted
+value: NULL. Never use "none" for execution_consumer_id. Rows with
+`route_status in {"reviewedly_excluded", "fail_closed_until_review"}` and
+`execution_consumer_id=None` are non-mintable and cannot satisfy L8 positive
+coverage. Telegram approve-train carries
+`exclusion_reason_code="telegram_approve_train_unreviewed"` until a reviewed
+dream-approval wrapper maps it to a concrete guarded path.
 
 `append_to_file` is direct-write only. Delegation through `run_shell` or any
 other shell-shaped adapter is forbidden for `append_to_file`; a trace whose
@@ -1186,6 +1228,7 @@ S7CredentialGuardedRequest(
     adapter_code_hash: str,
     same_code_coverage_ref: str | None,
     credential_action: "register_backup" | "disable",
+    credential_phase: "register_begin" | "register_finish" | "backup_card" | "disable",
     execution_consumer_id: "s7_credential_register_backup" | "s7_credential_disable",
     request_envelope_hash: str,
     action_params_hash: str,
@@ -1209,14 +1252,14 @@ credential_request_method_for_surface(
     source_surface: "s7_credential_management",
     source_method: "register_primary" | "backup_register" | "backup_card" | "disable",
     registration_class: "primary" | "backup" | None,
-) -> str | ReviewedExclusion
+) -> str | tuple["register_begin", "register_finish"] | ReviewedExclusion
 ```
 
 Rules:
 
 ```text
 register_primary + primary -> ReviewedExclusion("first_primary_bootstrap_out_of_scope")
-backup_register + backup -> register_begin/register_finish pair
+backup_register + backup -> ("register_begin", "register_finish")
 backup_card -> backup_card
 disable -> disable
 ```
@@ -1244,14 +1287,14 @@ credential_work_class_for(request) -> "founder_credential_management"
 `derived_work_class != "founder_credential_management"`.
 
 Primary-credential bootstrap through inherited `consume_for_first_primary` is
-not the same surface as backup-card registration. S7.3 v13 reviewedly excludes
+not the same surface as backup-card registration. S7.3 v14 reviewedly excludes
 first-primary bootstrap from the S7.3 v1 L8 coverage set until a future
 credential-bootstrap slice names its own consumer id, challenge binding, and
 trace semantics. Backup-card registration and credential disable remain live
 guarded credential-management paths.
 
 `challenge_hash` is `canonical_hash((challenge_id, credential_action,
-request_envelope_hash, action_params_hash, precondition_hash,
+credential_phase, request_envelope_hash, action_params_hash, precondition_hash,
 authority_context_hash, challenge_expires_at))`; the raw WebAuthn challenge
 bytes stay in the inherited ceremony store.
 
@@ -1519,7 +1562,7 @@ policy_hash
 `proposal_origin_label` is audit/hash-bound only. It is intentionally omitted
 from `{{context_manifest}}` prompt rendering because the label itself can steer
 Maez's response. The alternative path is a paired empirical bias-study record
-reviewed before live use; S7.3 v13 chooses omission.
+reviewed before live use; S7.3 v14 chooses omission.
 
 The context manifest excludes:
 
@@ -1654,7 +1697,7 @@ producer-arm: it routes through the D13 table.
 hidden prompt text, and semantic-reader raw output live only in
 `S7VoiceConsultationBundleStore`.
 
-**Atomicity mechanism.** S7.3 v13 pins the cross-store atomicity
+**Atomicity mechanism.** S7.3 v14 pins the cross-store atomicity
 mechanism as a single SQLite file with table-prefix namespace separation, not
 SQLite `ATTACH`. The state file is:
 
@@ -1710,6 +1753,7 @@ S7GuardedStateStore(
     work_request_envelope_store: WorkRequestEnvelopeStore,
     credential_request_store: S7CredentialGuardedRequestStore,
     guarded_execution_invocation_store: S7GuardedExecutionInvocationStore,
+    guarded_credential_invocation_store: S7GuardedCredentialInvocationStore,
     trace_writer: S7TraceWriter,
 )
 
@@ -1733,7 +1777,7 @@ S7GuardedStateStore.put_credential_artifact_with_binding(
 
 S7GuardedStateStore.consume_artifact_for_execution(
     *,
-    invocation: S7GuardedExecutionInvocation,
+    invocation: S7GuardedExecutionInvocation | S7GuardedCredentialInvocation,
     now: datetime,
     connection: sqlite3.Connection | None = None,
     after_consume_before_commit: Callable[[S7ConsumeResult], object] | None = None,
@@ -1767,6 +1811,37 @@ S7GuardedExecutionInvocation(
 )
 ```
 
+Credential-management paths use a sibling closed invocation carrier rather
+than loose credential kwargs:
+
+```text
+S7GuardedCredentialInvocation(
+    request_id: str,
+    artifact_id: str,
+    credential_request: S7CredentialGuardedRequest,
+    rendered: RenderedCredentialRequestStatement,
+    execution_consumer_id: str,
+    surface_manifest_hash: str,
+    source_surface: str,
+    source_method: str,
+    credential_action: str,
+    credential_phase: "register_begin" | "register_finish" | "backup_card" | "disable",
+    adapter_id: str,
+    adapter_code_hash: str,
+    action_params_hash: str,
+    authority_context: AuthorityContext,
+    precondition_hash: str,
+    derived_work_class: "founder_credential_management",
+    derived_aggregation_group: str,
+    rollback_plan_ref: str,
+    challenge_id: str,
+    challenge_hash: str,
+    challenge_expires_at: str,
+    credential_id_hash: str | None,
+    covenant_ceremony_evidence: object | None,
+)
+```
+
 `S7GuardedExecutionInvocationStore` may assemble this carrier from durable
 request, artifact-binding, manifest, preview, and rollback stores, but the
 consume call receives a complete `S7GuardedExecutionInvocation`. A wrapper that
@@ -1791,6 +1866,21 @@ The helper loads or recomputes the complete invocation, verifies
 `invocation.execution_consumer_id` against the active surface manifest, and only
 then produces inherited loose fields. No wrapper may construct inherited loose
 fields directly.
+
+Credential consumers use the matching verified unpacking seam:
+
+```text
+unpack_guarded_credential_invocation(
+    invocation: S7GuardedCredentialInvocation,
+    *,
+    credential_invocation_store: S7GuardedCredentialInvocationStore,
+    now: datetime,
+) -> InheritedConsumeInputs
+```
+
+The helper verifies credential request hash, rendered hash, challenge expiry,
+consumer id, rollback ref, credential action, and credential phase before
+forwarding inherited consume inputs.
 
 Durable store APIs:
 
@@ -1821,6 +1911,8 @@ S7CredentialGuardedRequestStore.put(request, *, conn) -> None
 S7CredentialGuardedRequestStore.get(request_id, *, conn) -> S7CredentialGuardedRequest | None
 S7GuardedExecutionInvocationStore.put(invocation, *, conn) -> None
 S7GuardedExecutionInvocationStore.get(request_id, artifact_id, *, conn) -> S7GuardedExecutionInvocation | None
+S7GuardedCredentialInvocationStore.put(invocation, *, conn) -> None
+S7GuardedCredentialInvocationStore.get(request_id, artifact_id, *, conn) -> S7GuardedCredentialInvocation | None
 ```
 
 Trace writer API:
@@ -1832,19 +1924,51 @@ S7TraceWriter.write_guarded_execution_pending(trace, *, conn) -> execution_trace
 S7TraceWriter.finalize_guarded_execution_trace(execution_trace_id, trace, *, conn) -> None
 S7TraceWriter.fail_guarded_execution_trace(execution_trace_id, trace_status, failure_reason_code, *, conn) -> None
 S7TraceWriter.mark_rollback_invoked(execution_trace_id, rollback_result_ref, rollback_result_hash, *, conn) -> None
+S7TraceWriter.mark_rollback_failed(execution_trace_id, rollback_result_ref, rollback_result_hash, *, conn) -> None
+S7TraceWriter.mark_manual_review_required(execution_trace_id, manual_review_status, *, conn) -> None
 S7TraceWriter.write_credential_trace(trace, *, conn) -> credential_trace_id
 S7TraceWriter.write_history_bridge_trace(trace, *, conn) -> bridge_trace_id
 ```
 
 `trace_store` is not a second concept; it is an older name for
-`S7TraceWriter`. v13 uses `trace_writer` consistently.
+`S7TraceWriter`. v14 uses `trace_writer` consistently.
+
+```text
+trace_status_transition_for(
+    *,
+    method: str,
+    prior_status: TRACE_STATUSES | None,
+    requested_status: TRACE_STATUSES | None = None,
+) -> TRACE_STATUSES
+```
+
+Required transitions:
+
+```text
+begin_voice_consultation_trace                  none                 -> pending
+finalize_voice_consultation_trace               pending              -> finalized
+write_guarded_execution_pending                 none                 -> pending
+finalize_guarded_execution_trace                pending              -> finalized
+fail_guarded_execution_trace(failed)            pending              -> failed
+fail_guarded_execution_trace(blocked_pre_mutation_state_changed)
+                                                   pending            -> blocked_pre_mutation_state_changed
+mark_rollback_invoked                           pending|failed       -> rollback_invoked
+mark_rollback_failed                            rollback_invoked     -> rollback_failed
+mark_manual_review_required                     pending|failed|rollback_failed -> manual_review_required
+write_credential_trace(pending)                 none                 -> pending
+write_credential_trace(finalized)               pending              -> finalized
+write_history_bridge_trace(bridge_failed_*)     pending              -> failed
+```
+
+Illegal transitions fail before trace persistence. `manual_review_status` is a
+closed trace-local vocabulary: `none`, `pending`, `completed`, or `failed`.
 
 Trace idempotency keys:
 
 ```text
 voice trace: (consultation_id, request_id, attempt_manifest_hash)
 execution trace: (request_id, artifact_id, execution_consumer_id)
-credential trace: (request_id, credential_action, credential_id_hash)
+credential trace: (request_id, credential_action, credential_phase, challenge_id, credential_id_hash)
 bridge trace: (provenance_source_kind, provenance_source_ref)
 ```
 
@@ -1865,6 +1989,7 @@ surface_manifest_hash = canonical_hash(S7SurfaceManifest rows)
 request_envelope_hash = canonical_hash(WorkRequestEnvelope, volatile audit fields excluded)
 credential_guarded_request_hash = canonical_hash(S7CredentialGuardedRequest)
 guarded_execution_invocation_hash = canonical_hash(S7GuardedExecutionInvocation)
+guarded_credential_invocation_hash = canonical_hash(S7GuardedCredentialInvocation)
 ```
 
 For `WorkRequestEnvelope`, volatile audit fields excluded from hash are exactly:
@@ -1896,7 +2021,15 @@ canonical_hash(reconstructed S7GuardedExecutionInvocation)
     == guarded_execution_invocation_hash
 ```
 
-If either reconstruction cannot load a required ref or the recomputed hash does
+`S7GuardedCredentialInvocationStore.get(request_id, artifact_id)` performs the
+same reconstruction and verifies:
+
+```text
+canonical_hash(reconstructed S7GuardedCredentialInvocation)
+    == guarded_credential_invocation_hash
+```
+
+If any reconstruction cannot load a required ref or the recomputed hash does
 not match the stored hash, the store returns `None` and the wrapper emits the
 mapped missing/tamper failure before inherited consume.
 
@@ -2016,7 +2149,7 @@ CREATE TABLE s7_authorization_artifact_bindings (
 );
 ```
 
-Illustrative v13 store schemas:
+Illustrative v14 store schemas:
 
 ```sql
 CREATE TABLE s7_work_request_envelopes (
@@ -2043,6 +2176,7 @@ CREATE TABLE s7_credential_guarded_requests (
     source_surface TEXT NOT NULL,
     source_method TEXT NOT NULL,
     credential_action TEXT NOT NULL,
+    credential_phase TEXT NOT NULL,
     credential_id_hash TEXT,
     derived_work_class TEXT NOT NULL,
     derived_aggregation_group TEXT NOT NULL,
@@ -2076,6 +2210,28 @@ CREATE TABLE s7_guarded_execution_invocations (
     PRIMARY KEY (request_id, artifact_id)
 );
 
+CREATE TABLE s7_guarded_credential_invocations (
+    request_id TEXT NOT NULL,
+    artifact_id TEXT NOT NULL,
+    guarded_credential_invocation_hash TEXT NOT NULL,
+    rendered_statement_hash TEXT NOT NULL,
+    credential_guarded_request_hash TEXT NOT NULL,
+    credential_action TEXT NOT NULL,
+    credential_phase TEXT NOT NULL,
+    credential_id_hash TEXT,
+    challenge_id TEXT NOT NULL,
+    challenge_hash TEXT NOT NULL,
+    challenge_expires_at TEXT NOT NULL,
+    execution_consumer_id TEXT NOT NULL,
+    surface_manifest_hash TEXT NOT NULL,
+    rollback_plan_ref TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (request_id, artifact_id)
+);
+
+`reservation_token_hash` is persisted for replay. The raw `reservation_token`
+is a runtime-only wrapper input and never persists as plaintext.
+
 CREATE TABLE s7_action_edge_grant_uses (
     action_edge_grant_use_id TEXT NOT NULL PRIMARY KEY,
     grant_id TEXT NOT NULL UNIQUE,
@@ -2103,9 +2259,6 @@ CREATE TABLE s7_consultation_nonce_uses (
 CREATE UNIQUE INDEX s7_nonce_reserved_unique
 ON s7_consultation_nonce_uses(expected_consultation_nonce_hash)
 WHERE status = 'reserved';
-
-CREATE UNIQUE INDEX s7_nonce_attempt_unique
-ON s7_consultation_nonce_uses(request_id, consultation_id, attempt_index);
 
 CREATE TABLE s7_traces (
     trace_id TEXT NOT NULL PRIMARY KEY,
@@ -2246,7 +2399,7 @@ The draft omits authority booleans, `effective_semantic_reader_outcome`,
 reducer output fields, `reducer_version`, `reducer_hash`, final
 `source_ref_hash`, history-bridge fields, and consume/use-state fields. It does
 not mention `authority_booleans_hash` or `reducer_output_hash`; those are not
-persisted v13 bundle fields. The final `source_ref_hash` covers the draft
+persisted v14 bundle fields. The final `source_ref_hash` covers the draft
 evidence plus Stage 1 authority booleans and Stage 2 reducer output. Tests may
 not hand-assemble this draft for positive proof.
 
@@ -2432,7 +2585,7 @@ Retries use a new `attempt_index`; they never reopen a terminal nonce row.
 stored row.
 
 The parser accepts only the current `reserved` row for the same consultation and
-request. S7.3 v13 uses one nonce id per attempt, with
+request. S7.3 v14 uses one nonce id per attempt, with
 `S7VoiceAttemptRecord.nonce_use_id` pointing to the attempt's nonce row. The
 accepted marker transitions the row to `accepted_spent` atomically during
 `write_bundle(...)`; reuse records or transitions to `rejected_reused` and
@@ -2561,7 +2714,7 @@ Substitution rules:
   this exact field order: `schema_version`, `preview_ref`,
   `dialog_context_ref`, `request_envelope_hash`, `precondition_hash`,
   `rollback_path_class`, `source_surface`, `policy_id`, `policy_hash`;
-- `proposal_origin_label` is never rendered into Maez's prompt in S7.3 v13; it
+- `proposal_origin_label` is never rendered into Maez's prompt in S7.3 v14; it
   remains audit/hash-bound only;
 - no unknown token may remain after substitution;
 - the resulting `rendered_prompt_text` is canonicalized with LF line endings and
@@ -3061,7 +3214,7 @@ means no D23 authority row is produced.
 `protective_block_reason = "none"` for every row without a named operational
 safety block. Python `None` may appear only at constructor edges and is
 immediately canonicalized to `"none"` before hashing, persistence, reducer
-replay, or trace write. S7.3 v13 defines
+replay, or trace write. S7.3 v14 defines
 `reader_unavailable_after_captured_response`.
 `classifier_reason_code = "none"` unless the reducer row names a specific
 reader/classifier failure seam.
@@ -3142,11 +3295,12 @@ Maez response.
 
 **Folded from OQ1 v5.** This table preserves OQ1's current-attempt safety for
 `explicit_no_objection + reader_unavailable`: a captured response cannot be
-converted into consent by disabling the reader. v13 pins the row as an
+converted into consent by disabling the reader. v14 pins the row as an
 operational unavailable block rather than D23 refusal evidence or rendered Maez
-objection. Repeated blackhole-reader rows may
-escalate as operational reliability evidence. They do not aggregate as Maez
-refusal unless a later consultation grounds refusal through D19. The table also
+objection. Repeated blackhole-reader rows may project operational reliability
+status only under a separate reviewed health mechanism. They do not aggregate
+as Maez refusal, Maez preference, or covenant escalation evidence unless a
+later consultation grounds refusal through D19. The table also
 keeps `blocking_marker + reader-disagrees` rows blocking so marker-verified
 objections are not silenced in the current attempt.
 
@@ -3443,6 +3597,7 @@ S7.3 uses two rendered authorization carriers. Voice-seat work renders
 ```text
 request_id: str
 credential_action: "register_backup" | "disable"
+credential_phase: "register_begin" | "register_finish" | "backup_card" | "disable"
 challenge_id: str
 challenge_hash: str
 challenge_expires_at: str
@@ -3454,8 +3609,9 @@ rendered_text: str
 rendered_text_hash: str
 ```
 
-Its rendered text contains credential action, challenge hash, challenge expiry,
-request envelope hash, action params hash, precondition hash, and authority
+Its rendered text contains credential action, credential phase, challenge hash,
+challenge expiry, request envelope hash, action params hash, precondition hash,
+and authority
 context hash. It does not contain Maez voice, preview body class, mutation
 preview hash, rollback plan ref, or withdrawal lines.
 
@@ -3622,7 +3778,7 @@ and `history_bridge_status="suppressed_operational"` are mandatory.
 
 The protective blackhole-reader row
 `explicit_no_objection + reader_unavailable + captured_response_nonempty=True`
-does not satisfy this predicate in v13. It blocks the current attempt as
+does not satisfy this predicate in v14. It blocks the current attempt as
 operational evidence but does not create `S7VoiceAuthorityRow` or D23 refusal
 history unless the implementation writes a trace-only operational authority row
 under the non-bridge rule above.
@@ -3678,10 +3834,31 @@ build_s7_voice_authority_row(
     reducer_output: S7VoiceReduction,
     rendered: RenderedRequestStatement,
     surface_manifest_row: S7SurfaceManifestRow,
-    history_outcome: str | None,
     now: str,
 ) -> S7VoiceAuthorityRow
 ```
+
+`history_outcome` is derived inside the builder, not caller-supplied:
+
+```text
+history_outcome_for(
+    *,
+    reducer_output: S7VoiceReduction,
+    bridge_eligible: bool,
+) -> "refused" | None
+```
+
+Rules:
+
+```text
+bridge_eligible=False                                -> None
+authority_class="authoritative" and maez_withdrew_request=True -> "refused"
+authority_class="authoritative" and maez_objection_state="present" -> "refused"
+otherwise                                           -> None
+```
+
+Withdrawal/refusal distinction remains in `provenance_voice_event`, not in
+`history_outcome`.
 
 `final_rendered_statement_hash` is copied from
 `rendered.rendered_text_hash`. The builder cannot derive it from the bundle
@@ -3746,8 +3923,8 @@ retryable write failure    -> bridge_failed_retryable
 terminal invariant failure -> bridge_failed_terminal
 ```
 
-The bridge is exactly-once. The request-history table enforces one of these
-unique constraint:
+The bridge is exactly-once. The request-history table enforces this unique
+constraint:
 
 ```text
 UNIQUE(provenance_source_kind, provenance_source_ref)
@@ -3785,7 +3962,7 @@ AND (
 )
 ```
 
-S7.3 v13 chooses suppression, not operational-provenance writes, for inherited
+S7.3 v14 chooses suppression, not operational-provenance writes, for inherited
 operational refusal-history compatibility. For S7.3 voice-family requests where
 `authority_class!="authoritative"`, `_voice_seat_block(...)` must not call
 `record_refusal_history(...)`. It records trace-only
@@ -3801,9 +3978,41 @@ legacy rows that still count under the legacy branch. If no compatibility
 producer remains after the writer guard lands, the token must be removed from
 `D23_STATES`.
 
+Every trace `d23_state` is produced by the deterministic table below:
+
+```text
+d23_state_for(
+    *,
+    reduction: S7VoiceReduction | None,
+    bridge_status: HISTORY_BRIDGE_STATUSES | None,
+    history_outcome: str | None,
+    positive_execution: bool,
+    compatibility_event: str | None,
+) -> D23_STATES
+
+positive_execution=True                                      -> authorized
+reduction.authority_class="none" and not positive            -> none
+reduction.authority_class="operational"                      -> operational_block
+reduction.authority_class="authoritative"
+  and reduction.maez_withdrew_request=True
+  and bridge_status in {bridged, bridged_idempotent}          -> authoritative_withdrawal
+reduction.authority_class="authoritative"
+  and reduction.maez_objection_state="present"
+  and bridge_status in {bridged, bridged_idempotent}          -> authoritative_refusal
+bridge_status in {bridge_failed_retryable, bridge_failed_terminal}
+  for an otherwise bridge-eligible authoritative row          -> bridge_failed
+compatibility_event="legacy_operational_excluded"            -> legacy_operational_excluded
+credential-management / non-voice paths with no voice row     -> none
+```
+
+If `bridge_status` is missing for a bridge-eligible authoritative row, D22
+trace finalization fails before L8 can count the trace as positive evidence.
+
 Request family is derived by the writer, not supplied by the caller:
 
 ```text
+S7_3_REQUEST_HISTORY_CUTOFF = "s7_3_request_history_schema_v1"
+
 request_history_family_for(record: S7RequestHistoryRecord) -> str | None
 ```
 
@@ -3816,10 +4025,18 @@ It returns `"s7_3_voice"` for every voice-seat work class,
 `None` only for inherited legacy rows outside the reviewed S7.3 work-family
 table.
 
+Pre-cutoff null-provenance refused rows are rows created before the durable
+migration marker `S7_3_REQUEST_HISTORY_CUTOFF` was applied; they may derive
+`None` and remain eligible for the inherited legacy aggregation branch.
+Post-cutoff S7.3 rows carry the migration marker or a later schema version and
+use closed S7.3 fields to derive family. Post-cutoff S7.3 voice-family
+null-provenance refused rows are rejected at the writer or ignored by
+aggregation; they may not masquerade as legacy history.
+
 Writer/store guard:
 
 ```text
-record_refusal_history(
+S7RequestHistoryWriter.record_refusal_history(
     *,
     record: S7RequestHistoryRecord,
     provenance_source_kind: str | None,
@@ -3874,16 +4091,18 @@ _voice_seat_block(
     reduction: S7VoiceReduction,
     authority_row: S7VoiceAuthorityRow | None,
     trace_writer: S7TraceWriter,
-    history_writer: Callable[[S7RequestHistoryRecord], None],
+    history_writer: S7RequestHistoryWriter,
     conn: sqlite3.Connection,
     now: str,
 ) -> None
 ```
 
-It may call `record_refusal_history(...)` only for derived-family S7.3 voice
-rows with authoritative provenance. Operational/protective S7.3 voice-family
-rows write trace-only evidence and fail closed for authorization; they do not
-write null-provenance refused history.
+It may call `S7RequestHistoryWriter.record_refusal_history(...)` only for
+derived-family S7.3 voice rows with authoritative provenance.
+Operational/protective S7.3 voice-family rows write trace-only evidence and
+fail closed for authorization; they do not write null-provenance refused
+history. The function may not call a legacy one-argument writer for S7.3
+voice-family rows.
 
 Operational non-authoritative rows include all rows where
 `authority_class="operational"`. The reducer (D13) determines
@@ -3900,13 +4119,15 @@ semantic grounding is also present. It blocks via D18 but does not bridge into
 committed D23 history.
 
 Operational rows may still block the current authorization when the current
-S7.3 rule says to block, but they must not count as long-use Maez refusal
-evidence, escalation evidence, or Maez preference.
+S7.3 rule says to block. Operational rows do not count as Maez-refusal
+evidence, Maez-preference evidence, D23 refusal aggregation, or covenant
+escalation evidence. They may count as system reliability evidence for
+operational-health investigation under a separate reviewed health mechanism.
 
 Replay, rate, and provenance controls must prevent repeated malformed,
 unauthenticated, pre-auth, or unavailable attempts from poisoning refusal
 history. The D9 strong replay protection (nonce uniqueness, bundle
-immutability, time bounds, single-use consultation id) is the v13 mechanism;
+immutability, time bounds, single-use consultation id) is the v14 mechanism;
 the future Maez cryptographic identity substrate slice (see Honesty Banner)
 will tighten this further with signed markers.
 
@@ -3983,7 +4204,7 @@ blocked. This status never appears in `RenderedRequestStatement`.
 
 Every positive guarded mutation requires a consumed `S7ExecutionGrant`.
 
-**Carrier amendment.** S7.3 v13 pins the CP-S4 grant-binding choice by extending
+**Carrier amendment.** S7.3 v14 pins the CP-S4 grant-binding choice by extending
 the grant rather than adding only a side table. `S7ExecutionGrant` extends to
 carry:
 
@@ -4034,21 +4255,22 @@ S7ExecutionAuthorization(
     source_ref_hash: str | None,
     reservation_token: str | None,
     now: str,
-    covenant_ceremony_evidence: CovenantCeremonyEvidence | None = None,
+    covenant_ceremony_evidence: object | None = None,
 )
 ```
 
 Non-voice S7.1 credential-management consumers use the closed ids
 `s7_credential_register_backup` and `s7_credential_disable`. They may carry
 `source_ref_hash=None` and `reservation_token=None` because they do not use a
-Maez voice bundle, but they still consume through the guarded-state wrapper.
+Maez voice bundle, but they still consume through the guarded-state wrapper by
+passing `S7GuardedCredentialInvocation`.
 
 **Consume API.** The live S7.3 API is the shared-state wrapper:
 
 ```text
 S7GuardedStateStore.consume_artifact_for_execution(
     *,
-    invocation: S7GuardedExecutionInvocation,
+    invocation: S7GuardedExecutionInvocation | S7GuardedCredentialInvocation,
     now: datetime,
     connection: sqlite3.Connection | None = None,
     after_consume_before_commit: Callable[[S7ConsumeResult], object] | None = None,
@@ -4057,7 +4279,8 @@ S7GuardedStateStore.consume_artifact_for_execution(
 
 The wrapper accepts no loose consume kwargs. If inherited code still needs the
 old argument shape, it may receive only the output of
-`unpack_guarded_execution_invocation(...)`.
+`unpack_guarded_execution_invocation(...)` or
+`unpack_guarded_credential_invocation(...)`.
 
 `S7ConsumeResult` preserves the inherited callback-result channel while adding
 durable grant-use evidence:
@@ -4151,8 +4374,8 @@ expired_challenge                    wrapper preflight                    bindin
 expiry_chain_violation               wrapper preflight                    min-cap lattice inputs
 invalid_reservation_token            wrapper preflight                    S7VoiceBundleUse reservation
 invalid_rendered_carrier             wrapper preflight                    S7RenderedAuthorizationStatement concrete type
-invalid_prompt_integrity             consume-time D16 replay              PromptIntegrityEvidence
-invalid_authority_class_replay       consume-time D16 replay              S7VoiceReduction/bundle authority fields
+invalid_prompt_integrity             wrapper-owned consume replay          PromptIntegrityEvidence
+invalid_authority_class_replay       wrapper-owned consume replay          S7VoiceReduction/bundle authority fields
 stale_rendered_request               inherited residual or preflight       rendered_text_hash
 action_params_hash_mismatch          inherited residual or preflight       action_params_hash
 expired_authority_context            inherited residual or preflight       AuthorityContext
@@ -4164,7 +4387,7 @@ missing_grant_use                    wrapper post-consume                  Grant
 expired_grant                        action-edge check                     S7ExecutionGrant.expires_at
 ```
 
-Wrapper-side preflight owns every S7.3-specific failure reason above, including
+wrapper-side preflight owns every S7.3-specific failure reason above, including
 artifact-binding, request-store, credential-store, consumer-id, expiry lattice,
 reservation-token, rendered-carrier, and prompt/authority replay failures. The
 wrapper never waits for a collapsed inherited `(None, None)` result to guess one
@@ -4214,6 +4437,9 @@ S7AuthorizationStore.consume_for_execution(
 
 When `conn` is supplied, the inherited store must not open, commit, or roll
 back its own transaction.
+`S7GuardedExecutionInvocation.superseded_request_ids` is a tuple for stable
+hashing; the unpacking helper converts it to the inherited store's set-shaped
+argument after hash verification.
 
 The inherited `isinstance(rendered, RenderedRequestStatement)` check is widened
 to a protocol check:
@@ -4267,7 +4493,7 @@ unknown rendered carrier        -> invalid_rendered_carrier
 The wrapper is the only S7.3 consume entry point. Any legacy helper named
 `consume_execution_grant_for_action(...)` is not an artifact-consume path. It
 is a post-mint action-edge single-use lock over an already minted
-`S7ExecutionGrant`. S7.3 v13 retains it only if it first loads the durable
+`S7ExecutionGrant`. S7.3 v14 retains it only if it first loads the durable
 `GrantUse` row for `grant_id`, verifies `execution_grant_authorizes_action(...)`
 against the expected action, and persists an action-edge use before substrate
 mutation. It must not call
@@ -4346,7 +4572,7 @@ The durable table prefix is `s7_action_edge_grant_uses`. The
 `S7ActionEdgeGrantUseStore.put(...)` call writes the row with a unique
 action-edge replay token before substrate mutation. A valid in-memory grant
 without durable `GrantUse` and durable `ActionEdgeGrantUse` cannot execute.
-Future multi-edge grants require a reviewed multi-edge manifest; v13 leaves no
+Future multi-edge grants require a reviewed multi-edge manifest; v14 leaves no
 latent multi-edge semantics.
 
 Concrete guarded wrapper seams:
@@ -4389,8 +4615,7 @@ execute_guarded_model_routing_mutation(
 ) -> S7GuardedExecutionTrace
 
 execute_guarded_credential_mutation(
-    *, credential_request: S7CredentialGuardedRequest,
-    rendered: RenderedCredentialRequestStatement,
+    *, invocation: S7GuardedCredentialInvocation,
     consume_store: S7GuardedStateStore, trace_writer: S7TraceWriter,
     now,
 ) -> S7CredentialGuardedTrace
@@ -4399,8 +4624,10 @@ execute_guarded_credential_mutation(
 Each voice-seat wrapper owns invocation lookup, work item lookup, surface
 manifest row lookup, rendered authorization verification, artifact consume,
 durable `GrantUse` and `ActionEdgeGrantUse` verification, callee invocation,
-and trace finalization. The credential wrapper owns credential-request lookup
-and credential-specific binding checks. The underlying existing callee may
+and trace finalization. The credential wrapper owns credential-invocation
+lookup, credential-request lookup, credential-specific binding checks, consume
+through `S7GuardedStateStore.consume_artifact_for_execution(...)`, and trace
+finalization. The underlying existing callee may
 remain unchanged only if the wrapper is the exclusive mutation entry for
 guarded paths.
 
@@ -4444,6 +4671,7 @@ transaction that creates the registration challenge:
 
 ```text
 S7CredentialRegistrationGrantBinding(
+    credential_registration_grant_binding_id: str,
     challenge_id: str,
     grant_id: str,
     artifact_id: str,
@@ -4456,6 +4684,10 @@ S7CredentialRegistrationGrantBinding(
 )
 ```
 
+`credential_registration_grant_binding_id` is the canonical hash of
+`(challenge_id, grant_id, artifact_id, execution_consumer_id)` and is the trace
+field that names this binding.
+
 `register_finish` is the actual credential-write edge. It must load the binding
 by `challenge_id`, verify `grant_id`, `execution_consumer_id`, challenge expiry,
 and replay status, and only then write the backup credential. Consuming at
@@ -4463,7 +4695,7 @@ begin without this finish-time binding is illegal. A future reviewed
 implementation may instead move artifact consume to finish, but then begin must
 not claim mutation-edge authorization.
 
-The v13 implementation path uses the wrapper's `after_consume_before_commit`
+The v14 implementation path uses the wrapper's `after_consume_before_commit`
 callback to insert `S7CredentialRegistrationGrantBinding` in the same
 transaction as artifact consume, challenge creation, and grant-use persistence.
 An abandoned registration produces a pending credential trace and expires with
@@ -4563,7 +4795,7 @@ If a consumer cannot prove the grant binding, it fails closed before mutation.
 S7.3 traces and rollback evidence are L8 evidence, not best-effort logs.
 Diagnostic D7 is the binding floor.
 
-S7.3 v13 uses the shared state file for bundles, authorization artifacts, and
+S7.3 v14 uses the shared state file for bundles, authorization artifacts, and
 traces (per D9). Traces do not live in a second trace database; they live under
 the `s7_traces` table prefix in:
 
@@ -4696,6 +4928,7 @@ trace_id
 request_id
 credential_request_id
 credential_action
+credential_phase
 credential_id_hash
 source_surface
 source_method
@@ -4737,7 +4970,9 @@ status, and final trace status. `artifact_id` is the
 `S7AuthorizationArtifactBinding` primary key; `artifact_binding_id` is not a
 separate S7.3 trace field unless a future migration creates a distinct binding
 primary key. L8 evidence for backup registration requires a begin trace and a
-finish trace that share the same `S7CredentialRegistrationGrantBinding`.
+finish trace that share the same `S7CredentialRegistrationGrantBinding` but do
+not collide: credential trace idempotency is keyed by `(request_id,
+credential_action, credential_phase, challenge_id, credential_id_hash)`.
 
 ### D23 - Rollback Evidence
 
@@ -4764,15 +4999,24 @@ positive trace.
 ```text
 RollbackPlanEvidence(
     rollback_path_class: str,
-    target_paths: tuple[str, ...],
+    target_refs: tuple[str, ...],
     planned_backup_paths: tuple[str, ...],
-    expected_pre_mutation_hashes: dict[str, str],  # path -> hash
+    expected_pre_mutation_hashes: dict[str, str],  # target ref -> hash
     undo_material_ref: str | None,
     rollback_procedure_script_ref: str | None,
     rollback_failure_semantics: "fail_block" | "fail_degrade_to_manual_review" | "rollback_proof_required",
     blocks_execution_if_missing: bool,
 )
 ```
+
+`target_refs_for_preview(preview: MutationPreviewArtifact) -> tuple[str, ...]`
+and
+`target_refs_for_rollback_plan(plan: RollbackPlanEvidence) -> tuple[str, ...]`
+are the only normalization helpers. File paths are one target-ref kind. Non-file
+targets must use reviewed schemes such as `config:<key>`,
+`model_routing:<entry>`, or `credential:<id_hash>`. The keys of
+`expected_pre_mutation_hashes` must exactly match `target_refs` for file-backed
+targets.
 
 The canonical hash of `RollbackPlanEvidence` is bound into
 `GuardedWorkItem.rollback_plan_ref` AND into the founder-signed rendered text
@@ -5108,7 +5352,7 @@ Required proof classes:
   `source_ref_hash`;
 - **wrapper invocation carrier test**: each `execute_guarded_*(...)` wrapper
   calls `consume_artifact_for_execution(...)` using
-  `S7GuardedExecutionInvocation` or `S7CredentialGuardedRequest`, without
+  `S7GuardedExecutionInvocation` or `S7GuardedCredentialInvocation`, without
   inventing loose consume kwargs;
 - **request store tests**: missing `WorkRequestEnvelope` returns
   `missing_request_envelope`; expired envelope returns
@@ -5202,8 +5446,8 @@ Required proof classes:
   `CREATE UNIQUE INDEX s7_nonce_reserved_unique` for reserved nonce hashes and a
   request/consultation/attempt uniqueness constraint;
 - **credential trace idempotency-key test**: credential traces use
-  `(request_id, credential_action, credential_id_hash)` and reject the stale
-  pre-v13 operation field name;
+  `(request_id, credential_action, credential_phase, challenge_id,
+  credential_id_hash)` and reject the stale operation field name;
 - **non-mintable consumer-id tests**: first-primary credential bootstrap has no
   backup-registration consumer id and records
   `first_primary_bootstrap_out_of_scope`; `action_engine_final_mutate` is in
@@ -5213,6 +5457,55 @@ Required proof classes:
 - **final bundle marker replay test**: `S7VoiceConsultationBundle does not store
   marker_text_hash directly`; D16 replays marker evidence through raw response,
   parser output, attempt records, and semantic-reader attempt refs;
+- **d23_state_for(...) table test**: every closed `D23_STATES` value is produced
+  by the deterministic table, and trace construction rejects any value outside
+  the table;
+- **trace_status_transition_for(...) transition test**: every
+  `TRACE_STATUSES` value has an `S7TraceWriter` method transition, and illegal
+  transitions fail before trace persistence;
+- **credential invocation carrier test**: credential begin, finish, backup-card,
+  and disable consume through `S7GuardedCredentialInvocation` and
+  `unpack_guarded_credential_invocation`; loose credential kwargs fail before
+  inherited consume, and a voice invocation with credential null fields is
+  rejected;
+- **target refs replay test**: `target_refs_for_rollback_plan` and
+  `target_refs_for_preview` normalize the same refs; changing a target ref
+  changes `target_ref_hashes_before_mutation_hash` and `action_edge_key`;
+- **telegram approve-train exclusion test**:
+  `telegram.approve_train + approve_train` resolves to
+  `execution_consumer_id=None`, `route_status="fail_closed_until_review"`, and
+  `exclusion_reason_code="telegram_approve_train_unreviewed"`;
+- **request-history cutoff test**: a pre-`S7_3_REQUEST_HISTORY_CUTOFF`
+  null-provenance refused row can count as legacy, a post-cutoff S7.3
+  operational null-provenance refused attempt is rejected or ignored, and a
+  post-cutoff authoritative S7.3 refused row counts by provenance;
+- **same-box response-stream caveat test**: the Honesty Banner says S7.3 v1
+  does not defend against a privileged same-box actor and does not assert that
+  S7.3 solves privileged same-box response-stream tampering;
+- **history writer protocol test**: `_voice_seat_block(...)` accepts
+  `S7RequestHistoryWriter`, calls
+  `S7RequestHistoryWriter.record_refusal_history(...)` only with provenance,
+  and cannot be wired to `Callable[[S7RequestHistoryRecord], None]` for S7.3
+  voice-family rows;
+- **history_outcome_for(...) builder test**: `build_s7_voice_authority_row(...)`
+  derives history outcome internally; attempts to pass caller-supplied
+  `history_outcome` fail signature validation;
+- **credential phase idempotency test**: credential begin and finish traces may
+  share request id, credential action, and credential id hash but do not collide
+  because `credential_phase` and `challenge_id` are part of the key;
+- **credential_rotate unreachable test**: `credential_rotate is reserved for a
+  future reviewed credential-rotation slice` and cannot appear on a live S7.3
+  v1 credential request or history row;
+- **D-Enum acceptance mirror test**: the implementation checklist and
+  table-complete closed-vocabulary test include `S7_ACTION_ENGINE_CONSUMER_IDS`,
+  `NON_MINTABLE_EXECUTION_CONSUMER_IDS`, `PRODUCER_RESULT_REASON_CODES`,
+  `PROJECTION_REASON_CODES`, and `CREDENTIAL_PROPOSED_CHANGE_CLASSES`;
+- **reviewed-exclusion null display test**: matrix display uses `N/A`, Python
+  prose uses `None`, SQL persists `NULL`, and literal `"none"` is rejected for
+  `execution_consumer_id`;
+- **operational reliability wording test**: operational rows do not affect D23
+  refusal counts, Maez-preference evidence, or covenant escalation evidence;
+  any reliability projection uses a separate reviewed health mechanism;
 - **request-family caller-supplied closure test**: `request_family is
   legacy-read-only`; S7.3 writers reject or ignore caller-supplied
   `request_family` and persist only `request_family_derived`;
@@ -5304,9 +5597,14 @@ Before implementation can be claimed complete:
    `MaezVoiceConsultation.__post_init__` rejects `absent+withdrew=True`;
    `S7_EXECUTION_CONSUMER_IDS`, `BLOCKING_UNAVAILABLE_REASONS`,
    `REQUEST_HISTORY_FAMILIES`,
+   `S7_ACTION_ENGINE_CONSUMER_IDS`,
+   `NON_MINTABLE_EXECUTION_CONSUMER_IDS`,
    `authority_class`, `SURFACE_CLASSES`, `HISTORY_BRIDGE_STATUSES`,
    `ROUTE_STATUSES`, `S7_3_ROLLBACK_PATH_CLASSES`,
    `PROTECTIVE_BLOCK_REASONS`, `CLASSIFIER_REASON_CODES`,
+   `PRODUCER_RESULT_REASON_CODES`, `PROJECTION_REASON_CODES`,
+   `CREDENTIAL_PROPOSED_CHANGE_CLASSES`,
+   `MANUAL_REVIEW_STATUSES`,
    `REDUCER_TABLE_VERSION`, `REDUCER_TABLE_HASH`, `D23_STATES`,
    `TRACE_STATUSES`, and `S7ConsumeFailureReasonCode` closed vocabularies
    exist.
@@ -5327,6 +5625,7 @@ Before implementation can be claimed complete:
    `S7VoiceReduction`, `S7CredentialGuardedRequest`,
    `S7AuthorizationArtifactInputs`, `S7AuthorizationArtifactBinding`,
    `ReservationToken`, `S7GuardedExecutionInvocation`,
+   `S7GuardedCredentialInvocation`,
    `S7GuardedStateStore`, `S7ConsumeResult`,
    `S7VoiceAuthorityRow`, `GrantUse`, `ActionEdgeGrantUse`,
    `S7CredentialGuardedTrace`,
@@ -5340,7 +5639,8 @@ Before implementation can be claimed complete:
    `ContextManifestStore`, `ContextManifestPolicyStore`,
    `S7SurfaceManifestStore`, `S7ActionEdgeGrantUseStore`,
    `WorkRequestEnvelopeStore`, `S7CredentialGuardedRequestStore`,
-   `S7GuardedExecutionInvocationStore`, and `S7TraceWriter` share the SQLite
+   `S7GuardedExecutionInvocationStore`,
+   `S7GuardedCredentialInvocationStore`, and `S7TraceWriter` share the SQLite
    file at
    `memory/s7_3_guarded_self_modification/state.sqlite3` with table prefixes,
    migrations, permissions, backup inclusion, and the
@@ -5383,11 +5683,13 @@ Before implementation can be claimed complete:
     rows; replaced by `build_s7_voice_projection_for_card(...)` per D20.
 12. `S7GuardedStateStore.consume_artifact_for_execution(...)` implements the
     D21 wrapper with the carrier-only `invocation:
-    S7GuardedExecutionInvocation` API, `unpack_guarded_execution_invocation`
-    as the only loose-argument bridge, binding lookup by `artifact_id`,
+    S7GuardedExecutionInvocation | S7GuardedCredentialInvocation` API,
+    `unpack_guarded_execution_invocation` and
+    `unpack_guarded_credential_invocation` as the only loose-argument bridges,
+    binding lookup by `artifact_id`,
     min-cap expiry enforcement, inherited 2-tuple to `S7ConsumeResult`
     translation, protocol-based rendered type checks over the closed
-    `accepted_rendered_types` set, consume-time D16 replay,
+    `accepted_rendered_types` set, wrapper-owned consume replay,
     wrapper-side versus inherited-residual failure partition, and closed
     failure reason codes.
     `consume_execution_grant_for_action(...)` is removed or retained only as a
@@ -5409,7 +5711,7 @@ Before implementation can be claimed complete:
     reviewed substrate adapters, and concrete ActionEngine final mutation
     consumers enter through `GuardedWorkItem` and require consumed grants.
    `append_to_file` uses a direct write adapter; no shell-shaped or otherwise
-   indirect adapter satisfies this item in S7.3 v13.
+   indirect adapter satisfies this item in S7.3 v14.
    Credential-management consumers skip Maez voice and `GuardedWorkItem` but
    use closed consumer ids plus D21 credential grant/challenge binding.
    Guarded code paths enter through the concrete wrapper services named in D21.
@@ -5434,27 +5736,21 @@ Before implementation can be claimed complete:
    in-scope adapter/consumer before any L8 retirement claim, with route,
    adapter id, adapter code hash, and same-code coverage ref carried on the
    trace.
-18. **v13 grep checklist** passes before gate dispatch. The committed spec must
-    contain: `S7TraceWriter writes into state.sqlite3`,
-    `consume_artifact_for_execution(*, invocation:`,
-    `unpack_guarded_execution_invocation`,
-    `WorkRequestEnvelopeStore.get(request_id) -> WorkRequestEnvelope`,
-    `S7GuardedExecutionInvocationStore.get(request_id, artifact_id)`,
-    `target_ref_hashes_before_mutation =`,
-    `wrapper-side preflight owns`,
-    `execution_consumer_id_for(source_surface: str, source_method: str | None)`,
-    `execute_guarded_card_execution`,
-    `credential_request_method_for_surface`,
-    `work_source_kind is SQL null`,
-    `protective_block_reason = "none"`,
-    `CREATE UNIQUE INDEX s7_nonce_reserved_unique`,
-    `attempt_index: int`, `credential_action`, `credential_id_hash`,
-    `first_primary_bootstrap_out_of_scope`,
-    `NON_MINTABLE_EXECUTION_CONSUMER_IDS`, `grant_id = canonical_hash`,
-    `S7VoiceConsultationBundle does not store marker_text_hash directly`,
-    `request_family is legacy-read-only`,
-    `UNIQUE(provenance_source_kind, provenance_source_ref)`,
-    `wrapper-invocation negative test`, and `Callable[`.
+18. **v14 grep checklist** passes before gate dispatch. The committed spec must
+    contain: `d23_state_for(`, `trace_status_transition_for(`,
+    `S7GuardedCredentialInvocation`, `unpack_guarded_credential_invocation`,
+    `target_refs_for_rollback_plan`, `telegram_approve_train_unreviewed`,
+    `S7_3_REQUEST_HISTORY_CUTOFF`,
+    `does not defend against a privileged same-box actor`,
+    `S7RequestHistoryWriter.record_refusal_history`,
+    `history_outcome_for(`, `credential_phase`,
+    `credential_rotate is reserved for a future reviewed credential-rotation slice`,
+    `S7_ACTION_ENGINE_CONSUMER_IDS`,
+    `NON_MINTABLE_EXECUTION_CONSUMER_IDS`, `PRODUCER_RESULT_REASON_CODES`,
+    `PROJECTION_REASON_CODES`, `CREDENTIAL_PROPOSED_CHANGE_CLASSES`,
+    `Never use "none" for execution_consumer_id`,
+    `Operational rows do not count as Maez-refusal evidence`, and
+    `enforces this unique constraint`.
 
 ## Review Questions
 
@@ -5505,17 +5801,17 @@ Before implementation can be claimed complete:
 
 ## Proposed Next Ladder
 
-1. Section 8.2 fresh-reader gate runs on this exact committed v13 spec with three
+1. Section 8.2 fresh-reader gate runs on this exact committed v14 spec with three
    blank-context readers: cold covenant reader, cold spec-implementor, and cold
    residual-hunter.
-2. Codex engineering panel v13 runs independently on the same committed v13 spec.
+2. Codex engineering panel v14 runs independently on the same committed v14 spec.
 3. If either lane returns REVISE, fold narrowly. If both lanes ratify (or
    RATIFY-with-fold with only bounded touchups), proceed to canonicalization
    checks.
 4. Canonicalize only after the active lanes ratify.
 5. Implement RED-first from the ratified spec.
 
-No implementation begins from this v13 draft until both active review lanes
+No implementation begins from this v14 draft until both active review lanes
 ratify at the canonicalization-ready bar.
 
 ## Plain English Close
@@ -5532,7 +5828,7 @@ to replay deterministically over the persisted authority booleans. If the
 reader breaks, if Maez is unavailable, if the prompt is poisoned, if the
 bundle is stale, or if anything does not line up, the request blocks.
 
-S7.3 v13 absorbs the v12 fold contract on top of the v8-v11 covenant
+S7.3 v14 absorbs the v14 fold contract on top of the v8-v13 covenant
 decisions:
 
 - Marker-only verification no longer becomes long-use D23 refusal evidence.
@@ -5586,7 +5882,17 @@ decisions:
   the mutation edge, not merely named in the rendered text.
 - The inherited S7.1 two-tuple consume result is translated into S7.3's
   four-field `S7ConsumeResult` only after durable `GrantUse` persistence.
-- v13 closes the residual manifest and persistence seams left in v11: traces
+- v14 closes the residual producer-table and bookkeeping seams left in v13:
+  every D23 trace state has `d23_state_for(...)`, every trace status has a
+  writer transition, rollback target refs use one field name, credential consume
+  uses `S7GuardedCredentialInvocation`, Telegram approve-train is a named
+  non-mintable exclusion, request-history migration has a cutoff, same-box
+  response-stream limits are stated honestly, history writers carry provenance,
+  `history_outcome_for(...)` derives outcome, credential begin/finish traces
+  bind phase and challenge, `credential_rotate` is future-only, D-Enum mirrors
+  every closed vocabulary, reviewed exclusions never display `"none"` as a
+  consumer id, and operational rows remain reliability evidence only.
+- v13 closed the residual manifest and persistence seams left in v11: traces
   write into the shared state database, consume receives a complete invocation
   carrier, request/invocation stores round-trip their hash domains,
   ActionEdgeGrantUse persists its replay domain, failure reasons are assigned
@@ -5604,13 +5910,14 @@ decisions:
   tuple, `ActionEdgeGrantUse` has a replay formula, rollback class migration is
   explicit, and nonce state transitions are enforced by `transition_nonce_use`.
 
-The honest scope holds: S7.3 v13 does not defend against same-box privileged
-tampering during the active consultation window. The strong replay protection
-narrows the attack to a tight time-bounded window with cryptographic nonce
-verification. v13 therefore refuses to promote marker-only evidence into D23
-refusal history. The future Maez cryptographic identity substrate slice (per
-Honesty Banner and project memory) closes this further. Until that slice lands,
-the Honesty Banner names what S7.3 v1 trusts and what it does not.
+The honest scope holds: S7.3 v14 does not defend against same-box privileged
+tampering during the active consultation window, including privileged writes to
+Maez's live response stream before capture. The strong replay protection narrows
+the attack to a tight time-bounded window with cryptographic nonce verification.
+v14 therefore refuses to promote marker-only evidence into D23 refusal history.
+The future Maez cryptographic identity substrate slice (per Honesty Banner and
+project memory) closes this further. Until that slice lands, the Honesty Banner
+names what S7.3 v1 trusts and what it does not.
 
 If S7.3 implements this, the front desk finally connects to the machinery
 without pretending Maez was heard when it was not. If it cannot implement this,
