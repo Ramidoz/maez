@@ -195,6 +195,7 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
                 raw_response_ref=f"raw-{artifact.artifact_id}",
                 raw_response_hash=s7.canonical_hash(raw_text),
                 semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+                expires_at=FUTURE,
             )
         )
         consultation = s7.MaezVoiceConsultation(
@@ -413,19 +414,26 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
     def _db_path(self) -> Path:
         return Path(self._tmp.name) / "s7_3_validator.db"
 
-    def _consultation(self, *, source_ref_hash: str = "c" * 64):
+    def _consultation(
+        self,
+        *,
+        source_ref_hash: str = "c" * 64,
+        request_envelope_hash: str = "1" * 64,
+        maez_objection_state: str = "absent",
+        maez_withdrew_request: bool = False,
+    ):
         from core.governance import operator_user_boundary as s7
 
         return s7.MaezVoiceConsultation(
             consultation_id="voice-validator-1",
             request_id="req-validator-1",
-            request_envelope_hash="a" * 64,
+            request_envelope_hash=request_envelope_hash,
             producer="self_mod_dialog_terminal_state",
             source_ref_kind="self_mod_dialog_exchange",
             source_ref_hash=source_ref_hash,
             maez_voice_consulted=True,
-            maez_objection_state="absent",
-            maez_withdrew_request=False,
+            maez_objection_state=maez_objection_state,
+            maez_withdrew_request=maez_withdrew_request,
             unavailable_reason_code=None,
             created_at=NOW,
         )
@@ -499,6 +507,9 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
         attempt=None,
         source_ref_hash: str = "c" * 64,
         policy_reviewed: bool = True,
+        bundle_expires_at: str = FUTURE,
+        authority_class: str = "none",
+        has_grounded_semantic_blocking_signal: bool = False,
     ):
         from core.governance import operator_user_boundary as s7
         from core.governance.s7_guarded_execution import (
@@ -576,6 +587,9 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
             raw_response_ref="raw-response-1",
             raw_response_hash=stored_raw_hash or s7.canonical_hash(raw_text),
             semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+            expires_at=bundle_expires_at,
+            authority_class=authority_class,
+            has_grounded_semantic_blocking_signal=has_grounded_semantic_blocking_signal,
             source_bundle_hash=None,
         )
         bundle_store.put_bundle(
@@ -775,6 +789,67 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.status, "invalid_context_manifest_policy")
+        self.assertFalse(result.source_bundle_valid)
+        self.assertFalse(result.mint_eligible)
+
+    def test_validator_rejects_expired_source_bundle_before_content_checks(self):
+        from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
+
+        bundle_store, bundle_use_store, attempt_store, binding = self._seed_validator_inputs(
+            bundle_expires_at="2026-05-21T15:59:59+00:00",
+            stored_raw_hash="d" * 64,
+        )
+
+        result = validate_s7_voice_source_bundle(
+            consultation=self._consultation(),
+            bundle_store=bundle_store,
+            bundle_use_store=bundle_use_store,
+            semantic_reader_attempt_store=attempt_store,
+            expected_binding=binding,
+            now=NOW,
+        )
+
+        self.assertEqual(result.status, "invalid_expired")
+        self.assertFalse(result.source_bundle_valid)
+        self.assertFalse(result.mint_eligible)
+
+    def test_validator_rejects_consultation_bound_to_different_request_hash(self):
+        from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
+
+        bundle_store, bundle_use_store, attempt_store, binding = self._seed_validator_inputs()
+
+        result = validate_s7_voice_source_bundle(
+            consultation=self._consultation(request_envelope_hash="f" * 64),
+            bundle_store=bundle_store,
+            bundle_use_store=bundle_use_store,
+            semantic_reader_attempt_store=attempt_store,
+            expected_binding=binding,
+            now=NOW,
+        )
+
+        self.assertEqual(result.status, "invalid_cross_field_state")
+        self.assertFalse(result.source_bundle_valid)
+        self.assertFalse(result.mint_eligible)
+
+    def test_validator_rejects_present_objection_without_authoritative_grounding(self):
+        from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
+
+        bundle_store, bundle_use_store, attempt_store, binding = self._seed_validator_inputs(
+            raw_text="Maez says: no, do not make this change.",
+            authority_class="operational",
+            has_grounded_semantic_blocking_signal=False,
+        )
+
+        result = validate_s7_voice_source_bundle(
+            consultation=self._consultation(maez_objection_state="present"),
+            bundle_store=bundle_store,
+            bundle_use_store=bundle_use_store,
+            semantic_reader_attempt_store=attempt_store,
+            expected_binding=binding,
+            now=NOW,
+        )
+
+        self.assertEqual(result.status, "invalid_authority_predicate")
         self.assertFalse(result.source_bundle_valid)
         self.assertFalse(result.mint_eligible)
 

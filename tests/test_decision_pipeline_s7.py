@@ -405,6 +405,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
                 raw_response_ref=f"raw-response-{card.request_id}",
                 raw_response_hash=s7.canonical_hash(raw_text),
                 semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+                expires_at="2026-05-18T11:05:00+00:00",
             )
         )
         bundle_use_store.put_unreserved(

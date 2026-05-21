@@ -18,6 +18,9 @@ VOICE_SOURCE_BUNDLE_VALIDATION_STATUSES = frozenset({
     "invalid_prompt_integrity",
     "invalid_hash_binding",
     "invalid_context_manifest_policy",
+    "invalid_expired",
+    "invalid_cross_field_state",
+    "invalid_authority_predicate",
     "raw_response_hash_mismatch",
     "reader_route_mismatch",
     "source_bundle_unavailable",
@@ -37,6 +40,12 @@ VOICE_BUNDLE_RESERVATION_STATES = frozenset({
     "unreserved",
     "reserved",
     "consumed",
+})
+
+S7_VOICE_AUTHORITY_CLASSES = frozenset({
+    "none",
+    "operational",
+    "authoritative",
 })
 
 S7_VOICE_SEMANTIC_READER_ROUTE_ID = "s7_voice_semantic_reader_v1"
@@ -370,6 +379,9 @@ class S7VoiceConsultationBundle:
     raw_response_ref: str | None
     raw_response_hash: str | None
     semantic_reader_attempt_hash: str | None
+    expires_at: str
+    authority_class: str = "none"
+    has_grounded_semantic_blocking_signal: bool = False
     context_manifest_ref: str | None = None
     source_bundle_hash: str | None = None
 
@@ -413,6 +425,10 @@ class S7VoiceConsultationBundle:
                 self.semantic_reader_attempt_hash,
                 field="semantic_reader_attempt_hash",
             )
+        s7._timestamp_text(self.expires_at, field="expires_at")
+        s7._validate_closed_value(self.authority_class, S7_VOICE_AUTHORITY_CLASSES, "authority_class")
+        if not isinstance(self.has_grounded_semantic_blocking_signal, bool):
+            raise ValueError("has_grounded_semantic_blocking_signal must be bool")
         if self.context_manifest_ref is not None and not self.context_manifest_ref:
             raise ValueError("context_manifest_ref must be non-empty when present")
         if self.source_bundle_hash is not None:
@@ -430,6 +446,8 @@ def s7_voice_consultation_bundle_hash(bundle: S7VoiceConsultationBundle) -> str:
         "consultation_id": bundle.consultation_id,
         "context_manifest_hash": bundle.context_manifest_hash,
         "context_manifest_ref": bundle.context_manifest_ref,
+        "expires_at": bundle.expires_at,
+        "has_grounded_semantic_blocking_signal": bundle.has_grounded_semantic_blocking_signal,
         "maez_voice_consultation_hash": bundle.maez_voice_consultation_hash,
         "model_config_hash": bundle.model_config_hash,
         "model_routing_identity_hash": bundle.model_routing_identity_hash,
@@ -445,6 +463,7 @@ def s7_voice_consultation_bundle_hash(bundle: S7VoiceConsultationBundle) -> str:
         "rollback_plan_ref": bundle.rollback_plan_ref,
         "runtime_identity_hash": bundle.runtime_identity_hash,
         "semantic_reader_attempt_hash": bundle.semantic_reader_attempt_hash,
+        "authority_class": bundle.authority_class,
     })
 
 
@@ -575,6 +594,9 @@ CREATE TABLE IF NOT EXISTS s7_voice_consultation_bundles (
     raw_response_ref TEXT,
     raw_response_hash TEXT,
     semantic_reader_attempt_hash TEXT,
+    expires_at TEXT,
+    authority_class TEXT,
+    has_grounded_semantic_blocking_signal INTEGER,
     source_bundle_hash TEXT
 );
 """
@@ -608,6 +630,9 @@ class S7VoiceConsultationBundleStore:
                 "runtime_identity_hash",
                 "model_routing_identity_hash",
                 "model_config_hash",
+                "expires_at",
+                "authority_class",
+                "has_grounded_semantic_blocking_signal",
                 "source_bundle_hash",
             ):
                 if column_name not in columns:
@@ -885,8 +910,11 @@ class S7VoiceConsultationBundleStore:
                     raw_response_ref,
                     raw_response_hash,
                     semantic_reader_attempt_hash,
+                    expires_at,
+                    authority_class,
+                    has_grounded_semantic_blocking_signal,
                     source_bundle_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     bundle.source_ref_hash,
@@ -910,6 +938,9 @@ class S7VoiceConsultationBundleStore:
                     bundle.raw_response_ref,
                     bundle.raw_response_hash,
                     bundle.semantic_reader_attempt_hash,
+                    bundle.expires_at,
+                    bundle.authority_class,
+                    1 if bundle.has_grounded_semantic_blocking_signal else 0,
                     bundle.source_bundle_hash,
                 ),
             )
@@ -935,7 +966,8 @@ class S7VoiceConsultationBundleStore:
                        context_manifest_ref, context_manifest_hash, runtime_identity_hash,
                        model_routing_identity_hash, model_config_hash,
                        raw_response_ref, raw_response_hash,
-                       semantic_reader_attempt_hash, source_bundle_hash
+                       semantic_reader_attempt_hash, expires_at, authority_class,
+                       has_grounded_semantic_blocking_signal, source_bundle_hash
                 FROM s7_voice_consultation_bundles
                 WHERE source_ref_hash = ?
                 """,
@@ -968,7 +1000,10 @@ class S7VoiceConsultationBundleStore:
             raw_response_ref=None if row[18] is None else str(row[18]),
             raw_response_hash=None if row[19] is None else str(row[19]),
             semantic_reader_attempt_hash=None if row[20] is None else str(row[20]),
-            source_bundle_hash=None if row[21] is None else str(row[21]),
+            expires_at=str(row[21]) if row[21] is not None else "1970-01-01T00:00:00+00:00",
+            authority_class=str(row[22]) if row[22] is not None else "none",
+            has_grounded_semantic_blocking_signal=bool(row[23]),
+            source_bundle_hash=None if row[24] is None else str(row[24]),
         )
 
 _SEMANTIC_READER_ATTEMPT_SCHEMA = """
@@ -1423,6 +1458,48 @@ def _context_manifest_policy_valid(
     )
 
 
+def _bundle_fresh(bundle: S7VoiceConsultationBundle, *, now: str) -> bool:
+    now_dt = s7._canonical_timestamp(now)
+    expires_dt = s7._canonical_timestamp(bundle.expires_at)
+    return now_dt is not None and expires_dt is not None and expires_dt > now_dt
+
+
+def _consultation_bundle_cross_fields_valid(
+    *,
+    consultation: s7.MaezVoiceConsultation,
+    bundle: S7VoiceConsultationBundle,
+) -> bool:
+    if bundle.request_envelope_hash != consultation.request_envelope_hash:
+        return False
+    if consultation.maez_objection_state == "absent":
+        return (
+            consultation.maez_voice_consulted is True
+            and consultation.maez_withdrew_request is False
+            and consultation.unavailable_reason_code in {None, "none"}
+            and bundle.authority_class == "none"
+            and bundle.has_grounded_semantic_blocking_signal is False
+        )
+    if consultation.maez_objection_state == "present":
+        return consultation.maez_voice_consulted is True
+    return False
+
+
+def _authority_predicate_valid(
+    *,
+    consultation: s7.MaezVoiceConsultation,
+    bundle: S7VoiceConsultationBundle,
+) -> bool:
+    if (
+        consultation.maez_objection_state == "present"
+        or consultation.maez_withdrew_request is True
+    ):
+        return (
+            bundle.authority_class == "authoritative"
+            and bundle.has_grounded_semantic_blocking_signal is True
+        )
+    return bundle.authority_class == "none"
+
+
 def validate_s7_voice_source_bundle(
     *,
     consultation: s7.MaezVoiceConsultation,
@@ -1438,9 +1515,10 @@ def validate_s7_voice_source_bundle(
     This is intentionally narrower than the full canonical validator while the
     producer side is still being built: it enforces the covenant-load-bearing
     checks needed before artifact minting may accept `valid_absent` at all:
-    exact-change hash binding, context-manifest policy validation, rendered
-    prompt replay, raw Maez response replay, and reviewed semantic-reader route
-    identity.
+    bundle immutability, bundle freshness, consultation/bundle cross-field
+    consistency, exact-change hash binding, context-manifest policy validation,
+    rendered prompt replay, raw Maez response replay, reviewed semantic-reader
+    route identity, and the authority predicate for grounded objections.
     """
 
     if not isinstance(consultation, s7.MaezVoiceConsultation):
@@ -1474,6 +1552,21 @@ def validate_s7_voice_source_bundle(
                 status="invalid_hash_binding",
                 authority_projection="operational_block",
                 failure_reason_code="invalid_hash_binding",
+            )
+        if not _bundle_fresh(bundle, now=now):
+            return _failed_source_bundle_validation(
+                status="invalid_expired",
+                authority_projection="operational_block",
+                failure_reason_code="invalid_expired",
+            )
+        if not _consultation_bundle_cross_fields_valid(
+            consultation=consultation,
+            bundle=bundle,
+        ):
+            return _failed_source_bundle_validation(
+                status="invalid_cross_field_state",
+                authority_projection="operational_block",
+                failure_reason_code="invalid_cross_field_state",
             )
         if not isinstance(expected_binding, S7VoiceSourceBundleHashBinding):
             return _failed_source_bundle_validation(
@@ -1572,6 +1665,15 @@ def validate_s7_voice_source_bundle(
                 failure_reason_code="reader_route_mismatch",
             )
 
+        if not _authority_predicate_valid(
+            consultation=consultation,
+            bundle=bundle,
+        ):
+            return _failed_source_bundle_validation(
+                status="invalid_authority_predicate",
+                authority_projection="operational_block",
+                failure_reason_code="invalid_authority_predicate",
+            )
         if (
             consultation.maez_objection_state == "present"
             or consultation.maez_withdrew_request is True

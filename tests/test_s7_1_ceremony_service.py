@@ -1252,6 +1252,7 @@ class S71CeremonyServiceTests(unittest.TestCase):
                     raw_response_ref="raw-response-ceremony",
                     raw_response_hash=s7.canonical_hash(raw_text),
                     semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+                    expires_at="2026-05-18T11:05:00+00:00",
                 )
             )
             bundle_use_store.put_unreserved(
@@ -1403,6 +1404,9 @@ class S71CeremonyServiceTests(unittest.TestCase):
                     raw_response_ref="raw-response-refusal",
                     raw_response_hash=s7.canonical_hash(raw_text),
                     semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+                    expires_at="2026-05-18T11:05:00+00:00",
+                    authority_class="authoritative",
+                    has_grounded_semantic_blocking_signal=True,
                 )
             )
             bundle_use_store.put_unreserved(
@@ -1554,6 +1558,9 @@ class S71CeremonyServiceTests(unittest.TestCase):
                     raw_response_ref="raw-response-refusal-tampered",
                     raw_response_hash="d" * 64,
                     semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+                    expires_at="2026-05-18T11:05:00+00:00",
+                    authority_class="authoritative",
+                    has_grounded_semantic_blocking_signal=True,
                 )
             )
             bundle_use_store.put_unreserved(

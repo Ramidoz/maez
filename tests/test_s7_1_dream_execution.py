@@ -242,6 +242,7 @@ class S71DreamExecutionTests(unittest.TestCase):
                 raw_response_ref=f"raw-response-{rendered.request_id}",
                 raw_response_hash=s7.canonical_hash(raw_text),
                 semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+                expires_at=FUTURE,
             )
         )
         bundle_use_store.put_unreserved(
