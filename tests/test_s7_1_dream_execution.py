@@ -167,6 +167,35 @@ class S71DreamExecutionTests(unittest.TestCase):
             verifier=_LiveAuthorizationVerifier(),
             store_factory=lambda: store,
         )
+        from core.governance.s7_guarded_execution import (
+            S7GuardedStateStore,
+            S7VoiceBundleUse,
+            S7VoiceBundleUseStore,
+            S7VoiceSourceBundleValidationResult,
+        )
+
+        auth_store = s7.S7AuthorizationStore(store.db_path)
+        bundle_use_store = S7VoiceBundleUseStore(store.db_path)
+        consultation = self._voice_consultation(envelope)
+        bundle_use_store.put_unreserved(
+            S7VoiceBundleUse.new_unreserved(
+                request_id=envelope.request_id,
+                source_ref_hash=consultation.source_ref_hash,
+                consultation_id=consultation.consultation_id,
+                used_at=NOW,
+            )
+        )
+        guarded_store = S7GuardedStateStore(
+            authorization_store=auth_store,
+            voice_bundle_use_store=bundle_use_store,
+        )
+        validation = S7VoiceSourceBundleValidationResult(
+            status="valid_absent",
+            source_bundle_valid=True,
+            mint_eligible=True,
+            authority_projection="valid_absent",
+            failure_reason_code=None,
+        )
         begin = service.authorize_begin(
             now=NOW,
             rendered_statement=rendered,
@@ -179,7 +208,7 @@ class S71DreamExecutionTests(unittest.TestCase):
             envelope=envelope,
             rendered_statement=rendered,
             precondition_hash=envelope.precondition_hash,
-            maez_voice_consultation=self._voice_consultation(envelope),
+            maez_voice_consultation=consultation,
             session_binding=f"session-{rendered.request_id}",
             internal_channel_binding="internal-dream",
             request_json={
@@ -187,10 +216,14 @@ class S71DreamExecutionTests(unittest.TestCase):
                 "credential_ref": "cred-primary",
                 "authentication_response": {"clientDataJSON": "valid-auth"},
             },
+            guarded_store=guarded_store,
+            source_bundle_validation=validation,
+            source_ref_hash=consultation.source_ref_hash,
+            reservation_token=f"reservation-token-{rendered.request_id}",
         )
         self.assertEqual(begin.status_code, 200)
         self.assertEqual(finish.status_code, 200)
-        return s7.S7AuthorizationStore(store.db_path), finish.body["artifact_id"]
+        return auth_store, finish.body["artifact_id"]
 
     def _credential_record(self, credential_ref: str, *, kind: str):
         from core.governance.s7_webauthn_bootstrap import FounderWebAuthnCredentialRecord
@@ -246,8 +279,6 @@ class S71DreamExecutionTests(unittest.TestCase):
         assert prop is not None
         self.assertEqual(prop["status"], "pending")
 
-    # Expected until the guarded positive path replaces the old S7.1 ceremony self-mod factory.
-    @unittest.expectedFailure
     def test_apply_dream_consumes_matching_s7_artifact_before_soul_write(self):
         from core.evolution.dream_state import DreamState
 
@@ -286,13 +317,9 @@ class S71DreamExecutionTests(unittest.TestCase):
         assert prop is not None
         self.assertEqual(prop["status"], "applied")
 
-    # Expected until the guarded positive path replaces the old S7.1 ceremony self-mod factory.
-    @unittest.expectedFailure
     def test_apply_dream_accepts_artifact_minted_by_s7_1_authorize_finish(self):
         from core.evolution.dream_state import DreamState
         from core.governance import operator_user_boundary as s7
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
-        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -304,13 +331,6 @@ class S71DreamExecutionTests(unittest.TestCase):
                 db_path=str(tmp_path / "dream_proposals.db"),
             )
             prop_id = dream._store_proposal("Maez noticed a durable pattern.")
-            store = S7WebAuthnBootstrapStore(tmp_path / "s7_1_webauthn")
-            store.store_credential(self._credential_record("cred-primary", kind="primary"))
-            store.store_credential(self._credential_record("cred-backup", kind="backup"))
-            service = S7LocalWebAuthnCeremonyService(
-                verifier=_LiveAuthorizationVerifier(),
-                store_factory=lambda: store,
-            )
             envelope = dream.build_apply_s7_envelope(prop_id)
             params = dream.s7_apply_action_params(prop_id)
             authority = self._authority_context()
@@ -325,30 +345,15 @@ class S71DreamExecutionTests(unittest.TestCase):
                 expires_at=FUTURE,
                 rendered_at=NOW,
             )
-            begin = service.authorize_begin(
-                now=NOW,
-                rendered_statement=rendered,
-                precondition_hash=envelope.precondition_hash,
-                session_binding="session-dream",
-                internal_channel_binding="internal-dream",
-            )
-            finish = service.authorize_finish(
-                now=NOW,
+            store, artifact_id = self._mint_authorization_through_service(
+                db_path=tmp_path / "s7_authorization_live.db",
                 envelope=envelope,
-                rendered_statement=rendered,
-                precondition_hash=envelope.precondition_hash,
-                maez_voice_consultation=self._voice_consultation(envelope),
-                session_binding="session-dream",
-                internal_channel_binding="internal-dream",
-                request_json={
-                    "challenge_id": begin.body["challenge_id"],
-                    "credential_ref": "cred-primary",
-                    "authentication_response": {"clientDataJSON": "valid-auth"},
-                },
+                rendered=rendered,
+                authority=authority,
             )
             authorization = s7.S7ExecutionAuthorization(
-                store=s7.S7AuthorizationStore(store.db_path),
-                artifact_id=finish.body["artifact_id"],
+                store=store,
+                artifact_id=artifact_id,
                 rendered=rendered,
                 action_params_hash=rendered.action_params_hash,
                 authority_context=authority,
@@ -363,8 +368,6 @@ class S71DreamExecutionTests(unittest.TestCase):
                 s7_execution_authorization=authorization,
             )
 
-        self.assertEqual(begin.status_code, 200)
-        self.assertEqual(finish.status_code, 200)
         self.assertTrue(ok, message)
         self.assertEqual(len(action_engine.calls), 1)
         self.assertIsNotNone(action_engine.calls[0][1])
@@ -397,8 +400,6 @@ class S71DreamExecutionTests(unittest.TestCase):
         assert prop is not None
         self.assertEqual(prop["status"], "pending")
 
-    # Expected until the guarded positive path replaces the old S7.1 ceremony self-mod factory.
-    @unittest.expectedFailure
     def test_apply_section_edit_consumes_matching_s7_artifact_before_write(self):
         from core.evolution.dream_state import DreamState
 

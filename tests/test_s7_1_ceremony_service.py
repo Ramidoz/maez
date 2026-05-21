@@ -1148,6 +1148,92 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(artifact_count, 0)
         self.assertEqual(len(history), 0)
 
+    def test_authorize_finish_for_voice_seat_mints_with_validated_bundle_reservation(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_guarded_execution import (
+            S7GuardedStateStore,
+            S7VoiceBundleUse,
+            S7VoiceBundleUseStore,
+            S7VoiceSourceBundleValidationResult,
+        )
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            auth_store = s7.S7AuthorizationStore(store.db_path)
+            bundle_use_store = S7VoiceBundleUseStore(store.db_path)
+            guarded_store = S7GuardedStateStore(
+                authorization_store=auth_store,
+                voice_bundle_use_store=bundle_use_store,
+            )
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+            envelope = self._self_mod_envelope()
+            consultation = self._voice_consultation(state="absent")
+            rendered = self._rendered_statement()
+            bundle_use_store.put_unreserved(
+                S7VoiceBundleUse.new_unreserved(
+                    request_id=envelope.request_id,
+                    source_ref_hash=consultation.source_ref_hash,
+                    consultation_id=consultation.consultation_id,
+                    used_at=NOW,
+                )
+            )
+            validation = S7VoiceSourceBundleValidationResult(
+                status="valid_absent",
+                source_bundle_valid=True,
+                mint_eligible=True,
+                authority_projection="valid_absent",
+                failure_reason_code=None,
+            )
+            begin = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+            )
+
+            finish = service.authorize_finish(
+                now=NOW,
+                envelope=envelope,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                maez_voice_consultation=consultation,
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+                request_json={
+                    "challenge_id": begin.body["challenge_id"],
+                    "credential_ref": "cred-primary",
+                    "authentication_response": {"clientDataJSON": "valid-auth"},
+                },
+                guarded_store=guarded_store,
+                source_bundle_validation=validation,
+                source_ref_hash=consultation.source_ref_hash,
+                reservation_token="runtime-token-not-persisted",
+            )
+            artifact_count = self._authorization_artifact_count(store.db_path)
+            reserved = bundle_use_store.get_for_source_ref(consultation.source_ref_hash)
+            history = store.refusal_history_for_envelope(envelope)
+
+        self.assertEqual(finish.status_code, 200)
+        self.assertEqual(finish.body["grant_source"], "founder_webauthn")
+        self.assertEqual(artifact_count, 1)
+        self.assertIsNotNone(reserved)
+        assert reserved is not None
+        self.assertEqual(reserved.reservation_state, "reserved")
+        self.assertEqual(reserved.artifact_id, finish.body["artifact_id"])
+        self.assertEqual(
+            reserved.reservation_token_hash,
+            s7.canonical_hash("runtime-token-not-persisted"),
+        )
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0].outcome, "authorized")
+
     def test_backup_registration_authorization_completes_without_voice_producer(self):
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 

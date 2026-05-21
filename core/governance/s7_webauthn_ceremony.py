@@ -500,6 +500,10 @@ class S7LocalWebAuthnCeremonyService:
         session_binding: str,
         internal_channel_binding: str,
         request_json: dict[str, Any] | None,
+        guarded_store: Any | None = None,
+        source_bundle_validation: Any | None = None,
+        source_ref_hash: str | None = None,
+        reservation_token: str | None = None,
     ) -> S7CeremonyServiceResult:
         dependency = self.verifier.dependency_state()
         if dependency.get("ok") is not True:
@@ -642,14 +646,23 @@ class S7LocalWebAuthnCeremonyService:
             mint_authorization_artifact(
                 artifact=artifact,
                 authorization_store=s7.S7AuthorizationStore(store.db_path),
-                guarded_store=None,
+                guarded_store=guarded_store,
+                source_bundle_validation=source_bundle_validation,
+                source_ref_hash=source_ref_hash,
+                reservation_token=reservation_token,
+                now=now,
             )
         except ValueError as exc:
             if artifact.derived_work_class in s7.VOICE_SEAT_WORK_CLASSES:
+                error = (
+                    "s7_guarded_state_store_required"
+                    if guarded_store is None
+                    else "s7_guarded_source_bundle_required"
+                )
                 return S7CeremonyServiceResult(
                     body={
                         "ok": False,
-                        "error": "s7_guarded_state_store_required",
+                        "error": error,
                         "detail": str(exc),
                     },
                     status_code=409,

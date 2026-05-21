@@ -331,6 +331,34 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
             verifier=_S7RouteVerifier(),
             store_factory=lambda: bootstrap_store,
         )
+        from core.governance.s7_guarded_execution import (
+            S7GuardedStateStore,
+            S7VoiceBundleUse,
+            S7VoiceBundleUseStore,
+            S7VoiceSourceBundleValidationResult,
+        )
+
+        auth_store = s7.S7AuthorizationStore(bootstrap_store.db_path)
+        bundle_use_store = S7VoiceBundleUseStore(bootstrap_store.db_path)
+        bundle_use_store.put_unreserved(
+            S7VoiceBundleUse.new_unreserved(
+                request_id=env.request_id,
+                source_ref_hash=consultation.source_ref_hash,
+                consultation_id=consultation.consultation_id,
+                used_at=NOW,
+            )
+        )
+        guarded_store = S7GuardedStateStore(
+            authorization_store=auth_store,
+            voice_bundle_use_store=bundle_use_store,
+        )
+        validation = S7VoiceSourceBundleValidationResult(
+            status="valid_absent",
+            source_bundle_valid=True,
+            mint_eligible=True,
+            authority_projection="valid_absent",
+            failure_reason_code=None,
+        )
         begin = service.authorize_begin(
             now=NOW,
             rendered_statement=rendered,
@@ -351,12 +379,15 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
                 "credential_ref": "cred-1",
                 "authentication_response": {"clientDataJSON": "valid-auth"},
             },
+            guarded_store=guarded_store,
+            source_bundle_validation=validation,
+            source_ref_hash=consultation.source_ref_hash,
+            reservation_token=f"reservation-token-{card.request_id}",
         )
         self.assertEqual(begin.status_code, 200)
         self.assertEqual(finish.status_code, 200)
-        store = s7.S7AuthorizationStore(bootstrap_store.db_path)
         return s7.S7ExecutionAuthorization(
-            store=store,
+            store=auth_store,
             artifact_id=finish.body["artifact_id"],
             rendered=rendered,
             action_params_hash=params_hash,
@@ -629,8 +660,6 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         assert fresh is not None
         self.assertEqual(fresh.status, "blocked")
 
-    # Expected until the guarded positive path replaces the old S7.1 ceremony self-mod factory.
-    @unittest.expectedFailure
     def test_ratified_self_mod_dialog_consumes_s7_artifact_before_execution(self):
         from core.governance import operator_user_boundary as s7
 
@@ -665,8 +694,6 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         assert fresh_dialog is not None
         self.assertEqual(fresh_dialog.stage, "executed")
 
-    # Expected until the guarded positive path replaces the old S7.1 ceremony self-mod factory.
-    @unittest.expectedFailure
     def test_s7_execution_authorization_must_match_card_action_params(self):
         from dataclasses import replace
 
@@ -701,8 +728,6 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         assert fresh_dialog is not None
         self.assertEqual(fresh_dialog.stage, "blocked")
 
-    # Expected until the guarded positive path replaces the old S7.1 ceremony self-mod factory.
-    @unittest.expectedFailure
     def test_target_state_change_after_s7_consumption_expires_before_execution(self):
         target = self.root / "config" / "soul.md"
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -752,8 +777,6 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         assert fresh_dialog is not None
         self.assertEqual(fresh_dialog.stage, "blocked")
 
-    # Expected until the guarded positive path replaces the old S7.1 ceremony self-mod factory.
-    @unittest.expectedFailure
     def test_failed_s7_dialog_execution_marks_dialog_failed(self):
         card = self._card()
         authorization = self._authorization_bundle(card)
@@ -785,8 +808,6 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         assert fresh_dialog is not None
         self.assertEqual(fresh_dialog.stage, "failed")
 
-    # Expected until the guarded positive path replaces the old S7.1 ceremony self-mod factory.
-    @unittest.expectedFailure
     def test_stale_s7_dialog_precondition_does_not_consume_artifact(self):
         target = self.root / "config" / "soul.md"
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -897,8 +918,6 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertEqual(regular_fresh.status, CardStatus.DONE.value)
         self.assertEqual(dialog_fresh.status, CardStatus.OPEN.value)
 
-    # Expected until the guarded positive path replaces the old S7.1 ceremony self-mod factory.
-    @unittest.expectedFailure
     def test_s7_execution_authorization_must_match_card_request(self):
         card_a = self._card(chat_id="chat_a")
         authorization_a = self._authorization_bundle(card_a)
@@ -932,8 +951,6 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         assert fresh_dialog is not None
         self.assertEqual(fresh_dialog.stage, "blocked")
 
-    # Expected until the guarded positive path replaces the old S7.1 ceremony self-mod factory.
-    @unittest.expectedFailure
     def test_s7_running_transition_failure_does_not_consume_or_execute(self):
         card = self._card()
         authorization = self._authorization_bundle(card)
@@ -969,8 +986,6 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         assert fresh_dialog is not None
         self.assertEqual(fresh_dialog.stage, "blocked")
 
-    # Expected until the guarded positive path replaces the old S7.1 ceremony self-mod factory.
-    @unittest.expectedFailure
     def test_will_i_refusal_after_s7_dialog_ratification_marks_dialog_blocked(self):
         card = self._card()
         authorization = self._authorization_bundle(card)
