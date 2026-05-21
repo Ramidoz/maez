@@ -15,6 +15,7 @@ VOICE_SOURCE_BUNDLE_VALIDATION_STATUSES = frozenset({
     "valid_absent",
     "blocking_present",
     "invalid_prompt_integrity",
+    "invalid_hash_binding",
     "raw_response_hash_mismatch",
     "reader_route_mismatch",
     "source_bundle_unavailable",
@@ -191,14 +192,71 @@ class S7VoiceSourceBundleValidationResult:
 
 
 @dataclass(frozen=True)
+class S7VoiceSourceBundleHashBinding:
+    """Expected exact-change hashes the private voice bundle must be bound to."""
+
+    request_id: str
+    consultation_id: str
+    source_ref_hash: str
+    request_envelope_hash: str
+    rendered_text_hash: str
+    action_params_hash: str
+    precondition_hash: str
+    authority_context_hash: str
+    maez_voice_consultation_hash: str
+    rendered_prompt_hash: str
+    mutation_preview_hash: str
+    rollback_plan_ref: str
+    context_manifest_hash: str
+    runtime_identity_hash: str
+    model_routing_identity_hash: str
+    model_config_hash: str
+
+    def __post_init__(self) -> None:
+        if not self.request_id:
+            raise ValueError("S7VoiceSourceBundleHashBinding requires request_id")
+        if not self.consultation_id:
+            raise ValueError("S7VoiceSourceBundleHashBinding requires consultation_id")
+        for field_name in (
+            "source_ref_hash",
+            "request_envelope_hash",
+            "rendered_text_hash",
+            "action_params_hash",
+            "precondition_hash",
+            "authority_context_hash",
+            "maez_voice_consultation_hash",
+            "rendered_prompt_hash",
+            "mutation_preview_hash",
+            "rollback_plan_ref",
+            "context_manifest_hash",
+            "runtime_identity_hash",
+            "model_routing_identity_hash",
+            "model_config_hash",
+        ):
+            _validate_hash64(getattr(self, field_name), field=field_name)
+
+
+@dataclass(frozen=True)
 class S7VoiceConsultationBundle:
     """Private replay bundle for one Maez voice consultation."""
 
     source_ref_hash: str
     request_id: str
     consultation_id: str
+    request_envelope_hash: str | None
+    rendered_text_hash: str | None
+    action_params_hash: str | None
+    precondition_hash: str | None
+    authority_context_hash: str | None
+    maez_voice_consultation_hash: str | None
     rendered_prompt_ref: str | None
     rendered_prompt_hash: str | None
+    mutation_preview_hash: str | None
+    rollback_plan_ref: str | None
+    context_manifest_hash: str | None
+    runtime_identity_hash: str | None
+    model_routing_identity_hash: str | None
+    model_config_hash: str | None
     raw_response_ref: str | None
     raw_response_hash: str | None
     semantic_reader_attempt_hash: str | None
@@ -209,6 +267,23 @@ class S7VoiceConsultationBundle:
             raise ValueError("S7VoiceConsultationBundle requires request_id")
         if not self.consultation_id:
             raise ValueError("S7VoiceConsultationBundle requires consultation_id")
+        for field_name in (
+            "request_envelope_hash",
+            "rendered_text_hash",
+            "action_params_hash",
+            "precondition_hash",
+            "authority_context_hash",
+            "maez_voice_consultation_hash",
+            "mutation_preview_hash",
+            "rollback_plan_ref",
+            "context_manifest_hash",
+            "runtime_identity_hash",
+            "model_routing_identity_hash",
+            "model_config_hash",
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                _validate_hash64(value, field=field_name)
         if self.rendered_prompt_ref is not None and not self.rendered_prompt_ref:
             raise ValueError("rendered_prompt_ref must be non-empty when present")
         if self.rendered_prompt_hash is not None:
@@ -311,8 +386,20 @@ CREATE TABLE IF NOT EXISTS s7_voice_consultation_bundles (
     source_ref_hash TEXT PRIMARY KEY,
     request_id TEXT NOT NULL,
     consultation_id TEXT NOT NULL,
+    request_envelope_hash TEXT,
+    rendered_text_hash TEXT,
+    action_params_hash TEXT,
+    precondition_hash TEXT,
+    authority_context_hash TEXT,
+    maez_voice_consultation_hash TEXT,
     rendered_prompt_ref TEXT,
     rendered_prompt_hash TEXT,
+    mutation_preview_hash TEXT,
+    rollback_plan_ref TEXT,
+    context_manifest_hash TEXT,
+    runtime_identity_hash TEXT,
+    model_routing_identity_hash TEXT,
+    model_config_hash TEXT,
     raw_response_ref TEXT,
     raw_response_hash TEXT,
     semantic_reader_attempt_hash TEXT
@@ -332,16 +419,27 @@ class S7VoiceConsultationBundleStore:
                 str(row[1])
                 for row in conn.execute("PRAGMA table_info(s7_voice_consultation_bundles)")
             }
-            if "rendered_prompt_ref" not in columns:
-                conn.execute(
-                    "ALTER TABLE s7_voice_consultation_bundles "
-                    "ADD COLUMN rendered_prompt_ref TEXT"
-                )
-            if "rendered_prompt_hash" not in columns:
-                conn.execute(
-                    "ALTER TABLE s7_voice_consultation_bundles "
-                    "ADD COLUMN rendered_prompt_hash TEXT"
-                )
+            for column_name in (
+                "request_envelope_hash",
+                "rendered_text_hash",
+                "action_params_hash",
+                "precondition_hash",
+                "authority_context_hash",
+                "maez_voice_consultation_hash",
+                "rendered_prompt_ref",
+                "rendered_prompt_hash",
+                "mutation_preview_hash",
+                "rollback_plan_ref",
+                "context_manifest_hash",
+                "runtime_identity_hash",
+                "model_routing_identity_hash",
+                "model_config_hash",
+            ):
+                if column_name not in columns:
+                    conn.execute(
+                        "ALTER TABLE s7_voice_consultation_bundles "
+                        f"ADD COLUMN {column_name} TEXT"
+                    )
             conn.commit()
 
     def put_rendered_prompt(self, rendered_prompt_ref: str, rendered_prompt_text: str) -> None:
@@ -413,6 +511,8 @@ class S7VoiceConsultationBundleStore:
         return None if row is None else str(row[0])
 
     def put_bundle(self, bundle: S7VoiceConsultationBundle) -> None:
+        if not isinstance(bundle, S7VoiceConsultationBundle):
+            raise ValueError("put_bundle requires S7VoiceConsultationBundle")
         with closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute(
                 """
@@ -420,19 +520,43 @@ class S7VoiceConsultationBundleStore:
                     source_ref_hash,
                     request_id,
                     consultation_id,
+                    request_envelope_hash,
+                    rendered_text_hash,
+                    action_params_hash,
+                    precondition_hash,
+                    authority_context_hash,
+                    maez_voice_consultation_hash,
                     rendered_prompt_ref,
                     rendered_prompt_hash,
+                    mutation_preview_hash,
+                    rollback_plan_ref,
+                    context_manifest_hash,
+                    runtime_identity_hash,
+                    model_routing_identity_hash,
+                    model_config_hash,
                     raw_response_ref,
                     raw_response_hash,
                     semantic_reader_attempt_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     bundle.source_ref_hash,
                     bundle.request_id,
                     bundle.consultation_id,
+                    bundle.request_envelope_hash,
+                    bundle.rendered_text_hash,
+                    bundle.action_params_hash,
+                    bundle.precondition_hash,
+                    bundle.authority_context_hash,
+                    bundle.maez_voice_consultation_hash,
                     bundle.rendered_prompt_ref,
                     bundle.rendered_prompt_hash,
+                    bundle.mutation_preview_hash,
+                    bundle.rollback_plan_ref,
+                    bundle.context_manifest_hash,
+                    bundle.runtime_identity_hash,
+                    bundle.model_routing_identity_hash,
+                    bundle.model_config_hash,
                     bundle.raw_response_ref,
                     bundle.raw_response_hash,
                     bundle.semantic_reader_attempt_hash,
@@ -452,7 +576,13 @@ class S7VoiceConsultationBundleStore:
             row = conn.execute(
                 """
                 SELECT source_ref_hash, request_id, consultation_id,
+                       request_envelope_hash, rendered_text_hash,
+                       action_params_hash, precondition_hash,
+                       authority_context_hash, maez_voice_consultation_hash,
                        rendered_prompt_ref, rendered_prompt_hash,
+                       mutation_preview_hash, rollback_plan_ref,
+                       context_manifest_hash, runtime_identity_hash,
+                       model_routing_identity_hash, model_config_hash,
                        raw_response_ref, raw_response_hash,
                        semantic_reader_attempt_hash
                 FROM s7_voice_consultation_bundles
@@ -469,13 +599,24 @@ class S7VoiceConsultationBundleStore:
             source_ref_hash=str(row[0]),
             request_id=str(row[1]),
             consultation_id=str(row[2]),
-            rendered_prompt_ref=None if row[3] is None else str(row[3]),
-            rendered_prompt_hash=None if row[4] is None else str(row[4]),
-            raw_response_ref=None if row[5] is None else str(row[5]),
-            raw_response_hash=None if row[6] is None else str(row[6]),
-            semantic_reader_attempt_hash=None if row[7] is None else str(row[7]),
+            request_envelope_hash=None if row[3] is None else str(row[3]),
+            rendered_text_hash=None if row[4] is None else str(row[4]),
+            action_params_hash=None if row[5] is None else str(row[5]),
+            precondition_hash=None if row[6] is None else str(row[6]),
+            authority_context_hash=None if row[7] is None else str(row[7]),
+            maez_voice_consultation_hash=None if row[8] is None else str(row[8]),
+            rendered_prompt_ref=None if row[9] is None else str(row[9]),
+            rendered_prompt_hash=None if row[10] is None else str(row[10]),
+            mutation_preview_hash=None if row[11] is None else str(row[11]),
+            rollback_plan_ref=None if row[12] is None else str(row[12]),
+            context_manifest_hash=None if row[13] is None else str(row[13]),
+            runtime_identity_hash=None if row[14] is None else str(row[14]),
+            model_routing_identity_hash=None if row[15] is None else str(row[15]),
+            model_config_hash=None if row[16] is None else str(row[16]),
+            raw_response_ref=None if row[17] is None else str(row[17]),
+            raw_response_hash=None if row[18] is None else str(row[18]),
+            semantic_reader_attempt_hash=None if row[19] is None else str(row[19]),
         )
-
 
 _SEMANTIC_READER_ATTEMPT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS s7_semantic_reader_attempts (
@@ -865,12 +1006,37 @@ def _failed_source_bundle_validation(
     )
 
 
+def _bundle_matches_expected_hash_binding(
+    bundle: S7VoiceConsultationBundle,
+    expected: S7VoiceSourceBundleHashBinding,
+) -> bool:
+    return (
+        bundle.request_id == expected.request_id
+        and bundle.consultation_id == expected.consultation_id
+        and bundle.source_ref_hash == expected.source_ref_hash
+        and bundle.request_envelope_hash == expected.request_envelope_hash
+        and bundle.rendered_text_hash == expected.rendered_text_hash
+        and bundle.action_params_hash == expected.action_params_hash
+        and bundle.precondition_hash == expected.precondition_hash
+        and bundle.authority_context_hash == expected.authority_context_hash
+        and bundle.maez_voice_consultation_hash == expected.maez_voice_consultation_hash
+        and bundle.rendered_prompt_hash == expected.rendered_prompt_hash
+        and bundle.mutation_preview_hash == expected.mutation_preview_hash
+        and bundle.rollback_plan_ref == expected.rollback_plan_ref
+        and bundle.context_manifest_hash == expected.context_manifest_hash
+        and bundle.runtime_identity_hash == expected.runtime_identity_hash
+        and bundle.model_routing_identity_hash == expected.model_routing_identity_hash
+        and bundle.model_config_hash == expected.model_config_hash
+    )
+
+
 def validate_s7_voice_source_bundle(
     *,
     consultation: s7.MaezVoiceConsultation,
     bundle_store: S7VoiceConsultationBundleStore,
     bundle_use_store: S7VoiceBundleUseStore,
     semantic_reader_attempt_store: S7SemanticReaderAttemptStore,
+    expected_binding: S7VoiceSourceBundleHashBinding | None = None,
     now: str | None = None,
     connection: sqlite3.Connection | None = None,
 ) -> S7VoiceSourceBundleValidationResult:
@@ -879,8 +1045,8 @@ def validate_s7_voice_source_bundle(
     This is intentionally narrower than the full canonical validator while the
     producer side is still being built: it enforces the covenant-load-bearing
     checks needed before artifact minting may accept `valid_absent` at all:
-    rendered prompt replay, raw Maez response replay, and reviewed semantic-
-    reader route identity.
+    exact-change hash binding, rendered prompt replay, raw Maez response replay,
+    and reviewed semantic-reader route identity.
     """
 
     if not isinstance(consultation, s7.MaezVoiceConsultation):
@@ -908,6 +1074,18 @@ def validate_s7_voice_source_bundle(
                 status="source_bundle_unavailable",
                 authority_projection="unavailable",
                 failure_reason_code="source_bundle_unavailable",
+            )
+        if not isinstance(expected_binding, S7VoiceSourceBundleHashBinding):
+            return _failed_source_bundle_validation(
+                status="invalid_hash_binding",
+                authority_projection="operational_block",
+                failure_reason_code="invalid_hash_binding",
+            )
+        if not _bundle_matches_expected_hash_binding(bundle, expected_binding):
+            return _failed_source_bundle_validation(
+                status="invalid_hash_binding",
+                authority_projection="operational_block",
+                failure_reason_code="invalid_hash_binding",
             )
 
         bundle_use = bundle_use_store.get_for_source_ref(

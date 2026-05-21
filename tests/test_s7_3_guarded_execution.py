@@ -123,6 +123,7 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
             S7VoiceBundleUseStore,
             S7VoiceConsultationBundle,
             S7VoiceConsultationBundleStore,
+            S7VoiceSourceBundleHashBinding,
             validate_s7_voice_source_bundle,
         )
 
@@ -140,6 +141,25 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
         attempt_store.put(attempt)
         raw_text = "Maez says there is no objection."
         rendered_prompt_text = f"S7 voice consultation prompt for {artifact.request_id}"
+        rendered_prompt_hash = s7.canonical_hash(rendered_prompt_text)
+        binding = S7VoiceSourceBundleHashBinding(
+            request_id=artifact.request_id,
+            consultation_id=f"voice-{artifact.artifact_id}",
+            source_ref_hash=source_ref_hash,
+            request_envelope_hash=artifact.request_envelope_hash,
+            rendered_text_hash=artifact.rendered_text_hash,
+            action_params_hash=artifact.action_params_hash,
+            precondition_hash=artifact.precondition_hash,
+            authority_context_hash=artifact.authority_context_hash,
+            maez_voice_consultation_hash="6" * 64,
+            rendered_prompt_hash=rendered_prompt_hash,
+            mutation_preview_hash="8" * 64,
+            rollback_plan_ref="9" * 64,
+            context_manifest_hash="a" * 64,
+            runtime_identity_hash="b" * 64,
+            model_routing_identity_hash="d" * 64,
+            model_config_hash="e" * 64,
+        )
         bundle_store.put_raw_response(f"raw-{artifact.artifact_id}", raw_text)
         bundle_store.put_rendered_prompt(
             f"prompt-{artifact.artifact_id}",
@@ -150,8 +170,20 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
                 source_ref_hash=source_ref_hash,
                 request_id=artifact.request_id,
                 consultation_id=f"voice-{artifact.artifact_id}",
+                request_envelope_hash=binding.request_envelope_hash,
+                rendered_text_hash=binding.rendered_text_hash,
+                action_params_hash=binding.action_params_hash,
+                precondition_hash=binding.precondition_hash,
+                authority_context_hash=binding.authority_context_hash,
+                maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
                 rendered_prompt_ref=f"prompt-{artifact.artifact_id}",
-                rendered_prompt_hash=s7.canonical_hash(rendered_prompt_text),
+                rendered_prompt_hash=binding.rendered_prompt_hash,
+                mutation_preview_hash=binding.mutation_preview_hash,
+                rollback_plan_ref=binding.rollback_plan_ref,
+                context_manifest_hash=binding.context_manifest_hash,
+                runtime_identity_hash=binding.runtime_identity_hash,
+                model_routing_identity_hash=binding.model_routing_identity_hash,
+                model_config_hash=binding.model_config_hash,
                 raw_response_ref=f"raw-{artifact.artifact_id}",
                 raw_response_hash=s7.canonical_hash(raw_text),
                 semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
@@ -175,6 +207,7 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
             bundle_store=bundle_store,
             bundle_use_store=S7VoiceBundleUseStore(self._db_path()),
             semantic_reader_attempt_store=attempt_store,
+            expected_binding=binding,
             now=NOW,
         )
 
@@ -389,6 +422,30 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
             created_at=NOW,
         )
 
+    def _expected_binding(self, **overrides):
+        from core.governance.s7_guarded_execution import S7VoiceSourceBundleHashBinding
+
+        values = {
+            "request_id": "req-validator-1",
+            "consultation_id": "voice-validator-1",
+            "source_ref_hash": "c" * 64,
+            "request_envelope_hash": "1" * 64,
+            "rendered_text_hash": "2" * 64,
+            "action_params_hash": "3" * 64,
+            "precondition_hash": "4" * 64,
+            "authority_context_hash": "5" * 64,
+            "maez_voice_consultation_hash": "6" * 64,
+            "rendered_prompt_hash": "7" * 64,
+            "mutation_preview_hash": "8" * 64,
+            "rollback_plan_ref": "9" * 64,
+            "context_manifest_hash": "a" * 64,
+            "runtime_identity_hash": "b" * 64,
+            "model_routing_identity_hash": "d" * 64,
+            "model_config_hash": "e" * 64,
+        }
+        values.update(overrides)
+        return S7VoiceSourceBundleHashBinding(**values)
+
     def _reviewed_attempt(self):
         from core.governance.s7_guarded_execution import (
             S7_REVIEWED_SEMANTIC_READER_DECODING_PARAMS_HASH,
@@ -430,6 +487,7 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
         rendered_prompt_text: str = "S7 voice consultation prompt for req-validator-1",
         stored_rendered_prompt_hash: str | None = None,
         store_rendered_prompt: bool = True,
+        binding_overrides: dict | None = None,
         attempt=None,
         source_ref_hash: str = "c" * 64,
     ):
@@ -449,15 +507,32 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
         attempt_store.put(attempt)
         if store_rendered_prompt:
             bundle_store.put_rendered_prompt("rendered-prompt-1", rendered_prompt_text)
+        binding = self._expected_binding(
+            source_ref_hash=source_ref_hash,
+            rendered_prompt_hash=stored_rendered_prompt_hash
+            or s7.canonical_hash(rendered_prompt_text),
+            **(binding_overrides or {}),
+        )
         bundle_store.put_raw_response("raw-response-1", raw_text)
         bundle_store.put_bundle(
             S7VoiceConsultationBundle(
                 source_ref_hash=source_ref_hash,
                 request_id="req-validator-1",
                 consultation_id="voice-validator-1",
+                request_envelope_hash=binding.request_envelope_hash,
+                rendered_text_hash=binding.rendered_text_hash,
+                action_params_hash=binding.action_params_hash,
+                precondition_hash=binding.precondition_hash,
+                authority_context_hash=binding.authority_context_hash,
+                maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
                 rendered_prompt_ref="rendered-prompt-1",
-                rendered_prompt_hash=stored_rendered_prompt_hash
-                or s7.canonical_hash(rendered_prompt_text),
+                rendered_prompt_hash=binding.rendered_prompt_hash,
+                mutation_preview_hash=binding.mutation_preview_hash,
+                rollback_plan_ref=binding.rollback_plan_ref,
+                context_manifest_hash=binding.context_manifest_hash,
+                runtime_identity_hash=binding.runtime_identity_hash,
+                model_routing_identity_hash=binding.model_routing_identity_hash,
+                model_config_hash=binding.model_config_hash,
                 raw_response_ref="raw-response-1",
                 raw_response_hash=stored_raw_hash or s7.canonical_hash(raw_text),
                 semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
@@ -471,7 +546,7 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
                 used_at=NOW,
             )
         )
-        return bundle_store, bundle_use_store, attempt_store
+        return bundle_store, bundle_use_store, attempt_store, binding
 
     def test_valid_absent_cannot_be_caller_constructed(self):
         from core.governance.s7_guarded_execution import S7VoiceSourceBundleValidationResult
@@ -488,13 +563,14 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
     def test_validator_produces_valid_absent_after_raw_response_and_reader_replay(self):
         from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
 
-        bundle_store, bundle_use_store, attempt_store = self._seed_validator_inputs()
+        bundle_store, bundle_use_store, attempt_store, binding = self._seed_validator_inputs()
 
         result = validate_s7_voice_source_bundle(
             consultation=self._consultation(),
             bundle_store=bundle_store,
             bundle_use_store=bundle_use_store,
             semantic_reader_attempt_store=attempt_store,
+            expected_binding=binding,
             now=NOW,
         )
 
@@ -507,7 +583,7 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
     def test_validator_rejects_mismatched_raw_response_hash(self):
         from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
 
-        bundle_store, bundle_use_store, attempt_store = self._seed_validator_inputs(
+        bundle_store, bundle_use_store, attempt_store, binding = self._seed_validator_inputs(
             stored_raw_hash="d" * 64,
         )
 
@@ -516,6 +592,7 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
             bundle_store=bundle_store,
             bundle_use_store=bundle_use_store,
             semantic_reader_attempt_store=attempt_store,
+            expected_binding=binding,
             now=NOW,
         )
 
@@ -526,7 +603,7 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
     def test_validator_rejects_mismatched_rendered_prompt_hash(self):
         from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
 
-        bundle_store, bundle_use_store, attempt_store = self._seed_validator_inputs(
+        bundle_store, bundle_use_store, attempt_store, binding = self._seed_validator_inputs(
             stored_rendered_prompt_hash="e" * 64,
         )
 
@@ -535,6 +612,7 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
             bundle_store=bundle_store,
             bundle_use_store=bundle_use_store,
             semantic_reader_attempt_store=attempt_store,
+            expected_binding=binding,
             now=NOW,
         )
 
@@ -545,7 +623,7 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
     def test_validator_rejects_missing_rendered_prompt_bytes(self):
         from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
 
-        bundle_store, bundle_use_store, attempt_store = self._seed_validator_inputs(
+        bundle_store, bundle_use_store, attempt_store, binding = self._seed_validator_inputs(
             store_rendered_prompt=False,
         )
 
@@ -554,6 +632,7 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
             bundle_store=bundle_store,
             bundle_use_store=bundle_use_store,
             semantic_reader_attempt_store=attempt_store,
+            expected_binding=binding,
             now=NOW,
         )
 
@@ -561,10 +640,52 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
         self.assertFalse(result.source_bundle_valid)
         self.assertFalse(result.mint_eligible)
 
+    def test_validator_rejects_bundle_bound_to_different_action_params_hash(self):
+        from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
+
+        bundle_store, bundle_use_store, attempt_store, binding = self._seed_validator_inputs()
+
+        result = validate_s7_voice_source_bundle(
+            consultation=self._consultation(),
+            bundle_store=bundle_store,
+            bundle_use_store=bundle_use_store,
+            semantic_reader_attempt_store=attempt_store,
+            expected_binding=self._expected_binding(
+                rendered_prompt_hash=binding.rendered_prompt_hash,
+                action_params_hash="f" * 64,
+            ),
+            now=NOW,
+        )
+
+        self.assertEqual(result.status, "invalid_hash_binding")
+        self.assertFalse(result.source_bundle_valid)
+        self.assertFalse(result.mint_eligible)
+
+    def test_validator_rejects_self_consistent_prompt_bound_to_different_rendered_request(self):
+        from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
+
+        bundle_store, bundle_use_store, attempt_store, binding = self._seed_validator_inputs()
+
+        result = validate_s7_voice_source_bundle(
+            consultation=self._consultation(),
+            bundle_store=bundle_store,
+            bundle_use_store=bundle_use_store,
+            semantic_reader_attempt_store=attempt_store,
+            expected_binding=self._expected_binding(
+                action_params_hash=binding.action_params_hash,
+                rendered_prompt_hash="f" * 64,
+            ),
+            now=NOW,
+        )
+
+        self.assertEqual(result.status, "invalid_hash_binding")
+        self.assertFalse(result.source_bundle_valid)
+        self.assertFalse(result.mint_eligible)
+
     def test_validator_rejects_unreviewed_semantic_reader_identity(self):
         from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
 
-        bundle_store, bundle_use_store, attempt_store = self._seed_validator_inputs(
+        bundle_store, bundle_use_store, attempt_store, binding = self._seed_validator_inputs(
             attempt=self._unreviewed_attempt(),
         )
 
@@ -573,6 +694,7 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
             bundle_store=bundle_store,
             bundle_use_store=bundle_use_store,
             semantic_reader_attempt_store=attempt_store,
+            expected_binding=binding,
             now=NOW,
         )
 

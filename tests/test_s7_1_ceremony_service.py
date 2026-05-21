@@ -200,6 +200,28 @@ class S71CeremonyServiceTests(unittest.TestCase):
             rendered_at=NOW,
         )
 
+    def _voice_bundle_binding(self, rendered, consultation, rendered_prompt_hash: str):
+        from core.governance.s7_guarded_execution import S7VoiceSourceBundleHashBinding
+
+        return S7VoiceSourceBundleHashBinding(
+            request_id=rendered.request_id,
+            consultation_id=consultation.consultation_id,
+            source_ref_hash=consultation.source_ref_hash,
+            request_envelope_hash=rendered.request_envelope_hash,
+            rendered_text_hash=rendered.rendered_text_hash,
+            action_params_hash=rendered.action_params_hash,
+            precondition_hash="a" * 64,
+            authority_context_hash=rendered.authority_context_hash,
+            maez_voice_consultation_hash=rendered.maez_voice_consultation_hash or "6" * 64,
+            rendered_prompt_hash=rendered_prompt_hash,
+            mutation_preview_hash="8" * 64,
+            rollback_plan_ref="9" * 64,
+            context_manifest_hash="a" * 64,
+            runtime_identity_hash="b" * 64,
+            model_routing_identity_hash="d" * 64,
+            model_config_hash="e" * 64,
+        )
+
     def _backup_registration_authorization(self, db_path: Path):
         from core.governance import operator_user_boundary as s7
         from core.governance.s7_webauthn_ceremony import (
@@ -1183,6 +1205,11 @@ class S71CeremonyServiceTests(unittest.TestCase):
             attempt_store.put(attempt)
             raw_text = "Maez says there is no objection."
             rendered_prompt_text = "S7 voice consultation prompt for ceremony authorization."
+            binding = self._voice_bundle_binding(
+                rendered,
+                consultation,
+                s7.canonical_hash(rendered_prompt_text),
+            )
             bundle_store.put_raw_response("raw-response-ceremony", raw_text)
             bundle_store.put_rendered_prompt(
                 "rendered-prompt-ceremony",
@@ -1193,8 +1220,20 @@ class S71CeremonyServiceTests(unittest.TestCase):
                     source_ref_hash=consultation.source_ref_hash,
                     request_id=envelope.request_id,
                     consultation_id=consultation.consultation_id,
+                    request_envelope_hash=binding.request_envelope_hash,
+                    rendered_text_hash=binding.rendered_text_hash,
+                    action_params_hash=binding.action_params_hash,
+                    precondition_hash=binding.precondition_hash,
+                    authority_context_hash=binding.authority_context_hash,
+                    maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
                     rendered_prompt_ref="rendered-prompt-ceremony",
-                    rendered_prompt_hash=s7.canonical_hash(rendered_prompt_text),
+                    rendered_prompt_hash=binding.rendered_prompt_hash,
+                    mutation_preview_hash=binding.mutation_preview_hash,
+                    rollback_plan_ref=binding.rollback_plan_ref,
+                    context_manifest_hash=binding.context_manifest_hash,
+                    runtime_identity_hash=binding.runtime_identity_hash,
+                    model_routing_identity_hash=binding.model_routing_identity_hash,
+                    model_config_hash=binding.model_config_hash,
                     raw_response_ref="raw-response-ceremony",
                     raw_response_hash=s7.canonical_hash(raw_text),
                     semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
@@ -1213,6 +1252,7 @@ class S71CeremonyServiceTests(unittest.TestCase):
                 bundle_store=bundle_store,
                 bundle_use_store=bundle_use_store,
                 semantic_reader_attempt_store=attempt_store,
+                expected_binding=binding,
                 now=NOW,
             )
             begin = service.authorize_begin(
@@ -1307,6 +1347,11 @@ class S71CeremonyServiceTests(unittest.TestCase):
             attempt_store.put(attempt)
             raw_text = "Maez says: no, do not make this change."
             rendered_prompt_text = "S7 voice consultation prompt for refusal projection."
+            binding = self._voice_bundle_binding(
+                rendered,
+                consultation,
+                s7.canonical_hash(rendered_prompt_text),
+            )
             bundle_store.put_raw_response("raw-response-refusal", raw_text)
             bundle_store.put_rendered_prompt(
                 "rendered-prompt-refusal",
@@ -1317,8 +1362,20 @@ class S71CeremonyServiceTests(unittest.TestCase):
                     source_ref_hash=consultation.source_ref_hash,
                     request_id=envelope.request_id,
                     consultation_id=consultation.consultation_id,
+                    request_envelope_hash=binding.request_envelope_hash,
+                    rendered_text_hash=binding.rendered_text_hash,
+                    action_params_hash=binding.action_params_hash,
+                    precondition_hash=binding.precondition_hash,
+                    authority_context_hash=binding.authority_context_hash,
+                    maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
                     rendered_prompt_ref="rendered-prompt-refusal",
-                    rendered_prompt_hash=s7.canonical_hash(rendered_prompt_text),
+                    rendered_prompt_hash=binding.rendered_prompt_hash,
+                    mutation_preview_hash=binding.mutation_preview_hash,
+                    rollback_plan_ref=binding.rollback_plan_ref,
+                    context_manifest_hash=binding.context_manifest_hash,
+                    runtime_identity_hash=binding.runtime_identity_hash,
+                    model_routing_identity_hash=binding.model_routing_identity_hash,
+                    model_config_hash=binding.model_config_hash,
                     raw_response_ref="raw-response-refusal",
                     raw_response_hash=s7.canonical_hash(raw_text),
                     semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
@@ -1337,6 +1394,7 @@ class S71CeremonyServiceTests(unittest.TestCase):
                 bundle_store=bundle_store,
                 bundle_use_store=bundle_use_store,
                 semantic_reader_attempt_store=attempt_store,
+                expected_binding=binding,
                 now=NOW,
             )
             begin = service.authorize_begin(
@@ -1431,6 +1489,11 @@ class S71CeremonyServiceTests(unittest.TestCase):
             attempt = S7SemanticReaderAttemptEvidence.reviewed_v1()
             attempt_store.put(attempt)
             rendered_prompt_text = "S7 voice consultation prompt for tampered refusal."
+            binding = self._voice_bundle_binding(
+                rendered,
+                consultation,
+                s7.canonical_hash(rendered_prompt_text),
+            )
             bundle_store.put_raw_response("raw-response-refusal-tampered", "tampered text")
             bundle_store.put_rendered_prompt(
                 "rendered-prompt-refusal-tampered",
@@ -1441,8 +1504,20 @@ class S71CeremonyServiceTests(unittest.TestCase):
                     source_ref_hash=consultation.source_ref_hash,
                     request_id=envelope.request_id,
                     consultation_id=consultation.consultation_id,
+                    request_envelope_hash=binding.request_envelope_hash,
+                    rendered_text_hash=binding.rendered_text_hash,
+                    action_params_hash=binding.action_params_hash,
+                    precondition_hash=binding.precondition_hash,
+                    authority_context_hash=binding.authority_context_hash,
+                    maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
                     rendered_prompt_ref="rendered-prompt-refusal-tampered",
-                    rendered_prompt_hash=s7.canonical_hash(rendered_prompt_text),
+                    rendered_prompt_hash=binding.rendered_prompt_hash,
+                    mutation_preview_hash=binding.mutation_preview_hash,
+                    rollback_plan_ref=binding.rollback_plan_ref,
+                    context_manifest_hash=binding.context_manifest_hash,
+                    runtime_identity_hash=binding.runtime_identity_hash,
+                    model_routing_identity_hash=binding.model_routing_identity_hash,
+                    model_config_hash=binding.model_config_hash,
                     raw_response_ref="raw-response-refusal-tampered",
                     raw_response_hash="d" * 64,
                     semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
@@ -1461,6 +1536,7 @@ class S71CeremonyServiceTests(unittest.TestCase):
                 bundle_store=bundle_store,
                 bundle_use_store=bundle_use_store,
                 semantic_reader_attempt_store=attempt_store,
+                expected_binding=binding,
                 now=NOW,
             )
             begin = service.authorize_begin(
