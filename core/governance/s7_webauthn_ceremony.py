@@ -536,6 +536,44 @@ class S7LocalWebAuthnCeremonyService:
             precondition_hash=precondition_hash,
         ):
             return _d12_binding_mismatch()
+        from core.governance import operator_user_boundary as s7
+
+        if (
+            getattr(envelope, "derived_work_class", None) in s7.VOICE_SEAT_WORK_CLASSES
+            and guarded_store is not None
+        ):
+            from core.governance.s7_guarded_execution import (
+                S7VoiceSourceBundleValidationResult,
+            )
+
+            source_bundle_ok = (
+                isinstance(source_bundle_validation, S7VoiceSourceBundleValidationResult)
+                and (
+                    (
+                        source_bundle_validation.status == "valid_absent"
+                        and source_bundle_validation.source_bundle_valid is True
+                        and source_bundle_validation.mint_eligible is True
+                        and source_bundle_validation.authority_projection == "valid_absent"
+                        and source_bundle_validation.failure_reason_code is None
+                    )
+                    or (
+                        source_bundle_validation.status == "blocking_present"
+                        and source_bundle_validation.source_bundle_valid is True
+                        and source_bundle_validation.mint_eligible is False
+                        and source_bundle_validation.authority_projection == "grounded_refusal"
+                        and source_bundle_validation.failure_reason_code is None
+                    )
+                )
+            )
+            if source_bundle_ok is not True:
+                return S7CeremonyServiceResult(
+                    body={
+                        "ok": False,
+                        "error": "s7_guarded_source_bundle_required",
+                        "detail": "S7.3 voice-seat work requires validator-produced source-bundle evidence",
+                    },
+                    status_code=409,
+                )
         voice = authorization_voice_seat_recheck(
             envelope=envelope,
             maez_voice_consultation=maez_voice_consultation,
@@ -616,8 +654,6 @@ class S7LocalWebAuthnCeremonyService:
                 body={"ok": False, "error": "s7_challenge_replayed"},
                 status_code=410,
             )
-
-        from core.governance import operator_user_boundary as s7
 
         artifact_id = f"s7authz_{uuid.uuid4().hex}"
         artifact = s7.S7AuthorizationArtifact(

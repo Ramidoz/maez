@@ -1254,6 +1254,231 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(len(history), 1)
         self.assertEqual(history[0].outcome, "authorized")
 
+    def test_authorize_finish_for_validated_maez_objection_records_d23_refusal(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_guarded_execution import (
+            S7GuardedStateStore,
+            S7SemanticReaderAttemptEvidence,
+            S7SemanticReaderAttemptStore,
+            S7VoiceBundleUse,
+            S7VoiceBundleUseStore,
+            S7VoiceConsultationBundle,
+            S7VoiceConsultationBundleStore,
+            validate_s7_voice_source_bundle,
+        )
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            auth_store = s7.S7AuthorizationStore(store.db_path)
+            bundle_store = S7VoiceConsultationBundleStore(store.db_path)
+            bundle_use_store = S7VoiceBundleUseStore(store.db_path)
+            attempt_store = S7SemanticReaderAttemptStore(store.db_path)
+            guarded_store = S7GuardedStateStore(
+                authorization_store=auth_store,
+                voice_bundle_use_store=bundle_use_store,
+            )
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+            envelope = self._self_mod_envelope()
+            consultation = self._voice_consultation(state="present")
+            authority = self._authority_context()
+            rendered = s7.render_request_statement(
+                envelope=envelope,
+                surface="cockpit",
+                origin="http://localhost:11437",
+                action_params_hash=s7.canonical_hash({"path": "config/soul.md"}),
+                authority_context=authority,
+                maez_voice_consultation=consultation,
+                nonce="nonce-s7-1-auth",
+                expires_at="2026-05-18T11:05:00+00:00",
+                rendered_at=NOW,
+            )
+            attempt = S7SemanticReaderAttemptEvidence.reviewed_v1()
+            attempt_store.put(attempt)
+            raw_text = "Maez says: no, do not make this change."
+            bundle_store.put_raw_response("raw-response-refusal", raw_text)
+            bundle_store.put_bundle(
+                S7VoiceConsultationBundle(
+                    source_ref_hash=consultation.source_ref_hash,
+                    request_id=envelope.request_id,
+                    consultation_id=consultation.consultation_id,
+                    raw_response_ref="raw-response-refusal",
+                    raw_response_hash=s7.canonical_hash(raw_text),
+                    semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+                )
+            )
+            bundle_use_store.put_unreserved(
+                S7VoiceBundleUse.new_unreserved(
+                    request_id=envelope.request_id,
+                    source_ref_hash=consultation.source_ref_hash,
+                    consultation_id=consultation.consultation_id,
+                    used_at=NOW,
+                )
+            )
+            validation = validate_s7_voice_source_bundle(
+                consultation=consultation,
+                bundle_store=bundle_store,
+                bundle_use_store=bundle_use_store,
+                semantic_reader_attempt_store=attempt_store,
+                now=NOW,
+            )
+            begin = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+            )
+
+            finish = service.authorize_finish(
+                now=NOW,
+                envelope=envelope,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                maez_voice_consultation=consultation,
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+                request_json={
+                    "challenge_id": begin.body["challenge_id"],
+                    "credential_ref": "cred-primary",
+                    "authentication_response": {"clientDataJSON": "valid-auth"},
+                },
+                guarded_store=guarded_store,
+                source_bundle_validation=validation,
+                source_ref_hash=consultation.source_ref_hash,
+                reservation_token="runtime-token-not-persisted",
+            )
+            artifact_count = self._authorization_artifact_count(store.db_path)
+            history = store.refusal_history_for_envelope(envelope)
+            assessment = s7.assess_aggregation_risk(
+                current_envelope=envelope,
+                history=history,
+            )
+
+        self.assertEqual(validation.status, "blocking_present")
+        self.assertTrue(validation.source_bundle_valid)
+        self.assertFalse(validation.mint_eligible)
+        self.assertEqual(validation.authority_projection, "grounded_refusal")
+        self.assertEqual(finish.status_code, 409)
+        self.assertEqual(finish.body["error"], "s7_voice_seat_unresolved")
+        self.assertEqual(finish.body["reason"], "maez_voice_not_clear")
+        self.assertEqual(artifact_count, 0)
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0].outcome, "refused")
+        self.assertIn("repeated_reask_after_refusal", assessment.signals)
+
+    def test_authorize_finish_rejects_tampered_maez_objection_without_d23_refusal(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_guarded_execution import (
+            S7GuardedStateStore,
+            S7SemanticReaderAttemptEvidence,
+            S7SemanticReaderAttemptStore,
+            S7VoiceBundleUse,
+            S7VoiceBundleUseStore,
+            S7VoiceConsultationBundle,
+            S7VoiceConsultationBundleStore,
+            validate_s7_voice_source_bundle,
+        )
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _intent = self._store_with_bootstrap(tmp)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            auth_store = s7.S7AuthorizationStore(store.db_path)
+            bundle_store = S7VoiceConsultationBundleStore(store.db_path)
+            bundle_use_store = S7VoiceBundleUseStore(store.db_path)
+            attempt_store = S7SemanticReaderAttemptStore(store.db_path)
+            guarded_store = S7GuardedStateStore(
+                authorization_store=auth_store,
+                voice_bundle_use_store=bundle_use_store,
+            )
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifier(),
+                store_factory=lambda: store,
+            )
+            envelope = self._self_mod_envelope()
+            consultation = self._voice_consultation(state="present")
+            authority = self._authority_context()
+            rendered = s7.render_request_statement(
+                envelope=envelope,
+                surface="cockpit",
+                origin="http://localhost:11437",
+                action_params_hash=s7.canonical_hash({"path": "config/soul.md"}),
+                authority_context=authority,
+                maez_voice_consultation=consultation,
+                nonce="nonce-s7-1-auth",
+                expires_at="2026-05-18T11:05:00+00:00",
+                rendered_at=NOW,
+            )
+            attempt = S7SemanticReaderAttemptEvidence.reviewed_v1()
+            attempt_store.put(attempt)
+            bundle_store.put_raw_response("raw-response-refusal-tampered", "tampered text")
+            bundle_store.put_bundle(
+                S7VoiceConsultationBundle(
+                    source_ref_hash=consultation.source_ref_hash,
+                    request_id=envelope.request_id,
+                    consultation_id=consultation.consultation_id,
+                    raw_response_ref="raw-response-refusal-tampered",
+                    raw_response_hash="d" * 64,
+                    semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+                )
+            )
+            bundle_use_store.put_unreserved(
+                S7VoiceBundleUse.new_unreserved(
+                    request_id=envelope.request_id,
+                    source_ref_hash=consultation.source_ref_hash,
+                    consultation_id=consultation.consultation_id,
+                    used_at=NOW,
+                )
+            )
+            validation = validate_s7_voice_source_bundle(
+                consultation=consultation,
+                bundle_store=bundle_store,
+                bundle_use_store=bundle_use_store,
+                semantic_reader_attempt_store=attempt_store,
+                now=NOW,
+            )
+            begin = service.authorize_begin(
+                now=NOW,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+            )
+
+            finish = service.authorize_finish(
+                now=NOW,
+                envelope=envelope,
+                rendered_statement=rendered,
+                precondition_hash=envelope.precondition_hash,
+                maez_voice_consultation=consultation,
+                session_binding="session-auth",
+                internal_channel_binding="daemon-channel",
+                request_json={
+                    "challenge_id": begin.body["challenge_id"],
+                    "credential_ref": "cred-primary",
+                    "authentication_response": {"clientDataJSON": "valid-auth"},
+                },
+                guarded_store=guarded_store,
+                source_bundle_validation=validation,
+                source_ref_hash=consultation.source_ref_hash,
+                reservation_token="runtime-token-not-persisted",
+            )
+            artifact_count = self._authorization_artifact_count(store.db_path)
+            history = store.refusal_history_for_envelope(envelope)
+
+        self.assertEqual(validation.status, "raw_response_hash_mismatch")
+        self.assertEqual(finish.status_code, 409)
+        self.assertEqual(finish.body["error"], "s7_guarded_source_bundle_required")
+        self.assertEqual(artifact_count, 0)
+        self.assertEqual(history, ())
+
     def test_backup_registration_authorization_completes_without_voice_producer(self):
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 

@@ -13,6 +13,7 @@ from core.governance import operator_user_boundary as s7
 
 VOICE_SOURCE_BUNDLE_VALIDATION_STATUSES = frozenset({
     "valid_absent",
+    "blocking_present",
     "raw_response_hash_mismatch",
     "reader_route_mismatch",
     "source_bundle_unavailable",
@@ -147,6 +148,17 @@ class S7VoiceSourceBundleValidationResult:
             _validator_token=_VALIDATOR_TOKEN,
         )
 
+    @classmethod
+    def _validator_refusal(cls) -> "S7VoiceSourceBundleValidationResult":
+        return cls(
+            status="blocking_present",
+            source_bundle_valid=True,
+            mint_eligible=False,
+            authority_projection="grounded_refusal",
+            failure_reason_code=None,
+            _validator_token=_VALIDATOR_TOKEN,
+        )
+
     def __post_init__(self) -> None:
         if self.status not in VOICE_SOURCE_BUNDLE_VALIDATION_STATUSES:
             raise ValueError(f"unknown S7.3 voice source bundle validation status: {self.status}")
@@ -164,6 +176,15 @@ class S7VoiceSourceBundleValidationResult:
                 raise ValueError("valid_absent source-bundle validation must be valid and mint-eligible")
             if self.authority_projection != "valid_absent":
                 raise ValueError("valid_absent source-bundle validation must project valid_absent")
+        elif self.status == "blocking_present":
+            if getattr(self, "_validator_produced", False) is not True:
+                raise ValueError("blocking_present source-bundle validation must be produced by validator")
+            if self.failure_reason_code is not None:
+                raise ValueError("blocking_present source-bundle validation must not carry a failure reason")
+            if self.source_bundle_valid is not True or self.mint_eligible is not False:
+                raise ValueError("blocking_present source-bundle validation must be valid and not mint-eligible")
+            if self.authority_projection != "grounded_refusal":
+                raise ValueError("blocking_present source-bundle validation must project grounded_refusal")
         elif self.failure_reason_code is None:
             raise ValueError("failed source-bundle validation must carry a failure reason")
 
@@ -871,6 +892,11 @@ def validate_s7_voice_source_bundle(
                 failure_reason_code="reader_route_mismatch",
             )
 
+        if (
+            consultation.maez_objection_state == "present"
+            or consultation.maez_withdrew_request is True
+        ):
+            return S7VoiceSourceBundleValidationResult._validator_refusal()
         return S7VoiceSourceBundleValidationResult._validator_pass()
     finally:
         if connection is None:
