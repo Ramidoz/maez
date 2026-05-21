@@ -421,3 +421,39 @@ class S7GuardedStateStore:
             )
             self.authorization_store.put(artifact, connection=conn)
             conn.commit()
+
+
+def mint_authorization_artifact(
+    *,
+    artifact: s7.S7AuthorizationArtifact,
+    authorization_store: s7.S7AuthorizationStore,
+    guarded_store: S7GuardedStateStore | None = None,
+    source_bundle_validation: S7VoiceSourceBundleValidationResult | None = None,
+    source_ref_hash: str | None = None,
+    reservation_token: str | None = None,
+    now: str | None = None,
+) -> None:
+    """Sole authorization-artifact mint entry point.
+
+    A guarded voice-seat work-class artifact may be minted only through the guarded
+    state store, which forces source-bundle validation and one-use reservation; it
+    must never reach the raw authorization store. Non-voice-seat authorizations
+    (e.g. founder credential management, routine custody) mint through the inherited
+    store directly.
+    """
+
+    if artifact.derived_work_class in s7.VOICE_SEAT_WORK_CLASSES:
+        if guarded_store is None:
+            raise ValueError(
+                "S7.3 guarded work-class artifact must be minted through the guarded "
+                "state store, not the raw authorization store"
+            )
+        guarded_store.put_artifact_with_bundle_reservation(
+            artifact=artifact,
+            source_bundle_validation=source_bundle_validation,
+            source_ref_hash=source_ref_hash,
+            reservation_token=reservation_token,
+            now=now,
+        )
+        return
+    authorization_store.put(artifact)

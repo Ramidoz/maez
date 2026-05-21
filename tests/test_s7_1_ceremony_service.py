@@ -373,6 +373,10 @@ class S71CeremonyServiceTests(unittest.TestCase):
         )
         return store, intent
 
+    def _authorization_artifact_count(self, db_path: Path) -> int:
+        with closing(sqlite3.connect(db_path)) as conn:
+            return conn.execute("SELECT COUNT(*) FROM s7_authorization_artifacts").fetchone()[0]
+
     def test_055_register_begin_creates_one_time_registration_challenge(self):
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 
@@ -1099,7 +1103,7 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(challenge["rendered_text_hash"], rendered.rendered_text_hash)
         self.assertEqual(challenge["request_envelope_hash"], rendered.request_envelope_hash)
 
-    def test_authorize_finish_mints_consumable_s7_artifact(self):
+    def test_authorize_finish_for_voice_seat_fails_closed_without_guarded_state_store(self):
         from core.governance import operator_user_boundary as s7
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 
@@ -1136,25 +1140,13 @@ class S71CeremonyServiceTests(unittest.TestCase):
                 },
             )
             artifact_store = s7.S7AuthorizationStore(store.db_path)
-            consumed = artifact_store.consume_verified(
-                finish.body["artifact_id"],
-                rendered=rendered,
-                action_params_hash=rendered.action_params_hash,
-                authority_context=self._authority_context(),
-                precondition_hash=envelope.precondition_hash,
-                derived_work_class=rendered.derived_work_class,
-                derived_aggregation_group=rendered.derived_aggregation_group,
-                now=NOW,
-            )
+            artifact_count = self._authorization_artifact_count(store.db_path)
             history = store.refusal_history_for_envelope(envelope)
 
-        self.assertEqual(finish.status_code, 200)
-        self.assertEqual(finish.body["grant_source"], "founder_webauthn")
-        self.assertRegex(finish.body["authorization_record_id"], r"^s7authhist_[0-9a-f]{32}$")
-        self.assertTrue(consumed)
-        self.assertEqual(len(history), 1)
-        self.assertEqual(history[0].outcome, "authorized")
-        self.assertEqual(history[0].request_id, envelope.request_id)
+        self.assertEqual(finish.status_code, 409)
+        self.assertEqual(finish.body["error"], "s7_guarded_state_store_required")
+        self.assertEqual(artifact_count, 0)
+        self.assertEqual(len(history), 0)
 
     def test_backup_registration_authorization_completes_without_voice_producer(self):
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
@@ -1284,10 +1276,13 @@ class S71CeremonyServiceTests(unittest.TestCase):
                 },
             )
             updated = store.get_credential("cred-primary")
+            artifact_count = self._authorization_artifact_count(store.db_path)
 
-        self.assertEqual(finish.status_code, 200)
+        self.assertEqual(finish.status_code, 409)
+        self.assertEqual(finish.body["error"], "s7_guarded_state_store_required")
         assert updated is not None
         self.assertEqual(updated.sign_count, 1)
+        self.assertEqual(artifact_count, 0)
 
     def test_authorize_finish_rejects_presence_only_for_uv_required_work(self):
         from core.governance import operator_user_boundary as s7

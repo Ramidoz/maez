@@ -636,7 +636,25 @@ class S7LocalWebAuthnCeremonyService:
             expires_at=str(challenge["expires_at"]),
             consumed_at=None,
         )
-        s7.S7AuthorizationStore(store.db_path).put(artifact)
+        from core.governance.s7_guarded_execution import mint_authorization_artifact
+
+        try:
+            mint_authorization_artifact(
+                artifact=artifact,
+                authorization_store=s7.S7AuthorizationStore(store.db_path),
+                guarded_store=None,
+            )
+        except ValueError as exc:
+            if artifact.derived_work_class in s7.VOICE_SEAT_WORK_CLASSES:
+                return S7CeremonyServiceResult(
+                    body={
+                        "ok": False,
+                        "error": "s7_guarded_state_store_required",
+                        "detail": str(exc),
+                    },
+                    status_code=409,
+                )
+            raise
         authorization_record_id = store.record_authorization_history(
             envelope=envelope,
             rendered_text_hash=rendered_statement.rendered_text_hash,

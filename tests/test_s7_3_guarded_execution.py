@@ -313,5 +313,122 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
         self.assertIsNone(bundle_use.reserved_at)
 
 
+class S73MintRouteStoreHygieneTests(unittest.TestCase):
+    """Store hygiene: a guarded work-class artifact may not be minted via the raw store."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _db_path(self) -> Path:
+        return Path(self._tmp.name) / "s7_3_route.db"
+
+    def _artifact_count(self) -> int:
+        with closing(sqlite3.connect(self._db_path())) as conn:
+            return conn.execute("SELECT COUNT(*) FROM s7_authorization_artifacts").fetchone()[0]
+
+    def _artifact(self, *, work_class: str, artifact_id: str = "artifact-route-1"):
+        from core.governance import operator_user_boundary as s7
+
+        env = s7.build_work_request_envelope(
+            request_id=f"req-{artifact_id}",
+            action="write_any_file",
+            params={"path": "/home/rohit/maez/config/soul.md", "content_hash": "d" * 64},
+            claimed_work_class=work_class,
+            requesting_subsystem="unit",
+            closed_symptom_code="self_mod_requested",
+            proposed_change_class="soul_change",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("file:config/soul.md",),
+            content_exposure_risk="bonded_content_ref",
+            precondition_hash="a" * 64,
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="behavior_change",
+            rollback_path_class="revert_patch",
+            maez_voice_consultation_id=f"voice-{artifact_id}",
+            free_text_ref_hash="b" * 64,
+        )
+        authority = s7.AuthorityContext(
+            actor_id="founder",
+            actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+            role_names=("bonded_user", "operator"),
+            grant_source="founder_webauthn",
+            allowed_scopes=("operator_health",),
+            auth_method="founder_webauthn",
+            surface="cockpit",
+            credential_ref="cred-1",
+            created_at=NOW,
+            expires_at=FUTURE,
+            verified=True,
+        )
+        consultation = s7.MaezVoiceConsultation(
+            consultation_id=f"voice-{artifact_id}",
+            request_id=env.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            producer="self_mod_dialog_terminal_state",
+            source_ref_kind="self_mod_dialog_exchange",
+            source_ref_hash="c" * 64,
+            maez_voice_consulted=True,
+            maez_objection_state="absent",
+            maez_withdrew_request=False,
+            unavailable_reason_code=None,
+            created_at=NOW,
+        )
+        params_hash = s7.canonical_hash({"path": "config/soul.md", "content_hash": "d" * 64})
+        rendered = s7.render_request_statement(
+            envelope=env,
+            surface="cockpit",
+            origin="http://localhost:11437",
+            action_params_hash=params_hash,
+            authority_context=authority,
+            maez_voice_consultation=consultation,
+            nonce=f"nonce-{artifact_id}",
+            expires_at=FUTURE,
+            rendered_at=NOW,
+        )
+        return s7.S7AuthorizationArtifact(
+            artifact_id=artifact_id,
+            request_id=env.request_id,
+            request_envelope_hash=s7.work_request_envelope_hash(env),
+            rendered_text_hash=rendered.rendered_text_hash,
+            action_params_hash=params_hash,
+            precondition_hash=env.precondition_hash,
+            authority_context_hash=s7.authority_context_hash(authority),
+            derived_work_class=env.derived_work_class,
+            derived_aggregation_group=env.derived_aggregation_group,
+            nonce=rendered.nonce,
+            credential_ref="cred-1",
+            auth_method="founder_webauthn",
+            grant_source="founder_webauthn",
+            user_presence=True,
+            user_verification=True,
+            created_at=NOW,
+            expires_at=FUTURE,
+            consumed_at=None,
+        )
+
+    def test_guarded_work_class_artifact_cannot_be_minted_with_only_raw_store(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_guarded_execution import mint_authorization_artifact
+
+        artifact = self._artifact(work_class="self_modification")
+        self.assertIn(artifact.derived_work_class, s7.VOICE_SEAT_WORK_CLASSES)
+        auth_store = s7.S7AuthorizationStore(self._db_path())
+
+        # Wired with ONLY the raw authorization store (no guarded state store):
+        # a guarded work-class artifact must fail closed before any persistence.
+        with self.assertRaisesRegex(ValueError, "guarded"):
+            mint_authorization_artifact(
+                artifact=artifact,
+                authorization_store=auth_store,
+                guarded_store=None,
+            )
+
+        self.assertEqual(self._artifact_count(), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
