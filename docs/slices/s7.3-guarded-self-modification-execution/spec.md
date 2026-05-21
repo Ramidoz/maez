@@ -1,6 +1,6 @@
 # S7.3 Guarded Self-Modification Execution Spec
 
-**Status:** SPEC v18 draft - folded from Codex panel v17 and v18 fold delta-plan; pending Section 8.2 fresh-reader gate v18 and Codex v18 panel review; not canonical law
+**Status:** SPEC v19 draft - folded from Codex panel v18 and v19 fold delta-plan; pending Section 8.2 fresh-reader gate v19 and Codex v19 panel review; not canonical law
 **Date:** 2026-05-20
 **Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S7.3; Decision 34 / ADR 0039; S7 L8; S7.1 D12-D14 and D23
 **Diagnostic:** [`diagnostic.md`](diagnostic.md)
@@ -65,6 +65,7 @@
 **v17 fold input:** [`reviews/spec-v17-fold-plan.md`](reviews/spec-v17-fold-plan.md)
 **v17 review input:** [`reviews/spec-codex-panel-v17.md`](reviews/spec-codex-panel-v17.md)
 **v18 fold input:** [`reviews/spec-v18-fold-plan.md`](reviews/spec-v18-fold-plan.md)
+**v19 fold input:** [`reviews/spec-v19-fold-plan.md`](reviews/spec-v19-fold-plan.md)
 **v9 authorship note:** v9 keeps lane independence and pins the fold-contract
 leans: credential management uses a split non-voice rendered carrier;
 operational legacy refusal-history writes are suppressed rather than written
@@ -167,6 +168,14 @@ registration has one artifact consume at `register_begin` and a binding-verified
 invocation before delegation; `manual_review_status="none"` is a trace default,
 not a manual-review evidence row; and `credential_rotate` exclusion moves to
 credential request normalization before request materialization.
+**v19 authorship note:** v19 keeps the v18 covenant architecture and folds the
+Codex v18 carrier-lifecycle findings: invocation row hashes exclude their own
+hash fields; history-bridge trace validation loads the exact context needed for
+`d23_state_for(...)`; credential actions are a separate closed namespace bridged
+from proposed-change classes; reservation tokens are hash-only at rest; backup
+credential registration names separate authorization and ceremony challenges;
+register-finish writes through a durable single-use finish row; and execution
+invocation DDL matches the non-null source/ref carrier fields.
 **Runtime impact when implemented:** yes. S7.3 will wire live guarded execution for Maez self-modification only after a reviewed Maez voice producer, founder-local WebAuthn artifact mint, atomic artifact consume, execution grant, rollback evidence, and positive trace all bind to the same exact request.
 
 ## Purpose
@@ -961,22 +970,24 @@ history vocabulary:
 ```text
 credential_register_backup
 credential_disable
+credential_rotate
 ```
 
-`credential_rotate` is not part of the live
-`CREDENTIAL_PROPOSED_CHANGE_CLASSES` set in S7.3 v1. It is reserved for a
-future reviewed credential-rotation slice:
+`credential_rotate` is a proposed-change class only. It is not a live
+credential action in S7.3 v1. It is reserved for a future reviewed
+credential-rotation slice:
 
 ```text
 FUTURE_CREDENTIAL_PROPOSED_CHANGE_CLASSES = frozenset({"credential_rotate"})
 ```
 
-S7.3 v1 producers cannot emit it. `S7CredentialGuardedRequest.__post_init__`
-rejects `credential_action == "credential_rotate"` with
-`route_status="reviewedly_excluded"` and
-`exclusion_reason_code="credential_rotate_future_slice"`. Any manifest row that
-mentions credential rotation is non-mintable and cannot return a live
-credential execution consumer id.
+S7.3 v1 live credential carriers cannot emit it. The normalizer maps
+`credential_rotate` to
+`ReviewedExclusion(route_status="reviewedly_excluded",
+exclusion_reason_code="credential_rotate_future_slice")` before
+`S7CredentialGuardedRequest` materialization. Any manifest row that mentions
+credential rotation is non-mintable and cannot return a live credential
+execution consumer id.
 
 `request_history_family_for(record)` returns `"s7_credential_management"` only
 when `record.derived_work_class == "founder_credential_management"` and
@@ -1325,6 +1336,17 @@ do not materialize `GuardedWorkItem` and do not run the Maez voice producer in
 S7.3 v1. They materialize:
 
 ```text
+CREDENTIAL_ACTIONS = {
+    "register_backup",
+    "disable",
+}
+
+CREDENTIAL_PROPOSED_CHANGE_CLASSES = {
+    "credential_register_backup",
+    "credential_disable",
+    "credential_rotate",
+}
+
 CredentialRequestNormalizationResult =
     S7CredentialGuardedRequest | ReviewedExclusion
 
@@ -1362,8 +1384,28 @@ Credential namespace normalization is:
 ```text
 source_method = surface-manifest route method
 credential_phase = register_begin | register_finish | backup_card | disable
-credential_action = credential operation class
+credential_action = credential operation class in CREDENTIAL_ACTIONS
 ```
+
+`CREDENTIAL_PROPOSED_CHANGE_CLASSES` and `CREDENTIAL_ACTIONS` are distinct
+namespaces. Proposed-change classes describe a credential proposal before route
+normalization. Credential actions describe a live guarded credential mutation
+after route normalization.
+
+```text
+credential_action_for_proposed_change_class(
+    proposed_change_class: CREDENTIAL_PROPOSED_CHANGE_CLASSES,
+) -> CREDENTIAL_ACTIONS | ReviewedExclusion
+```
+
+Bridge table:
+
+| proposed_change_class | result |
+|---|---|
+| `credential_register_backup` | `register_backup` |
+| `credential_disable` | `disable` |
+| `credential_rotate` | `ReviewedExclusion(route_status="reviewedly_excluded", exclusion_reason_code="credential_rotate_future_slice")` |
+| unknown token | fail closed before request materialization |
 
 Unlisted `registration_class`, `source_method`, or `credential_phase`
 combinations fail closed before artifact mint.
@@ -1415,9 +1457,15 @@ credential_work_class_for(request) -> "founder_credential_management"
 `route_status="reviewedly_excluded"` and
 `exclusion_reason_code="credential_rotate_future_slice"` for
 credential_rotate before S7CredentialGuardedRequest materialization.
-`S7CredentialGuardedRequest.__post_init__ rejects credential_action values
-outside CREDENTIAL_PROPOSED_CHANGE_CLASSES`. It does not emit `route_status` or
-`exclusion_reason_code`.
+credential_rotate is reviewedly excluded before credential action
+materialization. No S7CredentialGuardedRequest, S7GuardedCredentialInvocation,
+RenderedCredentialRequestStatement, artifact binding, or credential trace row
+may carry `credential_action="credential_rotate"` or
+`credential_action="rotate"`.
+`S7CredentialGuardedRequest.__post_init__ validates`
+`credential_action in CREDENTIAL_ACTIONS`. It does not validate
+`credential_action` against `CREDENTIAL_PROPOSED_CHANGE_CLASSES`, and it does
+not emit `route_status` or `exclusion_reason_code`.
 
 Primary-credential bootstrap through inherited `consume_for_first_primary` is
 not the same surface as backup-card registration. S7.3 v15 reviewedly excludes
@@ -1905,6 +1953,19 @@ reconstruct through a named loader. No D24 positive test may hand-assemble a
 carrier to bypass this rule.
 ```
 
+Invocation-carrier hashes are row integrity hashes, not ordinary payload
+fields. `guarded_execution_invocation_hash is excluded from the
+S7GuardedExecutionInvocation hash domain`. The value is computed as
+`canonical_hash(S7GuardedExecutionInvocation without
+guarded_execution_invocation_hash)`. `guarded_credential_invocation_hash is
+excluded from the S7GuardedCredentialInvocation hash domain`. The value is
+computed as `canonical_hash(S7GuardedCredentialInvocation without
+guarded_credential_invocation_hash)`. Store round-trip verification uses
+`canonical_hash_without_field` for both ref-based invocation carriers. A future
+row integrity hash field must either live outside the dataclass or name its
+field-exclusion rule before the store can satisfy the uniform persistence
+contract.
+
 One transaction-owning wrapper controls cross-store writes:
 
 ```text
@@ -1995,6 +2056,12 @@ S7GuardedExecutionInvocation is a hash/ref carrier. It no longer contains the
 full `S7RenderedAuthorizationStatement`, full `AuthorityContext`, or raw
 `ReservationToken`. It contains durable hashes, refs, and scalars whose fields
 match `s7_guarded_execution_invocations`.
+S7GuardedExecutionInvocation is not the compatibility/no-bundle carrier.
+Positive guarded execution invocations require non-null `source_ref_hash` and
+non-null `reservation_token_hash`. A path that lacks either value fails before
+`S7GuardedExecutionInvocationStore.put(...)`. Any future compatibility path
+that needs nullable source refs or reservation-token hashes must name a
+separate carrier.
 
 Full-object reconstruction is a separate load seam:
 
@@ -2120,7 +2187,8 @@ The helper reloads the persisted invocation before bundle loading:
 stored_invocation =
     invocation_store.get(invocation.request_id, invocation.artifact_id, conn=conn)
 stored_invocation == invocation
-canonical_hash(stored_invocation) == invocation.guarded_execution_invocation_hash
+canonical_hash_without_field(stored_invocation, "guarded_execution_invocation_hash")
+    == invocation.guarded_execution_invocation_hash
 ```
 
 It then calls `load_guarded_execution_invocation_bundle(...)`, verifies rendered
@@ -2157,7 +2225,8 @@ stored_invocation =
         conn=conn,
     )
 stored_invocation == invocation
-canonical_hash(stored_invocation) == invocation.guarded_credential_invocation_hash
+canonical_hash_without_field(stored_invocation, "guarded_credential_invocation_hash")
+    == invocation.guarded_credential_invocation_hash
 ```
 
 Only after the persisted carrier matches may the helper call
@@ -2356,8 +2425,8 @@ context_manifest_hash = canonical_hash(ContextManifest, manifest_id and created_
 surface_manifest_hash = canonical_hash(S7SurfaceManifest rows)
 request_envelope_hash = canonical_hash(WorkRequestEnvelope, volatile audit fields excluded)
 credential_guarded_request_hash = canonical_hash(S7CredentialGuardedRequest)
-guarded_execution_invocation_hash = canonical_hash(S7GuardedExecutionInvocation)
-guarded_credential_invocation_hash = canonical_hash(S7GuardedCredentialInvocation)
+guarded_execution_invocation_hash = canonical_hash_without_field(S7GuardedExecutionInvocation, "guarded_execution_invocation_hash")
+guarded_credential_invocation_hash = canonical_hash_without_field(S7GuardedCredentialInvocation, "guarded_credential_invocation_hash")
 ```
 
 For `WorkRequestEnvelope`, volatile audit fields excluded from hash are exactly:
@@ -2404,7 +2473,10 @@ blob only if every inherited `WorkRequestEnvelope` field is named as a column.
 only the hash/ref carrier from stored columns and verifies:
 
 ```text
-canonical_hash(reconstructed S7GuardedExecutionInvocation)
+canonical_hash_without_field(
+    reconstructed S7GuardedExecutionInvocation,
+    "guarded_execution_invocation_hash",
+)
     == guarded_execution_invocation_hash
 ```
 
@@ -2418,7 +2490,10 @@ inherited consume call.
 only the hash/ref carrier from stored columns and verifies:
 
 ```text
-canonical_hash(reconstructed S7GuardedCredentialInvocation)
+canonical_hash_without_field(
+    reconstructed S7GuardedCredentialInvocation,
+    "guarded_credential_invocation_hash",
+)
     == guarded_credential_invocation_hash
 ```
 
@@ -2448,7 +2523,10 @@ canonical_hash(reconstructed S7CredentialGuardedRequest)
 only the hash/ref carrier from stored columns and verifies:
 
 ```text
-canonical_hash(reconstructed S7GuardedCredentialInvocation)
+canonical_hash_without_field(
+    reconstructed S7GuardedCredentialInvocation,
+    "guarded_credential_invocation_hash",
+)
     == guarded_credential_invocation_hash
 ```
 
@@ -2615,14 +2693,15 @@ S7AuthorizationArtifactBindingInputs(
 S7AuthorizationArtifactBinding(
     artifact_id: str,
     inputs: S7AuthorizationArtifactBindingInputs,
-    reservation_token: str | None,
+    reservation_token_hash: str | None,
 )
 ```
 
 Voice-seat work rejects `None` for `source_ref_hash`,
 `maez_voice_consultation_hash`, `mutation_preview_hash`, and
 `rollback_plan_ref`, requires `work_item_id` plus `work_source_kind`, and stores
-the wrapper-minted `reservation_token` on `S7AuthorizationArtifactBinding`.
+the wrapper-minted `reservation_token_hash` on
+`S7AuthorizationArtifactBinding`.
 Non-voice S7.1 credential-management work may carry `None` for voice-only and
 work-item fields but must carry a closed `execution_consumer_id`,
 `source_surface="s7_credential_management"`, and verified
@@ -2653,7 +2732,7 @@ CREATE TABLE s7_authorization_artifact_bindings (
     same_code_coverage_ref TEXT,
     expected_execution_consumer_id TEXT NOT NULL,
     source_ref_hash TEXT,
-    reservation_token TEXT,
+    reservation_token_hash TEXT,
     maez_voice_consultation_hash TEXT,
     mutation_preview_hash TEXT,
     rollback_plan_ref TEXT,
@@ -2759,8 +2838,8 @@ CREATE TABLE s7_guarded_execution_invocations (
     source_method TEXT,
     adapter_id TEXT NOT NULL,
     adapter_code_hash TEXT NOT NULL,
-    source_ref_hash TEXT,
-    reservation_token_hash TEXT,
+    source_ref_hash TEXT NOT NULL,
+    reservation_token_hash TEXT NOT NULL,
     action_params_hash TEXT NOT NULL,
     precondition_hash TEXT NOT NULL,
     surface_manifest_hash TEXT NOT NULL,
@@ -2805,9 +2884,9 @@ CREATE TABLE s7_guarded_credential_invocations (
     PRIMARY KEY (request_id, artifact_id)
 );
 
--- reservation_token_hash is persisted for replay.
--- The raw reservation_token is a runtime-only wrapper input and never persists
--- as plaintext.
+-- reservation_token_hash is the only persisted reservation-token value.
+-- Raw reservation_token is runtime-only wrapper input.
+-- No S7.3 table persists raw reservation tokens.
 
 CREATE TABLE s7_action_edge_grant_uses (
     action_edge_grant_use_id TEXT NOT NULL PRIMARY KEY,
@@ -2941,6 +3020,14 @@ CREATE TABLE s7_history_bridge_trace_payloads (
     trace_payload_blob_hash TEXT NOT NULL
 );
 ```
+
+reservation_token_hash is the only persisted reservation-token value. Raw
+`reservation_token` is runtime-only wrapper input. No S7.3 table persists raw
+reservation tokens. If a wrapper presents a raw reservation token, D21 computes
+`canonical_hash(reservation_token)` and compares it to the persisted
+`reservation_token_hash` before inherited consume. The raw token is never
+written to `state.sqlite3`, a trace payload, an artifact binding row, an
+invocation row, or a bundle-use row.
 
 `S7TraceWriter` writes one `s7_traces` header row and exactly one typed payload
 row in the same transaction. `s7_voice_trace_payloads` does not require
@@ -4321,6 +4408,11 @@ authority context hash, rollback plan ref, and rollback path class. The
 rollback lines are founder-signed and artifact-bound for credential mutations.
 It does not contain Maez voice, preview body class, mutation preview hash, or
 withdrawal lines.
+For backup registration, the rendered credential statement's `challenge_id`,
+`challenge_hash`, and `challenge_expires_at` are the
+credential_authorization_challenge fields. The later
+registration_ceremony_challenge is not created until `register_begin` consumes
+the artifact and therefore is not founder-rendered in this statement.
 
 `RenderedRequestStatement` displays the founder-facing projection and binds
 the carrier hashes directly.
@@ -5488,13 +5580,53 @@ now=now, connection=conn)`. It must not construct
 has a two-step mutation edge. Backup credential registration has one S7
 artifact consume. `register_begin` consumes the artifact through
 `S7GuardedCredentialInvocation` with `credential_phase="register_begin"` and
-`credential_id_hash is None`. In the same transaction it creates
-`S7CredentialRegistrationGrantBinding` and the registration challenge:
+`credential_id_hash is None`.
+
+Backup registration uses two named challenge phases:
+
+```text
+credential_authorization_challenge
+registration_ceremony_challenge
+```
+
+The credential_authorization_challenge exists before founder signing. The
+rendered credential request statement, artifact binding inputs, and
+`S7AuthorizationArtifactBinding` bind its `challenge_id`, `challenge_hash`, and
+`expires_at`. This is the challenge over which the founder WebAuthn
+authorization gesture is made.
+
+The registration_ceremony_challenge is created by `register_begin` in the same
+transaction as artifact consume, `S7CredentialRegistrationGrantBinding`
+creation, and grant-use persistence. It is the WebAuthn creation challenge
+presented to the new backup credential.
+
+The two challenges are distinct by phase and purpose. They may not be silently
+treated as the same row. If both phases share one inherited WebAuthn challenge
+store, the row carries a closed phase token:
+
+```text
+CHALLENGE_PHASES = {
+    "credential_authorization_challenge",
+    "registration_ceremony_challenge",
+}
+```
+
+The phase token participates in the challenge hash domain so a challenge row
+for one phase cannot be replayed as the other. `register_begin` requires the
+authorization challenge to match the artifact binding and creates the ceremony
+challenge only after artifact consume succeeds. `register_finish` verifies the
+registration result against `registration_ceremony_challenge_hash`.
+
+In the same transaction as artifact consume, `register_begin` creates
+`S7CredentialRegistrationGrantBinding` and the registration ceremony challenge:
 
 ```text
 S7CredentialRegistrationGrantBinding(
     credential_registration_grant_binding_id: str,
-    challenge_id: str,
+    credential_authorization_challenge_id: str,
+    credential_authorization_challenge_hash: str,
+    registration_ceremony_challenge_id: str,
+    registration_ceremony_challenge_hash: str,
     grant_id: str,
     artifact_id: str,
     execution_consumer_id: "s7_credential_register_backup",
@@ -5507,17 +5639,79 @@ S7CredentialRegistrationGrantBinding(
 ```
 
 `credential_registration_grant_binding_id` is the canonical hash of
-`(challenge_id, grant_id, artifact_id, execution_consumer_id)` and is the trace
-field that names this binding.
+`(credential_authorization_challenge_hash,
+registration_ceremony_challenge_hash, grant_id, artifact_id,
+execution_consumer_id)` and is the trace field that names this binding.
 
 `register_finish` is the actual credential-write edge, but register_finish does
 not consume a second S7 artifact. register_finish loads the binding by
-`challenge_id`, verifies `grant_id`, `artifact_id`, `execution_consumer_id`,
-`rendered_text_hash`, `request_envelope_hash`, challenge expiry, single-use
-replay state, and the new non-null `credential_id_hash`, and only then writes
-the backup credential. Consuming at begin without this finish-time binding is
+`registration_ceremony_challenge_id`, verifies `grant_id`, `artifact_id`,
+`execution_consumer_id`, `rendered_text_hash`, `request_envelope_hash`,
+authorization challenge expiry, ceremony challenge expiry, single-use replay
+state, and the new non-null `credential_id_hash`, and only then writes the
+backup credential. Consuming at begin without this finish-time binding is
 illegal. A future reviewed implementation may instead move artifact consume to
 finish, but then begin must not claim mutation-edge authorization.
+
+`S7CredentialRegistrationGrantBinding` is immutable. Finish-time replay and
+result binding are represented by a separate single-use row:
+
+```text
+S7CredentialRegistrationFinishUse(
+    credential_registration_grant_binding_id: str,
+    finish_used_at: str,
+    credential_id_hash: str,
+    registration_result_hash: str,
+    registration_result_challenge_hash: str,
+    registration_ceremony_challenge_hash: str,
+    rendered_text_hash: str,
+    request_envelope_hash: str,
+    inserted_credential_row_id: str,
+)
+
+S7CredentialRegistrationFinishUseStore.put_if_unused(
+    *,
+    binding: S7CredentialRegistrationGrantBinding,
+    finish_use: S7CredentialRegistrationFinishUse,
+    registration_result: WebAuthnRegistrationResult,
+    conn: sqlite3.Connection,
+) -> None
+```
+
+Illustrative finish-use DDL:
+
+```sql
+CREATE TABLE s7_credential_registration_finish_uses (
+    credential_registration_grant_binding_id TEXT NOT NULL,
+    finish_used_at TEXT NOT NULL,
+    credential_id_hash TEXT NOT NULL,
+    registration_result_hash TEXT NOT NULL,
+    registration_result_challenge_hash TEXT NOT NULL,
+    registration_ceremony_challenge_hash TEXT NOT NULL,
+    rendered_text_hash TEXT NOT NULL,
+    request_envelope_hash TEXT NOT NULL,
+    inserted_credential_row_id TEXT NOT NULL,
+    UNIQUE(credential_registration_grant_binding_id),
+    UNIQUE(credential_id_hash)
+);
+```
+
+The finish-use store verifies no existing finish-use row exists for
+`credential_registration_grant_binding_id`, verifies
+`finish_use.registration_ceremony_challenge_hash ==
+binding.registration_ceremony_challenge_hash`, verifies
+`finish_use.registration_result_challenge_hash ==
+binding.registration_ceremony_challenge_hash`, verifies rendered text and
+request envelope hashes match the binding, verifies
+`finish_use.credential_id_hash` equals the credential id produced by
+`registration_result`, verifies `finish_use.registration_result_hash ==
+canonical_hash(registration_result)`, verifies challenge and grant expiry at
+`finish_used_at`, and writes the credential row and finish-use row in the same
+`BEGIN IMMEDIATE` transaction.
+
+register_finish writes the credential only through
+S7CredentialRegistrationFinishUseStore.put_if_unused(...). A finish callback
+that cannot create the finish-use row does not write the credential.
 
 The implementation path uses the wrapper-owned post-consume callback to insert
 `S7CredentialRegistrationGrantBinding` in the same transaction as artifact
@@ -5818,6 +6012,59 @@ the indexed SQL columns match the decoded payload, verifies `d23_state` equals
 same bridge writer branch that created the trace. The SQL payload table may
 keep compact indexed columns plus `trace_payload_blob_ref` and
 `trace_payload_blob_hash`; the decoded blob carries the full shape above.
+
+History-bridge D23 validation uses a loaded context rather than hidden global
+lookups:
+
+```text
+load_history_bridge_trace_payload_context(
+    *,
+    payload: S7HistoryBridgeTracePayload,
+    authority_row_store: S7AuthorityRowStore,
+    request_history_store: RequestHistoryStore,
+    reducer_trace_store: S7ReducerTraceStore,
+    conn: sqlite3.Connection,
+) -> S7HistoryBridgeTracePayloadContext
+
+S7HistoryBridgeTracePayloadContext(
+    payload: S7HistoryBridgeTracePayload,
+    reducer_output: D13ReducerOutput | None,
+    bridge_status: HISTORY_BRIDGE_STATUSES,
+    history_outcome: S7HistoryOutcome | None,
+    authority_class: AUTHORITY_CLASSES | None,
+    has_grounded_semantic_blocking_signal: bool,
+)
+```
+
+The d23_state_for input tuple is:
+
+```text
+(
+    reducer_output,
+    bridge_status,
+    history_outcome,
+    authority_class,
+    has_grounded_semantic_blocking_signal,
+)
+```
+
+The validator signature is:
+
+```text
+validate_history_bridge_trace_payload(
+    payload: S7HistoryBridgeTracePayload,
+    *,
+    context: S7HistoryBridgeTracePayloadContext,
+) -> None
+```
+
+The validator verifies `context.payload == payload`, verifies every non-null
+reference in `payload` resolves through the named stores used by
+`load_history_bridge_trace_payload_context(...)`, verifies
+`payload.history_bridge_status == context.bridge_status`, verifies
+`payload.d23_state == d23_state_for(...)` over the exact input tuple above, and
+fails closed if any required context field is unreachable before trace
+finalization.
 
 ### D23 - Rollback Evidence
 
@@ -6464,6 +6711,49 @@ Required proof classes:
   S7HistoryBridgeTracePayload field`; SQL indexed columns and decoded blob
   fields must match; mutating `history_bridge_status`, `d23_state`,
   `authority_row_id`, or `request_family_derived` breaks `trace_hash`;
+- **v19 invocation hash-domain test**:
+  `guarded_execution_invocation_hash is excluded from the
+  S7GuardedExecutionInvocation hash domain` and
+  `guarded_credential_invocation_hash is excluded from the
+  S7GuardedCredentialInvocation hash domain`; both hashes are computed with
+  `canonical_hash_without_field`, changing any non-hash invocation field
+  changes the hash, and changing only the hash field does not alter the
+  field-excluded hash domain;
+- **v19 history-bridge context test**:
+  `load_history_bridge_trace_payload_context(...)` returns
+  `S7HistoryBridgeTracePayloadContext`; `validate_history_bridge_trace_payload`
+  requires `context.payload == payload`, verifies the `d23_state_for input
+  tuple`, rejects missing authority/history/reducer refs, and hard-fails
+  impossible mixed inputs;
+- **v19 credential action namespace test**:
+  `CREDENTIAL_ACTIONS` contains only live carrier actions;
+  `credential_action_for_proposed_change_class` maps credential proposed-change
+  classes to live actions or `ReviewedExclusion`; `credential_action in
+  CREDENTIAL_ACTIONS` is the constructor rule; proposed-change-class tokens
+  cannot appear as live `credential_action` values;
+- **v19 reservation token persistence test**:
+  `reservation_token_hash is the only persisted reservation-token value`; raw
+  `reservation_token` is runtime-only wrapper input; no S7.3 table persists raw
+  reservation tokens; D21 compares `canonical_hash(reservation_token)` to the
+  persisted hash before inherited consume;
+- **v19 backup registration challenge-phase test**:
+  `credential_authorization_challenge` exists before founder signing,
+  `registration_ceremony_challenge` is created by `register_begin` after
+  artifact consume, both hashes are stored on
+  `S7CredentialRegistrationGrantBinding`, `CHALLENGE_PHASES` participates in
+  challenge hashes, and neither phase can be replayed as the other;
+- **v19 finish-use replay/result test**:
+  `register_finish` creates exactly one `S7CredentialRegistrationFinishUse`;
+  `UNIQUE(credential_registration_grant_binding_id)` blocks replay,
+  `registration_result_hash` and `registration_result_challenge_hash` bind the
+  WebAuthn result to the ceremony challenge, and credential row insert plus
+  finish-use insert are atomic;
+- **v19 execution invocation nullability test**:
+  `source_ref_hash TEXT NOT NULL` and `reservation_token_hash TEXT NOT NULL`
+  appear on `s7_guarded_execution_invocations`; missing source ref or
+  reservation-token hash fails before
+  `S7GuardedExecutionInvocationStore.put(...)`; compatibility/no-bundle paths
+  cannot create partial guarded execution invocation rows;
 - **register-finish binding test**: `register_begin` consumes exactly one S7
   artifact and persists exactly one `S7CredentialRegistrationGrantBinding`;
   register_finish rejects any attempt to consume a second S7 artifact, missing
@@ -6612,7 +6902,8 @@ Before implementation can be claimed complete:
    `S7GuardedStateStore`, `S7ConsumeResult`,
    `S7VoiceAuthorityRow`, `GrantUse`, `ActionEdgeGrantUse`,
    `S7CredentialGuardedTrace`,
-   `S7CredentialRegistrationGrantBinding`, `S7RollbackEvidenceStore`, and
+   `S7CredentialRegistrationGrantBinding`,
+   `S7CredentialRegistrationFinishUse`, `S7RollbackEvidenceStore`, and
    source-bundle validation shapes exist and are tested. `preview_body_class`
    has no `credential_management` value in S7.3 v1.
 4. `S7VoiceConsultationBundleStore`, `S7VoiceBundleUseStore`,
@@ -6624,6 +6915,7 @@ Before implementation can be claimed complete:
    `WorkRequestEnvelopeStore`, `S7CredentialGuardedRequestStore`,
    `S7GuardedExecutionInvocationStore`,
    `S7GuardedCredentialInvocationStore`, `S7RequestHistoryMigrationStore`,
+   `S7CredentialRegistrationFinishUseStore`,
    `ManualReviewEvidenceStore`, and `S7TraceWriter` share the SQLite
    file at
    `memory/s7_3_guarded_self_modification/state.sqlite3` with table prefixes,
@@ -6681,7 +6973,9 @@ Before implementation can be claimed complete:
     `ActionEdgeGrantUse`. `s7_grant_uses`, `s7_action_edge_grant_uses`,
     `s7_authorization_artifact_bindings`, and
     `s7_credential_registration_grant_bindings` tables exist in the shared
-    state DB. Voice-seat paths use `S7GuardedExecutionInvocation`; credential
+    state DB. `s7_credential_registration_finish_uses` exists in the shared
+    state DB and enforces finish-time single-use replay/result binding.
+    Voice-seat paths use `S7GuardedExecutionInvocation`; credential
     paths use `S7GuardedCredentialInvocation`, challenge expiry, and the
     finish-time grant/challenge binding. `S7ExecutionAuthorization` is
     compatibility-only for inherited voice-seat paths and fails closed for
@@ -6834,7 +7128,43 @@ Before implementation can be claimed complete:
     `No ManualReviewEvidence row may use manual_review_status="none"`,
     `CredentialRequestNormalizationResult`,
     `credential_rotate before S7CredentialGuardedRequest materialization`, and
-    `S7CredentialGuardedRequest.__post_init__ rejects credential_action values outside CREDENTIAL_PROPOSED_CHANGE_CLASSES`.
+    `S7CredentialGuardedRequest.__post_init__ validates`.
+23. **v19 grep checklist** passes before gate dispatch. The committed spec must
+    contain: `guarded_execution_invocation_hash is excluded from the S7GuardedExecutionInvocation hash domain`,
+    `canonical_hash(S7GuardedExecutionInvocation without guarded_execution_invocation_hash)`,
+    `guarded_credential_invocation_hash is excluded from the S7GuardedCredentialInvocation hash domain`,
+    `canonical_hash(S7GuardedCredentialInvocation without guarded_credential_invocation_hash)`,
+    `canonical_hash_without_field`, `load_history_bridge_trace_payload_context`,
+    `S7HistoryBridgeTracePayloadContext`, `d23_state_for input tuple`,
+    `context.payload == payload`, `CREDENTIAL_ACTIONS`,
+    `credential_action_for_proposed_change_class`,
+    `credential_rotate is reviewedly excluded before credential action materialization`,
+    `credential_action in CREDENTIAL_ACTIONS`,
+    `reservation_token_hash is the only persisted reservation-token value`,
+    Raw `reservation_token` is runtime-only wrapper input,
+    `No S7.3 table persists raw reservation tokens`,
+    `credential_authorization_challenge`,
+    `registration_ceremony_challenge`,
+    `credential_authorization_challenge_hash`,
+    `registration_ceremony_challenge_hash`, `CHALLENGE_PHASES`,
+    `S7CredentialRegistrationFinishUse`, `finish_used_at`,
+    `registration_result_hash`, `registration_result_challenge_hash`,
+    `UNIQUE(credential_registration_grant_binding_id)`,
+    `register_finish writes the credential only through S7CredentialRegistrationFinishUseStore.put_if_unused`,
+    `source_ref_hash TEXT NOT NULL`,
+    `reservation_token_hash TEXT NOT NULL`, and
+    `S7GuardedExecutionInvocation is not the compatibility/no-bundle carrier`.
+
+v19 requires both lanes before canonicalization. The Claude Section 8.2
+fresh-reader gate must re-read covenant posture across the v15-v19 carrier
+changes. The Codex engineering panel must re-read the seven v19 carrier and
+lifecycle sections plus the uniform persistence contract. The WebAuthn
+registration signature-scope item remains reserved for the full
+canonicalization council. v19 does not decide whether the
+founder-signs-at-begin / writes-at-finish two-step satisfies the
+founder-signs-the-actual-change principle; v19 makes the mechanism
+byte-explicit enough for the council to judge before any final header flip or
+canonical tag.
 
 ## Review Questions
 
