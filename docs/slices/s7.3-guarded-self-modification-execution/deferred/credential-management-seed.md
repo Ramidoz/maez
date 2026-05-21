@@ -3257,7 +3257,7 @@ S7VoiceBundleUse(
     source_ref_hash: str,
     reserved_for_artifact: str | None,
     reserved_at: str | None,
-    reservation_token: str | None,
+    reservation_token_hash: str | None,
     consumed_for_artifact: str | None,
     consumed_at: str | None,
 )
@@ -3406,7 +3406,7 @@ write_bundle(bundle) -> source_ref_hash
 read_by_source_ref_hash(source_ref_hash) -> bundle | None
 read_bundle_use(source_ref_hash) -> S7VoiceBundleUse | None
 reserve_for_artifact(source_ref_hash, artifact_id, reserved_at) -> ReservationToken
-mark_consumed_for_artifact(source_ref_hash, artifact_id, reservation_token, consumed_at)  # use table
+mark_consumed_for_artifact(source_ref_hash, artifact_id, reservation_token_hash, consumed_at)  # use table
 ```
 
 Replay protection:
@@ -3424,6 +3424,7 @@ Replay protection:
 - `mark_consumed_for_artifact(...)` mutates only `S7VoiceBundleUse` after
   artifact consume succeeds inside the same shared-file transaction discipline;
   the natural caller is `S7GuardedStateStore.consume_artifact_for_execution(...)`;
+  the caller hashes the runtime token before the use-table update;
 - consultation nonce-use rows cannot be reused after `accepted_spent`;
 - later attempts over changed material require a new consultation id and bundle.
 
@@ -5059,7 +5060,7 @@ S7ExecutionAuthorization(
     derived_aggregation_group: str,
     execution_consumer_id: str,
     source_ref_hash: str | None,
-    reservation_token: str | None,
+    reservation_token_hash: str | None,
     now: str,
     covenant_ceremony_evidence: object | None = None,
 )
@@ -5082,6 +5083,7 @@ from `S7ExecutionAuthorization` to `S7GuardedCredentialInvocation` is implicit.
 S7GuardedStateStore.consume_artifact_for_execution(
     *,
     invocation: S7GuardedExecutionInvocation | S7GuardedCredentialInvocation,
+    reservation_token: ReservationToken,
     now: datetime,
     connection: sqlite3.Connection | None = None,
     after_consume_before_commit: S7PostConsumeCallback | None = None,
@@ -5122,7 +5124,8 @@ On success the wrapper atomically:
    `execution_consumer_id=invocation.execution_consumer_id`;
 3. persists a durable `GrantUse` record;
 4. marks the matching `S7VoiceBundleUse` consumed when `source_ref_hash` is
-   present, requiring the matching `reservation_token`;
+   present, requiring `canonical_hash(reservation_token)` to match both the
+   invocation and bundle-use `reservation_token_hash`;
 5. runs `after_consume_before_commit` if supplied and stores its return value as
    `callback_result`;
 6. returns `S7ConsumeResult(grant, grant_use, callback_result, None)`.
