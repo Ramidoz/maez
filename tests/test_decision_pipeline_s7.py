@@ -352,6 +352,13 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         raw_text = "Maez says there is no objection."
         rendered_prompt_text = f"S7 voice consultation prompt for {env.request_id}"
         rendered_prompt_hash = s7.canonical_hash(rendered_prompt_text)
+        manifest = bundle_store.put_reviewed_context_manifest(
+            manifest_id=f"context-{card.request_id}",
+            preview_ref=f"preview-{card.request_id}",
+            request_envelope_hash=rendered.request_envelope_hash,
+            precondition_hash=env.precondition_hash,
+            created_at=NOW,
+        )
         binding = S7VoiceSourceBundleHashBinding(
             request_id=env.request_id,
             consultation_id=consultation.consultation_id,
@@ -365,7 +372,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
             rendered_prompt_hash=rendered_prompt_hash,
             mutation_preview_hash="8" * 64,
             rollback_plan_ref="9" * 64,
-            context_manifest_hash="a" * 64,
+            context_manifest_hash=manifest.context_manifest_hash,
             runtime_identity_hash="b" * 64,
             model_routing_identity_hash="d" * 64,
             model_config_hash="e" * 64,
@@ -390,6 +397,7 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
                 rendered_prompt_hash=binding.rendered_prompt_hash,
                 mutation_preview_hash=binding.mutation_preview_hash,
                 rollback_plan_ref=binding.rollback_plan_ref,
+                context_manifest_ref=manifest.manifest_id,
                 context_manifest_hash=binding.context_manifest_hash,
                 runtime_identity_hash=binding.runtime_identity_hash,
                 model_routing_identity_hash=binding.model_routing_identity_hash,

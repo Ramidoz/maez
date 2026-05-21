@@ -142,6 +142,13 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
         raw_text = "Maez says there is no objection."
         rendered_prompt_text = f"S7 voice consultation prompt for {artifact.request_id}"
         rendered_prompt_hash = s7.canonical_hash(rendered_prompt_text)
+        manifest = bundle_store.put_reviewed_context_manifest(
+            manifest_id=f"context-{artifact.artifact_id}",
+            preview_ref=f"preview-{artifact.artifact_id}",
+            request_envelope_hash=artifact.request_envelope_hash,
+            precondition_hash=artifact.precondition_hash,
+            created_at=NOW,
+        )
         binding = S7VoiceSourceBundleHashBinding(
             request_id=artifact.request_id,
             consultation_id=f"voice-{artifact.artifact_id}",
@@ -155,7 +162,7 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
             rendered_prompt_hash=rendered_prompt_hash,
             mutation_preview_hash="8" * 64,
             rollback_plan_ref="9" * 64,
-            context_manifest_hash="a" * 64,
+            context_manifest_hash=manifest.context_manifest_hash,
             runtime_identity_hash="b" * 64,
             model_routing_identity_hash="d" * 64,
             model_config_hash="e" * 64,
@@ -180,6 +187,7 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
                 rendered_prompt_hash=binding.rendered_prompt_hash,
                 mutation_preview_hash=binding.mutation_preview_hash,
                 rollback_plan_ref=binding.rollback_plan_ref,
+                context_manifest_ref=manifest.manifest_id,
                 context_manifest_hash=binding.context_manifest_hash,
                 runtime_identity_hash=binding.runtime_identity_hash,
                 model_routing_identity_hash=binding.model_routing_identity_hash,
@@ -490,14 +498,19 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
         binding_overrides: dict | None = None,
         attempt=None,
         source_ref_hash: str = "c" * 64,
+        policy_reviewed: bool = True,
     ):
         from core.governance import operator_user_boundary as s7
         from core.governance.s7_guarded_execution import (
+            REVIEWED_CONTEXT_MANIFEST_POLICY_HASHES,
+            S7ContextManifest,
+            S7ContextManifestPolicy,
             S7SemanticReaderAttemptStore,
             S7VoiceBundleUse,
             S7VoiceBundleUseStore,
             S7VoiceConsultationBundle,
             S7VoiceConsultationBundleStore,
+            s7_voice_consultation_bundle_hash,
         )
 
         bundle_store = S7VoiceConsultationBundleStore(self._db_path())
@@ -507,35 +520,70 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
         attempt_store.put(attempt)
         if store_rendered_prompt:
             bundle_store.put_rendered_prompt("rendered-prompt-1", rendered_prompt_text)
+        policy = S7ContextManifestPolicy(
+            policy_id="s7-context-policy-v1",
+            schema_version="1",
+            allowed_fields=("preview_ref", "dialog_context_ref", "rollback_path_class"),
+            dialog_context_rules=("no_private_raw_text",),
+            reviewed_at="2026-05-21T00:00:00+00:00",
+            policy_body_hash="f" * 64 if policy_reviewed else "0" * 64,
+        )
+        if policy_reviewed:
+            self.assertIn(policy.policy_hash, REVIEWED_CONTEXT_MANIFEST_POLICY_HASHES)
+        bundle_store.put_context_manifest_policy(policy)
+        manifest = S7ContextManifest(
+            schema_version="1",
+            manifest_id="context-manifest-1",
+            preview_ref="preview-ref-1",
+            dialog_context_ref=None,
+            request_envelope_hash="1" * 64,
+            precondition_hash="4" * 64,
+            rollback_path_class="revert_patch",
+            source_surface="cockpit",
+            proposal_origin_label="operator",
+            policy_id=policy.policy_id,
+            policy_hash=policy.policy_hash,
+            created_at=NOW,
+        )
+        bundle_store.put_context_manifest(manifest)
         binding = self._expected_binding(
             source_ref_hash=source_ref_hash,
             rendered_prompt_hash=stored_rendered_prompt_hash
             or s7.canonical_hash(rendered_prompt_text),
+            context_manifest_hash=manifest.context_manifest_hash,
             **(binding_overrides or {}),
         )
         bundle_store.put_raw_response("raw-response-1", raw_text)
+        bundle = S7VoiceConsultationBundle(
+            source_ref_hash=source_ref_hash,
+            request_id="req-validator-1",
+            consultation_id="voice-validator-1",
+            request_envelope_hash=binding.request_envelope_hash,
+            rendered_text_hash=binding.rendered_text_hash,
+            action_params_hash=binding.action_params_hash,
+            precondition_hash=binding.precondition_hash,
+            authority_context_hash=binding.authority_context_hash,
+            maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
+            rendered_prompt_ref="rendered-prompt-1",
+            rendered_prompt_hash=binding.rendered_prompt_hash,
+            mutation_preview_hash=binding.mutation_preview_hash,
+            rollback_plan_ref=binding.rollback_plan_ref,
+            context_manifest_ref=manifest.manifest_id,
+            context_manifest_hash=binding.context_manifest_hash,
+            runtime_identity_hash=binding.runtime_identity_hash,
+            model_routing_identity_hash=binding.model_routing_identity_hash,
+            model_config_hash=binding.model_config_hash,
+            raw_response_ref="raw-response-1",
+            raw_response_hash=stored_raw_hash or s7.canonical_hash(raw_text),
+            semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+            source_bundle_hash=None,
+        )
         bundle_store.put_bundle(
             S7VoiceConsultationBundle(
-                source_ref_hash=source_ref_hash,
-                request_id="req-validator-1",
-                consultation_id="voice-validator-1",
-                request_envelope_hash=binding.request_envelope_hash,
-                rendered_text_hash=binding.rendered_text_hash,
-                action_params_hash=binding.action_params_hash,
-                precondition_hash=binding.precondition_hash,
-                authority_context_hash=binding.authority_context_hash,
-                maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
-                rendered_prompt_ref="rendered-prompt-1",
-                rendered_prompt_hash=binding.rendered_prompt_hash,
-                mutation_preview_hash=binding.mutation_preview_hash,
-                rollback_plan_ref=binding.rollback_plan_ref,
-                context_manifest_hash=binding.context_manifest_hash,
-                runtime_identity_hash=binding.runtime_identity_hash,
-                model_routing_identity_hash=binding.model_routing_identity_hash,
-                model_config_hash=binding.model_config_hash,
-                raw_response_ref="raw-response-1",
-                raw_response_hash=stored_raw_hash or s7.canonical_hash(raw_text),
-                semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+                **{
+                    **bundle.__dict__,
+                    "source_bundle_hash": s7_voice_consultation_bundle_hash(bundle),
+                }
             )
         )
         bundle_use_store.put_unreserved(
@@ -679,6 +727,54 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.status, "invalid_hash_binding")
+        self.assertFalse(result.source_bundle_valid)
+        self.assertFalse(result.mint_eligible)
+
+    def test_validator_rejects_bundle_row_mutated_after_persisted_hash(self):
+        from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
+
+        bundle_store, bundle_use_store, attempt_store, binding = self._seed_validator_inputs()
+        with closing(sqlite3.connect(self._db_path())) as conn:
+            conn.execute(
+                """
+                UPDATE s7_voice_consultation_bundles
+                SET action_params_hash = ?
+                WHERE source_ref_hash = ?
+                """,
+                ("f" * 64, "c" * 64),
+            )
+            conn.commit()
+
+        result = validate_s7_voice_source_bundle(
+            consultation=self._consultation(),
+            bundle_store=bundle_store,
+            bundle_use_store=bundle_use_store,
+            semantic_reader_attempt_store=attempt_store,
+            expected_binding=binding,
+            now=NOW,
+        )
+
+        self.assertEqual(result.status, "invalid_hash_binding")
+        self.assertFalse(result.source_bundle_valid)
+        self.assertFalse(result.mint_eligible)
+
+    def test_validator_rejects_unreviewed_context_manifest_policy(self):
+        from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle
+
+        bundle_store, bundle_use_store, attempt_store, binding = self._seed_validator_inputs(
+            policy_reviewed=False,
+        )
+
+        result = validate_s7_voice_source_bundle(
+            consultation=self._consultation(),
+            bundle_store=bundle_store,
+            bundle_use_store=bundle_use_store,
+            semantic_reader_attempt_store=attempt_store,
+            expected_binding=binding,
+            now=NOW,
+        )
+
+        self.assertEqual(result.status, "invalid_context_manifest_policy")
         self.assertFalse(result.source_bundle_valid)
         self.assertFalse(result.mint_eligible)
 

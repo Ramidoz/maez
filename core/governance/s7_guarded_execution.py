@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import json
 import re
 import sqlite3
 from pathlib import Path
@@ -16,6 +17,7 @@ VOICE_SOURCE_BUNDLE_VALIDATION_STATUSES = frozenset({
     "blocking_present",
     "invalid_prompt_integrity",
     "invalid_hash_binding",
+    "invalid_context_manifest_policy",
     "raw_response_hash_mismatch",
     "reader_route_mismatch",
     "source_bundle_unavailable",
@@ -109,6 +111,114 @@ REVIEWED_SEMANTIC_READER_ROUTE_IDENTITIES = frozenset({
         semantic_reader_route_config_hash=S7_REVIEWED_SEMANTIC_READER_ROUTE_CONFIG_HASH,
     )
 })
+
+
+@dataclass(frozen=True)
+class S7ContextManifestPolicy:
+    """Reviewed policy that governs which context may enter a voice consultation."""
+
+    policy_id: str
+    schema_version: str
+    allowed_fields: tuple[str, ...]
+    dialog_context_rules: tuple[str, ...]
+    reviewed_at: str
+    policy_body_hash: str
+
+    def __post_init__(self) -> None:
+        if not self.policy_id:
+            raise ValueError("S7ContextManifestPolicy requires policy_id")
+        if not self.schema_version:
+            raise ValueError("S7ContextManifestPolicy requires schema_version")
+        if not isinstance(self.allowed_fields, tuple) or not self.allowed_fields:
+            raise ValueError("S7ContextManifestPolicy requires allowed_fields")
+        if not isinstance(self.dialog_context_rules, tuple):
+            raise ValueError("dialog_context_rules must be tuple")
+        if not self.reviewed_at:
+            raise ValueError("S7ContextManifestPolicy requires reviewed_at")
+        _validate_hash64(self.policy_body_hash, field="policy_body_hash")
+
+    @property
+    def policy_hash(self) -> str:
+        return s7.canonical_hash({
+            "allowed_fields": self.allowed_fields,
+            "dialog_context_rules": self.dialog_context_rules,
+            "policy_body_hash": self.policy_body_hash,
+            "policy_id": self.policy_id,
+            "reviewed_at": self.reviewed_at,
+            "schema_version": self.schema_version,
+        })
+
+
+S7_REVIEWED_CONTEXT_MANIFEST_POLICY = S7ContextManifestPolicy(
+    policy_id="s7-context-policy-v1",
+    schema_version="1",
+    allowed_fields=("preview_ref", "dialog_context_ref", "rollback_path_class"),
+    dialog_context_rules=("no_private_raw_text",),
+    reviewed_at="2026-05-21T00:00:00+00:00",
+    policy_body_hash="f" * 64,
+)
+
+REVIEWED_CONTEXT_MANIFEST_POLICY_HASHES = frozenset({
+    S7_REVIEWED_CONTEXT_MANIFEST_POLICY.policy_hash
+})
+
+
+@dataclass(frozen=True)
+class S7ContextManifest:
+    """Immutable context manifest bound into an S7.3 voice source bundle."""
+
+    schema_version: str
+    manifest_id: str
+    preview_ref: str
+    dialog_context_ref: str | None
+    request_envelope_hash: str
+    precondition_hash: str
+    rollback_path_class: str
+    source_surface: str
+    proposal_origin_label: str
+    policy_id: str
+    policy_hash: str
+    created_at: str
+
+    def __post_init__(self) -> None:
+        if not self.schema_version:
+            raise ValueError("S7ContextManifest requires schema_version")
+        if not self.manifest_id:
+            raise ValueError("S7ContextManifest requires manifest_id")
+        if not self.preview_ref:
+            raise ValueError("S7ContextManifest requires preview_ref")
+        if self.dialog_context_ref is not None and not self.dialog_context_ref:
+            raise ValueError("dialog_context_ref must be non-empty when present")
+        _validate_hash64(self.request_envelope_hash, field="request_envelope_hash")
+        _validate_hash64(self.precondition_hash, field="precondition_hash")
+        s7._validate_closed_value(self.rollback_path_class, s7.ROLLBACK_PATH_CLASSES, "rollback_path_class")
+        if not self.source_surface:
+            raise ValueError("S7ContextManifest requires source_surface")
+        s7._validate_closed_value(
+            self.proposal_origin_label,
+            frozenset({"operator", "maez", "system"}),
+            "proposal_origin_label",
+        )
+        if not self.policy_id:
+            raise ValueError("S7ContextManifest requires policy_id")
+        _validate_hash64(self.policy_hash, field="policy_hash")
+        if not self.created_at:
+            raise ValueError("S7ContextManifest requires created_at")
+
+    @property
+    def context_manifest_hash(self) -> str:
+        return s7.canonical_hash({
+            "dialog_context_ref": self.dialog_context_ref,
+            "policy_hash": self.policy_hash,
+            "policy_id": self.policy_id,
+            "precondition_hash": self.precondition_hash,
+            "preview_ref": self.preview_ref,
+            "proposal_origin_label": self.proposal_origin_label,
+            "request_envelope_hash": self.request_envelope_hash,
+            "rollback_path_class": self.rollback_path_class,
+            "schema_version": self.schema_version,
+            "source_surface": self.source_surface,
+        })
 
 
 @dataclass(frozen=True, init=False)
@@ -260,6 +370,8 @@ class S7VoiceConsultationBundle:
     raw_response_ref: str | None
     raw_response_hash: str | None
     semantic_reader_attempt_hash: str | None
+    context_manifest_ref: str | None = None
+    source_bundle_hash: str | None = None
 
     def __post_init__(self) -> None:
         _validate_hash64(self.source_ref_hash, field="source_ref_hash")
@@ -301,6 +413,39 @@ class S7VoiceConsultationBundle:
                 self.semantic_reader_attempt_hash,
                 field="semantic_reader_attempt_hash",
             )
+        if self.context_manifest_ref is not None and not self.context_manifest_ref:
+            raise ValueError("context_manifest_ref must be non-empty when present")
+        if self.source_bundle_hash is not None:
+            _validate_hash64(self.source_bundle_hash, field="source_bundle_hash")
+
+
+def s7_voice_consultation_bundle_hash(bundle: S7VoiceConsultationBundle) -> str:
+    """Content hash for immutable bundle fields, excluding its source-ref key."""
+
+    if not isinstance(bundle, S7VoiceConsultationBundle):
+        raise ValueError("s7_voice_consultation_bundle_hash requires S7VoiceConsultationBundle")
+    return s7.canonical_hash({
+        "action_params_hash": bundle.action_params_hash,
+        "authority_context_hash": bundle.authority_context_hash,
+        "consultation_id": bundle.consultation_id,
+        "context_manifest_hash": bundle.context_manifest_hash,
+        "context_manifest_ref": bundle.context_manifest_ref,
+        "maez_voice_consultation_hash": bundle.maez_voice_consultation_hash,
+        "model_config_hash": bundle.model_config_hash,
+        "model_routing_identity_hash": bundle.model_routing_identity_hash,
+        "mutation_preview_hash": bundle.mutation_preview_hash,
+        "precondition_hash": bundle.precondition_hash,
+        "raw_response_hash": bundle.raw_response_hash,
+        "raw_response_ref": bundle.raw_response_ref,
+        "rendered_prompt_hash": bundle.rendered_prompt_hash,
+        "rendered_prompt_ref": bundle.rendered_prompt_ref,
+        "rendered_text_hash": bundle.rendered_text_hash,
+        "request_envelope_hash": bundle.request_envelope_hash,
+        "request_id": bundle.request_id,
+        "rollback_plan_ref": bundle.rollback_plan_ref,
+        "runtime_identity_hash": bundle.runtime_identity_hash,
+        "semantic_reader_attempt_hash": bundle.semantic_reader_attempt_hash,
+    })
 
 
 @dataclass(frozen=True)
@@ -382,6 +527,32 @@ CREATE TABLE IF NOT EXISTS s7_voice_raw_responses (
     raw_response_text TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS s7_context_manifest_policies (
+    policy_id TEXT PRIMARY KEY,
+    schema_version TEXT NOT NULL,
+    allowed_fields TEXT NOT NULL,
+    dialog_context_rules TEXT NOT NULL,
+    reviewed_at TEXT NOT NULL,
+    policy_body_hash TEXT NOT NULL,
+    policy_hash TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS s7_context_manifests (
+    manifest_id TEXT PRIMARY KEY,
+    schema_version TEXT NOT NULL,
+    preview_ref TEXT NOT NULL,
+    dialog_context_ref TEXT,
+    request_envelope_hash TEXT NOT NULL,
+    precondition_hash TEXT NOT NULL,
+    rollback_path_class TEXT NOT NULL,
+    source_surface TEXT NOT NULL,
+    proposal_origin_label TEXT NOT NULL,
+    policy_id TEXT NOT NULL,
+    policy_hash TEXT NOT NULL,
+    context_manifest_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS s7_voice_consultation_bundles (
     source_ref_hash TEXT PRIMARY KEY,
     request_id TEXT NOT NULL,
@@ -396,13 +567,15 @@ CREATE TABLE IF NOT EXISTS s7_voice_consultation_bundles (
     rendered_prompt_hash TEXT,
     mutation_preview_hash TEXT,
     rollback_plan_ref TEXT,
+    context_manifest_ref TEXT,
     context_manifest_hash TEXT,
     runtime_identity_hash TEXT,
     model_routing_identity_hash TEXT,
     model_config_hash TEXT,
     raw_response_ref TEXT,
     raw_response_hash TEXT,
-    semantic_reader_attempt_hash TEXT
+    semantic_reader_attempt_hash TEXT,
+    source_bundle_hash TEXT
 );
 """
 
@@ -430,10 +603,12 @@ class S7VoiceConsultationBundleStore:
                 "rendered_prompt_hash",
                 "mutation_preview_hash",
                 "rollback_plan_ref",
+                "context_manifest_ref",
                 "context_manifest_hash",
                 "runtime_identity_hash",
                 "model_routing_identity_hash",
                 "model_config_hash",
+                "source_bundle_hash",
             ):
                 if column_name not in columns:
                     conn.execute(
@@ -476,6 +651,173 @@ class S7VoiceConsultationBundleStore:
                 conn.close()
         return None if row is None else str(row[0])
 
+    def put_context_manifest_policy(self, policy: S7ContextManifestPolicy) -> None:
+        if not isinstance(policy, S7ContextManifestPolicy):
+            raise ValueError("put_context_manifest_policy requires S7ContextManifestPolicy")
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO s7_context_manifest_policies (
+                    policy_id, schema_version, allowed_fields, dialog_context_rules,
+                    reviewed_at, policy_body_hash, policy_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    policy.policy_id,
+                    policy.schema_version,
+                    json.dumps(list(policy.allowed_fields), separators=(",", ":")),
+                    json.dumps(list(policy.dialog_context_rules), separators=(",", ":")),
+                    policy.reviewed_at,
+                    policy.policy_body_hash,
+                    policy.policy_hash,
+                ),
+            )
+            conn.commit()
+
+    def read_context_manifest_policy(
+        self,
+        policy_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> S7ContextManifestPolicy | None:
+        if not policy_id:
+            raise ValueError("policy_id is required")
+        conn = connection or sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                """
+                SELECT schema_version, allowed_fields, dialog_context_rules,
+                       reviewed_at, policy_body_hash, policy_hash
+                FROM s7_context_manifest_policies
+                WHERE policy_id = ?
+                """,
+                (policy_id,),
+            ).fetchone()
+        finally:
+            if connection is None:
+                conn.close()
+        if row is None:
+            return None
+        policy = S7ContextManifestPolicy(
+            policy_id=policy_id,
+            schema_version=str(row[0]),
+            allowed_fields=tuple(json.loads(str(row[1]))),
+            dialog_context_rules=tuple(json.loads(str(row[2]))),
+            reviewed_at=str(row[3]),
+            policy_body_hash=str(row[4]),
+        )
+        if policy.policy_hash != str(row[5]):
+            return None
+        return policy
+
+    def put_context_manifest(self, manifest: S7ContextManifest) -> None:
+        if not isinstance(manifest, S7ContextManifest):
+            raise ValueError("put_context_manifest requires S7ContextManifest")
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO s7_context_manifests (
+                    manifest_id, schema_version, preview_ref, dialog_context_ref,
+                    request_envelope_hash, precondition_hash, rollback_path_class,
+                    source_surface, proposal_origin_label, policy_id, policy_hash,
+                    context_manifest_hash, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    manifest.manifest_id,
+                    manifest.schema_version,
+                    manifest.preview_ref,
+                    manifest.dialog_context_ref,
+                    manifest.request_envelope_hash,
+                    manifest.precondition_hash,
+                    manifest.rollback_path_class,
+                    manifest.source_surface,
+                    manifest.proposal_origin_label,
+                    manifest.policy_id,
+                    manifest.policy_hash,
+                    manifest.context_manifest_hash,
+                    manifest.created_at,
+                ),
+            )
+            conn.commit()
+
+    def read_context_manifest(
+        self,
+        manifest_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> S7ContextManifest | None:
+        if not manifest_id:
+            raise ValueError("manifest_id is required")
+        conn = connection or sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                """
+                SELECT schema_version, preview_ref, dialog_context_ref,
+                       request_envelope_hash, precondition_hash, rollback_path_class,
+                       source_surface, proposal_origin_label, policy_id, policy_hash,
+                       context_manifest_hash, created_at
+                FROM s7_context_manifests
+                WHERE manifest_id = ?
+                """,
+                (manifest_id,),
+            ).fetchone()
+        finally:
+            if connection is None:
+                conn.close()
+        if row is None:
+            return None
+        manifest = S7ContextManifest(
+            schema_version=str(row[0]),
+            manifest_id=manifest_id,
+            preview_ref=str(row[1]),
+            dialog_context_ref=None if row[2] is None else str(row[2]),
+            request_envelope_hash=str(row[3]),
+            precondition_hash=str(row[4]),
+            rollback_path_class=str(row[5]),
+            source_surface=str(row[6]),
+            proposal_origin_label=str(row[7]),
+            policy_id=str(row[8]),
+            policy_hash=str(row[9]),
+            created_at=str(row[11]),
+        )
+        if manifest.context_manifest_hash != str(row[10]):
+            return None
+        return manifest
+
+    def put_reviewed_context_manifest(
+        self,
+        *,
+        manifest_id: str,
+        preview_ref: str,
+        request_envelope_hash: str,
+        precondition_hash: str,
+        rollback_path_class: str = "revert_patch",
+        source_surface: str = "cockpit",
+        proposal_origin_label: str = "operator",
+        dialog_context_ref: str | None = None,
+        created_at: str,
+    ) -> S7ContextManifest:
+        """Persist the reviewed v1 context policy and a manifest bound to it."""
+
+        self.put_context_manifest_policy(S7_REVIEWED_CONTEXT_MANIFEST_POLICY)
+        manifest = S7ContextManifest(
+            schema_version="1",
+            manifest_id=manifest_id,
+            preview_ref=preview_ref,
+            dialog_context_ref=dialog_context_ref,
+            request_envelope_hash=request_envelope_hash,
+            precondition_hash=precondition_hash,
+            rollback_path_class=rollback_path_class,
+            source_surface=source_surface,
+            proposal_origin_label=proposal_origin_label,
+            policy_id=S7_REVIEWED_CONTEXT_MANIFEST_POLICY.policy_id,
+            policy_hash=S7_REVIEWED_CONTEXT_MANIFEST_POLICY.policy_hash,
+            created_at=created_at,
+        )
+        self.put_context_manifest(manifest)
+        return manifest
+
     def put_raw_response(self, raw_response_ref: str, raw_response_text: str) -> None:
         if not raw_response_ref:
             raise ValueError("raw_response_ref is required")
@@ -513,6 +855,11 @@ class S7VoiceConsultationBundleStore:
     def put_bundle(self, bundle: S7VoiceConsultationBundle) -> None:
         if not isinstance(bundle, S7VoiceConsultationBundle):
             raise ValueError("put_bundle requires S7VoiceConsultationBundle")
+        if bundle.source_bundle_hash is None:
+            bundle = replace(
+                bundle,
+                source_bundle_hash=s7_voice_consultation_bundle_hash(bundle),
+            )
         with closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute(
                 """
@@ -530,14 +877,16 @@ class S7VoiceConsultationBundleStore:
                     rendered_prompt_hash,
                     mutation_preview_hash,
                     rollback_plan_ref,
+                    context_manifest_ref,
                     context_manifest_hash,
                     runtime_identity_hash,
                     model_routing_identity_hash,
                     model_config_hash,
                     raw_response_ref,
                     raw_response_hash,
-                    semantic_reader_attempt_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    semantic_reader_attempt_hash,
+                    source_bundle_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     bundle.source_ref_hash,
@@ -553,6 +902,7 @@ class S7VoiceConsultationBundleStore:
                     bundle.rendered_prompt_hash,
                     bundle.mutation_preview_hash,
                     bundle.rollback_plan_ref,
+                    bundle.context_manifest_ref,
                     bundle.context_manifest_hash,
                     bundle.runtime_identity_hash,
                     bundle.model_routing_identity_hash,
@@ -560,6 +910,7 @@ class S7VoiceConsultationBundleStore:
                     bundle.raw_response_ref,
                     bundle.raw_response_hash,
                     bundle.semantic_reader_attempt_hash,
+                    bundle.source_bundle_hash,
                 ),
             )
             conn.commit()
@@ -581,10 +932,10 @@ class S7VoiceConsultationBundleStore:
                        authority_context_hash, maez_voice_consultation_hash,
                        rendered_prompt_ref, rendered_prompt_hash,
                        mutation_preview_hash, rollback_plan_ref,
-                       context_manifest_hash, runtime_identity_hash,
+                       context_manifest_ref, context_manifest_hash, runtime_identity_hash,
                        model_routing_identity_hash, model_config_hash,
                        raw_response_ref, raw_response_hash,
-                       semantic_reader_attempt_hash
+                       semantic_reader_attempt_hash, source_bundle_hash
                 FROM s7_voice_consultation_bundles
                 WHERE source_ref_hash = ?
                 """,
@@ -609,13 +960,15 @@ class S7VoiceConsultationBundleStore:
             rendered_prompt_hash=None if row[10] is None else str(row[10]),
             mutation_preview_hash=None if row[11] is None else str(row[11]),
             rollback_plan_ref=None if row[12] is None else str(row[12]),
-            context_manifest_hash=None if row[13] is None else str(row[13]),
-            runtime_identity_hash=None if row[14] is None else str(row[14]),
-            model_routing_identity_hash=None if row[15] is None else str(row[15]),
-            model_config_hash=None if row[16] is None else str(row[16]),
-            raw_response_ref=None if row[17] is None else str(row[17]),
-            raw_response_hash=None if row[18] is None else str(row[18]),
-            semantic_reader_attempt_hash=None if row[19] is None else str(row[19]),
+            context_manifest_ref=None if row[13] is None else str(row[13]),
+            context_manifest_hash=None if row[14] is None else str(row[14]),
+            runtime_identity_hash=None if row[15] is None else str(row[15]),
+            model_routing_identity_hash=None if row[16] is None else str(row[16]),
+            model_config_hash=None if row[17] is None else str(row[17]),
+            raw_response_ref=None if row[18] is None else str(row[18]),
+            raw_response_hash=None if row[19] is None else str(row[19]),
+            semantic_reader_attempt_hash=None if row[20] is None else str(row[20]),
+            source_bundle_hash=None if row[21] is None else str(row[21]),
         )
 
 _SEMANTIC_READER_ATTEMPT_SCHEMA = """
@@ -1030,6 +1383,46 @@ def _bundle_matches_expected_hash_binding(
     )
 
 
+def _bundle_content_hash_valid(bundle: S7VoiceConsultationBundle) -> bool:
+    return (
+        bundle.source_bundle_hash is not None
+        and s7_voice_consultation_bundle_hash(
+            replace(bundle, source_bundle_hash=None)
+        ) == bundle.source_bundle_hash
+    )
+
+
+def _context_manifest_policy_valid(
+    *,
+    bundle: S7VoiceConsultationBundle,
+    bundle_store: S7VoiceConsultationBundleStore,
+    expected_binding: S7VoiceSourceBundleHashBinding,
+    connection: sqlite3.Connection,
+) -> bool:
+    if bundle.context_manifest_ref is None or bundle.context_manifest_hash is None:
+        return False
+    manifest = bundle_store.read_context_manifest(
+        bundle.context_manifest_ref,
+        connection=connection,
+    )
+    if manifest is None:
+        return False
+    if (
+        manifest.context_manifest_hash != bundle.context_manifest_hash
+        or manifest.context_manifest_hash != expected_binding.context_manifest_hash
+    ):
+        return False
+    policy = bundle_store.read_context_manifest_policy(
+        manifest.policy_id,
+        connection=connection,
+    )
+    return (
+        policy is not None
+        and policy.policy_hash == manifest.policy_hash
+        and policy.policy_hash in REVIEWED_CONTEXT_MANIFEST_POLICY_HASHES
+    )
+
+
 def validate_s7_voice_source_bundle(
     *,
     consultation: s7.MaezVoiceConsultation,
@@ -1045,8 +1438,9 @@ def validate_s7_voice_source_bundle(
     This is intentionally narrower than the full canonical validator while the
     producer side is still being built: it enforces the covenant-load-bearing
     checks needed before artifact minting may accept `valid_absent` at all:
-    exact-change hash binding, rendered prompt replay, raw Maez response replay,
-    and reviewed semantic-reader route identity.
+    exact-change hash binding, context-manifest policy validation, rendered
+    prompt replay, raw Maez response replay, and reviewed semantic-reader route
+    identity.
     """
 
     if not isinstance(consultation, s7.MaezVoiceConsultation):
@@ -1075,6 +1469,12 @@ def validate_s7_voice_source_bundle(
                 authority_projection="unavailable",
                 failure_reason_code="source_bundle_unavailable",
             )
+        if not _bundle_content_hash_valid(bundle):
+            return _failed_source_bundle_validation(
+                status="invalid_hash_binding",
+                authority_projection="operational_block",
+                failure_reason_code="invalid_hash_binding",
+            )
         if not isinstance(expected_binding, S7VoiceSourceBundleHashBinding):
             return _failed_source_bundle_validation(
                 status="invalid_hash_binding",
@@ -1086,6 +1486,17 @@ def validate_s7_voice_source_bundle(
                 status="invalid_hash_binding",
                 authority_projection="operational_block",
                 failure_reason_code="invalid_hash_binding",
+            )
+        if not _context_manifest_policy_valid(
+            bundle=bundle,
+            bundle_store=bundle_store,
+            expected_binding=expected_binding,
+            connection=conn,
+        ):
+            return _failed_source_bundle_validation(
+                status="invalid_context_manifest_policy",
+                authority_projection="operational_block",
+                failure_reason_code="invalid_context_manifest_policy",
             )
 
         bundle_use = bundle_use_store.get_for_source_ref(
