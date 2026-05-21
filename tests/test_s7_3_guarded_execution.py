@@ -148,15 +148,30 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
 
         self.assertEqual(self._artifact_count(), 0)
 
-    def test_mint_accepts_literal_valid_absent_voice_source_bundle_validation(self):
+    def test_mint_reserves_voice_bundle_use_and_persists_only_token_hash(self):
         from core.governance import operator_user_boundary as s7
         from core.governance.s7_guarded_execution import (
             S7GuardedStateStore,
+            S7VoiceBundleUse,
+            S7VoiceBundleUseStore,
             S7VoiceSourceBundleValidationResult,
         )
 
+        artifact = self._artifact()
         auth_store = s7.S7AuthorizationStore(self._db_path())
-        guarded_store = S7GuardedStateStore(authorization_store=auth_store)
+        bundle_use_store = S7VoiceBundleUseStore(self._db_path())
+        bundle_use_store.put_unreserved(
+            S7VoiceBundleUse.new_unreserved(
+                request_id=artifact.request_id,
+                source_ref_hash="c" * 64,
+                consultation_id=f"voice-{artifact.artifact_id}",
+                used_at=NOW,
+            )
+        )
+        guarded_store = S7GuardedStateStore(
+            authorization_store=auth_store,
+            voice_bundle_use_store=bundle_use_store,
+        )
         validation = S7VoiceSourceBundleValidationResult(
             status="valid_absent",
             source_bundle_valid=True,
@@ -166,11 +181,85 @@ class S73GuardedMintPreconditionTests(unittest.TestCase):
         )
 
         guarded_store.put_artifact_with_bundle_reservation(
-            artifact=self._artifact(),
+            artifact=artifact,
             source_bundle_validation=validation,
+            source_ref_hash="c" * 64,
+            reservation_token="runtime-token-not-persisted",
+            now=NOW,
         )
 
         self.assertEqual(self._artifact_count(), 1)
+        reserved = bundle_use_store.get_for_source_ref("c" * 64)
+        self.assertIsNotNone(reserved)
+        assert reserved is not None
+        self.assertEqual(reserved.reservation_state, "reserved")
+        self.assertEqual(reserved.artifact_id, artifact.artifact_id)
+        self.assertEqual(reserved.reservation_token_hash, s7.canonical_hash("runtime-token-not-persisted"))
+        self.assertEqual(reserved.reserved_at, NOW)
+        self.assertIsNone(reserved.consumed_at)
+        with closing(sqlite3.connect(self._db_path())) as conn:
+            stored_values = conn.execute(
+                "SELECT request_id, artifact_id, source_ref_hash, consultation_id, "
+                "bundle_use_hash, reservation_token_hash, reservation_state, "
+                "reserved_at, consumed_at, used_at FROM s7_voice_bundle_uses"
+            ).fetchone()
+        self.assertNotIn("runtime-token-not-persisted", tuple(str(value) for value in stored_values))
+
+    def test_mint_refuses_already_reserved_voice_bundle_use_before_artifact_write(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_guarded_execution import (
+            S7GuardedStateStore,
+            S7VoiceBundleUse,
+            S7VoiceBundleUseStore,
+            S7VoiceSourceBundleValidationResult,
+        )
+
+        first_artifact = self._artifact(artifact_id="artifact-s7-3-first")
+        second_artifact = self._artifact(artifact_id="artifact-s7-3-second")
+        auth_store = s7.S7AuthorizationStore(self._db_path())
+        bundle_use_store = S7VoiceBundleUseStore(self._db_path())
+        bundle_use_store.put_unreserved(
+            S7VoiceBundleUse.new_unreserved(
+                request_id=first_artifact.request_id,
+                source_ref_hash="c" * 64,
+                consultation_id=f"voice-{first_artifact.artifact_id}",
+                used_at=NOW,
+            )
+        )
+        guarded_store = S7GuardedStateStore(
+            authorization_store=auth_store,
+            voice_bundle_use_store=bundle_use_store,
+        )
+        validation = S7VoiceSourceBundleValidationResult(
+            status="valid_absent",
+            source_bundle_valid=True,
+            mint_eligible=True,
+            authority_projection="valid_absent",
+            failure_reason_code=None,
+        )
+        guarded_store.put_artifact_with_bundle_reservation(
+            artifact=first_artifact,
+            source_bundle_validation=validation,
+            source_ref_hash="c" * 64,
+            reservation_token="first-token",
+            now=NOW,
+        )
+
+        with self.assertRaisesRegex(ValueError, "unreserved"):
+            guarded_store.put_artifact_with_bundle_reservation(
+                artifact=second_artifact,
+                source_bundle_validation=validation,
+                source_ref_hash="c" * 64,
+                reservation_token="second-token",
+                now=NOW,
+            )
+
+        self.assertEqual(self._artifact_count(), 1)
+        reserved = bundle_use_store.get_for_source_ref("c" * 64)
+        self.assertIsNotNone(reserved)
+        assert reserved is not None
+        self.assertEqual(reserved.artifact_id, first_artifact.artifact_id)
+        self.assertEqual(reserved.reservation_token_hash, s7.canonical_hash("first-token"))
 
 
 if __name__ == "__main__":
