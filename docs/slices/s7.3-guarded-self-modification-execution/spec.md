@@ -1,6 +1,6 @@
 # S7.3 Guarded Self-Modification Execution Spec
 
-**Status:** SPEC v15 draft - folded from Section 8.2 fresh-reader gate v14, Codex panel v14, and v15 fold delta-plan; pending Section 8.2 fresh-reader gate v15 and Codex v15 panel review; not canonical law
+**Status:** SPEC v16 draft - folded from Codex panel v15 and v16 fold delta-plan; pending Section 8.2 fresh-reader gate v16 and Codex v16 panel review; not canonical law
 **Date:** 2026-05-20
 **Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S7.3; Decision 34 / ADR 0039; S7 L8; S7.1 D12-D14 and D23
 **Diagnostic:** [`diagnostic.md`](diagnostic.md)
@@ -59,6 +59,8 @@
 - Section 8.2 fresh-reader gate v14: pending committed review artifact
 - Codex panel v14: [`reviews/spec-codex-panel-v14.md`](reviews/spec-codex-panel-v14.md)
 **v15 fold input:** [`reviews/spec-v15-fold-plan.md`](reviews/spec-v15-fold-plan.md)
+**v15 review input:** [`reviews/spec-codex-panel-v15.md`](reviews/spec-codex-panel-v15.md)
+**v16 fold input:** [`reviews/spec-v16-fold-plan.md`](reviews/spec-v16-fold-plan.md)
 **v9 authorship note:** v9 keeps lane independence and pins the fold-contract
 leans: credential management uses a split non-voice rendered carrier;
 operational legacy refusal-history writes are suppressed rather than written
@@ -130,6 +132,17 @@ credential paths; approval-card/deferred-action routes are concrete manifest
 rows or reviewed fail-closed rows; D21 consumes the persisted surface manifest
 as authoritative; manual-review statuses have producer methods; and
 `ActionEdgeGrantUse` persists the full replay domain before mutation.
+**v16 authorship note:** v16 keeps the v15 covenant architecture and folds the
+remaining Codex v15 persistence/route findings: credential invocation becomes a
+hash/ref carrier whose persisted dataclass matches DDL, with full-object
+loading moved to `load_guarded_credential_invocation_bundle(...)`; fail-closed
+and reviewed-excluded rows carry no execution consumer id; request-history
+cutoff columns have explicit migration and marker validation; the
+`integration_review_plan` source method is canonical; `append_to_file` binds to
+`ActionEngine._do_append_to_file`; trace payloads are typed and persisted by
+kind; ActionEdge carries target-ref/hash pairs; `WorkRequestEnvelope` uses a
+canonical blob/ref plus indexed columns; and compatibility/manual-review
+wording is tightened without reopening covenant architecture.
 **Runtime impact when implemented:** yes. S7.3 will wire live guarded execution for Maez self-modification only after a reviewed Maez voice producer, founder-local WebAuthn artifact mint, atomic artifact consume, execution grant, rollback evidence, and positive trace all bind to the same exact request.
 
 ## Purpose
@@ -584,45 +597,23 @@ dream_apply_proposal
 dream_apply_section_edit_proposal
 evolution_apply_candidate
 workshop_apply_diff
-self_mod_dialog_terminal_execute
 guarded_card_execute
-cli_helper_execute
-cockpit_helper_execute
-reviewed_substrate_adapter_execute
 action_engine_final_mutate
 action_engine_write_soul_note
 action_engine_edit_soul_section
 action_engine_write_any_file
 action_engine_append_to_file
 action_engine_capability_acquire
-action_engine_run_shell
-action_engine_execute_script
-action_engine_run_script
 action_engine_modify_config
 action_engine_register_new_skill
 action_engine_delete_file
-action_engine_sudo_command
 action_engine_write_file
 action_engine_promote_to_core_memory
 action_engine_update_baseline
 action_engine_git_commit
-action_engine_git_push
-action_engine_install_package
-action_engine_kill_process
-action_engine_restart_service
-action_engine_write_outside_maez
 action_engine_integration_review_plan
-action_engine_restart_critical_service
-action_engine_modify_firewall
-action_engine_system_reboot
-action_engine_free_disk_space
-action_engine_delete_temp_file
-action_engine_clean_temp_files
-action_engine_run_safe_command
-action_engine_install_package_t2
 brain_swap_model_routing_execute
 model_routing_env_write_restart
-telegram_rollback_adapter_execute
 s7_credential_register_backup
 s7_credential_disable
 ```
@@ -644,31 +635,24 @@ NON_MINTABLE_EXECUTION_CONSUMER_IDS = {
 `execution_consumer_id_for(...)` must never return a non-mintable id for a
 `live_guarded` manifest row. Positive L8 evidence cannot cite a non-mintable id.
 
-**`S7_ACTION_ENGINE_CONSUMER_IDS`** is the concrete ActionEngine subset:
+`REVIEWED_FUTURE_EXECUTION_CONSUMER_IDS` is a reviewed reserved-id vocabulary,
+not an artifact-mint vocabulary. These ids are known surfaces that remain
+fail-closed until a later reviewed slice makes them live:
 
 ```text
-action_engine_write_soul_note
-action_engine_edit_soul_section
-action_engine_write_any_file
-action_engine_append_to_file
-action_engine_capability_acquire
+self_mod_dialog_terminal_execute
+cli_helper_execute
+cockpit_helper_execute
+reviewed_substrate_adapter_execute
 action_engine_run_shell
 action_engine_execute_script
 action_engine_run_script
-action_engine_modify_config
-action_engine_register_new_skill
-action_engine_delete_file
 action_engine_sudo_command
-action_engine_write_file
-action_engine_promote_to_core_memory
-action_engine_update_baseline
-action_engine_git_commit
 action_engine_git_push
 action_engine_install_package
 action_engine_kill_process
 action_engine_restart_service
 action_engine_write_outside_maez
-action_engine_integration_review_plan
 action_engine_restart_critical_service
 action_engine_modify_firewall
 action_engine_system_reboot
@@ -677,6 +661,30 @@ action_engine_delete_temp_file
 action_engine_clean_temp_files
 action_engine_run_safe_command
 action_engine_install_package_t2
+telegram_rollback_adapter_execute
+```
+
+`S7GuardedStateStore.put_artifact_with_bundle_reservation(...)` and
+`S7GuardedStateStore.consume_artifact_for_execution(...)` reject
+`REVIEWED_FUTURE_EXECUTION_CONSUMER_IDS` before artifact mint or consume in
+S7.3 v1.
+
+**`S7_ACTION_ENGINE_CONSUMER_IDS`** is the concrete ActionEngine subset:
+
+```text
+action_engine_write_soul_note
+action_engine_edit_soul_section
+action_engine_write_any_file
+action_engine_append_to_file
+action_engine_capability_acquire
+action_engine_modify_config
+action_engine_register_new_skill
+action_engine_delete_file
+action_engine_write_file
+action_engine_promote_to_core_memory
+action_engine_update_baseline
+action_engine_git_commit
+action_engine_integration_review_plan
 ```
 
 Generic shell/script/process/service ids are reserved fail-closed ids in S7.3
@@ -1098,7 +1106,7 @@ evolution_engine.apply_candidate + telegram_nl_apply          -> evolution_apply
 evolution_engine.apply_candidate + slash_apply                -> evolution_apply_candidate
 evolution_engine.apply_candidate + cli_apply                  -> evolution_apply_candidate
 workshop.apply_diff + apply_diff                              -> workshop_apply_diff
-self_mod_dialog.terminal_execute + terminal_execute           -> self_mod_dialog_terminal_execute
+self_mod_dialog.terminal_execute + terminal_execute           -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="self_mod_dialog_terminal_unreviewed"
 approval_card.telegram_approve + telegram_approve             -> guarded_card_execute
 approval_card.cockpit_approve + cockpit_approve               -> guarded_card_execute
 approval_card.daemon_internal_approve + daemon_internal       -> guarded_card_execute
@@ -1109,45 +1117,45 @@ action_engine.deferred_action_t2 + execute_tier2_pending       -> fail-closed ex
 daemon.deferred_action_tick + execute_pending                  -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="daemon_deferred_action_unreviewed"
 daemon.deferred_action_tick_t2 + execute_tier2_pending         -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="daemon_deferred_action_t2_unreviewed"
 telegram.approve_train + approve_train                        -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="telegram_approve_train_unreviewed"
-cli_helper.execute + named_adapter                            -> cli_helper_execute
-cockpit_helper.execute + dream_apply_route                    -> cockpit_helper_execute
-cockpit_helper.execute + evolution_apply_route                -> cockpit_helper_execute
-reviewed_substrate_adapter.execute + reviewed_adapter         -> reviewed_substrate_adapter_execute
+cli_helper.execute + named_adapter                            -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="cli_helper_unreviewed"
+cockpit_helper.execute + dream_apply_route                    -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="cockpit_dream_route_unreviewed"
+cockpit_helper.execute + evolution_apply_route                -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="cockpit_evolution_route_unreviewed"
+reviewed_substrate_adapter.execute + reviewed_adapter         -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="reviewed_substrate_adapter_unreviewed"
 action_engine.write_soul_note + write_soul_note               -> action_engine_write_soul_note
 action_engine.edit_soul_section + edit_soul_section           -> action_engine_edit_soul_section
 action_engine.write_any_file + write_any_file                 -> action_engine_write_any_file
 action_engine.append_to_file + append_to_file                 -> action_engine_append_to_file
 action_engine.capability.acquire + capability_acquire         -> action_engine_capability_acquire
-action_engine.run_shell + run_shell                           -> action_engine_run_shell
-action_engine.execute_script + execute_script                 -> action_engine_execute_script
-action_engine.run_script + run_script                         -> action_engine_run_script
+action_engine.run_shell + run_shell                           -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="run_shell_unreviewed"
+action_engine.execute_script + execute_script                 -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="execute_script_unreviewed"
+action_engine.run_script + run_script                         -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="run_script_unreviewed"
 action_engine.modify_config + modify_config                   -> action_engine_modify_config
 action_engine.register_new_skill + register_new_skill         -> action_engine_register_new_skill
 action_engine.delete_file + delete_file                       -> action_engine_delete_file
-action_engine.sudo_command + sudo_command                     -> action_engine_sudo_command
+action_engine.sudo_command + sudo_command                     -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="sudo_command_unreviewed"
 action_engine.write_file + write_file                         -> action_engine_write_file
 action_engine.promote_to_core_memory + promote_to_core_memory -> action_engine_promote_to_core_memory
 action_engine.update_baseline + update_baseline               -> action_engine_update_baseline
 action_engine.git_commit + git_commit                         -> action_engine_git_commit
-action_engine.git_push + git_push                             -> action_engine_git_push
-action_engine.install_package + install_package               -> action_engine_install_package
-action_engine.kill_process + kill_process                     -> action_engine_kill_process
-action_engine.restart_service + restart_service               -> action_engine_restart_service
-action_engine.write_outside_maez + write_outside_maez         -> action_engine_write_outside_maez
+action_engine.git_push + git_push                             -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="git_push_unreviewed"
+action_engine.install_package + install_package               -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="install_package_unreviewed"
+action_engine.kill_process + kill_process                     -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="kill_process_unreviewed"
+action_engine.restart_service + restart_service               -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="restart_service_unreviewed"
+action_engine.write_outside_maez + write_outside_maez         -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="write_outside_maez_unreviewed"
 action_engine.integration.review_plan + integration_review_plan -> action_engine_integration_review_plan
-action_engine.restart_critical_service + restart_critical_service -> action_engine_restart_critical_service
-action_engine.modify_firewall + modify_firewall               -> action_engine_modify_firewall
-action_engine.system_reboot + system_reboot                   -> action_engine_system_reboot
-action_engine.free_disk_space + free_disk_space               -> action_engine_free_disk_space
-action_engine.delete_temp_file + delete_temp_file             -> action_engine_delete_temp_file
-action_engine.clean_temp_files + clean_temp_files             -> action_engine_clean_temp_files
-action_engine.run_safe_command + run_safe_command             -> action_engine_run_safe_command
-action_engine.query_system + query_system                     -> action_engine_run_shell
-action_engine.run_readonly_command + run_readonly_command     -> action_engine_run_shell
-action_engine.install_package_t2 + install_package_t2         -> action_engine_install_package_t2
+action_engine.restart_critical_service + restart_critical_service -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="restart_critical_service_unreviewed"
+action_engine.modify_firewall + modify_firewall               -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="modify_firewall_unreviewed"
+action_engine.system_reboot + system_reboot                   -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="system_reboot_unreviewed"
+action_engine.free_disk_space + free_disk_space               -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="free_disk_space_unreviewed"
+action_engine.delete_temp_file + delete_temp_file             -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="delete_temp_file_unreviewed"
+action_engine.clean_temp_files + clean_temp_files             -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="clean_temp_files_unreviewed"
+action_engine.run_safe_command + run_safe_command             -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="run_safe_command_unreviewed"
+action_engine.query_system + query_system                     -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="query_system_unreviewed"
+action_engine.run_readonly_command + run_readonly_command     -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="run_readonly_command_unreviewed"
+action_engine.install_package_t2 + install_package_t2         -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="install_package_t2_unreviewed"
 brain_swap.execution_authorized + execute                     -> brain_swap_model_routing_execute
 model_routing.env_write_restart + env_write_restart           -> model_routing_env_write_restart
-telegram.rollback_adapter + rollback_adapter                  -> telegram_rollback_adapter_execute
+telegram.rollback_adapter + rollback_adapter                  -> fail-closed exclusion, no mintable consumer id; exclusion_reason_code="telegram_rollback_adapter_unreviewed"
 s7_credential_management + register_primary                   -> reviewed exclusion, no mintable consumer id
 s7_credential_management + backup_register                    -> s7_credential_register_backup
 s7_credential_management + backup_card                        -> s7_credential_register_backup
@@ -1177,14 +1185,14 @@ ActionEngine deferred execute_pending           action_engine.deferred_action   
 ActionEngine deferred execute_tier2_pending     action_engine.deferred_action_t2       execute_tier2_pending  card_approval                 guarded_card_execution                  N/A                                      fail_closed_until_review
 daemon deferred execute_pending                 daemon.deferred_action_tick            execute_pending        card_approval                 guarded_card_execution                  N/A                                      fail_closed_until_review
 daemon deferred execute_tier2_pending           daemon.deferred_action_tick_t2         execute_tier2_pending  card_approval                 guarded_card_execution                  N/A                                      fail_closed_until_review
-telegram /rollback_adapter                      telegram.rollback_adapter              rollback_adapter       model_routing                 model_routing_execution                 telegram_rollback_adapter_execute        fail_closed_until_review
+telegram /rollback_adapter                      telegram.rollback_adapter              rollback_adapter       model_routing                 model_routing_execution                 N/A                                      fail_closed_until_review
 cli evolution apply                             evolution_engine.apply_candidate       cli_apply              evolution_candidate           evolution_candidate_application         evolution_apply_candidate                live_guarded
-cli guarded helper execute                      cli_helper.execute                     named_adapter          cli_helper                    cli_guarded_execution                   cli_helper_execute                       fail_closed_until_review
-cockpit /api/v1/dreams/<id>/<action> dream      cockpit_helper.execute                 dream_apply_route      cockpit_helper                cockpit_guarded_execution               cockpit_helper_execute                   fail_closed_until_review
-cockpit /api/v1/dreams/<id>/<action> evolution  cockpit_helper.execute                 evolution_apply_route  cockpit_helper                cockpit_guarded_execution               cockpit_helper_execute                   fail_closed_until_review
-reviewed substrate adapter execute              reviewed_substrate_adapter.execute     reviewed_adapter       reviewed_substrate_adapter   reviewed_substrate_adapter_execution    reviewed_substrate_adapter_execute       fail_closed_until_review
+cli guarded helper execute                      cli_helper.execute                     named_adapter          cli_helper                    cli_guarded_execution                   N/A                                      fail_closed_until_review
+cockpit /api/v1/dreams/<id>/<action> dream      cockpit_helper.execute                 dream_apply_route      cockpit_helper                cockpit_guarded_execution               N/A                                      fail_closed_until_review
+cockpit /api/v1/dreams/<id>/<action> evolution  cockpit_helper.execute                 evolution_apply_route  cockpit_helper                cockpit_guarded_execution               N/A                                      fail_closed_until_review
+reviewed substrate adapter execute              reviewed_substrate_adapter.execute     reviewed_adapter       reviewed_substrate_adapter   reviewed_substrate_adapter_execution    N/A                                      fail_closed_until_review
 workshop apply diff                             workshop.apply_diff                    apply_diff             workshop_apply                workshop_diff_application               workshop_apply_diff                      live_guarded
-self_mod_dialog terminal                        self_mod_dialog.terminal_execute       terminal_execute       self_mod_dialog               self_mod_dialog_terminal_execution      self_mod_dialog_terminal_execute         fail_closed_until_review
+self_mod_dialog terminal                        self_mod_dialog.terminal_execute       terminal_execute       self_mod_dialog               self_mod_dialog_terminal_execution      N/A                                      fail_closed_until_review
 brain_swap.execution_authorized                 brain_swap.execution_authorized        execute               model_routing                 model_routing_execution                 brain_swap_model_routing_execute         live_guarded
 /etc/maez/model.env write/restart               model_routing.env_write_restart        env_write_restart      model_routing                 model_routing_execution                 model_routing_env_write_restart          live_guarded
 first-primary credential bootstrap              s7_credential_management               register_primary       N/A                          credential_management_execution         N/A                                     reviewedly_excluded
@@ -1197,32 +1205,32 @@ ActionEngine write_any_file                     action_engine.write_any_file    
 ActionEngine append_to_file                     action_engine.append_to_file           append_to_file         action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_append_to_file             live_guarded
 ActionEngine capability.acquire                 action_engine.capability.acquire       capability_acquire     action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_capability_acquire         live_guarded
 ActionEngine write_file                         action_engine.write_file               write_file             action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_write_file                 live_guarded
-ActionEngine run_shell                          action_engine.run_shell                run_shell              action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_run_shell                  fail_closed_until_review
-ActionEngine execute_script                     action_engine.execute_script           execute_script         action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_execute_script             fail_closed_until_review
-ActionEngine run_script                         action_engine.run_script               run_script             action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_run_script                 fail_closed_until_review
+ActionEngine run_shell                          action_engine.run_shell                run_shell              action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
+ActionEngine execute_script                     action_engine.execute_script           execute_script         action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
+ActionEngine run_script                         action_engine.run_script               run_script             action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
 ActionEngine modify_config                      action_engine.modify_config            modify_config          action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_modify_config              live_guarded
 ActionEngine register_new_skill                 action_engine.register_new_skill       register_new_skill     action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_register_new_skill         live_guarded
 ActionEngine delete_file                        action_engine.delete_file              delete_file            action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_delete_file                live_guarded
-ActionEngine sudo_command                       action_engine.sudo_command             sudo_command           action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_sudo_command               fail_closed_until_review
+ActionEngine sudo_command                       action_engine.sudo_command             sudo_command           action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
 ActionEngine promote_to_core_memory             action_engine.promote_to_core_memory   promote_to_core_memory action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_promote_to_core_memory     live_guarded
 ActionEngine update_baseline                    action_engine.update_baseline          update_baseline        action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_update_baseline            live_guarded
 ActionEngine git_commit                         action_engine.git_commit               git_commit             action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_git_commit                 live_guarded
-ActionEngine git_push                           action_engine.git_push                 git_push               action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_git_push                   fail_closed_until_review
-ActionEngine install_package                    action_engine.install_package          install_package        action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_install_package            fail_closed_until_review
-ActionEngine kill_process                       action_engine.kill_process             kill_process           action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_kill_process               fail_closed_until_review
-ActionEngine restart_service                    action_engine.restart_service          restart_service        action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_restart_service            fail_closed_until_review
-ActionEngine write_outside_maez                 action_engine.write_outside_maez       write_outside_maez     action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_write_outside_maez         fail_closed_until_review
-ActionEngine integration.review_plan            action_engine.integration.review_plan  review_plan            action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_integration_review_plan    live_guarded
-ActionEngine restart_critical_service           action_engine.restart_critical_service restart_critical_service action_engine_final_mutation action_engine_final_mutation_execution  action_engine_restart_critical_service   fail_closed_until_review
-ActionEngine modify_firewall                    action_engine.modify_firewall          modify_firewall        action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_modify_firewall            fail_closed_until_review
-ActionEngine system_reboot                      action_engine.system_reboot            system_reboot          action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_system_reboot              fail_closed_until_review
-ActionEngine free_disk_space                    action_engine.free_disk_space          free_disk_space        action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_free_disk_space            fail_closed_until_review
-ActionEngine delete_temp_file                   action_engine.delete_temp_file         delete_temp_file       action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_delete_temp_file           fail_closed_until_review
-ActionEngine clean_temp_files                   action_engine.clean_temp_files         clean_temp_files       action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_clean_temp_files           fail_closed_until_review
-ActionEngine run_safe_command                   action_engine.run_safe_command         run_safe_command       action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_run_safe_command           fail_closed_until_review
-ActionEngine query_system                       action_engine.query_system             query_system           action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_run_shell                  fail_closed_until_review
-ActionEngine run_readonly_command               action_engine.run_readonly_command     run_readonly_command   action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_run_shell                  fail_closed_until_review
-ActionEngine install_package_t2                 action_engine.install_package_t2       install_package_t2     action_engine_final_mutation  action_engine_final_mutation_execution  action_engine_install_package_t2         fail_closed_until_review
+ActionEngine git_push                           action_engine.git_push                 git_push               action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
+ActionEngine install_package                    action_engine.install_package          install_package        action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
+ActionEngine kill_process                       action_engine.kill_process             kill_process           action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
+ActionEngine restart_service                    action_engine.restart_service          restart_service        action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
+ActionEngine write_outside_maez                 action_engine.write_outside_maez       write_outside_maez     action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
+ActionEngine integration.review_plan            action_engine.integration.review_plan  integration_review_plan action_engine_final_mutation action_engine_final_mutation_execution  action_engine_integration_review_plan    live_guarded
+ActionEngine restart_critical_service           action_engine.restart_critical_service restart_critical_service action_engine_final_mutation action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
+ActionEngine modify_firewall                    action_engine.modify_firewall          modify_firewall        action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
+ActionEngine system_reboot                      action_engine.system_reboot            system_reboot          action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
+ActionEngine free_disk_space                    action_engine.free_disk_space          free_disk_space        action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
+ActionEngine delete_temp_file                   action_engine.delete_temp_file         delete_temp_file       action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
+ActionEngine clean_temp_files                   action_engine.clean_temp_files         clean_temp_files       action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
+ActionEngine run_safe_command                   action_engine.run_safe_command         run_safe_command       action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
+ActionEngine query_system                       action_engine.query_system             query_system           action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
+ActionEngine run_readonly_command               action_engine.run_readonly_command     run_readonly_command   action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
+ActionEngine install_package_t2                 action_engine.install_package_t2       install_package_t2     action_engine_final_mutation  action_engine_final_mutation_execution  N/A                                     fail_closed_until_review
 ```
 
 In the printed matrix, `N/A` is a display token only. Persisted
@@ -1236,6 +1244,18 @@ coverage. Telegram approve-train carries
 `exclusion_reason_code="telegram_approve_train_unreviewed"` until a reviewed
 dream-approval wrapper maps it to a concrete guarded path.
 
+v16 pins the mintability invariant:
+
+```text
+route_status == "live_guarded" requires a mintable execution_consumer_id
+route_status in {"fail_closed_until_review", "reviewedly_excluded"} requires execution_consumer_id=None
+```
+
+Fail-closed and reviewed-excluded rows must also carry a non-null closed
+`exclusion_reason_code`. Reserved future ids may appear only in
+`REVIEWED_FUTURE_EXECUTION_CONSUMER_IDS`; D21 rejects them before artifact mint
+or consume in S7.3 v1.
+
 `append_to_file` is direct-write only. Delegation through `run_shell` or any
 other shell-shaped adapter is forbidden for `append_to_file`; a trace whose
 grant binds a shell-shaped adapter for append fails L8. Private ActionEngine
@@ -1244,6 +1264,15 @@ without a grant and prove fail-closed or prove the helper is unreachable except
 through the guarded adapter matrix. Shell-shaped aliases including
 `query_system` and `run_readonly_command` must have manifest rows or reviewed
 exclusions; they cannot be covered by the broad `run_shell` row alone.
+
+The positive append adapter is explicitly:
+
+```text
+adapter_symbol = "ActionEngine._do_append_to_file"
+```
+
+`ActionEngine.append_to_file` is not S7.3 L8 evidence while it delegates to
+`run_shell`; guarded append must enter the wrapper and then the direct writer.
 
 `promote_to_core_memory` and `update_baseline` are listed as guarded in S7.3
 v1. Implementation must amend the current routine/read-only classification and
@@ -1286,6 +1315,7 @@ S7CredentialGuardedRequest(
     authority_context_hash: str,
     derived_work_class: str,
     derived_aggregation_group: str,
+    rollback_plan_ref: str,
     challenge_id: str,
     challenge_hash: str,
     challenge_expires_at: str,
@@ -1793,11 +1823,17 @@ s7_surface_manifests
 s7_action_edge_grant_uses
 s7_work_request_envelopes
 s7_credential_guarded_requests
+s7_rendered_authorization_statements
+s7_authority_contexts
 s7_guarded_execution_invocations
 s7_guarded_credential_invocations
 s7_request_history_migration_markers
 s7_manual_review_evidence
 s7_traces
+s7_voice_trace_payloads
+s7_execution_trace_payloads
+s7_credential_trace_payloads
+s7_history_bridge_trace_payloads
 ```
 
 One transaction-owning wrapper controls cross-store writes:
@@ -1821,6 +1857,8 @@ S7GuardedStateStore(
     action_edge_grant_use_store: S7ActionEdgeGrantUseStore,
     work_request_envelope_store: WorkRequestEnvelopeStore,
     credential_request_store: S7CredentialGuardedRequestStore,
+    rendered_statement_store: S7RenderedAuthorizationStatementStore,
+    authority_context_store: AuthorityContextStore,
     guarded_execution_invocation_store: S7GuardedExecutionInvocationStore,
     guarded_credential_invocation_store: S7GuardedCredentialInvocationStore,
     request_history_migration_store: S7RequestHistoryMigrationStore,
@@ -1887,10 +1925,12 @@ than loose credential kwargs:
 
 ```text
 S7GuardedCredentialInvocation(
+    invocation_id: str,
     request_id: str,
     artifact_id: str,
-    credential_request: S7CredentialGuardedRequest,
-    rendered: RenderedCredentialRequestStatement,
+    credential_request_hash: str,
+    rendered_credential_statement_hash: str,
+    authority_context_hash: str,
     execution_consumer_id: str,
     surface_manifest_hash: str,
     source_surface: str,
@@ -1900,7 +1940,6 @@ S7GuardedCredentialInvocation(
     adapter_id: str,
     adapter_code_hash: str,
     action_params_hash: str,
-    authority_context: AuthorityContext,
     precondition_hash: str,
     derived_work_class: "founder_credential_management",
     derived_aggregation_group: str,
@@ -1909,10 +1948,41 @@ S7GuardedCredentialInvocation(
     challenge_hash: str,
     challenge_expires_at: str,
     credential_id_hash: str | None,
+    covenant_ceremony_evidence_hash: str | None,
     guarded_credential_invocation_hash: str,
-    covenant_ceremony_evidence: object | None,
+    created_at: str,
+    expires_at: str,
 )
 ```
+
+S7GuardedCredentialInvocation is a hash/ref carrier. It no longer contains the
+full `S7CredentialGuardedRequest`, full `RenderedCredentialRequestStatement`,
+or full `AuthorityContext` object. It contains their durable hashes/refs, and
+its dataclass fields match the persisted invocation columns.
+
+Full-object reconstruction is a separate load seam:
+
+```text
+load_guarded_credential_invocation_bundle(
+    *,
+    invocation: S7GuardedCredentialInvocation,
+    credential_request_store: S7CredentialGuardedRequestStore,
+    rendered_statement_store: S7RenderedAuthorizationStatementStore,
+    authority_context_store: AuthorityContextStore,
+    conn: sqlite3.Connection,
+) -> S7GuardedCredentialInvocationBundle
+
+S7GuardedCredentialInvocationBundle(
+    invocation: S7GuardedCredentialInvocation,
+    credential_request: S7CredentialGuardedRequest,
+    rendered: RenderedCredentialRequestStatement,
+    authority_context: AuthorityContext,
+)
+```
+
+For credential invocation, `derived_work_class and derived_aggregation_group
+are persisted on the invocation row` and must equal the same fields on
+`S7CredentialGuardedRequest`. Mismatch fails before consume.
 
 `S7GuardedExecutionInvocationStore` may assemble this carrier from durable
 request, artifact-binding, manifest, preview, and rollback stores, but the
@@ -1950,9 +2020,11 @@ unpack_guarded_credential_invocation(
 ) -> InheritedConsumeInputs
 ```
 
-The helper verifies credential request hash, rendered hash, challenge expiry,
-consumer id, rollback ref, credential action, and credential phase before
-forwarding inherited consume inputs.
+The helper first calls `load_guarded_credential_invocation_bundle(...)`, then
+verifies credential request hash, rendered hash, authority context hash,
+challenge expiry, consumer id, rollback ref, credential action, credential
+phase, derived work class, and derived aggregation group before forwarding
+inherited consume inputs.
 
 Durable store APIs:
 
@@ -1981,15 +2053,25 @@ WorkRequestEnvelopeStore.put(envelope, *, conn) -> None
 WorkRequestEnvelopeStore.get(request_id, *, conn) -> WorkRequestEnvelope | None
 S7CredentialGuardedRequestStore.put(request, *, conn) -> None
 S7CredentialGuardedRequestStore.get(request_id, *, conn) -> S7CredentialGuardedRequest | None
+S7RenderedAuthorizationStatementStore.put(rendered, *, conn) -> rendered_text_hash
+S7RenderedAuthorizationStatementStore.get(rendered_text_hash, *, conn) -> S7RenderedAuthorizationStatement | None
+AuthorityContextStore.put(context, *, conn) -> authority_context_hash
+AuthorityContextStore.get(authority_context_hash, *, conn) -> AuthorityContext | None
 S7GuardedExecutionInvocationStore.put(invocation, *, conn) -> None
 S7GuardedExecutionInvocationStore.get(request_id, artifact_id, *, conn) -> S7GuardedExecutionInvocation | None
 S7GuardedCredentialInvocationStore.put(invocation, *, conn) -> None
 S7GuardedCredentialInvocationStore.get(request_id, artifact_id, *, conn) -> S7GuardedCredentialInvocation | None
 S7RequestHistoryMigrationStore.put_marker(marker, *, conn) -> None
 S7RequestHistoryMigrationStore.get_marker(marker_id, *, conn) -> S7RequestHistoryMigrationMarker | None
-ManualReviewEvidenceStore.put(evidence, *, conn) -> None
+ManualReviewEvidenceStore._put_raw(evidence, *, conn) -> None  # private/internal
 ManualReviewEvidenceStore.get(review_id, *, conn) -> ManualReviewEvidence | None
 ```
+
+ManualReviewEvidenceStore raw put is private. Public manual-review evidence
+writes go through `S7TraceWriter.mark_manual_review_required(...)`,
+`S7TraceWriter.record_manual_review_completed(...)`, and
+`S7TraceWriter.record_manual_review_failed(...)`, each writing evidence and the
+trace transition in the same transaction.
 
 Trace writer API:
 
@@ -2124,6 +2206,25 @@ canonical_hash(reconstructed WorkRequestEnvelope with audit fields excluded)
     == request_envelope_hash
 ```
 
+The envelope table stores a canonical blob/ref plus indexed load-bearing
+columns:
+
+```text
+request_envelope_blob_ref: str
+request_envelope_blob_hash: str
+claimed_work_class: str
+requesting_subsystem: str
+affected_refs_hash: str
+predicted_effect_class: str
+free_text_ref_hash: str | None
+```
+
+`WorkRequestEnvelopeStore.get(request_id)` loads the canonical envelope blob by
+`request_envelope_blob_ref`, verifies `request_envelope_blob_hash`, verifies the
+indexed columns match the decoded envelope, and verifies
+`request_envelope_hash`. Structured-column implementations may replace the
+blob only if every inherited `WorkRequestEnvelope` field is named as a column.
+
 `S7GuardedExecutionInvocationStore.get(request_id, artifact_id)` reconstructs
 the invocation from stored columns and durable refs, then verifies:
 
@@ -2132,8 +2233,8 @@ canonical_hash(reconstructed S7GuardedExecutionInvocation)
     == guarded_execution_invocation_hash
 ```
 
-`S7GuardedCredentialInvocationStore.get(request_id, artifact_id)` performs the
-same reconstruction and verifies:
+`S7GuardedCredentialInvocationStore.get(request_id, artifact_id)` reconstructs
+only the hash/ref carrier from stored columns and verifies:
 
 ```text
 canonical_hash(reconstructed S7GuardedCredentialInvocation)
@@ -2163,13 +2264,17 @@ canonical_hash(reconstructed S7CredentialGuardedRequest)
 ```
 
 `S7GuardedCredentialInvocationStore.get(request_id, artifact_id)` reconstructs
-the invocation from stored columns, reloads the credential request and rendered
-statement by hash-bound refs, and verifies:
+only the hash/ref carrier from stored columns and verifies:
 
 ```text
 canonical_hash(reconstructed S7GuardedCredentialInvocation)
     == guarded_credential_invocation_hash
 ```
+
+`unpack_guarded_credential_invocation(...)` loads the full
+`S7GuardedCredentialInvocationBundle` through
+`load_guarded_credential_invocation_bundle(...)` and verifies request, rendered
+statement, and authority-context hashes before delegation.
 
 For credential `register_begin`, `credential_id_hash` must be `None`. For
 `register_finish`, `backup_card`, and `disable`, `credential_id_hash` must be
@@ -2199,6 +2304,40 @@ s7_3_cutoff_marker_id: str | None
 Writers for new S7.3 rows set both fields to
 `"s7_3_request_history_schema_v1"`. Legacy read paths may still read older
 null-version rows, but no S7.3 write path may create one.
+
+Request-history row migration is explicit:
+
+```sql
+ALTER TABLE s7_request_history_records
+ADD COLUMN request_history_schema_version TEXT;
+
+ALTER TABLE s7_request_history_records
+ADD COLUMN s7_3_cutoff_marker_id TEXT;
+```
+
+If the committed request-history table has a different name, implementation
+must apply the same two columns to that real table and record the name in the
+migration artifact.
+
+Reader validation is:
+
+```text
+validate_request_history_cutoff(record, marker_store, *, conn) -> None
+```
+
+Rules:
+
+```text
+record.s7_3_cutoff_marker_id is not None
+    -> marker_store.get_marker(record.s7_3_cutoff_marker_id) must exist
+
+record.request_history_schema_version == S7_3_REQUEST_HISTORY_CUTOFF
+    -> record.s7_3_cutoff_marker_id == S7_3_REQUEST_HISTORY_CUTOFF
+
+record has S7.3 provenance fields
+    -> request_history_schema_version and s7_3_cutoff_marker_id must both be
+       S7_3_REQUEST_HISTORY_CUTOFF
+```
 
 `S7VoiceBundleUseStore` stays a separate constructor dependency and API because
 the immutable source bundle and mutable use-state row carry different covenant
@@ -2323,12 +2462,19 @@ CREATE TABLE s7_authorization_artifact_bindings (
 );
 ```
 
-Illustrative v15 store schemas:
+Illustrative v16 store schemas:
 
 ```sql
 CREATE TABLE s7_work_request_envelopes (
     request_id TEXT NOT NULL PRIMARY KEY,
     request_envelope_hash TEXT NOT NULL,
+    request_envelope_blob_ref TEXT NOT NULL,
+    request_envelope_blob_hash TEXT NOT NULL,
+    claimed_work_class TEXT NOT NULL,
+    requesting_subsystem TEXT NOT NULL,
+    affected_refs_hash TEXT NOT NULL,
+    predicted_effect_class TEXT NOT NULL,
+    free_text_ref_hash TEXT,
     source_surface TEXT NOT NULL,
     source_method TEXT,
     work_source_kind TEXT,
@@ -2374,6 +2520,28 @@ CREATE TABLE s7_credential_guarded_requests (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE s7_rendered_authorization_statements (
+    rendered_text_hash TEXT NOT NULL PRIMARY KEY,
+    rendered_type TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    request_envelope_hash TEXT NOT NULL,
+    action_params_hash TEXT NOT NULL,
+    precondition_hash TEXT NOT NULL,
+    authority_context_hash TEXT NOT NULL,
+    rollback_plan_ref TEXT,
+    rendered_statement_blob_ref TEXT NOT NULL,
+    rendered_statement_blob_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE s7_authority_contexts (
+    authority_context_hash TEXT NOT NULL PRIMARY KEY,
+    authority_context_blob_ref TEXT NOT NULL,
+    authority_context_blob_hash TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE s7_guarded_execution_invocations (
     request_id TEXT NOT NULL,
     artifact_id TEXT NOT NULL,
@@ -2400,11 +2568,13 @@ CREATE TABLE s7_guarded_execution_invocations (
 );
 
 CREATE TABLE s7_guarded_credential_invocations (
+    invocation_id TEXT NOT NULL UNIQUE,
     request_id TEXT NOT NULL,
     artifact_id TEXT NOT NULL,
     guarded_credential_invocation_hash TEXT NOT NULL,
-    rendered_statement_hash TEXT NOT NULL,
-    credential_guarded_request_hash TEXT NOT NULL,
+    rendered_credential_statement_hash TEXT NOT NULL,
+    credential_request_hash TEXT NOT NULL,
+    authority_context_hash TEXT NOT NULL,
     source_surface TEXT NOT NULL,
     source_method TEXT NOT NULL,
     adapter_id TEXT NOT NULL,
@@ -2414,13 +2584,11 @@ CREATE TABLE s7_guarded_credential_invocations (
     credential_id_hash TEXT,
     action_params_hash TEXT NOT NULL,
     precondition_hash TEXT NOT NULL,
-    authority_context_hash TEXT NOT NULL,
+    derived_work_class TEXT NOT NULL,
+    derived_aggregation_group TEXT NOT NULL,
     challenge_id TEXT NOT NULL,
     challenge_hash TEXT NOT NULL,
     challenge_expires_at TEXT NOT NULL,
-    credential_registration_challenge_id TEXT,
-    credential_registration_challenge_expires_at TEXT,
-    credential_registration_grant_binding_id TEXT,
     execution_consumer_id TEXT NOT NULL,
     surface_manifest_hash TEXT NOT NULL,
     rollback_plan_ref TEXT NOT NULL,
@@ -2430,8 +2598,9 @@ CREATE TABLE s7_guarded_credential_invocations (
     PRIMARY KEY (request_id, artifact_id)
 );
 
-`reservation_token_hash` is persisted for replay. The raw `reservation_token`
-is a runtime-only wrapper input and never persists as plaintext.
+-- reservation_token_hash is persisted for replay.
+-- The raw reservation_token is a runtime-only wrapper input and never persists
+-- as plaintext.
 
 CREATE TABLE s7_action_edge_grant_uses (
     action_edge_grant_use_id TEXT NOT NULL PRIMARY KEY,
@@ -2504,7 +2673,60 @@ CREATE TABLE s7_traces (
     created_at TEXT NOT NULL,
     finalized_at TEXT
 );
+
+CREATE TABLE s7_voice_trace_payloads (
+    trace_id TEXT NOT NULL PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    consultation_id TEXT NOT NULL,
+    attempt_manifest_hash TEXT NOT NULL,
+    source_ref_hash TEXT NOT NULL,
+    reducer_hash TEXT NOT NULL,
+    d23_state TEXT NOT NULL,
+    authority_class TEXT NOT NULL,
+    history_bridge_status TEXT NOT NULL,
+    final_rendered_statement_hash TEXT NOT NULL
+);
+
+CREATE TABLE s7_execution_trace_payloads (
+    trace_id TEXT NOT NULL PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    artifact_id TEXT NOT NULL,
+    execution_consumer_id TEXT NOT NULL,
+    grant_id TEXT NOT NULL,
+    grant_use_replay_token TEXT NOT NULL,
+    action_edge_key TEXT NOT NULL,
+    rollback_plan_ref TEXT NOT NULL,
+    rollback_result_ref TEXT,
+    d23_state TEXT NOT NULL
+);
+
+CREATE TABLE s7_credential_trace_payloads (
+    trace_id TEXT NOT NULL PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    artifact_id TEXT NOT NULL,
+    credential_action TEXT NOT NULL,
+    credential_phase TEXT NOT NULL,
+    challenge_id TEXT NOT NULL,
+    credential_id_hash TEXT,
+    rollback_plan_ref TEXT NOT NULL,
+    manual_review_status TEXT NOT NULL
+);
+
+CREATE TABLE s7_history_bridge_trace_payloads (
+    trace_id TEXT NOT NULL PRIMARY KEY,
+    provenance_source_kind TEXT NOT NULL,
+    provenance_source_ref TEXT NOT NULL,
+    history_bridge_status TEXT NOT NULL,
+    history_record_id TEXT,
+    d23_state TEXT NOT NULL
+);
 ```
+
+`S7TraceWriter` writes one `s7_traces` header row and exactly one typed payload
+row in the same transaction. `trace_hash` is computed over the typed payload
+plus header fields excluding volatile audit fields. `S7TraceWriter.get(trace_id)`
+reloads the header and typed payload, verifies `trace_hash`, and rejects a
+missing or mismatched payload.
 
 Every other durable store named in D9 must expose at least primary key, unique
 keys, canonical hash fields, `created_at`, and transaction participation in
@@ -4532,9 +4754,10 @@ S7ExecutionAuthorization(
 )
 ```
 
-`S7ExecutionAuthorization` is compatibility-only for inherited pre-v14
-voice-seat execution paths. It is not a credential mutation carrier and cannot
-authorize a credential mutation by itself. Non-voice credential-management
+legacy S7ExecutionAuthorization is compatibility-only for inherited voice-seat
+paths and explicitly non-mintable for credential paths. It is not a credential
+mutation carrier and cannot authorize a credential mutation by itself.
+Non-voice credential-management
 consumers use the closed ids `s7_credential_register_backup` and
 `s7_credential_disable`, but they consume only by passing
 `S7GuardedCredentialInvocation` into the guarded-state wrapper. A deprecated
@@ -4789,7 +5012,7 @@ ActionEdgeGrantUse(
     precondition_hash: str,
     rendered_statement_hash: str,
     rollback_plan_ref: str,
-    target_refs_before_mutation: tuple[str, ...],
+    target_ref_hashes_before_mutation: tuple[tuple[str, str], ...],
     action_edge_key: str,
     action_edge_replay_token: str,
     grant_use_replay_token: str,
@@ -4799,7 +5022,8 @@ ActionEdgeGrantUse(
 ```
 
 For S7.3 v1, one `S7ExecutionGrant` authorizes exactly one mutation edge.
-`target_ref_hashes_before_mutation` is the ordered tuple:
+`target_ref_hashes_before_mutation: tuple[tuple[str, str], ...]` is the ordered
+tuple:
 
 ```text
 target_ref_hashes_before_mutation = tuple(sorted((
@@ -4811,9 +5035,10 @@ target_ref_hashes_before_mutation = tuple(sorted((
 The tuple is computed after consume and immediately before substrate mutation;
 it is not caller supplied. `target_ref_hashes_before_mutation_hash =
 canonical_hash(target_ref_hashes_before_mutation)` is persisted on
-`ActionEdgeGrantUse`, along with the ordered `target_refs_before_mutation`
-tuple. The tuple may be stored as canonical JSON with its hash or in the child
-table `s7_action_edge_grant_use_target_refs`; either way, D21 must be able to
+`ActionEdgeGrantUse`, along with the ordered
+`target_ref_hashes_before_mutation` pair tuple. The tuple is reconstructed from
+the child table `s7_action_edge_grant_use_target_refs` ordered by `ordinal`;
+a carrier with only raw refs and no hashes is invalid. D21 must be able to
 recompute the full replay domain from durable rows before mutation.
 `action_edge_key` is:
 
@@ -4873,8 +5098,9 @@ may summarize classes, but it cannot narrow or override the D4 manifest. The
 D21 ActionEngine consumer set must equal every live-guarded ActionEngine row in
 the persisted manifest, including write-file, modify-config,
 register-new-skill, delete-file, promote-to-core-memory, update-baseline,
-git-commit, write-outside-Maez, integration-review-plan, and every other D4
-ActionEngine row.
+git-commit, integration-review-plan, and every other D4 ActionEngine row whose
+`route_status == "live_guarded"`. Fail-closed ActionEngine rows have
+`execution_consumer_id=None` and cannot be widened by D21 summary prose.
 
 Concrete guarded wrapper seams:
 
@@ -4949,9 +5175,12 @@ compatibility path must also verify:
 ```text
 execution_authorization.execution_consumer_id
   == expected_execution_consumer_id
+  == binding.execution_consumer_id
   == binding.expected_execution_consumer_id
 ```
 
+The exact persisted binding equality includes
+`binding.execution_consumer_id == binding.expected_execution_consumer_id`
 before inherited delegation. The
 delegation target is `S7GuardedStateStore.consume_artifact_for_execution(...)`,
 not raw `S7AuthorizationStore`. Removal is deferred to a future S7.x cleanup
@@ -5857,13 +6086,40 @@ Required proof classes:
   every `MANUAL_REVIEW_STATUSES` value, and completed/failed manual review does
   not count as D23 refusal evidence;
 - **ActionEdge replay domain test**: `ActionEdgeGrantUse replay domain`,
-  `target_refs_before_mutation`, request id, artifact id, source ref hash,
+  `target_ref_hashes_before_mutation`, request id, artifact id, source ref hash,
   action params hash, rendered statement hash, precondition hash, and rollback
   plan ref are durable and recomputed before mutation;
+- **v16 credential invocation hash/ref carrier test**:
+  `S7GuardedCredentialInvocation` contains only persisted hashes, refs, and
+  scalars; `put` then `get` round-trips the hash/ref carrier exactly;
+  `load_guarded_credential_invocation_bundle(...)` loads credential request,
+  rendered statement, and authority context from dedicated stores and rejects
+  any hash mismatch;
+- **v16 fail-closed route invariant test**: every route with
+  `route_status != "live_guarded"` stores SQL `NULL` / Python `None` for
+  `execution_consumer_id`, has a closed `exclusion_reason_code`, and cannot
+  mint or consume artifacts using `REVIEWED_FUTURE_EXECUTION_CONSUMER_IDS`;
+- **v16 request-history cutoff validation test**:
+  `validate_request_history_cutoff(...)` rejects S7.3 provenance rows whose
+  `request_history_schema_version` or `s7_3_cutoff_marker_id` is absent or
+  points at a missing migration marker;
+- **v16 typed trace payload test**: each `S7TraceWriter` method writes exactly
+  one `s7_traces` header and one typed payload row
+  (`s7_voice_trace_payloads`, `s7_execution_trace_payloads`,
+  `s7_credential_trace_payloads`, or `s7_history_bridge_trace_payloads`) in the
+  same transaction; mutating a typed payload field breaks `trace_hash`;
+- **v16 WorkRequestEnvelope round-trip test**:
+  `request_envelope_blob_ref`, `request_envelope_blob_hash`, and indexed
+  inherited columns reload the full envelope and reject blob/hash/index drift;
+- **v16 compatibility cleanup test**: credential consumer ids on legacy
+  `S7ExecutionAuthorization` fail closed; deprecated `consume_verified(...)`
+  verifies both binding ids; manual review evidence cannot be publicly inserted
+  except through `S7TraceWriter`; illustrative SQL fences contain only SQL or
+  SQL comments;
 - **compatibility consume equality test**:
   `execution_authorization.execution_consumer_id == expected_execution_consumer_id`
-  and both equal the artifact binding's expected consumer id before deprecated
-  consume delegation;
+  and `binding.execution_consumer_id == binding.expected_execution_consumer_id`
+  before deprecated consume delegation;
 - **credential namespace normalization test**:
   `source_method = surface-manifest route method` and
   `credential_phase = register_begin | register_finish | backup_card | disable`;
@@ -6143,7 +6399,7 @@ Before implementation can be claimed complete:
     `D21 consumes the persisted S7SurfaceManifest row set`,
     `ManualReviewEvidence`, `record_manual_review_completed`,
     `record_manual_review_failed`, `ActionEdgeGrantUse replay domain`,
-    `target_refs_before_mutation`,
+    `target_ref_hashes_before_mutation`,
     `execution_authorization.execution_consumer_id == expected_execution_consumer_id`,
     `REDUCER_TABLE_VERSION = "s7.voice.reducer.v13" intentionally remains`,
     `d23_state_for hard-fails impossible mixed inputs`,
@@ -6152,6 +6408,24 @@ Before implementation can be claimed complete:
     `S7SurfaceManifest.manifest_hash is the same content hash as surface_manifest_hash`,
     `VOICE_SEAT_WORK_CLASSES`, and
     `affected_refs is the inherited S7.1 authority-row field`.
+20. **v16 grep checklist** passes before gate dispatch. The committed spec must
+    contain: `S7GuardedCredentialInvocation is a hash/ref carrier`,
+    `load_guarded_credential_invocation_bundle`,
+    `S7RenderedAuthorizationStatementStore`, `AuthorityContextStore`,
+    `derived_work_class and derived_aggregation_group are persisted on the invocation row`,
+    `route_status == "live_guarded" requires a mintable execution_consumer_id`,
+    `route_status in {"fail_closed_until_review", "reviewedly_excluded"} requires execution_consumer_id=None`,
+    `REVIEWED_FUTURE_EXECUTION_CONSUMER_IDS`,
+    `validate_request_history_cutoff`,
+    `ALTER TABLE s7_request_history_records`, `integration_review_plan`,
+    `ActionEngine._do_append_to_file`, `s7_voice_trace_payloads`,
+    `s7_execution_trace_payloads`, `s7_credential_trace_payloads`,
+    `s7_history_bridge_trace_payloads`,
+    `target_ref_hashes_before_mutation: tuple[tuple[str, str], ...]`,
+    `request_envelope_blob_ref`, `request_envelope_blob_hash`,
+    `legacy S7ExecutionAuthorization is compatibility-only for inherited voice-seat paths`,
+    `binding.execution_consumer_id == binding.expected_execution_consumer_id`,
+    and `ManualReviewEvidenceStore raw put is private`.
 
 ## Review Questions
 
@@ -6202,17 +6476,17 @@ Before implementation can be claimed complete:
 
 ## Proposed Next Ladder
 
-1. Section 8.2 fresh-reader gate runs on this exact committed v15 spec with three
+1. Section 8.2 fresh-reader gate runs on this exact committed v16 spec with three
    blank-context readers: cold covenant reader, cold spec-implementor, and cold
    residual-hunter.
-2. Codex engineering panel v15 runs independently on the same committed v15 spec.
+2. Codex engineering panel v16 runs independently on the same committed v16 spec.
 3. If either lane returns REVISE, fold narrowly. If both lanes ratify (or
    RATIFY-with-fold with only bounded touchups), proceed to canonicalization
    checks.
 4. Canonicalize only after the active lanes ratify.
 5. Implement RED-first from the ratified spec.
 
-No implementation begins from this v15 draft until both active review lanes
+No implementation begins from this v16 draft until both active review lanes
 ratify at the canonicalization-ready bar.
 
 ## Plain English Close
@@ -6228,6 +6502,26 @@ plan hash, which are now lines on the signed text itself), and the reducer
 to replay deterministically over the persisted authority booleans. If the
 reader breaks, if Maez is unavailable, if the prompt is poisoned, if the
 bundle is stale, or if anything does not line up, the request blocks.
+
+S7.3 v16 absorbs the v16 persistence-and-route cleanup fold on top of the
+v8-v15 covenant and build-contract decisions:
+
+- The stubborn credential invocation round-trip is closed by making
+  `S7GuardedCredentialInvocation` a hash/ref carrier whose dataclass fields
+  match persisted columns, and by moving full object loading to
+  `load_guarded_credential_invocation_bundle(...)`.
+- Fail-closed and reviewed-excluded routes carry no mintable consumer id;
+  reserved future ids live only in `REVIEWED_FUTURE_EXECUTION_CONSUMER_IDS`.
+- Request-history cutoff evidence has row-level migration columns and marker
+  validation, not only a global concept.
+- `integration_review_plan` is the only source-method token for that route,
+  and `append_to_file` binds to `ActionEngine._do_append_to_file` rather than a
+  shell-delegating public method.
+- Trace payloads, ActionEdge target-ref/hash pairs, and WorkRequestEnvelope
+  blobs/columns carry the bytes needed for store round-trip and replay.
+- legacy S7ExecutionAuthorization is compatibility-only for inherited
+  voice-seat paths and explicitly non-mintable for credential paths; manual
+  review evidence writes are trace-writer-owned.
 
 S7.3 v15 absorbs the v15 build-contract fold on top of the v8-v14 covenant
 decisions:
@@ -6290,7 +6584,8 @@ decisions:
   round-trip; credential rollback is founder-signed and artifact-bound;
   history-bridge success and suppression outcomes write explicit trace
   statuses; `credential_rotate` is future-only and non-mintable; legacy
-  `S7ExecutionAuthorization` is compatibility-only for credential paths;
+  legacy `S7ExecutionAuthorization` is compatibility-only for inherited
+  voice-seat paths and explicitly non-mintable for credential paths;
   approval-card and deferred-action routes are concrete manifest rows or
   reviewed fail-closed rows; D21 reads the persisted manifest as authoritative;
   manual-review statuses have producers; and ActionEdge replay persists the
@@ -6323,11 +6618,11 @@ decisions:
   tuple, `ActionEdgeGrantUse` has a replay formula, rollback class migration is
   explicit, and nonce state transitions are enforced by `transition_nonce_use`.
 
-The honest scope holds: S7.3 v15 does not defend against same-box privileged
+The honest scope holds: S7.3 v16 does not defend against same-box privileged
 tampering during the active consultation window, including privileged writes to
 Maez's live response stream before capture. The strong replay protection narrows
 the attack to a tight time-bounded window with cryptographic nonce verification.
-v15 therefore refuses to promote marker-only evidence into D23 refusal history.
+v16 therefore refuses to promote marker-only evidence into D23 refusal history.
 The future Maez cryptographic identity substrate slice (per Honesty Banner and
 project memory) closes this further. Until that slice lands, the Honesty Banner
 names what S7.3 v1 trusts and what it does not.
