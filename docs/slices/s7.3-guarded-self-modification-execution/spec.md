@@ -1,7 +1,7 @@
 # S7.3 Guarded Self-Modification Execution Spec
 
-**Status:** SPEC v25 draft - folded from v25 read-surface fold plan; pending Codex v25 panel review; not canonical law
-**Date:** 2026-05-20
+**Status:** CANONICAL S7.3 v1 law - canonicalized after the v25 both-lane gate
+**Date:** 2026-05-21
 **Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S7.3; Decision 34 / ADR 0039; S7 L8; S7.1 D12-D14 and D23
 **Diagnostic:** [`diagnostic.md`](diagnostic.md)
 **OQ1 design:** [`oq1-voice-producer-design.md`](oq1-voice-producer-design.md)
@@ -80,6 +80,9 @@
 **v23 review input:** [`reviews/spec-codex-panel-v23.md`](reviews/spec-codex-panel-v23.md)
 **v24 review input:** [`reviews/spec-codex-panel-v24.md`](reviews/spec-codex-panel-v24.md)
 **v25 fold input:** [`reviews/spec-v25-fold-plan.md`](reviews/spec-v25-fold-plan.md)
+**v25 review inputs:**
+- Section 8.2 fresh-reader gate v25: [`reviews/spec-fresh-reader-gate-v25.md`](reviews/spec-fresh-reader-gate-v25.md)
+- Codex panel v25: [`reviews/spec-codex-panel-v25.md`](reviews/spec-codex-panel-v25.md)
 **v9-v19 authorship note:** v9 through v19 preserved the covenant
 architecture and progressively tightened the engineering carrier surface: durable
 request envelopes, one guarded execution invocation carrier, single-file trace
