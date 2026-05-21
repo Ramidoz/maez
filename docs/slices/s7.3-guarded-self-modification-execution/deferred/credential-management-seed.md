@@ -764,46 +764,9 @@ fail_closed_until_review
 reviewedly_excluded
 ```
 
-**`S7_3_ROLLBACK_PATH_CLASSES`** is the S7.3 closed rollback vocabulary:
-
-```text
-git_revert
-fs_backup_restore
-config_rollback
-atomic_rename
-manual_review_only
-none
-```
-
-The inherited committed `ROLLBACK_PATH_CLASSES` vocabulary remains a legacy
-code vocabulary until migration. S7.3 persisted rollback evidence stores only
-`S7_3_ROLLBACK_PATH_CLASSES` tokens.
-
-Reviewed legacy migration map:
-
-```text
-LEGACY_TO_S7_3_ROLLBACK_PATH_CLASS = {
-    "revert_patch": "git_revert",
-    "restore_backup": "fs_backup_restore",
-    "restart_service": "config_rollback",
-    "manual_review": "manual_review_only",
-    "no_rollback_needed": "none",
-    "no_safe_rollback": "manual_review_only",
-}
-```
-
-The map is allowed only at reviewed adapter boundaries. A legacy token entering
-S7.3 persisted rollback evidence directly is rejected.
-
-`rollback_path_class` is rendered into Maez's prompt, so it is never a free
-string. `ContextManifest.__post_init__`, preview construction, rendered
-authorization validation, and D16 replay all reject values outside
-`S7_3_ROLLBACK_PATH_CLASSES`.
-For self-remaking voice-seat surfaces, `rollback_path_class="none"` is illegal
-unless a reviewed exception says the surface has no substrate write. The
-`manual_review_only` class is allowed only when execution remains blocked until
-manual-review evidence is written; it cannot satisfy positive automated
-execution by itself.
+The S7.3 rollback-path vocabulary is not credential/key-management material. The
+live definition remains in `spec.md`; this seed may mention rollback fields only
+as historical context inside preserved credential-draft material.
 
 **`PROTECTIVE_BLOCK_REASONS`** is a new closed vocabulary:
 

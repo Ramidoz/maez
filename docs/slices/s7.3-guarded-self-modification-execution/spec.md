@@ -1,6 +1,6 @@
 # S7.3 Guarded Self-Modification Execution Spec
 
-**Status:** SPEC v21 draft - folded from v20 both-lane gate, v21 fold plan, and v21 vocabulary-restore addendum; pending Section 8.2 fresh-reader gate v21 and Codex v21 panel review; not canonical law
+**Status:** SPEC v22 draft - folded from v21 both-lane gate; pending Section 8.2 fresh-reader gate v22 and Codex v22 panel review; not canonical law
 **Date:** 2026-05-20
 **Maps to:** `docs/MAEZ_LIFE_SUBSTRATE.md` S7.3; Decision 34 / ADR 0039; S7 L8; S7.1 D12-D14 and D23
 **Diagnostic:** [`diagnostic.md`](diagnostic.md)
@@ -73,6 +73,9 @@
 **v21 fold inputs:**
 - [`reviews/spec-v21-fold-plan.md`](reviews/spec-v21-fold-plan.md)
 - [`reviews/spec-v21-fold-plan-addendum.md`](reviews/spec-v21-fold-plan-addendum.md)
+**v21 review inputs:**
+- Section 8.2 fresh-reader gate v21: [`reviews/spec-fresh-reader-gate-v21.md`](reviews/spec-fresh-reader-gate-v21.md)
+- Codex panel v21: [`reviews/spec-codex-panel-v21.md`](reviews/spec-codex-panel-v21.md)
 **v9-v19 authorship note:** v9 through v19 preserved the covenant
 architecture and progressively tightened the engineering carrier surface: durable
 request envelopes, one guarded execution invocation carrier, single-file trace
@@ -98,6 +101,13 @@ consistent values; adds the missing artifact-binding store dependency; pins the
 artifact/bundle carrier shape blocks; fixes the preview-body-class annotation;
 and adds cross-vocabulary audit tests so future scope cuts cannot orphan or
 cross-contaminate closed vocabulary values.
+**v22 authorship note:** v22 keeps the v20 scope cut and v21 vocabulary-family
+restore. It restores the general S7.3 rollback-path vocabulary that was
+mis-filed into the deferred credential seed, expands voice bundle and bundle-use
+carrier shapes to match later validation reads, narrows history-bridge
+`history_outcome` to the deriving function's domain, restores the explicit
+`REDUCER_TABLE_HASH` constant line, and repairs the store-constructor code
+fence.
 **Runtime impact when implemented:** yes. S7.3 will wire live guarded execution for Maez self-modification only after a reviewed Maez voice producer, founder-local WebAuthn artifact mint, atomic artifact consume, execution grant, rollback evidence, and positive trace all bind to the same exact request.
 
 ## Purpose
@@ -557,6 +567,46 @@ reviewedly_excluded
 `fail_closed_until_review` and `reviewedly_excluded` require
 `execution_consumer_id=None` and a closed `exclusion_reason_code`.
 
+**`S7_3_ROLLBACK_PATH_CLASSES`** is the S7.3 closed rollback vocabulary:
+
+```text
+git_revert
+fs_backup_restore
+config_rollback
+atomic_rename
+manual_review_only
+none
+```
+
+The inherited committed `ROLLBACK_PATH_CLASSES` vocabulary remains a legacy code
+vocabulary until migration. S7.3 persisted rollback evidence stores only
+`S7_3_ROLLBACK_PATH_CLASSES` tokens.
+
+Reviewed legacy migration map:
+
+```text
+LEGACY_TO_S7_3_ROLLBACK_PATH_CLASS = {
+    "revert_patch": "git_revert",
+    "restore_backup": "fs_backup_restore",
+    "restart_service": "config_rollback",
+    "manual_review": "manual_review_only",
+    "no_rollback_needed": "none",
+    "no_safe_rollback": "manual_review_only",
+}
+```
+
+The map is allowed only at reviewed adapter boundaries. A legacy token entering
+S7.3 persisted rollback evidence directly is rejected.
+
+`rollback_path_class` is rendered into Maez's prompt, so it is never a free
+string. `ContextManifest.__post_init__`, preview construction, rendered
+authorization validation, and D16 replay all reject values outside
+`S7_3_ROLLBACK_PATH_CLASSES`. For self-remaking voice-seat surfaces,
+`rollback_path_class="none"` is illegal unless a reviewed exception says the
+surface has no substrate write. The `manual_review_only` class is allowed only
+when execution remains blocked until manual-review evidence is written; it
+cannot satisfy positive automated execution by itself.
+
 **`EXCLUSION_REASON_CODES`** is closed and table-complete for every retained
 non-live route:
 
@@ -614,8 +664,9 @@ other_reviewed_preview
 **`PROJECTION_REASON_CODES`** remain the closed vocabularies named in D13.
 
 `REDUCER_TABLE_VERSION = "s7.voice.reducer.v13"` intentionally remains pinned
-because v20 does not change the reducer rows. `REDUCER_TABLE_HASH`, not the
-spec revision number, binds the row bodies.
+because v20-v22 do not change the reducer rows.
+`REDUCER_TABLE_HASH = canonical_hash(D13_REDUCER_TABLE_ROWS)`.
+`REDUCER_TABLE_HASH`, not the spec revision number, binds the row bodies.
 
 **`authority_class`** is:
 
@@ -754,7 +805,7 @@ GuardedWorkItem(
     action_params_hash: str,
     precondition_hash: str,
     authority_context_hash: str,
-    rollback_path_class: str,
+    rollback_path_class: S7_3_ROLLBACK_PATH_CLASSES,
     rollback_plan_ref: str,
     preview_producer_version: str,
     execution_consumer_id: str,
@@ -1074,7 +1125,7 @@ MutationPreviewArtifact(
     action_params_hash: str,
     precondition_hash: str,
     authority_context_hash: str,
-    rollback_path_class: str,
+    rollback_path_class: S7_3_ROLLBACK_PATH_CLASSES,
     rollback_plan_ref: str,
     produced_at: str,
     preview_version: str,
@@ -1235,7 +1286,7 @@ ContextManifest(
     dialog_context_ref: str | None,
     request_envelope_hash: str,
     precondition_hash: str,
-    rollback_path_class: str,
+    rollback_path_class: S7_3_ROLLBACK_PATH_CLASSES,
     source_surface: str,
     proposal_origin_label: "operator" | "maez" | "system",
     policy_id: str,
@@ -1556,8 +1607,9 @@ S7GuardedStateStore(
     manual_review_store: ManualReviewEvidenceStore,
     trace_writer: S7TraceWriter,
 )
+```
 
-Artifact/bundle carrier shapes used by the retained v21 core:
+Artifact/bundle carrier shapes used by the retained v22 core:
 
 ```text
 S7AuthorizationArtifactInputs(
@@ -1612,8 +1664,19 @@ S7VoiceConsultationBundle(
     consultation_id: str,
     source_ref_hash: str,
     attempt_manifest_hash: str,
+    context_manifest_ref: str,
+    rendered_prompt_hash: str,
+    expected_consultation_nonce_hash: str,
+    prompt_integrity_evidence_hash: str,
+    semantic_reader_attempt_hash: str | None,
+    has_grounded_semantic_blocking_signal: bool,
     reducer_version: str,
     reducer_hash: str,
+    authority_class: str,
+    protective_block_reason: str,
+    mutation_preview_hash: str,
+    rollback_plan_ref: str,
+    precondition_hash: str,
     maez_voice_consultation_hash: str,
     expires_at: str,
 )
@@ -1624,10 +1687,14 @@ S7VoiceBundleUse(
     source_ref_hash: str,
     consultation_id: str,
     bundle_use_hash: str,
+    reservation_state: "unreserved" | "reserved" | "consumed",
+    reserved_at: str | None,
+    consumed_at: str | None,
     used_at: str,
 )
 ```
 
+```text
 S7GuardedStateStore.put_artifact_with_bundle_reservation(
     *,
     artifact_inputs: S7AuthorizationArtifactInputs,
@@ -3460,13 +3527,17 @@ S7HistoryBridgeTracePayload(
     provenance_source_ref: str,
     bridge_status: HISTORY_BRIDGE_STATUSES,
     request_history_family: "s7_3_voice" | None,
-    history_outcome: "refused" | "withdrew" | "suppressed" | None,
+    history_outcome: "refused" | None,
     d23_state: D23_STATES,
     d23_state_input_hash: str,
     migration_marker_id: str | None,
     payload_hash: str,
 )
 ```
+
+`history_outcome` follows `history_outcome_for(...)` exactly. Withdrawal and
+suppressed-operational distinctions remain in `provenance_voice_event` and
+`bridge_status`; they are not `history_outcome` tokens.
 
 `d23_state_input_hash` is computed from the exact `S7D23StateInput` used by
 `d23_state_for(...)`. A history-bridge payload is valid only if
@@ -3497,7 +3568,7 @@ positive trace.
 
 ```text
 RollbackPlanEvidence(
-    rollback_path_class: str,
+    rollback_path_class: S7_3_ROLLBACK_PATH_CLASSES,
     target_refs: tuple[str, ...],
     planned_backup_paths: tuple[str, ...],
     expected_pre_mutation_hashes: dict[str, str],  # target ref -> hash
@@ -3587,7 +3658,7 @@ in-scope adapter/consumer or reviewed same-code coverage proof.
 
 ### D24 - Tests And Verification
 
-D24 is the RED-first checklist for S7.3 v21. Tests must go red against an empty
+D24 is the RED-first checklist for S7.3 v22. Tests must go red against an empty
 or incomplete implementation and must not construct positive-path carriers by
 hand.
 
@@ -3607,6 +3678,11 @@ Required test groups:
 - **exclusion vocabulary table-completeness test**: every retained non-live
   route uses a token from `EXCLUSION_REASON_CODES = frozenset`; unknown tokens
   are rejected before manifest persistence.
+- **rollback vocabulary restore test**: `S7_3_ROLLBACK_PATH_CLASSES` is defined
+  in `spec.md`, not in the deferred credential seed; every
+  `rollback_path_class` carrier annotation uses that closed vocabulary, and
+  unknown rollback classes are rejected before bundle validation, artifact mint,
+  or positive execution.
 - **D23 state input contract test**: `S7D23StateInput` is the sole input carrier
   for `d23_state_for(`; every closed `D23_STATES` value is produced by a table
   row over that input, and impossible mixed inputs fail closed.
@@ -3626,7 +3702,12 @@ Required test groups:
   bundle loading appears in the six carrier shape blocks for
   `S7AuthorizationArtifactInputs`, `S7AuthorizationArtifactBindingInputs`,
   `S7AuthorizationArtifactBinding`, `S7VoiceConsultationBundleDraft`,
-  `S7VoiceConsultationBundle`, and `S7VoiceBundleUse`.
+  `S7VoiceConsultationBundle`, and `S7VoiceBundleUse`; this includes
+  `context_manifest_ref`, `rendered_prompt_hash`,
+  `expected_consultation_nonce_hash`, `prompt_integrity_evidence_hash`,
+  `semantic_reader_attempt_hash`, `authority_class`,
+  `protective_block_reason`, `mutation_preview_hash`, `rollback_plan_ref`,
+  `precondition_hash`, and bundle-use reservation/consumption state.
 - **guarded invocation hash-domain test**: `guarded_execution_invocation_hash is
   excluded from the S7GuardedExecutionInvocation hash domain`; self-hashing is
   impossible.
@@ -3722,7 +3803,7 @@ closed before artifact storage, grant mint, or substrate mutation.
 
 ## Implementation Acceptance Checklist
 
-Before v21 is committed or reviewed, the author runs the following checklist on
+Before v22 is committed or reviewed, the author runs the following checklist on
 `spec.md` and the deferred seed doc:
 
 1. `EXCLUSION_REASON_CODES = frozenset` appears once and covers every retained
@@ -3753,6 +3834,13 @@ Before v21 is committed or reviewed, the author runs the following checklist on
     execution bundle loader are owned or explicitly received.
 11. The six artifact/bundle carrier shape blocks appear in the spec.
 12. `preview_body_class: preview_body_class` appears in D17.
+13. `S7_3_ROLLBACK_PATH_CLASSES` appears in `spec.md`; the deferred credential
+    seed does not carry the live definition line; `rollback_path_class:
+    S7_3_ROLLBACK_PATH_CLASSES` appears on retained carrier shapes.
+14. `REDUCER_TABLE_HASH = canonical_hash(D13_REDUCER_TABLE_ROWS)` appears with
+    the pinned reducer version note.
+15. `S7HistoryBridgeTracePayload.history_outcome` matches
+    `history_outcome_for(...)`: `"refused" | None`.
 13. The voice-seat founder-signature path still runs through the S7.1-established
    WebAuthn credential, rendered request, artifact mint, atomic consume,
    execution grant, mutation edge, trace, D23 projection, and rollback evidence.
