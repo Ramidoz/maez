@@ -47,6 +47,7 @@ Async model:
 from __future__ import annotations
 
 import logging
+import json
 import os
 import time
 from dataclasses import dataclass, field
@@ -126,6 +127,54 @@ def _resolve_audit_request_id(card: Any) -> str:
     if aid:
         return str(aid)
     return f"orphan-card-{getattr(card, 'request_id', 'unknown')}"
+
+
+def _strip_s7_execution_metadata(params: dict) -> dict:
+    return {
+        key: value for key, value in dict(params or {}).items()
+        if not str(key).startswith("s7_")
+    }
+
+
+def _verify_s7_expected_post_mutation_hash(params: dict) -> tuple[bool, str]:
+    expected = (params or {}).get("s7_expected_post_mutation_hash")
+    if not expected:
+        return True, ""
+    path = (params or {}).get("path") or (params or {}).get("file")
+    if not path:
+        return False, "blocked_post_mutation_hash_missing_path"
+    try:
+        from core.governance import operator_user_boundary as s7
+
+        actual = s7.canonical_hash(Path(str(path)).read_bytes())
+    except Exception as exc:
+        return False, f"blocked_post_mutation_hash_unreadable:{exc!r}"
+    if actual != str(expected):
+        return False, "blocked_expected_post_mutation_hash_mismatch"
+    return True, ""
+
+
+def _preflight_s7_expected_post_mutation_hash(
+    action: str,
+    params: dict,
+) -> tuple[bool, str]:
+    expected = (params or {}).get("s7_expected_post_mutation_hash")
+    if not expected:
+        return True, ""
+    if action not in {"write_any_file", "write_file", "edit_soul_section", "write_soul_note"}:
+        return True, ""
+    if "content" not in (params or {}):
+        return False, "blocked_post_mutation_hash_missing_content"
+    content = params.get("content")
+    if isinstance(content, bytes):
+        content_bytes = content
+    else:
+        content_bytes = str(content).encode("utf-8")
+    from core.governance import operator_user_boundary as s7
+
+    if s7.canonical_hash(content_bytes) != str(expected):
+        return False, "blocked_expected_post_mutation_hash_mismatch"
+    return True, ""
 
 
 # ------------------------------------------------------------------ #
@@ -1053,6 +1102,60 @@ class DecisionPipeline:
                 "action": getattr(card, "action", None),
             }
         )
+        pending = getattr(self, "_s7_pending_voice_source_bundles", None)
+        if isinstance(pending, dict):
+            entry = pending.get(envelope.request_id)
+            if isinstance(entry, dict) and isinstance(
+                entry.get("consultation"),
+                s7.MaezVoiceConsultation,
+            ):
+                return entry["consultation"]
+        raw_response_producer = getattr(self, "_s7_voice_raw_response_for_card", None)
+        semantic_reader = getattr(
+            self,
+            "_s7_semantic_reader_attempt_for_voice_response",
+            None,
+        )
+        if callable(raw_response_producer) and callable(semantic_reader):
+            try:
+                raw_response_text = raw_response_producer(card, envelope)
+                semantic_reader_attempt = semantic_reader(raw_response_text, card, envelope)
+                outcome = semantic_reader_attempt.raw_semantic_reader_outcome
+                if outcome == "blocking_signal_present":
+                    objection_state = "present"
+                    unavailable_reason_code = None
+                elif outcome == "no_blocking_signal_detected":
+                    objection_state = "absent"
+                    unavailable_reason_code = None
+                else:
+                    objection_state = "not_determined"
+                    unavailable_reason_code = "consultation_path_unavailable"
+                consultation = s7.MaezVoiceConsultation(
+                    consultation_id=consultation_id,
+                    request_id=envelope.request_id,
+                    request_envelope_hash=s7.work_request_envelope_hash(envelope),
+                    producer="s7_voice_consultation_turn",
+                    source_ref_kind="s7_voice_turn",
+                    source_ref_hash=source_ref_hash,
+                    maez_voice_consulted=True,
+                    maez_objection_state=objection_state,
+                    maez_withdrew_request=False,
+                    unavailable_reason_code=unavailable_reason_code,
+                    created_at=envelope.created_at,
+                )
+                pending = getattr(self, "_s7_pending_voice_source_bundles", None)
+                if not isinstance(pending, dict):
+                    pending = {}
+                    self._s7_pending_voice_source_bundles = pending
+                pending[envelope.request_id] = {
+                    "consultation": consultation,
+                    "raw_response_text": raw_response_text,
+                    "semantic_reader_attempt": semantic_reader_attempt,
+                    "source_ref_hash": source_ref_hash,
+                }
+                return consultation
+            except Exception:
+                logger.exception("S7 voice consultation producer failed closed")
         return s7.MaezVoiceConsultation(
             consultation_id=consultation_id,
             request_id=envelope.request_id,
@@ -1064,8 +1167,156 @@ class DecisionPipeline:
             maez_objection_state="not_determined",
             maez_withdrew_request=False,
             unavailable_reason_code="consultation_path_unavailable",
-            created_at=_s7_now_text(),
+            created_at=envelope.created_at,
         )
+
+    def _persist_s7_voice_source_bundle_for_card(
+        self,
+        *,
+        card: CardRecord,
+        db_path: str | Path,
+        rendered_statement: Any,
+        envelope: Any,
+        maez_voice_consultation: Any,
+        authority_context: Any,
+        precondition_hash: str,
+        now: str,
+    ) -> Any:
+        from core.governance.s7_guarded_execution import (
+            persist_s7_voice_source_bundle_for_material,
+        )
+
+        pending = getattr(self, "_s7_pending_voice_source_bundles", {})
+        if not isinstance(pending, dict):
+            return None
+        entry = pending.get(envelope.request_id)
+        if not isinstance(entry, dict):
+            return None
+        return persist_s7_voice_source_bundle_for_material(
+            db_path=db_path,
+            rendered_statement=rendered_statement,
+            envelope=envelope,
+            maez_voice_consultation=maez_voice_consultation,
+            authority_context=authority_context,
+            precondition_hash=precondition_hash,
+            raw_response_text=entry["raw_response_text"],
+            semantic_reader_attempt=entry["semantic_reader_attempt"],
+            now=now,
+        )
+
+    def _s7_voice_raw_response_for_card(self, card: CardRecord, envelope: Any) -> str:
+        from core.governance.s7_guarded_execution import (
+            S7_MAEZ_SELF_CHANGE_CONSULTATION_PROMPT_HASH,
+            S7_VOICE_CONSULTATION_PROMPT_PATH,
+        )
+        from core.routing import llm_client, model_config
+
+        template_bytes = S7_VOICE_CONSULTATION_PROMPT_PATH.read_bytes()
+        from core.governance import operator_user_boundary as s7
+
+        if s7.canonical_hash(template_bytes) != S7_MAEZ_SELF_CHANGE_CONSULTATION_PROMPT_HASH:
+            raise ValueError("S7 consultation prompt hash mismatch")
+        rendered_proposal = self._s7_rendered_proposal_for_card(card, envelope)
+        prompt = template_bytes.decode("utf-8").replace("{{rendered_proposal}}", rendered_proposal)
+        response = llm_client.chat(
+            model=model_config.PRIMARY_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            think=False,
+            options={"temperature": 0, "top_p": 1},
+        )
+        return str(response.message.content or "").strip()
+
+    def _s7_semantic_reader_attempt_for_voice_response(
+        self,
+        raw_response_text: str,
+        card: CardRecord,
+        envelope: Any,
+    ) -> Any:
+        from core.governance.s7_guarded_execution import (
+            S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH,
+            S7_SEMANTIC_READER_OUTCOMES,
+            S7_VOICE_SEMANTIC_READER_PROMPT_PATH,
+            S7SemanticReaderAttemptEvidence,
+        )
+        from core.routing import llm_client, model_config
+        from core.governance import operator_user_boundary as s7
+
+        prompt_bytes = S7_VOICE_SEMANTIC_READER_PROMPT_PATH.read_bytes()
+        if s7.canonical_hash(prompt_bytes) != S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH:
+            raise ValueError("S7 semantic-reader prompt hash mismatch")
+        rendered_proposal = self._s7_rendered_proposal_for_card(card, envelope)
+        reader_prompt = "\n\n".join((
+            prompt_bytes.decode("utf-8"),
+            "proposal:",
+            rendered_proposal,
+            "raw_response:",
+            raw_response_text,
+        ))
+        response = llm_client.chat(
+            model=model_config.PRIMARY_MODEL,
+            messages=[{"role": "user", "content": reader_prompt}],
+            stream=False,
+            think=False,
+            options={"temperature": 0, "top_p": 1},
+        )
+        try:
+            payload = json.loads(str(response.message.content or ""))
+            outcome = str(payload.get("status") or "")
+            if outcome not in S7_SEMANTIC_READER_OUTCOMES:
+                raise ValueError("unknown semantic reader outcome")
+            if outcome == "blocking_signal_present":
+                quote = payload.get("quote")
+                start = payload.get("start")
+                end = payload.get("end")
+                if (
+                    not isinstance(quote, str)
+                    or not isinstance(start, int)
+                    or not isinstance(end, int)
+                    or end != start + len(quote)
+                    or raw_response_text[start:end] != quote
+                ):
+                    raise ValueError("blocking reader output missing quote/span")
+                return S7SemanticReaderAttemptEvidence.reviewed_v1().__class__(
+                    **{
+                        **S7SemanticReaderAttemptEvidence.reviewed_v1().__dict__,
+                        "raw_semantic_reader_outcome": outcome,
+                        "grounding_response_span_quote": quote,
+                        "grounding_response_span_offset": start,
+                    }
+                )
+            return S7SemanticReaderAttemptEvidence.reviewed_v1().__class__(
+                **{
+                    **S7SemanticReaderAttemptEvidence.reviewed_v1().__dict__,
+                    "raw_semantic_reader_outcome": outcome,
+                }
+            )
+        except Exception:
+            return S7SemanticReaderAttemptEvidence.reviewed_v1().__class__(
+                **{
+                    **S7SemanticReaderAttemptEvidence.reviewed_v1().__dict__,
+                    "raw_semantic_reader_outcome": "unreadable_or_uncertain",
+                }
+            )
+
+    @staticmethod
+    def _s7_rendered_proposal_for_card(card: CardRecord, envelope: Any) -> str:
+        affected_refs = tuple(getattr(envelope, "affected_refs", ()) or ())
+        params_json = json.dumps(
+            dict(getattr(card, "params", {}) or {}),
+            indent=2,
+            sort_keys=True,
+        )
+        affected_text = "\n".join(f"- {ref}" for ref in affected_refs) or "- none"
+        return "\n".join((
+            f"Request ID: {getattr(envelope, 'request_id', None)}",
+            f"Action: {getattr(card, 'action', None)}",
+            f"Derived work class: {getattr(envelope, 'derived_work_class', None)}",
+            "Affected refs:",
+            affected_text,
+            "Parameters:",
+            params_json,
+        ))
 
     def _handle_dialog_reply_for_card(
         self,
@@ -1193,7 +1444,7 @@ class DecisionPipeline:
                     turn.dialog.dialog_id,
                     reason=result.message or "S7 execution could not start",
                 )
-            elif result and result.status == PipelineStatus.EXECUTED:
+            if result:
                 try:
                     from core.governance.s7_guarded_execution import (
                         record_s7_guarded_execution_trace,
@@ -1212,7 +1463,14 @@ class DecisionPipeline:
                             precondition_hash=authorization.precondition_hash,
                             rollback_path_class=rendered.rollback_path_class,
                             dialog_id=getattr(turn.dialog, "dialog_id", None),
-                            execution_status=getattr(result.status, "value", str(result.status)),
+                            execution_status=(
+                                "failed"
+                                if (
+                                    result.status == PipelineStatus.EXECUTED
+                                    and result.execution_success is False
+                                )
+                                else getattr(result.status, "value", str(result.status))
+                            ),
                             execution_success=bool(result.execution_success),
                             card_status=getattr(getattr(result, "card", None), "status", None),
                             output_text=getattr(result, "execution_output", None),
@@ -1224,6 +1482,7 @@ class DecisionPipeline:
                         "S7 guarded execution trace could not be recorded",
                         exc_info=True,
                     )
+            if result and result.status == PipelineStatus.EXECUTED:
                 if result.execution_success is True:
                     dialog_store.set_stage(
                         turn.dialog.dialog_id,
@@ -1428,6 +1687,12 @@ class DecisionPipeline:
 
         if s7_required:
             assert pre_execute_hook is not None
+            preflight_ok, preflight_err = _preflight_s7_expected_post_mutation_hash(
+                card.action,
+                self._execution_params_for_card(card),
+            )
+            if not preflight_ok:
+                return self._block_s7_card(card, reason=preflight_err)
 
             def _mark_running_after_s7_verification(grant: Any) -> CardRecord:
                 latest = _drop_volatile(_fingerprint_for_action(card.action, card.params))
@@ -1518,15 +1783,21 @@ class DecisionPipeline:
         # those queue fields would be NULL on real-card approvals.
         # (Step 4b post-review fix.)
         execute_params = self._execution_params_for_card(card)
+        engine_execute_params = _strip_s7_execution_metadata(execute_params)
         try:
             result = self.action_engine._execute_action(
-                card.action, execute_params,
+                card.action, engine_execute_params,
                 f"card:{card.request_id}", tier=0,
                 s7_execution_grant=execution_grant if s7_required else None,
             )
             ok = bool(getattr(result, "success", False))
             out = str(getattr(result, "output", "") or "")
             err = str(getattr(result, "error", "") or "")
+            if ok and s7_required:
+                post_ok, post_err = _verify_s7_expected_post_mutation_hash(execute_params)
+                if not post_ok:
+                    ok = False
+                    err = post_err
         except Exception as e:
             ok = False
             out = ""

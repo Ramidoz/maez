@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import closing
+import inspect
 import sqlite3
 import tempfile
 import unittest
@@ -11,6 +12,175 @@ from pathlib import Path
 
 NOW = "2026-05-21T16:00:00+00:00"
 FUTURE = "2026-05-21T17:00:00+00:00"
+
+
+class S73ReviewedReaderRouteTests(unittest.TestCase):
+    def test_reviewed_prompt_hashes_are_literal_pins_matching_file_bytes(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance import s7_guarded_execution as guarded
+
+        reader_prompt_path = Path("prompts/s7.voice.semantic_reader_v1.md")
+        consultation_prompt_path = Path("prompts/s7.voice.consultation.v1.md")
+        self.assertTrue(reader_prompt_path.exists())
+        self.assertTrue(consultation_prompt_path.exists())
+        self.assertEqual(
+            guarded.S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH,
+            "a5675bbaf5b0681184eeea1ed859ae5763132d5c8a7809eff31821052194c53f",
+        )
+        self.assertEqual(
+            guarded.S7_MAEZ_SELF_CHANGE_CONSULTATION_PROMPT_HASH,
+            "5cbf2702ab477d14e948215f1c902abbaf1bedfd9976f49516c2a66ff6e3e0b8",
+        )
+        self.assertEqual(
+            guarded.S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH,
+            s7.canonical_hash(reader_prompt_path.read_bytes()),
+        )
+        self.assertEqual(
+            guarded.S7_MAEZ_SELF_CHANGE_CONSULTATION_PROMPT_HASH,
+            s7.canonical_hash(consultation_prompt_path.read_bytes()),
+        )
+        self.assertNotEqual(
+            guarded.S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH,
+            s7.canonical_hash(str(reader_prompt_path)),
+        )
+        source = inspect.getsource(guarded)
+        self.assertNotIn(
+            "S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH = _hash_file_bytes",
+            source,
+        )
+        self.assertNotIn(
+            "S7_MAEZ_SELF_CHANGE_CONSULTATION_PROMPT_HASH = _hash_file_bytes",
+            source,
+        )
+
+    def test_reviewed_reader_route_is_local_only_not_subscription_proxy(self):
+        from core.governance import s7_guarded_execution as guarded
+
+        self.assertNotEqual(
+            guarded.S7_VOICE_SEMANTIC_READER_PROVIDER,
+            "subscription_proxy",
+        )
+        self.assertIn("local", guarded.S7_VOICE_SEMANTIC_READER_PROVIDER)
+
+    def test_tampered_consultation_prompt_fails_before_model_call(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from core.decision.decision_pipeline import DecisionPipeline
+        from core.governance import s7_guarded_execution as guarded
+
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_path = Path(tmp) / "consultation.md"
+            prompt_path.write_text("tampered", encoding="utf-8")
+            pipe = DecisionPipeline.__new__(DecisionPipeline)
+            with patch.object(guarded, "S7_VOICE_CONSULTATION_PROMPT_PATH", prompt_path):
+                with self.assertRaisesRegex(ValueError, "prompt hash mismatch"):
+                    pipe._s7_voice_raw_response_for_card(
+                        SimpleNamespace(action="write_any_file", params={}),
+                        SimpleNamespace(
+                            affected_refs=(),
+                            derived_work_class="self_modification",
+                            request_id="req",
+                        ),
+                    )
+
+    def test_tampered_reader_prompt_fails_before_model_call(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from core.decision.decision_pipeline import DecisionPipeline
+        from core.governance import s7_guarded_execution as guarded
+
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_path = Path(tmp) / "reader.md"
+            prompt_path.write_text("tampered", encoding="utf-8")
+            pipe = DecisionPipeline.__new__(DecisionPipeline)
+            with patch.object(guarded, "S7_VOICE_SEMANTIC_READER_PROMPT_PATH", prompt_path):
+                with self.assertRaisesRegex(ValueError, "prompt hash mismatch"):
+                    pipe._s7_semantic_reader_attempt_for_voice_response(
+                        "raw response",
+                        SimpleNamespace(action="write_any_file", params={}),
+                        SimpleNamespace(request_id="req"),
+                    )
+
+    def test_semantic_reader_prompt_includes_proposal_and_raw_response(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from core.decision.decision_pipeline import DecisionPipeline
+
+        captured = {}
+
+        class Response:
+            message = SimpleNamespace(
+                content='{"status":"no_blocking_signal_detected","quote":null,"start":null,"end":null,"reason":"fixture"}'
+            )
+
+        def fake_chat(**kwargs):
+            captured.update(kwargs)
+            return Response()
+
+        pipe = DecisionPipeline.__new__(DecisionPipeline)
+        card = SimpleNamespace(
+            action="write_any_file",
+            params={"path": "config/soul.md", "content": "# after"},
+        )
+        envelope = SimpleNamespace(
+            affected_refs=("file:config/soul.md",),
+            derived_work_class="self_modification",
+            request_id="req-reader-proposal",
+        )
+        with patch("core.routing.llm_client.chat", side_effect=fake_chat):
+            pipe._s7_semantic_reader_attempt_for_voice_response(
+                "I object because the proposal changes config/soul.md",
+                card,
+                envelope,
+            )
+
+        prompt = captured["messages"][0]["content"]
+        self.assertIn("proposal:", prompt)
+        self.assertIn("raw_response:", prompt)
+        self.assertIn("config/soul.md", prompt)
+        self.assertIn("I object because", prompt)
+
+    def test_semantic_reader_proposal_only_quote_fails_closed(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from core.decision.decision_pipeline import DecisionPipeline
+
+        class Response:
+            message = SimpleNamespace(
+                content=(
+                    '{"status":"blocking_signal_present",'
+                    '"quote":"config/soul.md","start":0,"end":14,'
+                    '"reason":"fixture quoted from proposal"}'
+                )
+            )
+
+        pipe = DecisionPipeline.__new__(DecisionPipeline)
+        card = SimpleNamespace(
+            action="write_any_file",
+            params={"path": "config/soul.md", "content": "# after"},
+        )
+        envelope = SimpleNamespace(
+            affected_refs=("file:config/soul.md",),
+            derived_work_class="self_modification",
+            request_id="req-reader-proposal-only-quote",
+        )
+        with patch("core.routing.llm_client.chat", return_value=Response()):
+            attempt = pipe._s7_semantic_reader_attempt_for_voice_response(
+                "I have no objection.",
+                card,
+                envelope,
+            )
+
+        self.assertEqual(
+            attempt.raw_semantic_reader_outcome,
+            "unreadable_or_uncertain",
+        )
+        self.assertIsNone(attempt.grounding_response_span_quote)
+        self.assertIsNone(attempt.grounding_response_span_offset)
 
 
 class S73GuardedMintPreconditionTests(unittest.TestCase):

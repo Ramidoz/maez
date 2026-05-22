@@ -66,6 +66,8 @@ class _CountingActionEngine:
 
     def _execute_action(self, action, params, reason, *, tier, s7_execution_grant=None):
         self.calls.append((action, dict(params or {}), reason, tier, s7_execution_grant))
+        if action == "write_any_file":
+            Path(params["path"]).write_text(params["content"], encoding="utf-8")
         return SimpleNamespace(success=True, output="executed", error="")
 
 
@@ -144,7 +146,17 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
             free_text_ref_hash=None,
         )
 
-    def _live_self_mod_daemon(self, root: str, request_id: str, *, rollback_path_class=None):
+    def _live_self_mod_daemon(
+        self,
+        root: str,
+        request_id: str,
+        *,
+        rollback_path_class=None,
+        use_live_voice_producer: bool = False,
+        voice_raw_response: str = "Maez says there is no objection.",
+        voice_reader_attempt=None,
+        expected_post_hash: str | None = None,
+    ):
         from dataclasses import replace
 
         from core import decision_pipeline as _dp
@@ -153,6 +165,7 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
         from core.decision.pending_cards import PendingCardStore
         from core.decision_pipeline import DecisionPipeline
         from core.governance import operator_user_boundary as s7
+        from core.governance import s7_guarded_execution as s7_guarded
         from skills.self_mod_dialog import SelfModDialogStore, open_dialog_for_card
 
         root_path = Path(root)
@@ -169,7 +182,11 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
         target = root_path / "config" / "soul.md"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("# before", encoding="utf-8")
-        params = {"path": str(target), "content": "# after"}
+        params = {
+            "path": str(target),
+            "content": "# after",
+            "s7_expected_post_mutation_hash": expected_post_hash or s7.canonical_hash(b"# after"),
+        }
         state_fields = _dp._drop_volatile(_dp._fingerprint_for_action("write_any_file", params))
         card = card_store.create_card(
             action="write_any_file",
@@ -207,23 +224,32 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
         actual_request_id = card.request_id
         envelope = pipeline._s7_request_envelope_for_card(card)
 
-        def _voice_consultation(_card, _envelope):
-            return s7.MaezVoiceConsultation(
-                consultation_id=getattr(_envelope, "maez_voice_consultation_id", None)
-                or f"voice-{actual_request_id}",
-                request_id=actual_request_id,
-                request_envelope_hash=s7.work_request_envelope_hash(_envelope),
-                producer="s7_voice_consultation_turn",
-                source_ref_kind="s7_voice_turn",
-                source_ref_hash=s7.canonical_hash({"voice": actual_request_id}),
-                maez_voice_consulted=True,
-                maez_objection_state="absent",
-                maez_withdrew_request=False,
-                unavailable_reason_code=None,
-                created_at=NOW,
+        if use_live_voice_producer:
+            pipeline._s7_voice_raw_response_for_card = (
+                lambda *_args, **_kwargs: voice_raw_response
             )
+            pipeline._s7_semantic_reader_attempt_for_voice_response = (
+                lambda *_args, **_kwargs: voice_reader_attempt
+                or s7_guarded.S7SemanticReaderAttemptEvidence.reviewed_v1()
+            )
+        else:
+            def _voice_consultation(_card, _envelope):
+                return s7.MaezVoiceConsultation(
+                    consultation_id=getattr(_envelope, "maez_voice_consultation_id", None)
+                    or f"voice-{actual_request_id}",
+                    request_id=actual_request_id,
+                    request_envelope_hash=s7.work_request_envelope_hash(_envelope),
+                    producer="s7_voice_consultation_turn",
+                    source_ref_kind="s7_voice_turn",
+                    source_ref_hash=s7.canonical_hash({"voice": actual_request_id}),
+                    maez_voice_consulted=True,
+                    maez_objection_state="absent",
+                    maez_withdrew_request=False,
+                    unavailable_reason_code=None,
+                    created_at=NOW,
+                )
 
-        pipeline._s7_voice_consultation_for_card = _voice_consultation
+            pipeline._s7_voice_consultation_for_card = _voice_consultation
         open_dialog_for_card(
             store=dialog_store,
             card_action=card.action,
@@ -257,7 +283,8 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
             headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
         )
         self.assertEqual(begin.status_code, 200)
-        challenge_id = begin.get_json()["challenge_id"]
+        begin_body = begin.get_json()
+        challenge_id = begin_body["challenge_id"]
         material = maez_daemon._s7_authorization_route_material(
             daemon,
             self._route_request(
@@ -270,12 +297,17 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
         )
         self.assertTrue(material.ok)
         self._seed_valid_voice_bundle_for_material(store.db_path, material)
+        founder_seen_hash = (
+            begin_body.get("maez_voice_raw_response_hash")
+            or self._seeded_voice_raw_response_hash()
+        )
         finish = client.post(
             f"/internal/s7/cards/{request_id}/webauthn/finish",
             json={
                 "session_binding": "session-auth",
                 "challenge_id": challenge_id,
                 "credential_ref": "cred-primary",
+                "maez_voice_raw_response_hash": founder_seen_hash,
                 "authentication_response": {"clientDataJSON": "valid-auth"},
             },
             headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
@@ -330,6 +362,7 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
         from core.governance import operator_user_boundary as s7
 
         envelope = self._self_mod_envelope(request_id)
+        pending_voice_sources = getattr(self, "_seeded_voice_pending", {})
 
         class Card:
             action = "edit_file"
@@ -347,6 +380,7 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
 
         class Pipe:
             card_store = Store()
+            _s7_pending_voice_source_bundles = pending_voice_sources
 
             def _card_requires_s7_authorization(self, _card):
                 return True
@@ -576,6 +610,13 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
 
         return Request()
 
+    def _seeded_voice_raw_response_hash(self, *, maez_objection_state: str = "absent"):
+        from core.governance import operator_user_boundary as s7
+
+        if maez_objection_state == "present":
+            return s7.canonical_hash("Maez says: no, do not make this change.")
+        return s7.canonical_hash("Maez says there is no objection.")
+
     def _seed_valid_voice_bundle_for_material(
         self,
         db_path,
@@ -693,6 +734,18 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
                 used_at=NOW,
             )
         )
+        pipe = material.kwargs.get("pipe")
+        pending = getattr(self, "_seeded_voice_pending", {})
+        if not isinstance(pending, dict):
+            pending = {}
+        pending[rendered.request_id] = {
+            "raw_response_text": raw_text,
+            "semantic_reader_attempt": attempt,
+            "source_ref_hash": consultation.source_ref_hash,
+        }
+        self._seeded_voice_pending = pending
+        if pipe is not None:
+            setattr(pipe, "_s7_pending_voice_source_bundles", pending)
         return binding
 
     def test_029_originless_local_curl_to_daemon_register_begin_is_rejected(self):
@@ -873,7 +926,7 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
         self.assertEqual(seen["request_json"]["challenge_id"], "challenge-route")
         self.assertEqual(seen["rendered_statement"].request_id, "req-route-finish")
 
-    def test_daemon_voice_seat_finish_rejects_missing_source_bundle_before_service(self):
+    def test_daemon_voice_seat_finish_rejects_empty_founder_visible_voice_payload_before_service(self):
         called = {"service": False}
 
         class Service:
@@ -903,13 +956,19 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
                                 "session_binding": "session-auth",
                                 "challenge_id": "challenge-route",
                                 "credential_ref": "cred-primary",
+                                "maez_voice_raw_response_hash": (
+                                    self._seeded_voice_raw_response_hash()
+                                ),
                                 "authentication_response": {"clientDataJSON": "valid-auth"},
                             },
                             headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
                         )
 
         self.assertEqual(response.status_code, 409)
-        self.assertEqual(response.get_json()["error"], "s7_guarded_source_bundle_required")
+        self.assertEqual(
+            response.get_json()["error"],
+            "s7_founder_seen_maez_voice_hash_required",
+        )
         self.assertFalse(called["service"])
 
     def test_daemon_voice_seat_finish_supplies_validator_result_from_derived_binding(self):
@@ -962,6 +1021,9 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
                                 "session_binding": "session-auth",
                                 "challenge_id": "challenge-route",
                                 "credential_ref": "cred-primary",
+                                "maez_voice_raw_response_hash": (
+                                    self._seeded_voice_raw_response_hash()
+                                ),
                                 "authentication_response": {"clientDataJSON": "valid-auth"},
                             },
                             headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
@@ -1038,6 +1100,11 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
                                 "session_binding": "session-auth",
                                 "challenge_id": "challenge-route",
                                 "credential_ref": "cred-primary",
+                                "maez_voice_raw_response_hash": (
+                                    self._seeded_voice_raw_response_hash(
+                                        maez_objection_state="present"
+                                    )
+                                ),
                                 "authentication_response": {"clientDataJSON": "valid-auth"},
                             },
                             headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
@@ -1130,6 +1197,9 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
                                 "session_binding": "session-auth",
                                 "challenge_id": "challenge-route",
                                 "credential_ref": "cred-primary",
+                                "maez_voice_raw_response_hash": (
+                                    self._seeded_voice_raw_response_hash()
+                                ),
                                 "authentication_response": {"clientDataJSON": "valid-auth"},
                             },
                             headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
@@ -1203,6 +1273,7 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
                     """,
                     (finish.get_json()["artifact_id"],),
                 ).fetchone()
+            target_text = _target.read_text(encoding="utf-8")
 
         self.assertEqual(execute.status_code, 200)
         self.assertTrue(execute.get_json()["ok"])
@@ -1218,6 +1289,414 @@ class S71DaemonInternalChannelTests(unittest.TestCase):
         self.assertEqual(trace_row[1], finish.get_json()["artifact_id"])
         self.assertEqual(trace_row[2], "executed")
         self.assertEqual(trace_row[3], "revert_patch")
+        self.assertEqual(target_text, "# after")
+
+    def test_daemon_s7_execute_blocks_wrong_expected_post_hash_before_mutation(self):
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        request_id = "req-s7-execute-post-hash-mismatch"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = f"{tmp}/memory/s7_1_webauthn"
+            store = S7WebAuthnBootstrapStore(root)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            daemon, _pipeline, engine, card, target = self._live_self_mod_daemon(
+                tmp,
+                request_id,
+                expected_post_hash="f" * 64,
+            )
+            request_id = card.request_id
+            env = {
+                "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "S7_WEBAUTHN_STORE_ROOT": root,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                with patch("daemon.maez_daemon.datetime", _FixedDateTime):
+                    with patch(
+                        "daemon.maez_daemon.S7ProductionWebAuthnVerifier",
+                        _RouteAuthenticationVerifier,
+                    ):
+                        client = self._client_for_daemon(daemon)
+                        begin, finish = self._mint_self_mod_artifact(
+                            client=client,
+                            daemon=daemon,
+                            store=store,
+                            request_id=request_id,
+                        )
+                        execute = client.post(
+                            f"/internal/s7/cards/{request_id}/execute",
+                            json={
+                                "session_binding": "session-auth",
+                                "authorization_challenge_id": begin.get_json()[
+                                    "challenge_id"
+                                ],
+                                "authorization_credential_ref": "cred-primary",
+                                "s7_authorization_artifact_id": finish.get_json()[
+                                    "artifact_id"
+                                ],
+                                "text": "yes",
+                            },
+                            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                        )
+            with sqlite3.connect(store.db_path) as conn:
+                trace_row = conn.execute(
+                    """
+                    SELECT execution_status, execution_success
+                    FROM s7_guarded_execution_traces
+                    WHERE request_id = ?
+                    """,
+                    (request_id,),
+                ).fetchone()
+            target_text = target.read_text(encoding="utf-8")
+
+        self.assertNotEqual(execute.status_code, 200)
+        self.assertEqual(len(engine.calls), 0)
+        self.assertEqual(target_text, "# before")
+        self.assertIn("post_mutation_hash", execute.get_json()["message"])
+        self.assertIsNotNone(trace_row)
+        assert trace_row is not None
+        self.assertEqual(trace_row[0], "blocked")
+        self.assertEqual(trace_row[1], 0)
+
+    def test_daemon_voice_seat_finish_live_producer_persists_bundle_without_test_seed(self):
+        from core.governance.s7_guarded_execution import (
+            S7VoiceBundleUseStore,
+            S7VoiceConsultationBundleStore,
+        )
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        request_id = "req-s7-live-producer"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = f"{tmp}/memory/s7_1_webauthn"
+            store = S7WebAuthnBootstrapStore(root)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            daemon, _pipeline, _engine, card, _target = self._live_self_mod_daemon(
+                tmp,
+                request_id,
+                use_live_voice_producer=True,
+            )
+            request_id = card.request_id
+            env = {
+                "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "S7_WEBAUTHN_STORE_ROOT": root,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                with patch("daemon.maez_daemon.datetime", _FixedDateTime):
+                    with patch(
+                        "daemon.maez_daemon.S7ProductionWebAuthnVerifier",
+                        _RouteAuthenticationVerifier,
+                    ):
+                        client = self._client_for_daemon(daemon)
+                        begin = client.post(
+                            f"/internal/s7/cards/{request_id}/webauthn/begin",
+                            json={
+                                "session_binding": "session-auth",
+                                "credential_ref": "cred-primary",
+                            },
+                            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                        )
+                        self.assertEqual(begin.status_code, 200)
+                        finish = client.post(
+                            f"/internal/s7/cards/{request_id}/webauthn/finish",
+                            json={
+                                "session_binding": "session-auth",
+                                "challenge_id": begin.get_json()["challenge_id"],
+                                "credential_ref": "cred-primary",
+                                "maez_voice_raw_response_hash": begin.get_json()[
+                                    "maez_voice_raw_response_hash"
+                                ],
+                                "authentication_response": {"clientDataJSON": "valid-auth"},
+                            },
+                            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                        )
+            bundle_store = S7VoiceConsultationBundleStore(store.db_path)
+            bundle_use_store = S7VoiceBundleUseStore(store.db_path)
+            bundle_uses = []
+            with sqlite3.connect(store.db_path) as conn:
+                bundle_uses = list(
+                    conn.execute(
+                        "SELECT source_ref_hash FROM s7_voice_bundle_uses WHERE request_id = ?",
+                        (request_id,),
+                    )
+                )
+            self.assertEqual(finish.status_code, 200, finish.get_json())
+            self.assertTrue(finish.get_json()["ok"])
+            self.assertEqual(
+                begin.get_json()["maez_voice_raw_response"],
+                "Maez says there is no objection.",
+            )
+            self.assertEqual(len(bundle_uses), 1)
+            bundle = bundle_store.get_for_source_ref(bundle_uses[0][0])
+            self.assertIsNotNone(bundle)
+            assert bundle is not None
+            self.assertEqual(
+                bundle.raw_response_hash,
+                begin.get_json()["maez_voice_raw_response_hash"],
+            )
+            use = bundle_use_store.get_for_source_ref(bundle_uses[0][0])
+            self.assertIsNotNone(use)
+            assert use is not None
+        self.assertEqual(use.reservation_state, "reserved")
+
+    def test_daemon_voice_seat_begin_shows_reader_false_negative_to_founder(self):
+        from core.governance.s7_guarded_execution import S7SemanticReaderAttemptEvidence
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        raw_response = "I object, but the fixture reader misses it."
+        request_id = "req-s7-live-producer-reader-false-negative-visible"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = f"{tmp}/memory/s7_1_webauthn"
+            store = S7WebAuthnBootstrapStore(root)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            attempt = S7SemanticReaderAttemptEvidence.reviewed_v1()
+            daemon, _pipeline, _engine, card, _target = self._live_self_mod_daemon(
+                tmp,
+                request_id,
+                use_live_voice_producer=True,
+                voice_raw_response=raw_response,
+                voice_reader_attempt=attempt,
+            )
+            request_id = card.request_id
+            env = {
+                "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "S7_WEBAUTHN_STORE_ROOT": root,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                with patch("daemon.maez_daemon.datetime", _FixedDateTime):
+                    with patch(
+                        "daemon.maez_daemon.S7ProductionWebAuthnVerifier",
+                        _RouteAuthenticationVerifier,
+                    ):
+                        begin = self._client_for_daemon(daemon).post(
+                            f"/internal/s7/cards/{request_id}/webauthn/begin",
+                            json={
+                                "session_binding": "session-auth",
+                                "credential_ref": "cred-primary",
+                            },
+                            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                        )
+
+        self.assertEqual(begin.status_code, 200)
+        body = begin.get_json()
+        self.assertEqual(body["maez_voice_raw_response"], raw_response)
+        self.assertEqual(
+            body["maez_voice_reader_outcome"],
+            "no_blocking_signal_detected",
+        )
+        self.assertIn("I object", body["maez_voice_raw_response"])
+
+    def test_daemon_voice_seat_finish_rejects_missing_founder_seen_raw_hash(self):
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        request_id = "req-s7-live-producer-missing-founder-seen-hash"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = f"{tmp}/memory/s7_1_webauthn"
+            store = S7WebAuthnBootstrapStore(root)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            daemon, _pipeline, _engine, card, _target = self._live_self_mod_daemon(
+                tmp,
+                request_id,
+                use_live_voice_producer=True,
+            )
+            request_id = card.request_id
+            env = {
+                "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "S7_WEBAUTHN_STORE_ROOT": root,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                with patch("daemon.maez_daemon.datetime", _FixedDateTime):
+                    with patch(
+                        "daemon.maez_daemon.S7ProductionWebAuthnVerifier",
+                        _RouteAuthenticationVerifier,
+                    ):
+                        client = self._client_for_daemon(daemon)
+                        begin = client.post(
+                            f"/internal/s7/cards/{request_id}/webauthn/begin",
+                            json={
+                                "session_binding": "session-auth",
+                                "credential_ref": "cred-primary",
+                            },
+                            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                        )
+                        finish = client.post(
+                            f"/internal/s7/cards/{request_id}/webauthn/finish",
+                            json={
+                                "session_binding": "session-auth",
+                                "challenge_id": begin.get_json()["challenge_id"],
+                                "credential_ref": "cred-primary",
+                                "authentication_response": {"clientDataJSON": "valid-auth"},
+                            },
+                            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                        )
+
+        self.assertEqual(finish.status_code, 409)
+        self.assertEqual(
+            finish.get_json()["error"],
+            "s7_founder_seen_maez_voice_hash_required",
+        )
+
+    def test_daemon_voice_seat_finish_live_producer_grounded_objection_blocks_mint(self):
+        from core.governance.s7_guarded_execution import S7SemanticReaderAttemptEvidence
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        raw_response = "I object because this changes what I am."
+        quote = "this changes what I am"
+        request_id = "req-s7-live-producer-refusal"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = f"{tmp}/memory/s7_1_webauthn"
+            store = S7WebAuthnBootstrapStore(root)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            attempt = S7SemanticReaderAttemptEvidence(
+                **{
+                    **S7SemanticReaderAttemptEvidence.reviewed_v1().__dict__,
+                    "raw_semantic_reader_outcome": "blocking_signal_present",
+                    "grounding_response_span_quote": quote,
+                    "grounding_response_span_offset": raw_response.index(quote),
+                }
+            )
+            daemon, _pipeline, _engine, card, _target = self._live_self_mod_daemon(
+                tmp,
+                request_id,
+                use_live_voice_producer=True,
+                voice_raw_response=raw_response,
+                voice_reader_attempt=attempt,
+            )
+            request_id = card.request_id
+            env = {
+                "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "S7_WEBAUTHN_STORE_ROOT": root,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                with patch("daemon.maez_daemon.datetime", _FixedDateTime):
+                    with patch(
+                        "daemon.maez_daemon.S7ProductionWebAuthnVerifier",
+                        _RouteAuthenticationVerifier,
+                    ):
+                        client = self._client_for_daemon(daemon)
+                        begin = client.post(
+                            f"/internal/s7/cards/{request_id}/webauthn/begin",
+                            json={
+                                "session_binding": "session-auth",
+                                "credential_ref": "cred-primary",
+                            },
+                            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                        )
+                        self.assertEqual(begin.status_code, 200)
+                        finish = client.post(
+                            f"/internal/s7/cards/{request_id}/webauthn/finish",
+                            json={
+                                "session_binding": "session-auth",
+                                "challenge_id": begin.get_json()["challenge_id"],
+                                "credential_ref": "cred-primary",
+                                "maez_voice_raw_response_hash": begin.get_json()[
+                                    "maez_voice_raw_response_hash"
+                                ],
+                                "authentication_response": {"clientDataJSON": "valid-auth"},
+                            },
+                            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                        )
+            with sqlite3.connect(store.db_path) as conn:
+                artifact_table = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 's7_authorization_artifacts'"
+                ).fetchone()
+                artifact_count = (
+                    0
+                    if artifact_table is None
+                    else conn.execute(
+                        "SELECT COUNT(*) FROM s7_authorization_artifacts WHERE request_id = ?",
+                        (request_id,),
+                    ).fetchone()[0]
+                )
+
+        self.assertEqual(finish.status_code, 409)
+        self.assertEqual(finish.get_json()["error"], "s7_voice_seat_unresolved")
+        self.assertEqual(artifact_count, 0)
+
+    def test_daemon_voice_seat_finish_live_producer_unreadable_reader_fails_closed(self):
+        from core.governance.s7_guarded_execution import S7SemanticReaderAttemptEvidence
+        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
+
+        request_id = "req-s7-live-producer-unreadable"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = f"{tmp}/memory/s7_1_webauthn"
+            store = S7WebAuthnBootstrapStore(root)
+            store.store_credential(self._credential_record("cred-primary", kind="primary"))
+            store.store_credential(self._credential_record("cred-backup", kind="backup"))
+            attempt = S7SemanticReaderAttemptEvidence(
+                **{
+                    **S7SemanticReaderAttemptEvidence.reviewed_v1().__dict__,
+                    "raw_semantic_reader_outcome": "unreadable_or_uncertain",
+                }
+            )
+            daemon, _pipeline, _engine, card, _target = self._live_self_mod_daemon(
+                tmp,
+                request_id,
+                use_live_voice_producer=True,
+                voice_raw_response="I cannot tell what this change does.",
+                voice_reader_attempt=attempt,
+            )
+            request_id = card.request_id
+            env = {
+                "S7_LIVE_WEBAUTHN_CEREMONY": "1",
+                "S7_INTERNAL_CHANNEL_TOKEN": "test-channel-secret",
+                "S7_WEBAUTHN_STORE_ROOT": root,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                with patch("daemon.maez_daemon.datetime", _FixedDateTime):
+                    with patch(
+                        "daemon.maez_daemon.S7ProductionWebAuthnVerifier",
+                        _RouteAuthenticationVerifier,
+                    ):
+                        client = self._client_for_daemon(daemon)
+                        begin = client.post(
+                            f"/internal/s7/cards/{request_id}/webauthn/begin",
+                            json={
+                                "session_binding": "session-auth",
+                                "credential_ref": "cred-primary",
+                            },
+                            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                        )
+                        self.assertEqual(begin.status_code, 200)
+                        finish = client.post(
+                            f"/internal/s7/cards/{request_id}/webauthn/finish",
+                            json={
+                                "session_binding": "session-auth",
+                                "challenge_id": begin.get_json()["challenge_id"],
+                                "credential_ref": "cred-primary",
+                                "maez_voice_raw_response_hash": begin.get_json()[
+                                    "maez_voice_raw_response_hash"
+                                ],
+                                "authentication_response": {"clientDataJSON": "valid-auth"},
+                            },
+                            headers={"X-Maez-S7-Internal-Channel": "test-channel-secret"},
+                        )
+            with sqlite3.connect(store.db_path) as conn:
+                artifact_table = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 's7_authorization_artifacts'"
+                ).fetchone()
+                artifact_count = (
+                    0
+                    if artifact_table is None
+                    else conn.execute(
+                        "SELECT COUNT(*) FROM s7_authorization_artifacts WHERE request_id = ?",
+                        (request_id,),
+                    ).fetchone()[0]
+                )
+
+        self.assertEqual(finish.status_code, 409)
+        self.assertEqual(finish.get_json()["error"], "s7_guarded_source_bundle_required")
+        self.assertEqual(artifact_count, 0)
 
     def test_daemon_s7_execute_replays_consumed_artifact_without_second_execution(self):
         from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore

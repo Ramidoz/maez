@@ -10,6 +10,7 @@ import sqlite3
 from pathlib import Path
 
 from core.governance import operator_user_boundary as s7
+from core.routing import model_config
 
 
 VOICE_SOURCE_BUNDLE_VALIDATION_STATUSES = frozenset({
@@ -56,21 +57,53 @@ S7_SEMANTIC_READER_OUTCOMES = frozenset({
     "unreadable_or_uncertain",
 })
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+S7_VOICE_CONSULTATION_PROMPT_PATH = _REPO_ROOT / "prompts" / "s7.voice.consultation.v1.md"
+S7_VOICE_SEMANTIC_READER_PROMPT_PATH = (
+    _REPO_ROOT / "prompts" / "s7.voice.semantic_reader_v1.md"
+)
+
+
+def _hash_file_bytes(path: Path) -> str:
+    return s7.canonical_hash(path.read_bytes())
+
+
 S7_VOICE_SEMANTIC_READER_ROUTE_ID = "s7_voice_semantic_reader_v1"
-S7_VOICE_SEMANTIC_READER_PROVIDER = "subscription_proxy"
-S7_REVIEWED_SEMANTIC_READER_PROVIDER_MODEL = "s7_voice_semantic_reader_v1_model"
-S7_REVIEWED_SEMANTIC_READER_MODEL_SNAPSHOT = "s7_voice_semantic_reader_v1_snapshot"
+S7_VOICE_SEMANTIC_READER_PROVIDER = "local_llm_client"
+S7_REVIEWED_SEMANTIC_READER_PROVIDER_MODEL = model_config.PRIMARY_MODEL
+S7_REVIEWED_SEMANTIC_READER_MODEL_SNAPSHOT = s7.canonical_hash({
+    "base_url": model_config.PRIMARY_BASE_URL,
+    "chat_kwargs": model_config.PRIMARY_CHAT_KWARGS,
+    "model": model_config.PRIMARY_MODEL,
+})
 S7_REVIEWED_SEMANTIC_READER_DECODING_PARAMS_HASH = s7.canonical_hash({
     "temperature": 0,
     "top_p": 1,
 })
-S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH = s7.canonical_hash(
-    "prompts/s7.voice.semantic_reader_v1.md"
+S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH = (
+    "a5675bbaf5b0681184eeea1ed859ae5763132d5c8a7809eff31821052194c53f"
+)
+S7_MAEZ_SELF_CHANGE_CONSULTATION_PROMPT_HASH = (
+    "5cbf2702ab477d14e948215f1c902abbaf1bedfd9976f49516c2a66ff6e3e0b8"
 )
 S7_REVIEWED_SEMANTIC_READER_ROUTE_CONFIG_HASH = s7.canonical_hash({
     "route_id": S7_VOICE_SEMANTIC_READER_ROUTE_ID,
     "provider": S7_VOICE_SEMANTIC_READER_PROVIDER,
 })
+
+
+def _assert_s7_reviewed_prompt_files_unchanged() -> None:
+    if _hash_file_bytes(S7_VOICE_SEMANTIC_READER_PROMPT_PATH) != (
+        S7_REVIEWED_SEMANTIC_READER_PROMPT_HASH
+    ):
+        raise ValueError("S7 semantic-reader prompt hash mismatch")
+    if _hash_file_bytes(S7_VOICE_CONSULTATION_PROMPT_PATH) != (
+        S7_MAEZ_SELF_CHANGE_CONSULTATION_PROMPT_HASH
+    ):
+        raise ValueError("S7 consultation prompt hash mismatch")
+
+
+_assert_s7_reviewed_prompt_files_unchanged()
 
 _HASH64_RE = re.compile(r"^[0-9a-f]{64}$")
 _VALIDATOR_TOKEN = object()
@@ -610,6 +643,99 @@ def derive_s7_voice_source_bundle_hash_binding(
             "request_envelope_hash": rendered_statement.request_envelope_hash,
         }),
     )
+
+
+def persist_s7_voice_source_bundle_for_material(
+    *,
+    db_path: str | Path,
+    rendered_statement: s7.RenderedRequestStatement,
+    envelope: s7.WorkRequestEnvelope,
+    maez_voice_consultation: s7.MaezVoiceConsultation,
+    authority_context: s7.AuthorityContext,
+    precondition_hash: str,
+    raw_response_text: str,
+    semantic_reader_attempt: S7SemanticReaderAttemptEvidence,
+    now: str,
+) -> S7VoiceSourceBundleHashBinding:
+    """Persist the private source bundle for an already-produced voice fact."""
+
+    if not isinstance(raw_response_text, str) or raw_response_text == "":
+        raise ValueError("raw_response_text is required")
+    if not isinstance(semantic_reader_attempt, S7SemanticReaderAttemptEvidence):
+        raise ValueError("semantic_reader_attempt is required")
+    binding = derive_s7_voice_source_bundle_hash_binding(
+        rendered_statement=rendered_statement,
+        envelope=envelope,
+        maez_voice_consultation=maez_voice_consultation,
+        authority_context=authority_context,
+        precondition_hash=precondition_hash,
+    )
+    bundle_store = S7VoiceConsultationBundleStore(db_path)
+    if bundle_store.get_for_source_ref(binding.source_ref_hash) is not None:
+        return binding
+    bundle_use_store = S7VoiceBundleUseStore(db_path)
+    attempt_store = S7SemanticReaderAttemptStore(db_path)
+    attempt_store.put(semantic_reader_attempt)
+    rendered_prompt_text = expected_s7_voice_rendered_prompt_text(
+        rendered_statement=rendered_statement,
+        maez_voice_consultation=maez_voice_consultation,
+    )
+    rendered_prompt_ref = f"s7.voice.prompt.{rendered_statement.request_id}"
+    raw_response_ref = f"s7.voice.raw.{rendered_statement.request_id}"
+    bundle_store.put_rendered_prompt(rendered_prompt_ref, rendered_prompt_text)
+    bundle_store.put_raw_response(raw_response_ref, raw_response_text)
+    manifest = bundle_store.put_reviewed_context_manifest(
+        manifest_id=f"s7.voice.context.{rendered_statement.request_id}",
+        preview_ref=f"preview:{rendered_statement.request_id}",
+        request_envelope_hash=rendered_statement.request_envelope_hash,
+        precondition_hash=precondition_hash,
+        rollback_path_class=envelope.rollback_path_class,
+        source_surface=rendered_statement.surface,
+        proposal_origin_label="operator",
+        created_at=rendered_statement.rendered_at,
+    )
+    blocking = (
+        semantic_reader_attempt.raw_semantic_reader_outcome
+        == "blocking_signal_present"
+        and semantic_reader_attempt.grounding_response_span_quote is not None
+    )
+    bundle_store.put_bundle(
+        S7VoiceConsultationBundle(
+            source_ref_hash=binding.source_ref_hash,
+            request_id=binding.request_id,
+            consultation_id=binding.consultation_id,
+            request_envelope_hash=binding.request_envelope_hash,
+            rendered_text_hash=binding.rendered_text_hash,
+            action_params_hash=binding.action_params_hash,
+            precondition_hash=binding.precondition_hash,
+            authority_context_hash=binding.authority_context_hash,
+            maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
+            rendered_prompt_ref=rendered_prompt_ref,
+            rendered_prompt_hash=binding.rendered_prompt_hash,
+            mutation_preview_hash=binding.mutation_preview_hash,
+            rollback_plan_ref=binding.rollback_plan_ref,
+            context_manifest_ref=manifest.manifest_id,
+            context_manifest_hash=binding.context_manifest_hash,
+            runtime_identity_hash=binding.runtime_identity_hash,
+            model_routing_identity_hash=binding.model_routing_identity_hash,
+            model_config_hash=binding.model_config_hash,
+            raw_response_ref=raw_response_ref,
+            raw_response_hash=s7.canonical_hash(raw_response_text),
+            semantic_reader_attempt_hash=semantic_reader_attempt.semantic_reader_attempt_hash,
+            expires_at=rendered_statement.expires_at,
+            authority_class="authoritative" if blocking else "none",
+            has_grounded_semantic_blocking_signal=blocking,
+        )
+    )
+    bundle_use_store.put_unreserved(
+        S7VoiceBundleUse.new_unreserved(
+            request_id=binding.request_id,
+            source_ref_hash=binding.source_ref_hash,
+            consultation_id=binding.consultation_id,
+            used_at=now,
+        )
+    )
+    return binding
 
 
 @dataclass(frozen=True)
@@ -2100,6 +2226,10 @@ def require_source_bundle_validation_for_mint(
 ) -> S7VoiceSourceBundleValidationResult:
     """Require the literal validator pass before an S7.3 artifact can be minted."""
 
+    # This token is an ordinary-caller guard, not a same-process security
+    # boundary. A privileged same-box actor remains inside the S7.3 honesty
+    # banner; live-route safety comes from deriving and validating the bundle
+    # in daemon code before this mint seam is reached.
     if not isinstance(source_bundle_validation, S7VoiceSourceBundleValidationResult):
         raise ValueError("S7.3 artifact mint requires source-bundle validation")
     if (

@@ -1161,6 +1161,7 @@ _S7_WEBAUTHN_PROOF_PAGE = r"""<!DOCTYPE html>
     <label>Session binding</label>
     <input id="authSession" value="manual-proof-auth">
     <button onclick="authorizeCard()">Authorize with navigator.credentials.get</button>
+    <button onclick="executeAuthorizedCard()" class="secondary">Execute authorized guarded card</button>
   </section>
   <section>
     <h2>4. Complete D19 disable/recovery proof</h2>
@@ -1177,6 +1178,8 @@ _S7_WEBAUTHN_PROOF_PAGE = r"""<!DOCTYPE html>
     <input id="disableCredentialRef" autocomplete="off">
     <label>S7 authorization artifact id for disable</label>
     <input id="lastArtifactId" autocomplete="off">
+    <label>Last S7 authorization artifact request id</label>
+    <input id="lastArtifactRequestId" autocomplete="off">
     <label>S7 authorization challenge id for disable</label>
     <input id="lastAuthorizationChallengeId" autocomplete="off">
     <label>S7 authorization session binding for disable</label>
@@ -1313,6 +1316,8 @@ async function createBackupRegistrationCard() {
     appendLog("backup registration card", card);
     backupAuthorizationRequestId.value = card.request_id || "";
     cardRequestId.value = card.request_id || "";
+    lastArtifactId.value = "";
+    lastArtifactRequestId.value = "";
   } catch (err) {
     appendLog("backup registration card error", describeError(err));
   }
@@ -1342,15 +1347,41 @@ async function authorizeCard() {
       session_binding: session,
       challenge_id: begin.challenge_id,
       credential_ref: selectedCredentialRef || credential.id,
+      maez_voice_raw_response_hash: begin.maez_voice_raw_response_hash,
       authentication_response: encodeCredentialResponse(credential),
     });
     appendLog("authorize finish", finish);
     lastArtifactId.value = finish.artifact_id || "";
+    lastArtifactRequestId.value = finish.request_id || requestId;
     if (requestId && requestId === backupAuthorizationRequestId.value) {
       backupArtifactId.value = finish.artifact_id || "";
     }
   } catch (err) {
     appendLog("authorize error", describeError(err));
+  }
+}
+async function executeAuthorizedCard() {
+  try {
+    const requestId = cardRequestId.value;
+    if (!lastArtifactId.value || lastArtifactRequestId.value !== requestId) {
+      appendLog("execute guarded card error", {
+        ok: false,
+        error: "artifact_request_mismatch",
+        artifact_request_id: lastArtifactRequestId.value,
+        current_request_id: requestId,
+      });
+      return;
+    }
+    const result = await jsonFetch(`/api/v1/s7/cards/${encodeURIComponent(requestId)}/execute`, {
+      session_binding: authSession.value,
+      authorization_challenge_id: lastAuthorizationChallengeId.value,
+      authorization_credential_ref: lastAuthorizationCredentialRef.value,
+      s7_authorization_artifact_id: lastArtifactId.value,
+      text: "yes",
+    });
+    appendLog("execute guarded card", result);
+  } catch (err) {
+    appendLog("execute guarded card error", describeError(err));
   }
 }
 async function createDisableCredentialCard(kind) {

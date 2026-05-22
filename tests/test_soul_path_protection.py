@@ -29,6 +29,7 @@ These tests lock in both layers.
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -161,6 +162,40 @@ class SoulReadViaRelativePathAllowed(unittest.TestCase):
         # Path constructed from BASE_DIR so this test passes in CI
         # (where BASE_DIR != /home/rohit/maez) as well as locally.
         self._assert_blocked_absolute_path(f"cat {self.soul_abs}")
+
+
+class SoulWriteTargetPathResolutionBlocked(unittest.TestCase):
+    """Actual write target checks resolve traversal and symlinks before writing."""
+
+    def setUp(self):
+        from core.action_engine import ActionEngine, BASE_DIR
+
+        self.engine = ActionEngine.__new__(ActionEngine)
+        self.base_dir = BASE_DIR
+
+    def test_write_any_file_blocks_traversal_to_soul(self):
+        from core.action_engine import ForbiddenActionError
+
+        traversal = self.base_dir / "tmp" / ".." / "config" / "soul.md"
+        with self.assertRaisesRegex(ForbiddenActionError, "covenant-protected"):
+            self.engine._do_write_any_file(
+                path=str(traversal),
+                content="# replaced",
+                reason="s7.3 path traversal regression",
+            )
+
+    def test_write_any_file_blocks_symlink_to_soul(self):
+        from core.action_engine import ForbiddenActionError
+
+        with tempfile.TemporaryDirectory(dir=self.base_dir) as tmp:
+            link = Path(tmp) / "soul-link.md"
+            link.symlink_to(self.base_dir / "config" / "soul.md")
+            with self.assertRaisesRegex(ForbiddenActionError, "covenant-protected"):
+                self.engine._do_write_any_file(
+                    path=str(link),
+                    content="# replaced",
+                    reason="s7.3 symlink regression",
+                )
 
 
 if __name__ == "__main__":

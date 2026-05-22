@@ -98,6 +98,16 @@ class _ValidBackupRegistrationVerifierWithDifferentAaguid(_ValidBackupRegistrati
         return result
 
 
+class _ValidBackupRegistrationVerifierWithDifferentAaguidOnly(_ValidBackupRegistrationVerifier):
+    def verify_registration_response(self, **kwargs):
+        result = dict(super().verify_registration_response(**kwargs))
+        if result.get("ok") is True:
+            result["aaguid"] = "ffeeddcc-bbaa-9988-7766-554433221100"
+            result["authenticator_attachment"] = None
+            result["transports"] = ()
+        return result
+
+
 class _ValidBackupRegistrationVerifierWithoutDistinctSignals(_ValidBackupRegistrationVerifier):
     def verify_registration_response(self, **kwargs):
         result = dict(super().verify_registration_response(**kwargs))
@@ -849,6 +859,66 @@ class S71CeremonyServiceTests(unittest.TestCase):
         self.assertEqual(backup.distinct_device_confidence, "unknown")
         self.assertEqual(state["mode"], "degraded")
         self.assertEqual(state["distinct_device_confidence"], "unknown")
+
+    def test_backup_registration_with_distinct_aaguid_only_confirms_distinct(self):
+        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, intent = self._store_with_bootstrap(tmp)
+            service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidRegistrationVerifierWithAaguid(),
+                store_factory=lambda: store,
+            )
+            primary_begin = service.register_begin(
+                now=NOW,
+                request_json={
+                    "bootstrap_intent_id": intent.intent_id,
+                    "bootstrap_token": intent.raw_token,
+                    "session_binding": "session-a",
+                },
+            )
+            service.register_finish(
+                now=NOW,
+                request_json={
+                    "challenge_id": primary_begin.body["challenge_id"],
+                    "bootstrap_intent_id": intent.intent_id,
+                    "bootstrap_token": intent.raw_token,
+                    "session_binding": "session-a",
+                    "registration_response": {"clientDataJSON": "valid"},
+                },
+            )
+            authorization = self._backup_registration_authorization(store.db_path)
+            backup_service = S7LocalWebAuthnCeremonyService(
+                verifier=_ValidBackupRegistrationVerifierWithDifferentAaguidOnly(),
+                store_factory=lambda: store,
+            )
+            backup_begin = service.register_begin(
+                now=NOW,
+                request_json={
+                    "registration_class": "backup",
+                    "session_binding": "session-b",
+                },
+                s7_execution_authorization=authorization,
+            )
+
+            result = backup_service.register_finish(
+                now=NOW,
+                request_json={
+                    "registration_class": "backup",
+                    "challenge_id": backup_begin.body["challenge_id"],
+                    "session_binding": "session-b",
+                    "registration_response": {"clientDataJSON": "valid-backup"},
+                },
+            )
+            backup = store.get_credential("cred-backup")
+            state = store.credential_recovery_state()
+
+        self.assertEqual(result.status_code, 200)
+        self.assertIsNotNone(backup)
+        assert backup is not None
+        self.assertEqual(backup.distinct_device_confidence, "confirmed_distinct")
+        self.assertEqual(state["mode"], "ready")
+        self.assertEqual(state["distinct_device_confidence"], "confirmed_distinct")
 
     def test_backup_registration_with_same_aaguid_stays_degraded(self):
         from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService

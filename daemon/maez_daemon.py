@@ -447,6 +447,8 @@ def _s7_authorization_route_material(
         rendered_at=now,
     )
     return _s7_route_material(
+        card=card,
+        pipe=pipe,
         envelope=envelope,
         rendered_statement=rendered,
         action_params=action_params,
@@ -481,6 +483,18 @@ def _s7_voice_source_validation_for_material(
     bundle_store = S7VoiceConsultationBundleStore(store.db_path)
     bundle_use_store = S7VoiceBundleUseStore(store.db_path)
     attempt_store = S7SemanticReaderAttemptStore(store.db_path)
+    persister = getattr(material.kwargs.get("pipe"), "_persist_s7_voice_source_bundle_for_card", None)
+    if callable(persister):
+        persister(
+            card=material.kwargs["card"],
+            db_path=store.db_path,
+            rendered_statement=material.kwargs["rendered_statement"],
+            envelope=material.kwargs["envelope"],
+            maez_voice_consultation=material.kwargs["maez_voice_consultation"],
+            authority_context=material.kwargs["authority_context"],
+            precondition_hash=material.kwargs["precondition_hash"],
+            now=now,
+        )
     binding = derive_s7_voice_source_bundle_hash_binding(
         rendered_statement=material.kwargs["rendered_statement"],
         envelope=material.kwargs["envelope"],
@@ -512,6 +526,69 @@ def _s7_voice_source_validation_for_material(
         source_ref_hash=binding.source_ref_hash,
         reservation_token=reservation_token,
     )
+
+
+def _s7_founder_visible_voice_payload_for_material(material):
+    from core.governance import operator_user_boundary as s7
+
+    pipe = material.kwargs.get("pipe")
+    envelope = material.kwargs.get("envelope")
+    pending = getattr(pipe, "_s7_pending_voice_source_bundles", {})
+    if not isinstance(pending, dict) or envelope is None:
+        return {}
+    entry = pending.get(getattr(envelope, "request_id", None))
+    if not isinstance(entry, dict):
+        return {}
+    raw_response_text = entry.get("raw_response_text")
+    semantic_reader_attempt = entry.get("semantic_reader_attempt")
+    if not isinstance(raw_response_text, str):
+        return {}
+    payload = {
+        "maez_voice_raw_response": raw_response_text,
+        "maez_voice_raw_response_hash": s7.canonical_hash(raw_response_text),
+        "maez_voice_source_ref_hash": entry.get("source_ref_hash"),
+    }
+    if semantic_reader_attempt is not None:
+        payload.update({
+            "maez_voice_reader_outcome": getattr(
+                semantic_reader_attempt,
+                "raw_semantic_reader_outcome",
+                None,
+            ),
+            "maez_voice_grounding_quote": getattr(
+                semantic_reader_attempt,
+                "grounding_response_span_quote",
+                None,
+            ),
+            "maez_voice_grounding_offset": getattr(
+                semantic_reader_attempt,
+                "grounding_response_span_offset",
+                None,
+            ),
+        })
+    renderer = getattr(pipe, "_s7_rendered_proposal_for_card", None)
+    if callable(renderer):
+        try:
+            payload["maez_voice_rendered_proposal"] = renderer(
+                material.kwargs.get("card"),
+                envelope,
+            )
+        except Exception:
+            pass
+    return payload
+
+
+def _s7_founder_seen_voice_hash_valid(material) -> bool:
+    request_json = material.kwargs.get("request_json") or {}
+    if not isinstance(request_json, dict):
+        return False
+    payload = _s7_founder_visible_voice_payload_for_material(material)
+    if not payload.get("maez_voice_raw_response_hash"):
+        return False
+    seen_hash = str(request_json.get("maez_voice_raw_response_hash") or "")
+    if not seen_hash:
+        return False
+    return seen_hash == payload.get("maez_voice_raw_response_hash")
 
 
 def _s7_backup_registration_authorization(daemon, req, *, now: str, store: S7WebAuthnBootstrapStore):
@@ -6348,6 +6425,12 @@ class MaezDaemon:
                     allow_degraded_primary_only=material.kwargs["allow_degraded_primary_only"],
                     allow_degraded_backup_only=material.kwargs["allow_degraded_backup_only"],
                 )
+                if (
+                    result.status_code == 200
+                    and material.kwargs["envelope"].derived_work_class
+                    in VOICE_SEAT_WORK_CLASSES
+                ):
+                    result.body.update(_s7_founder_visible_voice_payload_for_material(material))
                 return jsonify(result.body), result.status_code
             return jsonify(
                 s7_ceremony_deferred_response(
@@ -6377,6 +6460,13 @@ class MaezDaemon:
                     material.kwargs["envelope"].derived_work_class
                     in VOICE_SEAT_WORK_CLASSES
                 ):
+                    if not _s7_founder_seen_voice_hash_valid(material):
+                        return jsonify(
+                            {
+                                "ok": False,
+                                "error": "s7_founder_seen_maez_voice_hash_required",
+                            }
+                        ), 409
                     voice_source = _s7_voice_source_validation_for_material(
                         store=store,
                         material=material,

@@ -905,15 +905,15 @@ def _backup_distinct_device_confidence(
     """Classify backup distinctness from verifier/registry evidence.
 
     The code may not assert "confirmed_distinct" as a default. Confirmation
-    requires a different credential plus verifier-supplied authenticator
-    evidence that differs from the enabled primary. Absent or matching signals
-    remain honest degraded states.
+    requires a different credential plus verifier-supplied authenticator evidence
+    that differs from the enabled primary. A non-empty backup AAGUID that differs
+    from all enabled primary AAGUIDs is sufficient evidence even when browser
+    attachment/transport hints are absent. Absent or matching AAGUIDs remain
+    honest degraded states.
     """
 
     credential_ref = str(verified.get("credential_ref") or "")
     backup_aaguid = str(verified.get("aaguid") or "")
-    backup_attachment = str(verified.get("authenticator_attachment") or "")
-    backup_transports = tuple(str(value) for value in (verified.get("transports", ()) or ()))
     primary_records = tuple(
         record
         for record in store.list_credentials()
@@ -932,9 +932,8 @@ def _backup_distinct_device_confidence(
         return "unknown"
     if backup_aaguid in primary_aaguids:
         return "same_device_override"
-    signals = (backup_attachment, backup_transports)
-    if not any(signals):
-        return "unknown"
+    # Direct attestation with a different AAGUID is stronger evidence than
+    # optional browser attachment/transport hints, which some browsers omit.
     return "confirmed_distinct"
 
 
