@@ -194,11 +194,27 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
 
     def test_s7_voice_consultation_for_card_is_produced_by_pipeline(self):
         from core.governance import operator_user_boundary as s7
+        from core.governance.s7_guarded_execution import (
+            S7SemanticReaderAttemptEvidence,
+        )
 
         card = self._card()
         envelope = self.pipeline._s7_request_envelope_for_card(card)
 
-        consultation = self.pipeline._s7_voice_consultation_for_card(card, envelope)
+        attempt = S7SemanticReaderAttemptEvidence.reviewed_v1()
+        with (
+            patch.object(
+                self.pipeline,
+                "_s7_voice_raw_response_for_card",
+                return_value="I have no grounded objection.",
+            ),
+            patch.object(
+                self.pipeline,
+                "_s7_semantic_reader_attempt_for_voice_response",
+                return_value=attempt,
+            ),
+        ):
+            consultation = self.pipeline._s7_voice_consultation_for_card(card, envelope)
 
         self.assertIsInstance(consultation, s7.MaezVoiceConsultation)
         self.assertEqual(consultation.request_id, card.request_id)
@@ -207,10 +223,13 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
             consultation.request_envelope_hash,
             s7.work_request_envelope_hash(envelope),
         )
-        self.assertFalse(consultation.maez_voice_consulted)
-        self.assertEqual(consultation.maez_objection_state, "not_determined")
-        self.assertEqual(consultation.unavailable_reason_code, "consultation_path_unavailable")
+        self.assertTrue(consultation.maez_voice_consulted)
+        self.assertEqual(consultation.maez_objection_state, "absent")
+        self.assertIsNone(consultation.unavailable_reason_code)
         self.assertIsNone(consultation.raw_maez_text)
+        pending = self.pipeline._s7_pending_voice_source_bundles[envelope.request_id]
+        self.assertEqual(pending["raw_response_text"], "I have no grounded objection.")
+        self.assertIs(pending["semantic_reader_attempt"], attempt)
 
     def _open_dialog(self, card, *, require_s7_linkage: bool, request_hash: str | None = None):
         from skills.self_mod_dialog import open_dialog_for_card
