@@ -34,6 +34,13 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from core.egress.gate import (
+    EgressRequest,
+    EgressSegment,
+    decide_egress,
+    decision_to_telemetry,
+    load_or_create_telemetry_key,
+)
 from core.subscription_proxy.adapters.base import Adapter, CallResult
 from core.subscription_proxy.adapters.claude_cli import ClaudeCliAdapter
 from core.subscription_proxy.adapters.gemini_cli import GeminiCliAdapter
@@ -152,7 +159,11 @@ def _db() -> sqlite3.Connection:
             provenance_source   TEXT NOT NULL DEFAULT 'claude_tier_response',
             trust_tier          TEXT NOT NULL DEFAULT 'untrusted',
             training_eligible   INTEGER NOT NULL DEFAULT 0,
-            provenance_version  TEXT NOT NULL DEFAULT 'v1'
+            provenance_version  TEXT NOT NULL DEFAULT 'v1',
+            egress_decision     TEXT,
+            egress_reason_codes TEXT,
+            egress_content_digest TEXT,
+            egress_shadow_mode  INTEGER NOT NULL DEFAULT 0
         )
         """
     )
@@ -169,6 +180,10 @@ def _db() -> sqlite3.Connection:
          "INTEGER NOT NULL DEFAULT 0"),
         ("provenance_version",
          "TEXT NOT NULL DEFAULT 'v1'"),
+        ("egress_decision", "TEXT"),
+        ("egress_reason_codes", "TEXT"),
+        ("egress_content_digest", "TEXT"),
+        ("egress_shadow_mode", "INTEGER NOT NULL DEFAULT 0"),
     ):
         try:
             con.execute(f"ALTER TABLE calls ADD COLUMN {col} {ddl}")
@@ -206,6 +221,11 @@ def _record(
     provenance_source: str = "claude_tier_response",
     trust_tier: str = "untrusted",
     provenance_version: str = "v1",
+    egress_decision: str | None = None,
+    egress_reason_codes: str | None = None,
+    egress_content_digest: str | None = None,
+    egress_shadow_mode: bool = False,
+    prompt_preview_override: str | None = None,
 ) -> None:
     """Persist one proxy-call row.
 
@@ -229,16 +249,24 @@ def _record(
                 "prompt_hash, prompt_chars, reply_chars, input_toks, "
                 "output_toks, duration_s, status, prompt_preview, "
                 "reply_preview, error_preview, provenance_source, "
-                "trust_tier, training_eligible, provenance_version) "
+                "trust_tier, training_eligible, provenance_version, "
+                "egress_decision, egress_reason_codes, "
+                "egress_content_digest, egress_shadow_mode) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-                "?, ?, 0, ?)",
+                "?, ?, 0, ?, ?, ?, ?, ?)",
                 (
                     time.time(), adapter, caller, model, model_used,
                     phash, len(prompt), len(reply), input_toks, output_toks,
                     duration_s, status,
-                    prompt[:400], reply[:400], error[:400],
+                    (prompt_preview_override if prompt_preview_override is not None
+                     else prompt[:400]),
+                    reply[:400], error[:400],
                     provenance_source, trust_tier,
                     provenance_version,
+                    egress_decision,
+                    egress_reason_codes,
+                    egress_content_digest,
+                    1 if egress_shadow_mode else 0,
                 ),
             )
             con.commit()
@@ -395,6 +423,26 @@ async def chat_completions(request: Request):
     model_in = body.get("model") or ""
     adapter = _route(model_in)
     caller = request.headers.get("x-maez-caller", "unknown")
+    egress_request = EgressRequest(
+        call_class="cloud_model_inference",
+        destination=f"subscription_proxy:{adapter.name}",
+        caller=caller,
+        request_id=f"proxy-{int(time.time() * 1000)}",
+        segments=[
+            EgressSegment(
+                text=prompt,
+                origin_class="owner_message_context",
+                source_ref=f"subscription_proxy:{caller}:prompt",
+                redaction_allowed=True,
+            )
+        ],
+    )
+    egress_decision = decide_egress(egress_request)
+    egress_telemetry = decision_to_telemetry(
+        egress_decision,
+        key=load_or_create_telemetry_key(),
+    )
+    prompt_preview = egress_decision.sanitized_text()[:400]
 
     result: Optional[CallResult] = None
     async with _budget_lock(adapter.name):
@@ -433,6 +481,11 @@ async def chat_completions(request: Request):
                 model_used=None, prompt=prompt, reply="",
                 input_toks=None, output_toks=None,
                 duration_s=time.time() - t0, status="error", error=error_msg,
+                egress_decision=egress_decision.decision,
+                egress_reason_codes=",".join(egress_decision.reason_codes),
+                egress_content_digest=egress_telemetry["content_digest"],
+                egress_shadow_mode=True,
+                prompt_preview_override=prompt_preview,
             )
             raise HTTPException(502, f"{adapter.name} failed: {error_msg}")
 
@@ -442,6 +495,11 @@ async def chat_completions(request: Request):
             model_used=result.model_used, prompt=prompt, reply=result.reply,
             input_toks=result.input_toks, output_toks=result.output_toks,
             duration_s=duration_s, status="ok",
+            egress_decision=egress_decision.decision,
+            egress_reason_codes=",".join(egress_decision.reason_codes),
+            egress_content_digest=egress_telemetry["content_digest"],
+            egress_shadow_mode=True,
+            prompt_preview_override=prompt_preview,
         )
 
     # Fallback token estimation if adapter didn't provide counts

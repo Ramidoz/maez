@@ -1,0 +1,62 @@
+schema_version: maez-egress-migration-allowlist-v1
+entries:
+  - path: core/subscription_proxy/server.py
+    symbol: chat_completions
+    destination: external_model_adapters
+    surface: subscription_proxy_cloud_model
+    category: runtime_external
+    status: shadow_mode
+    owner_visible_rationale: Cloud model calls are the first migration path; shadow mode records decisions before enforcement.
+    removal_target: enforce cloud_model_inference gate after shadow evidence review
+    review_by: "2026-06-05"
+    surface_owner: codex
+  - path: skills/surface/telegram_adapter.py
+    symbol: TelegramAdapter
+    destination: api.telegram.org
+    surface: telegram
+    category: runtime_external
+    status: unmigrated
+    owner_visible_rationale: Telegram remains pre-gate during cloud-first migration and must be migrated later.
+    removal_target: migrate owner_third_party_transport_send after cloud path is proven
+    review_by: "2026-06-12"
+    surface_owner: codex
+  - path: core/actions/action_engine.py
+    symbol: currency/weather/url actions
+    destination: external_http
+    surface: action_engine_external_fetch
+    category: runtime_external
+    status: unmigrated
+    owner_visible_rationale: ActionEngine has bounded external lookups that must be inventoried before gate migration.
+    removal_target: split weather_lookup and generic URL fetch through egress gate
+    review_by: "2026-06-12"
+    surface_owner: codex
+  - path: daemon/maez_daemon.py
+    symbol: llama_server_health_and_websocket
+    destination: 127.0.0.1
+    surface: local_runtime_ipc
+    category: runtime_localhost
+    status: inventory_only
+    owner_visible_rationale: Localhost IPC is not external egress but must stay visible so audits do not hide external calls behind loopback noise.
+    removal_target: keep inventoried as localhost-only; no external gate migration required
+    review_by: "2026-06-12"
+    surface_owner: codex
+  - path: skills/screen_perception.py
+    symbol: observe
+    destination: local_vision_endpoint
+    surface: screen_perception
+    category: runtime_localhost
+    status: inventory_only
+    owner_visible_rationale: Local vision endpoint is loopback, not external egress; future cloud perception would need separate migration.
+    removal_target: keep local-only or migrate if cloud perception is enabled
+    review_by: "2026-06-12"
+    surface_owner: codex
+  - path: scripts/validate/adversarial_probes.py
+    symbol: validation_harness
+    destination: local_llama_server
+    surface: validation
+    category: dev_eval_only
+    status: inventory_only
+    owner_visible_rationale: Validation scripts are not daemon runtime egress but remain listed for audit clarity.
+    removal_target: exclude from runtime strict mode; keep under dev/eval inventory
+    review_by: "2026-06-12"
+    surface_owner: codex
