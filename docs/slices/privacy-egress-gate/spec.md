@@ -1,9 +1,9 @@
 # Privacy / Egress Gate -- Spec v2 (Roadmap #3)
 
-**Status:** DRAFT after Codex engineering-panel REVISE findings were folded. Not canonical. Not implemented. Docs-only.
+**Status:** CANONICAL SPEC. Both-lane cleared (Codex engineering panel + Claude six-role council). Not implemented. Docs-only.
 **Date:** 2026-05-22
 **Class:** [Covenant-shaped / full ladder]
-**Design provenance:** spec-only brainstorm 2026-05-22; Claude six-role council RATIFY-WITH-AMENDMENTS; Codex engineering panel returned REVISE on v1; v2 folds the engineering amendments.
+**Design provenance:** spec-only brainstorm 2026-05-22; Claude six-role council RATIFY-WITH-AMENDMENTS; Codex engineering panel returned REVISE on v1; v2 folds the engineering amendments; Claude council transport-split amendment folded at 3bb25af; canonicalized at this spec version.
 
 ## Purpose
 
