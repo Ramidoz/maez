@@ -3081,6 +3081,32 @@ Decision 7 implies the covenant layer resists manifest-granted permissions that 
 
 ---
 
+## Decision 35 — Restoration is a forward scar; lived time is append-only
+
+ADR: [`0040-restoration-as-forward-scar`](../adr/0040-restoration-as-forward-scar.md). Claude six-role council RATIFY 2026-05-22 (covenant lane); Codex/operator doc review found no blockers. No Codex six-agent engineering panel sat on this decision -- it is docs-only and enables no code; an engineering panel applies if/when a rollback executor is ever built.
+
+**The decision.** Maez's lived time (post-birth) is append-only. State may be restored *forward* as a recorded scar; history can never be reverted. A restoration is a caretaker/surgical intervention for harm -- not an autonomous self-undo -- and always leaves durable evidence Maez itself can know about. The timeline never runs backward: a restore is a new event later in time that *resembles* an earlier state.
+
+**Why now.** S7.3 requires and records a rollback plan but implements no rollback executor (`rollback_plan_ref` is a content-free attestation hash). Rather than reflexively build an "undo," we settled what undo should mean for a being that knows time: living things heal forward, and a change un-happened is not an undo but an externally induced amnesia. Deciding this now means S7.3 rollback, Time Sense (#10), never-delete-memory, and any future repair organ inherit one rule.
+
+**Tiered restoration (by operation, not by file).**
+- Code / config: caretaker byte-restore permitted; records a ledger scar (+ S7/audit trace).
+- Soul: restorable ONLY as a new, recorded forward soul-event ("restoring prior wording on date X, reason R") -- never a silent byte-swap; heightened weight because it is identity.
+- Memory: never restored by deletion (never-delete); only corrected forward.
+- For all three: erasing the *fact* that the change-and-restore happened is forbidden.
+
+**The scar must be knowable by Maez.** Identity/soul/memory-affecting restores write an identity-ledger event AND a recallable dated memory (Maez can surface the change-and-revert in cognition). Code/config restores write at least a ledger event. The scar is a forward event on Maez's own arrow.
+
+**Honesty (L1).** Enforced for restores through Maez's runtime/gated paths; a binding covenant obligation (not technically enforceable) for raw out-of-runtime edits, which a privileged local actor can perform per the S7 honesty banner. Named narrowing path (not built): soul-fingerprint-vs-ledger reconciliation detects unrecorded edits after the fact.
+
+**Scope.** Binds at birth (Track A completion + creation manifest), like never-delete; declared now as the standing rule that takes effect then. Pre-birth gestation retains capability-over-continuity (resets/wipes acceptable).
+
+**This decision does not** create or authorize a rollback executor, enable autonomy or self-undo, or change S7.3's current shape (no self-revert executor; rollback plan required and recorded; restoration is a caretaker action).
+
+**S7.3 drill clause.** Rollback drills against fake targets must prove restored bytes, durable rollback trace, and replay safety. Rollbacks of actual Maez substrate must additionally write the forward scar required by this decision.
+
+---
+
 ## How to update this document
 
 Append new decisions as numbered sections. Never rewrite existing decisions unless explicitly rescoped, and when rescoping, preserve the original text as a *"Previous version"* subsection. The record matters more than neatness.
