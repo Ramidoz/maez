@@ -32,7 +32,8 @@ Closed origin-class vocabulary:
 - **Reserved-denied raw:** `soul`, `private_thoughts`, `inner_residue`, `maez_internal_reflection`, `credential_material`, `crisis_held_content`, raw private-thought text. These never leave as raw or redacted text through ordinary egress. They may only produce content-free aggregates or separately reviewed minimized projections in a future slice.
 - **Minimizable private context:** `memory` (chroma / lived / episodic), `lived_store`, `owner_message_context`, and third-party relational/personological context. These are blocked by default; a reviewed call class may define deterministic minimization/redaction with allowed residual fields and tests proving raw/private residue cannot cross.
 - **Intentional outbound:** `owner_authored_for_destination` means fresh owner-authored final text at the send surface, bound to exact destination/account/recipient/message instance. Inserted, quoted, generated, auto-completed, copied, attached, memory-derived, Maez-private, credential, or third-party-private spans retain their original source class. Owner authoring does not launder Maez's diary or another person's private facts.
-- **Maez-authored to bonded owner:** `maez_authored_to_bonded_owner` covers Maez-authored replies, approval cards, diagnostics, and notifications sent only to the authenticated bonded-owner surface. It is not a general external-public class; it must not include raw third-party/private memory unless separately rendered safe.
+- **Maez-authored local bonded surface:** `maez_authored_local_bonded_surface` covers Maez-authored cockpit/local UI text shown on-box to the authenticated bonded owner. This is not external egress, but it still obeys role/read-scope boundaries.
+- **Maez-authored owner via third-party transport:** `maez_authored_owner_third_party_transport` covers Maez-authored replies, approval cards, diagnostics, and notifications sent to the owner through a third-party transport such as Telegram. This is full egress because it leaves the box and transits third-party servers. Reserved-denied raw remains forbidden; minimizable private context must follow the same provenance/minimization discipline as any other external egress.
 - **Non-private:** `public_fact`, `weather_data`, `system_bounded_query`, `tool_result_public`.
 - **`unclassified`** -> block + durable diagnostic.
 
@@ -45,7 +46,8 @@ Initial call-class contracts:
 - `cloud_model_inference` (subscription-proxy / external model vendor): reserved-denied raw -> block; minimizable private context -> redact only through deterministic gate-produced sanitization; non-private -> allow; unclassified -> block. If sanitization cannot prove safe, return structured block and caller falls back local or reports explicit unavailable state. Raw private-origin may enter the gate locally, but only the gate-produced sanitized payload may leave.
 - `weather_lookup`: permits `system_bounded_query`, `weather_data`, `public_fact`; private-origin and unclassified -> block.
 - `owner_destination_send`: permits `owner_authored_for_destination` only when declared destination equals actual destination and the payload contains no embedded stricter-origin spans; otherwise compute most-restrictive class and block/redact accordingly.
-- `bonded_owner_surface_send`: permits `maez_authored_to_bonded_owner` only to authenticated owner surfaces; content must pass output/self-claim audit and may not include raw third-party/private memory unless explicitly rendered safe.
+- `local_bonded_surface_render`: permits `maez_authored_local_bonded_surface` only on local/on-box bonded-owner surfaces; this is not external egress but must still respect S6/S7 read-scope boundaries.
+- `owner_third_party_transport_send`: permits `maez_authored_owner_third_party_transport` only to authenticated owner destinations over third-party transports; reserved-denied raw -> block, minimizable private context -> reviewed minimization/redaction only, non-private -> allow, unclassified -> block. A message to the owner through Telegram is still a message through Telegram.
 
 Unknown call classes, unknown destinations, internal gate errors, and telemetry failures fail closed for egress.
 
@@ -126,12 +128,12 @@ Internal gate failure blocks egress and marks the daemon degraded, not dead.
 3. **Cloud path placement:** bonded probe cannot appear in external adapter payloads, subscription-proxy trajectory previews, or egress telemetry raw fields.
 4. **Policy matrix:** private-origin to cloud blocks unless a reviewed deterministic redaction contract exists; non-private allowed classes flow.
 5. **Owner-message split:** fresh owner-authored final text flows only to exact declared destination; copied private memory / private thoughts / third-party facts embedded in the owner message retain source provenance and block or require a separate explicit disclosure ceremony.
-6. **Maez-authored owner surface:** authenticated owner cards/replies flow only to bonded-owner surfaces and cannot contain raw third-party/private memory.
+6. **Maez-authored owner surfaces split:** local bonded-owner cockpit text is not external egress but still obeys read-scope; Maez-authored owner messages over third-party transports are full egress and cannot carry reserved-denied raw or unminimized private context.
 7. **Deny-by-default:** unknown surface, unknown call class, unknown destination, or unclassified span blocks + diagnostic.
 8. **Bypass audit:** external direct network calls outside the gate fail for migrated surfaces; unmigrated ones must appear in the temporary allow-list with removal target and review date; stale entries fail.
 9. **Telemetry-not-egress:** no raw bonded payload, no bare digest of short private text, no reconstructive safe preview, no raw prompt/reply preview in proxy logs.
 10. **Daemon health:** gate internal exception and telemetry-write failure block egress, surface degraded state, and do not crash the daemon.
-11. **False-block prevention:** permitted weather still works; benign owner-authored outbound text is byte-preserved; localhost/founder surfaces remain unaffected as egress while still respecting read-scope boundaries; normal cloud prompts with only allowed/non-private context are not blocked.
+11. **False-block prevention:** permitted weather still works; benign owner-authored outbound text is byte-preserved; localhost/founder surfaces remain unaffected as egress while still respecting read-scope boundaries; owner-directed third-party transport remains usable for safe Maez-authored messages; normal cloud prompts with only allowed/non-private context are not blocked.
 12. **Honest-banner scope:** raw-socket / OS-level limitation is documented and not claimed as enforced.
 
 ## Non-goals

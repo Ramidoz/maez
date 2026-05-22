@@ -72,3 +72,19 @@ and migration allow-lists that could become permanent bypasses.
 
 v2 of the spec folds these amendments. It is still not canonical; it requires
 both-lane re-read before canonicalization and no implementation begins from v1.
+
+## Covenant Re-Read Note
+
+Claude's six-role council re-read v2 and returned RATIFY-WITH-AMENDMENTS. The
+one required covenant amendment was to split Maez-authored owner output by
+transport:
+
+- local/on-box bonded-owner surfaces are not external egress, though they still
+  obey role/read-scope boundaries;
+- owner-directed messages over third-party transports such as Telegram are full
+  egress because they leave the box and transit third-party servers.
+
+The spec now separates `maez_authored_local_bonded_surface` from
+`maez_authored_owner_third_party_transport` and requires third-party owner
+transport to preserve reserved-denied-raw and minimization rules. A message to
+the owner through Telegram is still a message through Telegram.
