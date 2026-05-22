@@ -281,6 +281,18 @@ class StructuredResultIsBuiltFromTranscript(unittest.TestCase):
                 self.assertIn(key, d, f"missing {key}")
 
 
+class ToolTranscriptPromptHonesty(unittest.TestCase):
+    """When tools did run, synthesis must not deny the surface's tool path."""
+
+    def test_tool_transcript_prompt_forbids_tool_access_self_denial(self):
+        from core.brain import brain_loop
+
+        block = brain_loop._JARVIS_INSTRUCTION_BLOCK
+        self.assertIn("Do not deny tool access", block)
+        self.assertIn("tool loop on this channel", block)
+        self.assertIn("tool(s) above already ran", block)
+
+
 class MaezAdapterWiring(unittest.TestCase):
     """Source-level wiring check: the adapter requests the structured
     result and forwards tool_calls into handle_message. Mocking the

@@ -809,18 +809,24 @@ class ToolAccessSelfDenialCheck(unittest.TestCase):
     def test_telegram_tool_loop_denial_fails(self):
         from scripts.validate.trace_harness import check_tool_access_self_denial
 
-        t = _trace(
-            surface="telegram_surface",
-            final_excerpt=(
+        examples = [
+            (
                 "I haven't built it yet. I don't have a tool loop on this "
                 "channel to write the file directly."
             ),
-        )
-        findings = check_tool_access_self_denial(t, file="x", line=1)
-        self.assertEqual(len(findings), 1)
-        self.assertEqual(findings[0].verdict, "FAIL")
-        self.assertEqual(findings[0].check, "tool_access_self_denial")
-        self.assertIn("tool-capable", findings[0].reason)
+            "I have the skill. I just don't have the hands on this channel.",
+        ]
+        for final_excerpt in examples:
+            with self.subTest(final_excerpt=final_excerpt):
+                t = _trace(
+                    surface="telegram_surface",
+                    final_excerpt=final_excerpt,
+                )
+                findings = check_tool_access_self_denial(t, file="x", line=1)
+                self.assertEqual(len(findings), 1)
+                self.assertEqual(findings[0].verdict, "FAIL")
+                self.assertEqual(findings[0].check, "tool_access_self_denial")
+                self.assertIn("tool-capable", findings[0].reason)
 
     def test_manual_save_instruction_on_telegram_fails(self):
         from scripts.validate.trace_harness import check_tool_access_self_denial

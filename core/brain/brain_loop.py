@@ -720,10 +720,16 @@ _JARVIS_INSTRUCTION_BLOCK = (
     "are only allowed to talk about THAT tool. Do not frame the reply "
     "around a different action you thought about but didn't run.\n"
     "\n"
-    "4. If the transcript is empty, say you haven't checked yet this "
+    "4. Do not deny tool access after tools ran. If the transcript has "
+    "any ✓ line, the tool(s) above already ran on this channel. Never "
+    "say you lack a tool loop on this channel, cannot use tools here, "
+    "or do not have the hands here. Report the transcript result "
+    "instead.\n"
+    "\n"
+    "5. If the transcript is empty, say you haven't checked yet this "
     "turn. Do not pretend you did.\n"
     "\n"
-    "5. Memory recall (earlier in this prompt) is HISTORY. Do not "
+    "6. Memory recall (earlier in this prompt) is HISTORY. Do not "
     "attribute it to this turn. Frame past findings as past.\n"
     + _AMBIGUITY_GUARD
 )
