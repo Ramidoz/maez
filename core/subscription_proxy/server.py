@@ -23,12 +23,14 @@ on this machine can already invoke the same CLIs.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import os
 import sqlite3
 import time
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -40,6 +42,7 @@ from core.egress.gate import (
     decision_to_telemetry,
     load_or_create_telemetry_key,
 )
+from core.egress.provenance import ProvenanceSpan
 from core.safety.cloud_redactor import redact_for_cloud
 from core.subscription_proxy.adapters.base import Adapter, CallResult
 from core.subscription_proxy.adapters.claude_cli import ClaudeCliAdapter
@@ -163,7 +166,9 @@ def _db() -> sqlite3.Connection:
             egress_decision     TEXT,
             egress_reason_codes TEXT,
             egress_content_digest TEXT,
-            egress_shadow_mode  INTEGER NOT NULL DEFAULT 0
+            egress_shadow_mode  INTEGER NOT NULL DEFAULT 0,
+            egress_origin_classes TEXT,
+            egress_provenance_mode TEXT
         )
         """
     )
@@ -184,6 +189,8 @@ def _db() -> sqlite3.Connection:
         ("egress_reason_codes", "TEXT"),
         ("egress_content_digest", "TEXT"),
         ("egress_shadow_mode", "INTEGER NOT NULL DEFAULT 0"),
+        ("egress_origin_classes", "TEXT"),
+        ("egress_provenance_mode", "TEXT"),
     ):
         try:
             con.execute(f"ALTER TABLE calls ADD COLUMN {col} {ddl}")
@@ -225,7 +232,10 @@ def _record(
     egress_reason_codes: str | None = None,
     egress_content_digest: str | None = None,
     egress_shadow_mode: bool = False,
+    egress_origin_classes: str | None = None,
+    egress_provenance_mode: str | None = None,
     prompt_preview_override: str | None = None,
+    reply_preview_override: str | None = None,
 ) -> None:
     """Persist one proxy-call row.
 
@@ -253,7 +263,10 @@ def _record(
             prompt_preview_override if prompt_preview_override is not None
             else redact_for_cloud(prompt).text[:400]
         )
-        reply_preview = redact_for_cloud(reply).text[:400]
+        reply_preview = (
+            reply_preview_override if reply_preview_override is not None
+            else redact_for_cloud(reply).text[:400]
+        )
         error_preview = redact_for_cloud(error).text[:400]
         with _db() as con:
             con.execute(
@@ -263,9 +276,10 @@ def _record(
                 "reply_preview, error_preview, provenance_source, "
                 "trust_tier, training_eligible, provenance_version, "
                 "egress_decision, egress_reason_codes, "
-                "egress_content_digest, egress_shadow_mode) "
+                "egress_content_digest, egress_shadow_mode, "
+                "egress_origin_classes, egress_provenance_mode) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-                "?, ?, 0, ?, ?, ?, ?, ?)",
+                "?, ?, 0, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     time.time(), adapter, caller, model, model_used,
                     prompt_fingerprint, len(prompt), len(reply),
@@ -280,6 +294,8 @@ def _record(
                     egress_reason_codes,
                     egress_content_digest,
                     1 if egress_shadow_mode else 0,
+                    egress_origin_classes,
+                    egress_provenance_mode,
                 ),
             )
             con.commit()
@@ -354,6 +370,182 @@ def _route(model: str) -> Adapter:
     return ADAPTERS[-1]
 
 
+def _blocked_request(
+    *,
+    destination: str,
+    caller: str,
+    request_id: str,
+    source_ref: str,
+    text: str,
+) -> EgressRequest:
+    return EgressRequest(
+        call_class="cloud_model_inference",
+        destination=destination,
+        caller=caller,
+        request_id=request_id,
+        segments=[
+            EgressSegment(
+                text=text,
+                origin_class="unclassified",
+                source_ref=source_ref,
+                redaction_allowed=False,
+            )
+        ],
+    )
+
+
+def _is_local_or_private_destination(destination: str) -> bool:
+    parsed = urlparse(destination)
+    host = parsed.hostname
+    if host is None:
+        if destination in {"localhost", "127.0.0.1", "::1"}:
+            host = destination
+        elif destination.startswith(("127.", "10.", "192.168.", "169.254.")):
+            host = destination.split("/", 1)[0].split(":", 1)[0]
+    if not host:
+        return False
+    if host.lower() == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_private or ip.is_link_local
+
+
+def _wire_spans(payload: object) -> list[EgressSegment]:
+    if not isinstance(payload, list):
+        return []
+    return [
+        ProvenanceSpan.from_wire(item).to_egress_segment()
+        for item in payload
+    ]
+
+
+def _spans_text(spans: list[EgressSegment]) -> str:
+    return "".join(span.text for span in spans)
+
+
+def _build_egress_request(
+    *,
+    body: dict,
+    rendered_parts: dict[str, str],
+    prompt: str,
+    system_prompt: str | None,
+    destination: str,
+    caller: str,
+    request_id: str,
+) -> tuple[EgressRequest, str]:
+    bundle = body.get("maez_egress_segments")
+    if not isinstance(bundle, dict):
+        return (
+            EgressRequest(
+                call_class="cloud_model_inference",
+                destination=destination,
+                caller=caller,
+                request_id=request_id,
+                segments=[
+                    EgressSegment(
+                        text=prompt,
+                        origin_class="owner_message_context",
+                        source_ref=f"subscription_proxy:{caller}:legacy_prompt",
+                        redaction_allowed=True,
+                    )
+                ],
+            ),
+            "legacy_conservative",
+        )
+
+    declared_destination = bundle.get("destination")
+    joined_text = "\n\n".join(
+        part for part in (system_prompt, prompt) if part
+    )
+    if (
+        (declared_destination and declared_destination != destination)
+        or _is_local_or_private_destination(str(declared_destination or ""))
+    ):
+        return (
+            _blocked_request(
+                destination=destination,
+                caller=caller,
+                request_id=request_id,
+                source_ref="subscription_proxy:destination_mismatch",
+                text=joined_text,
+            ),
+            "span_bundle_invalid",
+        )
+
+    raw_parts = bundle.get("parts")
+    if not isinstance(raw_parts, dict):
+        return (
+            _blocked_request(
+                destination=destination,
+                caller=caller,
+                request_id=request_id,
+                source_ref="subscription_proxy:missing_parts",
+                text=joined_text,
+            ),
+            "span_bundle_invalid",
+        )
+
+    segments: list[EgressSegment] = []
+    expected_keys = {key for key, text in rendered_parts.items() if text}
+    provided_keys = {key for key, value in raw_parts.items() if value}
+    if expected_keys != provided_keys:
+        return (
+            _blocked_request(
+                destination=destination,
+                caller=caller,
+                request_id=request_id,
+                source_ref="subscription_proxy:part_key_mismatch",
+                text=joined_text,
+            ),
+            "span_bundle_invalid",
+        )
+
+    for key, expected_text in rendered_parts.items():
+        if not expected_text:
+            continue
+        part_spans = _wire_spans(raw_parts.get(key))
+        if not part_spans or _spans_text(part_spans) != expected_text:
+            return (
+                _blocked_request(
+                    destination=destination,
+                    caller=caller,
+                    request_id=request_id,
+                    source_ref=f"subscription_proxy:{key}:byte_mismatch",
+                    text=joined_text,
+                ),
+                "span_bundle_invalid",
+            )
+        segments.extend(part_spans)
+
+    return (
+        EgressRequest(
+            call_class="cloud_model_inference",
+            destination=destination,
+            caller=caller,
+            request_id=request_id,
+            segments=segments,
+        ),
+        "span_bundle",
+    )
+
+
+def _safe_prompt_preview(decision) -> str:
+    if decision.decision == "allow":
+        return decision.sanitized_text()[:400]
+    reasons = ",".join(decision.reason_codes) or "not_recorded"
+    return (
+        f"[egress:{decision.decision}:{reasons}:"
+        f"{decision.original_char_count} chars]"
+    )
+
+
+def _safe_reply_preview(reply: str) -> str:
+    return f"[reply:not_recorded:{len(reply)} chars]"
+
+
 # ── FastAPI app ────────────────────────────────────────────────────────
 
 app = FastAPI(
@@ -412,7 +604,9 @@ async def chat_completions(request: Request):
         raise HTTPException(400, "messages required")
 
     system_parts: list[str] = []
-    user_parts: list[str] = []
+    user_prompt_parts: list[str] = []
+    assistant_history_parts: list[str] = []
+    role_history_parts: list[str] = []
     for m in messages:
         role = m.get("role")
         content = m.get("content") or ""
@@ -423,39 +617,51 @@ async def chat_completions(request: Request):
             )
         if role == "system":
             system_parts.append(content)
+        elif role == "user":
+            user_prompt_parts.append(content)
+        elif role == "assistant":
+            assistant_history_parts.append(f"[assistant]\n{content}")
         else:
-            user_parts.append(
-                f"[{role}]\n{content}" if role != "user" else content
-            )
+            role_history_parts.append(f"[{role}]\n{content}")
 
     system_prompt = "\n\n".join(p for p in system_parts if p) or None
-    prompt = "\n\n".join(p for p in user_parts if p).strip()
+    prompt_parts = [
+        *[p for p in assistant_history_parts if p],
+        *[p for p in role_history_parts if p],
+        *[p for p in user_prompt_parts if p],
+    ]
+    prompt = "\n\n".join(prompt_parts).strip()
     if not prompt:
         raise HTTPException(400, "no user/assistant content in messages")
 
     model_in = body.get("model") or ""
     adapter = _route(model_in)
     caller = request.headers.get("x-maez-caller", "unknown")
-    egress_request = EgressRequest(
-        call_class="cloud_model_inference",
+    request_id = f"proxy-{int(time.time() * 1000)}"
+    rendered_parts = {
+        "system": system_prompt or "",
+        "assistant_history": "\n\n".join(
+            p for p in assistant_history_parts if p
+        ),
+        "role_history": "\n\n".join(p for p in role_history_parts if p),
+        "user": "\n\n".join(p for p in user_prompt_parts if p),
+    }
+    egress_request, egress_provenance_mode = _build_egress_request(
+        body=body,
+        rendered_parts=rendered_parts,
+        prompt=prompt,
+        system_prompt=system_prompt,
         destination=f"subscription_proxy:{adapter.name}",
         caller=caller,
-        request_id=f"proxy-{int(time.time() * 1000)}",
-        segments=[
-            EgressSegment(
-                text=prompt,
-                origin_class="owner_message_context",
-                source_ref=f"subscription_proxy:{caller}:prompt",
-                redaction_allowed=True,
-            )
-        ],
+        request_id=request_id,
     )
     egress_decision = decide_egress(egress_request)
     egress_telemetry = decision_to_telemetry(
         egress_decision,
         key=load_or_create_telemetry_key(),
     )
-    prompt_preview = egress_decision.sanitized_text()[:400]
+    prompt_preview = _safe_prompt_preview(egress_decision)
+    reply_preview = ""
 
     result: Optional[CallResult] = None
     async with _budget_lock(adapter.name):
@@ -498,11 +704,17 @@ async def chat_completions(request: Request):
                 egress_reason_codes=",".join(egress_decision.reason_codes),
                 egress_content_digest=egress_telemetry["content_digest"],
                 egress_shadow_mode=True,
+                egress_origin_classes=",".join(
+                    egress_decision.origin_classes
+                ),
+                egress_provenance_mode=egress_provenance_mode,
                 prompt_preview_override=prompt_preview,
+                reply_preview_override=reply_preview,
             )
             raise HTTPException(502, f"{adapter.name} failed: {error_msg}")
 
         duration_s = time.time() - t0
+        reply_preview = _safe_reply_preview(result.reply)
         _record(
             adapter=adapter.name, caller=caller, model=model_in,
             model_used=result.model_used, prompt=prompt, reply=result.reply,
@@ -512,7 +724,10 @@ async def chat_completions(request: Request):
             egress_reason_codes=",".join(egress_decision.reason_codes),
             egress_content_digest=egress_telemetry["content_digest"],
             egress_shadow_mode=True,
+            egress_origin_classes=",".join(egress_decision.origin_classes),
+            egress_provenance_mode=egress_provenance_mode,
             prompt_preview_override=prompt_preview,
+            reply_preview_override=reply_preview,
         )
 
     # Fallback token estimation if adapter didn't provide counts

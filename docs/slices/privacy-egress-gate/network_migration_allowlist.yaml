@@ -30,6 +30,26 @@ entries:
     removal_target: split weather_lookup and generic URL fetch through egress gate
     review_by: "2026-06-12"
     surface_owner: codex
+  - path: skills/claude_router.py
+    symbol: call_claude
+    destination: anthropic_api
+    surface: direct_claude_router
+    category: subprocess_mediated_external
+    status: unmigrated
+    owner_visible_rationale: Direct Claude router bypasses the subscription-proxy egress gate and must remain visible as an enforcement blocker.
+    removal_target: convert to subscription_proxy cloud path before enforcement closure
+    review_by: "2026-06-12"
+    surface_owner: codex
+  - path: core/routing/fast_backend_cloud.py
+    symbol: CloudBackend.generate
+    destination: anthropic_openai_api
+    surface: direct_fast_backend_cloud
+    category: runtime_external
+    status: unmigrated
+    owner_visible_rationale: Fast backend cloud calls bypass claude_tier/proxy provenance plumbing and must remain explicit until converted.
+    removal_target: convert to subscription_proxy cloud path before enforcement closure
+    review_by: "2026-06-12"
+    surface_owner: codex
   - path: daemon/maez_daemon.py
     symbol: llama_server_health_and_websocket
     destination: 127.0.0.1

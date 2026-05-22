@@ -798,7 +798,11 @@ class TestSonnetJudge(unittest.TestCase):
                   max_tokens=80, timeout_s=30.0)
         self.assertEqual(out, "CORRECT — match.")
         self.assertEqual(captured["model"], "sonnet")
-        self.assertEqual(captured["prompt"], "PROMPT")
+        self.assertEqual(captured["prompt"].text, "PROMPT")
+        self.assertEqual(
+            captured["prompt"].spans[0].origin_class,
+            "system_bounded_query",
+        )
         # Caller MUST be tagged so trajectory logs are attributable
         # to the eval, not the unlabeled sentinel.
         self.assertIn("longmemeval", str(captured["caller"]).lower())

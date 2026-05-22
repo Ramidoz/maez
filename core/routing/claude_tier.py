@@ -40,6 +40,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
+from core.egress.provenance import ProvenancedText
+
 logger = logging.getLogger("maez.claude_tier")
 
 PROXY_URL = os.environ.get(
@@ -156,8 +158,8 @@ def can_afford(adapter: str, *, needed_calls: int = 1) -> bool:
 
 def call(
     *,
-    prompt: str,
-    system_prompt: Optional[str] = None,
+    prompt: str | ProvenancedText,
+    system_prompt: Optional[str | ProvenancedText] = None,
     model: str = "sonnet",
     caller: str = DEFAULT_CALLER,
     timeout_s: Optional[float] = None,
@@ -191,14 +193,32 @@ def call(
         raise ClaudeTierBadRequest("empty prompt")
 
     messages: list[dict] = []
+    provenance_parts: dict[str, list[dict]] = {}
     if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
-    body = json.dumps({
+        system_text = (
+            system_prompt.text
+            if isinstance(system_prompt, ProvenancedText)
+            else system_prompt
+        )
+        messages.append({"role": "system", "content": system_text})
+        if isinstance(system_prompt, ProvenancedText):
+            provenance_parts["system"] = system_prompt.to_wire()
+    prompt_text = prompt.text if isinstance(prompt, ProvenancedText) else prompt
+    messages.append({"role": "user", "content": prompt_text})
+    if isinstance(prompt, ProvenancedText):
+        provenance_parts["user"] = prompt.to_wire()
+
+    body_payload = {
         "model": model,
         "messages": messages,
         "stream": False,
-    }).encode("utf-8")
+    }
+    if provenance_parts:
+        body_payload["maez_egress_segments"] = {
+            "schema_version": "maez-egress-provenance-v1",
+            "parts": provenance_parts,
+        }
+    body = json.dumps(body_payload).encode("utf-8")
 
     req = urllib.request.Request(
         f"{PROXY_URL}/v1/chat/completions",

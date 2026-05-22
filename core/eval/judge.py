@@ -155,8 +155,14 @@ def build_sonnet_generate_fn(
         max_tokens: int = 80,  # noqa: ARG001 — proxy decides
         timeout_s: float = 60.0,
     ) -> str:
+        from core.egress.provenance import ProvenancedText
+
+        tagged_prompt = ProvenancedText.system_bounded_query(
+            str(prompt),
+            source_ref="core.eval.judge:sonnet_generate_prompt",
+        )
         reply = call_fn(
-            prompt=prompt,
+            prompt=tagged_prompt,
             model=model_at_close,
             caller=caller,
             timeout_s=timeout_s,

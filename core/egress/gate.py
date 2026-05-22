@@ -157,6 +157,13 @@ def decide_egress(payload: EgressRequest | object) -> EgressDecision:
                 origin_classes=origins,
                 original_char_count=original_chars,
             )
+        if origin == "unclassified":
+            return _block(
+                reason_codes=("unclassified",),
+                request=request,
+                origin_classes=origins,
+                original_char_count=original_chars,
+            )
         if asserted is not None and asserted != origin:
             return _block(
                 reason_codes=("origin_downgrade",),

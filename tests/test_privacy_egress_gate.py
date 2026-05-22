@@ -115,6 +115,38 @@ class PrivacyEgressGateTests(unittest.TestCase):
         self.assertEqual(decision.decision, "allow")
         self.assertEqual(decision.sanitized_text(), "Summarize public weather facts.")
 
+    def test_mixed_public_and_memory_redacts_without_erasing_public_origin(self):
+        from core.egress.gate import EgressRequest, EgressSegment, decide_egress
+
+        req = EgressRequest(
+            call_class="cloud_model_inference",
+            destination="subscription_proxy:claude",
+            caller="test",
+            request_id="req-mixed",
+            segments=[
+                EgressSegment(
+                    text="Public premise. ",
+                    origin_class="public_fact",
+                    source_ref="public:premise",
+                    redaction_allowed=False,
+                ),
+                EgressSegment(
+                    text="Owner said email rohit@example.com.",
+                    origin_class="memory",
+                    source_ref="memory:private",
+                    redaction_allowed=True,
+                ),
+            ],
+        )
+
+        decision = decide_egress(req)
+
+        self.assertEqual(decision.decision, "redact")
+        self.assertIn("minimized_private_context", decision.reason_codes)
+        self.assertEqual(decision.origin_classes, ("public_fact", "memory"))
+        self.assertIn("Public premise.", decision.sanitized_text())
+        self.assertNotIn("rohit@example.com", decision.sanitized_text())
+
     def test_telemetry_never_records_raw_bonded_payload_or_bare_hash(self):
         from core.egress.gate import (
             EgressRequest,

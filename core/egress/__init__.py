@@ -7,11 +7,14 @@ from core.egress.gate import (
     decide_egress,
     decision_to_telemetry,
 )
+from core.egress.provenance import ProvenanceSpan, ProvenancedText
 
 __all__ = [
     "EgressDecision",
     "EgressRequest",
     "EgressSegment",
+    "ProvenanceSpan",
+    "ProvenancedText",
     "decide_egress",
     "decision_to_telemetry",
 ]

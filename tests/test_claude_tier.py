@@ -312,5 +312,60 @@ class CallerHeader(unittest.TestCase):
         self.assertIn("/v1/chat/completions", captured["url"])
 
 
+class ProvenanceBundleTransport(unittest.TestCase):
+    def test_tagged_prompt_and_system_send_role_aware_span_bundle(self):
+        from core import claude_tier
+        from core.egress.provenance import ProvenancedText
+
+        response = _make_response({
+            "choices": [{
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop", "index": 0,
+            }],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            "model": "sonnet",
+        })
+        captured: dict = {}
+
+        def _capture(req, timeout):
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            return response
+
+        system = ProvenancedText.system_bounded_query(
+            "You answer public questions.", source_ref="system:test"
+        )
+        prompt = ProvenancedText.public_fact(
+            "What is the boiling point of water?", source_ref="public:test"
+        )
+
+        with mock.patch("urllib.request.urlopen", side_effect=_capture):
+            reply = claude_tier.call(
+                prompt=prompt,
+                system_prompt=system,
+                caller="provenance-test",
+            )
+
+        self.assertEqual(reply.reply, "ok")
+        body = captured["body"]
+        self.assertEqual(
+            body["messages"],
+            [
+                {"role": "system", "content": system.text},
+                {"role": "user", "content": prompt.text},
+            ],
+        )
+        bundle = body["maez_egress_segments"]
+        self.assertEqual(bundle["schema_version"], "maez-egress-provenance-v1")
+        self.assertEqual(bundle["parts"]["system"][0]["text"], system.text)
+        self.assertEqual(
+            bundle["parts"]["system"][0]["origin_class"],
+            "system_bounded_query",
+        )
+        self.assertEqual(bundle["parts"]["user"][0]["text"], prompt.text)
+        self.assertEqual(
+            bundle["parts"]["user"][0]["origin_class"], "public_fact"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
