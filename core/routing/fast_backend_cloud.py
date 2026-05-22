@@ -10,8 +10,9 @@ protocol in core/fast_backend_router.py.
 Hard contract:
   • Cloud is OFF by default. The router only invokes it if the operator
     explicitly enables cloud fallback via env var.
-  • If credentials are absent, is_available() returns False and generate()
-    returns a clean BackendResult(success=False, error=...) — never raises.
+  • Direct provider credentials are no longer used here. Calls route through
+    core.routing.claude_tier so the subscription proxy egress shadow gate sees
+    every cloud-bound prompt.
   • Maez never sends raw private archives, full memory dumps, soul notes,
     proposal evidence, or any daemon-owned long-term state through this
     backend. The fast prompt builder produces the only payload allowed
@@ -20,8 +21,8 @@ Hard contract:
 Env vars:
   MAEZ_CLOUD_BACKEND_ENABLED   "1" to enable; anything else → disabled
   MAEZ_CLOUD_PROVIDER          "anthropic" (default) | "openai"
-  ANTHROPIC_API_KEY            required if provider=anthropic
-  OPENAI_API_KEY               required if provider=openai
+  ANTHROPIC_API_KEY / OPENAI_API_KEY are not read by this backend; the
+  subscription proxy owns provider credentials.
   MAEZ_CLOUD_MODEL             optional override (defaults below)
 
 Default models are the cheapest current-gen "small" tier — this is the
@@ -40,8 +41,6 @@ from __future__ import annotations
 import os
 import time
 from typing import Optional
-
-import requests
 
 from core.fast_backend_local import BackendResult
 
@@ -93,6 +92,8 @@ def _backend_name_for(provider: str, model: str) -> str:
 
 
 def _api_key_for(provider: str) -> Optional[str]:
+    # Compatibility helper for older imports. Direct provider credentials are
+    # no longer the availability gate for this backend.
     if provider == PROVIDER_ANTHROPIC:
         return os.environ.get('ANTHROPIC_API_KEY')
     if provider == PROVIDER_OPENAI:
@@ -111,9 +112,11 @@ class CloudBackend:
     def is_available(self) -> bool:
         if not _enabled():
             return False
-        if _api_key_for(_provider()) is None:
+        try:
+            from core.routing import claude_tier
+            return claude_tier.is_online()
+        except Exception:
             return False
-        return True
 
     def generate(
         self,
@@ -126,6 +129,7 @@ class CloudBackend:
         model    = _model()
         name     = _backend_name_for(provider, model)
         t0       = time.perf_counter()
+        _ = (max_tokens, temperature)
 
         # Disabled / unconfigured paths — return clean failures, never raise.
         if not _enabled():
@@ -135,14 +139,6 @@ class CloudBackend:
                 error=(
                     f'cloud backend disabled (set {ENV_ENABLED}=1 to enable for staging)'
                 ),
-            )
-
-        api_key = _api_key_for(provider)
-        if api_key is None:
-            return BackendResult(
-                success=False, text='', backend_name=name,
-                model_call_ms=0,
-                error=f'cloud backend missing credentials for provider {provider!r}',
             )
 
         # Defense-in-depth size check
@@ -156,131 +152,29 @@ class CloudBackend:
                 ),
             )
 
-        if provider == PROVIDER_ANTHROPIC:
-            return self._call_anthropic(api_key, model, prompt, max_tokens, temperature, timeout_s, t0, name)
-        if provider == PROVIDER_OPENAI:
-            return self._call_openai(api_key, model, prompt, max_tokens, temperature, timeout_s, t0, name)
+        from core.egress.provenance import ProvenancedText
+        from core.routing import claude_tier
 
+        try:
+            reply = claude_tier.call(
+                prompt=ProvenancedText.owner_message_context(
+                    prompt,
+                    source_ref="core.routing.fast_backend_cloud:prompt",
+                ),
+                model=model,
+                caller="fast_backend_cloud/generate",
+                timeout_s=timeout_s,
+            )
+        except Exception as e:
+            return BackendResult(
+                success=False, text='', backend_name=name,
+                model_call_ms=int((time.perf_counter() - t0) * 1000),
+                error=f'proxy cloud call failed: {e!r}',
+            )
         return BackendResult(
-            success=False, text='', backend_name=name,
+            success=True, text=reply.reply.strip(), backend_name=name,
             model_call_ms=int((time.perf_counter() - t0) * 1000),
-            error=f'unknown provider {provider!r}',
-        )
-
-    # ── provider implementations ──
-    @staticmethod
-    def _call_anthropic(
-        api_key: str, model: str, prompt: str,
-        max_tokens: int, temperature: float, timeout_s: float,
-        t0: float, name: str,
-    ) -> BackendResult:
-        try:
-            resp = requests.post(
-                'https://api.anthropic.com/v1/messages',
-                headers={
-                    'x-api-key': api_key,
-                    'anthropic-version': '2023-06-01',
-                    'content-type': 'application/json',
-                },
-                json={
-                    'model': model,
-                    'max_tokens': max_tokens,
-                    'temperature': temperature,
-                    'messages': [{'role': 'user', 'content': prompt}],
-                },
-                timeout=timeout_s,
-            )
-        except requests.Timeout:
-            return BackendResult(
-                success=False, text='', backend_name=name,
-                model_call_ms=int((time.perf_counter() - t0) * 1000),
-                error=f'anthropic timeout after {timeout_s:.1f}s',
-            )
-        except Exception as e:
-            return BackendResult(
-                success=False, text='', backend_name=name,
-                model_call_ms=int((time.perf_counter() - t0) * 1000),
-                error=f'anthropic call failed: {e!r}',
-            )
-
-        elapsed_ms = int((time.perf_counter() - t0) * 1000)
-        if resp.status_code != 200:
-            return BackendResult(
-                success=False, text='', backend_name=name,
-                model_call_ms=elapsed_ms, raw_status=resp.status_code,
-                error=f'anthropic returned {resp.status_code}: {resp.text[:200]}',
-            )
-        try:
-            body = resp.json()
-            # Anthropic Messages API: content is a list of blocks
-            text = ''
-            for block in body.get('content') or []:
-                if block.get('type') == 'text':
-                    text += block.get('text', '')
-        except Exception as e:
-            return BackendResult(
-                success=False, text='', backend_name=name,
-                model_call_ms=elapsed_ms, raw_status=resp.status_code,
-                error=f'anthropic response parse failed: {e!r}',
-            )
-        return BackendResult(
-            success=True, text=text.strip(), backend_name=name,
-            model_call_ms=elapsed_ms, raw_status=resp.status_code,
-        )
-
-    @staticmethod
-    def _call_openai(
-        api_key: str, model: str, prompt: str,
-        max_tokens: int, temperature: float, timeout_s: float,
-        t0: float, name: str,
-    ) -> BackendResult:
-        try:
-            resp = requests.post(
-                'https://api.openai.com/v1/chat/completions',
-                headers={
-                    'authorization': f'Bearer {api_key}',
-                    'content-type': 'application/json',
-                },
-                json={
-                    'model': model,
-                    'max_tokens': max_tokens,
-                    'temperature': temperature,
-                    'messages': [{'role': 'user', 'content': prompt}],
-                },
-                timeout=timeout_s,
-            )
-        except requests.Timeout:
-            return BackendResult(
-                success=False, text='', backend_name=name,
-                model_call_ms=int((time.perf_counter() - t0) * 1000),
-                error=f'openai timeout after {timeout_s:.1f}s',
-            )
-        except Exception as e:
-            return BackendResult(
-                success=False, text='', backend_name=name,
-                model_call_ms=int((time.perf_counter() - t0) * 1000),
-                error=f'openai call failed: {e!r}',
-            )
-
-        elapsed_ms = int((time.perf_counter() - t0) * 1000)
-        if resp.status_code != 200:
-            return BackendResult(
-                success=False, text='', backend_name=name,
-                model_call_ms=elapsed_ms, raw_status=resp.status_code,
-                error=f'openai returned {resp.status_code}: {resp.text[:200]}',
-            )
-        try:
-            body = resp.json()
-            text = body['choices'][0]['message']['content']
-        except Exception as e:
-            return BackendResult(
-                success=False, text='', backend_name=name,
-                model_call_ms=elapsed_ms, raw_status=resp.status_code,
-                error=f'openai response parse failed: {e!r}',
-            )
-        return BackendResult(
-            success=True, text=text.strip(), backend_name=name,
-            model_call_ms=elapsed_ms, raw_status=resp.status_code,
+            raw_status=200,
         )
 
     def __repr__(self) -> str:

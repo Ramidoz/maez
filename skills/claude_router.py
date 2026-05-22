@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import threading
 import time
@@ -145,58 +144,57 @@ def jarvis_tier_enabled(user_profile_id: str | None) -> bool:
     return bool((profiles.get("defaults") or {}).get("jarvis_tier", False))
 
 
-# ── Claude API client ─────────────────────────────────────────────────
-_anthropic_client = None
-_client_lock = threading.Lock()
-
-
-def _get_client():
-    global _anthropic_client
-    if _anthropic_client is None:
-        with _client_lock:
-            if _anthropic_client is None:
-                import anthropic
-                key = os.environ.get("ANTHROPIC_API_KEY")
-                if not key:
-                    raise RuntimeError("ANTHROPIC_API_KEY not set in env")
-                _anthropic_client = anthropic.Anthropic(api_key=key)
-    return _anthropic_client
-
-
 def call_claude(system: str, messages: list[dict], tier: str,
                 max_tokens: int = 4096) -> dict[str, Any]:
-    """Call Claude API. Returns {content, model, usage, latency_s}.
+    """Call Claude through Maez's subscription proxy.
 
-    Raises on failure — caller handles fallback.
+    Returns {content, model, usage, latency_s}. Raises on failure so
+    the caller can fall back local. The direct Anthropic SDK path was
+    retired by #3 egress direct-route closure; cloud traffic must cross
+    the subscription-proxy provenance/shadow gate.
     """
-    client = _get_client()
-    model = MODEL_OPUS if tier == "opus" else MODEL_SONNET
+    from core.egress.provenance import ProvenancedText
+    from core.routing import claude_tier
 
-    # Anthropic SDK takes system separately, not in messages.
-    api_messages = [m for m in messages if m.get("role") != "system"]
+    model = "opus" if tier == "opus" else "sonnet"
+    prompt_parts: list[str] = []
+    for message in messages:
+        role = message.get("role")
+        if role == "system":
+            continue
+        content = str(message.get("content") or "")
+        if role == "user":
+            prompt_parts.append(content)
+        else:
+            prompt_parts.append(f"[{role}]\n{content}")
+    prompt = "\n\n".join(part for part in prompt_parts if part).strip()
+    if not prompt:
+        prompt = "(empty external route prompt)"
 
     t0 = time.time()
-    resp = client.messages.create(
+    reply = claude_tier.call(
+        prompt=ProvenancedText.owner_message_context(
+            prompt,
+            source_ref="skills.claude_router:messages",
+        ),
+        system_prompt=ProvenancedText.system_bounded_query(
+            system,
+            source_ref="skills.claude_router:system",
+        ),
         model=model,
-        system=system,
-        messages=api_messages,
-        max_tokens=max_tokens,
+        caller="claude_router/call_claude",
     )
     dt = time.time() - t0
 
-    # Concatenate text blocks.
-    parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
-    text = "\n".join(parts).strip()
-
     return {
-        "content": text,
-        "model": model,
+        "content": reply.reply,
+        "model": reply.model_used,
         "usage": {
-            "input_tokens": resp.usage.input_tokens,
-            "output_tokens": resp.usage.output_tokens,
+            "input_tokens": reply.input_tokens,
+            "output_tokens": reply.output_tokens,
         },
         "latency_s": round(dt, 2),
-        "stop_reason": resp.stop_reason,
+        "stop_reason": None,
     }
 
 

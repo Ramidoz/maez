@@ -39,7 +39,7 @@ class PrivacyEgressInventoryTests(unittest.TestCase):
             })
             self.assertNotEqual(entry["status"], "migrated")
 
-    def test_direct_cloud_routes_are_explicit_unmigrated_blockers(self):
+    def test_direct_cloud_routes_are_not_unmigrated_after_closure(self):
         path = Path("docs/slices/privacy-egress-gate/network_migration_allowlist.yaml")
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
         entries = {
@@ -52,8 +52,8 @@ class PrivacyEgressInventoryTests(unittest.TestCase):
             ("core/routing/fast_backend_cloud.py", "CloudBackend.generate"),
         ):
             self.assertIn(key, entries)
-            self.assertEqual(entries[key]["status"], "unmigrated")
-            self.assertIn("enforcement", entries[key]["removal_target"])
+            self.assertNotEqual(entries[key]["status"], "unmigrated")
+            self.assertIn("proxy", entries[key]["removal_target"])
 
 
 if __name__ == "__main__":
