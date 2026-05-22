@@ -811,7 +811,8 @@ class ActionEngine:
                         reasoning: str, tier: int,
                         action_id: str = "",
                         s7_authorized: bool = False,
-                        s7_execution_grant: object = None) -> ActionResult:
+                        s7_execution_grant: object = None,
+                        s7_authorization_params: dict | None = None) -> ActionResult:
         """Execute a single action with full safety and logging."""
         del s7_authorized
         start = time.time()
@@ -823,7 +824,11 @@ class ActionEngine:
         # Session 11z: deterministic covenant gate runs BEFORE the
         # audit LLM (item 3 of Project A). Survival instincts first.
         try:
-            self._s7_invocation_gate(action, params, s7_execution_grant=s7_execution_grant)
+            self._s7_invocation_gate(
+                action,
+                s7_authorization_params if s7_authorization_params is not None else params,
+                s7_execution_grant=s7_execution_grant,
+            )
             self._covenant_gate(action, params)
         except ForbiddenActionError as e:
             self._log_action(tier, action, reasoning, params, f"COVENANT_REFUSED: {e}")

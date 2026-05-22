@@ -38,10 +38,41 @@ class _CountingActionEngine:
         tier: int,
         s7_authorized: bool = False,
         s7_execution_grant: object = None,
+        s7_authorization_params: dict | None = None,
     ):
-        del s7_authorized, s7_execution_grant
+        del s7_authorized, s7_execution_grant, s7_authorization_params
         self.calls.append((action, dict(params or {}), reason, tier))
         return SimpleNamespace(success=self.success, output=self.output, error=self.error)
+
+
+class _S7CheckingActionEngine(_CountingActionEngine):
+    def _execute_action(
+        self,
+        action: str,
+        params: dict,
+        reason: str,
+        *,
+        tier: int,
+        s7_authorized: bool = False,
+        s7_execution_grant: object = None,
+        s7_authorization_params: dict | None = None,
+    ):
+        del s7_authorized
+        from core.governance import operator_user_boundary as s7
+
+        authorized = s7.consume_execution_grant_for_action(
+            s7_execution_grant,
+            action=action,
+            params=s7_authorization_params if s7_authorization_params is not None else params,
+        )
+        self.calls.append((action, dict(params or {}), reason, tier))
+        if not authorized:
+            return SimpleNamespace(
+                success=False,
+                output="",
+                error="S7 authorization required before direct write_any_file invocation",
+            )
+        return SimpleNamespace(success=True, output="executed", error="")
 
 
 class _S7RouteVerifier:
@@ -815,6 +846,51 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
         self.assertIsNotNone(fresh_dialog)
         assert fresh_dialog is not None
         self.assertEqual(fresh_dialog.stage, "blocked")
+
+    def test_s7_execution_grant_uses_unstripped_params_while_engine_receives_stripped_params(self):
+        target = self.root / "proof" / "fake-protected" / "soul.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("# before", encoding="utf-8")
+        params = {
+            "path": str(target),
+            "content": "# after",
+            "s7_expected_post_mutation_hash": "0" * 64,
+        }
+        card = self._card(params=params)
+        authorization = self._authorization_bundle(card)
+        dialog = self._open_dialog(
+            card,
+            require_s7_linkage=True,
+            request_hash=authorization.rendered.request_envelope_hash,
+        )
+        self.pipeline.action_engine = _S7CheckingActionEngine()
+        with patch.object(
+            _dp,
+            "_preflight_s7_expected_post_mutation_hash",
+            return_value=(True, ""),
+        ), patch.object(
+            _dp,
+            "_verify_s7_expected_post_mutation_hash",
+            return_value=(True, ""),
+        ):
+            result = self.pipeline._handle_dialog_reply_for_card(
+                card=card,
+                text="yes",
+                user_id="rohit",
+                s7_execution_authorization=authorization,
+            )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.status.value, "executed")
+        self.assertTrue(result.execution_success)
+        engine = self.pipeline.action_engine
+        self.assertEqual(len(engine.calls), 1)
+        self.assertNotIn("s7_expected_post_mutation_hash", engine.calls[0][1])
+        fresh_dialog = self.dialog_store.get(dialog.dialog_id)
+        self.assertIsNotNone(fresh_dialog)
+        assert fresh_dialog is not None
+        self.assertEqual(fresh_dialog.stage, "executed")
 
     def test_target_state_change_after_s7_consumption_expires_before_execution(self):
         target = self.root / "config" / "soul.md"

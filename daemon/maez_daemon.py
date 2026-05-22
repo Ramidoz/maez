@@ -397,6 +397,9 @@ def _s7_authorization_route_material(
         credential_ref = _s7_single_enabled_primary_credential_ref(store) or ""
     if not credential_ref and allow_degraded_backup_only:
         credential_ref = _s7_single_enabled_backup_credential_ref(store) or ""
+    if not credential_ref:
+        allowed_credentials = store.allow_credentials_for_authorization()
+        credential_ref = allowed_credentials[0] if allowed_credentials else ""
 
     envelope = pipe._s7_request_envelope_for_card(card)
     maez_voice_consultation = _s7_route_voice_consultation(pipe, card, envelope)
@@ -428,6 +431,7 @@ def _s7_authorization_route_material(
         f"{request_id}|{now}|{session_binding}".encode("utf-8")
     ).hexdigest())
     expires_at = str((challenge or {}).get("expires_at") or _s7_route_expires_at(now))
+    rendered_at = str((challenge or {}).get("created_at") or now)
     authority_context = _s7_route_authority_context(
         envelope.created_at,
         expires_at=expires_at,
@@ -444,7 +448,7 @@ def _s7_authorization_route_material(
         maez_voice_consultation=maez_voice_consultation,
         nonce=nonce,
         expires_at=expires_at,
-        rendered_at=now,
+        rendered_at=rendered_at,
     )
     return _s7_route_material(
         card=card,
@@ -483,18 +487,6 @@ def _s7_voice_source_validation_for_material(
     bundle_store = S7VoiceConsultationBundleStore(store.db_path)
     bundle_use_store = S7VoiceBundleUseStore(store.db_path)
     attempt_store = S7SemanticReaderAttemptStore(store.db_path)
-    persister = getattr(material.kwargs.get("pipe"), "_persist_s7_voice_source_bundle_for_card", None)
-    if callable(persister):
-        persister(
-            card=material.kwargs["card"],
-            db_path=store.db_path,
-            rendered_statement=material.kwargs["rendered_statement"],
-            envelope=material.kwargs["envelope"],
-            maez_voice_consultation=material.kwargs["maez_voice_consultation"],
-            authority_context=material.kwargs["authority_context"],
-            precondition_hash=material.kwargs["precondition_hash"],
-            now=now,
-        )
     binding = derive_s7_voice_source_bundle_hash_binding(
         rendered_statement=material.kwargs["rendered_statement"],
         envelope=material.kwargs["envelope"],
@@ -526,6 +518,27 @@ def _s7_voice_source_validation_for_material(
         source_ref_hash=binding.source_ref_hash,
         reservation_token=reservation_token,
     )
+
+
+def _s7_persist_voice_source_bundle_for_material(
+    *,
+    store: S7WebAuthnBootstrapStore,
+    material,
+    now: str,
+) -> bool:
+    persister = getattr(material.kwargs.get("pipe"), "_persist_s7_voice_source_bundle_for_card", None)
+    if not callable(persister):
+        return False
+    return persister(
+        card=material.kwargs["card"],
+        db_path=store.db_path,
+        rendered_statement=material.kwargs["rendered_statement"],
+        envelope=material.kwargs["envelope"],
+        maez_voice_consultation=material.kwargs["maez_voice_consultation"],
+        authority_context=material.kwargs["authority_context"],
+        precondition_hash=material.kwargs["precondition_hash"],
+        now=now,
+    ) is not None
 
 
 def _s7_founder_visible_voice_payload_for_material(material):
@@ -578,17 +591,31 @@ def _s7_founder_visible_voice_payload_for_material(material):
     return payload
 
 
-def _s7_founder_seen_voice_hash_valid(material) -> bool:
+def _s7_founder_seen_voice_hash_valid(material, *, store: S7WebAuthnBootstrapStore | None = None) -> bool:
     request_json = material.kwargs.get("request_json") or {}
     if not isinstance(request_json, dict):
-        return False
-    payload = _s7_founder_visible_voice_payload_for_material(material)
-    if not payload.get("maez_voice_raw_response_hash"):
         return False
     seen_hash = str(request_json.get("maez_voice_raw_response_hash") or "")
     if not seen_hash:
         return False
+    if store is not None:
+        try:
+            consultation = material.kwargs.get("maez_voice_consultation")
+            source_ref_hash = getattr(consultation, "source_ref_hash", None)
+            if isinstance(source_ref_hash, str) and source_ref_hash:
+                from core.governance.s7_guarded_execution import S7VoiceConsultationBundleStore
+
+                bundle_store = S7VoiceConsultationBundleStore(store.db_path)
+                bundle = bundle_store.get_for_source_ref(source_ref_hash)
+                if bundle is not None and bundle.raw_response_hash:
+                    return seen_hash == bundle.raw_response_hash
+        except Exception:
+            return False
+    payload = _s7_founder_visible_voice_payload_for_material(material)
+    if not payload.get("maez_voice_raw_response_hash"):
+        return False
     return seen_hash == payload.get("maez_voice_raw_response_hash")
+
 
 
 def _s7_backup_registration_authorization(daemon, req, *, now: str, store: S7WebAuthnBootstrapStore):
@@ -6430,6 +6457,18 @@ class MaezDaemon:
                     and material.kwargs["envelope"].derived_work_class
                     in VOICE_SEAT_WORK_CLASSES
                 ):
+                    if not _s7_persist_voice_source_bundle_for_material(
+                        store=store,
+                        material=material,
+                        now=now,
+                    ):
+                        return jsonify(
+                            {
+                                "ok": False,
+                                "error": "s7_guarded_source_bundle_required",
+                                "detail": "source_bundle_unavailable",
+                            }
+                        ), 409
                     result.body.update(_s7_founder_visible_voice_payload_for_material(material))
                 return jsonify(result.body), result.status_code
             return jsonify(
@@ -6460,7 +6499,7 @@ class MaezDaemon:
                     material.kwargs["envelope"].derived_work_class
                     in VOICE_SEAT_WORK_CLASSES
                 ):
-                    if not _s7_founder_seen_voice_hash_valid(material):
+                    if not _s7_founder_seen_voice_hash_valid(material, store=store):
                         return jsonify(
                             {
                                 "ok": False,

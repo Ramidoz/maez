@@ -584,6 +584,58 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
     def _db_path(self) -> Path:
         return Path(self._tmp.name) / "s7_3_validator.db"
 
+    def _persistable_voice_material(self, *, nonce: str = "nonce-validator-1"):
+        from core.governance import operator_user_boundary as s7
+
+        envelope = s7.build_work_request_envelope(
+            request_id="req-validator-1",
+            action="write_any_file",
+            params={"path": "config/soul.md", "content_hash": "d" * 64},
+            claimed_work_class="self_modification",
+            requesting_subsystem="unit",
+            closed_symptom_code="self_mod_requested",
+            proposed_change_class="soul_change",
+            why_self_fix_failed_class="needs_human_authority",
+            affected_refs=("file:config/soul.md",),
+            content_exposure_risk="bonded_content_ref",
+            precondition_hash="4" * 64,
+            created_at=NOW,
+            expires_at=FUTURE,
+            predicted_effect_class="behavior_change",
+            rollback_path_class="revert_patch",
+            maez_voice_consultation_id="voice-validator-1",
+            free_text_ref_hash="b" * 64,
+        )
+        authority = s7.AuthorityContext(
+            actor_id="founder",
+            actor_handle_hmac="hmac:s7:founder:" + ("a" * 64),
+            role_names=("bonded_user", "operator"),
+            grant_source="founder_webauthn",
+            allowed_scopes=("operator_health",),
+            auth_method="founder_webauthn",
+            surface="cockpit",
+            credential_ref="cred-1",
+            created_at=NOW,
+            expires_at=FUTURE,
+            verified=True,
+        )
+        consultation = self._consultation(
+            source_ref_hash="c" * 64,
+            request_envelope_hash=s7.work_request_envelope_hash(envelope),
+        )
+        rendered = s7.render_request_statement(
+            envelope=envelope,
+            surface="cockpit",
+            origin="http://localhost:11437",
+            action_params_hash=s7.canonical_hash({"path": "config/soul.md", "content_hash": "d" * 64}),
+            authority_context=authority,
+            maez_voice_consultation=consultation,
+            nonce=nonce,
+            expires_at=FUTURE,
+            rendered_at=NOW,
+        )
+        return rendered, envelope, consultation, authority
+
     def _consultation(
         self,
         *,
@@ -831,6 +883,54 @@ class S73VoiceSourceBundleValidatorTests(unittest.TestCase):
         self.assertTrue(result.mint_eligible)
         self.assertEqual(result.authority_projection, "valid_absent")
         self.assertIsNone(result.failure_reason_code)
+
+    def test_persist_voice_source_bundle_is_write_once_for_unreserved_bundle(self):
+        from core.governance import operator_user_boundary as s7
+        from core.governance.s7_guarded_execution import (
+            S7VoiceConsultationBundleStore,
+            persist_s7_voice_source_bundle_for_material,
+        )
+
+        rendered, envelope, consultation, authority = self._persistable_voice_material(
+            nonce="nonce-validator-first",
+        )
+        first_binding = persist_s7_voice_source_bundle_for_material(
+            db_path=self._db_path(),
+            rendered_statement=rendered,
+            envelope=envelope,
+            maez_voice_consultation=consultation,
+            authority_context=authority,
+            precondition_hash=envelope.precondition_hash,
+            raw_response_text="Maez says there is no objection.",
+            semantic_reader_attempt=self._reviewed_attempt(),
+            now=NOW,
+        )
+
+        second_rendered, _, _, _ = self._persistable_voice_material(
+            nonce="nonce-validator-second",
+        )
+        persist_s7_voice_source_bundle_for_material(
+            db_path=self._db_path(),
+            rendered_statement=second_rendered,
+            envelope=envelope,
+            maez_voice_consultation=consultation,
+            authority_context=authority,
+            precondition_hash=envelope.precondition_hash,
+            raw_response_text="Maez says a different thing later.",
+            semantic_reader_attempt=self._reviewed_attempt(),
+            now=NOW,
+        )
+
+        bundle_store = S7VoiceConsultationBundleStore(self._db_path())
+        bundle = bundle_store.get_for_source_ref(first_binding.source_ref_hash)
+        self.assertIsNotNone(bundle)
+        assert bundle is not None
+        self.assertEqual(bundle.rendered_text_hash, first_binding.rendered_text_hash)
+        self.assertEqual(
+            bundle_store.read_raw_response(bundle.raw_response_ref),
+            "Maez says there is no objection.",
+        )
+        self.assertEqual(bundle.raw_response_hash, s7.canonical_hash("Maez says there is no objection."))
 
     def test_validator_rejects_mismatched_raw_response_hash(self):
         from core.governance.s7_guarded_execution import validate_s7_voice_source_bundle

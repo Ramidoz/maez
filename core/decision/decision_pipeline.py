@@ -1789,6 +1789,7 @@ class DecisionPipeline:
                 card.action, engine_execute_params,
                 f"card:{card.request_id}", tier=0,
                 s7_execution_grant=execution_grant if s7_required else None,
+                s7_authorization_params=execute_params if s7_required else None,
             )
             ok = bool(getattr(result, "success", False))
             out = str(getattr(result, "output", "") or "")
