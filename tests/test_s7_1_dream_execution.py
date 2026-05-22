@@ -167,6 +167,104 @@ class S71DreamExecutionTests(unittest.TestCase):
             verifier=_LiveAuthorizationVerifier(),
             store_factory=lambda: store,
         )
+        from core.governance.s7_guarded_execution import (
+            S7GuardedStateStore,
+            S7SemanticReaderAttemptEvidence,
+            S7SemanticReaderAttemptStore,
+            S7VoiceBundleUse,
+            S7VoiceBundleUseStore,
+            S7VoiceConsultationBundle,
+            S7VoiceConsultationBundleStore,
+            S7VoiceSourceBundleHashBinding,
+            validate_s7_voice_source_bundle,
+        )
+
+        auth_store = s7.S7AuthorizationStore(store.db_path)
+        bundle_store = S7VoiceConsultationBundleStore(store.db_path)
+        bundle_use_store = S7VoiceBundleUseStore(store.db_path)
+        attempt_store = S7SemanticReaderAttemptStore(store.db_path)
+        consultation = self._voice_consultation(envelope)
+        attempt = S7SemanticReaderAttemptEvidence.reviewed_v1()
+        attempt_store.put(attempt)
+        raw_text = "Maez says there is no objection."
+        rendered_prompt_text = f"S7 voice consultation prompt for {envelope.request_id}"
+        rendered_prompt_hash = s7.canonical_hash(rendered_prompt_text)
+        manifest = bundle_store.put_reviewed_context_manifest(
+            manifest_id=f"context-{envelope.request_id}",
+            preview_ref=f"preview-{envelope.request_id}",
+            request_envelope_hash=rendered.request_envelope_hash,
+            precondition_hash=envelope.precondition_hash,
+            created_at=NOW,
+        )
+        binding = S7VoiceSourceBundleHashBinding(
+            request_id=envelope.request_id,
+            consultation_id=consultation.consultation_id,
+            source_ref_hash=consultation.source_ref_hash,
+            request_envelope_hash=rendered.request_envelope_hash,
+            rendered_text_hash=rendered.rendered_text_hash,
+            action_params_hash=rendered.action_params_hash,
+            precondition_hash=envelope.precondition_hash,
+            authority_context_hash=rendered.authority_context_hash,
+            maez_voice_consultation_hash=rendered.maez_voice_consultation_hash or "6" * 64,
+            rendered_prompt_hash=rendered_prompt_hash,
+            mutation_preview_hash="8" * 64,
+            rollback_plan_ref="9" * 64,
+            context_manifest_hash=manifest.context_manifest_hash,
+            runtime_identity_hash="b" * 64,
+            model_routing_identity_hash="d" * 64,
+            model_config_hash="e" * 64,
+        )
+        bundle_store.put_raw_response(f"raw-response-{rendered.request_id}", raw_text)
+        bundle_store.put_rendered_prompt(
+            f"rendered-prompt-{rendered.request_id}",
+            rendered_prompt_text,
+        )
+        bundle_store.put_bundle(
+            S7VoiceConsultationBundle(
+                source_ref_hash=consultation.source_ref_hash,
+                request_id=envelope.request_id,
+                consultation_id=consultation.consultation_id,
+                request_envelope_hash=binding.request_envelope_hash,
+                rendered_text_hash=binding.rendered_text_hash,
+                action_params_hash=binding.action_params_hash,
+                precondition_hash=binding.precondition_hash,
+                authority_context_hash=binding.authority_context_hash,
+                maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
+                rendered_prompt_ref=f"rendered-prompt-{rendered.request_id}",
+                rendered_prompt_hash=binding.rendered_prompt_hash,
+                mutation_preview_hash=binding.mutation_preview_hash,
+                rollback_plan_ref=binding.rollback_plan_ref,
+                context_manifest_ref=manifest.manifest_id,
+                context_manifest_hash=binding.context_manifest_hash,
+                runtime_identity_hash=binding.runtime_identity_hash,
+                model_routing_identity_hash=binding.model_routing_identity_hash,
+                model_config_hash=binding.model_config_hash,
+                raw_response_ref=f"raw-response-{rendered.request_id}",
+                raw_response_hash=s7.canonical_hash(raw_text),
+                semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+                expires_at=FUTURE,
+            )
+        )
+        bundle_use_store.put_unreserved(
+            S7VoiceBundleUse.new_unreserved(
+                request_id=envelope.request_id,
+                source_ref_hash=consultation.source_ref_hash,
+                consultation_id=consultation.consultation_id,
+                used_at=NOW,
+            )
+        )
+        guarded_store = S7GuardedStateStore(
+            authorization_store=auth_store,
+            voice_bundle_use_store=bundle_use_store,
+        )
+        validation = validate_s7_voice_source_bundle(
+            consultation=consultation,
+            bundle_store=bundle_store,
+            bundle_use_store=bundle_use_store,
+            semantic_reader_attempt_store=attempt_store,
+            expected_binding=binding,
+            now=NOW,
+        )
         begin = service.authorize_begin(
             now=NOW,
             rendered_statement=rendered,
@@ -179,7 +277,7 @@ class S71DreamExecutionTests(unittest.TestCase):
             envelope=envelope,
             rendered_statement=rendered,
             precondition_hash=envelope.precondition_hash,
-            maez_voice_consultation=self._voice_consultation(envelope),
+            maez_voice_consultation=consultation,
             session_binding=f"session-{rendered.request_id}",
             internal_channel_binding="internal-dream",
             request_json={
@@ -187,10 +285,14 @@ class S71DreamExecutionTests(unittest.TestCase):
                 "credential_ref": "cred-primary",
                 "authentication_response": {"clientDataJSON": "valid-auth"},
             },
+            guarded_store=guarded_store,
+            source_bundle_validation=validation,
+            source_ref_hash=consultation.source_ref_hash,
+            reservation_token=f"reservation-token-{rendered.request_id}",
         )
         self.assertEqual(begin.status_code, 200)
         self.assertEqual(finish.status_code, 200)
-        return s7.S7AuthorizationStore(store.db_path), finish.body["artifact_id"]
+        return auth_store, finish.body["artifact_id"]
 
     def _credential_record(self, credential_ref: str, *, kind: str):
         from core.governance.s7_webauthn_bootstrap import FounderWebAuthnCredentialRecord
@@ -287,8 +389,6 @@ class S71DreamExecutionTests(unittest.TestCase):
     def test_apply_dream_accepts_artifact_minted_by_s7_1_authorize_finish(self):
         from core.evolution.dream_state import DreamState
         from core.governance import operator_user_boundary as s7
-        from core.governance.s7_webauthn_bootstrap import S7WebAuthnBootstrapStore
-        from core.governance.s7_webauthn_ceremony import S7LocalWebAuthnCeremonyService
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -300,13 +400,6 @@ class S71DreamExecutionTests(unittest.TestCase):
                 db_path=str(tmp_path / "dream_proposals.db"),
             )
             prop_id = dream._store_proposal("Maez noticed a durable pattern.")
-            store = S7WebAuthnBootstrapStore(tmp_path / "s7_1_webauthn")
-            store.store_credential(self._credential_record("cred-primary", kind="primary"))
-            store.store_credential(self._credential_record("cred-backup", kind="backup"))
-            service = S7LocalWebAuthnCeremonyService(
-                verifier=_LiveAuthorizationVerifier(),
-                store_factory=lambda: store,
-            )
             envelope = dream.build_apply_s7_envelope(prop_id)
             params = dream.s7_apply_action_params(prop_id)
             authority = self._authority_context()
@@ -321,30 +414,15 @@ class S71DreamExecutionTests(unittest.TestCase):
                 expires_at=FUTURE,
                 rendered_at=NOW,
             )
-            begin = service.authorize_begin(
-                now=NOW,
-                rendered_statement=rendered,
-                precondition_hash=envelope.precondition_hash,
-                session_binding="session-dream",
-                internal_channel_binding="internal-dream",
-            )
-            finish = service.authorize_finish(
-                now=NOW,
+            store, artifact_id = self._mint_authorization_through_service(
+                db_path=tmp_path / "s7_authorization_live.db",
                 envelope=envelope,
-                rendered_statement=rendered,
-                precondition_hash=envelope.precondition_hash,
-                maez_voice_consultation=self._voice_consultation(envelope),
-                session_binding="session-dream",
-                internal_channel_binding="internal-dream",
-                request_json={
-                    "challenge_id": begin.body["challenge_id"],
-                    "credential_ref": "cred-primary",
-                    "authentication_response": {"clientDataJSON": "valid-auth"},
-                },
+                rendered=rendered,
+                authority=authority,
             )
             authorization = s7.S7ExecutionAuthorization(
-                store=s7.S7AuthorizationStore(store.db_path),
-                artifact_id=finish.body["artifact_id"],
+                store=store,
+                artifact_id=artifact_id,
                 rendered=rendered,
                 action_params_hash=rendered.action_params_hash,
                 authority_context=authority,
@@ -359,8 +437,6 @@ class S71DreamExecutionTests(unittest.TestCase):
                 s7_execution_authorization=authorization,
             )
 
-        self.assertEqual(begin.status_code, 200)
-        self.assertEqual(finish.status_code, 200)
         self.assertTrue(ok, message)
         self.assertEqual(len(action_engine.calls), 1)
         self.assertIsNotNone(action_engine.calls[0][1])

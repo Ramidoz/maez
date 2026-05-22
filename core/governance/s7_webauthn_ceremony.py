@@ -500,6 +500,10 @@ class S7LocalWebAuthnCeremonyService:
         session_binding: str,
         internal_channel_binding: str,
         request_json: dict[str, Any] | None,
+        guarded_store: Any | None = None,
+        source_bundle_validation: Any | None = None,
+        source_ref_hash: str | None = None,
+        reservation_token: str | None = None,
     ) -> S7CeremonyServiceResult:
         dependency = self.verifier.dependency_state()
         if dependency.get("ok") is not True:
@@ -532,6 +536,44 @@ class S7LocalWebAuthnCeremonyService:
             precondition_hash=precondition_hash,
         ):
             return _d12_binding_mismatch()
+        from core.governance import operator_user_boundary as s7
+
+        if (
+            getattr(envelope, "derived_work_class", None) in s7.VOICE_SEAT_WORK_CLASSES
+            and guarded_store is not None
+        ):
+            from core.governance.s7_guarded_execution import (
+                S7VoiceSourceBundleValidationResult,
+            )
+
+            source_bundle_ok = (
+                isinstance(source_bundle_validation, S7VoiceSourceBundleValidationResult)
+                and (
+                    (
+                        source_bundle_validation.status == "valid_absent"
+                        and source_bundle_validation.source_bundle_valid is True
+                        and source_bundle_validation.mint_eligible is True
+                        and source_bundle_validation.authority_projection == "valid_absent"
+                        and source_bundle_validation.failure_reason_code is None
+                    )
+                    or (
+                        source_bundle_validation.status == "blocking_present"
+                        and source_bundle_validation.source_bundle_valid is True
+                        and source_bundle_validation.mint_eligible is False
+                        and source_bundle_validation.authority_projection == "grounded_refusal"
+                        and source_bundle_validation.failure_reason_code is None
+                    )
+                )
+            )
+            if source_bundle_ok is not True:
+                return S7CeremonyServiceResult(
+                    body={
+                        "ok": False,
+                        "error": "s7_guarded_source_bundle_required",
+                        "detail": "S7.3 voice-seat work requires validator-produced source-bundle evidence",
+                    },
+                    status_code=409,
+                )
         voice = authorization_voice_seat_recheck(
             envelope=envelope,
             maez_voice_consultation=maez_voice_consultation,
@@ -613,8 +655,6 @@ class S7LocalWebAuthnCeremonyService:
                 status_code=410,
             )
 
-        from core.governance import operator_user_boundary as s7
-
         artifact_id = f"s7authz_{uuid.uuid4().hex}"
         artifact = s7.S7AuthorizationArtifact(
             artifact_id=artifact_id,
@@ -636,7 +676,34 @@ class S7LocalWebAuthnCeremonyService:
             expires_at=str(challenge["expires_at"]),
             consumed_at=None,
         )
-        s7.S7AuthorizationStore(store.db_path).put(artifact)
+        from core.governance.s7_guarded_execution import mint_authorization_artifact
+
+        try:
+            mint_authorization_artifact(
+                artifact=artifact,
+                authorization_store=s7.S7AuthorizationStore(store.db_path),
+                guarded_store=guarded_store,
+                source_bundle_validation=source_bundle_validation,
+                source_ref_hash=source_ref_hash,
+                reservation_token=reservation_token,
+                now=now,
+            )
+        except ValueError as exc:
+            if artifact.derived_work_class in s7.VOICE_SEAT_WORK_CLASSES:
+                error = (
+                    "s7_guarded_state_store_required"
+                    if guarded_store is None
+                    else "s7_guarded_source_bundle_required"
+                )
+                return S7CeremonyServiceResult(
+                    body={
+                        "ok": False,
+                        "error": error,
+                        "detail": str(exc),
+                    },
+                    status_code=409,
+                )
+            raise
         authorization_record_id = store.record_authorization_history(
             envelope=envelope,
             rendered_text_hash=rendered_statement.rendered_text_hash,
@@ -838,15 +905,15 @@ def _backup_distinct_device_confidence(
     """Classify backup distinctness from verifier/registry evidence.
 
     The code may not assert "confirmed_distinct" as a default. Confirmation
-    requires a different credential plus verifier-supplied authenticator
-    evidence that differs from the enabled primary. Absent or matching signals
-    remain honest degraded states.
+    requires a different credential plus verifier-supplied authenticator evidence
+    that differs from the enabled primary. A non-empty backup AAGUID that differs
+    from all enabled primary AAGUIDs is sufficient evidence even when browser
+    attachment/transport hints are absent. Absent or matching AAGUIDs remain
+    honest degraded states.
     """
 
     credential_ref = str(verified.get("credential_ref") or "")
     backup_aaguid = str(verified.get("aaguid") or "")
-    backup_attachment = str(verified.get("authenticator_attachment") or "")
-    backup_transports = tuple(str(value) for value in (verified.get("transports", ()) or ()))
     primary_records = tuple(
         record
         for record in store.list_credentials()
@@ -865,9 +932,8 @@ def _backup_distinct_device_confidence(
         return "unknown"
     if backup_aaguid in primary_aaguids:
         return "same_device_override"
-    signals = (backup_attachment, backup_transports)
-    if not any(signals):
-        return "unknown"
+    # Direct attestation with a different AAGUID is stronger evidence than
+    # optional browser attachment/transport hints, which some browsers omit.
     return "confirmed_distinct"
 
 

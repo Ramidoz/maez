@@ -94,6 +94,7 @@ from core.voice_continuity import voice_continuity_health
 from core.governance.successor_governance import successor_governance_health
 from core.governance.operator_user_boundary import (
     GUARDED_SELF_MODIFICATION_PAUSED_MODE,
+    VOICE_SEAT_WORK_CLASSES,
     build_operator_health_projection,
     live_webauthn_ceremony_enabled,
     s7_ceremony_deferred_response,
@@ -446,6 +447,8 @@ def _s7_authorization_route_material(
         rendered_at=now,
     )
     return _s7_route_material(
+        card=card,
+        pipe=pipe,
         envelope=envelope,
         rendered_statement=rendered,
         action_params=action_params,
@@ -459,6 +462,133 @@ def _s7_authorization_route_material(
         allow_degraded_primary_only=allow_degraded_primary_only,
         allow_degraded_backup_only=allow_degraded_backup_only,
     )
+
+
+def _s7_voice_source_validation_for_material(
+    *,
+    store: S7WebAuthnBootstrapStore,
+    material,
+    now: str,
+):
+    from core.governance import operator_user_boundary as s7
+    from core.governance.s7_guarded_execution import (
+        S7GuardedStateStore,
+        S7SemanticReaderAttemptStore,
+        S7VoiceBundleUseStore,
+        S7VoiceConsultationBundleStore,
+        derive_s7_voice_source_bundle_hash_binding,
+        validate_s7_voice_source_bundle,
+    )
+
+    bundle_store = S7VoiceConsultationBundleStore(store.db_path)
+    bundle_use_store = S7VoiceBundleUseStore(store.db_path)
+    attempt_store = S7SemanticReaderAttemptStore(store.db_path)
+    persister = getattr(material.kwargs.get("pipe"), "_persist_s7_voice_source_bundle_for_card", None)
+    if callable(persister):
+        persister(
+            card=material.kwargs["card"],
+            db_path=store.db_path,
+            rendered_statement=material.kwargs["rendered_statement"],
+            envelope=material.kwargs["envelope"],
+            maez_voice_consultation=material.kwargs["maez_voice_consultation"],
+            authority_context=material.kwargs["authority_context"],
+            precondition_hash=material.kwargs["precondition_hash"],
+            now=now,
+        )
+    binding = derive_s7_voice_source_bundle_hash_binding(
+        rendered_statement=material.kwargs["rendered_statement"],
+        envelope=material.kwargs["envelope"],
+        maez_voice_consultation=material.kwargs["maez_voice_consultation"],
+        authority_context=material.kwargs["authority_context"],
+        precondition_hash=material.kwargs["precondition_hash"],
+    )
+    validation = validate_s7_voice_source_bundle(
+        consultation=material.kwargs["maez_voice_consultation"],
+        bundle_store=bundle_store,
+        bundle_use_store=bundle_use_store,
+        semantic_reader_attempt_store=attempt_store,
+        expected_binding=binding,
+        now=now,
+    )
+    guarded_store = S7GuardedStateStore(
+        authorization_store=s7.S7AuthorizationStore(store.db_path),
+        voice_bundle_use_store=bundle_use_store,
+    )
+    reservation_token = s7.canonical_hash({
+        "purpose": "s7.3.voice_bundle_reservation",
+        "request_id": material.kwargs["rendered_statement"].request_id,
+        "rendered_text_hash": material.kwargs["rendered_statement"].rendered_text_hash,
+        "source_ref_hash": binding.source_ref_hash,
+    })
+    return _s7_route_material(
+        source_bundle_validation=validation,
+        guarded_store=guarded_store,
+        source_ref_hash=binding.source_ref_hash,
+        reservation_token=reservation_token,
+    )
+
+
+def _s7_founder_visible_voice_payload_for_material(material):
+    from core.governance import operator_user_boundary as s7
+
+    pipe = material.kwargs.get("pipe")
+    envelope = material.kwargs.get("envelope")
+    pending = getattr(pipe, "_s7_pending_voice_source_bundles", {})
+    if not isinstance(pending, dict) or envelope is None:
+        return {}
+    entry = pending.get(getattr(envelope, "request_id", None))
+    if not isinstance(entry, dict):
+        return {}
+    raw_response_text = entry.get("raw_response_text")
+    semantic_reader_attempt = entry.get("semantic_reader_attempt")
+    if not isinstance(raw_response_text, str):
+        return {}
+    payload = {
+        "maez_voice_raw_response": raw_response_text,
+        "maez_voice_raw_response_hash": s7.canonical_hash(raw_response_text),
+        "maez_voice_source_ref_hash": entry.get("source_ref_hash"),
+    }
+    if semantic_reader_attempt is not None:
+        payload.update({
+            "maez_voice_reader_outcome": getattr(
+                semantic_reader_attempt,
+                "raw_semantic_reader_outcome",
+                None,
+            ),
+            "maez_voice_grounding_quote": getattr(
+                semantic_reader_attempt,
+                "grounding_response_span_quote",
+                None,
+            ),
+            "maez_voice_grounding_offset": getattr(
+                semantic_reader_attempt,
+                "grounding_response_span_offset",
+                None,
+            ),
+        })
+    renderer = getattr(pipe, "_s7_rendered_proposal_for_card", None)
+    if callable(renderer):
+        try:
+            payload["maez_voice_rendered_proposal"] = renderer(
+                material.kwargs.get("card"),
+                envelope,
+            )
+        except Exception:
+            pass
+    return payload
+
+
+def _s7_founder_seen_voice_hash_valid(material) -> bool:
+    request_json = material.kwargs.get("request_json") or {}
+    if not isinstance(request_json, dict):
+        return False
+    payload = _s7_founder_visible_voice_payload_for_material(material)
+    if not payload.get("maez_voice_raw_response_hash"):
+        return False
+    seen_hash = str(request_json.get("maez_voice_raw_response_hash") or "")
+    if not seen_hash:
+        return False
+    return seen_hash == payload.get("maez_voice_raw_response_hash")
 
 
 def _s7_backup_registration_authorization(daemon, req, *, now: str, store: S7WebAuthnBootstrapStore):
@@ -515,6 +645,91 @@ def _s7_backup_registration_authorization(daemon, req, *, now: str, store: S7Web
             ].derived_aggregation_group,
             now=now,
         )
+    )
+
+
+def _s7_guarded_card_execution_authorization(
+    daemon,
+    req,
+    *,
+    request_id: str,
+    now: str,
+    store: S7WebAuthnBootstrapStore,
+):
+    from core.governance import operator_user_boundary as s7
+
+    request_json = req.get_json(silent=True) or {}
+    if not isinstance(request_json, dict):
+        return _s7_route_error("s7_schema_invalid", 400, detail="json_object_required")
+    artifact_id = str(request_json.get("s7_authorization_artifact_id") or "")
+    if not artifact_id:
+        return _s7_route_error("s7_schema_invalid", 400, detail="s7_authorization_artifact_id")
+    challenge_id = str(
+        request_json.get("authorization_challenge_id")
+        or request_json.get("challenge_id")
+        or ""
+    )
+    if not challenge_id:
+        return _s7_route_error("s7_schema_invalid", 400, detail="authorization_challenge_id")
+    session_binding = str(
+        request_json.get("authorization_session_binding")
+        or request_json.get("session_binding")
+        or ""
+    )
+    if not session_binding:
+        return _s7_route_error("s7_schema_invalid", 400, detail="session_binding")
+    credential_ref = str(
+        request_json.get("authorization_credential_ref")
+        or request_json.get("credential_ref")
+        or ""
+    )
+    if not credential_ref:
+        return _s7_route_error("s7_schema_invalid", 400, detail="authorization_credential_ref")
+
+    auth_request_json = {
+        "session_binding": session_binding,
+        "challenge_id": challenge_id,
+        "credential_ref": credential_ref,
+    }
+
+    class _AuthorizationRequest:
+        headers = req.headers
+
+        @staticmethod
+        def get_json(*_args, **_kwargs):
+            return auth_request_json
+
+    material = _s7_authorization_route_material(
+        daemon,
+        _AuthorizationRequest(),
+        request_id=request_id,
+        now=now,
+        store=store,
+        allow_consumed_authorization_challenge=True,
+    )
+    if material.ok is not True:
+        return material
+    rendered = material.kwargs["rendered_statement"]
+    if rendered.rollback_path_class in {"no_rollback_needed", "no_safe_rollback"}:
+        return _s7_route_error(
+            "s7_rollback_plan_required",
+            409,
+            rollback_path_class=rendered.rollback_path_class,
+        )
+    authorization = s7.S7ExecutionAuthorization(
+        store=s7.S7AuthorizationStore(store.db_path),
+        artifact_id=artifact_id,
+        rendered=rendered,
+        action_params_hash=material.kwargs["action_params_hash"],
+        authority_context=material.kwargs["authority_context"],
+        precondition_hash=material.kwargs["precondition_hash"],
+        derived_work_class=rendered.derived_work_class,
+        derived_aggregation_group=rendered.derived_aggregation_group,
+        now=now,
+    )
+    return _s7_route_material(
+        s7_execution_authorization=authorization,
+        text=str(request_json.get("text") or "yes"),
     )
 
 
@@ -6210,6 +6425,12 @@ class MaezDaemon:
                     allow_degraded_primary_only=material.kwargs["allow_degraded_primary_only"],
                     allow_degraded_backup_only=material.kwargs["allow_degraded_backup_only"],
                 )
+                if (
+                    result.status_code == 200
+                    and material.kwargs["envelope"].derived_work_class
+                    in VOICE_SEAT_WORK_CLASSES
+                ):
+                    result.body.update(_s7_founder_visible_voice_payload_for_material(material))
                 return jsonify(result.body), result.status_code
             return jsonify(
                 s7_ceremony_deferred_response(
@@ -6234,6 +6455,46 @@ class MaezDaemon:
                 )
                 if material.ok is not True:
                     return jsonify(material.body), material.status_code
+                voice_source = _s7_route_material()
+                if (
+                    material.kwargs["envelope"].derived_work_class
+                    in VOICE_SEAT_WORK_CLASSES
+                ):
+                    if not _s7_founder_seen_voice_hash_valid(material):
+                        return jsonify(
+                            {
+                                "ok": False,
+                                "error": "s7_founder_seen_maez_voice_hash_required",
+                            }
+                        ), 409
+                    voice_source = _s7_voice_source_validation_for_material(
+                        store=store,
+                        material=material,
+                        now=now,
+                    )
+                    validation = voice_source.kwargs["source_bundle_validation"]
+                    valid_absent = (
+                        validation.status == "valid_absent"
+                        and validation.source_bundle_valid is True
+                        and validation.mint_eligible is True
+                        and validation.authority_projection == "valid_absent"
+                        and validation.failure_reason_code is None
+                    )
+                    grounded_refusal = (
+                        validation.status == "blocking_present"
+                        and validation.source_bundle_valid is True
+                        and validation.mint_eligible is False
+                        and validation.authority_projection == "grounded_refusal"
+                        and validation.failure_reason_code is None
+                    )
+                    if not (valid_absent or grounded_refusal):
+                        return jsonify(
+                            {
+                                "ok": False,
+                                "error": "s7_guarded_source_bundle_required",
+                                "detail": validation.status,
+                            }
+                        ), 409
                 service = S7LocalWebAuthnCeremonyService(
                     verifier=S7ProductionWebAuthnVerifier(),
                     store_factory=lambda: store,
@@ -6247,12 +6508,77 @@ class MaezDaemon:
                     session_binding=material.kwargs["session_binding"],
                     internal_channel_binding=material.kwargs["internal_channel_binding"],
                     request_json=material.kwargs["request_json"],
+                    guarded_store=voice_source.kwargs.get("guarded_store"),
+                    source_bundle_validation=voice_source.kwargs.get("source_bundle_validation"),
+                    source_ref_hash=voice_source.kwargs.get("source_ref_hash"),
+                    reservation_token=voice_source.kwargs.get("reservation_token"),
                 )
                 return jsonify(result.body), result.status_code
             return jsonify(
                 s7_ceremony_deferred_response(
                     surface="daemon",
                     route=f"/internal/s7/cards/{request_id}/webauthn/finish",
+                )
+            ), 503
+
+        @app.route("/internal/s7/cards/<request_id>/execute", methods=["POST"])
+        def s7_guarded_card_execute(request_id: str):
+            if live_webauthn_ceremony_enabled():
+                if not _s7_internal_channel_trusted(request):
+                    return jsonify({"ok": False, "error": "s7_internal_channel_untrusted"}), 403
+                now = datetime.now(timezone.utc).isoformat()
+                store = S7WebAuthnBootstrapStore(_s7_webauthn_store_root())
+                authorization = _s7_guarded_card_execution_authorization(
+                    self,
+                    request,
+                    request_id=request_id,
+                    now=now,
+                    store=store,
+                )
+                if authorization.ok is not True:
+                    return jsonify(authorization.body), authorization.status_code
+                pipe = _s7_route_pipeline_for_daemon(self)
+                if pipe is None or getattr(pipe, "card_store", None) is None:
+                    return jsonify({"ok": False, "error": "s7_execution_edge_unavailable"}), 503
+                card = pipe.card_store.get(request_id)
+                if card is None:
+                    return jsonify({"ok": False, "error": "s7_request_not_found"}), 404
+                if not callable(getattr(pipe, "_is_pending_dialog_card", None)):
+                    return jsonify({"ok": False, "error": "s7_execution_edge_unavailable"}), 503
+                if pipe._is_pending_dialog_card(card) is not True:
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": "s7_narrow_path_required",
+                            "detail": "S7.3 live execution is limited to founder-present self-mod dialog cards",
+                        }
+                    ), 409
+                result = pipe._handle_pending_dialog_input(
+                    card=card,
+                    text=authorization.kwargs["text"],
+                    user_id=getattr(card, "user_id", None) or "owner",
+                    s7_execution_authorization=authorization.kwargs[
+                        "s7_execution_authorization"
+                    ],
+                )
+                if result is None:
+                    return jsonify({"ok": False, "error": "s7_execution_unrelated"}), 409
+                status = getattr(getattr(result, "status", None), "value", str(getattr(result, "status", "")))
+                ok = status == "executed" and bool(getattr(result, "execution_success", False))
+                status_code = 200 if ok else 409
+                return jsonify(
+                    {
+                        "ok": ok,
+                        "status": status,
+                        "message": getattr(result, "message", ""),
+                        "output": (getattr(result, "execution_output", "") or "")[:2000],
+                        "error": getattr(result, "execution_error", None),
+                    }
+                ), status_code
+            return jsonify(
+                s7_ceremony_deferred_response(
+                    surface="daemon",
+                    route=f"/internal/s7/cards/{request_id}/execute",
                 )
             ), 503
 

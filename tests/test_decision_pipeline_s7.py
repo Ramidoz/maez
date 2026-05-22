@@ -331,6 +331,103 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
             verifier=_S7RouteVerifier(),
             store_factory=lambda: bootstrap_store,
         )
+        from core.governance.s7_guarded_execution import (
+            S7GuardedStateStore,
+            S7SemanticReaderAttemptEvidence,
+            S7SemanticReaderAttemptStore,
+            S7VoiceBundleUse,
+            S7VoiceBundleUseStore,
+            S7VoiceConsultationBundle,
+            S7VoiceConsultationBundleStore,
+            S7VoiceSourceBundleHashBinding,
+            validate_s7_voice_source_bundle,
+        )
+
+        auth_store = s7.S7AuthorizationStore(bootstrap_store.db_path)
+        bundle_store = S7VoiceConsultationBundleStore(bootstrap_store.db_path)
+        bundle_use_store = S7VoiceBundleUseStore(bootstrap_store.db_path)
+        attempt_store = S7SemanticReaderAttemptStore(bootstrap_store.db_path)
+        attempt = S7SemanticReaderAttemptEvidence.reviewed_v1()
+        attempt_store.put(attempt)
+        raw_text = "Maez says there is no objection."
+        rendered_prompt_text = f"S7 voice consultation prompt for {env.request_id}"
+        rendered_prompt_hash = s7.canonical_hash(rendered_prompt_text)
+        manifest = bundle_store.put_reviewed_context_manifest(
+            manifest_id=f"context-{card.request_id}",
+            preview_ref=f"preview-{card.request_id}",
+            request_envelope_hash=rendered.request_envelope_hash,
+            precondition_hash=env.precondition_hash,
+            created_at=NOW,
+        )
+        binding = S7VoiceSourceBundleHashBinding(
+            request_id=env.request_id,
+            consultation_id=consultation.consultation_id,
+            source_ref_hash=consultation.source_ref_hash,
+            request_envelope_hash=rendered.request_envelope_hash,
+            rendered_text_hash=rendered.rendered_text_hash,
+            action_params_hash=rendered.action_params_hash,
+            precondition_hash=env.precondition_hash,
+            authority_context_hash=rendered.authority_context_hash,
+            maez_voice_consultation_hash=rendered.maez_voice_consultation_hash or "6" * 64,
+            rendered_prompt_hash=rendered_prompt_hash,
+            mutation_preview_hash="8" * 64,
+            rollback_plan_ref="9" * 64,
+            context_manifest_hash=manifest.context_manifest_hash,
+            runtime_identity_hash="b" * 64,
+            model_routing_identity_hash="d" * 64,
+            model_config_hash="e" * 64,
+        )
+        bundle_store.put_raw_response(f"raw-response-{card.request_id}", raw_text)
+        bundle_store.put_rendered_prompt(
+            f"rendered-prompt-{card.request_id}",
+            rendered_prompt_text,
+        )
+        bundle_store.put_bundle(
+            S7VoiceConsultationBundle(
+                source_ref_hash=consultation.source_ref_hash,
+                request_id=env.request_id,
+                consultation_id=consultation.consultation_id,
+                request_envelope_hash=binding.request_envelope_hash,
+                rendered_text_hash=binding.rendered_text_hash,
+                action_params_hash=binding.action_params_hash,
+                precondition_hash=binding.precondition_hash,
+                authority_context_hash=binding.authority_context_hash,
+                maez_voice_consultation_hash=binding.maez_voice_consultation_hash,
+                rendered_prompt_ref=f"rendered-prompt-{card.request_id}",
+                rendered_prompt_hash=binding.rendered_prompt_hash,
+                mutation_preview_hash=binding.mutation_preview_hash,
+                rollback_plan_ref=binding.rollback_plan_ref,
+                context_manifest_ref=manifest.manifest_id,
+                context_manifest_hash=binding.context_manifest_hash,
+                runtime_identity_hash=binding.runtime_identity_hash,
+                model_routing_identity_hash=binding.model_routing_identity_hash,
+                model_config_hash=binding.model_config_hash,
+                raw_response_ref=f"raw-response-{card.request_id}",
+                raw_response_hash=s7.canonical_hash(raw_text),
+                semantic_reader_attempt_hash=attempt.semantic_reader_attempt_hash,
+                expires_at="2026-05-18T11:05:00+00:00",
+            )
+        )
+        bundle_use_store.put_unreserved(
+            S7VoiceBundleUse.new_unreserved(
+                request_id=env.request_id,
+                source_ref_hash=consultation.source_ref_hash,
+                consultation_id=consultation.consultation_id,
+                used_at=NOW,
+            )
+        )
+        guarded_store = S7GuardedStateStore(
+            authorization_store=auth_store,
+            voice_bundle_use_store=bundle_use_store,
+        )
+        validation = validate_s7_voice_source_bundle(
+            consultation=consultation,
+            bundle_store=bundle_store,
+            bundle_use_store=bundle_use_store,
+            semantic_reader_attempt_store=attempt_store,
+            expected_binding=binding,
+            now=NOW,
+        )
         begin = service.authorize_begin(
             now=NOW,
             rendered_statement=rendered,
@@ -351,12 +448,15 @@ class S7DecisionPipelineExecutionGateTests(unittest.TestCase):
                 "credential_ref": "cred-1",
                 "authentication_response": {"clientDataJSON": "valid-auth"},
             },
+            guarded_store=guarded_store,
+            source_bundle_validation=validation,
+            source_ref_hash=consultation.source_ref_hash,
+            reservation_token=f"reservation-token-{card.request_id}",
         )
         self.assertEqual(begin.status_code, 200)
         self.assertEqual(finish.status_code, 200)
-        store = s7.S7AuthorizationStore(bootstrap_store.db_path)
         return s7.S7ExecutionAuthorization(
-            store=store,
+            store=auth_store,
             artifact_id=finish.body["artifact_id"],
             rendered=rendered,
             action_params_hash=params_hash,
