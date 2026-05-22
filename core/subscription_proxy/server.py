@@ -23,7 +23,6 @@ on this machine can already invoke the same CLIs.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 import sqlite3
@@ -41,6 +40,7 @@ from core.egress.gate import (
     decision_to_telemetry,
     load_or_create_telemetry_key,
 )
+from core.safety.cloud_redactor import redact_for_cloud
 from core.subscription_proxy.adapters.base import Adapter, CallResult
 from core.subscription_proxy.adapters.claude_cli import ClaudeCliAdapter
 from core.subscription_proxy.adapters.gemini_cli import GeminiCliAdapter
@@ -242,7 +242,19 @@ def _record(
     reviewed audit path; see docs/snapshots/actions-2026-05-04.md.
     """
     try:
-        phash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
+        # RED #9: trajectory metadata must not contain raw previews or
+        # dictionary-attackable bare hashes of short private text.
+        prompt_fingerprint = (
+            egress_content_digest
+            if egress_content_digest
+            else "hmac-sha256:not-recorded"
+        )
+        prompt_preview = (
+            prompt_preview_override if prompt_preview_override is not None
+            else redact_for_cloud(prompt).text[:400]
+        )
+        reply_preview = redact_for_cloud(reply).text[:400]
+        error_preview = redact_for_cloud(error).text[:400]
         with _db() as con:
             con.execute(
                 "INSERT INTO calls (ts, adapter, caller, model, model_used, "
@@ -256,11 +268,12 @@ def _record(
                 "?, ?, 0, ?, ?, ?, ?, ?)",
                 (
                     time.time(), adapter, caller, model, model_used,
-                    phash, len(prompt), len(reply), input_toks, output_toks,
+                    prompt_fingerprint, len(prompt), len(reply),
+                    input_toks, output_toks,
                     duration_s, status,
-                    (prompt_preview_override if prompt_preview_override is not None
-                     else prompt[:400]),
-                    reply[:400], error[:400],
+                    prompt_preview,
+                    reply_preview,
+                    error_preview,
                     provenance_source, trust_tier,
                     provenance_version,
                     egress_decision,

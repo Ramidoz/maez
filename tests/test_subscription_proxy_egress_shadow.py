@@ -26,7 +26,7 @@ class _Adapter:
     async def call(self, *, prompt: str, system_prompt: str | None, model: str):
         self.prompts.append(prompt)
         return CallResult(
-            reply="ok",
+            reply="echo rohit@example.com and memory_id_123",
             model_used=model,
             input_toks=1,
             output_toks=1,
@@ -90,14 +90,25 @@ class SubscriptionProxyEgressShadowTests(unittest.IsolatedAsyncioTestCase):
         )
         with sqlite3.connect(self.db_path) as con:
             row = con.execute(
-                "SELECT prompt_preview, egress_decision, egress_reason_codes, "
-                "egress_content_digest FROM calls"
+                "SELECT prompt_preview, reply_preview, prompt_hash, "
+                "egress_decision, egress_reason_codes, egress_content_digest "
+                "FROM calls"
             ).fetchone()
 
         self.assertIsNotNone(row)
-        prompt_preview, decision, reason_codes, digest = row
+        (
+            prompt_preview,
+            reply_preview,
+            prompt_hash,
+            decision,
+            reason_codes,
+            digest,
+        ) = row
         self.assertNotIn("rohit@example.com", prompt_preview)
         self.assertNotIn("memory_id_123", prompt_preview)
+        self.assertNotIn("rohit@example.com", reply_preview)
+        self.assertNotIn("memory_id_123", reply_preview)
+        self.assertTrue(prompt_hash.startswith("hmac-sha256:"))
         self.assertEqual(decision, "redact")
         self.assertIn("minimized_private_context", reason_codes)
         self.assertTrue(digest.startswith("hmac-sha256:"))
