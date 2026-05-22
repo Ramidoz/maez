@@ -8,6 +8,7 @@ config/token.json*
 config/credentials.json*
 memory/db/
 memory/*.db
+memory/egress_telemetry.key
 memory/chroma/
 # Belt-and-suspenders: after Phase 3 there is also a core/memory/
 # subpackage. A module-path regression could cause a runtime DB to
