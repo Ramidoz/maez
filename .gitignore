@@ -82,6 +82,7 @@ docs/maez_facing/
 # Runtime state (grows on its own; not source code)
 memory/continuity_capsule.json
 memory/continuity_archive/
+memory/embedding_contract_diagnostics.json
 memory/fast_reply_audit.jsonl
 memory/site_analytics.jsonl
 memory/last_briefing.txt
