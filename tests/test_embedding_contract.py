@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -57,6 +58,35 @@ def _contract_dict() -> dict:
             },
         },
     }
+
+
+def _write_sqlite_collection(path: Path, *, metadata: dict) -> None:
+    with sqlite3.connect(path) as db:
+        db.execute("CREATE TABLE collections (id TEXT PRIMARY KEY, name TEXT, dimension INTEGER)")
+        db.execute(
+            "CREATE TABLE collection_metadata ("
+            "collection_id TEXT, key TEXT, str_value TEXT, int_value INTEGER, "
+            "float_value REAL, bool_value INTEGER)"
+        )
+        db.execute(
+            "INSERT INTO collections (id, name, dimension) VALUES (?, ?, ?)",
+            ("collection-1", "raw_archive", 384),
+        )
+        for key, value in metadata.items():
+            if isinstance(value, int):
+                db.execute(
+                    "INSERT INTO collection_metadata "
+                    "(collection_id, key, str_value, int_value, float_value, bool_value) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    ("collection-1", key, None, value, None, None),
+                )
+            else:
+                db.execute(
+                    "INSERT INTO collection_metadata "
+                    "(collection_id, key, str_value, int_value, float_value, bool_value) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    ("collection-1", key, str(value), None, None, None),
+                )
 
 
 class EmbeddingContractManifestTests(unittest.TestCase):
@@ -149,6 +179,73 @@ class EmbeddingContractManifestTests(unittest.TestCase):
         self.assertFalse(payload["writes_allowed"])
         self.assertTrue(payload["reads_allowed"])
         self.assertIn("different-model", payload["diagnostics"][0])
+
+    def test_sqlite_stamp_disagreement_blocks_without_self_healing(self):
+        from memory.embedding_contract import (
+            load_embedding_contract,
+            read_chroma_sqlite_collection_metadata,
+            reconcile_embedding_contract,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            contract_path = Path(tmp) / "embedding_contract.json"
+            contract_path.write_text(json.dumps(_contract_dict()), encoding="utf-8")
+            db_path = Path(tmp) / "chroma.sqlite3"
+            _write_sqlite_collection(
+                db_path,
+                metadata={
+                    "hnsw:space": "cosine",
+                    "maez_embedding_schema_version": "maez-embedding-contract-v1",
+                    "maez_embedding_model": "different-model",
+                    "maez_embedding_dimension": 384,
+                    "maez_embedding_space": "cosine",
+                },
+            )
+
+            status = reconcile_embedding_contract(
+                {},
+                contract_path=contract_path,
+                sqlite_collections={"raw": (db_path, "raw_archive")},
+                verify_package=False,
+            )
+            metadata = read_chroma_sqlite_collection_metadata(db_path, "raw_archive")
+
+        self.assertFalse(status.ok)
+        self.assertTrue(status.reads_allowed)
+        self.assertFalse(status.writes_allowed)
+        self.assertTrue(any("different-model" in d for d in status.diagnostics))
+        self.assertEqual(metadata["maez_embedding_model"], "different-model")
+
+    def test_sqlite_missing_stamp_is_written_on_first_install(self):
+        from memory.embedding_contract import (
+            read_chroma_sqlite_collection_metadata,
+            reconcile_embedding_contract,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            contract_path = Path(tmp) / "embedding_contract.json"
+            contract_path.write_text(json.dumps(_contract_dict()), encoding="utf-8")
+            db_path = Path(tmp) / "chroma.sqlite3"
+            _write_sqlite_collection(db_path, metadata={"hnsw:space": "cosine"})
+
+            status = reconcile_embedding_contract(
+                {},
+                contract_path=contract_path,
+                sqlite_collections={"raw": (db_path, "raw_archive")},
+                verify_package=False,
+            )
+            metadata = read_chroma_sqlite_collection_metadata(db_path, "raw_archive")
+
+        self.assertTrue(status.ok, status.diagnostics)
+        self.assertTrue(status.reads_allowed)
+        self.assertTrue(status.writes_allowed)
+        self.assertEqual(
+            metadata["maez_embedding_schema_version"],
+            "maez-embedding-contract-v1",
+        )
+        self.assertEqual(metadata["maez_embedding_model"], "all-MiniLM-L6-v2")
+        self.assertEqual(metadata["maez_embedding_dimension"], 384)
+        self.assertEqual(metadata["maez_embedding_space"], "cosine")
 
     def test_memory_manager_write_chokepoint_blocks_on_contract_drift(self):
         from memory.embedding_contract import EmbeddingContractStatus

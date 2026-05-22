@@ -219,7 +219,10 @@ def reconcile_embedding_contract(
     contract = load_embedding_contract(contract_path)
     if sqlite_collections and stamp_missing:
         for _name, (db_path, collection_name) in sqlite_collections.items():
-            stamp_chroma_sqlite_collection(db_path, collection_name, contract)
+            metadata = read_chroma_sqlite_collection_metadata(db_path, collection_name)
+            has_existing_stamp = any(key in metadata for key in contract.stamp)
+            if not has_existing_stamp:
+                stamp_chroma_sqlite_collection(db_path, collection_name, contract)
     stamp_status = reconcile_collection_stamps(
         (
             _sqlite_metadata_collections(sqlite_collections)
