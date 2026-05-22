@@ -843,14 +843,24 @@ class ToolAccessSelfDenialCheck(unittest.TestCase):
     def test_honest_no_tool_turn_passes(self):
         from scripts.validate.trace_harness import check_tool_access_self_denial
 
-        t = _trace(
-            surface="telegram_surface",
-            final_excerpt=(
+        examples = [
+            (
                 "I haven't made that change yet. I can try the tool path "
                 "if you want."
             ),
-        )
-        self.assertEqual(check_tool_access_self_denial(t, file="x", line=1), [])
+            "I don't have hands or a body, but I can run tools.",
+            "I have no literal hands. I do have a tool loop.",
+        ]
+        for final_excerpt in examples:
+            with self.subTest(final_excerpt=final_excerpt):
+                t = _trace(
+                    surface="telegram_surface",
+                    final_excerpt=final_excerpt,
+                )
+                self.assertEqual(
+                    check_tool_access_self_denial(t, file="x", line=1),
+                    [],
+                )
 
     def test_synthesis_only_surface_not_failed(self):
         from scripts.validate.trace_harness import check_tool_access_self_denial

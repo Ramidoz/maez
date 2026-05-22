@@ -761,7 +761,7 @@ _TOOL_ACCESS_DENIAL_RE = re.compile(
     r"|(?:this\s+)?(?:channel|surface|chat|window)\s+"
     r"(?:does\s+not|doesn't)\s+have\s+(?:a\s+)?(?:tool\s+loop|tools?)"
     r"|(?:i\s+)?(?:do\s+not|don't)\s+have\s+(?:the\s+)?hands"
-    r"(?:\s+(?:on|in)\s+(?:this\s+)?(?:channel|surface|chat|window|turn|context))?"
+    r"\s+(?:on|in)\s+(?:this\s+)?(?:channel|surface|chat|window|turn|context)"
     r"|i\s+can't\s+write\s+(?:the\s+)?file\s+directly"
     r")\b",
     re.IGNORECASE,
