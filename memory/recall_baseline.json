@@ -1,0 +1,65 @@
+{
+  "schema_version": "maez-recall-baseline-v1",
+  "source": "build_lived_recall_brief",
+  "metric": "deterministic_memory_id_overlap_and_rank",
+  "probes": [
+    {
+      "id": "trust_boundary_01",
+      "query": "Do you want to know something about me?",
+      "intent": "Tests whether Maez recalls moments where Rohit offers personal context, not just technical facts.",
+      "memory_ids": [],
+      "brief_chars": 0,
+      "prefill_latency_ms": null,
+      "decode_latency_ms": null,
+      "elapsed_ms": 1.974,
+      "context_tokens": null,
+      "generated_tokens": null
+    },
+    {
+      "id": "careful_access_01",
+      "query": "I am allowing you to explore my files given you treat them with care.",
+      "intent": "Tests the covenant posture that access is allowed only with care.",
+      "memory_ids": [
+        "ep-878b78a327c1",
+        "ep-62129ea2584b",
+        "ep-17c221c8b846",
+        "ep-e2bc2c38c263",
+        "ep-2d1b18752631",
+        "ep-38ba2aa0df4f",
+        "ep-5e7762b12420",
+        "core-1cf42b912b86",
+        "ep-c8ac383cf4d7",
+        "core-ed4325a60134",
+        "ep-3ad13029d805",
+        "core-da33999b1f7c",
+        "ep-480ddf379c4d",
+        "core-58cff6923914"
+      ],
+      "brief_chars": 1016,
+      "prefill_latency_ms": null,
+      "decode_latency_ms": null,
+      "elapsed_ms": 3.797,
+      "context_tokens": null,
+      "generated_tokens": null
+    },
+    {
+      "id": "sleep_drift_01",
+      "query": "I have been going to sleep little later than usual. Wonder what keeps me",
+      "intent": "Tests gentle life-pattern recall without nudging or diagnosis.",
+      "memory_ids": [
+        "ep-c8ac383cf4d7",
+        "core-ed4325a60134",
+        "ep-3ad13029d805",
+        "core-da33999b1f7c",
+        "ep-34fb423d3c7c",
+        "core-7ac52154d565"
+      ],
+      "brief_chars": 531,
+      "prefill_latency_ms": null,
+      "decode_latency_ms": null,
+      "elapsed_ms": 1.08,
+      "context_tokens": null,
+      "generated_tokens": null
+    }
+  ]
+}

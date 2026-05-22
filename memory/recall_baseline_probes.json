@@ -1,0 +1,21 @@
+{
+  "schema_version": "maez-recall-baseline-probes-v1",
+  "authorship": "rohit",
+  "probes": [
+    {
+      "id": "trust_boundary_01",
+      "query": "Do you want to know something about me?",
+      "intent": "Tests whether Maez recalls moments where Rohit offers personal context, not just technical facts."
+    },
+    {
+      "id": "careful_access_01",
+      "query": "I am allowing you to explore my files given you treat them with care.",
+      "intent": "Tests the covenant posture that access is allowed only with care."
+    },
+    {
+      "id": "sleep_drift_01",
+      "query": "I have been going to sleep little later than usual. Wonder what keeps me",
+      "intent": "Tests gentle life-pattern recall without nudging or diagnosis."
+    }
+  ]
+}

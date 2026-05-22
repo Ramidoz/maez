@@ -18,6 +18,10 @@ from pathlib import Path
 
 from core.llm_client import sanitize_prompt_text
 from core.birth import memory_phase_tag as _memory_phase_tag
+from memory.embedding_contract import (
+    assert_embedding_writes_allowed as _assert_embedding_writes_allowed,
+    reconcile_embedding_contract as _reconcile_embedding_contract,
+)
 
 logger = logging.getLogger("maez")
 
@@ -560,6 +564,23 @@ class MemoryManager:
         self.core = self._core_client.get_or_create_collection(
             name="core_memories", metadata={"hnsw:space": "cosine"},
         )
+        self._embedding_contract_status = _reconcile_embedding_contract({
+            "raw": self.raw,
+            "daily": self.daily,
+            "core": self.core,
+        }, sqlite_collections={
+            "raw": (BASE_DB / "raw" / "chroma.sqlite3", "raw_archive"),
+            "daily": (
+                BASE_DB / "daily" / "chroma.sqlite3",
+                "daily_consolidations",
+            ),
+            "core": (BASE_DB / "core" / "chroma.sqlite3", "core_memories"),
+        })
+        if not self._embedding_contract_status.ok:
+            logger.warning(
+                "Embedding contract drift detected; reads allowed, writes blocked: %s",
+                "; ".join(self._embedding_contract_status.diagnostics),
+            )
 
         stats = self.memory_stats()
         logger.info(
@@ -582,6 +603,11 @@ class MemoryManager:
                     close()
                 except Exception as exc:  # noqa: BLE001 - shutdown is best-effort
                     logger.debug("Chroma client %s close failed: %s", attr, exc)
+
+    def _assert_embedding_writes_allowed(self) -> None:
+        status = getattr(self, "_embedding_contract_status", None)
+        if status is not None:
+            _assert_embedding_writes_allowed(status)
 
     # ------------------------------------------------------------------ #
     #  TIER 1 — Raw Archive                                                #
@@ -639,6 +665,7 @@ class MemoryManager:
         if snapshot:
             doc_metadata["snapshot_json"] = json.dumps(snapshot, default=str)[:3000]
 
+        self._assert_embedding_writes_allowed()
         self.raw.add(ids=[memory_id], documents=[doc_text], metadatas=[doc_metadata])
         logger.info("Raw stored: %s (cycle %d, %d chars)", memory_id[:8], cycle, len(doc_text))
         return memory_id
@@ -664,6 +691,7 @@ class MemoryManager:
             "memory_phase": _memory_phase_tag(),
         }
         meta.update(provenance_extra)
+        self._assert_embedding_writes_allowed()
         self.raw.add(
             ids=[memory_id],
             documents=[content],
@@ -853,6 +881,7 @@ class MemoryManager:
             daily_meta["provenance_source"] = "introspection"
         # else: every survivor is legacy → preserve the legacy
         # semantics (no trust_tier / provenance_source keys).
+        self._assert_embedding_writes_allowed()
         self.daily.add(
             ids=[consolidation_id],
             documents=[summary],
@@ -1036,6 +1065,7 @@ class MemoryManager:
         }
         meta.update(provenance_extra)
         meta.update(ancestor_extra)
+        self._assert_embedding_writes_allowed()
         self.core.add(
             ids=[memory_id],
             documents=[content],
