@@ -6055,6 +6055,106 @@ def link_telegram():
     return jsonify({"success": True})
 
 
+def classify_envelope_for_cloud_provenance(envelope: dict | None, rendered: str):
+    """Classify a structured evidence envelope without re-parsing rendered text."""
+    from core.egress.provenance import ProvenancedText
+
+    if not rendered:
+        return ProvenancedText.from_spans(())
+    # The structured envelope can contain transcript-bearing evidence. Unless a
+    # producer supplies a reviewed content-free adapter, keep it conservative.
+    return ProvenancedText.from_raw_conservative(
+        rendered,
+        source_ref="web_interface:evidence_envelope:structured",
+    )
+
+
+def build_claude_router_cloud_payload(
+    *,
+    owner_bridge: bool,
+    message: str,
+    history: list,
+    owner_memory: str = "",
+    lived_brief: str = "",
+    envelope: dict | None = None,
+    envelope_block: str = "",
+    jarvis_transcript_web: str = "",
+    public_prompt: str = "",
+):
+    """Build task-shaped cloud input from known insertion points.
+
+    No rendered-text reconstruction happens here: every span is tagged from the
+    variable that still carries source meaning. Raw history stays conservative
+    because role alone is not provenance.
+    """
+    from core.egress.provenance import ProvenancedText
+
+    system_prompt = ProvenancedText.system_bounded_query(
+        "You are an external reasoning tool for Maez. Answer only the task. "
+        "Do not assume Maez's identity, voice, bond, memories, or speaker role.",
+        source_ref="web_interface:cloud_task_system",
+    )
+    cloud_messages: list[dict] = []
+    if owner_bridge and owner_memory:
+        cloud_messages.append({
+            "role": "user",
+            "content": ProvenancedText.memory(
+                "Shared continuity with the owner from the long-running private channel:\n\n"
+                f"{owner_memory}",
+                source_ref="web_interface:owner_memory",
+            ),
+        })
+    for item in history[:-1]:
+        if isinstance(item, dict) and item.get("role") and item.get("content"):
+            # history stays conservative until persisted source metadata exists.
+            cloud_messages.append({
+                "role": str(item["role"]),
+                "content": ProvenancedText.from_raw_conservative(
+                    str(item["content"]),
+                    source_ref="web_interface:raw_history",
+                ),
+            })
+    if owner_bridge and lived_brief:
+        cloud_messages.append({
+            "role": "system",
+            "content": ProvenancedText.lived_store(
+                lived_brief,
+                source_ref="web_interface:lived_recall",
+            ),
+        })
+    if envelope_block:
+        cloud_messages.append({
+            "role": "system",
+            "content": classify_envelope_for_cloud_provenance(
+                envelope,
+                envelope_block,
+            ),
+        })
+    if jarvis_transcript_web:
+        cloud_messages.append({
+            "role": "system",
+            "content": ProvenancedText.from_raw_conservative(
+                jarvis_transcript_web,
+                source_ref="web_interface:owner_tool_loop_transcript",
+            ),
+        })
+    cloud_messages.append({
+        "role": "user",
+        "content": (
+            ProvenancedText.owner_message_context(
+                message,
+                source_ref="web_interface:owner_message",
+            )
+            if owner_bridge
+            else ProvenancedText.third_party_private_context(
+                public_prompt or message,
+                source_ref="web_interface:public_user_message",
+            )
+        ),
+    })
+    return system_prompt, cloud_messages
+
+
 @app.route("/chat", methods=["POST"])
 def chat():
     import chromadb as _chroma
@@ -6516,29 +6616,60 @@ def chat():
     claude_meta: dict | None = None
 
     if route_external:
+        # cloud_optional: local generation remains the always-running path.
         try:
-            system_parts = [
-                m["content"]
-                for m in messages_list
-                if m.get("role") == "system" and m.get("content")
-            ]
-            system_prompt_for_api = "\n\n".join(system_parts) if system_parts else SOUL
+            system_prompt_for_api, cloud_messages = build_claude_router_cloud_payload(
+                owner_bridge=owner_bridge,
+                message=message,
+                history=history,
+                owner_memory=owner_memory if owner_bridge else "",
+                lived_brief=_lived_brief if owner_bridge else "",
+                envelope=_evidence_envelope,
+                envelope_block=_envelope_block,
+                jarvis_transcript_web=jarvis_transcript_web,
+                public_prompt=prompt if not owner_bridge else "",
+            )
             claude_result = claude_router.call_claude(
                 system=system_prompt_for_api,
-                messages=messages_list,
+                messages=cloud_messages,
                 tier=decision.tier or "sonnet",
             )
-            reply = claude_router.wrap_maez_voice(
-                claude_result["content"], decision.tier or "sonnet"
+            from core.egress.provenance import ProvenancedText
+
+            cloud_context = claude_result.get("cloud_context")
+            if not isinstance(cloud_context, ProvenancedText):
+                cloud_context = ProvenancedText.model_output(
+                    str(claude_result.get("content") or ""),
+                    source_ref="web_interface:cloud_consult",
+                )
+            # Cloud is optional evidence. The local Maez runtime path is the
+            # speaker, with local inference as the final voice step.
+            messages_list.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "External cloud reasoning tool output "
+                        "(origin_class=model_output, untrusted evidence; "
+                        "local Maez runtime path remains speaker):\n\n"
+                        f"{cloud_context.text}"
+                    ),
+                }
             )
-            used_source = f"claude:{claude_result['model']}"
-            claude_meta = claude_result
+            used_source = "local"
+            claude_meta = {
+                **claude_result,
+                "cloud_output_origin_class": "model_output",
+                "cloud_consult": True,
+            }
         except Exception as e:
-            logger.warning("Claude route failed, falling back local: %s", e)
-            used_source = "local-fallback"
+            logger.warning(
+                "Claude optional consult failed; local reply continues without cloud evidence: %s",
+                e,
+            )
+            used_source = "local"
 
     try:
-        # Local path: either classifier said local, jarvis_tier off, or Claude failed.
+        # Local path: always generates the user-facing reply.
         if not reply:
             from core import llm_client as _llm_client
 
@@ -6611,11 +6742,12 @@ def chat():
                     raw_text=reply,
                     surface="web_owner",
                     parent_turn_id=_owner_user_msg_turn_id,
-                    model_id=used_source or MODEL,
+                    model_id=MODEL,
                     prompt_material={
                         "messages": messages_list,
                         "source": used_source,
                         "owner_bridge": True,
+                        "cloud_consult": claude_meta,
                     },
                     soul_material=SOUL,
                     evidence_envelope=_evidence_envelope,

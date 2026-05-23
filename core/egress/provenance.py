@@ -10,12 +10,14 @@ from core.egress.gate import (
     MINIMIZABLE_PRIVATE_CONTEXT,
     NON_PRIVATE,
     RESERVED_DENIED_RAW,
+    UNTRUSTED_EXTERNAL_OUTPUT,
 )
 
 
 _RESTRICTIVENESS = {
     **{origin: 3 for origin in RESERVED_DENIED_RAW},
     **{origin: 2 for origin in MINIMIZABLE_PRIVATE_CONTEXT},
+    **{origin: 2 for origin in UNTRUSTED_EXTERNAL_OUTPUT},
     **{origin: 1 for origin in INTENTIONAL_OUTBOUND},
     **{origin: 0 for origin in NON_PRIVATE},
     "unclassified": 4,
@@ -163,6 +165,12 @@ class ProvenancedText:
         ])
 
     @classmethod
+    def lived_store(cls, text: str, *, source_ref: str) -> "ProvenancedText":
+        return cls.from_spans([
+            ProvenanceSpan(text, "lived_store", source_ref, True)
+        ])
+
+    @classmethod
     def owner_message_context(
         cls,
         text: str,
@@ -171,6 +179,23 @@ class ProvenancedText:
     ) -> "ProvenancedText":
         return cls.from_spans([
             ProvenanceSpan(text, "owner_message_context", source_ref, True)
+        ])
+
+    @classmethod
+    def third_party_private_context(
+        cls,
+        text: str,
+        *,
+        source_ref: str,
+    ) -> "ProvenancedText":
+        return cls.from_spans([
+            ProvenanceSpan(text, "third_party_private_context", source_ref, True)
+        ])
+
+    @classmethod
+    def model_output(cls, text: str, *, source_ref: str) -> "ProvenancedText":
+        return cls.from_spans([
+            ProvenanceSpan(text, "model_output", source_ref, True)
         ])
 
     @classmethod
@@ -205,7 +230,10 @@ class ProvenancedText:
                 text=text,
                 origin_class=origin,
                 source_ref=source_ref,
-                redaction_allowed=origin in MINIMIZABLE_PRIVATE_CONTEXT,
+                redaction_allowed=(
+                    origin in MINIMIZABLE_PRIVATE_CONTEXT
+                    or origin in UNTRUSTED_EXTERNAL_OUTPUT
+                ),
             )
         ])
 
@@ -223,7 +251,10 @@ class ProvenancedText:
                 text=text,
                 origin_class=origin,
                 source_ref=source_ref,
-                redaction_allowed=origin in MINIMIZABLE_PRIVATE_CONTEXT,
+                redaction_allowed=(
+                    origin in MINIMIZABLE_PRIVATE_CONTEXT
+                    or origin in UNTRUSTED_EXTERNAL_OUTPUT
+                ),
             )
         ])
 

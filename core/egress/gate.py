@@ -35,6 +35,10 @@ NON_PRIVATE = {
     "tool_result_public",
 }
 
+UNTRUSTED_EXTERNAL_OUTPUT = {
+    "model_output",
+}
+
 INTENTIONAL_OUTBOUND = {
     "owner_authored_for_destination",
     "maez_authored_local_bonded_surface",
@@ -45,6 +49,7 @@ KNOWN_ORIGINS = (
     RESERVED_DENIED_RAW
     | MINIMIZABLE_PRIVATE_CONTEXT
     | NON_PRIVATE
+    | UNTRUSTED_EXTERNAL_OUTPUT
     | INTENTIONAL_OUTBOUND
     | {"unclassified"}
 )
@@ -178,7 +183,7 @@ def decide_egress(payload: EgressRequest | object) -> EgressDecision:
                 origin_classes=origins,
                 original_char_count=original_chars,
             )
-        if origin in MINIMIZABLE_PRIVATE_CONTEXT:
+        if origin in MINIMIZABLE_PRIVATE_CONTEXT or origin in UNTRUSTED_EXTERNAL_OUTPUT:
             if not segment.redaction_allowed:
                 return _block(
                     reason_codes=("private_context_redaction_not_allowed",),

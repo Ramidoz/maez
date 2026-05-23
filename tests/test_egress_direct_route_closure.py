@@ -25,7 +25,7 @@ class DirectClaudeRouterClosureTests(unittest.TestCase):
             side_effect=AssertionError("direct Anthropic client bypassed proxy"),
             create=True,
         ), mock.patch(
-            "core.routing.claude_tier.call",
+            "core.routing.claude_tier.call_messages",
             return_value=fake,
         ) as m_call:
             result = claude_router.call_claude(
@@ -46,14 +46,15 @@ class DirectClaudeRouterClosureTests(unittest.TestCase):
         self.assertEqual(kwargs["model"], "sonnet")
         self.assertEqual(kwargs["caller"], "claude_router/call_claude")
         self.assertIsInstance(kwargs["system_prompt"], ProvenancedText)
-        self.assertIsInstance(kwargs["prompt"], ProvenancedText)
+        self.assertEqual(len(kwargs["messages"]), 1)
+        self.assertIsInstance(kwargs["messages"][0].content, ProvenancedText)
         self.assertEqual(
             kwargs["system_prompt"].spans[0].origin_class,
             "system_bounded_query",
         )
         self.assertEqual(
-            kwargs["prompt"].spans[0].origin_class,
-            "owner_message_context",
+            kwargs["messages"][0].content.spans[0].origin_class,
+            "unclassified",
         )
 
 

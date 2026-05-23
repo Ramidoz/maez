@@ -38,9 +38,9 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Sequence
 
-from core.egress.provenance import ProvenancedText
+from core.egress.provenance import ProvenanceSpan, ProvenancedText
 
 logger = logging.getLogger("maez.claude_tier")
 
@@ -121,6 +121,13 @@ class TierReply:
     raw: dict
 
 
+@dataclass(frozen=True)
+class CloudMessage:
+    """Role-bearing cloud message with optional source-attached provenance."""
+    role: str
+    content: str | ProvenancedText
+
+
 # ── budget helpers ────────────────────────────────────────────────────
 
 def budget(timeout_s: float = 3.0) -> dict:
@@ -156,68 +163,52 @@ def can_afford(adapter: str, *, needed_calls: int = 1) -> bool:
 
 # ── the primary call primitive ────────────────────────────────────────
 
-def call(
+def _as_provenanced_text(
+    value: str | ProvenancedText,
     *,
-    prompt: str | ProvenancedText,
-    system_prompt: Optional[str | ProvenancedText] = None,
-    model: str = "sonnet",
-    caller: str = DEFAULT_CALLER,
-    timeout_s: Optional[float] = None,
-) -> TierReply:
-    """Send one completion request to the proxy.
+    source_ref: str,
+) -> ProvenancedText:
+    if isinstance(value, ProvenancedText):
+        return value
+    return ProvenancedText.from_raw_conservative(str(value), source_ref=source_ref)
 
-    Args:
-        prompt        — the user message. Single-turn.
-        system_prompt — optional system/instruction message.
-        model         — any model name the proxy can route. "sonnet"
-                        / "opus" / "haiku" → Claude subscription.
-                        "gpt-4o" → OpenAI API. "openai/gpt-4o" →
-                        OpenRouter. etc.
-        caller        — stable label for the trajectory log.
-                        Strongly recommended for accountability;
-                        defaults to a sentinel ("maez-tier-unlabeled")
-                        that makes unlabeled callers findable in the
-                        trajectory DB without refusing the call.
-        timeout_s     — override the module-level default.
 
-    Returns:
-        TierReply with the assistant text and usage counts.
+def _literal(text: str, *, source_ref: str) -> ProvenancedText:
+    return ProvenancedText.from_spans([
+        ProvenanceSpan(text, "system_bounded_query", source_ref, False)
+    ])
 
-    Raises:
-        ClaudeTierBadRequest   — malformed input (caller bug).
-        ClaudeTierCapped       — budget cap reached; back off.
-        ClaudeTierAdapterError — upstream adapter failed; may retry.
-        ClaudeTierUnavailable  — proxy unreachable; fall back or skip.
-    """
-    if not prompt:
-        raise ClaudeTierBadRequest("empty prompt")
 
-    messages: list[dict] = []
-    provenance_parts: dict[str, list[dict]] = {}
-    if system_prompt:
-        system_text = (
-            system_prompt.text
-            if isinstance(system_prompt, ProvenancedText)
-            else system_prompt
+def _with_role_prefix(message: CloudMessage, *, index: int) -> ProvenancedText:
+    content = _as_provenanced_text(
+        message.content,
+        source_ref=f"claude_tier:message:{index}:{message.role}:legacy_raw",
+    )
+    return (
+        _literal(
+            f"[{message.role}]\n",
+            source_ref=f"claude_tier:message:{index}:{message.role}:role_prefix",
         )
-        messages.append({"role": "system", "content": system_text})
-        if isinstance(system_prompt, ProvenancedText):
-            provenance_parts["system"] = system_prompt.to_wire()
-    prompt_text = prompt.text if isinstance(prompt, ProvenancedText) else prompt
-    messages.append({"role": "user", "content": prompt_text})
-    if isinstance(prompt, ProvenancedText):
-        provenance_parts["user"] = prompt.to_wire()
+        + content
+    )
 
-    body_payload = {
-        "model": model,
-        "messages": messages,
-        "stream": False,
-    }
-    if provenance_parts:
-        body_payload["maez_egress_segments"] = {
-            "schema_version": "maez-egress-provenance-v1",
-            "parts": provenance_parts,
-        }
+
+def _join_provenanced(parts: Sequence[ProvenancedText]) -> ProvenancedText:
+    joined = ProvenancedText.from_spans(())
+    for idx, part in enumerate(part for part in parts if part.text):
+        if idx:
+            joined = joined + _literal("\n\n", source_ref="claude_tier:part_separator")
+        joined = joined + part
+    return joined
+
+
+def _post_chat_payload(
+    *,
+    body_payload: dict,
+    model: str,
+    caller: str,
+    timeout_s: Optional[float],
+) -> TierReply:
     body = json.dumps(body_payload).encode("utf-8")
 
     req = urllib.request.Request(
@@ -292,6 +283,159 @@ def call(
         input_tokens=int(usage.get("prompt_tokens") or 0),
         output_tokens=int(usage.get("completion_tokens") or 0),
         raw=data,
+    )
+
+
+def call(
+    *,
+    prompt: str | ProvenancedText,
+    system_prompt: Optional[str | ProvenancedText] = None,
+    model: str = "sonnet",
+    caller: str = DEFAULT_CALLER,
+    timeout_s: Optional[float] = None,
+) -> TierReply:
+    """Send one completion request to the proxy.
+
+    Args:
+        prompt        — the user message. Single-turn.
+        system_prompt — optional system/instruction message.
+        model         — any model name the proxy can route. "sonnet"
+                        / "opus" / "haiku" → Claude subscription.
+                        "gpt-4o" → OpenAI API. "openai/gpt-4o" →
+                        OpenRouter. etc.
+        caller        — stable label for the trajectory log.
+                        Strongly recommended for accountability;
+                        defaults to a sentinel ("maez-tier-unlabeled")
+                        that makes unlabeled callers findable in the
+                        trajectory DB without refusing the call.
+        timeout_s     — override the module-level default.
+
+    Returns:
+        TierReply with the assistant text and usage counts.
+
+    Raises:
+        ClaudeTierBadRequest   — malformed input (caller bug).
+        ClaudeTierCapped       — budget cap reached; back off.
+        ClaudeTierAdapterError — upstream adapter failed; may retry.
+        ClaudeTierUnavailable  — proxy unreachable; fall back or skip.
+    """
+    if not prompt:
+        raise ClaudeTierBadRequest("empty prompt")
+
+    messages: list[dict] = []
+    provenance_parts: dict[str, list[dict]] = {}
+    if system_prompt:
+        system_text = (
+            system_prompt.text
+            if isinstance(system_prompt, ProvenancedText)
+            else system_prompt
+        )
+        messages.append({"role": "system", "content": system_text})
+        if isinstance(system_prompt, ProvenancedText):
+            provenance_parts["system"] = system_prompt.to_wire()
+    prompt_text = prompt.text if isinstance(prompt, ProvenancedText) else prompt
+    messages.append({"role": "user", "content": prompt_text})
+    if isinstance(prompt, ProvenancedText):
+        provenance_parts["user"] = prompt.to_wire()
+
+    body_payload = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+    }
+    if provenance_parts:
+        body_payload["maez_egress_segments"] = {
+            "schema_version": "maez-egress-provenance-v1",
+            "parts": provenance_parts,
+        }
+
+    return _post_chat_payload(
+        body_payload=body_payload,
+        model=model,
+        caller=caller,
+        timeout_s=timeout_s,
+    )
+
+
+def call_messages(
+    *,
+    system_prompt: str | ProvenancedText | None,
+    messages: Sequence[CloudMessage],
+    model: str = "sonnet",
+    caller: str = DEFAULT_CALLER,
+    timeout_s: Optional[float] = None,
+) -> TierReply:
+    """Send role-bearing message parts while preserving per-part provenance.
+
+    This is additive to call(); existing prompt/system_prompt callers keep
+    their legacy behavior. The span bundle is shaped to match the
+    subscription proxy's rendered parts exactly.
+    """
+    if not messages:
+        raise ClaudeTierBadRequest("empty messages")
+
+    wire_messages: list[dict] = []
+    provenance_parts: dict[str, list[dict]] = {}
+    if system_prompt:
+        system_pt = _as_provenanced_text(
+            system_prompt,
+            source_ref="claude_tier:system:legacy_raw",
+        )
+        wire_messages.append({"role": "system", "content": system_pt.text})
+        if system_pt.spans:
+            provenance_parts["system"] = system_pt.to_wire()
+
+    assistant_parts: list[ProvenancedText] = []
+    role_parts: list[ProvenancedText] = []
+    user_parts: list[ProvenancedText] = []
+
+    for index, message in enumerate(messages):
+        role = message.role or "user"
+        content_pt = _as_provenanced_text(
+            message.content,
+            source_ref=f"claude_tier:message:{index}:{role}:legacy_raw",
+        )
+        wire_messages.append({"role": role, "content": content_pt.text})
+        if role == "system":
+            provenance_parts["system"] = (
+                _join_provenanced([
+                    ProvenancedText.from_wire(provenance_parts.get("system", [])),
+                    content_pt,
+                ]).to_wire()
+            )
+        elif role == "user":
+            user_parts.append(content_pt)
+        elif role == "assistant":
+            assistant_parts.append(_with_role_prefix(message, index=index))
+        else:
+            role_parts.append(_with_role_prefix(message, index=index))
+
+    assistant = _join_provenanced(assistant_parts)
+    role_history = _join_provenanced(role_parts)
+    user = _join_provenanced(user_parts)
+    if assistant.text:
+        provenance_parts["assistant_history"] = assistant.to_wire()
+    if role_history.text:
+        provenance_parts["role_history"] = role_history.to_wire()
+    if user.text:
+        provenance_parts["user"] = user.to_wire()
+
+    body_payload = {
+        "model": model,
+        "messages": wire_messages,
+        "stream": False,
+    }
+    if provenance_parts:
+        body_payload["maez_egress_segments"] = {
+            "schema_version": "maez-egress-provenance-v1",
+            "parts": provenance_parts,
+        }
+
+    return _post_chat_payload(
+        body_payload=body_payload,
+        model=model,
+        caller=caller,
+        timeout_s=timeout_s,
     )
 
 

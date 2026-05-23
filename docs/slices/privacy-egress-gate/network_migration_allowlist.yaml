@@ -35,9 +35,9 @@ entries:
     destination: anthropic_api
     surface: direct_claude_router
     category: subprocess_mediated_external
-    status: proxy_shadow
-    owner_visible_rationale: Claude router now calls claude_tier/subscription_proxy so cloud traffic crosses the egress provenance shadow gate.
-    removal_target: keep on subscription_proxy path; verify before enforcement closure
+    status: proxy_shadow_provenanced
+    owner_visible_rationale: Claude router calls claude_tier/subscription_proxy with source-attached span provenance; cloud remains shadow-only.
+    removal_target: keep on subscription_proxy path; verify cloud-as-tool evidence before enforcement closure
     review_by: "2026-06-12"
     surface_owner: codex
   - path: core/routing/fast_backend_cloud.py

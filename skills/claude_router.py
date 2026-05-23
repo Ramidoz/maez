@@ -9,9 +9,9 @@ Phase 1 of the Jarvis-tier plan (see memory: project_jarvis_tier_and_distillatio
 Policy:
   - Per-user `jarvis_tier` flag in config/user_profiles.yaml gates external routing.
   - Regex classifier emits {route: local|external, tier: sonnet|opus, reason}.
-  - External calls hit Claude API; raw output returned with thin Maez-voice prefix.
+  - External calls hit Claude through Maez's proxy as optional tool evidence.
   - Every turn logged to logs/trajectories/YYYY-MM-DD.jsonl for future distillation.
-  - Failure → graceful fallback to local.
+  - Failure leaves local Maez generation as the always-running path.
 
 Not a permanent crutch. Trajectories become SFT data; external call rate drops over
 time as Maez's own brain closes the gap on the owner's actual problem distribution.
@@ -144,50 +144,84 @@ def jarvis_tier_enabled(user_profile_id: str | None) -> bool:
     return bool((profiles.get("defaults") or {}).get("jarvis_tier", False))
 
 
-def call_claude(system: str, messages: list[dict], tier: str,
+def _coerce_system(system):
+    from core.egress.provenance import ProvenancedText
+
+    if isinstance(system, ProvenancedText):
+        return system
+    return ProvenancedText.system_bounded_query(
+        str(system or ""),
+        source_ref="skills.claude_router:system",
+    )
+
+
+def _coerce_message_content(role: str, content, *, index: int):
+    from core.egress.provenance import ProvenancedText
+
+    if isinstance(content, ProvenancedText):
+        return content
+    return ProvenancedText.from_raw_conservative(
+        str(content or ""),
+        source_ref=f"skills.claude_router:{role}:{index}:legacy_raw",
+    )
+
+
+def call_claude(system, messages: list[dict], tier: str,
                 max_tokens: int = 4096) -> dict[str, Any]:
     """Call Claude through Maez's subscription proxy.
 
-    Returns {content, model, usage, latency_s}. Raises on failure so
-    the caller can fall back local. The direct Anthropic SDK path was
-    retired by #3 egress direct-route closure; cloud traffic must cross
-    the subscription-proxy provenance/shadow gate.
+    Returns {content, model, usage, latency_s, cloud_context}. Raises on
+    failure so the caller can continue its local-always path without cloud
+    evidence. The direct Anthropic SDK path was retired by #3 egress
+    direct-route closure; cloud traffic must cross the subscription-proxy
+    provenance/shadow gate.
     """
     from core.egress.provenance import ProvenancedText
     from core.routing import claude_tier
 
     model = "opus" if tier == "opus" else "sonnet"
-    prompt_parts: list[str] = []
-    for message in messages:
-        role = message.get("role")
+    cloud_messages: list[claude_tier.CloudMessage] = []
+    for index, message in enumerate(messages):
+        role = str(message.get("role") or "user")
         if role == "system":
             continue
-        content = str(message.get("content") or "")
-        if role == "user":
-            prompt_parts.append(content)
-        else:
-            prompt_parts.append(f"[{role}]\n{content}")
-    prompt = "\n\n".join(part for part in prompt_parts if part).strip()
-    if not prompt:
-        prompt = "(empty external route prompt)"
+        cloud_messages.append(
+            claude_tier.CloudMessage(
+                role=role,
+                content=_coerce_message_content(
+                    role,
+                    message.get("content"),
+                    index=index,
+                ),
+            )
+        )
+    if not cloud_messages:
+        cloud_messages.append(
+            claude_tier.CloudMessage(
+                role="user",
+                content=ProvenancedText.from_raw_conservative(
+                    "(empty external route prompt)",
+                    source_ref="skills.claude_router:empty_prompt",
+                ),
+            )
+        )
 
     t0 = time.time()
-    reply = claude_tier.call(
-        prompt=ProvenancedText.owner_message_context(
-            prompt,
-            source_ref="skills.claude_router:messages",
-        ),
-        system_prompt=ProvenancedText.system_bounded_query(
-            system,
-            source_ref="skills.claude_router:system",
-        ),
+    reply = claude_tier.call_messages(
+        system_prompt=_coerce_system(system),
+        messages=cloud_messages,
         model=model,
         caller="claude_router/call_claude",
     )
     dt = time.time() - t0
+    cloud_context = ProvenancedText.model_output(
+        reply.reply,
+        source_ref="claude_router:cloud_consult",
+    )
 
     return {
         "content": reply.reply,
+        "cloud_context": cloud_context,
         "model": reply.model_used,
         "usage": {
             "input_tokens": reply.input_tokens,
@@ -196,15 +230,6 @@ def call_claude(system: str, messages: list[dict], tier: str,
         "latency_s": round(dt, 2),
         "stop_reason": None,
     }
-
-
-# ── voice shell ───────────────────────────────────────────────────────
-def wrap_maez_voice(claude_text: str, tier: str) -> str:
-    """Thin voice shell around Claude output. Preserves fidelity."""
-    if not claude_text:
-        return claude_text
-    prefix = "— consulting a bigger model —\n\n" if tier == "opus" else "— checking with a bigger model —\n\n"
-    return prefix + claude_text
 
 
 # ── trajectory logger ─────────────────────────────────────────────────
