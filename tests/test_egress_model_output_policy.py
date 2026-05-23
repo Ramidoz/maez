@@ -34,7 +34,8 @@ class ModelOutputPolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(decision.decision, "redact")
-        self.assertIn("minimized_private_context", decision.reason_codes)
+        self.assertIn("minimized_untrusted_model_output", decision.reason_codes)
+        self.assertNotIn("minimized_private_context", decision.reason_codes)
         self.assertNotIn("rohit@example.com", decision.sanitized_text())
 
     def test_model_output_factory_does_not_upgrade_to_public_or_memory(self):

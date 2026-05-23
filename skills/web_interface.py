@@ -6106,7 +6106,10 @@ def build_claude_router_cloud_payload(
         })
     for item in history[:-1]:
         if isinstance(item, dict) and item.get("role") and item.get("content"):
-            # history stays conservative until persisted source metadata exists.
+            # History stays conservative until persisted source metadata exists.
+            # In proxy shadow mode this is telemetry, not active redaction:
+            # enforcement is the later slice that will stop/transform these
+            # conservative spans before adapter execution.
             cloud_messages.append({
                 "role": str(item["role"]),
                 "content": ProvenancedText.from_raw_conservative(
@@ -6633,33 +6636,25 @@ def chat():
                 system=system_prompt_for_api,
                 messages=cloud_messages,
                 tier=decision.tier or "sonnet",
+                timeout_s=claude_router.cloud_optional_timeout_s(),
             )
-            from core.egress.provenance import ProvenancedText
-
             cloud_context = claude_result.get("cloud_context")
-            if not isinstance(cloud_context, ProvenancedText):
-                cloud_context = ProvenancedText.model_output(
-                    str(claude_result.get("content") or ""),
-                    source_ref="web_interface:cloud_consult",
-                )
             # Cloud is optional evidence. The local Maez runtime path is the
             # speaker, with local inference as the final voice step.
-            messages_list.append(
-                {
-                    "role": "system",
-                    "content": (
-                        "External cloud reasoning tool output "
-                        "(origin_class=model_output, untrusted evidence; "
-                        "local Maez runtime path remains speaker):\n\n"
-                        f"{cloud_context.text}"
-                    ),
-                }
+            evidence_message = claude_router.build_cloud_evidence_message(
+                cloud_context or claude_result.get("content") or ""
             )
+            evidence_index = (
+                len(messages_list) - 1
+                if messages_list and messages_list[-1].get("role") == "user"
+                else len(messages_list)
+            )
+            messages_list.insert(evidence_index, evidence_message)
             used_source = "local"
             claude_meta = {
-                **claude_result,
-                "cloud_output_origin_class": "model_output",
-                "cloud_consult": True,
+                "cloud_consult": claude_router.build_cloud_consult_sidecar(
+                    claude_result
+                )
             }
         except Exception as e:
             logger.warning(
@@ -6667,6 +6662,9 @@ def chat():
                 e,
             )
             used_source = "local"
+            claude_meta = {
+                "cloud_failure": claude_router.build_cloud_failure_sidecar(e)
+            }
 
     try:
         # Local path: always generates the user-facing reply.

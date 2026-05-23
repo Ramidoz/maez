@@ -150,7 +150,8 @@ def decide_egress(payload: EgressRequest | object) -> EgressDecision:
     original_chars = sum(len(segment.text or "") for segment in request.segments)
     sanitized: list[str] = []
     reasons: list[str] = []
-    saw_minimizable = False
+    saw_minimizable_private = False
+    saw_untrusted_external = False
 
     for segment in request.segments:
         origin = segment.origin_class
@@ -191,7 +192,10 @@ def decide_egress(payload: EgressRequest | object) -> EgressDecision:
                     origin_classes=origins,
                     original_char_count=original_chars,
                 )
-            saw_minimizable = True
+            if origin in UNTRUSTED_EXTERNAL_OUTPUT:
+                saw_untrusted_external = True
+            else:
+                saw_minimizable_private = True
             redacted = redact_for_cloud(segment.text)
             sanitized.append(redacted.text)
             continue
@@ -205,8 +209,11 @@ def decide_egress(payload: EgressRequest | object) -> EgressDecision:
             original_char_count=original_chars,
         )
 
-    if saw_minimizable:
-        reasons.append("minimized_private_context")
+    if saw_minimizable_private or saw_untrusted_external:
+        if saw_minimizable_private:
+            reasons.append("minimized_private_context")
+        if saw_untrusted_external:
+            reasons.append("minimized_untrusted_model_output")
         decision: Decision = "redact"
     else:
         reasons.append("non_private_allowed")
