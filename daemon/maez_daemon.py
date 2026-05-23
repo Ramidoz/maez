@@ -1216,6 +1216,13 @@ class MaezDaemon:
         from core.health.bounded_worker import BoundedSingletonWorker
 
         self._dream_worker = BoundedSingletonWorker(name="dream-cycle")
+        from core.health.metacognitive_watchdog import MetacognitiveWatchdog
+
+        self._metacognitive_watchdog = MetacognitiveWatchdog()
+        self.watchdog_state = "observing"
+        self._watchdog_halted_at = None
+        self._watchdog_halt_summary = {}
+        self._watchdog_operator_resume_required = False
         # Native camera / MediaPipe calls can wedge below Python.
         # Isolate presence observation from the main reasoning loop:
         # if the sensor blocks, Maez records presence as unavailable
@@ -1754,6 +1761,40 @@ class MaezDaemon:
             "cycle_stalled": cycle_stalled,
             "stalled_after_seconds": stalled_after_seconds,
         }
+
+    def _watchdog_health(self, *, operator: bool = False) -> dict:
+        """Content-free metacognitive watchdog health projection."""
+        state = {
+            "watchdog_state": self.watchdog_state,
+            "operator_resume_required": bool(self._watchdog_operator_resume_required),
+        }
+        if self._watchdog_halted_at:
+            state["halted_at"] = self._watchdog_halted_at
+        if operator and self._watchdog_halt_summary:
+            state["halt_summary"] = dict(self._watchdog_halt_summary)
+        return state
+
+    def _enter_watchdog_safe_standby(self, halt) -> None:
+        """Stop autonomous cycles after a watchdog halt without ordinary shutdown."""
+        self.watchdog_state = "safe_standby"
+        self._watchdog_halted_at = datetime.now(timezone.utc).isoformat()
+        self._watchdog_operator_resume_required = True
+        summary = halt.health_summary() if hasattr(halt, "health_summary") else {}
+        self._watchdog_halt_summary = {
+            "halt_signal_id": summary.get("halt_signal_id", ""),
+            "halt_detector": summary.get("detector", getattr(halt, "detector", "")),
+            "halt_reason_code": summary.get("reason_code", getattr(halt, "reason_code", "")),
+            "window_ref": summary.get("window_ref", ""),
+            "threshold_ref": summary.get("threshold_ref", ""),
+            "observed_metrics": dict(summary.get("observed_metrics") or {}),
+        }
+        self.running = False
+        logger.error(
+            "Metacognitive watchdog safe_standby: detector=%s reason=%s signal=%s",
+            self._watchdog_halt_summary.get("halt_detector"),
+            self._watchdog_halt_summary.get("halt_reason_code"),
+            self._watchdog_halt_summary.get("halt_signal_id"),
+        )
 
     def _presence_unavailable(self, error: str, *, token=None) -> CameraPresenceState:
         if token is None:
@@ -4961,9 +5002,26 @@ class MaezDaemon:
         logger.info("Reasoning loop started (interval: %ds)", LOOP_INTERVAL)
 
         while self.running:
+            cycle_start = time.time()
+            try:
+                self._metacognitive_watchdog.observe_cycle_duration(
+                    cycle_start - getattr(self, "_watchdog_last_cycle_start", cycle_start)
+                )
+                self._watchdog_last_cycle_start = cycle_start
+                try:
+                    self._metacognitive_watchdog.observe_scalars(self.temperament.current())
+                except Exception as exc:
+                    logger.debug("metacognitive watchdog scalar sample skipped: %s", exc)
+            except Exception as halt:
+                from core.health.metacognitive_watchdog import WatchdogHalt
+
+                if isinstance(halt, WatchdogHalt):
+                    self._enter_watchdog_safe_standby(halt)
+                    break
+                raise
+
             self.cycle_count += 1
             self.last_cycle_time = datetime.now(timezone.utc).isoformat()
-            cycle_start = time.time()
             self._mark_cycle_stage("cycle_start")
 
             logger.info("--- Cycle %d ---", self.cycle_count)
@@ -4991,6 +5049,19 @@ class MaezDaemon:
             self._mark_cycle_stage("deferred_actions")
             tier1_results = self.actions.execute_pending()
             tier2_results = self.actions.execute_tier2_pending()
+            if tier1_results or tier2_results:
+                try:
+                    self._metacognitive_watchdog.observe_actions(
+                        f"tier{getattr(r, 'tier', '?')}:{getattr(r, 'action', '?')}"
+                        for r in tier1_results + tier2_results
+                    )
+                except Exception as halt:
+                    from core.health.metacognitive_watchdog import WatchdogHalt
+
+                    if isinstance(halt, WatchdogHalt):
+                        self._enter_watchdog_safe_standby(halt)
+                        break
+                    raise
             for r in tier1_results + tier2_results:
                 logger.info("Deferred action result: %s", r)
 
@@ -5377,6 +5448,16 @@ class MaezDaemon:
                         "cycle-response audit failed (continuing): %s",
                         _audit_err,
                     )
+
+                try:
+                    self._metacognitive_watchdog.observe_tokens(result.split())
+                except Exception as halt:
+                    from core.health.metacognitive_watchdog import WatchdogHalt
+
+                    if isinstance(halt, WatchdogHalt):
+                        self._enter_watchdog_safe_standby(halt)
+                        break
+                    raise
 
                 logger.info("Cycle %d response:\n%s", self.cycle_count, result)
                 # Store response with full perception snapshot + screen context
@@ -6277,6 +6358,7 @@ class MaezDaemon:
                     "cycle_count": self.cycle_count,
                     "last_cycle": self.last_cycle_time,
                     "reasoning_loop": self._cycle_heartbeat_health(),
+                    "metacognitive_watchdog": self._watchdog_health(),
                     "uptime_seconds": int(
                         time.time() - datetime.fromisoformat(self.boot_time).timestamp()
                     ),
@@ -6303,7 +6385,9 @@ class MaezDaemon:
 
         @app.route("/operator/health")
         def operator_health():
-            return jsonify(self._operator_health())
+            payload = dict(self._operator_health())
+            payload["metacognitive_watchdog"] = self._watchdog_health(operator=True)
+            return jsonify(payload)
 
         @app.route("/internal/s7/webauthn/status", methods=["GET"])
         def s7_webauthn_status():
