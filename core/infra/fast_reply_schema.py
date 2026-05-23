@@ -37,7 +37,7 @@ from typing import Any, Optional
 # ── allowed shape ────────────────────────────────────────────────────
 REQUEST_KEYS_REQUIRED = frozenset({'message', 'trust_scope'})
 REQUEST_KEYS_OPTIONAL = frozenset({
-    'backend',          # 'auto' | 'local' | 'cloud'
+    'backend',          # 'auto' | 'local' | 'cloud' (cloud is accepted then downgraded)
     'max_tokens',       # int
     'temperature',      # float
     'timeout_s',        # float

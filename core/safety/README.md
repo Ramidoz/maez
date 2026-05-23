@@ -10,7 +10,7 @@ approval (or refusal).
 | [`self_claim_audit.py`](self_claim_audit.py) | Structural fabrication detector. Rewrites Maez replies that claim invented names / paths / schedules not grounded in actual system state. |
 | [`owner_trust.py`](owner_trust.py) | Per-command risk classifier. `is_risky_cmd()` decides whether a shell command at the owner's trust level can inline-execute or must queue an approval card. |
 | [`injection_patterns.py`](injection_patterns.py) | Regex / heuristic patterns used by the audit LLM's Pass 2 judge. Six buckets (imperative, obfuscation, encoding, delegation, exfiltration, escalation). |
-| [`cloud_redactor.py`](cloud_redactor.py) | Strips owner-identifying tokens from any payload crossing into a cloud adapter. Runs inside `core.routing.fast_backend_router` just before an external call. |
+| [`cloud_redactor.py`](cloud_redactor.py) | Strips owner-identifying tokens from payload previews and egress-gate minimization paths. The old fast-backend router cloud path is retired; new cloud consults route through the provenance-aware egress gate. |
 
 ## Invariants
 

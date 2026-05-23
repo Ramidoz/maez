@@ -8,9 +8,9 @@ honest.
 |---|---|
 | [`model_config.py`](model_config.py) | Single source of truth for which local model is the primary, judge, summariser. Reads `MAEZ_PRIMARY_MODEL` / `MAEZ_JUDGE_MODEL` / friends from `.env`. |
 | [`llm_client.py`](llm_client.py) | Thin HTTP client for the local inference backend. `active_backend()` returns `llamacpp` or `ollama` based on env + reachability. |
-| [`fast_backend_router.py`](fast_backend_router.py) | Two-stage policy + selector. Stage 1 decides *what's allowed* (local / cloud / auto) per trust-scope rule; stage 2 picks the actual backend by availability. `BackendSelection.policy_denied` distinguishes policy refusal from outage. |
+| [`fast_backend_router.py`](fast_backend_router.py) | Two-stage policy + selector. Stage 1 decides *what's allowed* (local / auto only after fast-backend cloud retirement) per trust-scope rule; stage 2 picks the actual local backend by availability. `BackendSelection.policy_denied` distinguishes policy refusal from outage. |
 | [`fast_backend_local.py`](fast_backend_local.py) | Local-backend probe + generator. `is_available()` decides which backend to ping based on `active_backend()`. |
-| [`fast_backend_cloud.py`](fast_backend_cloud.py) | Cloud-backend wrapper. Routes through the subscription proxy (never directly) so every cloud call is auditable. |
+| [`fast_backend_cloud.py`](fast_backend_cloud.py) | Retired fast-lane cloud tombstone. Direct `CloudBackend.generate(...)` raises before egress; cloud is available through `claude_tier.py` / `claude_router` only. |
 | [`context_compressor.py`](context_compressor.py) | Trims prompt context when the trip risks exceeding the model's window. Preserves system + recent turns. |
 | [`claude_tier.py`](claude_tier.py) | Typed client for Claude (via `core.subscription_proxy`). Models the four fail modes (`Unavailable / Capped / AdapterError / BadRequest`). |
 
@@ -19,20 +19,21 @@ honest.
 Defined in `fast_backend_router.RULE_*`:
 
 - `MAEZ_LOCAL_ONLY` — trust scope `rohit` by default: never cloud.
-- `MAEZ_CLOUD_ALLOWED_FOR_DRAFTING` — specific scopes can route to
-  cloud for drafts / hard reasoning.
+- `MAEZ_CLOUD_ALLOWED_FOR_DRAFTING` — legacy rule name retained for
+  compatibility; fast-lane cloud is retired, so these scopes are
+  local-first with no cloud fallback.
 - `EXTERNAL_GUESTS_LOCAL_ONLY` — any non-owner scope: local only,
   fail loud if they ask for cloud.
-- `DEFAULT` — local-first, cloud fallback if env-enabled.
+- `DEFAULT` — local-first with no cloud fallback.
 
 ## Invariants
 
-- **Cloud never reached directly.** Every cloud call goes through
-  `core/subscription_proxy/` (localhost-only FastAPI on 11438).
-  Keeps all cloud routing auditable + budgetable in one place.
-- **Redact before cloud.** Any payload crossing into a cloud adapter
-  first passes through `core.safety.cloud_redactor`. The redaction
-  telemetry rides back on `BackendSelection.redaction_telemetry`.
+- **Fast lane is local-only.** `fast_backend_router` must not select
+  `CloudBackend`, and `CloudBackend.generate(...)` is an always-raise
+  tombstone if reached directly.
+- **Cloud consults belong to the main loop.** Cloud-capable reasoning
+  routes through `claude_router` / `claude_tier` as cloud-as-tool, not
+  through the fast-lane router.
 - **Policy-deny must be distinguishable from outage.** (10-B1 fix.)
   `BackendSelection.policy_denied=True` means "refused by rule";
   false + `backend is None` means "backend unreachable." Callers

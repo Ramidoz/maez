@@ -45,9 +45,9 @@ entries:
     destination: anthropic_openai_api
     surface: direct_fast_backend_cloud
     category: runtime_external
-    status: proxy_shadow
-    owner_visible_rationale: Fast backend cloud now calls claude_tier/subscription_proxy so cloud traffic crosses the egress provenance shadow gate.
-    removal_target: keep on subscription_proxy path; verify before enforcement closure
+    status: deprecated
+    owner_visible_rationale: Fast-backend cloud retirement 2026-05-23 made the fast lane local-only; cloud remains available through claude_router cloud-as-tool.
+    removal_target: Fast-backend cloud retirement 2026-05-23; keep tombstone for one canonicalize cycle, then delete after two weeks of zero new fast_backend_cloud/generate rows and Telegram migration.
     review_by: "2026-06-12"
     surface_owner: codex
   - path: daemon/maez_daemon.py

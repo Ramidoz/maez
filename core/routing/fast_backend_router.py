@@ -27,16 +27,16 @@ Policy rules (declarative table; easy to extend):
     maez_local_only                  — the owner's primary scope. Local always.
                                        Cloud requests are downgraded to local.
     maez_cloud_allowed_for_drafting  — the owner's drafting scope where cloud
-                                       fallback is permitted (still subject
-                                       to env gate).
+                                       used to be permitted. As of the
+                                       fast-backend cloud retirement slice,
+                                       fast-lane cloud requests are downgraded
+                                       to local here too.
     external_guests_local_only       — Public/guest scopes. Local always.
                                        Cloud requests are downgraded to local.
                                        If local is unavailable, the request
                                        fails — never silently routed to cloud.
     default                          — Anything not in the table.
-                                       Local-first with cloud fallback only
-                                       when local is unavailable AND cloud
-                                       is env-enabled.
+                                       Local-only. Cloud fallback is retired.
 
 Local-first principles preserved:
   • memory authority local
@@ -55,7 +55,6 @@ import logging
 from dataclasses import dataclass, field
 
 from core.fast_backend_local import LocalGemmaBackend, BackendResult
-from core.fast_backend_cloud import CloudBackend
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +71,7 @@ RULE_MAEZ_LOCAL_ONLY                 = 'maez_local_only'
 RULE_MAEZ_CLOUD_ALLOWED_FOR_DRAFTING = 'maez_cloud_allowed_for_drafting'
 RULE_EXTERNAL_GUESTS_LOCAL_ONLY      = 'external_guests_local_only'
 RULE_DEFAULT                         = 'default'
+RETIREMENT_REASON_FAST_LANE_CLOUD = 'fast_lane_cloud_retired'
 
 # Map trust_scope -> rule. Add scopes here as the system grows.
 # Keep this table small and explicit; surprises here cause cloud leaks.
@@ -105,6 +105,7 @@ class PolicyDecision:
     allow_cloud:        bool      # gate for the selector
     downgraded:         bool      # True if requested != effective (cloud→local)
     reasons:            list[str] = field(default_factory=list)
+    retirement_reason_code: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -115,6 +116,7 @@ class PolicyDecision:
             'allow_cloud':      self.allow_cloud,
             'downgraded':       self.downgraded,
             'reasons':          list(self.reasons),
+            'retirement_reason_code': self.retirement_reason_code,
         }
 
     def explain(self) -> str:
@@ -130,7 +132,7 @@ class PolicyDecision:
 
 @dataclass
 class BackendSelection:
-    backend: object        # duck-typed; either LocalGemmaBackend or CloudBackend
+    backend: object        # duck-typed; LocalGemmaBackend or None after retirement
     name: str
     reason: str            # human-readable explanation of the choice
     # Session 11g — populated only when the cloud branch ran the redactor.
@@ -142,13 +144,17 @@ class BackendSelection:
     # cloud under external_guests_local_only was indistinguishable
     # from a transient local outage in the logs.
     policy_denied: bool = False
+    retirement_reason_code: str = ""
 
 
 def _local() -> LocalGemmaBackend:
     return LocalGemmaBackend()
 
 
-def _cloud() -> CloudBackend:
+def _cloud() -> object:
+    # Compatibility shim for older regression guards. Selection no longer calls
+    # this factory after fast-backend cloud retirement.
+    from core.fast_backend_cloud import CloudBackend
     return CloudBackend()
 
 
@@ -204,8 +210,10 @@ def decide_policy(trust_scope: str, requested_policy: str = POLICY_AUTO) -> Poli
         if requested_policy == POLICY_CLOUD:
             decision.effective_policy = POLICY_LOCAL
             decision.downgraded = True
+            decision.retirement_reason_code = RETIREMENT_REASON_FAST_LANE_CLOUD
             decision.reasons.append(
-                'maez_local_only: cloud request downgraded to local'
+                'maez_local_only: cloud request downgraded to local '
+                f'({RETIREMENT_REASON_FAST_LANE_CLOUD})'
             )
         elif requested_policy == POLICY_AUTO:
             decision.effective_policy = POLICY_LOCAL
@@ -217,12 +225,26 @@ def decide_policy(trust_scope: str, requested_policy: str = POLICY_AUTO) -> Poli
         return decision
 
     if rule == RULE_MAEZ_CLOUD_ALLOWED_FOR_DRAFTING:
-        decision.allow_cloud = True
+        decision.allow_cloud = False
         decision.reasons.append(
-            'maez_cloud_allowed_for_drafting: cloud permitted (still subject to env gate)'
+            'maez_cloud_allowed_for_drafting: fast-lane cloud retired '
+            f'({RETIREMENT_REASON_FAST_LANE_CLOUD})'
         )
-        # Honor whatever was requested; auto stays auto, local stays local,
-        # cloud stays cloud.
+        if requested_policy == POLICY_CLOUD:
+            decision.effective_policy = POLICY_LOCAL
+            decision.downgraded = True
+            decision.retirement_reason_code = RETIREMENT_REASON_FAST_LANE_CLOUD
+            decision.reasons.append(
+                'cloud request downgraded to local after fast-backend cloud retirement'
+            )
+        elif requested_policy == POLICY_AUTO:
+            decision.effective_policy = POLICY_AUTO
+            decision.reasons.append(
+                'auto remains local-first with no cloud fallback after retirement'
+            )
+        else:
+            decision.effective_policy = POLICY_LOCAL
+            decision.reasons.append('local request honored')
         return decision
 
     if rule == RULE_EXTERNAL_GUESTS_LOCAL_ONLY:
@@ -230,9 +252,10 @@ def decide_policy(trust_scope: str, requested_policy: str = POLICY_AUTO) -> Poli
         if requested_policy == POLICY_CLOUD:
             decision.effective_policy = POLICY_LOCAL
             decision.downgraded = True
+            decision.retirement_reason_code = RETIREMENT_REASON_FAST_LANE_CLOUD
             decision.reasons.append(
                 'external_guests_local_only: cloud request downgraded to local '
-                '(guests never reach cloud)'
+                f'(guests never reach cloud; {RETIREMENT_REASON_FAST_LANE_CLOUD})'
             )
         elif requested_policy == POLICY_AUTO:
             decision.effective_policy = POLICY_LOCAL
@@ -245,9 +268,22 @@ def decide_policy(trust_scope: str, requested_policy: str = POLICY_AUTO) -> Poli
             )
         return decision
 
-    # RULE_DEFAULT — historical 11d behavior
-    decision.allow_cloud = True
-    decision.reasons.append('default: local-first; cloud fallback if local unavailable and env-enabled')
+    # RULE_DEFAULT — local-only after fast-backend cloud retirement.
+    decision.allow_cloud = False
+    decision.reasons.append(
+        f'default: fast-lane cloud retired ({RETIREMENT_REASON_FAST_LANE_CLOUD})'
+    )
+    if requested_policy == POLICY_CLOUD:
+        decision.effective_policy = POLICY_LOCAL
+        decision.downgraded = True
+        decision.retirement_reason_code = RETIREMENT_REASON_FAST_LANE_CLOUD
+        decision.reasons.append('cloud request downgraded to local')
+    elif requested_policy == POLICY_AUTO:
+        decision.effective_policy = POLICY_AUTO
+        decision.reasons.append('auto remains local-first with no cloud fallback')
+    else:
+        decision.effective_policy = POLICY_LOCAL
+        decision.reasons.append('local request honored')
     return decision
 
 
@@ -255,7 +291,6 @@ def select_backend(decision: PolicyDecision) -> BackendSelection:
     """STAGE 2 — given a policy decision, pick the actual backend by availability.
     Never raises. Returns a BackendSelection (backend may be None on failure)."""
     local = _local()
-    cloud = _cloud()
 
     eff = decision.effective_policy
 
@@ -278,61 +313,44 @@ def select_backend(decision: PolicyDecision) -> BackendSelection:
             backend=None, name='none',
             reason=f'effective=local; local unavailable [{decision.rule_fired}]',
             policy_denied=True,
+            retirement_reason_code=decision.retirement_reason_code,
         )
 
     if eff == POLICY_CLOUD:
-        if not decision.allow_cloud:
-            # Defense-in-depth: should not happen because decide_policy
-            # would have downgraded; refuse explicitly anyway.
-            # 10-B1: policy_denied=True so a cloud-forbidden guest
-            # whose local probe happens to be intermittent cannot be
-            # confused with a plain availability failure.
-            logger.warning(
-                "fast_backend_router: policy forbids cloud [%s]; refusing "
-                "(rule_fired=%s)",
-                decision.effective_policy, decision.rule_fired,
-            )
-            return BackendSelection(
-                backend=None, name='none',
-                reason=(
-                    f'effective=cloud but policy disallows cloud [{decision.rule_fired}]'
-                ),
-                policy_denied=True,
-            )
-        if cloud.is_available():
-            return BackendSelection(
-                backend=cloud, name=cloud.name,
-                reason=f'effective=cloud; cloud enabled [{decision.rule_fired}]',
-            )
+        logger.warning(
+            "fast_backend_router: cloud effective policy reached after "
+            "retirement; refusing (rule_fired=%s)",
+            decision.rule_fired,
+        )
         return BackendSelection(
             backend=None, name='none',
             reason=(
-                f'effective=cloud; cloud disabled or unconfigured '
-                f'(set MAEZ_CLOUD_BACKEND_ENABLED=1 and provide an API key) '
+                f'effective=cloud; fast-lane cloud retired '
+                f'({RETIREMENT_REASON_FAST_LANE_CLOUD}) '
                 f'[{decision.rule_fired}]'
             ),
+            policy_denied=True,
+            retirement_reason_code=RETIREMENT_REASON_FAST_LANE_CLOUD,
         )
 
-    # eff == auto — local-first, cloud only if policy + env both allow
+    # eff == auto — local-first, no cloud fallback after retirement.
     if local.is_available():
         return BackendSelection(
             backend=local, name=local.name,
             reason=f'effective=auto; local available (preferred) [{decision.rule_fired}]',
-        )
-    if decision.allow_cloud and cloud.is_available():
-        return BackendSelection(
-            backend=cloud, name=cloud.name,
-            reason=f'effective=auto; local unavailable, cloud fallback [{decision.rule_fired}]',
         )
     _policy_denied = (not decision.allow_cloud) and not local.is_available()
     return BackendSelection(
         backend=None, name='none',
         reason=(
             f'effective=auto; no backend available '
-            f'(local down{"; cloud disallowed by policy" if not decision.allow_cloud else "; cloud also unavailable"}) '
+            f'(local down; cloud retired by policy) '
             f'[{decision.rule_fired}]'
         ),
         policy_denied=_policy_denied,
+        retirement_reason_code=(
+            RETIREMENT_REASON_FAST_LANE_CLOUD if _policy_denied else ""
+        ),
     )
 
 
@@ -373,27 +391,7 @@ def generate(
         sel.name, sel.reason, decision.explain(),
     )
 
-    # ── Session 11g: cloud redaction guard ──
-    # If the selected backend is the cloud backend, run the prompt through
-    # core.cloud_redactor.redact_for_cloud and substitute the redacted text.
-    # The local backend path is intentionally untouched — perception is
-    # already local-only and redaction would just add latency for no gain.
     prompt_for_backend = prompt
-    if isinstance(sel.backend, CloudBackend):
-        from core.cloud_redactor import redact_for_cloud
-        red = redact_for_cloud(prompt)
-        prompt_for_backend = red.text
-        sel.redaction_telemetry = red.to_telemetry()
-        if red.changed:
-            logger.info(
-                'cloud_redactor: %d redactions applied (pii=%s internal=%s) '
-                'before sending to %s',
-                red.total_redactions(),
-                red.pii_counts, red.internal_counts, sel.name,
-            )
-        else:
-            logger.info('cloud_redactor: no redactions needed for %s', sel.name)
-
     result = sel.backend.generate(
         prompt_for_backend,
         max_tokens=max_tokens,

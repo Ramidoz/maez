@@ -87,7 +87,7 @@ class FastReplyMetrics:
     policy_reasons: list[str] = field(default_factory=list)
     # ── 11e: empty-reply retry ──
     retry_attempted: bool = False
-    retry_strategy: str = ""  # '' | 'local_sharper' | 'cloud_fallback' | 'degraded_fallback'
+    retry_strategy: str = ""  # '' | 'local_sharper' | 'degraded_fallback'
     retry_reason: str = ""  # '' | 'empty_success' | ...
     retry_succeeded: bool = False
     retry_model_call_ms: int = 0
@@ -97,6 +97,8 @@ class FastReplyMetrics:
     cloud_redactions: int = 0  # total replacements applied
     cloud_redaction_pii: dict = field(default_factory=dict)
     cloud_redaction_internal: dict = field(default_factory=dict)
+    # ── fast-backend cloud retirement ──
+    retirement_reason_code: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -135,6 +137,7 @@ class FastReplyMetrics:
             "cloud_redactions": self.cloud_redactions,
             "cloud_redaction_pii": dict(self.cloud_redaction_pii),
             "cloud_redaction_internal": dict(self.cloud_redaction_internal),
+            "retirement_reason_code": self.retirement_reason_code,
         }
 
 
@@ -191,17 +194,18 @@ def fast_reply(
                            policy table — may be downgraded to local for
                            local-only trust scopes)
 
-        backend_call (kwarg) — if provided, takes precedence over `backend`
+        backend_call (kwarg) — test/bench-only. If provided, it takes
+        precedence over `backend`
         and is invoked as backend_call(prompt_text, max_tokens, temperature).
-        Bench uses this to inject stubs without touching the router.
+        Bench/tests use this to inject stubs without touching the router.
+        Production callers must not pass it.
 
     Empty-reply retry (Session 11e):
         If the chosen backend returns success=True but the text is empty
         or below MIN_VISIBLE_CHARS visible characters, do exactly one
         conservative retry:
           1) one local retry with sharper preface, temp+0.3, tokens*1.5
-          2) if still empty AND policy allows cloud, one cloud retry
-          3) otherwise return DEGRADED_REPLY_TEXT (success=True, degraded)
+          2) otherwise return DEGRADED_REPLY_TEXT (success=True, degraded)
         Retry telemetry lives on metrics.retry_*.
     """
     metrics = FastReplyMetrics()
@@ -259,6 +263,7 @@ def fast_reply(
     metrics.policy_allow_cloud = decision.allow_cloud
     metrics.policy_downgraded = decision.downgraded
     metrics.policy_reasons = list(decision.reasons)
+    metrics.retirement_reason_code = decision.retirement_reason_code
 
     # ── 4. BACKEND CALL ──
     selection_reason = ""
@@ -284,6 +289,8 @@ def fast_reply(
             timeout_s=timeout_s,
         )
         selection_reason = sel.reason
+        if getattr(sel, "retirement_reason_code", ""):
+            metrics.retirement_reason_code = sel.retirement_reason_code
         # Surface cloud redaction telemetry into metrics, if any.
         rt = getattr(sel, "redaction_telemetry", None)
         if isinstance(rt, dict):
@@ -349,56 +356,9 @@ def fast_reply(
             final_text = retry_result.text
             metrics.retry_succeeded = True
         else:
-            # Strategy B: cloud fallback if policy allows AND env enables
-            cloud_eligible = (
-                decision is not None
-                and decision.allow_cloud
-                and backend_call is None  # only when router-driven
-            )
-            if cloud_eligible:
-                cloud_result, cloud_sel, _cd = fast_backend_router.generate(
-                    retry_prompt,
-                    policy="cloud",
-                    trust_scope=trust_scope,
-                    max_tokens=retry_tokens,
-                    temperature=retry_temp,
-                    timeout_s=timeout_s,
-                )
-                metrics.retry_strategy = "cloud_fallback"
-                metrics.retry_model_call_ms = (
-                    metrics.retry_model_call_ms + cloud_result.model_call_ms
-                )
-                metrics.retry_backend_name = cloud_result.backend_name
-                # Cloud retry path: pick up redaction telemetry from this call too
-                rt2 = getattr(cloud_sel, "redaction_telemetry", None)
-                if isinstance(rt2, dict):
-                    # Add to any prior redaction info from the first call
-                    metrics.cloud_redacted = metrics.cloud_redacted or bool(
-                        rt2.get("changed", False)
-                    )
-                    metrics.cloud_redactions = metrics.cloud_redactions + int(
-                        rt2.get("total_redactions", 0) or 0
-                    )
-                    for k, v in (rt2.get("pii_counts") or {}).items():
-                        metrics.cloud_redaction_pii[k] = metrics.cloud_redaction_pii.get(k, 0) + v
-                    for k, v in (rt2.get("internal_counts") or {}).items():
-                        metrics.cloud_redaction_internal[k] = (
-                            metrics.cloud_redaction_internal.get(k, 0) + v
-                        )
-
-                if cloud_result.success and fast_backend_local.is_visible_reply(cloud_result.text):
-                    final_text = cloud_result.text
-                    metrics.retry_succeeded = True
-                else:
-                    # Strategy C: degraded fallback
-                    final_text = DEGRADED_REPLY_TEXT
-                    metrics.retry_strategy = "degraded_fallback"
-                    metrics.retry_succeeded = False
-            else:
-                # Strategy C: degraded fallback (no cloud allowed)
-                final_text = DEGRADED_REPLY_TEXT
-                metrics.retry_strategy = "degraded_fallback"
-                metrics.retry_succeeded = False
+            final_text = DEGRADED_REPLY_TEXT
+            metrics.retry_strategy = "degraded_fallback"
+            metrics.retry_succeeded = False
 
     metrics.total_ms = int((time.perf_counter() - t_start) * 1000)
 
