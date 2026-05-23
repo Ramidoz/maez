@@ -223,4 +223,3 @@ required amendments above. The next panel pass should verify:
 5. Behavioral tests replace the current source-grep-only safety checks.
 6. `model_output` has conservative policy plus distinct runtime reason codes.
 7. Raw-history shadow semantics are explicit and not overclaimed.
-
