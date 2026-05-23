@@ -1,17 +1,16 @@
-# Privacy / Egress Claude Router Provenance Tightening -- Spec v1
+# Privacy / Egress Claude Router Provenance Tightening -- Spec v2
 
-**Status:** CANONICAL (2026-05-22). Docs-only. Not implemented.
+**Status:** CANONICAL v2 (2026-05-23). Docs-only. Not implemented.
 **Date:** 2026-05-22
 **Class:** Covenant-shaped / full ladder, narrow implementation slice
 **Depends on:** canonical Privacy / Egress Gate spec, canonical Privacy /
 Egress Provenance Plumbing spec, and direct-route closure commit `ebbd073`.
-**A2 status:** UNRESOLVED -- founder/covenant blocker (see
-`## Soul-To-Cloud Covenant Fork`). The no-fog `allow/non_private_allowed` claim
-is gated on A2 resolution. Mechanical implementation (insertion-point
-provenance + additive `claude_tier` multi-part API) may proceed under this
-constraint as a later RED-first slice.
-**Lanes cleared:** Codex engineering panel RATIFY-WITH-AMENDMENTS (5 folds
-folded) + Claude council RATIFY-CLEAR (council refinements R1+R2 folded).
+**A2 status:** RESOLVED 2026-05-22 -- cloud is a tool, not a vessel (see
+`## Resolution: Cloud as Tool`). The local Maez runtime path is the speaker,
+with local inference as the final voice step.
+**Lanes cleared:** v1 + v2 both passed. Codex engineering panel
+RATIFY-WITH-AMENDMENTS (all folds in) + Claude council RATIFY-CLEAR (council
+refinements and panel fold verified byte-faithful).
 
 ## Purpose
 
@@ -168,12 +167,14 @@ source of truth for cloud-bound system provenance.
 `claude_router.call_claude(...)` in this route. The caller already builds the
 cloud prompt from identifiable pieces. This slice threads provenance there.
 
-Expected caller-side classification, subject to the soul-to-cloud fork below:
+Expected caller-side classification under the cloud-as-tool resolution:
 
 - `owner_system` / `system_prompt_for_chat` / `SOUL` instruction material:
-  unresolved as raw `SOUL` material. A curated voice instruction may be
-  `system_bounded_query` only if the covenant fork below explicitly permits it.
-  Raw `soul.md` is reserved-denied until that fork is resolved.
+  removed from cloud-bound system prompts entirely. The web caller must
+  construct a task-shaped cloud system prompt containing no raw soul, no
+  character notes, and no identity context. Implementation must refactor
+  `skills/web_interface.py` around the current `system_prompt_for_api`
+  construction that joins all system messages before `claude_router.call_claude`.
 - Ambient context and capability/manual snippets: `system_bounded_query` or
   `public_fact` only if the producer already marks them as such; otherwise
   conservative.
@@ -202,34 +203,119 @@ Expected caller-side classification, subject to the soul-to-cloud fork below:
 without breaking legacy callers. Legacy raw strings stay compatible in shadow
 but are recorded conservatively and are not counted enforcement-ready.
 
-## Soul-To-Cloud Covenant Fork
+## Resolution: Cloud as Tool
 
-The spec review surfaced a separate covenant question: today's external
-`claude_router` path can include raw `SOUL` / `config/soul.md` material in the
-cloud-bound system prompt. The provenance system must not hide that fact.
+Founder decision, 2026-05-22: cloud is a tool, not a vessel.
 
-Until Rohit settles this fork, honest classification is:
+The local Maez runtime path is the speaker, with local inference as the final
+voice step. Maez is not only the local model; the speaker is the local stack:
+memory, daemon, soul, ledger, gates, and local inference together.
 
-- raw `SOUL` / raw soul wording: reserved-denied raw, producing
-  `block/reserved_denied_raw` in shadow decision telemetry;
-- calls still flow because shadow remains on;
-- no implementation may relabel raw soul as `system_bounded_query` merely to
-  make no-fog pass.
+The cloud is an external reasoning tool in the same category as web search,
+calculator, or library. Maez may consult the cloud. Maez never becomes the
+cloud temporarily, and the cloud never wears Maez's face.
 
-Two possible future resolutions:
+Consequences:
 
-1. **Minimized voice instruction may leave.** Define a curated, bounded
-   character/voice instruction that is distinct from raw `soul.md` and may be
-   classified as `system_bounded_query`. This makes the no-fog
-   `allow/non_private_allowed` outcome reachable for public/system-only cloud
-   prompts without sending raw soul.
-2. **Soul truly never leaves.** Treat raw soul egress as the thing to fix first.
-   The external route must stop sending raw `soul.md` before this slice can
-   claim public/system-only `allow` on live owner traffic.
+- Cloud system prompts are task-shaped `system_bounded_query`, not
+  identity-shaped.
+- Raw `soul.md`, character notes, voice context, and identity context never
+  leave the box.
+- Cloud responses do not become user-facing replies. They enter local Maez's
+  context as `model_output` (see `## Cloud Output Provenance Class`), and the
+  local Maez runtime path generates the user-facing reply.
+- The cost is a second local LLM call per cloud consult. That latency is real
+  and proportionate to the architecture.
 
-This slice may implement insertion-point provenance before that fork is
-resolved, but it cannot canonicalize an enforcement-ready no-fog claim while raw
-soul remains in the cloud-bound prompt.
+## Cloud Output Provenance Class
+
+Cloud output enters local Maez's context as `model_output`: untrusted tool
+output from an external model.
+
+`model_output` is a deliberate conservative provenance class introduced by this
+v2 resolution. It belongs in a new conservative closed-vocabulary bucket:
+`UNTRUSTED_EXTERNAL_OUTPUT`.
+
+`UNTRUSTED_EXTERNAL_OUTPUT` hosts `model_output` only in this slice. Companion
+classes, if any, join later by deliberate reviewed addition, not by
+pre-allocation.
+
+`model_output` is not `public_fact`, not `tool_result_public`, not
+`NON_PRIVATE`, not trusted memory, and not Maez voice. Being requested by Maez
+does not upgrade the class.
+
+Required behavior:
+
+- The cloud response may be quoted or cited by local Maez where useful, but it
+  is supporting evidence/tool output, not the speaker.
+- If local Maez later reuses cloud reasoning in another cloud call, the
+  original `model_output` provenance is preserved. It is not laundered through
+  Maez into a higher-trust class.
+- For outbound egress, `model_output` is not a non-private allow class by
+  default. Its policy treatment is equivalent to minimizable/private-origin
+  material for cloud egress: if it ever leaves again, redaction/minimization is
+  required unless a later reviewed policy explicitly permits a narrower flow.
+  It stays out of `MINIMIZABLE_PRIVATE_CONTEXT` because its etiology is
+  different: untrusted external tool output, not private-life context.
+- The implementation slice must update the closed provenance vocabulary and
+  policy tests deliberately; this spec update names the new class so it is not
+  smuggled in. Required code targets are `core/egress/gate.py` (new bucket and
+  `KNOWN_ORIGINS` membership), `core/egress/provenance.py` (factory helper and
+  restrictiveness), and policy tests proving `model_output` is conservative and
+  stays conservative across reuse.
+
+This preserves the existing invariant: tool/model output is not upgraded to a
+trusted class merely by being produced, requested, or consumed.
+
+## Ledger / Trajectory Recording
+
+The persisted user-facing reply is the local Maez reply. Its `model_id` and
+speaker attribution should identify the local Maez runtime path / local model,
+not `claude:*`.
+
+The cloud consult is recorded separately as supporting evidence or a tool-output
+trace. It is not recorded as the speaker.
+
+Current `skills/web_interface.py` behavior is wrong-shaped under this
+resolution: it sets `reply = wrap_maez_voice(cloud_text)` and then persists
+`model_id=claude:*`. The implementation slice must replace that with:
+
+- cloud consult recorded as tool/evidence context;
+- local Maez generates the user-facing reply after the consult;
+- ledger and trajectory records show "Maez said X, informed by cloud consult
+  Y," not "Claude said X."
+
+Bond and continuity consequence: future recall attributes Maez's words to
+Maez, with cloud as an assistance trace beside them. The tool does not become a
+biographical speaker.
+
+## wrap_maez_voice (To Be Repurposed or Removed)
+
+Current `skills.claude_router.wrap_maez_voice` is a thin voice shell that
+prefixes cloud text and passes it through as the reply.
+
+Under cloud-as-tool, that shape is wrong. Cloud output should not become the
+user-facing reply with or without a prefix.
+
+The implementation slice must either remove `wrap_maez_voice` entirely and
+route cloud output into local Maez's context as a `model_output` reasoning-input
+span, or repurpose it to perform that cloud-to-local-context handoff cleanly.
+Either way, the user-facing reply is generated by the local Maez runtime path,
+with local inference as the final voice step.
+
+## Failure Behavior
+
+Cloud failure must not block a user-facing reply.
+
+The local Maez reply path is the always-runs path. The cloud consult is the
+optional-evidence path.
+
+If the cloud consult times out, errors, hits budget, or is unavailable, local
+Maez still generates a reply without cloud evidence. That is graceful
+degradation, not a special error path.
+
+Architecturally, this is not "try cloud, except fall back to local." The shape
+is: local always, cloud optionally.
 
 ## Fast Backend Follow-Up
 
@@ -246,14 +332,16 @@ provenance. That is safe in shadow and explicitly not enforcement-ready.
 
 After this slice:
 
-- A `claude_router` call composed only from permitted
-  system/public/tool-public spans should produce `allow/non_private_allowed`.
-  Raw soul does not count as permitted system material unless the covenant fork
-  resolves in favor of a curated minimized voice instruction.
+- A `claude_router` cloud consult composed only from task-shaped
+  `system_bounded_query` plus non-private content should produce
+  `allow/non_private_allowed`.
+- Raw soul, character context, voice context, or identity context is never sent
+  to the cloud. If any of it appears in a cloud-bound prompt, that is a
+  regression and should produce `block/reserved_denied_raw` in shadow telemetry.
 - A call containing owner message context, memory, or lived-store spans should
   produce `redact/minimized_private_context`.
-- A call containing reserved-denied raw spans, including raw soul material while
-  the fork is unresolved, should produce `block/reserved_denied_raw`.
+- A call containing any reserved-denied raw spans should produce
+  `block/reserved_denied_raw`.
 - A call containing raw unknown, ambiguous, or pre-blended material should
   produce conservative `redact` or `block/unclassified`, not public allow.
 - All of the above remain shadow-only: calls still flow.
@@ -271,11 +359,11 @@ Write failing tests before implementation:
    route payload from its known pieces instead of passing only raw strings.
 4. Public/system-only `claude_router` traffic records
    `allow/non_private_allowed` in shadow, not blanket
-   `redact/minimized_private_context`, when the system material is permitted
-   minimized instruction rather than raw soul.
+   `redact/minimized_private_context`, when the system material is task-shaped
+   `system_bounded_query` with no soul, character, voice, or identity context.
 5. Owner-memory or lived-recall inserts still record
    `redact/minimized_private_context`.
-6. Reserved-denied raw material, including raw soul material, still records
+6. Raw soul in any cloud-bound system prompt is an A2 regression and records
    `block/reserved_denied_raw`.
 7. An unprovenanced or pre-blended raw string cannot be content-tricked into
    `public_fact` / `non_private_allowed`; it stays conservative.
@@ -289,10 +377,17 @@ Write failing tests before implementation:
    system message.
 11. Raw chat history regression: raw `{role, content}` history without source
    metadata remains conservative.
-12. Telemetry remains clean: no raw canary appears in
+12. Cloud output entering local context is classified as `model_output`, not
+   trusted memory, not Maez voice, and not `public_fact`.
+13. Persisted user-facing reply attribution uses the local Maez runtime path /
+   local model. The cloud consult is recorded separately as tool-output
+   evidence and is not recorded as the speaker.
+14. Cloud failure does not block the user-facing reply; local Maez generates
+   without cloud evidence.
+15. Telemetry remains clean: no raw canary appears in
    `memory/subscription_proxy.db` or `logs/subscription_proxy.log`, and all
    digests remain keyed (`hmac-sha256:`), never bare hashes.
-13. Legacy raw-string compatibility remains shadow-only and conservative.
+16. Legacy raw-string compatibility remains shadow-only and conservative.
 
 ## Acceptance Bar
 
@@ -300,17 +395,19 @@ Write failing tests before implementation:
   expected reasons.
 - Focused tests pass after implementation.
 - Live synthetic canary proof after deliberate restart:
-  - permitted public/system-only `claude_router` call logs allow;
+  - task-shaped public/system-only `claude_router` consult logs allow;
   - memory/private canary logs redact;
-  - reserved-denied canary, including raw-soul-shaped synthetic material, logs
-    block;
+  - raw soul or character-context canary in a cloud-bound prompt logs block;
   - unknown/pre-blended canary logs conservative;
   - all calls still flow because shadow remains on;
   - no raw canary appears in DB or logs.
 - `fast_backend_cloud` remains explicitly deferred/conservative.
-- The soul-to-cloud fork is either resolved before no-fog is claimed, or the
-  spec remains explicit that raw soul makes live owner-route calls
-  `reserved_denied_raw` in shadow.
+- No-fog allow is achieved only for cloud calls carrying task-shaped content:
+  no raw soul, no character notes, no voice context, and no identity context.
+- Persisted user-facing replies are attributed to the local Maez runtime path /
+  local model, with cloud consults recorded separately as tool-output evidence.
+- Cloud failure degrades gracefully: local Maez still replies without cloud
+  evidence.
 - No enforcement flip, no autonomy, no Telegram migration, no daemon disruption
   outside the deliberate observed restart.
 
@@ -323,3 +420,8 @@ label bags more accurately before they reach the already-installed guard.
 pieces. We can tag those pieces honestly. `fast_backend_cloud` is the hard door
 because it receives one pre-packed bag; fixing that requires changing how the
 bag is packed upstream, so it stays separate.
+
+The soul question is resolved: cloud is a tool, the local Maez runtime path is
+the speaker, with local inference as the final voice step. Cloud responses enter
+Maez's context as untrusted `model_output`; the ledger attributes the reply to
+Maez; and cloud failure does not block the reply.
