@@ -196,6 +196,16 @@ def _cloud_output_digest(text: str) -> str:
     return f"hmac-sha256:{digest}"
 
 
+def _cloud_output_digest_metadata(text: str) -> dict[str, Any]:
+    try:
+        return {"digest": _cloud_output_digest(text)}
+    except Exception as exc:
+        return {
+            "digest": "hmac-sha256:unavailable",
+            "digest_error_type": type(exc).__name__,
+        }
+
+
 def _cloud_context_from_result(result: dict[str, Any]):
     from core.egress.provenance import ProvenancedText
 
@@ -277,6 +287,7 @@ def build_cloud_failure_sidecar(exc: BaseException) -> dict[str, Any]:
     else:
         kind = "unknown"
     error_text = str(exc)
+    digest_meta = _cloud_output_digest_metadata(error_text)
     return {
         "schema_version": "maez-cloud-consult-v1",
         "cloud_consult": False,
@@ -284,7 +295,12 @@ def build_cloud_failure_sidecar(exc: BaseException) -> dict[str, Any]:
         "failure_kind": kind,
         "exception_type": type(exc).__name__,
         "error_char_count": len(error_text),
-        "error_digest": _cloud_output_digest(error_text),
+        "error_digest": digest_meta["digest"],
+        **(
+            {"digest_error_type": digest_meta["digest_error_type"]}
+            if digest_meta.get("digest_error_type")
+            else {}
+        ),
     }
 
 
@@ -400,11 +416,8 @@ def log_trajectory(entry: dict[str, Any]) -> None:
             and _meta["cloud_consult"].get("origin_class") == "model_output"
         )
         if _src == "local" and _cloud_consult:
-            entry.setdefault(
-                "provenance_source",
-                "local_maez_with_model_output_evidence",
-            )
-            entry.setdefault("trust_tier", "own_voice_with_untrusted_tool_evidence")
+            entry["provenance_source"] = "local_maez_with_model_output_evidence"
+            entry["trust_tier"] = "own_voice_with_untrusted_tool_evidence"
         elif _src == "local":
             entry.setdefault("provenance_source", "local_maez")
             entry.setdefault("trust_tier", "own_voice")

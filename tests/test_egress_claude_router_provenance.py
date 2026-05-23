@@ -483,6 +483,44 @@ class ClaudeRouterProvenanceTests(unittest.TestCase):
             "own_voice_with_untrusted_tool_evidence",
         )
 
+    def test_cloud_consult_trajectory_labels_cannot_be_caller_laundered(self):
+        from core.egress.provenance import ProvenancedText
+        from skills import claude_router
+
+        with mock.patch.dict(os.environ, {"MAEZ_EGRESS_TELEMETRY_KEY": "test-key"}):
+            sidecar = claude_router.build_cloud_consult_sidecar({
+                "content": "cloud reasoning",
+                "cloud_context": ProvenancedText.model_output(
+                    "cloud reasoning",
+                    source_ref="claude_router:cloud_consult",
+                ),
+                "model": "claude-sonnet-4-6",
+                "usage": {"input_tokens": 1, "output_tokens": 2},
+                "latency_s": 0.5,
+            })
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(claude_router, "TRAJECTORY_DIR", Path(tmp)):
+                claude_router.log_trajectory({
+                    "profile_id": "owner",
+                    "message": "question",
+                    "reply": "local reply",
+                    "source": "local",
+                    "provenance_source": "local_maez",
+                    "trust_tier": "own_voice",
+                    "claude_meta": {"cloud_consult": sidecar},
+                })
+            row = json.loads(next(Path(tmp).glob("*.jsonl")).read_text().splitlines()[0])
+
+        self.assertEqual(
+            row["provenance_source"],
+            "local_maez_with_model_output_evidence",
+        )
+        self.assertEqual(
+            row["trust_tier"],
+            "own_voice_with_untrusted_tool_evidence",
+        )
+
     def test_cloud_failure_classification_is_structured(self):
         from core.routing.claude_tier import ClaudeTierUnavailable
         from skills import claude_router
@@ -499,6 +537,22 @@ class ClaudeRouterProvenanceTests(unittest.TestCase):
         self.assertNotIn(canary, rendered)
         self.assertNotIn("error_preview", meta)
         self.assertTrue(meta["error_digest"].startswith("hmac-sha256:"))
+
+    def test_cloud_failure_sidecar_digest_failure_does_not_raise(self):
+        from core.routing.claude_tier import ClaudeTierUnavailable
+        from skills import claude_router
+
+        with mock.patch(
+            "core.egress.gate.load_or_create_telemetry_key",
+            side_effect=OSError("key path unavailable"),
+        ):
+            meta = claude_router.build_cloud_failure_sidecar(
+                ClaudeTierUnavailable("proxy unreachable"),
+            )
+
+        self.assertEqual(meta["cloud_consult"], False)
+        self.assertEqual(meta["error_digest"], "hmac-sha256:unavailable")
+        self.assertEqual(meta["digest_error_type"], "OSError")
 
 
 class WebInterfaceCloudAsToolTests(unittest.TestCase):
