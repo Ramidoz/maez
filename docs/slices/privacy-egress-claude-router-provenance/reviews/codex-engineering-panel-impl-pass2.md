@@ -66,4 +66,3 @@ mechanism bug and several test/telemetry tightenings before merge.
 - Successful cloud consult sidecars are JSON-safe and raw-output-free.
 - `model_output` is distinct from private context in reason-code telemetry.
 - `fast_backend_cloud` remains untouched.
-
