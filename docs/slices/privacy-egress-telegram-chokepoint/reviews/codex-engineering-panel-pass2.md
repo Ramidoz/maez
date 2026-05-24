@@ -114,4 +114,3 @@ After the single amendment is folded, a third pass should only need to verify:
 - RED tests name both forms,
 - acceptance criteria names both forms,
 - no new scope claims are introduced.
-
