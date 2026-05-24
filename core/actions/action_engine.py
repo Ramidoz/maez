@@ -36,6 +36,8 @@ from memory.quality_tracker import QualityTracker
 # audit_assistant_text", ...)).
 from core.safety.audited_output import audit_assistant_text
 from core.infra.secrets import sanitize_env
+from core.egress.provenance import ProvenancedText
+from core.egress.telegram_egress import owner_multispan_envelope
 # 5x.F.B: through-quotation downgrade rule consults F.A's
 # has_untrusted predicate. Single source of truth — re-implementing
 # the iteration here would create drift if F.A's tier semantics ever
@@ -514,6 +516,52 @@ class ActionEngine:
         with self._pending_lock:
             _pending_count = len(self._pending)
         logger.info("ActionEngine initialized (pending: %d)", _pending_count)
+
+    @staticmethod
+    def _telegram_notice_content(text: str, *, source_ref: str) -> ProvenancedText:
+        spans = []
+        for line in str(text).splitlines(keepends=True):
+            if ": " not in line:
+                spans.extend(
+                    ProvenancedText.system_bounded_query(
+                        line,
+                        source_ref=f"{source_ref}:static",
+                    ).spans
+                )
+                continue
+            label, value = line.split(": ", 1)
+            spans.extend(
+                ProvenancedText.system_bounded_query(
+                    f"{label}: ",
+                    source_ref=f"{source_ref}:label",
+                ).spans
+            )
+            spans.extend(
+                ProvenancedText.owner_message_context(
+                    value,
+                    source_ref=f"{source_ref}:value",
+                ).spans
+            )
+        return ProvenancedText.from_spans(spans)
+
+    def _send_telegram_notice(self, text: str | ProvenancedText, *, source_ref: str) -> None:
+        if not self.telegram:
+            return
+        send_envelope = getattr(self.telegram, "send_envelope", None)
+        if not callable(send_envelope):
+            return
+        content = (
+            text
+            if isinstance(text, ProvenancedText)
+            else self._telegram_notice_content(str(text), source_ref=source_ref)
+        )
+        envelope = owner_multispan_envelope(
+            bot_route="voice_owner_private",
+            chat_id="",
+            content=content,
+            source_ref=source_ref,
+        )
+        send_envelope(envelope)
 
     # ------------------------------------------------------------------ #
     #  Safety checks                                                       #
@@ -1886,14 +1934,14 @@ class ActionEngine:
             "kill_process", {"pid": pid, "name": name, "reason": reason},
             reason, tier=2,
         )
-        if self.telegram:
-            self.telegram.send_message(
+        self._send_telegram_notice(
                 f"[Action Queued — T2]\n"
                 f"Kill process: {name} (PID {pid})\n"
                 f"Reason: {reason}\n"
                 f"Executes in 5 minutes.\n"
-                f"Reply /cancel {action_id} to stop."
-            )
+                f"Reply /cancel {action_id} to stop.",
+            source_ref="action_engine:kill_process",
+        )
         return action_id
 
     def _do_kill_process(self, pid: int, name: str, reason: str) -> str:
@@ -1923,14 +1971,14 @@ class ActionEngine:
             "restart_service", {"service_name": service_name, "reason": reason},
             reason, tier=2,
         )
-        if self.telegram:
-            self.telegram.send_message(
+        self._send_telegram_notice(
                 f"[Action Queued — T2]\n"
                 f"Restart service: {service_name}\n"
                 f"Reason: {reason}\n"
                 f"Executes in 5 minutes.\n"
-                f"Reply /cancel {action_id} to stop."
-            )
+                f"Reply /cancel {action_id} to stop.",
+            source_ref="action_engine:restart_service",
+        )
         return action_id
 
     def _do_restart_service(self, service_name: str, reason: str) -> str:
@@ -1949,14 +1997,14 @@ class ActionEngine:
         action_id = self.queue_action(
             "free_disk_space", {"reason": reason}, reason, tier=2,
         )
-        if self.telegram:
-            self.telegram.send_message(
+        self._send_telegram_notice(
                 f"[Action Queued — T2]\n"
                 f"Free disk space (apt clean + /tmp)\n"
                 f"Reason: {reason}\n"
                 f"Executes in 5 minutes.\n"
-                f"Reply /cancel {action_id} to stop."
-            )
+                f"Reply /cancel {action_id} to stop.",
+            source_ref="action_engine:free_disk_space",
+        )
         return action_id
 
     def _do_free_disk_space(self, reason: str = "") -> str:
@@ -1997,14 +2045,14 @@ class ActionEngine:
             "install_package", {"package": package, "reason": reason},
             reason, tier=3,
         )
-        if self.telegram:
-            self.telegram.send_message(
+        self._send_telegram_notice(
                 f"[Action Request — T3]\n"
                 f"Install package: {package}\n"
                 f"Reason: {reason}\n"
                 f"Reply /approve {action_id} to confirm.\n"
-                f"Expires in 10 minutes."
-            )
+                f"Expires in 10 minutes.",
+            source_ref="action_engine:install_package",
+        )
         return action_id
 
     def _do_install_package(self, package: str, reason: str = "") -> str:
@@ -2024,14 +2072,14 @@ class ActionEngine:
             "execute_script", {"path": path, "reason": reason},
             reason, tier=3,
         )
-        if self.telegram:
-            self.telegram.send_message(
+        self._send_telegram_notice(
                 f"[Action Request — T3]\n"
                 f"Execute script: {path}\n"
                 f"Reason: {reason}\n"
                 f"Reply /approve {action_id} to confirm.\n"
-                f"Expires in 10 minutes."
-            )
+                f"Expires in 10 minutes.",
+            source_ref="action_engine:execute_script",
+        )
         return action_id
 
     def _do_execute_script(self, path: str, reason: str = "") -> str:
@@ -2054,15 +2102,15 @@ class ActionEngine:
             "modify_config", {"file": file, "changes": changes, "reason": reason},
             reason, tier=3,
         )
-        if self.telegram:
-            self.telegram.send_message(
+        self._send_telegram_notice(
                 f"[Action Request — T3]\n"
                 f"Modify config: {file}\n"
                 f"Changes: {changes[:200]}\n"
                 f"Reason: {reason}\n"
                 f"Reply /approve {action_id} to confirm.\n"
-                f"Expires in 10 minutes."
-            )
+                f"Expires in 10 minutes.",
+            source_ref="action_engine:modify_config",
+        )
         return action_id
 
     def _do_modify_config(self, file: str, changes: str, reason: str = "") -> str:
@@ -2081,15 +2129,15 @@ class ActionEngine:
             {"skill_name": skill_name, "skill_code": skill_code, "reason": reason},
             reason, tier=3,
         )
-        if self.telegram:
-            self.telegram.send_message(
+        self._send_telegram_notice(
                 f"[Action Request — T3]\n"
                 f"Register new skill: {skill_name}\n"
                 f"Reason: {reason}\n"
                 f"Code: {len(skill_code)} chars\n"
                 f"Reply /approve {action_id} to confirm.\n"
-                f"Expires in 10 minutes."
-            )
+                f"Expires in 10 minutes.",
+            source_ref="action_engine:register_new_skill",
+        )
         return action_id
 
     def _do_register_new_skill(self, skill_name: str, skill_code: str,
@@ -2106,12 +2154,12 @@ class ActionEngine:
             "restart_critical_service", {"service_name": service_name, "reason": reason},
             reason, tier=3,
         )
-        if self.telegram:
-            self.telegram.send_message(
+        self._send_telegram_notice(
                 f"[Action Request — T3]\nRestart critical: {service_name}\n"
                 f"Reason: {reason}\nReply /approve {action_id} to confirm.\n"
-                f"Expires in 10 minutes."
-            )
+                f"Expires in 10 minutes.",
+            source_ref="action_engine:restart_critical_service",
+        )
         return action_id
 
     def _do_restart_critical_service(self, service_name: str, reason: str = "") -> str:
@@ -2130,12 +2178,12 @@ class ActionEngine:
         action_id = self.queue_action(
             "modify_firewall", {"rule": rule, "reason": reason}, reason, tier=3,
         )
-        if self.telegram:
-            self.telegram.send_message(
+        self._send_telegram_notice(
                 f"[Action Request — T3]\nFirewall rule: {rule}\n"
                 f"Reason: {reason}\nReply /approve {action_id} to confirm.\n"
-                f"Expires in 10 minutes."
-            )
+                f"Expires in 10 minutes.",
+            source_ref="action_engine:modify_firewall",
+        )
         return action_id
 
     def _do_modify_firewall(self, rule: str, reason: str = "") -> str:
@@ -2153,12 +2201,12 @@ class ActionEngine:
         action_id = self.queue_action(
             "system_reboot", {"reason": reason}, reason, tier=3,
         )
-        if self.telegram:
-            self.telegram.send_message(
+        self._send_telegram_notice(
                 f"[Action Request — T3]\nSystem REBOOT\n"
                 f"Reason: {reason}\nReply /approve {action_id} to confirm.\n"
-                f"Expires in 10 minutes."
-            )
+                f"Expires in 10 minutes.",
+            source_ref="action_engine:system_reboot",
+        )
         return action_id
 
     def _do_system_reboot(self, reason: str = "") -> str:
@@ -2173,12 +2221,12 @@ class ActionEngine:
         action_id = self.queue_action(
             "delete_file", {"path": path, "reason": reason}, reason, tier=3,
         )
-        if self.telegram:
-            self.telegram.send_message(
+        self._send_telegram_notice(
                 f"[Action Request — T3]\nDelete file: {path}\n"
                 f"Reason: {reason}\nReply /approve {action_id} to confirm.\n"
-                f"Expires in 10 minutes."
-            )
+                f"Expires in 10 minutes.",
+            source_ref="action_engine:delete_file",
+        )
         return action_id
 
     def _do_delete_file(self, path: str, reason: str = "") -> str:
@@ -2194,12 +2242,12 @@ class ActionEngine:
         action_id = self.queue_action(
             "sudo_command", {"cmd": cmd, "reason": reason}, reason, tier=3,
         )
-        if self.telegram:
-            self.telegram.send_message(
+        self._send_telegram_notice(
                 f"[Action Request — T3]\nSudo: {cmd}\n"
                 f"Reason: {reason}\nReply /approve {action_id} to confirm.\n"
-                f"Expires in 10 minutes."
-            )
+                f"Expires in 10 minutes.",
+            source_ref="action_engine:sudo_command",
+        )
         return action_id
 
     def _do_sudo_command(self, cmd: str, reason: str = "") -> str:
@@ -2301,11 +2349,11 @@ class ActionEngine:
                                  entry["reasoning"], entry["params"],
                                  "EXPIRED (no approval after 10m)")
                 _quality_tracker.record_outcome(entry["id"], 'rejected', 'timeout')
-                if self.telegram:
-                    self.telegram.send_message(
+                self._send_telegram_notice(
                         f"[Action Expired] {entry['action']} ({entry['id']})\n"
-                        f"No approval received within 10 minutes."
-                    )
+                        f"No approval received within 10 minutes.",
+                    source_ref="action_engine:expired_action",
+                )
             else:
                 remaining.append(entry)
                 continue

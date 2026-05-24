@@ -71,6 +71,8 @@ from core.memory.cycle_recall_context import (
     capture as _crc_capture,
     make_empty as _crc_empty,
 )
+from core.egress.provenance import ProvenancedText
+from core.egress.telegram_egress import owner_multispan_envelope
 from core.perception import snapshot as perception_snapshot, format_snapshot
 from core.information_limb.calendar_v1 import build_calendar_health
 from core.information_limb.calendar_store import CalendarStore, CalendarStoreError
@@ -2056,6 +2058,80 @@ class MaezDaemon:
                     return topic[:80]
         return ""
 
+    @staticmethod
+    def _telegram_notice_content(text: str, *, source_ref: str) -> ProvenancedText:
+        if source_ref == "daemon:proactive_opinion":
+            return ProvenancedText.maez_authored_owner_third_party_transport(
+                text,
+                source_ref=source_ref,
+            )
+        if source_ref == "daemon:morning_briefing" and text.startswith("Morning briefing:\n\n"):
+            prefix = "Morning briefing:\n\n"
+            return ProvenancedText.system_bounded_query(
+                prefix,
+                source_ref=f"{source_ref}:label",
+            ) + ProvenancedText.maez_authored_owner_third_party_transport(
+                text[len(prefix) :],
+                source_ref=f"{source_ref}:audited_briefing",
+            )
+        if source_ref == "daemon:curiosity_checkin":
+            spans = []
+            for line in text.splitlines(keepends=True):
+                if line.startswith("  "):
+                    spans.extend(
+                        ProvenancedText.third_party_private_context(
+                            line,
+                            source_ref=f"{source_ref}:public_user_profile",
+                        ).spans
+                    )
+                else:
+                    spans.extend(
+                        ProvenancedText.system_bounded_query(
+                            line,
+                            source_ref=f"{source_ref}:static",
+                        ).spans
+                    )
+            return ProvenancedText.from_spans(spans)
+        if source_ref == "daemon:followup_queue" and "Result: " in text:
+            before, result = text.split("Result: ", 1)
+            return ProvenancedText.system_bounded_query(
+                before + "Result: ",
+                source_ref=f"{source_ref}:label",
+            ) + ProvenancedText.tool_result_public(
+                result,
+                source_ref=f"{source_ref}:action_result",
+            )
+        if source_ref == "daemon:followup_queue" and "\n\n" in text:
+            before, detail = text.split("\n\n", 1)
+            return ProvenancedText.system_bounded_query(
+                before + "\n\n",
+                source_ref=f"{source_ref}:status",
+            ) + ProvenancedText.tool_result_public(
+                detail,
+                source_ref=f"{source_ref}:action_detail",
+            )
+        return ProvenancedText.system_bounded_query(text, source_ref=source_ref)
+
+    def _send_telegram_notice(self, text: str | ProvenancedText, *, source_ref: str) -> None:
+        telegram = getattr(self, "telegram", None)
+        if not telegram:
+            return
+        send_envelope = getattr(telegram, "send_envelope", None)
+        if not callable(send_envelope):
+            return
+        content = (
+            text
+            if isinstance(text, ProvenancedText)
+            else self._telegram_notice_content(str(text), source_ref=source_ref)
+        )
+        envelope = owner_multispan_envelope(
+            bot_route="voice_owner_private",
+            chat_id="",
+            content=content,
+            source_ref=source_ref,
+        )
+        send_envelope(envelope)
+
     def _curiosity_checkin(self):
         """Ask the owner about new people who talked to Maez today."""
         try:
@@ -2070,7 +2146,10 @@ class MaezDaemon:
                 lines.append(f"  {user['display_name']} — {user.get('notes') or 'no details yet'}")
             lines.append("\nReply with: /trust [username] [relationship] [tier 0-3]")
             lines.append("Example: /trust [person] partner 3")
-            self.telegram.send_message("\n".join(lines))
+            self._send_telegram_notice(
+                "\n".join(lines),
+                source_ref="daemon:curiosity_checkin",
+            )
             logger.info("[SOCIAL] Curiosity check-in sent for %d users", len(unconfirmed))
         except Exception as e:
             logger.error("Curiosity check-in error: %s", e)
@@ -2174,7 +2253,10 @@ class MaezDaemon:
                 logger.warning("proactive audit fail-open: %s", _aud_exc)
 
             # Send the audited text, not the raw generation.
-            self.telegram.send_message(result)
+            self._send_telegram_notice(
+                result,
+                source_ref="daemon:proactive_opinion",
+            )
             logger.info("[OPINION] Unprompted: %s", result[:80])
 
             # Provenance-tagged storage so later recall can distinguish
@@ -4144,7 +4226,10 @@ class MaezDaemon:
                         _aud_exc,
                     )
                 final_msg = f"Morning briefing:\n\n{briefing}"
-                self.telegram.send_message(final_msg)
+                self._send_telegram_notice(
+                    final_msg,
+                    source_ref="daemon:morning_briefing",
+                )
                 logger.info("Morning briefing sent")
                 # Store as a telegram exchange so chat_history threading
                 # picks it up when the owner replies. Placeholder user
@@ -5754,7 +5839,10 @@ class MaezDaemon:
                         else:
                             msg = f"Failed — {desc}\n\n{output or 'No error detail.'}"
                         try:
-                            self.telegram.send_message(msg)
+                            self._send_telegram_notice(
+                                msg,
+                                source_ref="daemon:followup_queue",
+                            )
                             self.followup_queue.mark_delivered(fu["id"])
                             logger.info(
                                 "[FOLLOWUP] Delivered (grounded): %s → %s", action_id, status

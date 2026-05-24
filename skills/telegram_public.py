@@ -27,9 +27,11 @@ from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
 from core.infra.secrets import load_ordinary_config_for_process, load_secrets_for_process
 from core.egress.telegram_egress import (
     call_telegram_method_async,
-    legacy_text_envelope,
+    owner_multispan_envelope,
+    public_transport_control_envelope,
     public_text_envelope,
 )
+from core.egress.provenance import ProvenancedText
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -65,11 +67,16 @@ async def _public_reply_text(update, text: str, **kwargs):
 
 
 async def _public_owner_alert(bot, **kwargs):
-    envelope = legacy_text_envelope(
+    content = kwargs.pop("content", None)
+    if content is None:
+        content = ProvenancedText.from_raw_conservative(
+            str(kwargs.get("text") or ""),
+            source_ref="telegram_public:owner_alert",
+        )
+    envelope = owner_multispan_envelope(
         bot_route="owner_private",
-        audience_class="bonded_owner",
         chat_id=str(kwargs.get("chat_id") or ""),
-        text=str(kwargs.get("text") or ""),
+        content=content,
         source_ref="telegram_public:owner_alert",
         message_kind="text",
     )
@@ -82,11 +89,8 @@ async def _public_owner_alert(bot, **kwargs):
 
 
 async def _public_chat_action(bot, **kwargs):
-    envelope = legacy_text_envelope(
-        bot_route="public_stranger",
-        audience_class="public_stranger",
+    envelope = public_transport_control_envelope(
         chat_id=str(kwargs.get("chat_id") or ""),
-        text="",
         source_ref="telegram_public:send_chat_action",
         message_kind="typing",
     )
@@ -343,7 +347,24 @@ Respond naturally. Be present. Be real."""
                 f"Flags: {', '.join(detection['flags'][:3])}\n\n"
                 f"Message: {message[:200]}"
             )
-            await _public_owner_alert(bot, chat_id=int(self.rohit_user_id), text=alert)
+            static_prefix = "Manipulation attempt detected\n\n"
+            third_party_details = alert[len(static_prefix):]
+            content = (
+                ProvenancedText.maez_authored_owner_third_party_transport(
+                    static_prefix,
+                    source_ref="telegram_public:owner_alert:static",
+                )
+                + ProvenancedText.third_party_private_context(
+                    third_party_details,
+                    source_ref="telegram_public:owner_alert:public_user",
+                )
+            )
+            await _public_owner_alert(
+                bot,
+                chat_id=int(self.rohit_user_id),
+                text=alert,
+                content=content,
+            )
         except Exception as e:
             logger.error("Failed to alert the owner: %s", e)
 

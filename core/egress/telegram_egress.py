@@ -9,7 +9,7 @@ import secrets
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Iterator, Literal, Mapping
 
 from core.egress.gate import (
     EgressDecision,
@@ -103,6 +103,169 @@ def with_interactive_markup(
     interactive_markup: TelegramInteractiveMarkup,
 ) -> TelegramEgressEnvelope:
     return replace(envelope, interactive_markup=interactive_markup)
+
+
+def owner_multispan_envelope(
+    *,
+    chat_id: str,
+    content: ProvenancedText,
+    source_ref: str,
+    bot_route: BotRoute = "owner_private",
+    request_id: str | None = None,
+    message_kind: str = "text",
+    metadata: Mapping[str, object] | None = None,
+    interactive_markup: TelegramInteractiveMarkup | None = None,
+    reply_to: str | None = None,
+) -> TelegramEgressEnvelope:
+    return TelegramEgressEnvelope(
+        bot_route=bot_route,
+        audience_class="bonded_owner",
+        chat_id=str(chat_id),
+        message_kind=message_kind,
+        content=content,
+        caption=None,
+        interactive_markup=interactive_markup,
+        media_ref=None,
+        reply_to=reply_to,
+        source_ref=source_ref,
+        request_id=request_id or _request_id(),
+        metadata=metadata or {},
+    )
+
+
+def public_multispan_envelope(
+    *,
+    chat_id: str,
+    content: ProvenancedText,
+    source_ref: str,
+    request_id: str | None = None,
+    message_kind: str = "text",
+    metadata: Mapping[str, object] | None = None,
+    interactive_markup: TelegramInteractiveMarkup | None = None,
+    reply_to: str | None = None,
+) -> TelegramEgressEnvelope:
+    return TelegramEgressEnvelope(
+        bot_route="public_stranger",
+        audience_class="public_stranger",
+        chat_id=str(chat_id),
+        message_kind=message_kind,
+        content=content,
+        caption=None,
+        interactive_markup=interactive_markup,
+        media_ref=None,
+        reply_to=reply_to,
+        source_ref=source_ref,
+        request_id=request_id or _request_id(),
+        metadata=metadata or {},
+    )
+
+
+def owner_transport_control_envelope(
+    *,
+    chat_id: str,
+    source_ref: str,
+    bot_route: BotRoute = "owner_private",
+    request_id: str | None = None,
+    message_kind: str = "transport_control",
+    metadata: Mapping[str, object] | None = None,
+    reply_to: str | None = None,
+) -> TelegramEgressEnvelope:
+    return TelegramEgressEnvelope(
+        bot_route=bot_route,
+        audience_class="bonded_owner",
+        chat_id=str(chat_id),
+        message_kind=message_kind,
+        content=None,
+        caption=None,
+        interactive_markup=None,
+        media_ref=None,
+        reply_to=reply_to,
+        source_ref=source_ref,
+        request_id=request_id or _request_id(),
+        metadata=metadata or {},
+    )
+
+
+def public_transport_control_envelope(
+    *,
+    chat_id: str,
+    source_ref: str,
+    request_id: str | None = None,
+    message_kind: str = "transport_control",
+    metadata: Mapping[str, object] | None = None,
+    reply_to: str | None = None,
+) -> TelegramEgressEnvelope:
+    return TelegramEgressEnvelope(
+        bot_route="public_stranger",
+        audience_class="public_stranger",
+        chat_id=str(chat_id),
+        message_kind=message_kind,
+        content=None,
+        caption=None,
+        interactive_markup=None,
+        media_ref=None,
+        reply_to=reply_to,
+        source_ref=source_ref,
+        request_id=request_id or _request_id(),
+        metadata=metadata or {},
+    )
+
+
+def owner_media_envelope(
+    *,
+    chat_id: str,
+    message_kind: str,
+    caption: ProvenancedText | None,
+    media_ref: str,
+    source_ref: str,
+    bot_route: BotRoute = "owner_private",
+    request_id: str | None = None,
+    metadata: Mapping[str, object] | None = None,
+    interactive_markup: TelegramInteractiveMarkup | None = None,
+    reply_to: str | None = None,
+) -> TelegramEgressEnvelope:
+    return TelegramEgressEnvelope(
+        bot_route=bot_route,
+        audience_class="bonded_owner",
+        chat_id=str(chat_id),
+        message_kind=message_kind,
+        content=None,
+        caption=caption,
+        interactive_markup=interactive_markup,
+        media_ref=str(media_ref),
+        reply_to=reply_to,
+        source_ref=source_ref,
+        request_id=request_id or _request_id(),
+        metadata=metadata or {},
+    )
+
+
+def public_media_envelope(
+    *,
+    chat_id: str,
+    message_kind: str,
+    caption: ProvenancedText | None,
+    media_ref: str,
+    source_ref: str,
+    request_id: str | None = None,
+    metadata: Mapping[str, object] | None = None,
+    interactive_markup: TelegramInteractiveMarkup | None = None,
+    reply_to: str | None = None,
+) -> TelegramEgressEnvelope:
+    return TelegramEgressEnvelope(
+        bot_route="public_stranger",
+        audience_class="public_stranger",
+        chat_id=str(chat_id),
+        message_kind=message_kind,
+        content=None,
+        caption=caption,
+        interactive_markup=interactive_markup,
+        media_ref=str(media_ref),
+        reply_to=reply_to,
+        source_ref=source_ref,
+        request_id=request_id or _request_id(),
+        metadata=metadata or {},
+    )
 
 
 def owner_text_envelope(
@@ -219,7 +382,7 @@ async def send_telegram_async(
 
 async def call_telegram_method_async(
     *,
-    envelope: TelegramEgressEnvelope,
+    envelope: TelegramEgressEnvelope | object,
     target: object,
     method_name: str,
     kwargs: Mapping[str, Any] | None = None,
@@ -229,6 +392,14 @@ async def call_telegram_method_async(
     Existing producers use many Telegram methods. This helper lets migration
     replace direct library calls without inventing a second transport booth.
     """
+
+    if not isinstance(envelope, TelegramEgressEnvelope):
+        decision = decide_egress(envelope)
+        return TelegramEgressResult(
+            sent=False,
+            decision=decision,
+            reason_codes=decision.reason_codes,
+        )
 
     kwargs_dict = dict(kwargs or {})
     envelope = _envelope_with_method_payload(envelope, kwargs_dict)
@@ -240,6 +411,8 @@ async def call_telegram_method_async(
             decision=decision,
             reason_codes=decision.reason_codes,
         )
+    if decision.decision == "redact":
+        kwargs_dict = _kwargs_with_sanitized_payload(envelope, decision, kwargs_dict)
     method = getattr(target, method_name)
     return await method(**kwargs_dict)
 
@@ -302,12 +475,55 @@ def _payload_text_with_existing_provenance(
     return ProvenancedText.from_raw_conservative(text, source_ref=source_ref)
 
 
+def _kwargs_with_sanitized_payload(
+    envelope: TelegramEgressEnvelope,
+    decision: EgressDecision,
+    kwargs: Mapping[str, Any],
+) -> dict[str, Any]:
+    kwargs_dict = dict(kwargs)
+    sanitized_iter = iter(decision.sanitized_segments)
+    content_text = _sanitized_text_for(envelope.content, sanitized_iter)
+    caption_text = _sanitized_text_for(envelope.caption, sanitized_iter)
+    if content_text is not None and "text" in kwargs_dict:
+        kwargs_dict["text"] = content_text
+    if caption_text is not None and "caption" in kwargs_dict:
+        kwargs_dict["caption"] = caption_text
+    return kwargs_dict
+
+
+def _sanitized_text_for(
+    text: ProvenancedText | None,
+    sanitized_iter: Iterator[str],
+) -> str | None:
+    if text is None:
+        return None
+    parts: list[str] = []
+    for _span in text.spans:
+        try:
+            parts.append(next(sanitized_iter))
+        except StopIteration:
+            return text.text
+    return "".join(parts)
+
+
 def _decide_envelope(envelope: TelegramEgressEnvelope) -> EgressDecision:
     call_class = (
         "owner_third_party_transport_send"
         if envelope.audience_class == "bonded_owner"
         else "public_third_party_transport_send"
     )
+    if not _segments(envelope) and envelope.message_kind in CONTENT_FREE_MESSAGE_KINDS:
+        return EgressDecision(
+            decision="allow",
+            sanitized_segments=[],
+            reason_codes=("content_free_transport_control_allowed",),
+            call_class=call_class,
+            destination=f"telegram:{envelope.bot_route}:{envelope.audience_class}",
+            caller=envelope.source_ref,
+            request_id=envelope.request_id,
+            origin_classes=(),
+            original_char_count=0,
+        )
     return decide_egress(
         EgressRequest(
             call_class=call_class,
@@ -350,6 +566,14 @@ def _diagnostic_row(
     key = load_or_create_telemetry_key()
     content_text = _content_text(envelope)
     content_digest = hmac.new(key, content_text.encode("utf-8"), hashlib.sha256).hexdigest()
+    media_ref_digest = None
+    if envelope.media_ref:
+        media_digest = hmac.new(
+            key,
+            str(envelope.media_ref).encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        media_ref_digest = f"hmac-sha256:{media_digest}"
     chat_digest = hmac.new(
         key,
         str(envelope.chat_id).encode("utf-8"),
@@ -369,6 +593,7 @@ def _diagnostic_row(
         "source_ref": envelope.source_ref,
         "char_count": len(content_text),
         "content_digest": f"hmac-sha256:{content_digest}",
+        "media_ref_digest": media_ref_digest,
         "interactive_markup": _markup_metadata(envelope.interactive_markup, key),
     }
 

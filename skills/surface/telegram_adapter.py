@@ -145,8 +145,13 @@ from core.egress.telegram_egress import (
     TelegramEgressResult,
     TelegramInteractiveMarkup,
     call_telegram_method_async,
-    legacy_text_envelope,
+    owner_media_envelope,
+    owner_multispan_envelope,
+    owner_transport_control_envelope,
 )
+from core.egress.provenance import ProvenancedText
+
+_TELEGRAM_REVIEWED_ORIGIN_METADATA_KEY = "maez_telegram_reviewed_origin_class"
 
 
 def check_telegram_requirements() -> bool:
@@ -1222,7 +1227,7 @@ class TelegramAdapter(BasePlatformAdapter):
     async def send(
         self,
         chat_id: str,
-        content: str,
+        content: str | ProvenancedText,
         reply_to: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> SendResult:
@@ -1230,13 +1235,20 @@ class TelegramAdapter(BasePlatformAdapter):
         if not self._bot:
             return SendResult(success=False, error="Not connected")
 
+        egress_content = self._provenanced_content_for_raw_send(
+            content,
+            metadata=metadata,
+            source_ref="telegram_adapter:send_message",
+        )
+        content_text = egress_content.text
+
         # Skip whitespace-only text to prevent Telegram 400 empty-text errors.
-        if not content or not content.strip():
+        if not content_text or not content_text.strip():
             return SendResult(success=True, message_id=None)
 
         try:
             # Format and split message if needed
-            formatted = self.format_message(content)
+            formatted = self.format_message(content_text)
             chunks = self.truncate_message(
                 formatted, self.MAX_MESSAGE_LENGTH, len_fn=utf16_len,
             )
@@ -1280,6 +1292,11 @@ class TelegramAdapter(BasePlatformAdapter):
                             msg = await self._egress_call("send_message", message_kind="text", source_ref="telegram_adapter:send_message",
                                 chat_id=int(chat_id),
                                 text=chunk,
+                                egress_content=self._provenanced_content_for_transport_text(
+                                    egress_content,
+                                    text=chunk,
+                                    source_ref="telegram_adapter:send_message",
+                                ),
                                 parse_mode=ParseMode.MARKDOWN_V2,
                                 reply_to_message_id=reply_to_id,
                                 message_thread_id=effective_thread_id,
@@ -1293,6 +1310,11 @@ class TelegramAdapter(BasePlatformAdapter):
                                 msg = await self._egress_call("send_message", message_kind="text", source_ref="telegram_adapter:send_message",
                                     chat_id=int(chat_id),
                                     text=plain_chunk,
+                                    egress_content=self._provenanced_content_for_transport_text(
+                                        egress_content,
+                                        text=plain_chunk,
+                                        source_ref="telegram_adapter:send_message:plain_text_fallback",
+                                    ),
                                     parse_mode=None,
                                     reply_to_message_id=reply_to_id,
                                     message_thread_id=effective_thread_id,
@@ -1373,6 +1395,28 @@ class TelegramAdapter(BasePlatformAdapter):
             err_str = str(e).lower()
             is_timeout = (_to and isinstance(e, _to)) or "timed out" in err_str
             return SendResult(success=False, error=str(e), retryable=not is_timeout)
+
+    async def _send_with_retry(
+        self,
+        chat_id: str,
+        content: str,
+        reply_to: Optional[str] = None,
+        metadata: Any = None,
+        max_retries: int = 2,
+        base_delay: float = 2.0,
+    ) -> SendResult:
+        reviewed_metadata = self._metadata_with_reviewed_origin(
+            metadata,
+            "maez_authored_owner_third_party_transport",
+        )
+        return await super()._send_with_retry(
+            chat_id=chat_id,
+            content=content,
+            reply_to=reply_to,
+            metadata=reviewed_metadata,
+            max_retries=max_retries,
+            base_delay=base_delay,
+        )
 
     async def edit_message(
         self,
@@ -1475,6 +1519,14 @@ class TelegramAdapter(BasePlatformAdapter):
         try:
             default_hint = f" (default: {default})" if default else ""
             text = f"⚕ *Update needs your input:*\n\n{prompt}{default_hint}"
+            egress_content = self._telegram_content_from_parts(
+                "telegram_adapter:update_prompt",
+                [
+                    ("system_bounded_query", "⚕ *Update needs your input:*\n\n", "label"),
+                    ("owner_message_context", prompt, "prompt"),
+                    ("system_bounded_query", default_hint, "default_hint"),
+                ],
+            )
             keyboard = InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("✓ Yes", callback_data="update_prompt:y"),
@@ -1484,6 +1536,7 @@ class TelegramAdapter(BasePlatformAdapter):
             msg = await self._egress_call("send_message", message_kind="text", source_ref="telegram_adapter:send_message",
                 chat_id=int(chat_id),
                 text=text,
+                egress_content=egress_content,
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=keyboard,
                 **self._link_preview_kwargs(),
@@ -1512,6 +1565,19 @@ class TelegramAdapter(BasePlatformAdapter):
                 f"⚠️ <b>Command Approval Required</b>\n\n"
                 f"<pre>{_html.escape(cmd_preview)}</pre>\n\n"
                 f"Reason: {_html.escape(description)}"
+            )
+            egress_content = self._telegram_content_from_parts(
+                "telegram_adapter:exec_approval",
+                [
+                    (
+                        "system_bounded_query",
+                        "⚠️ <b>Command Approval Required</b>\n\n<pre>",
+                        "header",
+                    ),
+                    ("owner_message_context", _html.escape(cmd_preview), "command"),
+                    ("system_bounded_query", "</pre>\n\nReason: ", "reason_label"),
+                    ("owner_message_context", _html.escape(description), "reason"),
+                ],
             )
 
             # Resolve thread context for thread replies
@@ -1547,7 +1613,13 @@ class TelegramAdapter(BasePlatformAdapter):
             if message_thread_id is not None:
                 kwargs["message_thread_id"] = message_thread_id
 
-            msg = await self._egress_call("send_message", message_kind="text", source_ref="telegram_adapter:send_message", **kwargs)
+            msg = await self._egress_call(
+                "send_message",
+                message_kind="text",
+                source_ref="telegram_adapter:send_message",
+                egress_content=egress_content,
+                **kwargs,
+            )
 
             # Store session_key keyed by approval_id for the callback handler
             self._approval_state[approval_id] = session_key
@@ -1605,11 +1677,22 @@ class TelegramAdapter(BasePlatformAdapter):
                 f"Provider: {provider_label}\n\n"
                 f"Select a provider:"
             )
+            egress_content = self._telegram_content_from_parts(
+                "telegram_adapter:model_picker",
+                [
+                    ("system_bounded_query", "⚙ *Model Configuration*\n\nCurrent model: `", "header"),
+                    ("tool_result_public", current_model or "unknown", "current_model"),
+                    ("system_bounded_query", "`\nProvider: ", "provider_label"),
+                    ("tool_result_public", provider_label, "current_provider"),
+                    ("system_bounded_query", "\n\nSelect a provider:", "footer"),
+                ],
+            )
 
             thread_id = metadata.get("thread_id") if metadata else None
             msg = await self._egress_call("send_message", message_kind="text", source_ref="telegram_adapter:send_message",
                 chat_id=int(chat_id),
                 text=text,
+                egress_content=egress_content,
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=keyboard,
                 message_thread_id=int(thread_id) if thread_id else None,
@@ -2014,12 +2097,12 @@ class TelegramAdapter(BasePlatformAdapter):
             return SendResult(success=True, message_id=str(msg.message_id))
         except Exception as e:
             logger.error(
-                "[%s] Failed to send Telegram voice/audio, falling back to base adapter: %s",
+                "[%s] Failed to send Telegram voice/audio; base raw-text fallback disabled: %s",
                 self.name,
                 e,
                 exc_info=True,
             )
-            return await super().send_voice(chat_id, audio_path, caption, reply_to)
+            return SendResult(success=False, error=str(e))
 
     async def send_image_file(
         self,
@@ -2051,12 +2134,12 @@ class TelegramAdapter(BasePlatformAdapter):
             return SendResult(success=True, message_id=str(msg.message_id))
         except Exception as e:
             logger.error(
-                "[%s] Failed to send Telegram local image, falling back to base adapter: %s",
+                "[%s] Failed to send Telegram local image; base raw-text fallback disabled: %s",
                 self.name,
                 e,
                 exc_info=True,
             )
-            return await super().send_image_file(chat_id, image_path, caption, reply_to)
+            return SendResult(success=False, error=str(e))
 
     async def send_document(
         self,
@@ -2091,7 +2174,7 @@ class TelegramAdapter(BasePlatformAdapter):
             return SendResult(success=True, message_id=str(msg.message_id))
         except Exception as e:
             print(f"[{self.name}] Failed to send document: {e}")
-            return await super().send_document(chat_id, file_path, caption, file_name, reply_to)
+            return SendResult(success=False, error=str(e))
 
     async def send_video(
         self,
@@ -2122,7 +2205,7 @@ class TelegramAdapter(BasePlatformAdapter):
             return SendResult(success=True, message_id=str(msg.message_id))
         except Exception as e:
             print(f"[{self.name}] Failed to send video: {e}")
-            return await super().send_video(chat_id, video_path, caption, reply_to)
+            return SendResult(success=False, error=str(e))
 
     async def send_image(
         self,
@@ -2143,7 +2226,7 @@ class TelegramAdapter(BasePlatformAdapter):
         from tools.url_safety import is_safe_url
         if not is_safe_url(image_url):
             logger.warning("[%s] Blocked unsafe image URL (SSRF protection)", self.name)
-            return await super().send_image(chat_id, image_url, caption, reply_to, metadata=metadata)
+            return SendResult(success=False, error="unsafe image URL blocked")
 
         try:
             # Telegram can send photos directly from URLs (up to ~5MB)
@@ -2166,7 +2249,7 @@ class TelegramAdapter(BasePlatformAdapter):
             )
             # Do not fetch the URL from Maez-side code here. External HTTP
             # fetching belongs to the future action_engine_external_fetch gate.
-            return await super().send_image(chat_id, image_url, caption, reply_to)
+            return SendResult(success=False, error=str(e))
 
     async def send_animation(
         self,
@@ -3479,19 +3562,75 @@ class TelegramAdapter(BasePlatformAdapter):
         message_kind: str,
         chat_id: str | int,
         text: str = "",
+        content: ProvenancedText | None = None,
+        caption: str | None = None,
+        media_ref: str | None = None,
         source_ref: str,
         metadata: Optional[Dict[str, Any]] = None,
         interactive_markup: TelegramInteractiveMarkup | None = None,
     ) -> TelegramEgressEnvelope:
-        envelope = legacy_text_envelope(
-            bot_route="owner_private",
-            audience_class="bonded_owner",
-            chat_id=str(chat_id),
-            text=text,
-            source_ref=source_ref,
-            message_kind=message_kind,
-            metadata=metadata or {},
-        )
+        if (
+            message_kind in {"transport_control", "typing", "reaction", "callback_answer", "draft_presence"}
+            and not text
+            and not caption
+        ):
+            envelope = owner_transport_control_envelope(
+                bot_route="owner_private",
+                chat_id=str(chat_id),
+                source_ref=source_ref,
+                message_kind=message_kind,
+                metadata=metadata or {},
+            )
+        elif media_ref is not None:
+            envelope = owner_media_envelope(
+                bot_route="owner_private",
+                chat_id=str(chat_id),
+                message_kind=message_kind,
+                caption=(
+                    ProvenancedText.maez_authored_owner_third_party_transport(
+                        caption,
+                        source_ref=f"{source_ref}:caption",
+                    )
+                    if caption
+                    else None
+                ),
+                media_ref=media_ref,
+                source_ref=source_ref,
+                metadata=metadata or {},
+            )
+        elif content is not None:
+            envelope = owner_multispan_envelope(
+                bot_route="owner_private",
+                chat_id=str(chat_id),
+                content=content,
+                source_ref=source_ref,
+                message_kind=message_kind,
+                metadata=metadata or {},
+            )
+        elif message_kind in {"callback_answer", "edit_text"} and text:
+            envelope = owner_multispan_envelope(
+                bot_route="owner_private",
+                chat_id=str(chat_id),
+                content=ProvenancedText.system_bounded_query(
+                    text,
+                    source_ref=source_ref,
+                ),
+                source_ref=source_ref,
+                message_kind=message_kind,
+                metadata=metadata or {},
+            )
+        else:
+            envelope = owner_multispan_envelope(
+                bot_route="owner_private",
+                chat_id=str(chat_id),
+                content=ProvenancedText.from_raw_conservative(
+                    text,
+                    source_ref=f"{source_ref}:raw_unreviewed",
+                ),
+                source_ref=source_ref,
+                message_kind=message_kind,
+                metadata=metadata or {},
+            )
         if interactive_markup is None:
             return envelope
         return TelegramEgressEnvelope(
@@ -3533,6 +3672,38 @@ class TelegramAdapter(BasePlatformAdapter):
             button_count=button_count,
         )
 
+    @staticmethod
+    def _telegram_content_from_parts(
+        source_ref: str,
+        parts: list[tuple[str, str, str]],
+    ) -> ProvenancedText:
+        spans = []
+        for origin_class, text, label in parts:
+            if not text:
+                continue
+            if origin_class == "maez_authored_owner_third_party_transport":
+                piece = ProvenancedText.maez_authored_owner_third_party_transport(
+                    text,
+                    source_ref=f"{source_ref}:{label}",
+                )
+            elif origin_class == "owner_message_context":
+                piece = ProvenancedText.owner_message_context(
+                    text,
+                    source_ref=f"{source_ref}:{label}",
+                )
+            elif origin_class == "tool_result_public":
+                piece = ProvenancedText.tool_result_public(
+                    text,
+                    source_ref=f"{source_ref}:{label}",
+                )
+            else:
+                piece = ProvenancedText.system_bounded_query(
+                    text,
+                    source_ref=f"{source_ref}:{label}",
+                )
+            spans.extend(piece.spans)
+        return ProvenancedText.from_spans(spans)
+
     async def _egress_call(
         self,
         method_name: str,
@@ -3540,6 +3711,7 @@ class TelegramAdapter(BasePlatformAdapter):
         message_kind: str,
         source_ref: str,
         egress_text: str = "",
+        egress_content: ProvenancedText | None = None,
         metadata: Optional[Dict[str, Any]] = None,
         interactive_markup: TelegramInteractiveMarkup | None = None,
         **kwargs: Any,
@@ -3550,10 +3722,21 @@ class TelegramAdapter(BasePlatformAdapter):
             interactive_markup = self._telegram_interactive_markup(
                 kwargs.get("reply_markup")
             )
+        payload_text = egress_text or str(kwargs.get("text") or "")
+        payload_caption = kwargs.get("caption")
+        media_ref = self._telegram_media_ref(kwargs)
+        if egress_content is None and payload_text:
+            egress_content = ProvenancedText.system_bounded_query(
+                payload_text,
+                source_ref=source_ref,
+            )
         envelope = self._telegram_egress_envelope(
             message_kind=message_kind,
             chat_id=kwargs.get("chat_id") or "",
-            text=egress_text,
+            text=payload_text,
+            content=egress_content,
+            caption=str(payload_caption) if payload_caption else None,
+            media_ref=media_ref,
             source_ref=source_ref,
             metadata=metadata,
             interactive_markup=interactive_markup,
@@ -3583,10 +3766,21 @@ class TelegramAdapter(BasePlatformAdapter):
         except Exception:
             pass
         interactive_markup = self._telegram_interactive_markup(kwargs.get("reply_markup"))
+        payload_text = egress_text or str(kwargs.get("text") or "")
+        payload_caption = kwargs.get("caption")
+        media_ref = self._telegram_media_ref(kwargs)
+        egress_content = (
+            ProvenancedText.system_bounded_query(payload_text, source_ref=source_ref)
+            if payload_text
+            else None
+        )
         envelope = self._telegram_egress_envelope(
             message_kind=message_kind,
             chat_id=chat_id,
-            text=egress_text,
+            text=payload_text,
+            content=egress_content,
+            caption=str(payload_caption) if payload_caption else None,
+            media_ref=media_ref,
             source_ref=source_ref,
             interactive_markup=interactive_markup,
         )
@@ -3605,6 +3799,83 @@ class TelegramAdapter(BasePlatformAdapter):
             return
         reasons = ",".join(result.reason_codes) or result.decision.decision
         raise RuntimeError(f"telegram egress blocked: {reasons}")
+
+    @staticmethod
+    def _telegram_media_ref(kwargs: Dict[str, Any]) -> str | None:
+        for key in ("photo", "voice", "audio", "document", "video", "animation"):
+            value = kwargs.get(key)
+            if isinstance(value, (str, Path)):
+                return str(value)
+            if value is not None:
+                if key == "document" and kwargs.get("filename"):
+                    return f"{key}:stream:{kwargs['filename']}"
+                return f"{key}:stream"
+        return None
+
+    @staticmethod
+    def _metadata_with_reviewed_origin(
+        metadata: Any,
+        origin_class: str,
+    ) -> Dict[str, Any]:
+        if isinstance(metadata, dict):
+            next_metadata = dict(metadata)
+        elif metadata is None:
+            next_metadata = {}
+        else:
+            next_metadata = {"platform_metadata": metadata}
+        next_metadata.setdefault(_TELEGRAM_REVIEWED_ORIGIN_METADATA_KEY, origin_class)
+        return next_metadata
+
+    @staticmethod
+    def _provenanced_content_for_raw_send(
+        content: str | ProvenancedText,
+        *,
+        metadata: Optional[Dict[str, Any]],
+        source_ref: str,
+    ) -> ProvenancedText:
+        if isinstance(content, ProvenancedText):
+            return content
+        origin_class = None
+        if isinstance(metadata, dict):
+            origin_class = metadata.get(_TELEGRAM_REVIEWED_ORIGIN_METADATA_KEY)
+        text = str(content)
+        if origin_class == "maez_authored_owner_third_party_transport":
+            return ProvenancedText.maez_authored_owner_third_party_transport(
+                text,
+                source_ref=source_ref,
+            )
+        if origin_class == "system_bounded_query":
+            return ProvenancedText.system_bounded_query(text, source_ref=source_ref)
+        return ProvenancedText.from_raw_conservative(
+            text,
+            source_ref=f"{source_ref}:raw_unreviewed",
+        )
+
+    @staticmethod
+    def _provenanced_content_for_transport_text(
+        content: ProvenancedText,
+        *,
+        text: str,
+        source_ref: str,
+    ) -> ProvenancedText:
+        if content.text == text:
+            return content
+        if len(content.spans) == 1:
+            span = content.spans[0]
+            return ProvenancedText.from_spans(
+                [
+                    type(span)(
+                        text=text,
+                        origin_class=span.origin_class,
+                        source_ref=f"{span.source_ref}:transport_text",
+                        redaction_allowed=span.redaction_allowed,
+                    )
+                ]
+            )
+        return ProvenancedText.from_raw_conservative(
+            text,
+            source_ref=f"{source_ref}:transport_text_mismatch",
+        )
 
     async def send_empty_draft_presence(self, event: MessageEvent) -> bool:
         """Attempt one empty Telegram draft presence signal.

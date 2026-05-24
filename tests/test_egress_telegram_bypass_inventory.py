@@ -10,6 +10,22 @@ PRODUCTION_ROOTS = ("skills", "daemon", "core")
 APPROVED_DIRECT_SEND_FILES = {
     "core/egress/telegram_egress.py",
 }
+APPROVED_LEGACY_FACTORY_FILES = {
+    "core/egress/telegram_egress.py",
+}
+RAW_SYNC_SEND_SCAN_ROOTS = (
+    "daemon/maez_daemon.py",
+    "core/actions/action_engine.py",
+    "core/evolution/dream_state.py",
+)
+TELEGRAM_ADAPTER_MEDIA_FALLBACK_METHODS = {
+    "send_image",
+    "send_animation",
+    "send_voice",
+    "send_video",
+    "send_document",
+    "send_image_file",
+}
 
 TELEGRAM_METHODS = {
     "send_message",
@@ -57,6 +73,60 @@ def _telegram_aliases(tree: ast.AST) -> set[str]:
                 if isinstance(target, ast.Name):
                     aliases.add(target.id)
     return aliases
+
+
+def _literal_string(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _is_getattr_call(node: ast.AST, attr_name: str) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    if _receiver_name(node.func) != "getattr":
+        return False
+    if len(node.args) < 2:
+        return False
+    return _literal_string(node.args[1]) == attr_name
+
+
+def _sync_telegram_aliases(tree: ast.AST) -> set[str]:
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        if value is None:
+            continue
+        receiver = _receiver_name(value)
+        if receiver.endswith(".telegram") or _is_getattr_call(value, "telegram"):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    aliases.add(target.id)
+    return aliases
+
+
+def _is_sync_telegram_object(node: ast.AST, aliases: set[str]) -> bool:
+    receiver = _receiver_name(node)
+    if isinstance(node, ast.Name) and node.id in aliases:
+        return True
+    if receiver.endswith(".telegram"):
+        return True
+    if _is_getattr_call(node, "telegram"):
+        return True
+    return False
+
+
+def _is_raw_sync_send_message_call(call: ast.Call, aliases: set[str] | None = None) -> bool:
+    aliases = aliases or set()
+    func = call.func
+    if isinstance(func, ast.Attribute) and func.attr == "send_message":
+        return _is_sync_telegram_object(func.value, aliases)
+    if _is_getattr_call(func, "send_message"):
+        return bool(func.args) and _is_sync_telegram_object(func.args[0], aliases)
+    return False
 
 
 def _is_telegram_send_call(call: ast.Call, telegram_aliases: set[str] | None = None) -> bool:
@@ -110,7 +180,106 @@ def _find_direct_telegram_calls() -> list[str]:
     return sorted(hits)
 
 
+def _find_legacy_text_envelope_calls() -> list[str]:
+    hits: list[str] = []
+    for root_name in PRODUCTION_ROOTS:
+        for path in (ROOT / root_name).rglob("*.py"):
+            rel = path.relative_to(ROOT).as_posix()
+            if rel in APPROVED_LEGACY_FACTORY_FILES or _is_test_path(path):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and _receiver_name(node.func) == "legacy_text_envelope":
+                    hits.append(f"{rel}:{node.lineno}:legacy_text_envelope")
+    return sorted(hits)
+
+
+def _find_legacy_shadow_kwarg_paths() -> list[str]:
+    hits = _find_legacy_text_envelope_calls()
+    for root_name in PRODUCTION_ROOTS:
+        for path in (ROOT / root_name).rglob("*.py"):
+            rel = path.relative_to(ROOT).as_posix()
+            if rel in APPROVED_LEGACY_FACTORY_FILES or _is_test_path(path):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.keyword):
+                    continue
+                if node.arg not in {"allow_shadow_send", "allow_legacy_shadow_send"}:
+                    continue
+                if isinstance(node.value, ast.Constant) and node.value.value is True:
+                    hits.append(f"{rel}:{node.lineno}:{node.arg}=True")
+    return sorted(set(hits))
+
+
+def _find_raw_sync_send_message_calls() -> list[str]:
+    hits: list[str] = []
+    for rel in RAW_SYNC_SEND_SCAN_ROOTS:
+        path = ROOT / rel
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        aliases = _sync_telegram_aliases(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and _is_raw_sync_send_message_call(node, aliases):
+                hits.append(f"{rel}:{node.lineno}:{_receiver_name(node.func)}")
+    return sorted(hits)
+
+
+def _find_telegram_adapter_super_media_fallbacks() -> list[str]:
+    path = ROOT / "skills/surface/telegram_adapter.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in TELEGRAM_ADAPTER_MEDIA_FALLBACK_METHODS:
+            continue
+        if _receiver_name(node.func.value) == "super":
+            hits.append(f"skills/surface/telegram_adapter.py:{node.lineno}:super().{node.func.attr}")
+    return sorted(hits)
+
+
 class TelegramBypassInventoryTests(unittest.TestCase):
+    def test_no_production_legacy_text_envelope_outside_chokepoint(self):
+        self.assertEqual(_find_legacy_text_envelope_calls(), [])
+
+    def test_no_production_legacy_shadow_send_paths(self):
+        self.assertEqual(_find_legacy_shadow_kwarg_paths(), [])
+
+    def test_no_raw_sync_send_message_calls_in_production_producers(self):
+        self.assertEqual(_find_raw_sync_send_message_calls(), [])
+
+    def test_sync_send_inventory_catches_direct_alias_and_getattr_patterns(self):
+        tree = ast.parse(
+            """
+def f(self):
+    self.telegram.send_message("direct")
+    tg = self.telegram
+    tg.send_message("alias")
+    getattr(self.telegram, "send_message")("getattr-method")
+    getattr(self, "telegram").send_message("getattr-object")
+"""
+        )
+        aliases = _sync_telegram_aliases(tree)
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+        detected = [
+            _receiver_name(call.func)
+            for call in calls
+            if _is_raw_sync_send_message_call(call, aliases)
+        ]
+
+        self.assertEqual(
+            detected,
+            [
+                "self.telegram.send_message",
+                "tg.send_message",
+                "getattr",
+                "getattr.send_message",
+            ],
+        )
+
+    def test_telegram_adapter_media_paths_do_not_fallback_to_base_raw_sends(self):
+        self.assertEqual(_find_telegram_adapter_super_media_fallbacks(), [])
+
     def test_no_direct_telegram_send_calls_outside_chokepoint(self):
         hits = _find_direct_telegram_calls()
 
@@ -201,13 +370,13 @@ async def f(Bot):
 
         self.assertNotIn("send_draft(**kwargs)", source)
 
-    def test_allowlist_marks_telegram_chokepoint_without_migrating_action_fetch(self):
+    def test_allowlist_marks_telegram_producer_threaded_without_migrating_action_fetch(self):
         text = ROOT.joinpath(
             "docs/slices/privacy-egress-gate/network_migration_allowlist.yaml"
         ).read_text(encoding="utf-8")
 
         self.assertIn("surface: telegram", text)
-        self.assertIn("status: chokepoint_shadow", text)
+        self.assertIn("status: producer_threaded_shadow", text)
         action_entry = text.split("surface: action_engine_external_fetch", 1)[1]
         self.assertIn("status: unmigrated", action_entry)
 

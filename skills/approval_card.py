@@ -43,6 +43,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Optional, Protocol
 
+from core.egress.provenance import ProvenancedText
 from core.pending_cards import CardRecord, CardStatus
 
 
@@ -285,10 +286,71 @@ class TelegramTextRenderer:
     send_message_fn: Callable[..., str]
     edit_message_fn: Optional[Callable[..., None]] = None
 
+    @staticmethod
+    def _telegram_payload(text: str, *, source_ref: str) -> ProvenancedText:
+        spans = []
+        saw_value_line = False
+        in_code_fence = False
+        for line in str(text).splitlines(keepends=True):
+            if line.strip().startswith("```"):
+                in_code_fence = not in_code_fence
+                spans.extend(
+                    ProvenancedText.system_bounded_query(
+                        line,
+                        source_ref=f"{source_ref}:code_fence",
+                    ).spans
+                )
+                continue
+            if in_code_fence:
+                spans.extend(
+                    ProvenancedText.tool_result_public(
+                        line,
+                        source_ref=f"{source_ref}:execution_output",
+                    ).spans
+                )
+                continue
+            if ": " not in line:
+                if line.strip() and not saw_value_line:
+                    saw_value_line = True
+                    spans.extend(
+                        ProvenancedText.owner_message_context(
+                            line,
+                            source_ref=f"{source_ref}:summary",
+                        ).spans
+                    )
+                    continue
+                spans.extend(
+                    ProvenancedText.system_bounded_query(
+                        line,
+                        source_ref=f"{source_ref}:static",
+                    ).spans
+                )
+                continue
+            label, value = line.split(": ", 1)
+            spans.extend(
+                ProvenancedText.system_bounded_query(
+                    f"{label}: ",
+                    source_ref=f"{source_ref}:label",
+                ).spans
+            )
+            spans.extend(
+                ProvenancedText.owner_message_context(
+                    value,
+                    source_ref=f"{source_ref}:value",
+                ).spans
+            )
+        return ProvenancedText.from_spans(spans)
+
     def present(self, card: CardRecord) -> Optional[str]:
         text = format_card_text(card)
         try:
-            msg_id = self.send_message_fn(self.chat_id, text)
+            msg_id = self.send_message_fn(
+                self.chat_id,
+                self._telegram_payload(
+                    text,
+                    source_ref=f"approval_card:{card.request_id}:present",
+                ),
+            )
             return str(msg_id) if msg_id is not None else None
         except Exception:
             return None
@@ -297,7 +359,14 @@ class TelegramTextRenderer:
         text = format_reminder_text(card)
         try:
             reply_to = card.channel_message_id
-            msg_id = self.send_message_fn(self.chat_id, text, reply_to=reply_to)
+            msg_id = self.send_message_fn(
+                self.chat_id,
+                self._telegram_payload(
+                    text,
+                    source_ref=f"approval_card:{card.request_id}:reminder",
+                ),
+                reply_to=reply_to,
+            )
             return str(msg_id) if msg_id is not None else None
         except Exception:
             return None
@@ -306,7 +375,14 @@ class TelegramTextRenderer:
         text = format_resolution_text(card)
         try:
             reply_to = card.channel_message_id
-            self.send_message_fn(self.chat_id, text, reply_to=reply_to)
+            self.send_message_fn(
+                self.chat_id,
+                self._telegram_payload(
+                    text,
+                    source_ref=f"approval_card:{card.request_id}:resolution",
+                ),
+                reply_to=reply_to,
+            )
         except Exception:
             pass
 

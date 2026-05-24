@@ -447,12 +447,15 @@ class ProactiveOpinionIsAuditedAndTagged(unittest.TestCase):
         src = (_REPO / "daemon" / "maez_daemon.py").read_text()
         window = self._proactive_window(src)
         i_audit = window.find("audit_assistant_text")
-        i_send = window.find("self.telegram.send_message")
+        i_send = window.find("_send_telegram_notice")
         self.assertGreater(i_audit, 0,
                            "proactive must call audit_assistant_text.")
+        self.assertGreater(i_send, 0,
+                           "proactive must reach Telegram through "
+                           "_send_telegram_notice.")
         self.assertLess(i_audit, i_send,
                         "audit_assistant_text must appear BEFORE "
-                        "telegram.send_message in proactive.")
+                        "Telegram transport in proactive.")
 
     def test_source_tags_provenance(self):
         src = (_REPO / "daemon" / "maez_daemon.py").read_text()

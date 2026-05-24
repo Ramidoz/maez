@@ -15,9 +15,9 @@ entries:
     destination: api.telegram.org
     surface: telegram
     category: runtime_external
-    status: chokepoint_shadow
-    owner_visible_rationale: Telegram sends route through the provenance-aware chokepoint in shadow posture; producer-side precise provenance threading remains a follow-up.
-    removal_target: replace legacy unclassified Telegram wrappers with producer-side provenance, then review before enforcement flip
+    status: producer_threaded_shadow
+    owner_visible_rationale: Telegram sends route through the provenance-aware chokepoint with producer-side at-birth provenance threaded for owner/public/control/media surfaces; shadow posture remains until enforcement review.
+    removal_target: review producer-threaded diagnostics and live canaries, then decide Telegram enforcement posture before global enforcement flip
     review_by: "2026-06-12"
     surface_owner: codex
   - path: core/actions/action_engine.py

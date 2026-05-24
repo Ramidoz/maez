@@ -43,6 +43,7 @@ class PrivacyEgressInventoryTests(unittest.TestCase):
                 "proxy_shadow_provenanced",
                 "proxy_shadow",
                 "chokepoint_shadow",
+                "producer_threaded_shadow",
                 "inventory_only",
                 "deprecated",
             })
@@ -82,6 +83,21 @@ class PrivacyEgressInventoryTests(unittest.TestCase):
         ).lower()
         self.assertIn("fast-backend cloud retirement", combined)
         self.assertIn("2026-05-23", combined)
+
+    def test_telegram_route_is_producer_threaded_and_action_fetch_stays_unmigrated(self):
+        path = Path("docs/slices/privacy-egress-gate/network_migration_allowlist.yaml")
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        entries_by_surface = {
+            entry["surface"]: entry
+            for entry in payload["entries"]
+        }
+
+        telegram = entries_by_surface["telegram"]
+        self.assertEqual(telegram["status"], "producer_threaded_shadow")
+        self.assertIn("producer", telegram["removal_target"].lower())
+
+        action_fetch = entries_by_surface["action_engine_external_fetch"]
+        self.assertEqual(action_fetch["status"], "unmigrated")
 
 
 if __name__ == "__main__":

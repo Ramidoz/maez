@@ -310,7 +310,13 @@ class MaezMessageHandler:
             if not adapter or not adapter_loop or not chat_id:
                 return
             try:
-                coro = adapter.send(chat_id, msg_text)
+                from core.egress.provenance import ProvenancedText
+
+                payload = ProvenancedText.maez_authored_owner_third_party_transport(
+                    msg_text,
+                    source_ref=f"{SURFACE_NAME}:self_mod_dialog_intermediate",
+                )
+                coro = adapter.send(chat_id, payload)
                 fut = asyncio.run_coroutine_threadsafe(coro, adapter_loop)
                 fut.result(timeout=20)
             except Exception as e:

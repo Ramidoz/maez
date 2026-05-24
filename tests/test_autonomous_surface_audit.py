@@ -14,7 +14,8 @@ These tests lock in the fix via source inspection. The behavioral
 path would need to mock the LLM, Telegram client, file IO, and
 system perception — more mocking code than the guard protects.
 The regression we're blocking is exactly at the source-literal
-level: "this path must call `audit_assistant_text` before send."
+level: "this path must call `audit_assistant_text` before Telegram
+transport."
 """
 from __future__ import annotations
 
@@ -30,7 +31,7 @@ if str(_REPO) not in sys.path:
 
 class MorningBriefingAuditedBeforeSend(unittest.TestCase):
     """F1 — `_send_morning_briefing` must route the LLM output
-    through `audit_assistant_text` before `telegram.send_message`."""
+    through `audit_assistant_text` before Telegram transport."""
 
     def _source(self):
         from daemon.maez_daemon import MaezDaemon
@@ -46,12 +47,12 @@ class MorningBriefingAuditedBeforeSend(unittest.TestCase):
     def test_audit_runs_before_send(self):
         src = self._source()
         audit_pos = src.find("audit_assistant_text")
-        send_pos = src.find("telegram.send_message")
+        send_pos = src.find("_send_telegram_notice")
         self.assertGreater(audit_pos, 0, "audit_assistant_text not found")
-        self.assertGreater(send_pos, 0, "telegram.send_message not found")
+        self.assertGreater(send_pos, 0, "_send_telegram_notice not found")
         self.assertLess(audit_pos, send_pos,
             "audit_assistant_text call must appear before "
-            "telegram.send_message in source — reverse order means "
+            "Telegram transport in source — reverse order means "
             "raw LLM output reaches the owner first.",
         )
 
@@ -84,7 +85,7 @@ class MorningBriefingAuditedBeforeSend(unittest.TestCase):
 
 class DreamInsightAuditedBeforeSend(unittest.TestCase):
     """F2 — `DreamState.run_dream_cycle`'s insight must route through
-    `audit_assistant_text` before `telegram.send_message`."""
+    `audit_assistant_text` before Telegram transport."""
 
     def _source(self):
         from core.evolution.dream_state import DreamState
@@ -100,15 +101,15 @@ class DreamInsightAuditedBeforeSend(unittest.TestCase):
     def test_audit_runs_before_send(self):
         src = self._source()
         # Locate the LAST occurrence of audit_assistant_text (the call
-        # site, not the import) and the first telegram.send_message
+        # site, not the import) and the first Telegram transport call
         # after it. The audit must appear before the send.
         audit_pos = src.rfind("audit_assistant_text(")
-        send_pos = src.find("telegram.send_message")
+        send_pos = src.find("_send_telegram_notice")
         self.assertGreater(audit_pos, 0, "audit_assistant_text() call not found")
-        self.assertGreater(send_pos, 0, "telegram.send_message not found")
+        self.assertGreater(send_pos, 0, "_send_telegram_notice not found")
         self.assertLess(audit_pos, send_pos,
             "audit_assistant_text call must appear before "
-            "telegram.send_message in source — see F2 rationale.",
+            "Telegram transport in source — see F2 rationale.",
         )
 
 
@@ -130,9 +131,9 @@ class TrainingProposalAuditedBeforeSend(unittest.TestCase):
     def test_audit_runs_before_send(self):
         src = self._source()
         audit_pos = src.rfind("audit_assistant_text(")
-        send_pos = src.find("telegram.send_message")
+        send_pos = src.find("_send_telegram_notice")
         self.assertGreater(audit_pos, 0, "audit_assistant_text() call not found")
-        self.assertGreater(send_pos, 0, "telegram.send_message not found")
+        self.assertGreater(send_pos, 0, "_send_telegram_notice not found")
         self.assertLess(audit_pos, send_pos,
             "training proposal audit must appear before Telegram send.",
         )

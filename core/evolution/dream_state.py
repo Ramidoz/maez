@@ -60,6 +60,8 @@ logger = logging.getLogger("maez.dream")
 # /etc/maez/model.env), so dream-state reasoning runs on whatever brain
 # is live — not a stale label.
 from core.model_config import PRIMARY_MODEL as MODEL
+from core.egress.provenance import ProvenancedText
+from core.egress.telegram_egress import owner_multispan_envelope
 
 try:
     from core import paths as _paths
@@ -147,6 +149,70 @@ class DreamState:
         self._lock = threading.RLock()
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
+
+    @staticmethod
+    def _telegram_notice_content(text: str, *, source_ref: str) -> ProvenancedText:
+        if source_ref in {"dream_state:dream_proposal", "dream_state:training_proposal"}:
+            sections = str(text).split("\n\n", 2)
+            if len(sections) >= 3:
+                header, body, commands = sections
+                return (
+                    ProvenancedText.system_bounded_query(
+                        header + "\n\n",
+                        source_ref=f"{source_ref}:header",
+                    )
+                    + ProvenancedText.maez_authored_owner_third_party_transport(
+                        body,
+                        source_ref=f"{source_ref}:audited_body",
+                    )
+                    + ProvenancedText.system_bounded_query(
+                        "\n\n" + commands,
+                        source_ref=f"{source_ref}:commands",
+                    )
+                )
+        spans = []
+        for line in str(text).splitlines(keepends=True):
+            if ": " not in line:
+                spans.extend(
+                    ProvenancedText.system_bounded_query(
+                        line,
+                        source_ref=f"{source_ref}:static",
+                    ).spans
+                )
+                continue
+            label, value = line.split(": ", 1)
+            spans.extend(
+                ProvenancedText.system_bounded_query(
+                    f"{label}: ",
+                    source_ref=f"{source_ref}:label",
+                ).spans
+            )
+            spans.extend(
+                ProvenancedText.memory(
+                    value,
+                    source_ref=f"{source_ref}:proposal_detail",
+                ).spans
+            )
+        return ProvenancedText.from_spans(spans)
+
+    def _send_telegram_notice(self, text: str | ProvenancedText, *, source_ref: str) -> None:
+        if not self.telegram:
+            return
+        send_envelope = getattr(self.telegram, "send_envelope", None)
+        if not callable(send_envelope):
+            return
+        content = (
+            text
+            if isinstance(text, ProvenancedText)
+            else self._telegram_notice_content(str(text), source_ref=source_ref)
+        )
+        envelope = owner_multispan_envelope(
+            bot_route="voice_owner_private",
+            chat_id="",
+            content=content,
+            source_ref=source_ref,
+        )
+        send_envelope(envelope)
 
     # ── SQLite schema ───────────────────────────────────────────────
     def _conn(self) -> sqlite3.Connection:
@@ -340,7 +406,10 @@ class DreamState:
                     f"💭 [DREAM #{prop_id}]\n\n{audited_insight}\n\n"
                     f"`/apply_dream {prop_id}`  ·  `/reject_dream {prop_id}`"
                 )
-                self.telegram.send_message(msg)
+                self._send_telegram_notice(
+                    msg,
+                    source_ref="dream_state:dream_proposal",
+                )
             except Exception as e:
                 logger.debug("dream: telegram send failed: %s", e)
 
@@ -638,7 +707,10 @@ class DreamState:
                     )
                 except Exception as _aud_exc:
                     logger.debug("dream: training proposal audit fail-open: %s", _aud_exc)
-                self.telegram.send_message(msg)
+                self._send_telegram_notice(
+                    msg,
+                    source_ref="dream_state:training_proposal",
+                )
             except Exception as e:
                 logger.debug("dream: training proposal telegram send failed: %s", e)
 

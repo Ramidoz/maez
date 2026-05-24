@@ -11,6 +11,7 @@ import logging
 import os
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
@@ -34,7 +35,14 @@ from core.perception import snapshot as perception_snapshot, format_snapshot
 from core.conversation_controller import ConversationController
 from core.body.camera_presence_voice import answer_camera_presence_question
 from core.safety.clinical_boundary import PrivateThoughtsCrisisSignalWriter, guard_owner_text
-from core.egress.telegram_egress import call_telegram_method_async, legacy_text_envelope
+from core.egress.provenance import ProvenanceSpan, ProvenancedText
+from core.egress.telegram_egress import (
+    TelegramEgressEnvelope,
+    call_telegram_method_async,
+    owner_multispan_envelope,
+    owner_text_envelope,
+    owner_transport_control_envelope,
+)
 from memory.memory_manager import MemoryManager
 from skills.web_search import (
     search as web_search,
@@ -49,9 +57,8 @@ logger = logging.getLogger("maez")
 
 async def _reply_text(update, text: str, **kwargs):
     chat_id = getattr(getattr(update, "effective_chat", None), "id", "")
-    envelope = legacy_text_envelope(
+    envelope = owner_text_envelope(
         bot_route="voice_owner_private",
-        audience_class="bonded_owner",
         chat_id=str(chat_id),
         text=str(text),
         source_ref="telegram_voice:reply_text",
@@ -65,15 +72,20 @@ async def _reply_text(update, text: str, **kwargs):
     )
 
 
-async def _bot_send_message(bot, **kwargs):
-    envelope = legacy_text_envelope(
-        bot_route="voice_owner_private",
-        audience_class="bonded_owner",
-        chat_id=str(kwargs.get("chat_id") or ""),
-        text=str(kwargs.get("text") or ""),
-        source_ref="telegram_voice:bot_send_message",
-        message_kind="text",
-    )
+async def _bot_send_message(bot, *, envelope: TelegramEgressEnvelope | None = None, **kwargs):
+    if envelope is None:
+        envelope = owner_multispan_envelope(
+            bot_route="voice_owner_private",
+            chat_id=str(kwargs.get("chat_id") or ""),
+            content=ProvenancedText.from_raw_conservative(
+                str(kwargs.get("text") or ""),
+                source_ref="telegram_voice:bot_send_message:raw_unreviewed",
+            ),
+            source_ref="telegram_voice:bot_send_message",
+            message_kind="text",
+        )
+    elif kwargs.get("chat_id") and not envelope.chat_id:
+        envelope = replace(envelope, chat_id=str(kwargs.get("chat_id")))
     return await call_telegram_method_async(
         envelope=envelope,
         target=bot,
@@ -83,11 +95,9 @@ async def _bot_send_message(bot, **kwargs):
 
 
 async def _bot_send_chat_action(bot, **kwargs):
-    envelope = legacy_text_envelope(
+    envelope = owner_transport_control_envelope(
         bot_route="voice_owner_private",
-        audience_class="bonded_owner",
         chat_id=str(kwargs.get("chat_id") or ""),
-        text="",
         source_ref="telegram_voice:send_chat_action",
         message_kind="typing",
     )
@@ -278,6 +288,52 @@ def split_long_message(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> list[
     if remaining:
         parts.append(remaining)
     return parts
+
+
+def _slice_provenanced_text(
+    content: ProvenancedText,
+    part: str,
+    cursor: int,
+) -> tuple[ProvenancedText, int]:
+    """Return a provenance-preserving slice for a transport message chunk."""
+    full_text = content.text
+    start = full_text.find(part, cursor)
+    if start < 0:
+        return (
+            ProvenancedText.from_raw_conservative(
+                part,
+                source_ref="telegram_voice:chunk:mismatch",
+            ),
+            cursor,
+        )
+    end = start + len(part)
+    spans: list[ProvenanceSpan] = []
+    span_start = 0
+    for span in content.spans:
+        span_end = span_start + len(span.text)
+        overlap_start = max(start, span_start)
+        overlap_end = min(end, span_end)
+        if overlap_start < overlap_end:
+            rel_start = overlap_start - span_start
+            rel_end = overlap_end - span_start
+            spans.append(
+                ProvenanceSpan(
+                    text=span.text[rel_start:rel_end],
+                    origin_class=span.origin_class,
+                    source_ref=f"{span.source_ref}:chunk",
+                    redaction_allowed=span.redaction_allowed,
+                )
+            )
+        span_start = span_end
+    if not spans:
+        return (
+            ProvenancedText.from_raw_conservative(
+                part,
+                source_ref="telegram_voice:chunk:empty",
+            ),
+            end,
+        )
+    return ProvenancedText.from_spans(spans), end
 
 
 # --- Natural language intent detection ---
@@ -745,8 +801,8 @@ class TelegramVoice:
         card_store = PendingCardStore()
         audit_log = AuditLog()
 
-        def _send(chat_id, text, reply_to=None):
-            return self._send_card_message(chat_id, text, reply_to=reply_to)
+        def _send(chat_id, payload, reply_to=None):
+            return self._send_card_message(chat_id, payload, reply_to=reply_to)
 
         renderer = TelegramTextRenderer(
             chat_id=str(self.authorized_user),
@@ -795,7 +851,7 @@ class TelegramVoice:
             logger.debug("telegram camera presence direct-answer skipped: %s", exc)
             return None
 
-    def _send_card_message(self, chat_id, text: str, reply_to=None) -> str | None:
+    def _send_card_message(self, chat_id, payload, reply_to=None) -> str | None:
         """Send a Telegram message and return the posted message_id.
 
         Unlike send_message(), this returns the message_id so the
@@ -805,6 +861,25 @@ class TelegramVoice:
         if not self.enabled or not self._loop:
             return None
         target_chat = int(chat_id) if chat_id else self.authorized_user
+        if isinstance(payload, ProvenancedText):
+            text = payload.text
+            envelope = owner_multispan_envelope(
+                bot_route="voice_owner_private",
+                chat_id=str(target_chat),
+                content=payload,
+                source_ref="telegram_voice:card_message",
+            )
+        else:
+            text = str(payload)
+            envelope = owner_multispan_envelope(
+                bot_route="voice_owner_private",
+                chat_id=str(target_chat),
+                content=ProvenancedText.from_raw_conservative(
+                    text,
+                    source_ref="telegram_voice:card_message:raw",
+                ),
+                source_ref="telegram_voice:card_message",
+            )
 
         async def _send():
             bot = Bot(token=self.token)
@@ -814,7 +889,7 @@ class TelegramVoice:
                     kwargs["reply_to_message_id"] = int(reply_to)
                 except (TypeError, ValueError):
                     pass
-            msg = await _bot_send_message(bot, **kwargs)
+            msg = await _bot_send_message(bot, envelope=envelope, **kwargs)
             return getattr(msg, "message_id", None)
 
         future = asyncio.run_coroutine_threadsafe(_send(), self._loop)
@@ -3714,9 +3789,16 @@ class TelegramVoice:
             )
 
             for part in split_long_message(reply):
+                envelope = owner_text_envelope(
+                    bot_route="voice_owner_private",
+                    chat_id=str(update.effective_chat.id),
+                    text=part,
+                    source_ref="telegram_voice:legacy_polling_reply",
+                )
                 await _bot_send_message(context.bot,
                     chat_id=update.effective_chat.id,
                     text=part,
+                    envelope=envelope,
                 )
                 if len(split_long_message(reply)) > 1:
                     await asyncio.sleep(0.3)
@@ -5091,12 +5173,16 @@ class TelegramVoice:
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=join_timeout)
 
-    def send_message(self, text: str):
-        """Send a message to the owner via Telegram. Safe to call from any thread.
-        Auto-splits messages > 4000 chars on sentence boundaries."""
+    def send_envelope(self, envelope: TelegramEgressEnvelope):
+        """Send a provenance-bearing envelope to the owner via Telegram."""
         if not self.enabled or not self._loop:
             return
 
+        text = ""
+        if envelope.content is not None:
+            text = envelope.content.text
+        elif envelope.caption is not None:
+            text = envelope.caption.text
         parts = split_long_message(text)
         if len(parts) > 1:
             logger.info("Telegram message split into %d parts", len(parts))
@@ -5105,14 +5191,41 @@ class TelegramVoice:
             import asyncio as _a
 
             bot = Bot(token=self.token)
+            cursor = 0
             for i, part in enumerate(parts):
-                await _bot_send_message(bot, chat_id=self.authorized_user, text=part)
+                part_envelope = envelope
+                if not part_envelope.chat_id:
+                    part_envelope = replace(
+                        part_envelope,
+                        chat_id=str(self.authorized_user),
+                    )
+                if envelope.content is not None:
+                    chunk_content, cursor = _slice_provenanced_text(
+                        envelope.content,
+                        part,
+                        cursor,
+                    )
+                    part_envelope = replace(part_envelope, content=chunk_content)
+                await _bot_send_message(
+                    bot,
+                    chat_id=self.authorized_user,
+                    text=part,
+                    envelope=part_envelope,
+                )
                 if i < len(parts) - 1:
                     await _a.sleep(0.5)
 
         future = asyncio.run_coroutine_threadsafe(_send_all(), self._loop)
         try:
             future.result(timeout=30)
-            logger.info("Telegram sent: %s (full %d chars)", text[:80], len(text))
+            logger.info("Telegram sent envelope: %s (full %d chars)", text[:80], len(text))
         except Exception as e:
             logger.error("Telegram send failed: %s", e)
+
+    def send_message(self, text: str):
+        """Retired raw-string compatibility surface.
+
+        Producer-threaded Telegram sends must classify content at birth and
+        call ``send_envelope(...)`` instead of asking this wrapper to guess.
+        """
+        raise RuntimeError("raw TelegramVoice.send_message retired; use send_envelope")
