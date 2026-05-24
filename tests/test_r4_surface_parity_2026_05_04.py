@@ -65,9 +65,13 @@ class R4_TelegramPublicAudits(unittest.TestCase):
         )
 
     def test_telegram_public_audits_reply_before_send(self):
-        """Source-pin: the audit call must precede the `reply_text(reply)`
-        line at line ~349 (post-LLM, pre-send). Search the file for
-        the audit-then-send pattern."""
+        """Source-pin: audit must precede the public reply send.
+
+        The Telegram chokepoint slice routes public replies through
+        `_public_reply_text(update, reply)` instead of direct
+        `update.message.reply_text(reply)`. The R4 invariant remains:
+        audit the post-LLM reply before the send boundary.
+        """
         path = REPO / "skills" / "telegram_public.py"
         src = path.read_text()
         # Find the LLM-reply assembly + send block. The pattern we
@@ -76,13 +80,11 @@ class R4_TelegramPublicAudits(unittest.TestCase):
         # We assert the audit helper name is present AND a call to
         # it appears before the post-LLM reply_text line.
         import re
-        send_match = re.search(
-            r"await update\.message\.reply_text\(reply\)", src,
-        )
+        send_match = re.search(r"await _public_reply_text\(update,\s*reply\)", src)
         self.assertIsNotNone(
             send_match,
             "expected the LLM-reply send shape "
-            "`await update.message.reply_text(reply)` to exist "
+            "`await _public_reply_text(update, reply)` to exist "
             "in telegram_public.py",
         )
         send_idx = send_match.start()

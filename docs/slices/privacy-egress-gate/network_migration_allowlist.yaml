@@ -15,9 +15,9 @@ entries:
     destination: api.telegram.org
     surface: telegram
     category: runtime_external
-    status: unmigrated
-    owner_visible_rationale: Telegram remains pre-gate during cloud-first migration and must be migrated later.
-    removal_target: migrate owner_third_party_transport_send after cloud path is proven
+    status: chokepoint_shadow
+    owner_visible_rationale: Telegram sends route through the provenance-aware chokepoint in shadow posture; producer-side precise provenance threading remains a follow-up.
+    removal_target: replace legacy unclassified Telegram wrappers with producer-side provenance, then review before enforcement flip
     review_by: "2026-06-12"
     surface_owner: codex
   - path: core/actions/action_engine.py

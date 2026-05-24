@@ -34,6 +34,7 @@ from core.perception import snapshot as perception_snapshot, format_snapshot
 from core.conversation_controller import ConversationController
 from core.body.camera_presence_voice import answer_camera_presence_question
 from core.safety.clinical_boundary import PrivateThoughtsCrisisSignalWriter, guard_owner_text
+from core.egress.telegram_egress import call_telegram_method_async, legacy_text_envelope
 from memory.memory_manager import MemoryManager
 from skills.web_search import (
     search as web_search,
@@ -44,6 +45,58 @@ from skills.web_search import (
 )
 
 logger = logging.getLogger("maez")
+
+
+async def _reply_text(update, text: str, **kwargs):
+    chat_id = getattr(getattr(update, "effective_chat", None), "id", "")
+    envelope = legacy_text_envelope(
+        bot_route="voice_owner_private",
+        audience_class="bonded_owner",
+        chat_id=str(chat_id),
+        text=str(text),
+        source_ref="telegram_voice:reply_text",
+        message_kind="text",
+    )
+    return await call_telegram_method_async(
+        envelope=envelope,
+        target=update.message,
+        method_name="reply_text",
+        kwargs={"text": text, **kwargs},
+    )
+
+
+async def _bot_send_message(bot, **kwargs):
+    envelope = legacy_text_envelope(
+        bot_route="voice_owner_private",
+        audience_class="bonded_owner",
+        chat_id=str(kwargs.get("chat_id") or ""),
+        text=str(kwargs.get("text") or ""),
+        source_ref="telegram_voice:bot_send_message",
+        message_kind="text",
+    )
+    return await call_telegram_method_async(
+        envelope=envelope,
+        target=bot,
+        method_name="send_message",
+        kwargs=kwargs,
+    )
+
+
+async def _bot_send_chat_action(bot, **kwargs):
+    envelope = legacy_text_envelope(
+        bot_route="voice_owner_private",
+        audience_class="bonded_owner",
+        chat_id=str(kwargs.get("chat_id") or ""),
+        text="",
+        source_ref="telegram_voice:send_chat_action",
+        message_kind="typing",
+    )
+    return await call_telegram_method_async(
+        envelope=envelope,
+        target=bot,
+        method_name="send_chat_action",
+        kwargs=kwargs,
+    )
 
 
 def _audit_telegram_reply(
@@ -761,7 +814,7 @@ class TelegramVoice:
                     kwargs["reply_to_message_id"] = int(reply_to)
                 except (TypeError, ValueError):
                     pass
-            msg = await bot.send_message(**kwargs)
+            msg = await _bot_send_message(bot, **kwargs)
             return getattr(msg, "message_id", None)
 
         future = asyncio.run_coroutine_threadsafe(_send(), self._loop)
@@ -857,7 +910,7 @@ class TelegramVoice:
                 surface="telegram_dialog",
             )
             try:
-                await update.message.reply_text(dialog_reply_text)
+                await _reply_text(update, dialog_reply_text)
             except Exception as e:
                 logger.warning("failed to send self-mod dialog reply: %s", e)
 
@@ -1039,7 +1092,7 @@ class TelegramVoice:
                         surface="telegram",
                     )
                     try:
-                        await update.message.reply_text(terminal_reply)
+                        await _reply_text(update, terminal_reply)
                         logger.info(
                             "Fix 6 terminal summary sent to Telegram (%d chars)",
                             len(terminal_reply),
@@ -1198,7 +1251,7 @@ class TelegramVoice:
                                     surface="telegram_recovery",
                                 )
                                 try:
-                                    await update.message.reply_text(reply_text)
+                                    await _reply_text(update, reply_text)
                                 except Exception as e:
                                     logger.debug("recovery reply send failed: %s", e)
                                 try:
@@ -1961,7 +2014,7 @@ class TelegramVoice:
                         "\n".join(lines),
                         surface="telegram_dream_list",
                     )
-                    await update.message.reply_text(_msg)
+                    await _reply_text(update, _msg)
                     return True
                 return False
 
@@ -1973,13 +2026,13 @@ class TelegramVoice:
             logger.debug("dream.get_proposal failed: %s", e)
             return False
         if not prop:
-            await update.message.reply_text(
+            await _reply_text(update,
                 f"I don't find proposal #{target_id}. It may have expired or already been resolved."
             )
             return True
         if target_id not in pending_ids and prop.get("status") != "pending":
             status = prop.get("status") or "unknown"
-            await update.message.reply_text(
+            await _reply_text(update,
                 f"Proposal #{target_id} is already {status} — nothing to apply/reject."
             )
             return True
@@ -2008,11 +2061,11 @@ class TelegramVoice:
                 return False
         except Exception as e:
             logger.exception("dream proposal dispatch failed")
-            await update.message.reply_text(f"Couldn't process #{target_id}: {e}")
+            await _reply_text(update, f"Couldn't process #{target_id}: {e}")
             return True
 
         prefix = "✓" if ok else "✗"
-        await update.message.reply_text(f"{prefix} #{target_id}: {msg}")
+        await _reply_text(update, f"{prefix} #{target_id}: {msg}")
         logger.info("dream proposal %s: id=%d type=%s ok=%s", action, target_id, ptype, ok)
         return True
 
@@ -2112,7 +2165,7 @@ class TelegramVoice:
                     surface="telegram_proposal_disambig",
                 )
                 _log_out("disambiguation", msg, pending_count=len(pending))
-                await update.message.reply_text(msg)
+                await _reply_text(update, msg)
                 return True
 
         # Verify the candidate exists and is still pending
@@ -2123,7 +2176,7 @@ class TelegramVoice:
                 f"what's currently pending."
             )
             _log_out("unknown_candidate", msg, target_id=target_id)
-            await update.message.reply_text(msg)
+            await _reply_text(update, msg)
             return True
 
         # Execute the action
@@ -2133,7 +2186,7 @@ class TelegramVoice:
 
                 msg = f"OK, applying proposal #{target_id}…"
                 _log_out("approve_start", msg, target_id=target_id)
-                await update.message.reply_text(msg)
+                await _reply_text(update, msg)
                 result = apply_candidate(target_id)
                 if "error" in result:
                     msg = (
@@ -2148,7 +2201,7 @@ class TelegramVoice:
                         target_id=target_id,
                         rolled_back=bool(result.get("rolled_back")),
                     )
-                    await update.message.reply_text(msg)
+                    await _reply_text(update, msg)
                 else:
                     msg = (
                         f"Done. Proposal #{target_id} is live now. I'll watch "
@@ -2156,7 +2209,7 @@ class TelegramVoice:
                         f"back automatically if my score drops."
                     )
                     _log_out("approve_done", msg, target_id=target_id)
-                    await update.message.reply_text(msg)
+                    await _reply_text(update, msg)
                 return True
 
             if action == "reject":
@@ -2185,7 +2238,7 @@ class TelegramVoice:
                     f"I could try."
                 )
                 _log_out("reject_done", msg, target_id=target_id)
-                await update.message.reply_text(msg)
+                await _reply_text(update, msg)
                 return True
 
             if action == "show":
@@ -2195,7 +2248,7 @@ class TelegramVoice:
                 if not disp:
                     msg = f"I can't find proposal #{target_id}."
                     _log_out("show_not_found", msg, target_id=target_id)
-                    await update.message.reply_text(msg)
+                    await _reply_text(update, msg)
                     return True
                 i = disp.get("intent") or {}
                 u = disp.get("usefulness") or {}
@@ -2232,13 +2285,13 @@ class TelegramVoice:
                     pass
                 msg = "\n".join(lines)
                 _log_out("show", msg, target_id=target_id)
-                await update.message.reply_text(msg)
+                await _reply_text(update, msg)
                 return True
         except Exception as e:
             logger.error("Natural-language proposal action failed: %s", e)
             msg = f"Something went wrong while handling that: {e}"
             _log_out("exception", msg, target_id=target_id)
-            await update.message.reply_text(msg)
+            await _reply_text(update, msg)
             return True
 
         return False
@@ -2433,18 +2486,18 @@ class TelegramVoice:
                 f"Running the search I offered: {query}",
                 surface="telegram_offer_binding",
             )
-            await update.message.reply_text(_status)
+            await _reply_text(update, _status)
             result = _web_search(query, max_results=5)
         except Exception as e:
             logger.error("offer binding web_search failed: %s", e)
-            await update.message.reply_text(
+            await _reply_text(update,
                 f"I tried to run the offered search but the skill failed ({e}). "
                 f"I'm not going to make up an answer."
             )
             return True
 
         if not result.get("success") or not result.get("results"):
-            await update.message.reply_text(
+            await _reply_text(update,
                 f'I searched for "{query}" but didn\'t get useful results back. '
                 f"Want to try different phrasing?"
             )
@@ -2466,7 +2519,7 @@ class TelegramVoice:
         reply = "\n".join(lines).rstrip()
         if len(reply) > 3500:
             reply = reply[:3500] + "\n\n(truncated)"
-        await update.message.reply_text(reply)
+        await _reply_text(update, reply)
         return True
 
     async def _try_web_search_intent(self, update, text: str) -> bool:
@@ -2488,18 +2541,18 @@ class TelegramVoice:
                 f"Searching the web for: {query}…",
                 surface="telegram_web_search",
             )
-            await update.message.reply_text(_status)
+            await _reply_text(update, _status)
             result = _web_search(query, max_results=5)
         except Exception as e:
             logger.error("web_search call failed: %s", e)
-            await update.message.reply_text(
+            await _reply_text(update,
                 f'I tried to search the web for "{query}" but the search '
                 f"skill failed ({e}). I'm not going to make up an answer."
             )
             return True
 
         if not result.get("success") or not result.get("results"):
-            await update.message.reply_text(
+            await _reply_text(update,
                 f'I searched the web for "{query}" but didn\'t get any '
                 f"useful results back — either nothing matched, or the "
                 f"search service wasn't reachable. I'm not going to "
@@ -2530,7 +2583,7 @@ class TelegramVoice:
         reply = "\n".join(lines).rstrip()
         if len(reply) > 3500:
             reply = reply[:3500] + "\n\n(truncated)"
-        await update.message.reply_text(reply)
+        await _reply_text(update, reply)
         return True
 
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2559,7 +2612,7 @@ class TelegramVoice:
             mark = getattr(getattr(self, "daemon", None), "_mark_m1_s4_policy", None)
             if callable(mark):
                 mark(_s4_result.promotion_policy)
-            await update.message.reply_text(
+            await _reply_text(update,
                 _audit_telegram_reply(
                     _s4_result.answer_text or "",
                     surface="telegram_clinical_boundary",
@@ -2569,7 +2622,7 @@ class TelegramVoice:
 
         camera_answer = self._camera_presence_direct_answer(user_text)
         if camera_answer is not None:
-            await update.message.reply_text(
+            await _reply_text(update,
                 _audit_telegram_reply(camera_answer, surface="telegram_camera_presence")
             )
             return
@@ -3142,7 +3195,7 @@ class TelegramVoice:
             logger.info("Matched intent: %s for '%s'", intent, user_text[:60])
             response = await self._execute_intent(intent, update, context)
             if response:
-                await update.message.reply_text(response)
+                await _reply_text(update, response)
                 # 5x.B Pass 1: bond transcript; mixed-origin (see 5x.D).
                 self.memory.store_telegram(
                     f"the owner asked: {user_text}\nMaez replied: {response}",
@@ -3609,7 +3662,7 @@ class TelegramVoice:
         _telegram_audit_ran = False
         _telegram_audit_changed = False
         try:
-            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+            await _bot_send_chat_action(context.bot, chat_id=update.effective_chat.id, action="typing")
 
             full_reply = ""
 
@@ -3661,7 +3714,7 @@ class TelegramVoice:
             )
 
             for part in split_long_message(reply):
-                await context.bot.send_message(
+                await _bot_send_message(context.bot,
                     chat_id=update.effective_chat.id,
                     text=part,
                 )
@@ -3684,7 +3737,7 @@ class TelegramVoice:
                 surface="telegram_text",
                 evidence_envelope=_evidence_envelope,
             )
-            await update.message.reply_text(reply)
+            await _reply_text(update, reply)
             return reply
 
         logger.info("Telegram reply: %s", reply[:100])
@@ -3864,7 +3917,7 @@ class TelegramVoice:
             f"GPU Temp: {gpu.get('temperature_c', 'N/A')}°C\n"
             f"Memories: {self.memory.count()}"
         )
-        await update.message.reply_text(status)
+        await _reply_text(update, status)
 
     async def _handle_cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /cancel <action_id> command."""
@@ -3873,14 +3926,14 @@ class TelegramVoice:
         if not self._is_authorized(update.effective_user.id):
             return
         if not self.actions or not context.args:
-            await update.message.reply_text("Usage: /cancel <action_id>")
+            await _reply_text(update, "Usage: /cancel <action_id>")
             return
 
         action_id = context.args[0]
         if self.actions.cancel_pending(action_id):
-            await update.message.reply_text(f"Cancelled action {action_id}.")
+            await _reply_text(update, f"Cancelled action {action_id}.")
         else:
-            await update.message.reply_text(f"Action {action_id} not found or already executed.")
+            await _reply_text(update, f"Action {action_id} not found or already executed.")
 
     async def _handle_approve(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /approve <action_id> command."""
@@ -3889,16 +3942,16 @@ class TelegramVoice:
         if not self._is_authorized(update.effective_user.id):
             return
         if not self.actions or not context.args:
-            await update.message.reply_text("Usage: /approve <action_id>")
+            await _reply_text(update, "Usage: /approve <action_id>")
             return
 
         action_id = context.args[0]
         result = self.actions.approve_action(action_id)
         if result:
             status = "OK" if result.success else f"FAILED: {result.error}"
-            await update.message.reply_text(f"Action {action_id}: {status}\n{result.output[:500]}")
+            await _reply_text(update, f"Action {action_id}: {status}\n{result.output[:500]}")
         else:
-            await update.message.reply_text(f"Action {action_id} not found or already handled.")
+            await _reply_text(update, f"Action {action_id} not found or already handled.")
 
     async def _handle_pending(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /pending command — list pending actions."""
@@ -3907,18 +3960,18 @@ class TelegramVoice:
         if not self._is_authorized(update.effective_user.id):
             return
         if not self.actions:
-            await update.message.reply_text("Action engine not connected.")
+            await _reply_text(update, "Action engine not connected.")
             return
 
         pending = self.actions.get_pending()
         if not pending:
-            await update.message.reply_text("No pending actions.")
+            await _reply_text(update, "No pending actions.")
             return
 
         lines = [f"Pending actions ({len(pending)}):"]
         for a in pending:
             lines.append(f"  [{a['id']}] T{a['tier']} {a['action']} — {a['reasoning'][:60]}")
-        await update.message.reply_text("\n".join(lines))
+        await _reply_text(update, "\n".join(lines))
 
     async def _handle_git(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not self._is_authorized(update.effective_user.id):
@@ -3926,7 +3979,7 @@ class TelegramVoice:
         from skills.git_awareness import get_summary_for_telegram
 
         msg = get_summary_for_telegram()
-        await update.message.reply_text(msg)
+        await _reply_text(update, msg)
 
     async def _handle_disk(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not self._is_authorized(update.effective_user.id):
@@ -3935,7 +3988,7 @@ class TelegramVoice:
 
         report = scan()
         self._pending_cleanup = report
-        await update.message.reply_text(format_telegram_message(report))
+        await _reply_text(update, format_telegram_message(report))
 
     async def _handle_analyze(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not self._is_authorized(update.effective_user.id):
@@ -3943,7 +3996,7 @@ class TelegramVoice:
         from skills.self_analysis import analyze, format_for_telegram
 
         result = analyze(self.memory, self.actions)
-        await update.message.reply_text(format_for_telegram(result))
+        await _reply_text(update, format_for_telegram(result))
 
     async def _handle_approve_cleanup(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not self._is_authorized(update.effective_user.id):
@@ -3953,11 +4006,11 @@ class TelegramVoice:
 
             result = execute_cleanup(self._pending_cleanup)
             self._pending_cleanup = None
-            await update.message.reply_text(
+            await _reply_text(update,
                 f"Cleanup done. Freed {result['freed_mb']:.0f} MB.\n" + "\n".join(result["results"])
             )
         else:
-            await update.message.reply_text("No pending cleanup.")
+            await _reply_text(update, "No pending cleanup.")
 
     async def _handle_trust(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Set trust tier for a user. /trust username relationship tier"""
@@ -3965,24 +4018,24 @@ class TelegramVoice:
             return
         args = context.args
         if not args or len(args) < 3:
-            await update.message.reply_text("Usage: /trust [username] [relationship] [tier 0-3]")
+            await _reply_text(update, "Usage: /trust [username] [relationship] [tier 0-3]")
             return
         username, relationship = args[0], args[1]
         try:
             tier = int(args[2])
         except ValueError:
-            await update.message.reply_text("Tier must be 0-3")
+            await _reply_text(update, "Tier must be 0-3")
             return
         from skills.user_accounts import UserAccounts, _default_share_config
 
         accts = UserAccounts()
         user = accts.get_by_username(username) or accts.get_by_display_name(username)
         if not user:
-            await update.message.reply_text(f"No user found: '{username}'")
+            await _reply_text(update, f"No user found: '{username}'")
             return
         share_config = _default_share_config(tier, relationship)
         accts.confirm_user(user["uuid"], relationship, tier, share_config)
-        await update.message.reply_text(
+        await _reply_text(update,
             f"Got it. {user['display_name']} is your {relationship}. "
             f"Trust tier {tier}. I'll adjust what I share with them."
         )
@@ -3993,7 +4046,7 @@ class TelegramVoice:
             return
         args = context.args
         if not args or len(args) != 2:
-            await update.message.reply_text(
+            await _reply_text(update,
                 "Usage: /login <username> <password>\nRegister first at http://64.85.211.140:11437"
             )
             return
@@ -4002,7 +4055,7 @@ class TelegramVoice:
         accts = UserAccounts()
         result = accts.login(args[0], args[1])
         if not result:
-            await update.message.reply_text("Invalid username or password.")
+            await _reply_text(update, "Invalid username or password.")
             return
         telegram_id = str(update.effective_user.id)
         if update.effective_user.id == self.authorized_user:
@@ -4010,7 +4063,7 @@ class TelegramVoice:
         else:
             accts.link_telegram(result["uuid"], telegram_id)
         display = result.get("display_name") or args[0]
-        await update.message.reply_text(
+        await _reply_text(update,
             f"Linked. I know you as {display} now, across all channels."
         )
 
@@ -4019,20 +4072,20 @@ class TelegramVoice:
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /promote <action_type>")
+            await _reply_text(update, "Usage: /promote <action_type>")
             return
         action_type = context.args[0]
         from core.action_engine import ACTION_TIERS
 
         if action_type not in ACTION_TIERS:
-            await update.message.reply_text(f"Unknown action type: {action_type}")
+            await _reply_text(update, f"Unknown action type: {action_type}")
             return
         current = ACTION_TIERS[action_type]
         if current <= 0:
-            await update.message.reply_text(f"{action_type} is already Tier 0.")
+            await _reply_text(update, f"{action_type} is already Tier 0.")
             return
         ACTION_TIERS[action_type] = current - 1
-        await update.message.reply_text(
+        await _reply_text(update,
             f"Promoted {action_type}: Tier {current} → Tier {current - 1}."
         )
 
@@ -4049,9 +4102,9 @@ class TelegramVoice:
 
             ok = deploy_improvement(pending["staging_file"], pending["target_file"])
             os.remove(pending_path)
-            await update.message.reply_text("Evolution deployed." if ok else "Deployment failed.")
+            await _reply_text(update, "Evolution deployed." if ok else "Deployment failed.")
         else:
-            await update.message.reply_text("No pending evolution.")
+            await _reply_text(update, "No pending evolution.")
 
     async def _handle_reject_evolution(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not self._is_authorized(update.effective_user.id):
@@ -4059,9 +4112,9 @@ class TelegramVoice:
         pending_path = "/home/rohit/maez/evolution/pending_evolution.json"
         if os.path.exists(pending_path):
             os.remove(pending_path)
-            await update.message.reply_text("Evolution discarded.")
+            await _reply_text(update, "Evolution discarded.")
         else:
-            await update.message.reply_text("No pending evolution.")
+            await _reply_text(update, "No pending evolution.")
 
     async def _handle_evolution_log(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not self._is_authorized(update.effective_user.id):
@@ -4071,9 +4124,9 @@ class TelegramVoice:
             with open(log_path) as f:
                 lines = f.readlines()
             last = "".join(lines[-10:]) if lines else "Empty"
-            await update.message.reply_text(f"Evolution log:\n{last}")
+            await _reply_text(update, f"Evolution log:\n{last}")
         except Exception:
-            await update.message.reply_text("No evolution log yet.")
+            await _reply_text(update, "No evolution log yet.")
 
     # ── Session 11o: dream-state command handlers ──────────────────
     async def _handle_dreams(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4081,15 +4134,15 @@ class TelegramVoice:
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         if self.daemon is None or getattr(self.daemon, "dream", None) is None:
-            await update.message.reply_text("Dream state not available.")
+            await _reply_text(update, "Dream state not available.")
             return
         try:
             pending = self.daemon.dream.list_pending()
         except Exception as e:
-            await update.message.reply_text(f"list_pending failed: {e}")
+            await _reply_text(update, f"list_pending failed: {e}")
             return
         if not pending:
-            await update.message.reply_text("No pending dream insights.")
+            await _reply_text(update, "No pending dream insights.")
             return
         lines = [f"💭 {len(pending)} pending dream insight(s):\n"]
         for pid, created_iso, insight in pending[:10]:
@@ -4101,53 +4154,53 @@ class TelegramVoice:
             lines.append(f"  `/apply_dream {pid}`  ·  `/reject_dream {pid}`")
             lines.append("")
         body = "\n".join(lines)
-        await update.message.reply_text(_audit_telegram_reply(body, surface="telegram/dreams"))
+        await _reply_text(update, _audit_telegram_reply(body, surface="telegram/dreams"))
 
     async def _handle_apply_dream(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Apply a dream proposal: append to soul.md via action_engine."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /apply_dream <id>")
+            await _reply_text(update, "Usage: /apply_dream <id>")
             return
         try:
             prop_id = int(context.args[0])
         except ValueError:
-            await update.message.reply_text("Invalid id — must be an integer.")
+            await _reply_text(update, "Invalid id — must be an integer.")
             return
         if self.daemon is None or getattr(self.daemon, "dream", None) is None:
-            await update.message.reply_text("Dream state not available.")
+            await _reply_text(update, "Dream state not available.")
             return
         try:
             ok, msg = self.daemon.dream.apply_proposal(prop_id)
         except Exception as e:
-            await update.message.reply_text(f"apply_proposal failed: {e}")
+            await _reply_text(update, f"apply_proposal failed: {e}")
             return
         prefix = "✓" if ok else "✗"
-        await update.message.reply_text(f"{prefix} {msg}")
+        await _reply_text(update, f"{prefix} {msg}")
 
     async def _handle_reject_dream(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Reject a dream proposal (soul.md unchanged)."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /reject_dream <id>")
+            await _reply_text(update, "Usage: /reject_dream <id>")
             return
         try:
             prop_id = int(context.args[0])
         except ValueError:
-            await update.message.reply_text("Invalid id — must be an integer.")
+            await _reply_text(update, "Invalid id — must be an integer.")
             return
         if self.daemon is None or getattr(self.daemon, "dream", None) is None:
-            await update.message.reply_text("Dream state not available.")
+            await _reply_text(update, "Dream state not available.")
             return
         try:
             ok, msg = self.daemon.dream.reject_proposal(prop_id)
         except Exception as e:
-            await update.message.reply_text(f"reject_proposal failed: {e}")
+            await _reply_text(update, f"reject_proposal failed: {e}")
             return
         prefix = "✓" if ok else "✗"
-        await update.message.reply_text(f"{prefix} {msg}")
+        await _reply_text(update, f"{prefix} {msg}")
 
     # ── Session 11s: soul section-edit command handlers ───────────
     async def _handle_edit_proposals(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4155,15 +4208,15 @@ class TelegramVoice:
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         if self.daemon is None or getattr(self.daemon, "dream", None) is None:
-            await update.message.reply_text("Dream state not available.")
+            await _reply_text(update, "Dream state not available.")
             return
         try:
             pending = self.daemon.dream.list_pending(proposal_type="section_replace")
         except Exception as e:
-            await update.message.reply_text(f"list_pending failed: {e}")
+            await _reply_text(update, f"list_pending failed: {e}")
             return
         if not pending:
-            await update.message.reply_text("No pending section-edit proposals.")
+            await _reply_text(update, "No pending section-edit proposals.")
             return
         lines = [f"✏️ {len(pending)} pending section-edit proposal(s):\n"]
         for pid, created_iso, insight in pending[:10]:
@@ -4175,7 +4228,7 @@ class TelegramVoice:
             lines.append(f"  /show_edit {pid}  ·  /apply_edit {pid}  ·  /reject_edit {pid}")
             lines.append("")
         body = "\n".join(lines)
-        await update.message.reply_text(
+        await _reply_text(update,
             _audit_telegram_reply(body, surface="telegram/edit_proposals")
         )
 
@@ -4184,22 +4237,22 @@ class TelegramVoice:
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /show_edit <id>")
+            await _reply_text(update, "Usage: /show_edit <id>")
             return
         try:
             prop_id = int(context.args[0])
         except ValueError:
-            await update.message.reply_text("Invalid id — must be an integer.")
+            await _reply_text(update, "Invalid id — must be an integer.")
             return
         if self.daemon is None or getattr(self.daemon, "dream", None) is None:
-            await update.message.reply_text("Dream state not available.")
+            await _reply_text(update, "Dream state not available.")
             return
         prop = self.daemon.dream.get_proposal(prop_id)
         if prop is None:
-            await update.message.reply_text(f"Proposal #{prop_id} not found.")
+            await _reply_text(update, f"Proposal #{prop_id} not found.")
             return
         if prop.get("proposal_type") != "section_replace":
-            await update.message.reply_text(
+            await _reply_text(update,
                 f"#{prop_id} is type {prop.get('proposal_type')!r}, not section_replace."
             )
             return
@@ -4215,53 +4268,53 @@ class TelegramVoice:
             f"```\n{diff}\n```\n\n"
             f"/apply_edit {prop_id}  ·  /reject_edit {prop_id}"
         )
-        await update.message.reply_text(_audit_telegram_reply(body, surface="telegram/show_edit"))
+        await _reply_text(update, _audit_telegram_reply(body, surface="telegram/show_edit"))
 
     async def _handle_apply_edit(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Apply a soul.md section-edit proposal."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /apply_edit <id>")
+            await _reply_text(update, "Usage: /apply_edit <id>")
             return
         try:
             prop_id = int(context.args[0])
         except ValueError:
-            await update.message.reply_text("Invalid id — must be an integer.")
+            await _reply_text(update, "Invalid id — must be an integer.")
             return
         if self.daemon is None or getattr(self.daemon, "dream", None) is None:
-            await update.message.reply_text("Dream state not available.")
+            await _reply_text(update, "Dream state not available.")
             return
         try:
             ok, msg = self.daemon.dream.apply_section_edit_proposal(prop_id)
         except Exception as e:
-            await update.message.reply_text(f"apply_section_edit failed: {e}")
+            await _reply_text(update, f"apply_section_edit failed: {e}")
             return
         prefix = "✓" if ok else "✗"
-        await update.message.reply_text(f"{prefix} {msg}")
+        await _reply_text(update, f"{prefix} {msg}")
 
     async def _handle_reject_edit(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Reject a soul.md section-edit proposal (soul.md unchanged)."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /reject_edit <id>")
+            await _reply_text(update, "Usage: /reject_edit <id>")
             return
         try:
             prop_id = int(context.args[0])
         except ValueError:
-            await update.message.reply_text("Invalid id — must be an integer.")
+            await _reply_text(update, "Invalid id — must be an integer.")
             return
         if self.daemon is None or getattr(self.daemon, "dream", None) is None:
-            await update.message.reply_text("Dream state not available.")
+            await _reply_text(update, "Dream state not available.")
             return
         try:
             ok, msg = self.daemon.dream.reject_proposal(prop_id)
         except Exception as e:
-            await update.message.reply_text(f"reject_proposal failed: {e}")
+            await _reply_text(update, f"reject_proposal failed: {e}")
             return
         prefix = "✓" if ok else "✗"
-        await update.message.reply_text(f"{prefix} {msg}")
+        await _reply_text(update, f"{prefix} {msg}")
 
     # ── Session 11u: training proposal + adapter management commands ──
     async def _handle_train_proposals(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4269,15 +4322,15 @@ class TelegramVoice:
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         if self.daemon is None or getattr(self.daemon, "dream", None) is None:
-            await update.message.reply_text("Dream state not available.")
+            await _reply_text(update, "Dream state not available.")
             return
         try:
             pending = self.daemon.dream.list_pending(proposal_type="training_run")
         except Exception as e:
-            await update.message.reply_text(f"list_pending failed: {e}")
+            await _reply_text(update, f"list_pending failed: {e}")
             return
         if not pending:
-            await update.message.reply_text("No pending training proposals.")
+            await _reply_text(update, "No pending training proposals.")
             return
         lines = [f"🏋️ {len(pending)} pending training proposal(s):\n"]
         for pid, created_iso, insight in pending[:10]:
@@ -4290,7 +4343,7 @@ class TelegramVoice:
             lines.append(f"  /show_train {pid}  ·  /approve_train {pid}  ·  /reject_train {pid}")
             lines.append("")
         body = "\n".join(lines)
-        await update.message.reply_text(
+        await _reply_text(update,
             _audit_telegram_reply(body, surface="telegram/train_proposals")
         )
 
@@ -4299,22 +4352,22 @@ class TelegramVoice:
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /show_train <id>")
+            await _reply_text(update, "Usage: /show_train <id>")
             return
         try:
             prop_id = int(context.args[0])
         except ValueError:
-            await update.message.reply_text("Invalid id.")
+            await _reply_text(update, "Invalid id.")
             return
         if self.daemon is None or getattr(self.daemon, "dream", None) is None:
-            await update.message.reply_text("Dream state not available.")
+            await _reply_text(update, "Dream state not available.")
             return
         prop = self.daemon.dream.get_proposal(prop_id)
         if prop is None:
-            await update.message.reply_text(f"Proposal #{prop_id} not found.")
+            await _reply_text(update, f"Proposal #{prop_id} not found.")
             return
         if prop.get("proposal_type") != "training_run":
-            await update.message.reply_text(
+            await _reply_text(update,
                 f"#{prop_id} is type {prop.get('proposal_type')!r}, not training_run."
             )
             return
@@ -4326,29 +4379,29 @@ class TelegramVoice:
             f"Status: {prop.get('status', '?')}\n\n"
             f"/approve_train {prop_id}  ·  /reject_train {prop_id}"
         )
-        await update.message.reply_text(_audit_telegram_reply(body, surface="telegram/show_train"))
+        await _reply_text(update, _audit_telegram_reply(body, surface="telegram/show_train"))
 
     async def _handle_approve_train(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Mark a training proposal as approved."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /approve_train <id>")
+            await _reply_text(update, "Usage: /approve_train <id>")
             return
         try:
             prop_id = int(context.args[0])
         except ValueError:
-            await update.message.reply_text("Invalid id.")
+            await _reply_text(update, "Invalid id.")
             return
         if self.daemon is None or getattr(self.daemon, "dream", None) is None:
-            await update.message.reply_text("Dream state not available.")
+            await _reply_text(update, "Dream state not available.")
             return
         prop = self.daemon.dream.get_proposal(prop_id)
         if prop is None:
-            await update.message.reply_text(f"Proposal #{prop_id} not found.")
+            await _reply_text(update, f"Proposal #{prop_id} not found.")
             return
         if prop.get("status") != "pending":
-            await update.message.reply_text(f"#{prop_id} already {prop.get('status')}.")
+            await _reply_text(update, f"#{prop_id} already {prop.get('status')}.")
             return
         with self.daemon.dream._lock, self.daemon.dream._conn() as c:
             c.execute(
@@ -4356,7 +4409,7 @@ class TelegramVoice:
                 (time.time(), prop_id),
             )
             c.commit()
-        await update.message.reply_text(
+        await _reply_text(update,
             f"✓ Training #{prop_id} approved. Run the training pipeline manually to execute."
         )
 
@@ -4365,23 +4418,23 @@ class TelegramVoice:
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /reject_train <id>")
+            await _reply_text(update, "Usage: /reject_train <id>")
             return
         try:
             prop_id = int(context.args[0])
         except ValueError:
-            await update.message.reply_text("Invalid id.")
+            await _reply_text(update, "Invalid id.")
             return
         if self.daemon is None or getattr(self.daemon, "dream", None) is None:
-            await update.message.reply_text("Dream state not available.")
+            await _reply_text(update, "Dream state not available.")
             return
         try:
             ok, msg = self.daemon.dream.reject_proposal(prop_id)
         except Exception as e:
-            await update.message.reply_text(f"reject failed: {e}")
+            await _reply_text(update, f"reject failed: {e}")
             return
         prefix = "✓" if ok else "✗"
-        await update.message.reply_text(f"{prefix} {msg}")
+        await _reply_text(update, f"{prefix} {msg}")
 
     async def _handle_adapter_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show current adapter info."""
@@ -4391,7 +4444,7 @@ class TelegramVoice:
 
         adapter_link = Path("/home/rohit/maez/training/runs/current")
         if not adapter_link.exists():
-            await update.message.reply_text("No adapter promoted (no 'current' symlink).")
+            await _reply_text(update, "No adapter promoted (no 'current' symlink).")
             return
         target = adapter_link.resolve()
         summary_path = target / "summary.json"
@@ -4410,7 +4463,7 @@ class TelegramVoice:
                 body = f"📊 Current adapter: {target.name} (summary unreadable)"
         else:
             body = f"📊 Current adapter: {target.name} (no summary.json)"
-        await update.message.reply_text(body)
+        await _reply_text(update, body)
 
     async def _handle_rollback_adapter(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Roll back to the previous adapter version."""
@@ -4419,7 +4472,7 @@ class TelegramVoice:
         runs_dir = Path("/home/rohit/maez/training/runs")
         current_link = runs_dir / "current"
         if not current_link.is_symlink():
-            await update.message.reply_text("No current adapter symlink found.")
+            await _reply_text(update, "No current adapter symlink found.")
             return
         current_target = current_link.resolve().name
         run_dirs = sorted(
@@ -4436,20 +4489,20 @@ class TelegramVoice:
             key=lambda d: d.name,
         )
         if len(run_dirs) < 2:
-            await update.message.reply_text(
+            await _reply_text(update,
                 "Only one adapter version exists — nothing to roll back to."
             )
             return
         current_idx = next((i for i, d in enumerate(run_dirs) if d.name == current_target), -1)
         if current_idx <= 0:
-            await update.message.reply_text(
+            await _reply_text(update,
                 f"Current adapter is already the oldest ({current_target})."
             )
             return
         prev = run_dirs[current_idx - 1]
         current_link.unlink()
         current_link.symlink_to(prev)
-        await update.message.reply_text(
+        await _reply_text(update,
             f"✓ Rolled back: {current_target} → {prev.name}\n"
             f"Restart llama-server to load: sudo systemctl restart llama-server.service"
         )
@@ -4468,7 +4521,7 @@ class TelegramVoice:
                     "FROM candidates ORDER BY id DESC LIMIT 5"
                 ).fetchall()
             if not rows:
-                await update.message.reply_text("No proposals yet.")
+                await _reply_text(update, "No proposals yet.")
                 return
             lines = ["Recent proposals:"]
             for r in rows:
@@ -4487,18 +4540,18 @@ class TelegramVoice:
                 w = (r[2] or "")[:60]
                 lines.append(f"  [{r[0]}] {r[1]:11s} {emoji} {u:10s} {w}")
             body = "\n".join(lines)
-            await update.message.reply_text(
+            await _reply_text(update,
                 _audit_telegram_reply(body, surface="telegram/proposals")
             )
         except Exception as e:
-            await update.message.reply_text(f"Error: {e}")
+            await _reply_text(update, f"Error: {e}")
 
     async def _handle_show(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show candidate by id."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /show <candidate_id>")
+            await _reply_text(update, "Usage: /show <candidate_id>")
             return
         try:
             cid = int(context.args[0])
@@ -4506,7 +4559,7 @@ class TelegramVoice:
 
             disp = load_candidate_for_display(cid)
             if not disp:
-                await update.message.reply_text(f"Candidate {cid} not found")
+                await _reply_text(update, f"Candidate {cid} not found")
                 return
             u = disp["usefulness"]
             intent = disp.get("intent") or {}
@@ -4525,44 +4578,44 @@ class TelegramVoice:
                 f"Change minimal:  {u.get('change_minimal')}",
             ]
             body = "\n".join(lines)
-            await update.message.reply_text(_audit_telegram_reply(body, surface="telegram/show"))
+            await _reply_text(update, _audit_telegram_reply(body, surface="telegram/show"))
         except Exception as e:
-            await update.message.reply_text(f"Error: {e}")
+            await _reply_text(update, f"Error: {e}")
 
     async def _handle_apply(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Apply candidate by id."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /apply <candidate_id>")
+            await _reply_text(update, "Usage: /apply <candidate_id>")
             return
         try:
             cid = int(context.args[0])
             from skills.evolution_engine import apply_candidate
 
-            await update.message.reply_text(f"Applying candidate {cid}...")
+            await _reply_text(update, f"Applying candidate {cid}...")
             result = apply_candidate(cid)
             if "error" in result:
-                await update.message.reply_text(
+                await _reply_text(update,
                     f"Apply failed: {result['error']}\n"
                     f"Rolled back: {result.get('rolled_back', False)} "
                     f"(layer={result.get('layer')})"
                 )
             else:
-                await update.message.reply_text(
+                await _reply_text(update,
                     f"\u2705 Applied candidate {cid}\n"
                     f"State: {result.get('state')}\n"
                     f"Pre-score: {result.get('pre_score_avg')}"
                 )
         except Exception as e:
-            await update.message.reply_text(f"Error: {e}")
+            await _reply_text(update, f"Error: {e}")
 
     async def _handle_reject(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Reject candidate by id."""
         if not update.message or not self._is_authorized(update.effective_user.id):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /reject <candidate_id>")
+            await _reply_text(update, "Usage: /reject <candidate_id>")
             return
         try:
             cid = int(context.args[0])
@@ -4576,7 +4629,7 @@ class TelegramVoice:
             with _rail_conn() as conn:
                 row = conn.execute("SELECT state FROM candidates WHERE id=?", (cid,)).fetchone()
             if not row:
-                await update.message.reply_text(f"Candidate {cid} not found")
+                await _reply_text(update, f"Candidate {cid} not found")
                 return
             _set_candidate_state(cid, "rejected", rejection_reason="manual rejection via Telegram")
             _log_evolution(
@@ -4586,9 +4639,9 @@ class TelegramVoice:
                     "result": f"candidate {cid}",
                 }
             )
-            await update.message.reply_text(f"Candidate {cid} rejected (was: {row[0]})")
+            await _reply_text(update, f"Candidate {cid} rejected (was: {row[0]})")
         except Exception as e:
-            await update.message.reply_text(f"Error: {e}")
+            await _reply_text(update, f"Error: {e}")
 
     async def _handle_cog_analyze(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Compact cognition snapshot — overrides old self-analysis /analyze."""
@@ -4605,7 +4658,7 @@ class TelegramVoice:
 
             window = min(len(_recent_scores), 10)
             if window == 0:
-                await update.message.reply_text("No cognition data yet.")
+                await _reply_text(update, "No cognition data yet.")
                 return
             scores = _recent_scores[-window:]
             topics = _recent_topics[-window:]
@@ -4637,9 +4690,9 @@ class TelegramVoice:
                 f"  Fixation streak: {streak}",
                 f"  Policy mode:    {mode}",
             ]
-            await update.message.reply_text("\n".join(lines))
+            await _reply_text(update, "\n".join(lines))
         except Exception as e:
-            await update.message.reply_text(f"Error: {e}")
+            await _reply_text(update, f"Error: {e}")
 
     async def _handle_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Grouped command list."""
@@ -4672,7 +4725,7 @@ class TelegramVoice:
             "  /promote   Promote action type\n"
             "  /help      This list"
         )
-        await update.message.reply_text(text)
+        await _reply_text(update, text)
 
     # -------------------------------------------------------------- #
     #  Builder-mode commands (A-core #3, Step 4)                      #
@@ -4751,7 +4804,7 @@ class TelegramVoice:
         reason_parts = context.args or []
         reason = " ".join(reason_parts).strip()
         if not reason:
-            await update.message.reply_text(
+            await _reply_text(update,
                 "Usage: /builder_enter <reason>\n\nExample: /builder_enter rewriting sudo handling"
             )
             return
@@ -4775,7 +4828,7 @@ class TelegramVoice:
                     pass
             lines.append("")
             lines.append("Run /builder_exit first, then try again.")
-            await update.message.reply_text("\n".join(lines))
+            await _reply_text(update, "\n".join(lines))
             return
 
         # Open the session via the existing AuditLog API
@@ -4789,13 +4842,13 @@ class TelegramVoice:
             )
         except Exception as e:
             logger.warning("builder_enter failed to open session: %s", e)
-            await update.message.reply_text(f"Error opening builder-mode session: {e}")
+            await _reply_text(update, f"Error opening builder-mode session: {e}")
             return
 
         opened_at = time.time()
         self._builder_write_state(session_id, reason, opened_at)
 
-        await update.message.reply_text(
+        await _reply_text(update,
             "Builder mode active.\n"
             f"Session: {session_id}\n"
             f"Reason: {reason}\n"
@@ -4812,7 +4865,7 @@ class TelegramVoice:
 
         state = self._builder_read_state()
         if state is None:
-            await update.message.reply_text(
+            await _reply_text(update,
                 "No active builder-mode session. Run /builder_enter <reason> to start one."
             )
             return
@@ -4853,7 +4906,7 @@ class TelegramVoice:
             audit.end_direct_edit_session(session_id=session_id)
         except Exception as e:
             logger.warning("builder_exit failed to close session: %s", e)
-            await update.message.reply_text(f"Error closing builder-mode session: {e}")
+            await _reply_text(update, f"Error closing builder-mode session: {e}")
             return
 
         self._builder_clear_state()
@@ -4866,7 +4919,7 @@ class TelegramVoice:
             lines.append(f"Duration: {duration_str}")
         if diff_logged:
             lines.append("Final diff captured as a direct_edit event.")
-        await update.message.reply_text("\n".join(lines))
+        await _reply_text(update, "\n".join(lines))
 
     async def _configure_bot_commands(self):
         """Register bot commands and menu button for the private chat."""
@@ -5053,7 +5106,7 @@ class TelegramVoice:
 
             bot = Bot(token=self.token)
             for i, part in enumerate(parts):
-                await bot.send_message(chat_id=self.authorized_user, text=part)
+                await _bot_send_message(bot, chat_id=self.authorized_user, text=part)
                 if i < len(parts) - 1:
                     await _a.sleep(0.5)
 

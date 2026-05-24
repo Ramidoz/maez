@@ -42,6 +42,7 @@ class PrivacyEgressInventoryTests(unittest.TestCase):
                 "unmigrated",
                 "proxy_shadow_provenanced",
                 "proxy_shadow",
+                "chokepoint_shadow",
                 "inventory_only",
                 "deprecated",
             })

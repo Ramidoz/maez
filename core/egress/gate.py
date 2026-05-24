@@ -43,6 +43,7 @@ INTENTIONAL_OUTBOUND = {
     "owner_authored_for_destination",
     "maez_authored_local_bonded_surface",
     "maez_authored_owner_third_party_transport",
+    "maez_authored_public_third_party_transport",
 }
 
 KNOWN_ORIGINS = (
@@ -140,19 +141,24 @@ def decide_egress(payload: EgressRequest | object) -> EgressDecision:
         return _block(reason_codes=("unclassified", "raw_payload"))
 
     request = payload
+    if request.call_class == "owner_third_party_transport_send":
+        return _decide_owner_third_party_transport(request)
+    if request.call_class == "public_third_party_transport_send":
+        return _decide_public_third_party_transport(request)
     if request.call_class != "cloud_model_inference":
         return _block(reason_codes=("unknown_call_class",), request=request)
 
+    return _decide_cloud_model_inference(request)
+
+
+def _common_request_shape(
+    request: EgressRequest,
+) -> tuple[tuple[str, ...], int] | EgressDecision:
     if not request.segments:
         return _block(reason_codes=("unclassified",), request=request)
 
     origins = tuple(segment.origin_class for segment in request.segments)
     original_chars = sum(len(segment.text or "") for segment in request.segments)
-    sanitized: list[str] = []
-    reasons: list[str] = []
-    saw_minimizable_private = False
-    saw_untrusted_external = False
-
     for segment in request.segments:
         origin = segment.origin_class
         asserted = segment.asserted_origin_class
@@ -177,6 +183,22 @@ def decide_egress(payload: EgressRequest | object) -> EgressDecision:
                 origin_classes=origins,
                 original_char_count=original_chars,
             )
+    return origins, original_chars
+
+
+def _decide_cloud_model_inference(request: EgressRequest) -> EgressDecision:
+    shape = _common_request_shape(request)
+    if isinstance(shape, EgressDecision):
+        return shape
+    origins, original_chars = shape
+
+    sanitized: list[str] = []
+    reasons: list[str] = []
+    saw_minimizable_private = False
+    saw_untrusted_external = False
+
+    for segment in request.segments:
+        origin = segment.origin_class
         if origin in RESERVED_DENIED_RAW:
             return _block(
                 reason_codes=("reserved_denied_raw",),
@@ -223,6 +245,125 @@ def decide_egress(payload: EgressRequest | object) -> EgressDecision:
         decision=decision,
         sanitized_segments=sanitized,
         reason_codes=tuple(reasons),
+        call_class=request.call_class,
+        destination=request.destination,
+        caller=request.caller,
+        request_id=request.request_id,
+        origin_classes=origins,
+        original_char_count=original_chars,
+    )
+
+
+def _decide_owner_third_party_transport(request: EgressRequest) -> EgressDecision:
+    shape = _common_request_shape(request)
+    if isinstance(shape, EgressDecision):
+        return shape
+    origins, original_chars = shape
+    sanitized: list[str] = []
+    reasons: list[str] = []
+    saw_minimized = False
+
+    for segment in request.segments:
+        origin = segment.origin_class
+        if origin in RESERVED_DENIED_RAW:
+            return _block(
+                reason_codes=("reserved_denied_raw",),
+                request=request,
+                origin_classes=origins,
+                original_char_count=original_chars,
+            )
+        if origin == "maez_authored_public_third_party_transport":
+            return _block(
+                reason_codes=("audience_origin_mismatch",),
+                request=request,
+                origin_classes=origins,
+                original_char_count=original_chars,
+            )
+        if origin == "third_party_private_context":
+            if not segment.redaction_allowed:
+                return _block(
+                    reason_codes=("private_context_redaction_not_allowed",),
+                    request=request,
+                    origin_classes=origins,
+                    original_char_count=original_chars,
+                )
+            sanitized.append(redact_for_cloud(segment.text).text)
+            saw_minimized = True
+            continue
+        if (
+            origin in NON_PRIVATE
+            or origin in {"memory", "lived_store", "owner_message_context"}
+            or origin == "maez_authored_owner_third_party_transport"
+        ):
+            sanitized.append(segment.text)
+            continue
+        return _block(
+            reason_codes=("origin_not_permitted_for_owner_transport",),
+            request=request,
+            origin_classes=origins,
+            original_char_count=original_chars,
+        )
+
+    if saw_minimized:
+        decision: Decision = "redact"
+        reasons.append("minimized_private_context")
+    else:
+        decision = "allow"
+        reasons.append("owner_transport_allowed")
+
+    return EgressDecision(
+        decision=decision,
+        sanitized_segments=sanitized,
+        reason_codes=tuple(reasons),
+        call_class=request.call_class,
+        destination=request.destination,
+        caller=request.caller,
+        request_id=request.request_id,
+        origin_classes=origins,
+        original_char_count=original_chars,
+    )
+
+
+def _decide_public_third_party_transport(request: EgressRequest) -> EgressDecision:
+    shape = _common_request_shape(request)
+    if isinstance(shape, EgressDecision):
+        return shape
+    origins, original_chars = shape
+    sanitized: list[str] = []
+
+    for segment in request.segments:
+        origin = segment.origin_class
+        if origin in RESERVED_DENIED_RAW:
+            return _block(
+                reason_codes=("reserved_denied_raw",),
+                request=request,
+                origin_classes=origins,
+                original_char_count=original_chars,
+            )
+        if (
+            origin == "maez_authored_owner_third_party_transport"
+            or origin in MINIMIZABLE_PRIVATE_CONTEXT
+        ):
+            return _block(
+                reason_codes=("public_recipient_owner_context_blocked",),
+                request=request,
+                origin_classes=origins,
+                original_char_count=original_chars,
+            )
+        if origin in NON_PRIVATE or origin == "maez_authored_public_third_party_transport":
+            sanitized.append(segment.text)
+            continue
+        return _block(
+            reason_codes=("origin_not_permitted_for_public_transport",),
+            request=request,
+            origin_classes=origins,
+            original_char_count=original_chars,
+        )
+
+    return EgressDecision(
+        decision="allow",
+        sanitized_segments=sanitized,
+        reason_codes=("public_transport_allowed",),
         call_class=request.call_class,
         destination=request.destination,
         caller=request.caller,

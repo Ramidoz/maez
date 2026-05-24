@@ -199,6 +199,38 @@ class ProvenancedText:
         ])
 
     @classmethod
+    def maez_authored_public_third_party_transport(
+        cls,
+        text: str,
+        *,
+        source_ref: str,
+    ) -> "ProvenancedText":
+        return cls.from_spans([
+            ProvenanceSpan(
+                text,
+                "maez_authored_public_third_party_transport",
+                source_ref,
+                False,
+            )
+        ])
+
+    @classmethod
+    def maez_authored_owner_third_party_transport(
+        cls,
+        text: str,
+        *,
+        source_ref: str,
+    ) -> "ProvenancedText":
+        return cls.from_spans([
+            ProvenanceSpan(
+                text,
+                "maez_authored_owner_third_party_transport",
+                source_ref,
+                False,
+            )
+        ])
+
+    @classmethod
     def reserved_raw(
         cls,
         text: str,

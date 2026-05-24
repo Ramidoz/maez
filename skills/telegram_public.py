@@ -25,6 +25,11 @@ from datetime import datetime
 # primary brain via /etc/maez/model.env, not a hardcoded "gemma4:26b".
 from core.model_config import PRIMARY_MODEL as _PRIMARY_MODEL
 from core.infra.secrets import load_ordinary_config_for_process, load_secrets_for_process
+from core.egress.telegram_egress import (
+    call_telegram_method_async,
+    legacy_text_envelope,
+    public_text_envelope,
+)
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -41,6 +46,56 @@ load_secrets_for_process(
     populate_environ=True,
 )
 logger = logging.getLogger('maez.public')
+
+
+async def _public_reply_text(update, text: str, **kwargs):
+    chat_id = getattr(getattr(update, "effective_chat", None), "id", "")
+    envelope = public_text_envelope(
+        chat_id=str(chat_id),
+        text=str(text),
+        source_ref="telegram_public:reply_text",
+        message_kind="text",
+    )
+    return await call_telegram_method_async(
+        envelope=envelope,
+        target=update.message,
+        method_name="reply_text",
+        kwargs={"text": text, **kwargs},
+    )
+
+
+async def _public_owner_alert(bot, **kwargs):
+    envelope = legacy_text_envelope(
+        bot_route="owner_private",
+        audience_class="bonded_owner",
+        chat_id=str(kwargs.get("chat_id") or ""),
+        text=str(kwargs.get("text") or ""),
+        source_ref="telegram_public:owner_alert",
+        message_kind="text",
+    )
+    return await call_telegram_method_async(
+        envelope=envelope,
+        target=bot,
+        method_name="send_message",
+        kwargs=kwargs,
+    )
+
+
+async def _public_chat_action(bot, **kwargs):
+    envelope = legacy_text_envelope(
+        bot_route="public_stranger",
+        audience_class="public_stranger",
+        chat_id=str(kwargs.get("chat_id") or ""),
+        text="",
+        source_ref="telegram_public:send_chat_action",
+        message_kind="typing",
+    )
+    return await call_telegram_method_async(
+        envelope=envelope,
+        target=bot,
+        method_name="send_chat_action",
+        kwargs=kwargs,
+    )
 
 
 # ─── User Profile Store ────────────────────────────────────────────────────────
@@ -288,7 +343,7 @@ Respond naturally. Be present. Be real."""
                 f"Flags: {', '.join(detection['flags'][:3])}\n\n"
                 f"Message: {message[:200]}"
             )
-            await bot.send_message(chat_id=int(self.rohit_user_id), text=alert)
+            await _public_owner_alert(bot, chat_id=int(self.rohit_user_id), text=alert)
         except Exception as e:
             logger.error("Failed to alert the owner: %s", e)
 
@@ -351,7 +406,7 @@ Respond naturally. Be present. Be real."""
             _evidence_envelope = None
             _envelope_block = ""
 
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
+        await _public_chat_action(context.bot, chat_id=update.effective_chat.id, action='typing')
 
         # Reason
         try:
@@ -414,7 +469,7 @@ Respond naturally. Be present. Be real."""
                 "ungated reply): %s", _audit_e,
             )
 
-        await update.message.reply_text(reply)
+        await _public_reply_text(update, reply)
 
         # Store conversation
         self.store.add_conversation_memory(user.id, 'user', message, flagged=detection['score'] >= 50)
@@ -437,9 +492,9 @@ Respond naturally. Be present. Be real."""
         is_returning = int(profile.get('message_count', 0)) > 0
 
         if is_returning:
-            await update.message.reply_text(f"You're back, {first_name}. I remember you.")
+            await _public_reply_text(update, f"You're back, {first_name}. I remember you.")
         else:
-            await update.message.reply_text(
+            await _public_reply_text(update,
                 f"Hey {first_name}. I'm Maez.\n\n"
                 f"I'm not a chatbot. I'm a persistent presence — "
                 f"I'll remember this conversation and every one after it. "
