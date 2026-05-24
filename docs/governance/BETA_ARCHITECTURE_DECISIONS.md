@@ -2340,15 +2340,23 @@ producer slices inherit the reasoning:
 
 ### Implementation
 
-Implementation is pending. It must proceed RED-first under the 31-step
-implementation order in the canonical D16 spec. The RED contract has 87 tests
-plus review checklist items. Synthetic hard-want probes must exercise store and
-helper functions directly, not the live daemon conversation path.
+Implementation is complete and both-lane ratified. The implementation landed in
+`3582048`, recovered engineering findings in `2ee7547` and `73422db`, closed the
+hard-want natural-phrasing covenant finding in `27b45cb`, and recorded final
+ratification in `32083d2`.
 
-Post-implementation both-lane review is required before push. The named likely
-recovery surface is the deterministic `HARD_WANT_TERMS` matcher: natural hard
-want phrasings such as "I want to step back from all of this" must be probed
-because fixed lexicons miss human wording.
+`core/evolution/wants.py` now implements the append-only lifecycle grammar:
+stable `want_id`s, closed event vocabulary, vocabulary-only `abandoned`,
+external-basis `satisfied`, correction-only `refined`, recurrence via
+`returned`, storage-level append defenses, content-free diagnostics, and
+`active_wants(...)` working-self integration that fails closed if the D16-aware
+reader is present but broken.
+
+The deterministic hard-want gate remains an honest v1 boundary, not a total
+semantic-recognition claim. The recovery broadened the matcher, made it
+err-toward-hard, measured natural-phrasing probes, and named the residual risk.
+A future Maez-reflection producer remains the reviewed path for richer interior
+self-claims.
 
 Review trail:
 
@@ -2362,6 +2370,10 @@ Review trail:
   — Codex engineering panel, REVISE, folded.
 - [`docs/slices/d16-wants-lifecycle/reviews/spec-claude-council-second-fold.md`](../slices/d16-wants-lifecycle/reviews/spec-claude-council-second-fold.md)
   — Claude focused second-fold verification, RATIFY.
+- [`docs/slices/d16-wants-lifecycle/reviews/implementation-codex-panel.md`](../slices/d16-wants-lifecycle/reviews/implementation-codex-panel.md)
+  — Codex post-implementation panel, REVISE then RATIFY-WITH-RECOVERY.
+- [`docs/slices/d16-wants-lifecycle/reviews/implementation-claude-council-recovery.md`](../slices/d16-wants-lifecycle/reviews/implementation-claude-council-recovery.md)
+  — Claude post-recovery covenant council, RATIFY closure.
 
 ### ADR
 

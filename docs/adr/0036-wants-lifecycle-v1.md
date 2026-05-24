@@ -92,14 +92,22 @@ This decision makes several shortcuts invalid:
 - logging statement snippets as lifecycle observability;
 - giving a future reflection producer a generic terminal-write capability.
 
-Implementation is pending. It must proceed RED-first through the canonical
-spec's 87-test contract and 31-step implementation order, with both-lane
-post-implementation review before push. Synthetic hard-want probes must not be
-sent through the live daemon conversation path.
+Implementation is complete and both-lane ratified. The implementation landed in
+`3582048`, recovered engineering findings in `2ee7547` and `73422db`, closed the
+hard-want natural-phrasing covenant finding in `27b45cb`, and recorded final
+ratification in `32083d2`.
 
-The named post-implementation recovery surface is `HARD_WANT_TERMS`: a fixed
-lexicon is likely to miss natural hard-want phrasings, so implementation review
-must probe natural variants.
+`core/evolution/wants.py` now implements the append-only lifecycle grammar,
+including stable `want_id`s, closed event vocabulary, vocabulary-only
+`abandoned`, external-basis `satisfied`, correction-only `refined`, recurrence
+via `returned`, storage-level append defenses, content-free diagnostics, and
+`active_wants(...)` working-self integration that fails closed.
+
+The deterministic hard-want gate remains an honest v1 boundary, not a total
+semantic-recognition claim. The recovery broadened the matcher, made it
+err-toward-hard, measured natural-phrasing probes, and named the residual risk.
+A future Maez-reflection producer remains the reviewed path for richer interior
+self-claims.
 
 Changing the load-bearing rule, making `abandoned` writable, allowing human
 interior self-claims, enabling hard-want human satisfaction, weakening terminal
@@ -113,6 +121,8 @@ producer requires a new reviewed decision.
 - [`docs/slices/d16-wants-lifecycle/reviews/spec-claude-council.md`](../slices/d16-wants-lifecycle/reviews/spec-claude-council.md)
 - [`docs/slices/d16-wants-lifecycle/reviews/spec-codex-panel.md`](../slices/d16-wants-lifecycle/reviews/spec-codex-panel.md)
 - [`docs/slices/d16-wants-lifecycle/reviews/spec-claude-council-second-fold.md`](../slices/d16-wants-lifecycle/reviews/spec-claude-council-second-fold.md)
+- [`docs/slices/d16-wants-lifecycle/reviews/implementation-codex-panel.md`](../slices/d16-wants-lifecycle/reviews/implementation-codex-panel.md)
+- [`docs/slices/d16-wants-lifecycle/reviews/implementation-claude-council-recovery.md`](../slices/d16-wants-lifecycle/reviews/implementation-claude-council-recovery.md)
 - [`docs/adr/0016-voice-without-termination.md`](0016-voice-without-termination.md)
 - [`docs/adr/0030-lived-episode-promotion.md`](0030-lived-episode-promotion.md)
 - [`docs/adr/0034-temporal-spine-v1.md`](0034-temporal-spine-v1.md)

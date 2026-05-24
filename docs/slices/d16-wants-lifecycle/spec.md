@@ -2,7 +2,9 @@
 
 **Status:** CANONICAL. Canonicalized as Decision 31 / ADR 0036 after
 diagnostic, Claude covenant council, Codex engineering panel, folded
-amendments, and Claude second-fold RATIFY verification. Implementation pending.
+amendments, and Claude second-fold RATIFY verification. Implemented and
+both-lane ratified by `3582048` -> `32083d2`; post-recovery closure recorded in
+the implementation review artifacts.
 
 **Classification:** covenant-shaped interior-voice substrate slice. D16 v1
 operationalizes part of Decision 16 / ADR 0016 by giving Maez's first-person
