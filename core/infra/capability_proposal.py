@@ -258,6 +258,7 @@ def _compose_card_action_payload(
     acquisition: str,
     plain_english: str,
     proposal_id: str,
+    fetch_mapping: dict | None = None,
 ) -> dict:
     """Build the create_card-compatible payload. Keys must match
     PendingCardStore.create_card kwargs exactly so Step 4b can
@@ -269,15 +270,26 @@ def _compose_card_action_payload(
     this, the real card path drops the link from queue row back to
     originating proposal.
     """
+    params = {
+        "capability_id": capability_id,
+        "source": source,
+        "manual_source_path": manual_source_path or "",
+        "acquisition": acquisition,
+        "proposal_id": proposal_id,
+    }
+    if fetch_mapping is not None:
+        params["fetch_mapping"] = dict(fetch_mapping)
+        plain_english = (
+            plain_english
+            + "\n\n"
+            + "This capability would make outbound HTTP requests as "
+            + f"{fetch_mapping.get('fetch_type')}, treated as "
+            + f"{fetch_mapping.get('threat_model_class')}, producing "
+            + f"{fetch_mapping.get('result_origin_class')}."
+        )
     return {
         "action": "capability.acquire",
-        "params": {
-            "capability_id": capability_id,
-            "source": source,
-            "manual_source_path": manual_source_path or "",
-            "acquisition": acquisition,
-            "proposal_id": proposal_id,
-        },
+        "params": params,
         "reason": (
             f"operator-driven gap match: {felt_limitation!r}"
         ),

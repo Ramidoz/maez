@@ -10,18 +10,11 @@ from unittest.mock import patch
 from core.actions.action_engine import ActionEngine
 
 
-class _FakeResponse:
+class _FakeFetchResult:
     def __init__(self, text: str):
-        self._body = text.encode("utf-8")
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return False
-
-    def read(self, *_args):
-        return self._body
+        self.text = text
+        self.ok = True
+        self.reason_codes = ()
 
 
 class StockQuoteAction(unittest.TestCase):
@@ -32,8 +25,8 @@ class StockQuoteAction(unittest.TestCase):
             "SRXH.US,2026-04-29,18:03:11,0.117,0.1189,0.1107,0.1135,13640200\n"
         )
 
-        with patch("urllib.request.urlopen") as urlopen:
-            urlopen.return_value = _FakeResponse(csv)
+        with patch("core.egress.external_fetch.fetch_text") as fetch_text:
+            fetch_text.return_value = _FakeFetchResult(csv)
             result = engine.quote_stock(
                 symbol="SRXH",
                 reasoning="owner asked for the current stock price",
@@ -43,8 +36,8 @@ class StockQuoteAction(unittest.TestCase):
         self.assertIn("SRXH.US = 0.1135 USD", result.output)
         self.assertIn("as of 2026-04-29 18:03:11", result.output)
         self.assertIn("volume 13640200", result.output)
-        request = urlopen.call_args.args[0]
-        self.assertIn("s=srxh.us", request.full_url)
+        self.assertEqual(fetch_text.call_args.kwargs["fetch_type"], "stock_lookup")
+        self.assertIn("s=srxh.us", fetch_text.call_args.kwargs["url"])
 
     def test_provider_template_is_configurable_without_code_changes(self):
         engine = ActionEngine()
@@ -53,8 +46,8 @@ class StockQuoteAction(unittest.TestCase):
             "https://quotes.example.test/current?symbol={symbol}"
         )
         try:
-            with patch("urllib.request.urlopen") as urlopen:
-                urlopen.return_value = _FakeResponse(
+            with patch("core.egress.external_fetch.fetch_text") as fetch_text:
+                fetch_text.return_value = _FakeFetchResult(
                     "Symbol,Date,Time,Open,High,Low,Close,Volume\n"
                     "AAPL.US,2026-04-29,18:03:11,200,201,199,200.5,100\n"
                 )
@@ -70,16 +63,15 @@ class StockQuoteAction(unittest.TestCase):
 
         self.assertTrue(result.success, result.error)
         self.assertIn("AAPL.US = 200.5 USD", result.output)
-        request = urlopen.call_args.args[0]
         self.assertEqual(
-            request.full_url,
+            fetch_text.call_args.kwargs["url"],
             "https://quotes.example.test/current?symbol=aapl.us",
         )
 
     def test_invalid_symbol_does_not_hit_provider(self):
         engine = ActionEngine()
 
-        with patch("urllib.request.urlopen") as urlopen:
+        with patch("core.egress.external_fetch.fetch_text") as fetch_text:
             result = engine.quote_stock(
                 symbol="SRXH; rm -rf /",
                 reasoning="bad symbol",
@@ -87,13 +79,13 @@ class StockQuoteAction(unittest.TestCase):
 
         self.assertTrue(result.success, result.error)
         self.assertIn("invalid stock symbol", result.output)
-        urlopen.assert_not_called()
+        fetch_text.assert_not_called()
 
     def test_no_price_returns_error_text_not_fake_quote(self):
         engine = ActionEngine()
 
-        with patch("urllib.request.urlopen") as urlopen:
-            urlopen.return_value = _FakeResponse(
+        with patch("core.egress.external_fetch.fetch_text") as fetch_text:
+            fetch_text.return_value = _FakeFetchResult(
                 "Symbol,Date,Time,Open,High,Low,Close,Volume\n"
                 "NOPE.US,N/D,N/D,N/D,N/D,N/D,N/D,N/D\n"
             )

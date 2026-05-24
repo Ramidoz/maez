@@ -370,7 +370,7 @@ async def f(Bot):
 
         self.assertNotIn("send_draft(**kwargs)", source)
 
-    def test_allowlist_marks_telegram_producer_threaded_without_migrating_action_fetch(self):
+    def test_allowlist_marks_telegram_and_action_fetch_shadow_states(self):
         text = ROOT.joinpath(
             "docs/slices/privacy-egress-gate/network_migration_allowlist.yaml"
         ).read_text(encoding="utf-8")
@@ -378,7 +378,7 @@ async def f(Bot):
         self.assertIn("surface: telegram", text)
         self.assertIn("status: producer_threaded_shadow", text)
         action_entry = text.split("surface: action_engine_external_fetch", 1)[1]
-        self.assertIn("status: unmigrated", action_entry)
+        self.assertIn("status: substrate_shadow", action_entry)
 
 
 if __name__ == "__main__":

@@ -48,6 +48,19 @@ logger = logging.getLogger("maez")
 
 _quality_tracker = QualityTracker()
 
+
+def _valid_fetch_mapping(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    required = {
+        "fetch_type": str,
+        "threat_model_class": str,
+        "result_origin_class": str,
+        "destination_family": str,
+        "class_exists": bool,
+    }
+    return all(isinstance(payload.get(key), expected) for key, expected in required.items())
+
 # --- Paths ---
 ACTIONS_LOG = BASE_DIR / "logs" / "actions.log"
 PENDING_FILE = BASE_DIR / "daemon" / "pending_actions.json"
@@ -1147,7 +1160,12 @@ class ActionEngine:
         """
         from core.capability_acquisition_queue import handle_capability_acquire
 
-        return handle_capability_acquire(params)
+        queue_path = params.pop("queue_path", None)
+        if params.get("requires_external_http") and not _valid_fetch_mapping(
+            params.get("fetch_mapping")
+        ):
+            return "capability.acquire refused: external HTTP capability requires fetch_mapping"
+        return handle_capability_acquire(params, queue_path=queue_path)
 
     def _do_integration_review_plan(self, **params) -> str:
         """Action handler for ``integration.review_plan`` (D20 Stage-5).
@@ -1576,19 +1594,18 @@ class ActionEngine:
         if not url.startswith(("http://", "https://")):
             return f"invalid url (must start with http:// or https://): {url[:80]}"
         try:
-            import urllib.request as _urllib_req
+            from core.egress import external_fetch
             import re as _re2
-            req = _urllib_req.Request(
-                url,
-                headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                    )
-                },
+
+            fetched = external_fetch.fetch_text(
+                fetch_type="fetch_url",
+                url=url,
+                caller="core.actions.action_engine.fetch_url",
+                timeout_s=15,
             )
-            with _urllib_req.urlopen(req, timeout=15) as resp:
-                raw = resp.read(512 * 1024).decode("utf-8", errors="replace")
+            if not fetched.ok:
+                return f"fetch_url error: {', '.join(fetched.reason_codes)}"
+            raw = fetched.text
             # Strip script/style blocks, then all tags, then collapse whitespace.
             raw = _re2.sub(r'(?s)<(script|style)[^>]*>.*?</\1>', ' ', raw)
             raw = _re2.sub(r'<[^>]+>', ' ', raw)
@@ -1651,16 +1668,19 @@ class ActionEngine:
         ).rstrip("/")
         try:
             import urllib.parse as _urllib_parse
-            import urllib.request as _urllib_req
+            from core.egress import external_fetch
 
             query = _urllib_parse.urlencode({"base": src, "quotes": dst})
             url = f"{api_base}?{query}"
-            req = _urllib_req.Request(
-                url,
-                headers={"User-Agent": "Maez/1.0 currency-converter"},
+            fetched = external_fetch.fetch_text(
+                fetch_type="currency_lookup",
+                url=url,
+                caller="core.actions.action_engine.convert_currency",
+                timeout_s=10,
             )
-            with _urllib_req.urlopen(req, timeout=10) as resp:
-                payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+            if not fetched.ok:
+                return f"currency conversion error: {', '.join(fetched.reason_codes)}"
+            payload = json.loads(fetched.text)
 
             if isinstance(payload, list):
                 row = payload[0] if payload else {}
@@ -1727,16 +1747,19 @@ class ActionEngine:
             import csv as _csv
             import io as _io
             import urllib.parse as _urllib_parse
-            import urllib.request as _urllib_req
+            from core.egress import external_fetch
 
             encoded_symbol = _urllib_parse.quote(provider_symbol.lower(), safe=".-")
             url = template.format(symbol=encoded_symbol)
-            req = _urllib_req.Request(
-                url,
-                headers={"User-Agent": "Maez/1.0 stock-quote"},
+            fetched = external_fetch.fetch_text(
+                fetch_type="stock_lookup",
+                url=url,
+                caller="core.actions.action_engine.quote_stock",
+                timeout_s=10,
             )
-            with _urllib_req.urlopen(req, timeout=10) as resp:
-                raw = resp.read(64 * 1024).decode("utf-8", errors="replace")
+            if not fetched.ok:
+                return f"stock quote error: {', '.join(fetched.reason_codes)}"
+            raw = fetched.text
 
             rows = list(_csv.DictReader(_io.StringIO(raw)))
             if not rows:

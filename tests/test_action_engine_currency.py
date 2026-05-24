@@ -3,7 +3,6 @@
 # See LICENSE for full text.
 from __future__ import annotations
 
-import json
 import os
 import unittest
 from unittest.mock import patch
@@ -11,33 +10,26 @@ from unittest.mock import patch
 from core.actions.action_engine import ActionEngine
 
 
-class _FakeResponse:
-    def __init__(self, payload: object):
-        self._body = json.dumps(payload).encode("utf-8")
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return False
-
-    def read(self):
-        return self._body
+class _FakeFetchResult:
+    def __init__(self, text: str):
+        self.text = text
+        self.ok = True
+        self.reason_codes = ()
 
 
 class CurrencyConversionAction(unittest.TestCase):
     def test_converts_with_live_rate_payload(self):
         engine = ActionEngine()
 
-        with patch("urllib.request.urlopen") as urlopen:
-            urlopen.return_value = _FakeResponse([
+        with patch("core.egress.external_fetch.fetch_text") as fetch_text:
+            fetch_text.return_value = _FakeFetchResult("""[
                 {
                     "date": "2026-04-29",
                     "base": "EUR",
                     "quote": "USD",
-                    "rate": 1.087,
+                    "rate": 1.087
                 }
-            ])
+            ]""")
 
             result = engine.convert_currency(
                 amount=300,
@@ -50,19 +42,19 @@ class CurrencyConversionAction(unittest.TestCase):
         self.assertIn("300.00 EUR = 326.10 USD", result.output)
         self.assertIn("rate 1.087", result.output)
         self.assertIn("date 2026-04-29", result.output)
-        request = urlopen.call_args.args[0]
-        self.assertIn("base=EUR", request.full_url)
-        self.assertIn("quotes=USD", request.full_url)
+        self.assertEqual(fetch_text.call_args.kwargs["fetch_type"], "currency_lookup")
+        self.assertIn("base=EUR", fetch_text.call_args.kwargs["url"])
+        self.assertIn("quotes=USD", fetch_text.call_args.kwargs["url"])
 
     def test_supports_dict_rate_payload_for_provider_swaps(self):
         engine = ActionEngine()
 
-        with patch("urllib.request.urlopen") as urlopen:
-            urlopen.return_value = _FakeResponse({
+        with patch("core.egress.external_fetch.fetch_text") as fetch_text:
+            fetch_text.return_value = _FakeFetchResult("""{
                 "date": "2026-04-29",
                 "base": "INR",
-                "rates": {"USD": 0.012},
-            })
+                "rates": {"USD": 0.012}
+            }""")
 
             result = engine.convert_currency(
                 amount="200000",
@@ -80,15 +72,15 @@ class CurrencyConversionAction(unittest.TestCase):
         old = os.environ.get("MAEZ_FX_API_BASE")
         os.environ["MAEZ_FX_API_BASE"] = "https://fx.example.test/rates"
         try:
-            with patch("urllib.request.urlopen") as urlopen:
-                urlopen.return_value = _FakeResponse([
+            with patch("core.egress.external_fetch.fetch_text") as fetch_text:
+                fetch_text.return_value = _FakeFetchResult("""[
                     {
                         "date": "2026-04-29",
                         "base": "GBP",
                         "quote": "JPY",
-                        "rate": 190.5,
+                        "rate": 190.5
                     }
-                ])
+                ]""")
 
                 result = engine.convert_currency(
                     amount=2,
@@ -104,13 +96,12 @@ class CurrencyConversionAction(unittest.TestCase):
 
         self.assertTrue(result.success, result.error)
         self.assertIn("source https://fx.example.test/rates", result.output)
-        request = urlopen.call_args.args[0]
-        self.assertTrue(request.full_url.startswith("https://fx.example.test/rates?"))
+        self.assertTrue(fetch_text.call_args.kwargs["url"].startswith("https://fx.example.test/rates?"))
 
     def test_same_currency_does_not_call_provider(self):
         engine = ActionEngine()
 
-        with patch("urllib.request.urlopen") as urlopen:
+        with patch("core.egress.external_fetch.fetch_text") as fetch_text:
             result = engine.convert_currency(
                 amount=12.5,
                 from_currency="USD",
@@ -120,7 +111,7 @@ class CurrencyConversionAction(unittest.TestCase):
 
         self.assertTrue(result.success, result.error)
         self.assertEqual(result.output, "12.50 USD = 12.50 USD (same currency)")
-        urlopen.assert_not_called()
+        fetch_text.assert_not_called()
 
     def test_invalid_amount_returns_failure_text_not_fabricated_number(self):
         engine = ActionEngine()

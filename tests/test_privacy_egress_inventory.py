@@ -44,6 +44,7 @@ class PrivacyEgressInventoryTests(unittest.TestCase):
                 "proxy_shadow",
                 "chokepoint_shadow",
                 "producer_threaded_shadow",
+                "substrate_shadow",
                 "inventory_only",
                 "deprecated",
             })
@@ -97,7 +98,7 @@ class PrivacyEgressInventoryTests(unittest.TestCase):
         self.assertIn("producer", telegram["removal_target"].lower())
 
         action_fetch = entries_by_surface["action_engine_external_fetch"]
-        self.assertEqual(action_fetch["status"], "unmigrated")
+        self.assertEqual(action_fetch["status"], "substrate_shadow")
 
 
 if __name__ == "__main__":

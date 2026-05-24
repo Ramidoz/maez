@@ -13,9 +13,9 @@ import json
 import logging
 import re
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
+
+from core.egress import external_fetch
 
 logger = logging.getLogger("maez")
 
@@ -52,11 +52,15 @@ def search(query: str, max_results: int = 5) -> dict:
             'no_html': '1', 'skip_disambig': '1',
         })
         url = f"https://api.duckduckgo.com/?{params}"
-        req = urllib.request.Request(
-            url, headers={'User-Agent': 'Maez/1.0 (Personal AI Agent)'}
+        fetched = external_fetch.fetch_text(
+            fetch_type="web_search",
+            url=url,
+            caller="skills.web_search.search.instant_answer",
+            timeout_s=10,
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
+        if not fetched.ok:
+            raise RuntimeError(",".join(fetched.reason_codes))
+        data = json.loads(fetched.text)
 
         # Abstract (direct answer)
         if data.get('Abstract'):
@@ -108,14 +112,15 @@ def _html_search(query: str, max_results: int = 5) -> list:
     try:
         params = urllib.parse.urlencode({'q': query, 'kl': 'us-en'})
         url = f"https://html.duckduckgo.com/html/?{params}"
-        req = urllib.request.Request(url, headers={
-            'User-Agent': (
-                'Mozilla/5.0 (X11; Linux x86_64) '
-                'AppleWebKit/537.36 Chrome/120.0.0.0'
-            )
-        })
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            html = resp.read().decode('utf-8', errors='ignore')
+        fetched = external_fetch.fetch_text(
+            fetch_type="web_search",
+            url=url,
+            caller="skills.web_search.html_search",
+            timeout_s=10,
+        )
+        if not fetched.ok:
+            raise RuntimeError(",".join(fetched.reason_codes))
+        html = fetched.text
 
         def strip_tags(text):
             return re.sub(r'<[^>]+>', '', text).strip()
@@ -205,13 +210,16 @@ def search_rss(topic: str = 'general', max_results: int = 5) -> dict:
 
     for feed_url in feeds:
         try:
-            req = urllib.request.Request(
-                feed_url, headers={'User-Agent': 'Maez/1.0 RSS Reader'}
+            fetched = external_fetch.fetch_text(
+                fetch_type="search_rss",
+                url=feed_url,
+                caller="skills.web_search.search_rss",
+                timeout_s=8,
             )
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                content = resp.read()
+            if not fetched.ok:
+                raise RuntimeError(",".join(fetched.reason_codes))
 
-            root = ET.fromstring(content)
+            root = ET.fromstring(fetched.text)
             source_name = feed_url.split('/')[2].replace('www.', '').replace('feeds.', '')
 
             # RSS 2.0 format

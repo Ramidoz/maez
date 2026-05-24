@@ -25,9 +25,9 @@ entries:
     destination: external_http
     surface: action_engine_external_fetch
     category: runtime_external
-    status: unmigrated
-    owner_visible_rationale: ActionEngine has bounded external lookups that must be inventoried before gate migration.
-    removal_target: split weather_lookup and generic URL fetch through egress gate
+    status: substrate_shadow
+    owner_visible_rationale: ActionEngine live-data lookups and shared web_search/search_rss now route through the external-fetch substrate with typed fetch declarations, URL preflight, and non-reconstructive diagnostics; ambient weather remains a separate deferred surface.
+    removal_target: review substrate-shadow diagnostics, migrate deferred weather/live-data surfaces separately, then decide enforcement posture before global enforcement flip
     review_by: "2026-06-12"
     surface_owner: codex
   - path: skills/claude_router.py
