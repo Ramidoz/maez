@@ -2675,6 +2675,35 @@ class TelegramVoice:
         user_text = update.message.text
         if not user_text:
             return
+        from core.evolution.subjective_duration import (
+            SubjectiveDuration,
+            SubjectiveDurationOwnerAuth,
+        )
+
+        subjective_duration_owner_auth = SubjectiveDurationOwnerAuth(
+            surface="telegram_owner",
+            proof="telegram_authorized_user",
+        )
+        from core.evolution.subjective_duration import subjective_duration_prompt_line
+
+        def _telegram_subjective_duration_line(*, record_contact: bool) -> str:
+            try:
+                _subjective_duration = SubjectiveDuration()
+                if record_contact:
+                    _subjective_duration.record_salience_event(
+                        salience_event_kind="owner_contact",
+                        producer_ref="telegram_voice._handle_message",
+                        owner_auth=subjective_duration_owner_auth,
+                    )
+                return subjective_duration_prompt_line(
+                    owner_auth=subjective_duration_owner_auth,
+                    store=_subjective_duration,
+                )
+            except Exception as _subjective_duration_exc:
+                logger.debug("telegram subjective_duration line skipped: %s", _subjective_duration_exc)
+                return ""
+
+        subjective_duration_line = _telegram_subjective_duration_line(record_contact=True)
 
         _s4_result = guard_owner_text(
             user_text,
@@ -2839,7 +2868,12 @@ class TelegramVoice:
             logger.debug("web search interceptor failed: %s", e)
 
         try:
-            await self._process_message(update, context, user_text)
+            await self._process_message(
+                update,
+                context,
+                user_text,
+                subjective_duration_line=subjective_duration_line,
+            )
         finally:
             self._generating = False
             # D20 Stage-1 — autonomous gap-sensing. Best-effort:
@@ -2878,8 +2912,14 @@ class TelegramVoice:
             logger.info("Processing interrupted message: %s", new_text[:60])
             self._generating = True
             self._interrupt_queue = asyncio.Queue()
+            interrupt_subjective_duration_line = _telegram_subjective_duration_line(record_contact=False)
             try:
-                await self._process_message(update, context, new_text)
+                await self._process_message(
+                    update,
+                    context,
+                    new_text,
+                    subjective_duration_line=interrupt_subjective_duration_line,
+                )
             finally:
                 self._generating = False
                 # D20 Stage-1 — same hook on the interrupt path.
@@ -3220,7 +3260,14 @@ class TelegramVoice:
             logger.warning("recovery synthesis LLM call failed: %s", e)
             return ""
 
-    async def _process_message(self, update, context, user_text: str) -> str:
+    async def _process_message(
+        self,
+        update,
+        context,
+        user_text: str,
+        *,
+        subjective_duration_line: str = "",
+    ) -> str:
         """Build context, stream response, handle post-processing."""
         import re as _re
         import time as _time
@@ -3379,6 +3426,8 @@ class TelegramVoice:
             f"Note: VRAM usage of 17-22GB is the baseline for this system. "
             f"Do not mention it unless it exceeds 23GB.\n\n"
         )
+        if subjective_duration_line:
+            prompt += subjective_duration_line + "\n\n"
         # N+1 (2026-04-16): inject [ACTUAL STATE] near the top of the
         # prompt so the LLM anchors on real pending state and real
         # probe outcomes. Reduces fake-state narration at source and

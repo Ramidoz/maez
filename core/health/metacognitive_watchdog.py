@@ -19,6 +19,8 @@ from pathlib import Path
 from statistics import pvariance
 from typing import Any, Iterable, Mapping
 
+from core.evolution.temperament import PARAMETER_SET
+
 __all__ = [
     "MetacognitiveWatchdog",
     "WatchdogConfig",
@@ -47,6 +49,7 @@ class WatchdogConfig:
     scalar_window_size: int = 8
     scalar_variance_threshold: float = 0.0001
     scalar_consecutive_windows: int = 3
+    scalar_allowlist: frozenset[str] | None = field(default_factory=lambda: PARAMETER_SET)
     velocity_window_size: int = 6
     velocity_min_seconds: float = 5.0
     velocity_max_seconds: float = 120.0
@@ -177,12 +180,15 @@ class MetacognitiveWatchdog:
 
     def observe_scalars(self, scalars: Mapping[str, Any]) -> None:
         for name, value in scalars.items():
+            scalar_name = str(name)
+            if self.config.scalar_allowlist is not None and scalar_name not in self.config.scalar_allowlist:
+                continue
             try:
                 numeric = float(value)
             except (TypeError, ValueError):
                 continue
             window = self._scalars.setdefault(
-                str(name),
+                scalar_name,
                 deque(maxlen=self.config.scalar_window_size),
             )
             window.append(numeric)
@@ -190,10 +196,10 @@ class MetacognitiveWatchdog:
                 continue
             variance = pvariance(window)
             if variance < self.config.scalar_variance_threshold:
-                count = self._flatline_windows.get(str(name), 0) + 1
-                self._flatline_windows[str(name)] = count
+                count = self._flatline_windows.get(scalar_name, 0) + 1
+                self._flatline_windows[scalar_name] = count
             else:
-                self._flatline_windows[str(name)] = 0
+                self._flatline_windows[scalar_name] = 0
                 continue
             if count >= self.config.scalar_consecutive_windows:
                 self._halt(
@@ -206,7 +212,7 @@ class MetacognitiveWatchdog:
                         "consecutive_windows": count,
                     },
                     threshold_ref="scalar_variance_threshold",
-                    window_ref=f"{name}:last_{len(window)}_samples",
+                    window_ref=f"{scalar_name}:last_{len(window)}_samples",
                 )
 
     def observe_cycle_duration(self, duration_seconds: float) -> None:

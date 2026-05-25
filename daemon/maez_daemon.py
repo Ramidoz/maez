@@ -2987,6 +2987,7 @@ class MaezDaemon:
         signals_absent: "list | None" = None,
         chat_history: "list | None" = None,
         tool_calls: "list[dict] | None" = None,
+        subjective_duration_owner_auth: "SubjectiveDurationOwnerAuth | None" = None,
     ) -> str:
         """Process an incoming message through full reasoning context. Returns reply string.
 
@@ -3022,6 +3023,23 @@ class MaezDaemon:
                 keyword overlap (incident: meta-harness at 04:42,
                 "it" at 04:53 lost the referent).
         """
+        subjective_duration_line = ""
+        _subjective_duration = None
+        _sd = None
+        _sd_prompt_line = None
+        if subjective_duration_owner_auth is not None:
+            try:
+                from core.evolution import subjective_duration as _sd
+
+                _subjective_duration = _sd.SubjectiveDuration()
+                _subjective_duration.record_salience_event(
+                    salience_event_kind="owner_contact",
+                    producer_ref=f"daemon.handle_message:{source}",
+                    owner_auth=subjective_duration_owner_auth,
+                )
+            except Exception as _subjective_duration_exc:
+                logger.debug("subjective_duration owner contact skipped: %s", _subjective_duration_exc)
+
         _s4_result = guard_owner_text(
             text,
             surface=source,
@@ -3201,6 +3219,19 @@ class MaezDaemon:
                 _mark_signal_absent("calendar", "calendar")
 
         system_state = format_snapshot(snap)
+        if (
+            subjective_duration_owner_auth is not None
+            and _subjective_duration is not None
+            and _sd is not None
+        ):
+            try:
+                _sd_prompt_line = _sd.subjective_duration_prompt_line
+                subjective_duration_line = _sd_prompt_line(
+                    owner_auth=subjective_duration_owner_auth,
+                    store=_subjective_duration,
+                )
+            except Exception as _subjective_duration_exc:
+                logger.debug("subjective_duration owner line skipped: %s", _subjective_duration_exc)
         authoritative_tool_reply = _authoritative_tool_reply(tool_calls)
         recalled = self.memory.recall_for_telegram(text)
         # Trace: capture every memory id surfaced by the recall — across
@@ -3281,6 +3312,8 @@ class MaezDaemon:
 
         is_voice = source == "voice"
         prompt = f"{system_state}\n\n"
+        if subjective_duration_line:
+            prompt += subjective_duration_line + "\n\n"
 
         # Public bot context — early for attention weight
         public_ctx = self._get_public_context()

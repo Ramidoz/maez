@@ -6178,6 +6178,26 @@ def chat():
     uid = user.get("uuid", "")
     user_full = accounts.get_user_record(uid) or {}
     owner_bridge = _is_private_owner_bridge(user_full)
+    _subjective_duration = None
+    _subjective_duration_owner_auth = None
+    if owner_bridge:
+        try:
+            from core.evolution.subjective_duration import SubjectiveDuration, SubjectiveDurationOwnerAuth
+
+            _subjective_duration_owner_auth = SubjectiveDurationOwnerAuth(
+                surface="web_owner_bridge",
+                proof="web_private_owner_bridge",
+            )
+            _subjective_duration = SubjectiveDuration()
+            _subjective_duration.record_salience_event(
+                salience_event_kind="owner_contact",
+                producer_ref="skills.web_interface:chat",
+                owner_auth=_subjective_duration_owner_auth,
+            )
+        except Exception as _subjective_duration_exc:
+            logger.debug("web owner subjective_duration contact skipped: %s", _subjective_duration_exc)
+            _subjective_duration = None
+            _subjective_duration_owner_auth = None
     if owner_bridge:
         _s4_result = guard_owner_text(
             message,
@@ -6243,6 +6263,18 @@ def chat():
                 owner_system += "\n\n" + _manual_context
         except Exception:
             pass
+        try:
+            from core.evolution.subjective_duration import subjective_duration_prompt_line
+
+            if _subjective_duration_owner_auth is not None and _subjective_duration is not None:
+                _subjective_duration_line = subjective_duration_prompt_line(
+                    owner_auth=_subjective_duration_owner_auth,
+                    store=_subjective_duration,
+                )
+                if _subjective_duration_line:
+                    owner_system += "\n\n" + _subjective_duration_line
+        except Exception as _subjective_duration_exc:
+            logger.debug("web owner subjective_duration line skipped: %s", _subjective_duration_exc)
         # Same prompt-budget cap as the daemon's /message path so a
         # high-recall query can't push past the llama-server ctx.
         from core.cognition.envelope_builder import resolve_recall_cap_chars
