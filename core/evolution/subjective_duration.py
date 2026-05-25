@@ -14,12 +14,13 @@ import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from pathlib import Path
 from typing import Callable, Literal, Mapping
 
 from core.egress.gate import load_or_create_telemetry_key
 from core.evolution.temperament import DEFAULT_DB_PATH as TEMPERAMENT_DB_PATH
-from core.evolution.temperament import PARAMETER_NAMES, PARAMETER_SET
+from core.evolution.temperament import PARAMETER_NAMES
 from core.time.temporal_spine import canonical_utc, canonical_utc_iso
 
 SUBJECTIVE_DURATION_MIN = 0.0
@@ -32,7 +33,7 @@ MODULATION_TEMPERAMENT_INPUTS = (
     "warmth",
     "caution",
 )
-SCHEMA_VERSION = "subjective-duration-diagnostic-v1"
+SCHEMA_VERSION = "subjective-duration-diagnostic-v2"
 OWNER_AUTH_SURFACES = frozenset({"daemon_owner", "telegram_owner", "web_owner_bridge", "manual_test"})
 OWNER_AUTH_PROOFS = frozenset(
     {
@@ -87,6 +88,29 @@ class SalienceEventDefinition:
     affects: frozenset[str]
     owner_auth_required: bool
     reviewed_registration_ref: str
+
+
+class ProducerRef(Enum):
+    """Reviewed producer identities allowed to submit producer snapshots."""
+
+    MANUAL_TEST_PRODUCER = "manual_test_producer"
+
+
+@dataclass(frozen=True)
+class MeaningfulSalienceEventRecord:
+    event_id: int
+    ts_utc: str
+    salience_event_kind: str
+    producer_ref: str
+    bond_id: str
+    producer_event_id: str
+    producer_temperament_before: dict[str, float | None]
+    producer_temperament_after: dict[str, float | None]
+    meaningfulness_score: float
+    meaningfulness_input_count: int
+    temperament_delta_mean: float | None
+    temperament_delta_max: float | None
+    is_canary: bool
 
 
 @dataclass(frozen=True)
@@ -275,6 +299,64 @@ def _observed_temperament_values(values: Mapping[str, float | None]) -> dict[str
     return observed
 
 
+def _serialize_temperament_snapshot(snapshot: Mapping[str, float | None] | None) -> str:
+    if snapshot is None:
+        return ""
+    normalized = {str(key): (None if value is None else float(value)) for key, value in snapshot.items()}
+    return json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+
+
+def _parse_temperament_snapshot(raw: str) -> dict[str, float | None]:
+    if not raw:
+        return {}
+    loaded = json.loads(raw)
+    if not isinstance(loaded, dict):
+        return {}
+    parsed: dict[str, float | None] = {}
+    for key, value in loaded.items():
+        parsed[str(key)] = None if value is None else float(value)
+    return parsed
+
+
+def _validate_producer_ref(producer_ref: str) -> None:
+    valid = {entry.value for entry in ProducerRef}
+    if producer_ref not in valid:
+        raise ValueError(f"unknown producer_ref: {producer_ref!r}; valid: {sorted(valid)}")
+
+
+def _build_metadata_json(*, salience_event_kind: str, producer_snapshot_path: bool) -> str:
+    metadata: dict[str, object] = {}
+    if producer_snapshot_path and salience_event_kind != "meaningful_exchange":
+        metadata["kind_gated_zero_score"] = True
+    return json.dumps(metadata, sort_keys=True, separators=(",", ":")) if metadata else "{}"
+
+
+def _migrate_meaningful_salience_seam(conn: sqlite3.Connection) -> None:
+    info = conn.execute("PRAGMA table_info(subjective_duration_salience_events)").fetchall()
+    existing = {row[1] for row in info}
+    migrations = [
+        ("bond_id", "ADD COLUMN bond_id TEXT NOT NULL DEFAULT '_LEGACY'"),
+        ("producer_event_id", "ADD COLUMN producer_event_id TEXT NOT NULL DEFAULT ''"),
+        (
+            "producer_temperament_before_json",
+            "ADD COLUMN producer_temperament_before_json TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "producer_temperament_after_json",
+            "ADD COLUMN producer_temperament_after_json TEXT NOT NULL DEFAULT ''",
+        ),
+        ("is_canary", "ADD COLUMN is_canary INTEGER NOT NULL DEFAULT 0"),
+    ]
+    for column_name, alter_sql in migrations:
+        if column_name not in existing:
+            conn.execute(f"ALTER TABLE subjective_duration_salience_events {alter_sql}")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sd_events_bond_producer "
+        "ON subjective_duration_salience_events(bond_id, producer_event_id)"
+    )
+    conn.commit()
+
+
 def _temperament_modulators(values: Mapping[str, float | None]) -> tuple[float, float, float]:
     def v(name: str) -> float:
         raw = values.get(name)
@@ -331,6 +413,11 @@ def _diagnostic_row(
     temperament_before_digest: str | None = None,
     temperament_after_digest: str | None = None,
     explicit_salience_marker_present: bool = False,
+    bond_id: str | None = None,
+    producer_event_id: str | None = None,
+    producer_temperament_before_json: str | None = None,
+    producer_temperament_after_json: str | None = None,
+    is_canary: bool = False,
 ) -> dict[str, object]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -353,6 +440,11 @@ def _diagnostic_row(
         "temperament_before_digest": temperament_before_digest,
         "temperament_after_digest": temperament_after_digest,
         "explicit_salience_marker_present": bool(explicit_salience_marker_present),
+        "bond_id": bond_id,
+        "producer_event_id": producer_event_id,
+        "producer_temperament_before_json": producer_temperament_before_json,
+        "producer_temperament_after_json": producer_temperament_after_json,
+        "is_canary": bool(is_canary),
         "content_recorded": False,
     }
 
@@ -382,8 +474,8 @@ class SubjectiveDuration:
         self._initialize()
 
     def _initialize(self) -> None:
-            with closing(sqlite3.connect(self.db_path)) as conn:
-                conn.executescript(
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS subjective_duration_samples (
                     sample_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -416,6 +508,7 @@ class SubjectiveDuration:
                 CREATE INDEX IF NOT EXISTS idx_sd_events_ts ON subjective_duration_salience_events(ts_utc);
                 """
             )
+            _migrate_meaningful_salience_seam(conn)
 
     def current(self, *, now_utc: str | datetime | None = None) -> SubjectiveDurationSnapshot:
         now = _normalize_event_time(now_utc or datetime.now(UTC))
@@ -498,18 +591,66 @@ class SubjectiveDuration:
         meaningfulness_score: float | None = None,
         explicit_salience_marker_present: bool = False,
         now_utc: str | datetime | None = None,
+        bond_id: str | None = None,
+        producer_event_id: str | None = None,
+        producer_temperament_before: Mapping[str, float | None] | None = None,
+        producer_temperament_after: Mapping[str, float | None] | None = None,
+        is_canary: bool = False,
     ) -> int:
         if salience_event_kind not in self.registry:
             raise ValueError(f"unknown salience_event_kind: {salience_event_kind}")
         definition = self.registry[salience_event_kind]
+
+        producer_kwargs = (
+            bond_id,
+            producer_event_id,
+            producer_temperament_before,
+            producer_temperament_after,
+        )
+        producer_snapshot_path = any(value is not None for value in producer_kwargs)
+        if is_canary and not producer_snapshot_path:
+            raise ValueError("is_canary=True requires the producer-snapshot path")
+        if producer_snapshot_path and any(value is None for value in producer_kwargs):
+            raise ValueError(
+                "producer-snapshot path requires ALL of: bond_id, producer_event_id, "
+                "producer_temperament_before, producer_temperament_after"
+            )
+        if producer_snapshot_path:
+            if not isinstance(bond_id, str) or not bond_id:
+                raise ValueError("bond_id must be a non-empty string")
+            if bond_id == "_LEGACY":
+                raise ValueError(
+                    "bond_id='_LEGACY' is the pre-bond-substrate sentinel; "
+                    "live producers may not write under it"
+                )
+            if bond_id in {"*", "%", "all", "any"}:
+                raise ValueError(f"bond_id={bond_id!r} is a wildcard pattern; refused")
+            _validate_producer_ref(producer_ref)
+            if not isinstance(producer_event_id, str) or not producer_event_id:
+                raise ValueError("producer_event_id must be a non-empty string")
+            if meaningfulness_score is not None:
+                raise ValueError(
+                    "producer-snapshot path auto-computes meaningfulness_score; "
+                    "callers may not supply an explicit score"
+                )
         if definition.owner_auth_required and not isinstance(owner_auth, SubjectiveDurationOwnerAuth):
             raise PermissionError("owner-authenticated salience event requires typed owner auth")
         if definition.producer_ref_required and not producer_ref:
             raise ValueError("producer_ref required for salience event")
 
         now = _normalize_event_time(now_utc or datetime.now(UTC))
-        before = _safe_temperament(self.temperament_reader)
-        after = _safe_temperament(self.temperament_reader)
+        if producer_snapshot_path:
+            before = {
+                name: producer_temperament_before.get(name)  # type: ignore[union-attr]
+                for name in MODULATION_TEMPERAMENT_INPUTS
+            }
+            after = {
+                name: producer_temperament_after.get(name)  # type: ignore[union-attr]
+                for name in MODULATION_TEMPERAMENT_INPUTS
+            }
+        else:
+            before = _safe_temperament(self.temperament_reader)
+            after = _safe_temperament(self.temperament_reader)
         observed_before = _observed_temperament_values(before)
         observed_after = _observed_temperament_values(after)
         shared = [name for name in MODULATION_TEMPERAMENT_INPUTS if name in observed_before and name in observed_after]
@@ -532,6 +673,14 @@ class SubjectiveDuration:
         delta_max = max(deltas) if deltas else None
         source_ref_present = bool(source_ref)
         source_digest = _hmac_digest(source_ref) if source_ref_present else ""
+        before_json = _serialize_temperament_snapshot(producer_temperament_before) if producer_snapshot_path else ""
+        after_json = _serialize_temperament_snapshot(producer_temperament_after) if producer_snapshot_path else ""
+        row_bond_id = bond_id if producer_snapshot_path else "_LEGACY"
+        row_producer_event_id = producer_event_id if producer_snapshot_path else ""
+        metadata_json = _build_metadata_json(
+            salience_event_kind=salience_event_kind,
+            producer_snapshot_path=producer_snapshot_path,
+        )
         ts_iso = now.isoformat()
         latest = self._latest_sample()
         value = 0.0 if latest is None else float(latest["value"])
@@ -542,8 +691,9 @@ class SubjectiveDuration:
                 "INSERT INTO subjective_duration_salience_events "
                 "(ts_utc, salience_event_kind, producer_ref, owner_auth_class, source_ref_digest, "
                 "meaningfulness_score, meaningfulness_input_count, temperament_delta_mean, temperament_delta_max, "
-                "temperament_before_digest, temperament_after_digest, explicit_salience_marker_present, metadata_json) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "temperament_before_digest, temperament_after_digest, explicit_salience_marker_present, metadata_json, "
+                "bond_id, producer_event_id, producer_temperament_before_json, producer_temperament_after_json, is_canary) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     ts_iso,
                     salience_event_kind,
@@ -557,7 +707,12 @@ class SubjectiveDuration:
                     _digest_temperament(before),
                     _digest_temperament(after),
                     1 if explicit_salience_marker_present else 0,
-                    "{}",
+                    metadata_json,
+                    row_bond_id,
+                    row_producer_event_id,
+                    before_json,
+                    after_json,
+                    1 if is_canary else 0,
                 ),
             )
             event_id = int(cur.lastrowid)
@@ -583,9 +738,63 @@ class SubjectiveDuration:
                 temperament_before_digest=_digest_temperament(before),
                 temperament_after_digest=_digest_temperament(after),
                 explicit_salience_marker_present=explicit_salience_marker_present,
+                bond_id=row_bond_id,
+                producer_event_id=producer_event_id if producer_snapshot_path else None,
+                producer_temperament_before_json=before_json or None,
+                producer_temperament_after_json=after_json or None,
+                is_canary=is_canary,
             )
         )
         return event_id
+
+    def lookup_meaningful_salience_event_record(
+        self,
+        *,
+        bond_id: str,
+        producer_event_id: str,
+    ) -> MeaningfulSalienceEventRecord | None:
+        if not bond_id:
+            raise ValueError("bond_id required; empty string refused")
+        if bond_id == "_LEGACY":
+            raise ValueError(
+                "bond_id='_LEGACY' is the pre-bond-substrate sentinel; "
+                "legacy rows are addressable only via event_id"
+            )
+        if bond_id == "_SCRATCH_FIXTURE":
+            raise ValueError("bond_id='_SCRATCH_FIXTURE' is the scratch-canary sentinel; production lookup refuses it")
+        if bond_id in {"*", "%", "all", "any"}:
+            raise ValueError(f"bond_id={bond_id!r} is a wildcard pattern; refused")
+        if not producer_event_id:
+            raise ValueError("producer_event_id required; empty string refused")
+
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT event_id, ts_utc, salience_event_kind, producer_ref, bond_id, producer_event_id, "
+                "producer_temperament_before_json, producer_temperament_after_json, meaningfulness_score, "
+                "meaningfulness_input_count, temperament_delta_mean, temperament_delta_max, is_canary "
+                "FROM subjective_duration_salience_events "
+                "WHERE bond_id = ? AND producer_event_id = ? "
+                "ORDER BY event_id DESC LIMIT 1",
+                (bond_id, producer_event_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return MeaningfulSalienceEventRecord(
+            event_id=int(row["event_id"]),
+            ts_utc=str(row["ts_utc"]),
+            salience_event_kind=str(row["salience_event_kind"]),
+            producer_ref=str(row["producer_ref"]),
+            bond_id=str(row["bond_id"]),
+            producer_event_id=str(row["producer_event_id"]),
+            producer_temperament_before=_parse_temperament_snapshot(str(row["producer_temperament_before_json"])),
+            producer_temperament_after=_parse_temperament_snapshot(str(row["producer_temperament_after_json"])),
+            meaningfulness_score=float(row["meaningfulness_score"]),
+            meaningfulness_input_count=int(row["meaningfulness_input_count"]),
+            temperament_delta_mean=None if row["temperament_delta_mean"] is None else float(row["temperament_delta_mean"]),
+            temperament_delta_max=None if row["temperament_delta_max"] is None else float(row["temperament_delta_max"]),
+            is_canary=bool(row["is_canary"]),
+        )
 
     def _latest_sample(self) -> dict[str, object] | None:
         with closing(sqlite3.connect(self.db_path)) as conn:
@@ -628,7 +837,10 @@ class SubjectiveDuration:
         with closing(sqlite3.connect(self.db_path)) as conn:
             rows = conn.execute(
                 "SELECT ts_utc, meaningfulness_score FROM subjective_duration_salience_events "
-                "WHERE salience_event_kind = 'meaningful_exchange' ORDER BY event_id DESC"
+                "WHERE salience_event_kind = 'meaningful_exchange' "
+                "AND bond_id NOT IN ('_LEGACY', '_SCRATCH_FIXTURE') "
+                "AND is_canary = 0 "
+                "ORDER BY event_id DESC"
             ).fetchall()
         resonance = 0.0
         half_life = self.config.residual_echo_half_life_seconds
@@ -654,7 +866,10 @@ class SubjectiveDuration:
         with closing(sqlite3.connect(self.db_path)) as conn:
             rows = conn.execute(
                 "SELECT ts_utc FROM subjective_duration_salience_events "
-                "WHERE salience_event_kind = 'meaningful_exchange' AND meaningfulness_score > 0.0"
+                "WHERE salience_event_kind = 'meaningful_exchange' "
+                "AND meaningfulness_score > 0.0 "
+                "AND bond_id NOT IN ('_LEGACY', '_SCRATCH_FIXTURE') "
+                "AND is_canary = 0"
             ).fetchall()
         count = 0
         for (ts_raw,) in rows:

@@ -26,6 +26,7 @@ def _production_python_paths() -> list[Path]:
         ".venv",
         "__pycache__",
         "docs",
+        "scripts",
         "tests",
     }
     return sorted(

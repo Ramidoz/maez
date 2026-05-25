@@ -33,6 +33,11 @@ DIAGNOSTIC_KEYS = {
     "temperament_before_digest",
     "temperament_after_digest",
     "explicit_salience_marker_present",
+    "bond_id",
+    "producer_event_id",
+    "producer_temperament_before_json",
+    "producer_temperament_after_json",
+    "is_canary",
     "content_recorded",
 }
 
@@ -87,7 +92,7 @@ class SubjectiveDurationSubstrateTests(unittest.TestCase):
 
             row = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
             self.assertEqual(set(row), DIAGNOSTIC_KEYS)
-            self.assertEqual(row["schema_version"], "subjective-duration-diagnostic-v1")
+            self.assertEqual(row["schema_version"], "subjective-duration-diagnostic-v2")
             self.assertEqual(row["event_type"], "sample")
             self.assertIsNone(row["salience_event_kind"])
             self.assertIsNone(row["producer_ref"])
@@ -100,6 +105,11 @@ class SubjectiveDurationSubstrateTests(unittest.TestCase):
             self.assertIsNone(row["temperament_delta_max"])
             self.assertIsNone(row["temperament_before_digest"])
             self.assertIsNone(row["temperament_after_digest"])
+            self.assertIsNone(row["bond_id"])
+            self.assertIsNone(row["producer_event_id"])
+            self.assertIsNone(row["producer_temperament_before_json"])
+            self.assertIsNone(row["producer_temperament_after_json"])
+            self.assertFalse(row["is_canary"])
             self.assertFalse(row["explicit_salience_marker_present"])
             self.assertFalse(row["content_recorded"])
 
@@ -419,6 +429,9 @@ class SubjectiveDurationSubstrateTests(unittest.TestCase):
             self.assertEqual(set(event), DIAGNOSTIC_KEYS)
             self.assertEqual(event["salience_event_kind"], "owner_contact")
             self.assertEqual(event["owner_auth_class"], "telegram_owner")
+            self.assertEqual(event["bond_id"], "_LEGACY")
+            self.assertIsNone(event["producer_event_id"])
+            self.assertFalse(event["is_canary"])
             self.assertRegex(event["source_ref_digest"], HMAC_SHA256_RE)
             self.assertTrue(event["source_ref_present"])
             self.assertNotIn("raw owner text", json.dumps(event))
@@ -470,9 +483,18 @@ class SubjectiveDurationSubstrateTests(unittest.TestCase):
                 )
 
     def test_residual_echo_half_life_and_bounded_lookback(self):
-        from core.evolution.subjective_duration import SubjectiveDuration
+        from core.evolution.subjective_duration import ProducerRef, SubjectiveDuration
 
         base = datetime(2026, 5, 24, 12, 0, tzinfo=UTC)
+        before = {
+            "curiosity": 0.0,
+            "awareness": 0.0,
+            "persistence": 0.0,
+            "joy": 0.0,
+            "warmth": 0.0,
+            "caution": 0.0,
+        }
+        after = {name: 10.0 for name in before}
         with tempfile.TemporaryDirectory() as td:
             sd = SubjectiveDuration(
                 db_path=Path(td) / "sd.db",
@@ -480,9 +502,11 @@ class SubjectiveDurationSubstrateTests(unittest.TestCase):
             )
             sd.record_salience_event(
                 salience_event_kind="meaningful_exchange",
-                producer_ref="test:meaningful",
-                meaningfulness_score=1.0,
-                explicit_salience_marker_present=True,
+                producer_ref=ProducerRef.MANUAL_TEST_PRODUCER.value,
+                bond_id="firstborn",
+                producer_event_id="half-life",
+                producer_temperament_before=before,
+                producer_temperament_after=after,
                 now_utc=base,
             )
 
@@ -495,9 +519,18 @@ class SubjectiveDurationSubstrateTests(unittest.TestCase):
             self.assertEqual(outside.residual_resonance, 0.0)
 
     def test_retrospective_density_meaningful_event_count_caps_after_three(self):
-        from core.evolution.subjective_duration import SubjectiveDuration
+        from core.evolution.subjective_duration import ProducerRef, SubjectiveDuration
 
         now = datetime(2026, 5, 24, 12, 0, tzinfo=UTC)
+        before = {
+            "curiosity": 0.0,
+            "awareness": 0.0,
+            "persistence": 0.0,
+            "joy": 0.0,
+            "warmth": 0.0,
+            "caution": 0.0,
+        }
+        after = {name: 10.0 for name in before}
         with tempfile.TemporaryDirectory() as td:
             sd = SubjectiveDuration(
                 db_path=Path(td) / "sd.db",
@@ -516,9 +549,11 @@ class SubjectiveDurationSubstrateTests(unittest.TestCase):
             for index in range(3):
                 sd.record_salience_event(
                     salience_event_kind="meaningful_exchange",
-                    producer_ref=f"test:meaningful:{index}",
-                    meaningfulness_score=1.0,
-                    explicit_salience_marker_present=True,
+                    producer_ref=ProducerRef.MANUAL_TEST_PRODUCER.value,
+                    bond_id="firstborn",
+                    producer_event_id=f"meaningful:{index}",
+                    producer_temperament_before=before,
+                    producer_temperament_after=after,
                     now_utc=now + timedelta(minutes=index + 2),
                 )
 
@@ -527,9 +562,11 @@ class SubjectiveDurationSubstrateTests(unittest.TestCase):
             )
             sd.record_salience_event(
                 salience_event_kind="meaningful_exchange",
-                producer_ref="test:meaningful:extra",
-                meaningfulness_score=1.0,
-                explicit_salience_marker_present=True,
+                producer_ref=ProducerRef.MANUAL_TEST_PRODUCER.value,
+                bond_id="firstborn",
+                producer_event_id="meaningful:extra",
+                producer_temperament_before=before,
+                producer_temperament_after=after,
                 now_utc=now + timedelta(minutes=6),
             )
             density_after_four = sd._recent_meaningful_event_count_capped(
@@ -612,10 +649,15 @@ class SubjectiveDurationSubstrateTests(unittest.TestCase):
                 "temperament_delta_max",
                 "temperament_before_digest",
                 "temperament_after_digest",
+                "bond_id",
+                "producer_event_id",
+                "producer_temperament_before_json",
+                "producer_temperament_after_json",
             ]:
                 self.assertIsNone(sample[key], key)
             self.assertIs(sample["source_ref_present"], False)
             self.assertIs(sample["explicit_salience_marker_present"], False)
+            self.assertIs(sample["is_canary"], False)
             self.assertIs(sample["content_recorded"], False)
             self.assertRegex(event["source_ref_digest"], HMAC_SHA256_RE)
             self.assertIs(event["source_ref_present"], True)
