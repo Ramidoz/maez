@@ -146,6 +146,7 @@ VALUE_MAX = 10.0
 # those names will be registered here when the shaping module lands.
 ALLOWED_SOURCES = frozenset({
     "explicit_set",
+    "drive_driven_curiosity_resolution",
 })
 
 

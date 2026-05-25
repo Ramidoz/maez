@@ -3,9 +3,11 @@
 """Drive-driven curiosity adapter over the existing wonderings store."""
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 import hashlib
 from typing import Callable, Mapping
@@ -31,6 +33,10 @@ class SidecarDuplicateWriteRefused(ValueError):
     """Raised when code tries to rewrite append-only sidecar metadata."""
 
 
+class CuriosityAuthorityRefused(ValueError):
+    """Raised when the curiosity producer exceeds its reviewed authority."""
+
+
 class EncounterSource(Enum):
     WONDERING_GENERATED = "wondering_generated"
     EXPLICIT_OWNER_FLAG = "explicit_owner_flag"
@@ -46,6 +52,11 @@ class EncounterSource(Enum):
 TIMER_ONLY_REFUSAL_SET = frozenset({"timer", "cron", "scheduler_tick"})
 DRIVE_DRIVEN_CURIOSITY_PRODUCER_REF = "drive_driven_curiosity"
 MANUAL_TEST_PRODUCER_REF = "manual_test_producer"
+DRIVE_RESOLUTION_TEMPERAMENT_SOURCE = "drive_driven_curiosity_resolution"
+BASE_RESOLUTION_DELTA = 0.5
+NEUTRAL_TEMPERAMENT_VALUE_FOR_FIRST_OBSERVATION = 5.0
+TEMPERAMENT_VALUE_MIN = 0.0
+TEMPERAMENT_VALUE_MAX = 10.0
 
 
 @dataclass(frozen=True)
@@ -60,6 +71,38 @@ class CuriosityObject:
     subject_ref: str | None = None
     resolution_marker_type: str | None = None
     resolution_marker_utc: str | None = None
+    created_at: float | None = None
+    advance_count: int = 0
+    extraction_shape_blocked: bool = False
+    third_party_blocked: bool = False
+    can_resolve_interiorly: bool = False
+    fixation_released: bool = False
+
+
+class MeaningfulExchangeEligibility(Enum):
+    ELIGIBLE_OWNER_BOND = "eligible_owner_bond"
+    ELIGIBLE_SELF_MODEL = "eligible_self_model"
+    ELIGIBLE_LONG_CARRIED_RESOLUTION = "eligible_long_carried_resolution"
+    NOT_ELIGIBLE_ROUTINE_FACT = "not_eligible_routine_fact"
+    NOT_ELIGIBLE_LOW_CONFIDENCE = "not_eligible_low_confidence"
+    NOT_ELIGIBLE_CAN_RESOLVE_INTERIORLY = "not_eligible_can_resolve_interiorly"
+    NOT_ELIGIBLE_OWNER_BOND_ROUTINE = "not_eligible_owner_bond_routine"
+
+
+@dataclass(frozen=True)
+class OwnerBondSaturationGuard:
+    rolling_window_hours: int = 24
+    owner_bond_meaningful_daily_cap: int = 3
+
+
+@dataclass(frozen=True)
+class CuriosityResolutionCeremonyResult:
+    eligibility: MeaningfulExchangeEligibility
+    temperament_event_id: int | None
+    salience_event_id: int | None
+    producer_event_id: str
+    delta_intent: float
+    delta_applied: float
 
 
 @dataclass(frozen=True)
@@ -88,6 +131,34 @@ def _digest(value: object) -> str | None:
 
 def _producer_ref_value(producer_ref: object) -> str:
     return str(getattr(producer_ref, "value", producer_ref))
+
+
+def _coerce_datetime(value: datetime | float | int | None) -> datetime:
+    if value is None:
+        return datetime.now(UTC)
+    if isinstance(value, datetime):
+        return value.astimezone(UTC) if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return datetime.fromtimestamp(float(value), tz=UTC)
+
+
+def _priority_class_weight(priority_class: str) -> float:
+    return {
+        "owner_bond": 1.0,
+        "self_growth": 0.9,
+        "world_knowledge": 0.4,
+        "aesthetic_play": 0.4,
+    }.get(str(priority_class), 0.5)
+
+
+def _marker_confidence_weight(marker_type: str) -> float:
+    return {
+        "explicit_owner_resolved": 1.0,
+        "explicit_self_resolved": 0.9,
+    }.get(str(marker_type), 0.5)
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
 
 
 def _emit_subject_kind_refused(fields: Mapping, refusal_kind: str) -> None:
@@ -174,6 +245,12 @@ def _materialize_curiosity_object(fields: Mapping) -> CuriosityObject:
         subject_ref=fields.get("subject_ref"),
         resolution_marker_type=fields.get("resolution_marker_type"),
         resolution_marker_utc=fields.get("resolution_marker_utc"),
+        created_at=None if fields.get("created_at") is None else float(fields["created_at"]),
+        advance_count=int(fields.get("advance_count") or 0),
+        extraction_shape_blocked=bool(fields.get("extraction_shape_blocked")),
+        third_party_blocked=bool(fields.get("third_party_blocked")),
+        can_resolve_interiorly=bool(fields.get("can_resolve_interiorly")),
+        fixation_released=bool(fields.get("fixation_released")),
     )
 
 
@@ -347,6 +424,8 @@ def _project_row(row: sqlite3.Row | dict) -> CuriosityObject:
         subject_kind=_subject_kind(data.get("subject_kind")),
         resolution_marker_type=data.get("resolution_marker_type"),
         resolution_marker_utc=data.get("resolution_marker_utc"),
+        created_at=None if data.get("created_at") is None else float(data["created_at"]),
+        advance_count=int(data.get("pursuit_count") or data.get("advance_count") or 0),
     )
 
 
@@ -395,6 +474,296 @@ def list_drive_curiosity_objects(store: Wonderings, *, bond_id: str) -> list[Cur
         except LegacyWonderingProjectionRefused:
             continue
     return out
+
+
+def _parse_event_time(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return None
+
+
+def _count_owner_bond_meaningful_events(
+    *,
+    subjective_duration: object,
+    bond_id: str,
+    guard: OwnerBondSaturationGuard,
+    now_utc: datetime,
+) -> int:
+    db_path = getattr(subjective_duration, "db_path", None)
+    if db_path is None:
+        return 0
+    cutoff = now_utc - timedelta(hours=max(1, int(guard.rolling_window_hours)))
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT ts_utc, producer_event_id FROM subjective_duration_salience_events
+             WHERE bond_id = ?
+               AND salience_event_kind = 'meaningful_exchange'
+               AND producer_ref = ?
+               AND is_canary = 0
+            """,
+            (str(bond_id), DRIVE_DRIVEN_CURIOSITY_PRODUCER_REF),
+        ).fetchall()
+    count = 0
+    for ts_raw, producer_event_id in rows:
+        if ":priority:owner_bond:" not in str(producer_event_id):
+            continue
+        ts = _parse_event_time(str(ts_raw))
+        if ts is not None and cutoff <= ts <= now_utc:
+            count += 1
+    return count
+
+
+def classify_meaningful_exchange(
+    *,
+    curiosity_object: CuriosityObject,
+    subjective_duration: object,
+    guard: OwnerBondSaturationGuard | None = None,
+    now_utc: datetime | float | int | None = None,
+    diagnostic_sink: Callable[[dict], None] | None = None,
+) -> MeaningfulExchangeEligibility:
+    guard = guard or OwnerBondSaturationGuard()
+    now = _coerce_datetime(now_utc)
+    priority = str(curiosity_object.priority_class)
+    subject_kind = _subject_kind(curiosity_object.subject_kind)
+    age_hours = (
+        None
+        if curiosity_object.created_at is None
+        else max(0.0, (now.timestamp() - float(curiosity_object.created_at)) / 3600.0)
+    )
+
+    if priority == "owner_bond":
+        if curiosity_object.extraction_shape_blocked or curiosity_object.third_party_blocked:
+            return MeaningfulExchangeEligibility.NOT_ELIGIBLE_LOW_CONFIDENCE
+        count = _count_owner_bond_meaningful_events(
+            subjective_duration=subjective_duration,
+            bond_id=curiosity_object.bond_id,
+            guard=guard,
+            now_utc=now,
+        )
+        cap = max(1, int(guard.owner_bond_meaningful_daily_cap))
+        if count >= cap:
+            if diagnostic_sink is not None:
+                diagnostic_sink(
+                    {
+                        "event_type": "MEANINGFUL_EXCHANGE_CLASSIFIED",
+                        "reason": "owner_bond_saturation",
+                        "bond_digest": _digest(curiosity_object.bond_id),
+                        "eligibility": (
+                            MeaningfulExchangeEligibility
+                            .NOT_ELIGIBLE_OWNER_BOND_ROUTINE
+                            .value
+                        ),
+                    }
+                )
+            return MeaningfulExchangeEligibility.NOT_ELIGIBLE_OWNER_BOND_ROUTINE
+        return MeaningfulExchangeEligibility.ELIGIBLE_OWNER_BOND
+    if curiosity_object.can_resolve_interiorly:
+        return MeaningfulExchangeEligibility.NOT_ELIGIBLE_CAN_RESOLVE_INTERIORLY
+    if priority == "self_growth" and subject_kind is SubjectKind.SELF_MODEL:
+        return MeaningfulExchangeEligibility.ELIGIBLE_SELF_MODEL
+    if (
+        age_hours is not None
+        and age_hours >= 7 * 24
+        and float(curiosity_object.salience) > 0.4
+        and not curiosity_object.fixation_released
+    ):
+        return MeaningfulExchangeEligibility.ELIGIBLE_LONG_CARRIED_RESOLUTION
+    if priority in {"world_knowledge", "aesthetic_play"}:
+        if (age_hours is None or age_hours < 24) and curiosity_object.advance_count <= 1:
+            return MeaningfulExchangeEligibility.NOT_ELIGIBLE_ROUTINE_FACT
+        return MeaningfulExchangeEligibility.NOT_ELIGIBLE_LOW_CONFIDENCE
+    return MeaningfulExchangeEligibility.NOT_ELIGIBLE_LOW_CONFIDENCE
+
+
+def _consumed_daily_delta(
+    *,
+    temperament: object,
+    bond_id: str,
+    parameter: str,
+    date_utc: str,
+) -> float:
+    consumed = 0.0
+    for event in temperament.history(parameter, limit=500):
+        if event.get("source") != DRIVE_RESOLUTION_TEMPERAMENT_SOURCE:
+            continue
+        evidence_raw = event.get("evidence")
+        if isinstance(evidence_raw, Mapping):
+            evidence = evidence_raw
+        else:
+            try:
+                evidence = json.loads(str(event.get("evidence_json") or "{}"))
+            except json.JSONDecodeError:
+                continue
+        if evidence.get("bond_id") != bond_id:
+            continue
+        if evidence.get("budget_date_utc") != date_utc:
+            continue
+        consumed += abs(float(evidence.get("delta_applied") or 0.0))
+    return consumed
+
+
+def _emit_temperament_write_clamped(
+    *,
+    diagnostic_sink: Callable[[dict], None] | None,
+    bond_id: str,
+    parameter: str,
+    proposed_delta: float,
+    delta_applied: float,
+    first_observation_suppressed: bool,
+) -> None:
+    if diagnostic_sink is None:
+        return
+    diagnostic_sink(
+        {
+            "event_type": "TEMPERAMENT_WRITE_CLAMPED",
+            "bond_digest": _digest(bond_id),
+            "parameter": parameter,
+            "proposed_delta": proposed_delta,
+            "delta_applied": delta_applied,
+            "first_observation_suppressed": first_observation_suppressed,
+        }
+    )
+
+
+def _producer_event_id(
+    *,
+    curiosity_object: CuriosityObject,
+    resolution_marker_type: str,
+    resolution_marker_utc: datetime,
+) -> str:
+    return (
+        f"wondering:{curiosity_object.wondering_id}:"
+        f"priority:{curiosity_object.priority_class}:"
+        f"resolution:{resolution_marker_type}:{int(resolution_marker_utc.timestamp())}"
+    )
+
+
+def write_curiosity_resolution_seam_call(
+    *,
+    curiosity_object: CuriosityObject,
+    temperament: object,
+    subjective_duration: object,
+    resolution_marker_type: str,
+    resolution_marker_utc: datetime | float | int | None,
+    guard: OwnerBondSaturationGuard | None = None,
+    daily_delta_budget: float = 2.0,
+    salience_event_kind: str = "meaningful_exchange",
+    temperament_parameter: str = "curiosity",
+    diagnostic_sink: Callable[[dict], None] | None = None,
+) -> CuriosityResolutionCeremonyResult:
+    if salience_event_kind != "meaningful_exchange":
+        raise CuriosityAuthorityRefused(
+            "drive-driven curiosity may only write meaningful_exchange salience events"
+        )
+    if temperament_parameter != "curiosity":
+        raise CuriosityAuthorityRefused(
+            "drive-driven curiosity may only write the curiosity temperament parameter"
+        )
+
+    marker_utc = _coerce_datetime(resolution_marker_utc)
+    producer_event_id = _producer_event_id(
+        curiosity_object=curiosity_object,
+        resolution_marker_type=resolution_marker_type,
+        resolution_marker_utc=marker_utc,
+    )
+    eligibility = classify_meaningful_exchange(
+        curiosity_object=curiosity_object,
+        subjective_duration=subjective_duration,
+        guard=guard,
+        now_utc=marker_utc,
+        diagnostic_sink=diagnostic_sink,
+    )
+    if not eligibility.value.startswith("eligible_"):
+        return CuriosityResolutionCeremonyResult(
+            eligibility=eligibility,
+            temperament_event_id=None,
+            salience_event_id=None,
+            producer_event_id=producer_event_id,
+            delta_intent=0.0,
+            delta_applied=0.0,
+        )
+
+    before_snapshot = temperament.current()
+    current_value = temperament.current_value("curiosity")
+    prior = (
+        NEUTRAL_TEMPERAMENT_VALUE_FOR_FIRST_OBSERVATION
+        if current_value is None
+        else float(current_value)
+    )
+    delta_intent = (
+        BASE_RESOLUTION_DELTA
+        * _priority_class_weight(curiosity_object.priority_class)
+        * float(curiosity_object.salience)
+        * _marker_confidence_weight(resolution_marker_type)
+    )
+    budget_date = marker_utc.date().isoformat()
+    consumed = _consumed_daily_delta(
+        temperament=temperament,
+        bond_id=curiosity_object.bond_id,
+        parameter="curiosity",
+        date_utc=budget_date,
+    )
+    remaining = max(0.0, float(daily_delta_budget) - consumed)
+    delta_applied = min(delta_intent, remaining)
+    if delta_applied < delta_intent:
+        _emit_temperament_write_clamped(
+            diagnostic_sink=diagnostic_sink,
+            bond_id=curiosity_object.bond_id,
+            parameter="curiosity",
+            proposed_delta=delta_intent,
+            delta_applied=delta_applied,
+            first_observation_suppressed=current_value is None and delta_applied == 0.0,
+        )
+    if current_value is None and delta_applied == 0.0:
+        return CuriosityResolutionCeremonyResult(
+            eligibility=eligibility,
+            temperament_event_id=None,
+            salience_event_id=None,
+            producer_event_id=producer_event_id,
+            delta_intent=delta_intent,
+            delta_applied=delta_applied,
+        )
+
+    new_value = _clamp(
+        prior + delta_applied,
+        TEMPERAMENT_VALUE_MIN,
+        TEMPERAMENT_VALUE_MAX,
+    )
+    temperament_event_id = temperament.record_event(
+        parameter="curiosity",
+        value=new_value,
+        source="drive_driven_curiosity_resolution",
+        reason=f"resolution:{resolution_marker_type}",
+        evidence={
+            "object_id_digest": _digest(curiosity_object.wondering_id),
+            "bond_id": curiosity_object.bond_id,
+            "priority_class": curiosity_object.priority_class,
+            "marker_type": resolution_marker_type,
+            "delta_intent": delta_intent,
+            "delta_applied": delta_applied,
+            "budget_date_utc": budget_date,
+        },
+    )
+    after_snapshot = temperament.current()
+    salience_event_id = subjective_duration.record_salience_event(
+        salience_event_kind="meaningful_exchange",
+        producer_ref=DRIVE_DRIVEN_CURIOSITY_PRODUCER_REF,
+        bond_id=curiosity_object.bond_id,
+        producer_event_id=producer_event_id,
+        producer_temperament_before=before_snapshot,
+        producer_temperament_after=after_snapshot,
+        now_utc=marker_utc,
+    )
+    return CuriosityResolutionCeremonyResult(
+        eligibility=eligibility,
+        temperament_event_id=temperament_event_id,
+        salience_event_id=salience_event_id,
+        producer_event_id=producer_event_id,
+        delta_intent=delta_intent,
+        delta_applied=delta_applied,
+    )
 
 
 def resolve_curiosity_object(
