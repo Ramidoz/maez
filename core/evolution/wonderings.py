@@ -164,6 +164,7 @@ class Wonderings:
     @contextmanager
     def _conn(self):
         con = sqlite3.connect(str(self.db_path))
+        con.execute("PRAGMA foreign_keys = ON")
         con.row_factory = sqlite3.Row
         try:
             yield con
@@ -242,6 +243,21 @@ class Wonderings:
                 except sqlite3.OperationalError as exc:
                     if "duplicate column" not in str(exc).lower():
                         raise
+            if "bond_id" not in existing_cols:
+                try:
+                    c.execute(
+                        "ALTER TABLE wonderings "
+                        "ADD COLUMN bond_id TEXT NOT NULL DEFAULT '_LEGACY'"
+                    )
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
+            if "resolved_at" not in existing_cols:
+                try:
+                    c.execute("ALTER TABLE wonderings ADD COLUMN resolved_at REAL")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
             c.execute(
                 """
                 CREATE TABLE IF NOT EXISTS wondering_pursuits (
@@ -252,6 +268,29 @@ class Wonderings:
                     decision          TEXT NOT NULL,
                     score             REAL,
                     components_json   TEXT
+                )
+                """
+            )
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS wondering_drive_metadata (
+                    wondering_id            INTEGER PRIMARY KEY
+                                                REFERENCES wonderings(id),
+                    bond_id                 TEXT NOT NULL,
+                    encounter_source        TEXT NOT NULL,
+                    encounter_ref_digest    TEXT NOT NULL,
+                    priority_class          TEXT NOT NULL,
+                    salience                REAL NOT NULL,
+                    autonomy_lane_hints     TEXT NOT NULL,
+                    subject_kind            TEXT NOT NULL,
+                    third_party_consent_allows_external_research
+                                            INTEGER NOT NULL DEFAULT 0,
+                    produced_via_subjective_duration_depth
+                                            INTEGER NOT NULL DEFAULT 0,
+                    resolution_marker_type  TEXT,
+                    resolution_marker_utc   REAL,
+                    transition_reason       TEXT,
+                    created_at              REAL NOT NULL
                 )
                 """
             )
@@ -267,17 +306,23 @@ class Wonderings:
                 "CREATE INDEX IF NOT EXISTS ix_pursuits_wid "
                 "ON wondering_pursuits (wondering_id, decided_at)"
             )
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_wondering_drive_metadata_bond "
+                "ON wondering_drive_metadata (bond_id)"
+            )
 
     # ── CRUD ──────────────────────────────────────────────────────────
-    def add(self, question: str, source: str = "manual") -> int:
+    def add(self, question: str, source: str = "manual", *, bond_id: str = "_LEGACY") -> int:
         question = (question or "").strip()
         if not question:
             raise ValueError("question cannot be empty")
+        if not isinstance(bond_id, str) or not bond_id:
+            raise ValueError("bond_id must be a non-empty string")
         with self._lock, self._conn() as c:
             cur = c.execute(
-                "INSERT INTO wonderings (created_at, question, source) "
-                "VALUES (?, ?, ?)",
-                (time.time(), question, source),
+                "INSERT INTO wonderings (created_at, question, source, bond_id) "
+                "VALUES (?, ?, ?, ?)",
+                (time.time(), question, source, bond_id),
             )
             wid = cur.lastrowid
             logger.info("wondering added #%d (source=%s): %s",
@@ -604,13 +649,15 @@ class Wonderings:
             logger.info("wondering #%d unblocked from card, learning "
                         "evidence_tied=%s", wondering_id, evidence_tied)
 
-    def resolve(self, wondering_id: int, conclusion: str):
+    def resolve(self, wondering_id: int, conclusion: str, *, resolved_at: float | None = None):
+        if resolved_at is None:
+            resolved_at = time.time()
         with self._lock, self._conn() as c:
             c.execute(
                 "UPDATE wonderings "
-                "SET status = 'resolved', conclusion = ? "
+                "SET status = 'resolved', conclusion = ?, resolved_at = ? "
                 "WHERE id = ?",
-                (conclusion.strip(), wondering_id),
+                (conclusion.strip(), resolved_at, wondering_id),
             )
             logger.info("wondering #%d resolved: %s",
                         wondering_id, conclusion[:80])

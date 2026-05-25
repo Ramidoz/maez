@@ -94,6 +94,7 @@ class ProducerRef(Enum):
     """Reviewed producer identities allowed to submit producer snapshots."""
 
     MANUAL_TEST_PRODUCER = "manual_test_producer"
+    DRIVE_DRIVEN_CURIOSITY = "drive_driven_curiosity"
 
 
 @dataclass(frozen=True)
