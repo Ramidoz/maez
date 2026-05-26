@@ -14,6 +14,7 @@ import sys
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -170,6 +171,199 @@ class FormatForPromptBudgetTests(unittest.TestCase):
         # model still treats the block as past-tense scoped.
         self.assertIn("PAST OBSERVATIONS", out)
         self.assertIn("END PAST OBSERVATIONS", out)
+
+
+class RedditSourceAwareRecallTests(unittest.TestCase):
+    """Reply-path recall should open Maez's own Reddit notebook when
+    the owner asks a Reddit-shaped question.
+
+    This is retrieval ranking, not substrate writing: Reddit rows are
+    already persisted with source=reddit/r/<sub>. The conversational
+    path must prefer recent source-matched rows when the query names
+    Reddit / a subreddit, without making Reddit globally dominate
+    generic LLM questions.
+    """
+
+    class _FakeCore:
+        def count(self):
+            return 0
+
+    class _FakeDaily:
+        def count(self):
+            return 0
+
+    class _FakeRaw:
+        def __init__(self, rows, get_rows=None):
+            self._rows = rows
+            self._get_rows = get_rows or rows
+
+        def count(self):
+            return max(len(self._rows), len(self._get_rows))
+
+        def query(self, query_texts, n_results):
+            rows = self._rows[:n_results]
+            return {
+                "ids": [[r["id"] for r in rows]],
+                "documents": [[r["content"] for r in rows]],
+                "metadatas": [[r["metadata"] for r in rows]],
+                "distances": [[r["distance"] for r in rows]],
+            }
+
+        def get(self, where=None, include=None, limit=None):
+            rows = self._get_rows
+            if where:
+                rows = [
+                    r for r in rows
+                    if all(r["metadata"].get(k) == v for k, v in where.items())
+                ]
+            if limit is not None:
+                rows = rows[:limit]
+            return {
+                "ids": [r["id"] for r in rows],
+                "documents": [r["content"] for r in rows],
+                "metadatas": [r["metadata"] for r in rows],
+            }
+
+    def _manager_with_raw(self, rows, get_rows=None):
+        mm = _mm()
+        mm.core = self._FakeCore()
+        mm.daily = self._FakeDaily()
+        mm.raw = self._FakeRaw(rows, get_rows=get_rows)
+        return mm
+
+    def test_reddit_specific_query_prefers_recent_matching_subreddit_row(self):
+        now = datetime.now(timezone.utc)
+        mm = self._manager_with_raw([
+            {
+                "id": "generic-close",
+                "content": "A generic web note about local LLM model releases.",
+                "metadata": {"timestamp": now.isoformat(), "type": "reasoning"},
+                "distance": 0.10,
+            },
+            {
+                "id": "reddit-local",
+                "content": "[REDDIT r/LocalLLaMA post abc] Qwen local inference discussion",
+                "metadata": {
+                    "timestamp": now.isoformat(),
+                    "type": "reddit_post",
+                    "source": "reddit/r/LocalLLaMA",
+                    "reddit_post_id": "abc",
+                },
+                "distance": 0.45,
+            },
+        ])
+
+        with mock.patch("memory.mmr.mmr_rerank", side_effect=lambda rows, k, lambda_: rows[:k]):
+            recalled = mm.recall_for_telegram("what is happening in local LLMs on Reddit?")
+
+        self.assertEqual(recalled["raw"][0]["id"], "reddit-local")
+        self.assertEqual(
+            recalled["raw"][0]["metadata"].get("source"),
+            "reddit/r/LocalLLaMA",
+        )
+
+    def test_generic_llm_query_does_not_make_reddit_win_automatically(self):
+        now = datetime.now(timezone.utc)
+        mm = self._manager_with_raw([
+            {
+                "id": "generic-close",
+                "content": "A generic technical note about local LLM model releases.",
+                "metadata": {"timestamp": now.isoformat(), "type": "reasoning"},
+                "distance": 0.10,
+            },
+            {
+                "id": "reddit-local",
+                "content": "[REDDIT r/LocalLLaMA post abc] Qwen local inference discussion",
+                "metadata": {
+                    "timestamp": now.isoformat(),
+                    "type": "reddit_post",
+                    "source": "reddit/r/LocalLLaMA",
+                    "reddit_post_id": "abc",
+                },
+                "distance": 0.45,
+            },
+        ])
+
+        with mock.patch("memory.mmr.mmr_rerank", side_effect=lambda rows, k, lambda_: rows[:k]):
+            recalled = mm.recall_for_telegram("what is new in local LLMs?")
+
+        self.assertEqual(recalled["raw"][0]["id"], "generic-close")
+
+    def test_reddit_specific_query_supplements_recent_source_rows_missed_by_vector_search(self):
+        now = datetime.now(timezone.utc)
+        mm = self._manager_with_raw(
+            rows=[
+                {
+                    "id": "generic-close",
+                    "content": "A generic web note about local LLM model releases.",
+                    "metadata": {"timestamp": now.isoformat(), "type": "reasoning"},
+                    "distance": 0.10,
+                },
+            ],
+            get_rows=[
+                {
+                    "id": "reddit-local",
+                    "content": "[REDDIT r/LocalLLaMA post abc] Qwen local inference discussion",
+                    "metadata": {
+                        "timestamp": now.isoformat(),
+                        "type": "reddit_post",
+                        "source": "reddit/r/LocalLLaMA",
+                        "reddit_post_id": "abc",
+                    },
+                    "distance": 0.45,
+                },
+            ],
+        )
+
+        with mock.patch("memory.mmr.mmr_rerank", side_effect=lambda rows, k, lambda_: rows[:k]):
+            recalled = mm.recall_for_telegram("what is happening in local LLMs on Reddit?")
+
+        self.assertEqual(recalled["raw"][0]["id"], "reddit-local")
+
+    def test_reddit_source_supplement_sorts_before_truncating_old_chroma_rows(self):
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(days=14)
+        old_rows = [
+            {
+                "id": f"old-{i}",
+                "content": f"[REDDIT r/LocalLLaMA post old{i}] old discussion",
+                "metadata": {
+                    "timestamp": old.isoformat(),
+                    "type": "reddit_post",
+                    "source": "reddit/r/LocalLLaMA",
+                    "reddit_post_id": f"old{i}",
+                },
+                "distance": 0.20,
+            }
+            for i in range(101)
+        ]
+        fresh = {
+            "id": "fresh-reddit-local",
+            "content": "[REDDIT r/LocalLLaMA post fresh] fresh local inference discussion",
+            "metadata": {
+                "timestamp": now.isoformat(),
+                "type": "reddit_post",
+                "source": "reddit/r/LocalLLaMA",
+                "reddit_post_id": "fresh",
+            },
+            "distance": 0.45,
+        }
+        mm = self._manager_with_raw(
+            rows=[
+                {
+                    "id": "generic-close",
+                    "content": "A generic web note about local LLM model releases.",
+                    "metadata": {"timestamp": now.isoformat(), "type": "reasoning"},
+                    "distance": 0.10,
+                },
+            ],
+            get_rows=old_rows + [fresh],
+        )
+
+        with mock.patch("memory.mmr.mmr_rerank", side_effect=lambda rows, k, lambda_: rows[:k]):
+            recalled = mm.recall_for_telegram("what is happening in local LLMs on Reddit?")
+
+        self.assertEqual(recalled["raw"][0]["id"], "fresh-reddit-local")
 
 
 class GetRecentDailyTests(unittest.TestCase):

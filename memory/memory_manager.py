@@ -11,6 +11,7 @@ Tier 3: Core Memories   — Permanent long-term observations, always in context.
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -466,6 +467,70 @@ def _age_hours_from_iso(raw_ts, now_s: float) -> float:
         return max(0.0, delta / 3600.0)
     except (ValueError, TypeError, OverflowError):
         return 0.0
+
+
+_REDDIT_SOURCE_BOOST_MAX_AGE_HOURS = 24.0
+
+
+def _reddit_source_distance_factor(query: str, mem: dict, now_s: float) -> float:
+    """Return a distance multiplier for fresh Reddit rows when the
+    owner asks a Reddit-shaped question.
+
+    Lower distance ranks higher. This is deliberately narrow: generic
+    LLM questions should not make Reddit dominate; explicit Reddit /
+    subreddit questions should open the source-tagged notebook Maez
+    already has instead of letting generic semantic neighbors win.
+    """
+    q = (query or "").lower()
+    if not ("reddit" in q or "subreddit" in q or "r/" in q):
+        return 1.0
+
+    meta = mem.get("metadata") or {}
+    source = str(meta.get("source") or "").lower()
+    if not source.startswith("reddit/r/"):
+        return 1.0
+
+    age_h = _age_hours_from_iso(meta.get("timestamp", ""), now_s)
+    if age_h > _REDDIT_SOURCE_BOOST_MAX_AGE_HOURS:
+        return 1.0
+
+    explicit = re.search(r"\br/([a-z0-9_]+)\b", q)
+    if explicit:
+        return 0.18 if source == f"reddit/r/{explicit.group(1)}" else 1.0
+
+    asks_local_llm = (
+        "localllama" in q
+        or "local llama" in q
+        or "local llm" in q
+        or "local llms" in q
+    )
+    if asks_local_llm:
+        return 0.18 if source == "reddit/r/localllama" else 1.0
+
+    return 0.35
+
+
+def _reddit_source_where_clauses(query: str) -> list[dict]:
+    q = (query or "").lower()
+    if not ("reddit" in q or "subreddit" in q or "r/" in q):
+        return []
+
+    explicit = re.search(r"\br/([a-z0-9_]+)\b", q)
+    if explicit:
+        sub = explicit.group(1)
+        source = "reddit/r/LocalLLaMA" if sub == "localllama" else f"reddit/r/{sub}"
+        return [{"source": source}]
+
+    asks_local_llm = (
+        "localllama" in q
+        or "local llama" in q
+        or "local llm" in q
+        or "local llms" in q
+    )
+    if asks_local_llm:
+        return [{"source": "reddit/r/LocalLLaMA"}]
+
+    return [{"type": "reddit_post"}]
 
 
 def _humanize_age(raw_ts, now: datetime) -> str:
@@ -1232,6 +1297,80 @@ class MemoryManager:
 
         return memories
 
+    def _recent_reddit_source_rows(
+        self,
+        collection,
+        query: str,
+        *,
+        limit: int = 5,
+    ) -> list[dict]:
+        """Fetch fresh Reddit rows by metadata for source-shaped
+        questions.
+
+        Vector search can miss exact source rows even when the owner is
+        explicitly asking about that source. This supplement is narrow:
+        only Reddit-shaped queries trigger it, rows must be recent, and
+        normal integrity exclusions still apply.
+        """
+        clauses = _reddit_source_where_clauses(query)
+        if not clauses or collection.count() == 0:
+            return []
+
+        now_s = _now_seconds()
+        rows: list[dict] = []
+        seen: set[str] = set()
+        for where in clauses:
+            try:
+                got = collection.get(
+                    where=where,
+                    include=["documents", "metadatas"],
+                )
+            except Exception as exc:
+                logger.debug("reddit source supplement skipped: %s", exc)
+                continue
+
+            for i, row_id in enumerate(got.get("ids") or []):
+                if row_id in seen:
+                    continue
+                meta = (got.get("metadatas") or [{}])[i] or {}
+                if meta.get("integrity") in self._EXCLUDED_INTEGRITY:
+                    continue
+                age_h = _age_hours_from_iso(meta.get("timestamp", ""), now_s)
+                if age_h > _REDDIT_SOURCE_BOOST_MAX_AGE_HOURS:
+                    continue
+                docs = got.get("documents") or []
+                seen.add(row_id)
+                rows.append({
+                    "id": row_id,
+                    "content": docs[i] if i < len(docs) else "",
+                    "metadata": meta,
+                    "distance": 0.05,
+                })
+
+        rows.sort(
+            key=lambda r: str((r.get("metadata") or {}).get("timestamp") or ""),
+            reverse=True,
+        )
+        return rows[:limit]
+
+    def _merge_recall_candidates(
+        self,
+        semantic_rows: list[dict],
+        supplement_rows: list[dict],
+    ) -> list[dict]:
+        if not supplement_rows:
+            return semantic_rows
+        merged: list[dict] = []
+        seen: set[str] = set()
+        for row in supplement_rows + semantic_rows:
+            row_id = row.get("id")
+            if row_id in seen:
+                continue
+            if row_id:
+                seen.add(row_id)
+            merged.append(row)
+        return merged
+
     def tag_integrity(
         self,
         ids: list[str],
@@ -1294,6 +1433,7 @@ class MemoryManager:
         except ImportError:
             get_fixation_penalty = lambda t: 1.0
             primary_topic = lambda t: 'unknown'
+        now_s = _now_seconds()
 
         for mem in results:
             content_lower = mem.get("content", "").lower()
@@ -1302,6 +1442,8 @@ class MemoryManager:
             # Boost: multiply distance by 0.7 if content matches wing keywords
             if any(kw in content_lower for kw in wing_keywords):
                 dist *= 0.7
+
+            dist *= _reddit_source_distance_factor(query, mem, now_s)
 
             # Anti-fixation: penalize memories about recently over-represented topics
             mem_topic = mem.get("metadata", {}).get("cog_topic") or primary_topic(content_lower)
@@ -1330,6 +1472,10 @@ class MemoryManager:
         core = self.get_all_core()
         daily = self._query_collection(self.daily, context_query, n=3)
         raw = self._query_collection(self.raw, context_query, n=10)
+        raw = self._merge_recall_candidates(
+            raw,
+            self._recent_reddit_source_rows(self.raw, context_query),
+        )
         raw = self._topic_rerank(context_query, raw, n=5)
 
         return {"core": core, "daily": daily, "raw": raw}
@@ -1339,6 +1485,10 @@ class MemoryManager:
         core = self.get_all_core()
         daily = self._query_collection(self.daily, query, n=3)
         raw = self._query_collection(self.raw, query, n=20)
+        raw = self._merge_recall_candidates(
+            raw,
+            self._recent_reddit_source_rows(self.raw, query),
+        )
         raw = self._topic_rerank(query, raw, n=10)
 
         return {"core": core, "daily": daily, "raw": raw}
