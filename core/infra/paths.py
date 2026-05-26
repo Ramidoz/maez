@@ -155,6 +155,11 @@ def maintenance_proposals_db() -> Path:
     return memory_dir() / "maintenance_proposals.db"
 
 
+def sandbox_witnesses_db() -> Path:
+    """Sqlite DB for append-only maintenance sandbox witnesses."""
+    return memory_dir() / "sandbox_witnesses.db"
+
+
 def owner_outreach_db() -> Path:
     """Sqlite DB for owner-interrupting outreach dispatch records."""
     return memory_dir() / "owner_outreach.db"
