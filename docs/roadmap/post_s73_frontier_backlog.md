@@ -668,6 +668,28 @@ verification via
 `sqlite3 memory/db/raw/chroma.sqlite3 "SELECT COUNT(*) FROM embedding_metadata WHERE key='type' AND string_value='reddit_post';"`
 returning 2462.
 
+##### Finding 19 v0 archetype set (added 2026-05-26)
+
+After Finding 19's root-cause trace clarified the dispatcher's
+substrate-vs-tool layer, a v0 archetype set was pre-generated to seed
+the embedding-proximity layer once the dispatcher slice runs. Eleven
+intent classes (A–K) spanning Layer 0 substrate-vs-tool, Layer 1
+substrate-axis, and Layer 2 repair/follow-up modifiers; 103 archetypes
+total; 67% empirically anchored to witnessed runtime catches or
+10-agent gap-hunt findings; 33% pure model-proposed extrapolations
+tagged as such.
+
+The archetype set is stored as durable evidence at
+[`dispatcher-archetypes-v0-2026-05-26.md`](dispatcher-archetypes-v0-2026-05-26.md).
+It is evidence, not canon — the dispatcher brief decides which
+archetypes survive the full ladder. Validation discipline during the
+observation window: runtime catches that map to a proposed archetype
+confirm it; runtime catches that don't map flag missing archetypes.
+
+Per Locke F3 from the sandbox-witness council pass-1, the
+closed-vocabulary growth path remains *Maez-extensible via the
+maintenance-proposal substrate*. The archetype set is no exception.
+
 #### Dispatcher v1 architecture option set
 
 - **State interception:** generalize the Reddit precedent from `5c6be72`.
