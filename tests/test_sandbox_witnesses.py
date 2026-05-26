@@ -81,3 +81,46 @@ class SandboxWitnessVocabularyTests(unittest.TestCase):
             )
             self.assertEqual(len(store.family_for_proposal("firstborn", "proposal-1")), 2)
             self.assertEqual(stored_second.witness_status, WitnessStatus.WITNESSED)
+
+    def test_store_persists_staleness_anchors_for_generation(self):
+        from core.policies.sandbox_witnesses import (
+            SandboxWitnessKind,
+            SandboxWitnessRecord,
+            SandboxWitnesses,
+            StalenessAnchor,
+            StalenessAnchorKind,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SandboxWitnesses(Path(tmp) / "sandbox_witnesses.db")
+            stored = store.append(
+                SandboxWitnessRecord.new(
+                    bond_id="firstborn",
+                    proposal_id="proposal-1",
+                    witness_kind=SandboxWitnessKind.WORKTREE_RED_TEST,
+                    observed_effect_digest="hmac-sha256:" + "a" * 64,
+                    predicted_effect_digest="hmac-sha256:" + "b" * 64,
+                    artifact_digest="hmac-sha256:" + "c" * 64,
+                    captured_utc=datetime(2026, 5, 26, 12, 0, tzinfo=UTC),
+                    staleness_anchors=(
+                        StalenessAnchor(
+                            anchor_kind=StalenessAnchorKind.COMMIT_HASH,
+                            anchor_name="worktree",
+                            anchor_value="abc123",
+                        ),
+                        StalenessAnchor(
+                            anchor_kind=StalenessAnchorKind.DB_CURSOR,
+                            anchor_name="raw_memory:reddit_post_id",
+                            anchor_value="2373",
+                        ),
+                    ),
+                )
+            )
+
+            loaded = store.current_for_proposal("firstborn", "proposal-1")
+
+            self.assertEqual(loaded, stored)
+            self.assertEqual(
+                [anchor.anchor_name for anchor in loaded.staleness_anchors],
+                ["worktree", "raw_memory:reddit_post_id"],
+            )

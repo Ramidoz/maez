@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import uuid
@@ -52,6 +53,21 @@ class WitnessRefused(ValueError):
 
 
 @dataclass(frozen=True)
+class StalenessAnchor:
+    anchor_kind: StalenessAnchorKind
+    anchor_name: str
+    anchor_value: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.anchor_kind, StalenessAnchorKind):
+            raise ValueError("anchor_kind must be StalenessAnchorKind")
+        if not _is_anchor_text(self.anchor_name):
+            raise ValueError("anchor_name is required")
+        if not self.anchor_value:
+            raise ValueError("anchor_value is required")
+
+
+@dataclass(frozen=True)
 class SandboxWitnessRecord:
     witness_id: str
     generation: int
@@ -63,6 +79,7 @@ class SandboxWitnessRecord:
     predicted_effect_digest: str
     artifact_digest: str
     captured_utc: datetime
+    staleness_anchors: tuple[StalenessAnchor, ...] = ()
     refusal_reason: WitnessRefusalReason | None = None
 
     @classmethod
@@ -76,6 +93,7 @@ class SandboxWitnessRecord:
         predicted_effect_digest: str,
         artifact_digest: str,
         captured_utc: datetime,
+        staleness_anchors: tuple[StalenessAnchor, ...] = (),
     ) -> "SandboxWitnessRecord":
         return cls(
             witness_id="",
@@ -88,6 +106,7 @@ class SandboxWitnessRecord:
             predicted_effect_digest=predicted_effect_digest,
             artifact_digest=artifact_digest,
             captured_utc=captured_utc,
+            staleness_anchors=staleness_anchors,
             refusal_reason=None,
         )
 
@@ -116,6 +135,8 @@ class SandboxWitnessRecord:
         ):
             if not _is_digest(getattr(self, field_name)):
                 raise ValueError(f"{field_name} must be hmac-sha256")
+        for anchor in self.staleness_anchors:
+            anchor.__post_init__()
         _coerce_utc(self.captured_utc, field_name="captured_utc")
 
 
@@ -151,12 +172,24 @@ class SandboxWitnesses:
                     predicted_effect_digest TEXT NOT NULL,
                     artifact_digest TEXT NOT NULL,
                     captured_utc TEXT NOT NULL,
+                    staleness_anchors_json TEXT NOT NULL DEFAULT '[]',
                     refusal_reason TEXT,
                     created_utc TEXT NOT NULL,
                     UNIQUE (bond_id, proposal_id, generation)
                 )
                 """
             )
+            columns = {
+                row[1]
+                for row in con.execute("PRAGMA table_info(sandbox_witnesses)").fetchall()
+            }
+            if "staleness_anchors_json" not in columns:
+                con.execute(
+                    """
+                    ALTER TABLE sandbox_witnesses
+                    ADD COLUMN staleness_anchors_json TEXT NOT NULL DEFAULT '[]'
+                    """
+                )
             con.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_sandbox_witnesses_family
@@ -195,10 +228,11 @@ class SandboxWitnesses:
                     predicted_effect_digest,
                     artifact_digest,
                     captured_utc,
+                    staleness_anchors_json,
                     refusal_reason,
                     created_utc
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 _record_values(stored),
             )
@@ -260,6 +294,7 @@ def _record_values(record: SandboxWitnessRecord) -> tuple:
         record.predicted_effect_digest,
         record.artifact_digest,
         record.captured_utc.isoformat(),
+        _anchors_to_json(record.staleness_anchors),
         record.refusal_reason.value if record.refusal_reason else None,
         datetime.now(UTC).isoformat(),
     )
@@ -277,9 +312,40 @@ def _row_to_record(row: sqlite3.Row) -> SandboxWitnessRecord:
         predicted_effect_digest=str(row["predicted_effect_digest"]),
         artifact_digest=str(row["artifact_digest"]),
         captured_utc=datetime.fromisoformat(str(row["captured_utc"])),
+        staleness_anchors=_anchors_from_json(str(row["staleness_anchors_json"])),
         refusal_reason=WitnessRefusalReason(str(row["refusal_reason"]))
         if row["refusal_reason"]
         else None,
+    )
+
+
+def _anchors_to_json(anchors: tuple[StalenessAnchor, ...]) -> str:
+    return json.dumps(
+        [
+            {
+                "anchor_kind": anchor.anchor_kind.value,
+                "anchor_name": anchor.anchor_name,
+                "anchor_value": anchor.anchor_value,
+            }
+            for anchor in sorted(
+                anchors,
+                key=lambda item: (item.anchor_kind.value, item.anchor_name, item.anchor_value),
+            )
+        ],
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _anchors_from_json(raw: str) -> tuple[StalenessAnchor, ...]:
+    data = json.loads(raw or "[]")
+    return tuple(
+        StalenessAnchor(
+            anchor_kind=StalenessAnchorKind(str(item["anchor_kind"])),
+            anchor_name=str(item["anchor_name"]),
+            anchor_value=str(item["anchor_value"]),
+        )
+        for item in data
     )
 
 
@@ -294,6 +360,14 @@ def _is_digest(value: str) -> bool:
 def _is_slug(value: str) -> bool:
     return 1 <= len(value) <= 96 and all(
         char in "abcdefghijklmnopqrstuvwxyz0123456789-_" for char in value
+    )
+
+
+def _is_anchor_text(value: str) -> bool:
+    return 1 <= len(value) <= 256 and all(
+        char
+        in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_:./"
+        for char in value
     )
 
 
