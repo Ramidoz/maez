@@ -705,6 +705,7 @@ def write_curiosity_resolution_seam_call(
     salience_event_kind: str = "meaningful_exchange",
     temperament_parameter: str = "curiosity",
     diagnostic_sink: Callable[[dict], None] | None = None,
+    is_canary: bool = False,
 ) -> CuriosityResolutionCeremonyResult:
     if salience_event_kind != "meaningful_exchange":
         raise CuriosityAuthorityRefused(
@@ -808,6 +809,7 @@ def write_curiosity_resolution_seam_call(
         producer_temperament_before=before_snapshot,
         producer_temperament_after=after_snapshot,
         now_utc=marker_utc,
+        is_canary=is_canary,
     )
     return CuriosityResolutionCeremonyResult(
         eligibility=eligibility,

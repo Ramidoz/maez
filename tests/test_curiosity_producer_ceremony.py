@@ -158,6 +158,43 @@ class CuriosityProducerCeremonyTests(unittest.TestCase):
         self.assertGreater(record.meaningfulness_score, 0.0)
         self.assertGreater(record.temperament_delta_max, 0.0)
 
+    def test_live_path_canary_seam_row_does_not_pollute_aggregate_readers(self):
+        from core.evolution.drive_driven_curiosity import (
+            OwnerBondSaturationGuard,
+            write_curiosity_resolution_seam_call,
+        )
+
+        obj = self._curiosity_object(salience=1.0)
+        _, temperament, subjective = self._stores()
+        temperament.record_event(parameter="curiosity", value=5.0)
+        now = datetime(2026, 5, 25, 12, 0, tzinfo=UTC)
+        pre_residual = subjective._residual_resonance(now)
+        pre_count = subjective._recent_meaningful_event_count_capped(now)
+
+        result = write_curiosity_resolution_seam_call(
+            curiosity_object=obj,
+            temperament=temperament,
+            subjective_duration=subjective,
+            resolution_marker_type="explicit_owner_resolved",
+            resolution_marker_utc=now,
+            guard=OwnerBondSaturationGuard(owner_bond_meaningful_daily_cap=99),
+            is_canary=True,
+        )
+        record = subjective.lookup_meaningful_salience_event_record(
+            bond_id="firstborn",
+            producer_event_id=result.producer_event_id,
+        )
+        post_residual = subjective._residual_resonance(now + timedelta(seconds=1))
+        post_count = subjective._recent_meaningful_event_count_capped(
+            now + timedelta(seconds=1)
+        )
+
+        self.assertIsNotNone(record)
+        self.assertTrue(record.is_canary)
+        self.assertGreater(record.meaningfulness_score, 0.0)
+        self.assertEqual(post_residual, pre_residual)
+        self.assertEqual(post_count, pre_count)
+
     def test_curiosity_producer_refuses_other_salience_event_kinds(self):
         from core.evolution.drive_driven_curiosity import (
             CuriosityAuthorityRefused,
