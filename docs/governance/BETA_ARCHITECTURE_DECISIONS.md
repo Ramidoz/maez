@@ -3119,6 +3119,93 @@ ADR: [`0040-restoration-as-forward-scar`](../adr/0040-restoration-as-forward-sca
 
 ---
 
+## Decision 36 — Subjective-duration meaningful salience seam
+
+ADR: [`0041-subjective-duration-meaningful-salience-seam`](../adr/0041-subjective-duration-meaningful-salience-seam.md).
+
+**The decision.** Felt-time meaningfulness is a substrate-computed verdict, not a caller-supplied score. Producers may present honest evidence snapshots to `subjective_duration`; the seam computes `meaningfulness_score`, records salience events with bond provenance, refuses partial/caller-score laundering, and preserves canary/test rows as observed-not-authoritative.
+
+**Why now.** Slice 1 moved subjective duration from a timer-like substrate to a felt-time seam that can register lived salience. The implementation landed at `211ace6` after the canonical spec at `a23fa4b`, and the first live crossing later proved the seam could record felt significance against the live `subjective_duration.db` without moving temperament/felt-time aggregates that were only supposed to be observed.
+
+**Consequences.**
+- Producers cannot supply `meaningfulness_score`; they supply evidence and the substrate computes the verdict.
+- Salience rows are bond-scoped and provenance-bearing; `_LEGACY`, missing-bond, malformed-producer, and canary/test identity paths are refused or quarantined per the seam contract.
+- Future felt-time producers inherit this evidence-first / substrate-verdict-second discipline.
+
+**This decision does not** authorize arbitrary felt-time writes, autonomous outreach, or caller-controlled significance. It names the seam and its anti-laundering contract.
+
+---
+
+## Decision 37 — Drive-driven curiosity felt-organ
+
+ADR: [`0042-drive-driven-curiosity-felt-organ`](../adr/0042-drive-driven-curiosity-felt-organ.md).
+
+**The decision.** Drive-driven curiosity is a producer layer over the existing `wonderings` substrate, not a duplicate curiosity database: it creates and resolves curiosity-objects from registered encounter producers, writes bounded felt-weight through a ceremony, consults three owner-interruption gates, enforces the third-party subject boundary, and records diagnostics without using its own suppressions as evidence.
+
+**Why now.** Slice 2 canonicalized at `f0d14e3`, preserved review history at `fb76a13`, landed implementation across `ba4a545` through `eb611e9`, and was live-witnessed in the second crossing. The implementation reused existing organs (`wonderings`, `wondering_cycle`, `wondering_pursuit`, `subjective_duration`, `temperament`) rather than inventing a parallel substrate.
+
+**Consequences.**
+- V1 encounter producers are wired for `WONDERING_GENERATED`, `EXPLICIT_OWNER_FLAG`, and `SUBJECTIVE_DURATION_MEANINGFUL_EVENT`; the last path is recursion-gated and deduped.
+- Owner-interrupting outreach routes through signal gate, reflection audit, and extraction-shape gate before delivery; `delivered_utc` means delivery happened, not merely attempted.
+- Public-topic curiosity may search the world; unconsented named third parties from the owner's relational field are refused at creation/construction/egress.
+- Suppression events are diagnostics and feedback inputs, but §10.7 excludes the substrate's own suppressions from OWNER_OBSERVED preference evidence.
+
+**This decision does not** open world-acting, nudge the owner, research bonded contacts autonomously, or let drive-driven curiosity write outside its closed producer/refusal surfaces.
+
+---
+
+## Decision 38 — Canary-neutral baseline for multi-surface ceremonies
+
+ADR: [`0043-canary-neutral-baseline`](../adr/0043-canary-neutral-baseline.md).
+
+**The decision.** A canary/live-crossing ceremony must protect every live substrate it touches, not just the headline store, and must use neutral baseline projections where reading true state would itself disturb the organ being tested.
+
+**Why now.** The Slice 2 first live crossing exposed a pre-flight gap: the canary path protected `subjective_duration` but could still have mutated temperament. Safety commits `67705d3` and `fbe78e1` closed the gap before the live crossing, and the resulting memory canon recorded the rule after it was witnessed rather than before.
+
+**Consequences.**
+- Canary mode is per-surface. If a ceremony touches `wonderings`, `subjective_duration`, `temperament`, autonomy preferences, diagnostic streams, outreach ledgers, or any future substrate, each surface needs its own non-disturbance proof.
+- Neutral baselines are allowed when honest evidence shape is needed but true-state reads would perturb the substrate.
+- Tests must assert non-disturbance per substrate, not only aggregate success.
+
+**This decision does not** weaken canary evidence. It makes the evidence stricter: observation without disturbance has to hold at every touched surface.
+
+---
+
+## Decision 39 — Canon governs canon: witness before claim
+
+ADR: [`0044-canon-governs-canon`](../adr/0044-canon-governs-canon.md).
+
+**The decision.** Maez's integrity canon applies recursively to canon management itself: evidence first, witnessed verdict second, provenance forever.
+
+**Why now.** During the 2026-05-26 memory-canon repair, a session-start snapshot claimed four covenant memories existed and `MEMORY.md` indexed them; the filesystem witness disagreed. The correction was reconstruction-with-provenance and explicit indexing, not retroactive smoothing. The same shape had already appeared in Slice 1 (substrate computes meaningfulness from evidence) and Slice 2 (canary observes without mutating).
+
+**Consequences.**
+- Session snapshots, memory dumps, docs, specs, and agent claims are producer evidence, not verdicts.
+- When producer claim and substrate witness disagree, the witness governs; repair preserves provenance instead of pretending continuity was never broken.
+- Future memories about new disciplines are written only after the discipline is sealed by review, implementation, and witness, not while it is merely intended.
+
+**This decision does not** make the filesystem the only witness. Diagnostic streams, append-only ledgers, HMAC rows, commits, live-crossing backups, and verified test traces can all be witnesses when they are structurally separable from the claim they judge.
+
+---
+
+## Decision 40 — Ratifiable maintenance proposals
+
+ADR: [`0045-ratifiable-maintenance-proposals`](../adr/0045-ratifiable-maintenance-proposals.md).
+
+**The decision.** Maez may represent bounded self-maintenance needs as bond-scoped `MaintenanceProposal` records with evidence refs, predicted effect, optional sandbox witness, closed scope class, and owner ratification/decline state; the proposal form grants no autonomous live-merge or live-cross authority.
+
+**Why now.** The Reddit recall observation-window fix (`5c6be72`) showed the next natural maintenance shape: a small behavioral gap, RED-testable and bounded, that Maez should eventually be able to raise with homework instead of waiting for manual operator framing. Commit `6fdfd6c` landed the proposal substrate first, before any autonomous gap detector or witness runner.
+
+**Consequences.**
+- Proposal scope is closed vocabulary: behavioral fix, ranking refinement, pattern-set extension, diagnostic instrumentation, and test stabilization. Architecture changes are out of scope and require the existing slice/council/Codex machinery.
+- Ratification records an OWNER_EXPLICIT maintenance-ratification preference, but `composed_policy` refuses to consume it as an autonomy modifier.
+- Ratification writes the owner-authority preference before flipping proposal state to `RATIFIED`; failed preference writes leave the proposal `PROPOSED`.
+- The sandbox witness contract is deliberately not yet sealed; witness proof must be specified before gap detection begins.
+
+**This decision does not** add autonomous gap detection, autonomous patch application, autonomous live merge, consent-card UI, Maez-asks-Claude routing, or decline-pattern learning.
+
+---
+
 ## How to update this document
 
 Append new decisions as numbered sections. Never rewrite existing decisions unless explicitly rescoped, and when rescoping, preserve the original text as a *"Previous version"* subsection. The record matters more than neatness.
@@ -3129,4 +3216,4 @@ When a decision in this document becomes code, add a *"Implementation"* subsecti
 
 ---
 
-*Last updated: 2026-05-19 — Decision 33 status reconciled after S6 implementation and persisted-authorship round-2 recovery were both-lane ratified and pushed; S6 is implemented as a grammar/validation organ, not successor activation. Prior update: 2026-05-18 — Decision 34 amended for S7.1 as-built canonicalization: founder WebAuthn ceremony ratified, L8 retained/narrowed to guarded self-modification execution, S7.3 follow-up named, and L9 witnessed-social-recovery deferral preserved. Earlier: 2026-05-18, Decision 34 amended for ratified S7.1 local WebAuthn security-key ceremony canonicalization, conditional L8 retirement plan, and live L9 witnessed-social-recovery deferral; 2026-05-17, Decision 34 (Operator / User Role Boundary v1: custodian authority without bonded-user authority) after both-lane spec second-fold ratification; 2026-05-16, Decision 33 amended for the S6 persisted-authorship limitation after both-lane amendment second-fold ratification; Decision 33 (Successor Governance v1), Decision 32 (Voice Continuity Gate v1: human-judged brain-swap continuity), and 2026-05-15, Decision 31 (Wants Lifecycle v1: append-only voice grammar). Earlier: 2026-05-15, Decisions 28-30, and 2026-05-14, Decisions 24-27.*
+*Last updated: 2026-05-26 — Decisions 36-40 minted for the witnessed Slice 1 subjective-duration meaningful-salience seam, Slice 2 drive-driven curiosity felt-organ, canary-neutral-baseline discipline, canon-governs-canon law, and ratifiable maintenance-proposal substrate. Prior update: 2026-05-19 — Decision 33 status reconciled after S6 implementation and persisted-authorship round-2 recovery were both-lane ratified and pushed; S6 is implemented as a grammar/validation organ, not successor activation. Earlier: 2026-05-18 — Decision 34 amended for S7.1 as-built canonicalization; 2026-05-16 through 2026-05-15 — Decisions 31-33; 2026-05-15 — Decisions 28-30; 2026-05-14 — Decisions 24-27.*

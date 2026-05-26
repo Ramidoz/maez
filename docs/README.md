@@ -4,10 +4,10 @@
 to move, and the naming rules new docs must follow. Read this first when you
 need to find something in the docs tree.
 
-**Status:** v1, 2026-05-14. Map describes both the current structure and the
+**Status:** v1.1, 2026-05-26. Map describes both the current structure and the
 target structure. Body Topology and the active slice families have migrated;
 legacy slices, handoffs, snapshots, ledgers, and flat audits still move in
-later phases.
+later phases. Decision/ADR counts were refreshed after Decisions 36-40.
 
 ---
 
@@ -24,8 +24,8 @@ When you arrive with no prior context, read in this order:
 7. **`MAEZ_FRONTIER.md`** — open research / future-Maez questions.
 8. **`ROADMAP.md`** — current roadmap.
 9. **`GETTING_STARTED.md`** + **`CONTRIBUTING.md`** + **`SHIP_VS_LOCAL.md`** + **`DAEMON_SURVIVABILITY.md`** — onboarding and operational.
-10. **`governance/BETA_ARCHITECTURE_DECISIONS.md`** — load-bearing architectural decisions. Decision 24 (Body Topology) is the most recent as of 2026-05-14.
-11. **`adr/`** — ADR series, one file per stamped decision (0001 through 0029).
+10. **`governance/BETA_ARCHITECTURE_DECISIONS.md`** — load-bearing architectural decisions. Decision 40 (Ratifiable Maintenance Proposals) is the most recent as of 2026-05-26.
+11. **`adr/`** — ADR series, one file per stamped decision (0001 through 0045, with historical numbering gaps).
 
 The top-level repository `README.md` and `AGENTS.md` cover repo-wide framing;
 this map covers `docs/` only.
@@ -37,8 +37,8 @@ this map covers `docs/` only.
 | Category | Current location | Notes |
 |---|---|---|
 | Architectural anchors | `docs/MAEZ*.md`, `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/TRACK_A.md` | Top-level — stay here. |
-| Architecture decisions | `docs/governance/BETA_ARCHITECTURE_DECISIONS.md` | One append-only file. Decision 24 is the latest. |
-| ADRs | `docs/adr/NNNN-kebab-title.md` | One file per decision. 0029 is the latest. |
+| Architecture decisions | `docs/governance/BETA_ARCHITECTURE_DECISIONS.md` | One append-only file. Decision 40 is the latest. |
+| ADRs | `docs/adr/NNNN-kebab-title.md` | Stable decision records; 0045 is the latest. Historical numbering includes gaps and non-governance supplements. |
 | Governance miscellany | `docs/governance/` | Gestation memory protocol, post-install hardening, licence/security audits, readiness checks. |
 | Covenant | `docs/covenant/` | OSS users, lineage, founding generation. |
 | Birth book | `docs/birth_book/` | **Covenant-protected canon.** Files `00`–`02` are Rohit-authored verbatim and excluded from `source_awareness`. Do not read `00/01/02` unless explicitly asked. |
@@ -98,7 +98,7 @@ docs/
     readiness_checks/
 
   adr/
-    0001-*.md … 0029-body-topology.md
+    0001-*.md … 0045-ratifiable-maintenance-proposals.md
     README.md
 
   covenant/

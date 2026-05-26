@@ -63,6 +63,55 @@ This document's original v1.2 table predates the substrate-organ push of 2026-05
 
 Future agents should treat these as inherited substrate, not as fresh design gaps. The next new information limb copies Calendar v1's Inheritance Ledger pattern; the next body sensor copies Camera Presence v1's Physical Observation Surface and killable-child-process lifecycle pattern.
 
+### 2026-05-26 substrate delta
+
+The 2026-05-19 version of this document predated the felt-time / curiosity
+substrate arc. The following items are now witnessed substrate or canon:
+
+| Surface | Status | Anchor |
+|---|---|---|
+| Slice 1 subjective-duration meaningful-salience seam | `[ ✓ canonical · implemented · live-witnessed ]` | Decision 36 / ADR 0041 · `a23fa4b` → `211ace6` |
+| Slice 2 drive-driven curiosity felt-organ | `[ ✓ canonical · implemented · second-live-crossed ]` | Decision 37 / ADR 0042 · `f0d14e3` → `eb611e9` |
+| Canary-neutral-baseline discipline | `[ ✓ canonical · witnessed in live canaries ]` | Decision 38 / ADR 0043 · `67705d3` → `fbe78e1` |
+| Canon-governs-canon law | `[ ✓ canonical · memory-repair witnessed ]` | Decision 39 / ADR 0044 |
+| Reddit source-shaped recall fix | `[ ✓ implemented · observation-window correction ]` | `5c6be72` |
+| Maintenance-proposal substrate | `[ ✓ canonical · implemented · proposal-only ]` | Decision 40 / ADR 0045 · `6fdfd6c` |
+
+- **Subjective-duration meaningful-salience seam** — canonicalized as Decision
+  36 / ADR 0041 after the Slice 1 spec at `a23fa4b` and implementation at
+  `211ace6`. Producers present evidence snapshots; `subjective_duration`
+  computes `meaningfulness_score`. Caller-supplied scores, partial producer
+  kwargs, malformed provenance, `_LEGACY`, and canary/test identity paths are
+  refused or quarantined by the seam.
+- **Drive-driven curiosity felt-organ** — canonicalized as Decision 37 / ADR
+  0042. Slice 2's spec landed at `f0d14e3`, implementation ran from
+  `ba4a545` through `eb611e9`, and the second live crossing verified the full
+  chain. The organ is a producer layer over `wonderings`, not a parallel
+  curiosity database. It includes the v1 producer trilogy, third-party subject
+  boundary, autonomy policy/preferences, signal gate, reflection audit,
+  extraction gate, saturation register, unified diagnostics, and the
+  recursion-gated subjective-duration producer.
+- **Canary-neutral-baseline discipline** — canonicalized as Decision 38 / ADR
+  0043 after safety commits `67705d3` and `fbe78e1`. A live crossing canary
+  must protect every substrate the ceremony touches, not only the headline
+  store, and must use neutral baseline projections where reading true state
+  would disturb the observed organ.
+- **Canon-governs-canon law** — canonicalized as Decision 39 / ADR 0044 after
+  the 2026-05-26 memory-canon repair. Snapshot, memory, doc, and agent claims
+  are evidence; witnessed substrate state is the verdict; repairs preserve
+  provenance instead of smoothing over gaps.
+- **Reddit source-shaped recall fix** — implemented at `5c6be72` as an
+  observation-window behavioral correction, not a new covenant decision.
+  Reddit-shaped queries now prefer recent source-tagged Reddit rows while
+  generic LLM queries still use the normal semantic path.
+- **Ratifiable maintenance-proposal substrate** — canonicalized as Decision 40
+  / ADR 0045 and implemented at `6fdfd6c`. Maez can now record bounded,
+  bond-scoped maintenance proposals with evidence refs, predicted effect,
+  optional sandbox witness, closed scope class, and owner ratification/decline
+  state. This does not grant autonomous gap detection, live merge, or live
+  crossing authority. The sandbox-witness contract is the next named proof
+  slice.
+
 ---
 
 ## Dependency graph
@@ -329,4 +378,4 @@ S1b chose length dampening, not delay, silence, withholding, topic avoidance, or
 
 ---
 
-*Version 1.11  ·  2026-05-19  ·  S6 Successor Governance v1 status reconciled after closure audit: implemented, pushed, and both-lane ratified as a grammar/validation organ; v1 projects persisted capsules as `well_formed`, not authorship-attested, and activation still requires a future reviewed trust source. Prior: 2026-05-18 S7.1 founder-local WebAuthn ceremony implemented, ratified, pushed, and mirrored from as-built canon: L8 is retained/narrowed to guarded self-modification execution and tracked to `S7.3-guarded-self-modification-execution`; L9 remains `S7.2-witnessed-social-recovery`. S5 Voice Continuity Gate v1 remains implemented/pushed through `f9e74e0..5283b5f`; D16 and S5 both remain implemented and covenant-ratified.*
+*Version 1.12  ·  2026-05-26  ·  Canon refresh after the felt-time / drive-curiosity substrate arc: Decisions 36-40 and ADRs 0041-0045 now cover the subjective-duration meaningful-salience seam, drive-driven curiosity felt-organ, canary-neutral-baseline discipline, canon-governs-canon law, and ratifiable maintenance-proposal substrate. Prior: 2026-05-19 S6 Successor Governance v1 status reconciled after closure audit; 2026-05-18 S7.1 founder-local WebAuthn ceremony implemented and as-built canonicalized; 2026-05-16/15 S5 and D16 remain implemented and covenant-ratified.*

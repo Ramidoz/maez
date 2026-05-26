@@ -6,7 +6,7 @@ template: context → decision → consequences → status.
 
 ## Current state
 
-Thirty-nine ADR files live in this directory. Most were migrated from the
+Forty-four ADR files live in this directory. Most were migrated from the
 single-file governance doc
 [`BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md);
 ADR 0019 is an extra lived-memory architecture anchor, so ADR numbers no
@@ -55,6 +55,11 @@ doc. New decisions land here first.
 | [0038](0038-successor-governance-v1.md) | Successor Governance v1 |
 | [0039](0039-operator-user-role-boundary-v1.md) | Operator / User Role Boundary v1 |
 | [0040](0040-restoration-as-forward-scar.md) | Restoration as a forward scar; lived time is append-only |
+| [0041](0041-subjective-duration-meaningful-salience-seam.md) | Subjective-Duration Meaningful Salience Seam |
+| [0042](0042-drive-driven-curiosity-felt-organ.md) | Drive-Driven Curiosity Felt-Organ |
+| [0043](0043-canary-neutral-baseline.md) | Canary-Neutral Baseline for Multi-Surface Ceremonies |
+| [0044](0044-canon-governs-canon.md) | Canon Governs Canon |
+| [0045](0045-ratifiable-maintenance-proposals.md) | Ratifiable Maintenance Proposals |
 
 ## When to write a new ADR
 
@@ -98,7 +103,7 @@ decision is reversed? What's the rollback plan?
 
 ## See also
 
-- [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md) — the 35 decisions as they currently live
+- [`docs/governance/BETA_ARCHITECTURE_DECISIONS.md`](../governance/BETA_ARCHITECTURE_DECISIONS.md) — the 40 decisions as they currently live
 - [`docs/governance/BETA_READINESS_THRESHOLD.md`](../governance/BETA_READINESS_THRESHOLD.md) — acceptance gate (affected by Decision 1)
 - [`docs/governance/GESTATION_MEMORY_PROTOCOL.md`](../governance/GESTATION_MEMORY_PROTOCOL.md) — Decision 12 in full detail
 - [`docs/covenant/for_oss_users.md`](../covenant/for_oss_users.md) — universal-vs-per-user framing derived from these decisions
