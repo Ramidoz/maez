@@ -212,6 +212,46 @@ class MaintenanceProposalTests(unittest.TestCase):
             WitnessStatus.UNWITNESSED_BY_OMISSION,
         )
 
+    def test_ratification_uses_current_witness_generation(self):
+        from core.policies.maintenance_proposals import ratify_maintenance_proposal
+        from core.policies.sandbox_witnesses import (
+            SandboxWitnessKind,
+            SandboxWitnessRecord,
+            SandboxWitnesses,
+            WitnessStatus,
+        )
+
+        store = self._store()
+        witness_store = SandboxWitnesses(Path(self.tmp.name) / "sandbox_witnesses.db")
+        preference_store = AutonomyPreferences(self.pref_path)
+        store.append(self._proposal(sandbox_witness=None))
+        witness_store.append(
+            SandboxWitnessRecord.new(
+                bond_id="firstborn",
+                proposal_id="proposal-1",
+                witness_kind=SandboxWitnessKind.WORKTREE_RED_TEST,
+                observed_effect_digest=_DIGEST_A,
+                predicted_effect_digest=_DIGEST_B,
+                artifact_digest=_DIGEST_C,
+                captured_utc=datetime(2026, 5, 26, 12, 30, tzinfo=UTC),
+            )
+        )
+
+        ratified = ratify_maintenance_proposal(
+            bond_id="firstborn",
+            proposal_id="proposal-1",
+            ratified_utc=datetime(2026, 5, 26, 13, 0, tzinfo=UTC),
+            store=store,
+            preference_store=preference_store,
+            witness_store=witness_store,
+        )
+
+        self.assertEqual(ratified.witness_status, WitnessStatus.WITNESSED)
+        self.assertEqual(
+            store.get("firstborn", "proposal-1").witness_status,
+            WitnessStatus.WITNESSED,
+        )
+
     def test_ratify_does_not_mark_proposal_ratified_when_preference_write_fails(self):
         from core.policies.maintenance_proposals import ratify_maintenance_proposal
 

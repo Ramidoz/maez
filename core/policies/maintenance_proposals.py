@@ -18,6 +18,7 @@ from core.policies.autonomy_preferences import (
     PreferenceExpressedBy,
 )
 from core.policies.sandbox_witnesses import (
+    SandboxWitnesses,
     WitnessRefusalReason,
     WitnessRefused,
     WitnessStatus,
@@ -279,17 +280,23 @@ def ratify_maintenance_proposal(
     ratified_utc: datetime,
     store: MaintenanceProposals | None = None,
     preference_store: AutonomyPreferences | None = None,
+    witness_store: SandboxWitnesses | None = None,
     diagnostic_sink: DiagnosticSink | None = None,
 ) -> MaintenanceProposal:
     active_store = store or MaintenanceProposals()
     proposal = active_store.get(bond_id, proposal_id)
     _refuse_legacy_witness(proposal)
+    witness_status = _ratification_witness_status(
+        bond_id=bond_id,
+        proposal_id=proposal_id,
+        witness_store=witness_store,
+    )
     ratified = replace(
         proposal,
         status=ProposalStatus.RATIFIED,
         ratified_utc=_coerce_utc(ratified_utc, field_name="ratified_utc"),
         decline_reason_digest=None,
-        witness_status=WitnessStatus.UNWITNESSED_BY_OMISSION,
+        witness_status=witness_status,
     )
     active_preferences = preference_store or AutonomyPreferences()
     active_preferences.append(_ratification_preference(ratified))
@@ -464,6 +471,25 @@ def _refuse_legacy_witness(proposal: MaintenanceProposal) -> None:
             WitnessRefusalReason.LEGACY_WITNESS_SHAPE_REFUSED,
             "legacy sandbox_witness_json is read-only compatibility state",
         )
+
+
+def _ratification_witness_status(
+    *,
+    bond_id: str,
+    proposal_id: str,
+    witness_store: SandboxWitnesses | None,
+) -> WitnessStatus:
+    if witness_store is None:
+        return WitnessStatus.UNWITNESSED_BY_OMISSION
+    witness = witness_store.current_for_proposal(bond_id, proposal_id)
+    if witness is None:
+        return WitnessStatus.UNWITNESSED_BY_OMISSION
+    if witness.witness_status is not WitnessStatus.WITNESSED:
+        raise WitnessRefused(
+            witness.refusal_reason or WitnessRefusalReason.WITNESS_STALE,
+            "current sandbox witness generation is not ratification-eligible",
+        )
+    return WitnessStatus.WITNESSED
 
 
 def _is_digest(value: str) -> bool:
