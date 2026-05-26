@@ -84,6 +84,7 @@ class MaintenanceProposal:
     ratified_utc: datetime | None
     decline_reason_digest: str | None
     witness_status: WitnessStatus | None = None
+    legacy_sandbox_witness_json: str | None = None
 
     def __post_init__(self) -> None:
         if not self.proposal_id:
@@ -114,6 +115,8 @@ class MaintenanceProposal:
             WitnessStatus,
         ):
             raise ValueError("witness_status must be WitnessStatus")
+        if self.legacy_sandbox_witness_json is not None:
+            _legacy_sandbox_from_json(self.legacy_sandbox_witness_json)
 
 
 class MaintenanceProposals:
@@ -449,7 +452,7 @@ def _row_to_proposal(row: sqlite3.Row) -> MaintenanceProposal:
         diagnosis_digest=str(row["diagnosis_digest"]),
         proposed_patch_ref=str(row["proposed_patch_ref"]),
         predicted_effect=str(row["predicted_effect"]),
-        sandbox_witness=_legacy_sandbox_from_json(row["sandbox_witness_json"]),
+        sandbox_witness=None,
         evidence_refs=tuple(
             _evidence_from_dict(item)
             for item in json.loads(str(row["evidence_refs_json"]))
@@ -462,6 +465,7 @@ def _row_to_proposal(row: sqlite3.Row) -> MaintenanceProposal:
         witness_status=WitnessStatus(str(row["witness_status"]))
         if "witness_status" in row.keys() and row["witness_status"]
         else None,
+        legacy_sandbox_witness_json=row["sandbox_witness_json"],
     )
 
 

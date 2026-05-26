@@ -7,6 +7,7 @@ from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from textwrap import dedent
 
 from core.policies.autonomy_preferences import (
     AutonomyPreferences,
@@ -179,6 +180,75 @@ class MaintenanceProposalTests(unittest.TestCase):
                 self._proposal(proposal_id="proposal-2", sandbox_witness=legacy),
                 store=store,
             )
+
+    def test_legacy_sandbox_witness_json_reads_only_through_legacy_surface(self):
+        store = self._store()
+        legacy_json = (
+            '{"focused_tests_passed": true, "red_tests_passed": true, '
+            f'"scratch_canary_passed": true, "witness_digest": "{_DIGEST_B}"}}'
+        )
+        with closing(sqlite3.connect(self.db_path)) as con:
+            con.execute(
+                dedent(
+                    """
+                    INSERT INTO maintenance_proposals (
+                        proposal_id,
+                        bond_id,
+                        emitted_utc,
+                        scope_class,
+                        diagnosis_digest,
+                        proposed_patch_ref,
+                        predicted_effect,
+                        sandbox_witness_json,
+                        evidence_refs_json,
+                        status,
+                        ratified_utc,
+                        decline_reason_digest,
+                        witness_status
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                ),
+                (
+                    "legacy-row",
+                    "firstborn",
+                    datetime(2026, 5, 26, 12, 0, tzinfo=UTC).isoformat(),
+                    "ranking_refinement",
+                    _DIGEST_A,
+                    "refs/heads/legacy-row",
+                    "Legacy row should not authorize current witness state.",
+                    legacy_json,
+                    (
+                        '[{"evidence_kind": "raw_memory", '
+                        f'"ref_digest": "{_DIGEST_C}", '
+                        '"observed_utc": "2026-05-26T11:30:00+00:00"}]'
+                    ),
+                    "proposed",
+                    None,
+                    None,
+                    None,
+                ),
+            )
+            con.commit()
+
+        loaded = store.get("firstborn", "legacy-row")
+
+        self.assertIsNone(loaded.sandbox_witness)
+        self.assertEqual(loaded.legacy_sandbox_witness_json, legacy_json)
+
+    def test_static_guard_refuses_new_production_write_to_legacy_sandbox_witness_json(self):
+        source = Path("core/policies/maintenance_proposals.py").read_text(
+            encoding="utf-8"
+        )
+        legacy_writer_calls = [
+            line.strip()
+            for line in source.splitlines()
+            if "_legacy_sandbox_to_json(" in line
+            and not line.strip().startswith("def _legacy_sandbox_to_json")
+        ]
+
+        self.assertEqual(legacy_writer_calls, [])
+        self.assertIn("legacy_sandbox_witness_json", source)
 
     def test_ratify_updates_status_and_writes_owner_explicit_preference(self):
         from core.policies.maintenance_proposals import ratify_maintenance_proposal
